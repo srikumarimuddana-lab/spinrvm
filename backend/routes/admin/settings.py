@@ -274,6 +274,13 @@ class SettingsUpdateRequest(BaseModel):
     # utils/stripe_reconcile._maybe_heal_stuck_processing. Money-moving — enable
     # only after staging validation.
     stripe_auto_heal_processing: Optional[bool] = None
+    # Notification throttling (quiet hours + daily cap) — see migration 304.
+    # Defaults OFF; ship dark, verify in staging, then flip on. Global for
+    # every rider/driver — no per-user override yet.
+    notification_throttling_enabled: Optional[bool] = None
+    notification_quiet_hours_start: Optional[str] = Field(default=None, pattern="^([01]\\d|2[0-3]):[0-5]\\d$")
+    notification_quiet_hours_end: Optional[str] = Field(default=None, pattern="^([01]\\d|2[0-3]):[0-5]\\d$")
+    notification_daily_cap: Optional[int] = Field(default=None, ge=0, le=100)
     # AI assistant (rider AI mode, backend/ai/) — provider/model swap at
     # runtime, keys masked like the Stripe/Twilio credentials above.
     ai_assistant_enabled: Optional[bool] = None
@@ -331,6 +338,15 @@ class SettingsUpdateRequest(BaseModel):
     # dark-launched, driver-app only. Not a credential, no masking/
     # super-admin gate needed.
     driver_discreet_sos_enabled: Optional[bool] = None
+    # Kill switches (ACTION_ITEMS.md E5). scheduled_dispatch_enabled already
+    # existed in AppSettings/gated the loop (2026-08-02) but was never added
+    # here — there was previously no way to set it via the admin API at all,
+    # only a direct DB update. All four are plain booleans, no credential
+    # masking/super-admin gate needed.
+    scheduled_dispatch_enabled: Optional[bool] = None
+    surge_engine_enabled: Optional[bool] = None
+    promo_redemption_enabled: Optional[bool] = None
+    corporate_billing_enabled: Optional[bool] = None
     # Dual-approval gate for large PII-bearing exports (migration 268,
     # routes/admin/compliance.py, routes/admin/data_transfer_export.py) —
     # requires a second super_admin to approve before a large driver/rider

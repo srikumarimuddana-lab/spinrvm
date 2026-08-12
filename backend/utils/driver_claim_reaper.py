@@ -4,7 +4,12 @@ Dispatch claims a driver (is_available=false via claim_driver_atomic) and only
 then inserts the ride_offers row + schedules the offer-timeout task. A crash or
 restart in that window leaves the driver is_available=false with no offer and no
 timeout handler — silently dropped from dispatch. The stuck-ride sweeper
-recovers the ride, not the driver flag.
+(`utils/stuck_ride_sweeper.py`) recovers the ride ONLY when it is in
+`searching` (its atomic claim filters `.eq("status", "searching")`) — it does
+not recover the driver flag, and it does nothing at all for a ride already
+past `searching` (e.g. `driver_assigned`/`in_progress`). A stuck `in_progress`
+ride has no automated recovery today; `utils/stale_in_progress_ride_alerter.py`
+alerts (never mutates) on that gap.
 
 This loop releases such orphans: a driver that is online, unavailable, was
 claimed more than RECLAIM_THRESHOLD_SECONDS ago, and has NEITHER a pending offer

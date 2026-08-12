@@ -46,9 +46,9 @@ except ImportError:
     from utils.referral_terms import paid_referral_earnings, resolve_referral_terms  # type: ignore
 
 try:
-    from ...utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts
+    from ...utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts, drop_legacy_rides
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
-    from utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts  # type: ignore
+    from utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts, drop_legacy_rides  # type: ignore
 
 db = db_supabase  # legacy alias
 
@@ -712,7 +712,34 @@ async def admin_get_driver_stats(
     banned_count = sum(1 for d in enriched_drivers if d.get("status") == "banned")
     deleted_count = sum(1 for d in enriched_drivers if d.get("status") == "deleted")
     total_rides_sum = sum(int(d.get("total_rides") or 0) for d in enriched_drivers)
-    total_earnings_sum = float(sum(Decimal(str(d.get("total_earnings") or 0)) for d in enriched_drivers))
+
+    # P1-A (docs/audit/2026-08-11-driver-rider-migration-audit.md): `drivers.
+    # total_earnings` is never written by any code path (same dead column
+    # admin_get_driver_live_stats's docstring already documents and works
+    # around) — this stat card and the per-area breakdown always read $0.
+    # Computed live here instead, mirroring that endpoint's pattern: sum
+    # driver_earnings across each driver's completed rides. Fleet-wide, so
+    # one batched query (bounded, not per-driver — avoids an N+1 scan) is
+    # cheaper than N per-driver round-trips. Lifetime, not date-windowed,
+    # to match total_rides_sum's semantics above (also a lifetime counter).
+    # Excludes legacy-imported rides (EXCLUDE_LEGACY_RIDES) for the same
+    # reason admin_ride_money_rollup/admin_payouts_overview_aggregates do
+    # (P0-B) — previous-app money the driver already received, not new
+    # Spinr income.
+    driver_ids_set = {d["id"] for d in enriched_drivers}
+    earnings_by_driver: Dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    if driver_ids_set:
+        earnings_rides = await db_supabase.get_rows(
+            "rides",
+            {"driver_id": {"$in": list(driver_ids_set)}, "status": "completed", **EXCLUDE_LEGACY_RIDES},
+            limit=50000,
+        )
+        for r in earnings_rides:
+            did = r.get("driver_id")
+            if did:
+                earnings_by_driver[did] += Decimal(str(r.get("driver_earnings") or 0))
+
+    total_earnings_sum = float(sum(earnings_by_driver.values(), Decimal("0")))
     avg_rating = 0.0
     rated = [d for d in enriched_drivers if d.get("rating") and float(d.get("rating", 0)) > 0]
     if rated:
@@ -742,7 +769,7 @@ async def admin_get_driver_stats(
             area_stats[aid]["unverified"] += 1
         area_stats[aid]["total_rides"] += int(d.get("total_rides") or 0)
         area_stats[aid]["total_earnings"] = float(
-            Decimal(str(area_stats[aid]["total_earnings"])) + Decimal(str(d.get("total_earnings") or 0))
+            Decimal(str(area_stats[aid]["total_earnings"])) + earnings_by_driver[d["id"]]
         )
 
     # ── Daily charts (within date range) ──
@@ -760,9 +787,11 @@ async def admin_get_driver_stats(
             day_key = dt.strftime("%Y-%m-%d")
             daily_joins[day_key] += 1
 
-    # Rides + earnings per day (for drivers matching the service_area filter)
-    driver_ids_set = {d["id"] for d in enriched_drivers}
-    ride_filters: Dict[str, Any] = {"created_at": {"$gte": range_start.isoformat()}}
+    # Rides + earnings per day (for drivers matching the service_area filter).
+    # Legacy-imported rides excluded (same P0-B reasoning as above) so a
+    # historical bulk import doesn't show up as a spike in "new" fleet
+    # activity/earnings on whatever day it happened to be imported.
+    ride_filters: Dict[str, Any] = {"created_at": {"$gte": range_start.isoformat()}, **EXCLUDE_LEGACY_RIDES}
     all_rides = await db_supabase.get_rows("rides", ride_filters, order="created_at", desc=True, limit=5000)
 
     # Filter rides to only those belonging to our driver set
@@ -1275,6 +1304,7 @@ async def admin_nudge_driver_expiry(
                 "driver_id": driver_id,
                 "doc_type": body.doc_type,
             },
+            target_app="driver",
         )
     except Exception as exc:
         logger.error(
@@ -1368,6 +1398,8 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
         "is_citizen",
         "decals_sent",
         "decals_sent_at",
+        "decal_generated_at",
+        "decal_number",
     }
     allowed = user_fields | driver_fields
     filtered = {k: v for k, v in updates.items() if k in allowed}
@@ -1590,7 +1622,11 @@ async def admin_review_driver_photo(
     try:
         if req.action == "approve":
             await send_push_notification(
-                user_id, "Photo approved ✅", "Your profile photo is now visible to riders.", {"type": "photo_approved"}
+                user_id,
+                "Photo approved ✅",
+                "Your profile photo is now visible to riders.",
+                {"type": "photo_approved"},
+                target_app="driver",
             )
         else:
             await send_push_notification(
@@ -1598,6 +1634,7 @@ async def admin_review_driver_photo(
                 "Photo needs attention ⚠️",
                 "Your profile photo wasn't approved. Please upload a clear photo of yourself.",
                 {"type": "photo_rejected"},
+                target_app="driver",
             )
     except Exception as e:
         logger.warning(f"[ADMIN] photo-review push failed for driver {driver_id}: {e}")
@@ -1989,7 +2026,18 @@ async def admin_get_driver_live_stats(driver_id: str):
 
     # driver_earnings is the post-platform-fee amount the driver actually
     # gets — same field the rider receipt + driver payout summary uses.
-    total_earnings = float(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in completed))
+    #
+    # P1-A / Phase-3 cross-surface finding #2 (docs/audit/2026-08-11-driver-
+    # rider-migration-audit.md): this header must exclude legacy-imported
+    # rides the same way admin_get_driver_payouts_summary (the Payouts tab
+    # on the same driver detail screen) already does — previously this
+    # "Earnings" card and that tab showed two different numbers for the
+    # same driver. total_assigned/completed_count/acceptance_rate are left
+    # unfiltered on purpose: legacy rides are always status='completed'
+    # (booking_import_service only imports completed bookings), so
+    # excluding them there would change the acceptance-rate denominator in
+    # a way the audit didn't ask for and this fix doesn't need to touch.
+    total_earnings = float(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in drop_legacy_rides(completed)))
 
     rated = [r for r in completed if (r.get("rider_rating") or 0) > 0]
     avg_rating = round(sum(float(r["rider_rating"]) for r in rated) / len(rated), 2) if rated else None
@@ -2644,6 +2692,28 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
     lifetime_ride_earnings = sum((_dec(r.get("driver_earnings")) for r in rides), Decimal("0"))
     lifetime_tips = sum((_dec(r.get("tip_amount")) for r in rides), Decimal("0"))
 
+    # How many of this driver's completed rides were EXCLUDED as previous-app
+    # imports. Without this the card reads "0 completed rides · $0.00" while
+    # the Rides tab beside it shows 15, and nothing on screen explains the
+    # contradiction — the operator is left assuming data loss. Counted, not
+    # fetched: a HEAD-style count keeps the payload small.
+    imported_rides_excluded = 0
+    try:
+        imported_rides_excluded = len(
+            await db_supabase.get_rows(
+                "rides",
+                {"driver_id": driver_id, "status": "completed", "legacy_import_metadata": {"$notnull": True}},
+                columns="id",
+                limit=10000,
+            )
+            or []
+        )
+    except Exception:
+        # Presentation-only context. Never fail the whole payouts tab over it,
+        # but do surface it — a silent zero here would itself be misleading.
+        logger.error("payouts-summary: imported-ride count failed for %s", driver_id, exc_info=True)
+        imported_rides_excluded = -1  # -1 = unknown, distinct from a real zero
+
     # ---- Aggregate from driver_bonuses (quest/referral/adjustment) ----
     bonus_rows = await db_supabase.get_rows(
         "driver_bonuses",
@@ -2817,6 +2887,9 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
             "pending_balance": float(pending_balance),
             "on_hold": float(on_hold),
             "rides_count": len(rides),
+            # Completed rides imported from the previous app and therefore NOT
+            # counted in lifetime_earnings (-1 = count unavailable).
+            "imported_rides_excluded": imported_rides_excluded,
             "active_days_30d": active_days_30d,
             "last_payout": (
                 {
@@ -3183,6 +3256,143 @@ async def admin_refresh_driver_stripe_payouts(driver_id: str, admin: dict = Depe
             }
             for bp in bank_payouts
         ],
+    }
+
+
+class RefreshAllPayoutsRequest(BaseModel):
+    """Scope for the fleet-wide Stripe payout refresh. Empty body = every
+    driver with a Stripe account, full history."""
+
+    model_config = {"extra": "forbid"}
+
+    driver_ids: Optional[List[str]] = Field(None, max_length=500)
+
+
+@router.post("/drivers/refresh-stripe-payouts")
+async def admin_refresh_all_driver_stripe_payouts(
+    body: RefreshAllPayoutsRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """One-click Stripe payout sync across the fleet.
+
+    Same two syncs the per-driver button runs — Stripe Transfers into
+    ``payouts``, then the connected-account bank-payout/balance ledger — with
+    ``driver_ids=None`` meaning every mapped driver (the sync services already
+    fan out with bounded concurrency).
+
+    Unlike the per-driver endpoint this does NOT fail the whole request on a
+    per-driver Stripe error: across a fleet, one retired or unreachable
+    account must not block everyone else's history from being materialized.
+    Errors are returned per driver so nothing is silently dropped, and the
+    response says plainly that a re-run is safe.
+
+    super_admin only — it writes payout history, the same bar as the
+    per-driver button and the dedicated /admin/stripe/* sync routes.
+    """
+    if (admin.get("role") or "").lower() != "super_admin":
+        raise HTTPException(status_code=403, detail="Stripe payout refresh requires super_admin")
+
+    try:
+        from ...services import stripe_payout_sync_service as sync_svc
+        from ...services.stripe_connect_ledger_service import sync_connect_ledger
+        from ...settings_loader import get_app_settings
+    except ImportError:
+        from services import stripe_payout_sync_service as sync_svc  # type: ignore
+        from services.stripe_connect_ledger_service import sync_connect_ledger  # type: ignore
+        from settings_loader import get_app_settings  # type: ignore
+
+    settings = await get_app_settings()
+    stripe_secret = settings.get("stripe_secret_key", "")
+    if not stripe_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Stripe is not configured — set stripe_secret_key in Settings.",
+        )
+
+    batch = f"admin-refresh-all-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+    plan = await sync_svc.build_plan(stripe_secret, batch, driver_ids=body.driver_ids)
+
+    transfers_inserted = 0
+    transfers_skipped = 0
+    plan_errors = [{"row_ref": e.row_ref, "field": e.field, "message": e.message} for e in plan.errors]
+
+    # commit_plan refuses a plan carrying errors — that all-or-nothing rule is
+    # right for the per-driver button but would let one unreachable account
+    # block the entire fleet here. Commit the drivers that listed cleanly and
+    # report the rest, rather than writing nothing and calling it a success.
+    clean_rows = [r for r in plan.payouts_to_insert if r["driver_id"] not in {e.row_ref for e in plan.errors}]
+    if clean_rows:
+        committable = sync_svc.StripePayoutSyncPlan(batch=batch)
+        committable.payouts_to_insert = clean_rows
+        try:
+            commit_result = await asyncio.to_thread(sync_svc.commit_plan, committable)
+            transfers_inserted = commit_result.get("inserted", 0)
+            transfers_skipped = commit_result.get("skipped_existing", 0)
+        except Exception:
+            logger.error("[STRIPE-REFRESH-ALL] commit failed for batch %s", batch, exc_info=True)
+            raise HTTPException(
+                status_code=502,
+                detail="Failed to write synced transfers to the database. Nothing partial was reported — re-run.",
+            )
+
+    try:
+        ledger_result = await sync_connect_ledger(stripe_secret, driver_ids=body.driver_ids)
+    except Exception:
+        logger.error("[STRIPE-REFRESH-ALL] connect-ledger sync failed for batch %s", batch, exc_info=True)
+        await log_admin_action(
+            admin,
+            "stripe_payout_refresh_all",
+            "drivers",
+            "*",
+            {"status": "ledger_sync_failed", "transfers_inserted": transfers_inserted, "batch": batch},
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"Transfers synced ({transfers_inserted} new), but the bank-payout/ledger sync failed. "
+                "Re-run — it is safe to repeat."
+            ),
+        )
+
+    await log_admin_action(
+        admin,
+        "stripe_payout_refresh_all",
+        "drivers",
+        "*",
+        {
+            "batch": batch,
+            "drivers_scanned": plan.stats.get("drivers_scanned"),
+            "transfers_inserted": transfers_inserted,
+            "transfers_skipped": transfers_skipped,
+            "sum_planned": plan.stats.get("sum_planned"),
+            "payouts_upserted": ledger_result.payouts_upserted,
+            "ledger_upserted": ledger_result.ledger_upserted,
+            "driver_errors": len(plan_errors),
+        },
+    )
+
+    return {
+        # False when any driver could not be read, so the dashboard cannot
+        # toast an unqualified success over a partial sync.
+        "synced": not plan_errors and not ledger_result.errors,
+        "message": (
+            f"Synced {transfers_inserted} new transfer(s) across "
+            f"{plan.stats.get('drivers_scanned', 0)} driver(s); {transfers_skipped} already tracked. "
+            f"{ledger_result.payouts_upserted} bank payout(s), {ledger_result.ledger_upserted} ledger entries."
+            + (
+                f" {len(plan_errors)} driver(s) could not be read — re-run, it is safe to repeat."
+                if plan_errors
+                else ""
+            )
+        ),
+        "drivers_scanned": plan.stats.get("drivers_scanned", 0),
+        "transfers_inserted": transfers_inserted,
+        "transfers_skipped": transfers_skipped,
+        "bank_payouts_synced": ledger_result.payouts_upserted,
+        "ledger_entries_synced": ledger_result.ledger_upserted,
+        "plan_warnings": [{"row_ref": w.row_ref, "field": w.field, "message": w.message} for w in plan.warnings],
+        "plan_errors": plan_errors,
+        "ledger_errors": [{"row_ref": e.row_ref, "field": e.field, "message": e.message} for e in ledger_result.errors],
     }
 
 
@@ -3610,3 +3820,63 @@ async def admin_driver_daily_activity(
     report["date"] = d.isoformat()
     report["tz"] = "America/Regina"
     return report
+
+
+# ── Welcome Letter PDF generation ──────────────────────────────────
+
+
+class DecalGenerateRequest(BaseModel):
+    driver_ids: List[str] = Field(..., min_length=1, max_length=200)
+
+
+@router.post("/drivers/decals/generate-pdf")
+async def generate_decal_pdf_endpoint(
+    body: DecalGenerateRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    from fastapi.responses import Response as FastAPIResponse
+
+    try:
+        from ...utils.decal_pdf import generate_decal_pdf
+    except ImportError:
+        from utils.decal_pdf import generate_decal_pdf  # type: ignore[no-redef]
+
+    drivers = []
+    for driver_id in body.driver_ids:
+        row = await db_supabase.get_driver_by_id(driver_id)
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Driver {driver_id} not found")
+        drivers.append(row)
+
+    now = datetime.now(timezone.utc).isoformat()
+    for driver in drivers:
+        updates: Dict[str, Any] = {}
+        if not driver.get("decal_generated_at"):
+            updates["decal_generated_at"] = now
+        if not driver.get("decal_number"):
+            seq = str(uuid.uuid4().int % 100000).zfill(5)
+            updates["decal_number"] = f"SPR-{datetime.now(timezone.utc).year}-{seq}"
+        if updates:
+            await db_supabase.update_one("drivers", {"id": driver["id"]}, updates)
+            driver.update(updates)
+
+    pdf_bytes = generate_decal_pdf(drivers)
+
+    await log_admin_action(
+        admin,
+        "welcome_letter_generated",
+        "drivers",
+        ",".join(body.driver_ids),
+        {"driver_count": len(drivers)},
+    )
+
+    filename = (
+        f"welcome_letter_{drivers[0].get('decal_number', 'unknown')}.pdf"
+        if len(drivers) == 1
+        else f"welcome_letters_{len(drivers)}_drivers.pdf"
+    )
+    return FastAPIResponse(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

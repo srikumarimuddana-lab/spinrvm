@@ -58,6 +58,17 @@ _MISSING_MESSAGE_HINTS = (
     "no such paymentintent",
     "similar object exists in test mode",
     "similar object exists in live mode",
+    # Connect accounts get their OWN wording, and it matches none of the
+    # above: "The account acct_X was a test account created with a testmode
+    # key, and therefore can only be used with testmode keys." It carries no
+    # `resource_missing` code either, so without these hints every stranded
+    # test-mode acct_… was classified as an unknown error — which made the
+    # entire test→live repair path inert for exactly the accounts it exists
+    # to clean up. The account is unreachable on this key and permanently so,
+    # which is the same fact "no such account" states; the message even names
+    # the acct_… so the expected_id check below still pins it to our object.
+    "can only be used with testmode keys",
+    "can only be used with livemode keys",
 )
 
 

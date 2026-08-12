@@ -30,9 +30,17 @@ from ._shared import (  # noqa: F401
 )
 
 try:
-    from ...utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts
+    from ...utils.legacy_rides import (
+        EXCLUDE_LEGACY_RIDES,
+        drop_legacy_offset_payouts,
+        previous_app_history_visible,
+    )
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
-    from utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts  # type: ignore
+    from utils.legacy_rides import (  # type: ignore
+        EXCLUDE_LEGACY_RIDES,
+        drop_legacy_offset_payouts,
+        previous_app_history_visible,
+    )
 
 router = APIRouter()
 
@@ -103,8 +111,7 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
             (
                 _d(p.get("amount") or 0)
                 for p in payout_rows
-                if str(p.get("status") or "").lower() not in _not_money_out
-                and p.get("payout_type") != "stripe_sync"
+                if str(p.get("status") or "").lower() not in _not_money_out and p.get("payout_type") != "stripe_sync"
             ),
             Decimal("0"),
         )
@@ -145,12 +152,30 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
             detail="Earnings temporarily unavailable",
         ) from e
 
+    # Money the PREVIOUS app paid this driver (stripe_sync mirrors of real
+    # Stripe Transfers). Excluded from the balance math above by design; the
+    # app shows it as its own labeled figure so a migrated driver can see
+    # their history is intact without it inflating current earnings.
+    # Transition messaging with a sunset: after the cutoff in
+    # utils/legacy_rides this reports 0.00 and the app note self-hides.
+    previous_app_paid = Decimal("0")
+    if previous_app_history_visible():
+        previous_app_paid = sum(
+            (
+                _d(p.get("amount") or 0)
+                for p in payout_rows
+                if p.get("payout_type") == "stripe_sync" and str(p.get("status") or "").lower() not in _not_money_out
+            ),
+            Decimal("0"),
+        )
+
     return {
         "total_earnings": _money_str(total_earnings + total_bonuses),
         # payable_balance = ride earnings + bonuses - ALL money-out payouts
         "payable_balance": _money_str(total_earnings + total_bonuses - total_payouts),
         "pending_payouts": _money_str(pending_payouts),
         "total_paid_out": _money_str(total_payouts - pending_payouts),
+        "previous_app_paid_total": _money_str(previous_app_paid),
         "total_bonuses": _money_str(total_bonuses),
         "total_referral_bonuses": _money_str(total_referral_bonuses),
         "has_bank_account": bool(driver.get("bank_account")),
@@ -377,16 +402,20 @@ async def get_driver_daily_earnings(days: int = Query(7), current_user: dict = D
                     "distance_km": 0,
                 }
             daily_data[date_str]["earnings"] += (
-                float(r.get("base_fare") or 0)
-                + float(r.get("distance_fare") or 0)
-                + float(r.get("time_fare") or 0)
-                + float(r.get("tip_amount") or 0)
+                _d(r.get("base_fare") or 0)
+                + _d(r.get("distance_fare") or 0)
+                + _d(r.get("time_fare") or 0)
+                + _d(r.get("tip_amount") or 0)
             )
             daily_data[date_str]["tips"] += r.get("tip_amount", 0) or 0
             daily_data[date_str]["rides"] += 1
             daily_data[date_str]["distance_km"] += r.get("distance_km", 0) or 0
 
-        results = [{"date": date, **data} for date, data in sorted(daily_data.items())]
+        # Decimal-accumulated above (CLAUDE.md money-arithmetic rule); cast to
+        # float only at the response boundary.
+        results = [
+            {"date": date, **{**data, "earnings": float(data["earnings"])}} for date, data in sorted(daily_data.items())
+        ]
     except Exception as e:
         # An empty chart reads as "no rides this period" — surface the DB error
         # as 503 instead of fabricating an empty result.
@@ -563,15 +592,19 @@ async def get_driver_weekly_earnings(weeks: int = Query(4), current_user: dict =
                     "distance_km": 0,
                 }
             weekly_data[week_key]["earnings"] += (
-                float(r.get("base_fare") or 0)
-                + float(r.get("distance_fare") or 0)
-                + float(r.get("time_fare") or 0)
-                + float(r.get("tip_amount") or 0)
+                _d(r.get("base_fare") or 0)
+                + _d(r.get("distance_fare") or 0)
+                + _d(r.get("time_fare") or 0)
+                + _d(r.get("tip_amount") or 0)
             )
             weekly_data[week_key]["tips"] += r.get("tip_amount", 0) or 0
             weekly_data[week_key]["rides"] += 1
             weekly_data[week_key]["distance_km"] += r.get("distance_km", 0) or 0
 
+        # Decimal-accumulated above (CLAUDE.md money-arithmetic rule); cast to
+        # float only at the response boundary.
+        for w in weekly_data.values():
+            w["earnings"] = float(w["earnings"])
         return sorted(weekly_data.values(), key=lambda x: x["week_start"])
     except Exception as e:
         logger.error(f"Error fetching weekly earnings: {e}", exc_info=True)
@@ -661,15 +694,19 @@ async def get_driver_monthly_earnings(months: int = Query(6), current_user: dict
                     "distance_km": 0,
                 }
             monthly_data[month_key]["earnings"] += (
-                float(r.get("base_fare") or 0)
-                + float(r.get("distance_fare") or 0)
-                + float(r.get("time_fare") or 0)
-                + float(r.get("tip_amount") or 0)
+                _d(r.get("base_fare") or 0)
+                + _d(r.get("distance_fare") or 0)
+                + _d(r.get("time_fare") or 0)
+                + _d(r.get("tip_amount") or 0)
             )
             monthly_data[month_key]["tips"] += r.get("tip_amount", 0) or 0
             monthly_data[month_key]["rides"] += 1
             monthly_data[month_key]["distance_km"] += r.get("distance_km", 0) or 0
 
+        # Decimal-accumulated above (CLAUDE.md money-arithmetic rule); cast to
+        # float only at the response boundary.
+        for m in monthly_data.values():
+            m["earnings"] = float(m["earnings"])
         return sorted(monthly_data.values(), key=lambda x: x["month"])
     except Exception as e:
         logger.error(f"Error fetching monthly earnings: {e}", exc_info=True)
@@ -728,14 +765,20 @@ async def get_driver_earnings_comparison(period: str = Query("week"), current_us
         ) from e
 
     def summarize(rides):
-        return {
-            "earnings": sum(
-                float(r.get("base_fare") or 0)
-                + float(r.get("distance_fare") or 0)
-                + float(r.get("time_fare") or 0)
-                + float(r.get("tip_amount") or 0)
+        # Decimal accumulation (CLAUDE.md money-arithmetic rule); cast to
+        # float only at the response boundary.
+        earnings_total = sum(
+            (
+                _d(r.get("base_fare") or 0)
+                + _d(r.get("distance_fare") or 0)
+                + _d(r.get("time_fare") or 0)
+                + _d(r.get("tip_amount") or 0)
                 for r in rides
             ),
+            Decimal("0"),
+        )
+        return {
+            "earnings": float(earnings_total),
             "rides": len(rides),
             "tips": sum(r.get("tip_amount", 0) or 0 for r in rides),
         }

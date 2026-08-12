@@ -76,13 +76,13 @@ jobs:
 
       - name: Checkout PR code
         if: env.HAS_ANTHROPIC_KEY == 'true'
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
       - name: Run Claude review
         if: env.HAS_ANTHROPIC_KEY == 'true'
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@9c41ed18ca8b2b2a17eaef4723d5092ccdebc814 # v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

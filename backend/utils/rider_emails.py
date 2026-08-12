@@ -175,6 +175,34 @@ async def send_email_changed_notice(
     )
 
 
+async def send_new_device_notice(user: dict[str, Any]) -> bool:
+    """Security notice: this account was just signed into from a device we
+    haven't seen before (fingerprinted by User-Agent — see
+    ``utils/refresh_tokens.is_new_device``).
+
+    Informational only — the login has already succeeded by the time this
+    fires; this never blocks or delays sign-in. Mirrors
+    ``send_email_changed_notice``'s "contact support if this wasn't you"
+    pattern, sent to the account's current address (unlike the email-change
+    notice, there is no "old address" here — the account itself may have
+    just been compromised, so the current address is the only reachable one).
+    """
+    company = await load_company_details()
+    return await _send(
+        company=company,
+        user_id=user["id"],
+        user=user,
+        subject=f"New sign-in to your {company.app_name} account",
+        heading="New sign-in to your account",
+        paragraphs=[
+            f"Your {company.app_name} account was just signed into from a device we haven't seen before.",
+            "If this was you, no action is needed. If you don't recognize this sign-in, contact "
+            f"{company.support_email} immediately.",
+        ],
+        email_type="rider_new_device_signin",
+    )
+
+
 async def send_account_deletion_notice(user: dict[str, Any], scheduled_at: str) -> bool:
     """Confirms a PIPEDA deletion request and states what is kept, and why."""
     when = (scheduled_at or "")[:10]

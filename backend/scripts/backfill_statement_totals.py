@@ -71,211 +71,63 @@ import json
 import logging
 import os
 import sys
-from datetime import date, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("backfill_statement_totals")
 
-# PostgREST caps an unbounded select at db-max-rows without signalling it.
-_PAGE_SIZE = 500
-
-
-def _parse_date(value) -> date | None:
-    """Accept a date, a 'YYYY-MM-DD' string, or a full ISO timestamp."""
-    if isinstance(value, date) and not isinstance(value, datetime):
-        return value
-    if isinstance(value, datetime):
-        return value.date()
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        return date.fromisoformat(text[:10])
-    except ValueError:
-        return None
-
-
-def _money_keys(totals: dict) -> dict:
-    """The three figures the job stores and the admin list renders."""
-    return {
-        "earnings": totals.get("earnings"),
-        "payouts_total": totals.get("payouts_total"),
-        "trips": totals.get("trips"),
-    }
-
-
-def _corrected(old_totals: dict, statement: dict) -> dict:
-    """New totals, preserving the pre-backfill figures for rollback/audit.
-
-    ``superseded`` is written once: on a re-run the row is skipped as
-    unchanged, and even if it were not, an existing ``superseded`` is never
-    overwritten — the ORIGINAL job-time figures are what an auditor needs,
-    not the previous run's.
-    """
-    corrected = {
-        "earnings": statement["earnings"],
-        "payouts_total": statement["payouts_total"],
-        "trips": statement["trips"],
-    }
-    superseded = (old_totals or {}).get("superseded")
-    if superseded is None:
-        superseded = _money_keys(old_totals or {})
-        superseded["reason"] = "dropped_upper_bound_filter_bug"
-    corrected["superseded"] = superseded
-    return corrected
-
-
-async def _load_statements(db, driver_id: str | None, since: str | None, limit: int | None) -> list[dict]:
-    filters: dict = {}
-    if driver_id:
-        filters["driver_id"] = driver_id
-    if since:
-        filters["period_start"] = {"$gte": since}
-
-    rows: list[dict] = []
-    offset = 0
-    while True:
-        page = (
-            await db.get_rows(
-                "driver_statements",
-                filters,
-                order="period_start",
-                desc=True,
-                limit=_PAGE_SIZE,
-                offset=offset,
-            )
-            or []
-        )
-        rows.extend(page)
-        if len(page) < _PAGE_SIZE or (limit and len(rows) >= limit):
-            break
-        offset += _PAGE_SIZE
-    return rows[:limit] if limit else rows
-
 
 async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--apply", action="store_true", help="write the corrected totals (default: dry run)")
-    parser.add_argument("--driver-id", help="restrict to one driver")
+    parser.add_argument("--driver-id", action="append", dest="driver_ids", help="restrict to a driver (repeatable)")
     parser.add_argument("--since", help="only statements with period_start >= this date (YYYY-MM-DD)")
-    parser.add_argument("--limit", type=int, help="cap the number of statements considered")
+    parser.add_argument("--limit", type=int, default=None, help="cap the statements considered (default: all)")
     args = parser.parse_args()
 
+    # The admin "Fix Statement Totals" button calls this same service, so the
+    # CLI and the UI can never apply a different correction.
     try:
-        import db_supabase as db
-        from utils.driver_statement import build_custom_statement, build_statement
+        from services.statement_totals_backfill import recompute_statement_totals
     except ImportError:  # pragma: no cover - CLI convenience
-        from backend import db_supabase as db  # type: ignore
-        from backend.utils.driver_statement import build_custom_statement, build_statement  # type: ignore
+        from backend.services.statement_totals_backfill import recompute_statement_totals  # type: ignore
 
-    statements = await _load_statements(db, args.driver_id, args.since, args.limit)
-    logger.info("considering %d statement(s)%s", len(statements), "" if args.apply else " (DRY RUN — no writes)")
+    result = await recompute_statement_totals(
+        driver_ids=args.driver_ids,
+        since=args.since,
+        limit=args.limit,
+        apply=args.apply,
+    )
 
-    drivers: dict[str, dict] = {}
-    changed = 0
-    unchanged = 0
-    skipped: list[str] = []
-    failed: list[str] = []
-    # Net movement across every corrected row, so the operator can sanity-check
-    # the direction of the correction before applying it.
-    delta_payouts = 0.0
-    delta_earnings = 0.0
-
-    for row in statements:
-        sid = str(row.get("id"))
-        driver_id = row.get("driver_id")
-        period_type = (row.get("period_type") or "").strip()
-        start_d = _parse_date(row.get("period_start"))
-        end_d = _parse_date(row.get("period_end"))
-
-        if not driver_id or start_d is None:
-            skipped.append(f"{sid}: missing driver_id or unparseable period_start")
-            continue
-
-        driver = drivers.get(driver_id)
-        if driver is None:
-            found = await db.get_rows("drivers", {"id": driver_id}, limit=1)
-            if not found:
-                skipped.append(f"{sid}: driver {driver_id} no longer exists")
-                continue
-            driver = found[0]
-            drivers[driver_id] = driver
-
-        try:
-            if period_type in ("weekly", "monthly"):
-                statement = await build_statement(driver, period_type, start_d)
-            elif end_d is not None:
-                # Custom ranges (admin date filter) have no anchor to derive
-                # bounds from — rebuild over the stored inclusive range.
-                statement = await build_custom_statement(driver, start_d, end_d)
-            else:
-                skipped.append(f"{sid}: period_type {period_type!r} has no period_end to rebuild from")
-                continue
-        except Exception as e:
-            logger.error("[%s] rebuild failed: %s", sid, e, exc_info=True)
-            failed.append(sid)
-            continue
-
-        old = row.get("totals") or {}
-        new = _corrected(old, statement)
-
-        if _money_keys(old) == _money_keys(new):
-            unchanged += 1
-            continue
-
-        changed += 1
-        try:
-            delta_payouts += float(new["payouts_total"]) - float(old.get("payouts_total") or 0)
-            delta_earnings += float(new["earnings"]) - float(old.get("earnings") or 0)
-        except (TypeError, ValueError):
-            pass
-
+    for c in result.changes:
         logger.info(
             "[%s] %s %s: earnings %s -> %s | paid out %s -> %s | trips %s -> %s",
-            sid,
-            period_type,
-            start_d,
-            old.get("earnings"),
-            new["earnings"],
-            old.get("payouts_total"),
-            new["payouts_total"],
-            old.get("trips"),
-            new["trips"],
+            c.statement_id, c.period_type, c.period_start,
+            c.before["earnings"], c.after["earnings"],
+            c.before["payouts_total"], c.after["payouts_total"],
+            c.before["trips"], c.after["trips"],
         )
-
-        if args.apply:
-            try:
-                # update_one returns None when it matched ZERO rows — a silent
-                # no-op that would otherwise be counted as a correction. Treat
-                # it as a failure: a money backfill reporting writes it never
-                # made is worse than one that reports an error.
-                written = await db.update_one("driver_statements", {"id": sid}, {"totals": new})
-                if not written:
-                    logger.error("[%s] update matched no rows — not corrected", sid)
-                    failed.append(sid)
-            except Exception as e:
-                logger.error("[%s] write failed: %s", sid, e, exc_info=True)
-                failed.append(sid)
 
     logger.info(
         "%s: %d corrected, %d already correct, %d skipped, %d failed",
-        "APPLIED" if args.apply else "DRY RUN",
-        changed,
-        unchanged,
-        len(skipped),
-        len(failed),
+        "APPLIED" if result.applied else "DRY RUN",
+        result.corrected, result.unchanged, len(result.skipped), len(result.failed),
     )
-    if changed:
-        logger.info("net movement across corrected rows: earnings %+.2f | paid out %+.2f", delta_earnings, delta_payouts)
-    for note in skipped:
+    if result.corrected:
+        logger.info(
+            "net movement across corrected rows: earnings %+.2f | paid out %+.2f",
+            result.delta_earnings, result.delta_payouts,
+        )
+    for note in result.skipped:
         logger.warning("skipped %s", note)
-    if failed:
-        logger.error("failed statement ids: %s", json.dumps(failed))
+    if result.has_more:
+        logger.warning("more statements remain beyond --limit; re-run to continue")
+    if result.failed:
+        logger.error("failed statement ids: %s", json.dumps(result.failed))
         return 1
-    if not args.apply and changed:
-        logger.info("re-run with --apply to write these %d correction(s)", changed)
+    if not result.applied and result.corrected:
+        logger.info("re-run with --apply to write these %d correction(s)", result.corrected)
     return 0
 
 

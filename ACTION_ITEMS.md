@@ -7,7 +7,60 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed to `ON DELETE SET NULL` (migration 294) so `purge_pii_retention()` Step B no longer FK-aborts the entire daily retention purge once a paid ride crosses 7 years; `docs/runbooks/data-retention.md` extended to cover Steps H–M. Prior same-day (2026-08-10): B20 CLOSED: `ledger_projection.py`'s `_decompose` now degrades (whole amount to `platform_revenue`, Sentry-escalated) instead of silently decomposing from stale `driver_earnings`/`tax_amount` when a fare-settlement event's ride isn't yet `payment_status='paid'` — source-aware by construction (cancellation-fee/notice-fee events never reach the check). Also found and fixed in the same change: `_RIDE_COLUMNS` omitted `payment_status` entirely, which would have made the new check degrade *every* fare charge unconditionally had it shipped alone — added a column-membership regression test for it, mirroring the existing `discount_amount` one. 23 + 122 tests pass. Prior same-day (2026-08-10): B19 and B21 CLOSED: `payment_retry.py`'s `requires_capture` branch now routes through `_finalize_card_settlement` (picking up the atomic RPC + Sentry escalation + WS notify the other two settlement paths already had), and all 4 background loops (`payment_retry.py`, `driver_claim_reaper.py`, `offer_expiry_reaper.py`, `orphaned_hold_reconciler.py`) now have correct throttle-lock TTL arithmetic (`interval * 0.85` instead of `1.5x`/`2x`), each with the same two regression tests `ledger_projection.py` already used to catch this class of bug. 165 + 113 tests pass across the affected surfaces. Prior same-day (2026-08-10): A1c CLOSED: full-suite backend coverage verified at 90% aggregate on the latest `main` run (job 93335534234), all three sub-tiers done, no remainder. Same check also fixed the one test failing on that run (`test_snap_to_road_returns_none_without_any_provider_configured` — stale test hit a live public OSRM router instead of mocking "no provider configured") and filed **C12** (Codecov push uploads silently rejected — tokenless upload, `continue-on-error: true` hides it as a green check). Prior (2026-08-03): A1c (Track 2) Sub-tier C fully CLOSED across two parallel sessions (both converged on all 39 files in the 60-80% coverage band, fresh snapshot, not the stale 55-file estimate): `routes/faqs.py` 78.12%→94%, `utils/apns_client.py` 78.72%→100%, `server.py` 79.20%→88% (test-only, no bugs found; `server.py`'s Sentry-init block left as a documented import-time-only gap); `services/zoho_desk_integration.py` 74.42%→98%, `utils/distance_reconciliation.py` 74.70%→96%, `services/data_transfer/observability.py` 75.00%→100%; `utils/retention_purge.py` 69.12%→98%, `utils/orphaned_hold_reconciler.py` 69.23%→95%, `utils/driver_online.py` 69.70%→100% (the `is_available ⇒ is_online` invariant helper, explicit parametrized invariant test added); `utils/payment_retry.py` closed to 99% (reconciled in rather than overwritten). A separate parallel-session pass found and fixed 5 found-not-fixed bugs surfaced during the coverage sweep (see Sub-tier C entry below for the full list) and investigated a 6th, reverting its approved fix after a blast-radius test proved it was based on a false premise (Entry 13, `docs/change-log/2026-08-03-a1c-found-not-fixed-bugfixes.md`); its own final full suite ran 9235 passed, 1 known pre-existing flaky test deselected (order-dependent, passes standalone — see Sub-tier C entry). Prior (2026-08-02): `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%; `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
+_Last updated: 2026-08-12 — B8 CLOSED (Regina/Saskatoon only, stopgap): applied
+the 1.4×/1.8× multiplier proposal against production to fix identical fares
+across vehicle tiers, but only after catching that live data had drifted
+since the original 2026-08-11 investigation (Regina's Economy rate was
+`0.02/0.02` live, not the documented `2/2`; Saskatoon had an undocumented
+Economy>XL per_km inversion) and that the drafted `UPDATE` SQL used the
+wrong JSON shape (object-keyed `jsonb_set`, not the actual array-of-objects
+schema — would have silently no-op'd). Absolute price-vs-Uber positioning
+explicitly deferred per user direction, not resolved by this stopgap — see
+`docs/change-log/2026-08-12-b8-regina-saskatoon-vehicle-pricing.md`. New
+follow-ups logged: undocumented "Saskatoon Airport" area has the same
+identical-fares defect; a "Regina Airpot" (typo) area also has it. Prior
+same-day: A28 CLOSED: audit's 4 P2 findings + P2-B
+triaged. P2-C already closed (same finding as P0-A/#3678). Float-on-money
+in `routes/drivers/earnings.py` (4 sites) fixed — Decimal accumulation
+instead of raw `float()`, with regression tests independently verified to
+fail on the pre-fix file with the predicted drift value. Remaining items
+(driver-import VIN/email/phone validation, `/balance` vs `/earnings`
+composition, rider total-rides definition, missing import change-logs)
+filed as backlog — most need a product decision, not a blind code change.
+Prior same-day: A27 CLOSED: audit's 2 P1 findings. P1-A (dead
+`drivers.total_earnings` fleet-wide stat) fixed with a live, legacy-excluded,
+batched earnings computation; also fixed a related gap on the per-driver
+"Earnings" header (missing legacy exclusion vs. its own "Payouts" tab). P1-B
+investigation (was PST hidden in legacy receipts?) surfaced a bigger live
+issue: the current fare engine had PST disabled for Saskatchewan with a
+comment claiming it doesn't apply — contradicting regulatory-sk.md. User
+confirmed PST does apply; enabled it in production for the 4 real SK service
+areas (effective for new quotes only, no backdating), fixed the stale
+comment, added the first direct tax-calculation unit tests. Prior same-day
+(2026-08-12): C18 CLOSED: all 176 `uses:` references across 23
+`.github/workflows/*.yml` files pinned from mutable version tags (`@v7`) to
+verified commit SHAs (`@<sha> # v7`), resolved via anonymous public-repo git
+reads (not the release-page scrape the original investigation correctly
+rejected) — see `docs/change-log/2026-08-12-c18-pin-github-actions-shas.md`.
+One reference (`8398a7/action-slack@v3`) turned out to resolve to a mutable
+**branch**, not even a tag. Prior same-day (2026-08-12): A1c/Sub-tier C:
+`utils/kyb_reverification.py` CLOSED, 67% → 92% (75 stmts) — a gap in the
+prior "fully CLOSED" sweeps (2026-08-03, 2026-08-10/11), found via a live
+`pytest --cov` re-check before starting a planned 28-file batch; the other
+27 files in that batch were already closed by concurrent sessions (in most
+cases under the exact same test-file name this session independently
+chose) and were discarded without being committed — see
+`docs/change-log/2026-08-12-a1c-kyb-reverification-coverage.md` for the
+full collision list. Prior (2026-08-11): A26 CLOSED: `EXCLUDE_LEGACY_RIDES` compiled to
+an unsatisfiable `legacy_import_metadata IS NULL` SQL predicate against a
+`NOT NULL DEFAULT '{}'::jsonb` column, matching zero rows always at 9+
+driver-facing earnings/statement/T4A call sites — confirmed live against
+production (authorized Supabase MCP access) and fixed by adding a proper
+`$eq` filter operator to `repositories/_base.py` and changing the constant
+to `{"legacy_import_metadata": {"$eq": {}}}`, a single-source-of-truth fix
+covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
+(admin financial-dashboard legacy-ride double-counting, 3 PRs merged:
+#3674, #3678, #3683). Prior same-day: B25 ADDED (open): Maestro real-device mobile E2E (`.github/workflows/maestro-e2e.yml`) is wired but never fires — missing `EXPO_TOKEN`/`MAESTRO_CLOUD_API_KEY` secrets unconfirmed, opt-in-only trigger (`workflow_dispatch`/`run-maestro` label), no iOS lane. Found while explaining the Playwright-vs-Maestro split to a user; Playwright (`rider-app/e2e/`, `driver-app/e2e/`) only covers the Expo web export, not a real native device. Prior (2026-08-10): B17 CLOSED: `financial_events.ride_id` FK changed to `ON DELETE SET NULL` (migration 294) so `purge_pii_retention()` Step B no longer FK-aborts the entire daily retention purge once a paid ride crosses 7 years; `docs/runbooks/data-retention.md` extended to cover Steps H–M. Prior same-day (2026-08-10): B20 CLOSED: `ledger_projection.py`'s `_decompose` now degrades (whole amount to `platform_revenue`, Sentry-escalated) instead of silently decomposing from stale `driver_earnings`/`tax_amount` when a fare-settlement event's ride isn't yet `payment_status='paid'` — source-aware by construction (cancellation-fee/notice-fee events never reach the check). Also found and fixed in the same change: `_RIDE_COLUMNS` omitted `payment_status` entirely, which would have made the new check degrade *every* fare charge unconditionally had it shipped alone — added a column-membership regression test for it, mirroring the existing `discount_amount` one. 23 + 122 tests pass. Prior same-day (2026-08-10): B19 and B21 CLOSED: `payment_retry.py`'s `requires_capture` branch now routes through `_finalize_card_settlement` (picking up the atomic RPC + Sentry escalation + WS notify the other two settlement paths already had), and all 4 background loops (`payment_retry.py`, `driver_claim_reaper.py`, `offer_expiry_reaper.py`, `orphaned_hold_reconciler.py`) now have correct throttle-lock TTL arithmetic (`interval * 0.85` instead of `1.5x`/`2x`), each with the same two regression tests `ledger_projection.py` already used to catch this class of bug. 165 + 113 tests pass across the affected surfaces. Prior same-day (2026-08-10): A1c CLOSED: full-suite backend coverage verified at 90% aggregate on the latest `main` run (job 93335534234), all three sub-tiers done, no remainder. Same check also fixed the one test failing on that run (`test_snap_to_road_returns_none_without_any_provider_configured` — stale test hit a live public OSRM router instead of mocking "no provider configured") and filed **C12** (Codecov push uploads silently rejected — tokenless upload, `continue-on-error: true` hides it as a green check). Prior (2026-08-03): A1c (Track 2) Sub-tier C fully CLOSED across two parallel sessions (both converged on all 39 files in the 60-80% coverage band, fresh snapshot, not the stale 55-file estimate): `routes/faqs.py` 78.12%→94%, `utils/apns_client.py` 78.72%→100%, `server.py` 79.20%→88% (test-only, no bugs found; `server.py`'s Sentry-init block left as a documented import-time-only gap); `services/zoho_desk_integration.py` 74.42%→98%, `utils/distance_reconciliation.py` 74.70%→96%, `services/data_transfer/observability.py` 75.00%→100%; `utils/retention_purge.py` 69.12%→98%, `utils/orphaned_hold_reconciler.py` 69.23%→95%, `utils/driver_online.py` 69.70%→100% (the `is_available ⇒ is_online` invariant helper, explicit parametrized invariant test added); `utils/payment_retry.py` closed to 99% (reconciled in rather than overwritten). A separate parallel-session pass found and fixed 5 found-not-fixed bugs surfaced during the coverage sweep (see Sub-tier C entry below for the full list) and investigated a 6th, reverting its approved fix after a blast-radius test proved it was based on a false premise (Entry 13, `docs/change-log/2026-08-03-a1c-found-not-fixed-bugfixes.md`); its own final full suite ran 9235 passed, 1 known pre-existing flaky test deselected (order-dependent, passes standalone — see Sub-tier C entry). Prior (2026-08-02): `routes/drivers/subscriptions.py` (Sub-tier A, Spinr Pass) CLOSED, 61%→99% across two same-day sessions; `ride_flow.py`/`ride_cancel.py`/`ride_reads.py` (Sub-tier A) CLOSED, 66.30%/51.75%/58.95%→99%/100%/98%; `utils/redis_client.py` closed to 100%; `routes/websocket.py` closed to 80.3% (PR #3154); `repositories/ride_repo.py` 54.83%→84.1%. A1b closed 2026-08-01 (Track 1 done); Track 2 spun off as A1c — full-repo scoping pass done (Sub-tiers A/B/C), `utils/reconciliation.py` (16%→90%) closed; AI15 added and closed 2026-08-01 (`backend/ai/pii.py` card-number/SIN scrubbing gaps, found via `/ai-check`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
 
 ---
 
@@ -2618,6 +2671,322 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   from `test_auth.py`/`test_middleware_user_id.py` deliberately using
   short JWT test keys — none are leaks), exit code 0 each — and fail no tests.
 
+### A25. Legacy driver/rider-migration audit (2026-08-11) — 3 P0 findings
+- **Source:** `docs/audit/2026-08-11-driver-rider-migration-audit.md`
+  (merged via #3662, not yet triaged into this file until now).
+- **P0-C — rider CSV importer could silently overwrite PIPEDA-scrubbed PII
+  on `pending_deletion`/`deleted` accounts.**
+  - [x] **Status:** DONE (2026-08-11) — `rider_import_service.py` now reads
+    `users.status` in `_prefetch_existing`/`build_plan` and skips (flags as
+    `protected_skip`, no fields touched) any match whose status is
+    `pending_deletion` or `deleted`, instead of repopulating falsy email/PII
+    fields the way it did for a normal partial profile. Admin dashboard
+    (Bulk Rider Import page) surfaces the new category with a distinct
+    "Skipped — needs review" badge/stat. 2 new backend tests, full change
+    impact log at `docs/change-log/2026-08-11-rider-import-pii-protection.md`.
+    PR #3674.
+- **P0-A — rider importer has no provenance trail.**
+  - [x] **Status:** DONE — stale checkbox, corrected here. Already fixed in
+    PR #3678 (same finding also listed as A28's P2-C, which already notes
+    "no separate action needed"). Confirmed directly against
+    `backend/services/rider_import_service.py`: every imported/updated
+    rider row now sets `legacy_import_metadata` (see lines ~298-299,
+    ~327). No code change needed; correcting this entry's own checkbox so
+    it doesn't keep reading as open.
+- **P0-B — 3 admin financial dashboards double-count legacy-imported ride
+  earnings.**
+  - [x] **Status:** DONE (2026-08-11) — new migrations
+    `backend/migrations/302_ride_money_rollup_exclude_legacy.sql` and
+    `backend/migrations/303_payouts_overview_ytd_exclude_legacy.sql` add a
+    legacy-exclusion predicate to `admin_ride_money_rollup` (unconditional)
+    and `admin_payouts_overview_aggregates`'s `ytd`/T4A CTE only
+    (`earned_up_to_end`/`earned_up_to_prev`/`blocked_outstanding` stay
+    unfiltered — they're paired with the offsetting `payouts` rows and are
+    already arithmetically correct). The CSV export at
+    `routes/admin/rides.py`'s `/earnings/rides` now drops legacy rides
+    **post-fetch** via `drop_legacy_rides()`, not via a server-side filter —
+    see A26 below for why. Full change impact log:
+    `docs/change-log/2026-08-11-admin-legacy-earnings-exclusion.md`.
+- P1/P2 findings from the same audit (3 P1, 4 P2) not yet triaged into this
+  file — see the audit doc directly.
+
+### A26. `EXCLUDE_LEGACY_RIDES` compiles to an unsatisfiable SQL predicate — was zeroing driver-facing earnings in production (CRITICAL, found 2026-08-11 while fixing A25/P0-B)
+- [x] **Status:** DONE (2026-08-11) — confirmed live against production
+  (`soavhtdhefowwvforzwb`, `ca-central-1`) via authorized Supabase MCP
+  access, then fixed. A driver with 1 real, non-legacy $7.59 completed ride
+  was returning 0 rows from the exact compiled filter — their
+  `GET /drivers/balance` was reading `total_rides: 0`, `total_earnings:
+  $0.00` despite having real, unpaid earnings. Added an explicit `$eq`
+  operator to `repositories/_base.py`'s `_apply_filters` and changed
+  `EXCLUDE_LEGACY_RIDES` to `{"legacy_import_metadata": {"$eq": {}}}` —
+  single source of truth, fixes all 9+ call sites without touching them
+  individually. Re-verified live against the same driver with the
+  corrected predicate — now correctly returns their 1 real ride. Full
+  backend suite: 11020 passed, 0 failed. Full Change Impact & Risk Log:
+  `docs/change-log/2026-08-11-a26-exclude-legacy-rides-eq-fix.md`.
+  <details><summary>Original finding (2026-08-11, pre-fix)</summary>
+
+  Found by `spinr-migration-reviewer` while reviewing the P0-B migrations
+  above; user directed: file it, don't fix broadly this session (no live
+  Supabase access to verify safely at the time). Live Supabase access was
+  authorized later the same session, enabling direct confirmation and fix.
+- **What:** `utils/legacy_rides.py`'s
+  `EXCLUDE_LEGACY_RIDES = {"legacy_import_metadata": None}` is merged
+  directly into real `db_supabase.get_rows(...)` filter dicts at 9+ call
+  sites. `repositories/_base.py`'s `_apply_filters` compiles a `None` value
+  to `q.is_(k, "null")` → PostgREST `is.null` → real SQL `column IS NULL`.
+  But `rides.legacy_import_metadata` (migration 268),
+  `users.legacy_import_metadata` (256), and `drivers.legacy_import_metadata`
+  (221) are all declared `NOT NULL DEFAULT '{}'::jsonb` — **no row in any of
+  these tables can ever be SQL NULL** in that column, imported or not.
+  `IS NULL` against a `NOT NULL` column matches **zero rows, always** — not
+  "exclude legacy rides," but "exclude every row the filter touches."
+- **Confirmed technically** (not yet confirmed live): traced
+  `postgrest.base_request_builder.BaseFilterRequestBuilder.is_()` →
+  `value = "null"` → `Filters.IS` → PostgREST `is.null` → Postgres
+  `IS NULL`; cross-checked all three columns' DDL
+  (`NOT NULL DEFAULT '{}'::jsonb`). If this reaches production traffic as
+  analyzed, every query merging `EXCLUDE_LEGACY_RIDES` returns **zero rows**,
+  not "zero legacy rows" — meaning `payable_balance`/`total_earnings` would
+  compute as `$0` for every driver at those call sites, not just ones
+  touched by legacy import.
+- **Why not fixed here:** severity (driver payouts, live-tested surface) +
+  the fact that a bug this size going unnoticed strains credulity — there
+  may be a mitigating factor not visible from static analysis alone (e.g. a
+  different code path in production, a compensating fallback, or the bug
+  simply not being live yet). No live Supabase access in this sandbox to
+  confirm actual behavior before touching money-critical driver-facing code.
+- **Call sites to check/fix together** (all currently assume the filter
+  works as a server-side exclusion):
+  - `routes/drivers/earnings.py` — 7 places (driver balance + earnings
+    endpoints)
+  - `utils/driver_statement.py:216`
+  - `utils/t4a_annual_job.py:194`
+  - `routes/admin/drivers.py:2642`
+- **What already avoids the bug:** the post-fetch companion
+  `drop_legacy_rides()` (Python-truthy check on the fetched rows, not a
+  DB-level filter) is unaffected and correct. A26's P0-B fix
+  (`routes/admin/rides.py`'s `/earnings/rides` CSV export) deliberately uses
+  `drop_legacy_rides()` instead of `EXCLUDE_LEGACY_RIDES` for this reason —
+  see A25/P0-B above.
+- **Suggested fix** (once live-verified): change
+  `EXCLUDE_LEGACY_RIDES = {"legacy_import_metadata": None}` to something
+  `_apply_filters` can actually compile against a `NOT NULL DEFAULT '{}'`
+  column — e.g. add an `$eq` operator to `_SUPPORTED_FILTER_OPS` /
+  `_build_or_clause_term` and use
+  `{"legacy_import_metadata": {"$eq": {}}}`, or simplest: swap every
+  `**EXCLUDE_LEGACY_RIDES`-in-a-filter call site to fetch normally and
+  `drop_legacy_rides()` post-fetch (already proven safe, no `_apply_filters`
+  change needed, but loses server-side row reduction on
+  `limit=10000`-style calls).
+- **First action for whoever picks this up:** confirm live in staging/prod
+  whether `routes/drivers/earnings.py`'s balance/earnings endpoints are
+  currently returning `0`/empty for drivers who have ANY completed ride
+  (not just legacy-touched ones) — that's the smoking-gun symptom if this
+  analysis is correct.
+  </details>
+
+### A27. Audit's 2 P1 findings (`docs/audit/2026-08-11-driver-rider-migration-audit.md`) — both CLOSED 2026-08-11
+- **P1-A — `drivers.total_earnings` is dead code (fleet-wide admin stat
+  always $0).**
+  - [x] **Status:** DONE. `admin_get_driver_stats` and per-area breakdown
+    now compute earnings live from completed, legacy-excluded rides (one
+    batched query, not N+1). Also fixed a related gap found in the same
+    pass: `admin_get_driver_live_stats` (per-driver "Earnings" header)
+    lacked the legacy-ride exclusion its own "Payouts" tab already had —
+    same driver, same screen, two different numbers (Phase 3 cross-surface
+    finding #2 in the audit). Full Change Impact & Risk Log:
+    `docs/change-log/2026-08-11-p1a-driver-earnings-dead-column.md`.
+- **P1-B — legacy PST possibly folded silently into the fare line on
+  imported historical receipts.**
+  - [x] **Status:** CLOSED, but the investigation surfaced something bigger
+    than the audit anticipated. Traced the *current* fare engine
+    (`features.calculate_all_fees`) and found it carried a comment
+    asserting "PST does NOT apply to rideshare" in Saskatchewan, with the
+    live `service_areas` config for Saskatoon/Regina set `pst_enabled:
+    false` — directly contradicting `.claude/context/regulatory-sk.md`'s
+    documented rule ("PST (6%, SK) on fare where applicable — ride-share
+    currently PST-applicable in SK"). **User confirmed PST does apply and
+    the code was wrong** — Saskatoon/Regina were under-collecting PST on
+    every live ride, not just legacy-imported ones. Per explicit user
+    direction, enabled PST now in production (`pst_enabled=true,
+    pst_rate=6` on the 4 real Saskatchewan `service_areas` rows only — not
+    the unrelated `riyadh`/`riyadh airport` test rows), effective
+    immediately for new fare quotes, no backdating of already-completed
+    rides. Fixed the stale code comment; added the first direct unit tests
+    for `calculate_all_fees`'s GST/PST/HST branches (none existed before).
+    The original legacy-import question (was PST hidden in the imported
+    receipts' fare line) is likely moot given PST wasn't being charged at
+    all until this fix — no separate legacy-receipt remediation needed.
+    Full Change Impact & Risk Log:
+    `docs/change-log/2026-08-11-sk-pst-enable.md`.
+  - **Not verified / left open**: whether historical remediation (crediting
+    riders or drivers for the pre-fix under-collection period) is needed —
+    explicitly out of scope per "no backdating" instruction; flag to
+    Finance/Legal if that determination is still pending.
+- P2 findings from the same audit: see A28 below, triaged 2026-08-12.
+
+### A28. Audit's 4 P2 findings + P2-B (`docs/audit/2026-08-11-driver-rider-migration-audit.md`) — triaged 2026-08-12
+- **P2-C — rider importer never writes `legacy_import_metadata`.**
+  - [x] **Status:** already DONE — this is the exact same finding as P0-A
+    (see A25 above), fixed in PR #3678. No separate action needed; noting
+    the cross-reference here since the audit lists it under both P0 and P2
+    numbering.
+- **P2 — driver import validity gaps** (`driver_import_service.py`): VIN
+  stored plaintext with no format/checksum check; email/phone accepted
+  with no format validation; a document row can import with
+  `status="approved"` and an already-past `expiry_date`.
+  - [x] **Status:** DONE (2026-08-12) — fixed per the direction this entry
+    itself scoped. `build_plan` now:
+    1. Format-validates `phone` against the same `^\+1\d{10}$` shape
+       `SendOTPRequest`/`VerifyOTPRequest` (`schemas.py`) require at
+       signup, and `email` (when present — it's optional) against a
+       permissive structural check (`^[^\s@]+@[^\s@]+\.[^\s@]+$`) — reject
+       the row (`plan.errors`, skip) on either failure. Deliberately not
+       full RFC 5322 email grammar: this is one-time CLI-operator CSV
+       input, not a live user-facing form, so the bar is "catch a
+       structurally broken value," matching this entry's own stated intent.
+    2. Format/checksum-validates `vin` by reusing the existing
+       `validators.validate_vin` (17-char ISO 3779 alphanumeric, I/O/Q
+       excluded — the same helper `schemas.py` already used elsewhere for
+       live vehicle registration, not a new checksum implementation) at
+       **both** VIN write sites: the new-driver-insert path and the
+       resumed-driver vehicle-update path (`vehicle_field_changes`'s
+       `vin_plain`). A valid-but-differently-cased VIN is normalized
+       (uppercased) rather than merely accepted, so downstream storage is
+       consistent.
+    3. Rejects a document row whose `status == "approved"` and
+       `expiry_date` has already passed (`date.fromisoformat(expiry) <
+       date.today()`) — a `status == "pending"` row with the same past
+       date still imports (correct: it hasn't been approved yet, and the
+       real runtime gate — `go_online`'s own expiry re-check,
+       `routes/drivers/status.py:309-328` — still applies before a driver
+       can go online either way). This stays defense-in-depth, exactly as
+       this entry originally framed it, not a replacement for that gate.
+    - **Files:** `backend/services/driver_import_service.py` (all three
+      fixes); `backend/tests/test_driver_import_service.py` (6 new tests:
+      malformed phone, malformed email, blank email is not an error, VIN
+      format on new-driver insert incl. case-normalization, VIN format on
+      resumed-driver update); `backend/tests/test_driver_import_service_coverage.py`
+      (2 new tests: expired+approved document rejected, expired+pending
+      document still allowed).
+    - **Verification:** full existing suite for this module + its callers
+      re-run clean: `test_driver_import_service.py` (23/23),
+      `test_driver_import_service_coverage.py` (70/70 — includes the
+      pre-existing `test_resume_updates_changed_vehicle_fields` /
+      `test_resume_unchanged_vin_is_not_updated`, which already used real
+      valid VINs and confirm the new VIN check doesn't reject legitimate
+      values), `test_admin_driver_import.py` (9/9),
+      `test_admin_drivers_coverage.py` (129/129) — 231/231 total, 0 failed.
+      `services/driver_import_service.py` module coverage 98.51%
+      (`coverage.xml`, measured directly — the aggregate `--cov=.` run's
+      terminal table is too wide to grep the module's own row out of
+      reliably). `python3 -c "import ast; ast.parse(...)"` clean after
+      every edit.
+    - **What was NOT verified:** not exercised against the real CLI script
+      (`scripts/import_saskatoon_drivers.py`) or the admin HTTP upload
+      flow end-to-end with a live Supabase — verified at the `build_plan`
+      unit-test layer only (mocked/fake Supabase client), consistent with
+      how every other validation rule in this file is tested. The
+      "nullable-by-design, no `plan.errors` entry when blank" fields this
+      entry also noted (`sgi_approved`/`work_authorization_status`/etc.)
+      were confirmed intentional by the original audit and were not
+      touched here.
+  - Also noted: `sgi_approved`/`work_authorization_status`/
+    `is_permanent_resident`/`is_citizen`/expiry dates/`decals_sent` are
+    nullable-by-design with no `plan.errors` entry when blank — the audit
+    flags this only to confirm it's the intended model (completeness
+    enforced by downstream `status`/`is_verified` gating), not to request
+    a change. No action needed unless product says otherwise.
+- **Float-on-money in `routes/drivers/earnings.py`** (adjacent finding,
+  flagged because it's inside the file the audit reviewed line-by-line
+  anyway — a genuine CLAUDE.md Decimal-discipline violation, 4 call sites).
+  - [x] **Status:** DONE (2026-08-12) — daily/weekly/monthly/comparison
+    earnings aggregation now uses `_d()`/Decimal throughout instead of raw
+    `float()` accumulation. Display-path only (no money movement), but
+    brings the file into CLAUDE.md compliance. Full Change Impact & Risk
+    Log: `docs/change-log/2026-08-12-driver-earnings-decimal-fix.md`.
+- **`/balance` vs `/earnings` composition can diverge** (Phase 3
+  cross-surface findings #6/#7): `/balance` sums fare components live and
+  excludes `ride_incentive_claims` bonuses/cancellation fees that
+  `/earnings` and driver statements include; `/earnings`-family endpoints
+  trust the stored `driver_earnings` column directly. Undocumented as
+  intentional or accidental.
+  - [ ] **Status:** open — needs a product decision, not a blind code
+    change. Reconciling the two compositions either way is a money-visible
+    behavior change on a live-tested surface (driver balance/payout
+    figures) and CLAUDE.md requires escalation when blast radius/intent is
+    unclear on a surface like this. Flag to product/finance: should
+    `payable_balance` include bonuses/cancellation fees (making it match
+    `/earnings`), or is the current split deliberate (balance = withdrawable
+    ride money only, earnings = full income picture)?
+- **Admin "total rides" vs rider-app "total rides" use different
+  definitions, unreconciled** (Phase 3 cross-surface finding #10): admin
+  counts all-status lifetime rides; rider-app counts completed-only,
+  period-scoped.
+  - [ ] **Status:** open, low priority — the audit itself frames this as
+    "by design," similar to the T4A-vs-earnings date-bucket difference
+    (finding #8) which is already documented in code as intentional. Likely
+    resolution is a one-line code comment on each definition rather than a
+    behavior change, once product confirms both are meant to differ.
+- **P2-B — no Change Impact Log exists for the driver or rider bulk-import
+  paths themselves** (only booking-import and Stripe-mapping migration have
+  runbooks/change-logs, despite both writing directly to `auth`/`users`/
+  `drivers`).
+  - [ ] **Status:** open — documentation-only gap, no code risk. Someone
+    should backfill `docs/change-log/` entries for
+    `driver_import_service.py`/`rider_import_service.py` describing the
+    existing (already-shipped) behavior, per CLAUDE.md's "live-tested
+    surface" documentation requirement.
+
+### A29. `spinr-regulatory-compliance-checker` follow-ups from the SK PST enablement (A27/#3723) — not previously filed
+- **Correction note:** PR #3723's body said these 3 findings were "filed as
+  `ACTION_ITEMS.md` follow-ups, not blocking this PR" — they were not
+  actually added at the time. Filing them now (2026-08-12) to make that
+  claim true.
+- **No audit trail on the tax-rate admin endpoints themselves.** Two
+  separate `PUT /areas/{area_id}/tax` endpoints exist
+  (`features.py:722-744`'s `pricing_router` and
+  `routes/admin/service_areas.py:841-856`), and neither writes an
+  `audit_logs` row or requires a justification string for a tax-rate
+  change — unlike the analogous surge-cap endpoint in `features.py`, which
+  documents "no written-justification field... must not be a path to
+  exceed the cap" and routes above-cap changes to an audited path. A
+  tax-rate change carries real regulatory/financial weight (every rider's
+  charge, CRA/SK remittance obligations) with zero admin-action audit
+  trail today. Compounded in the actual 2026-08-11 PST-enablement event:
+  the change was applied via direct Supabase access, bypassing both
+  endpoints entirely — mitigated after the fact with 4 retroactive
+  `audit_logs` rows (see A27/P1-B), but the underlying endpoints still
+  have no audit requirement for the *next* tax-rate change made through
+  the normal admin UI.
+  - [ ] **Status:** open. Fix direction: add an `audit_logs` write (with a
+    required justification field, mirroring the surge-cap pattern) to both
+    tax endpoints before the next tax-rate change ships.
+- **`corporate_statement_pdf.py` GST/PST fallback risk.** Falls back to a
+  single combined "Tax (GST/PST)" line (lines 93-98) whenever
+  `tax_by_type` is empty — e.g. a statement period mixing pre-/post-PST-
+  cutover rides where no ride happens to have a populated breakdown, or
+  any future tax type the aggregator doesn't yet bucket. Low risk today
+  since `_aggregate_rows` in `routes/corporate_company.py` already buckets
+  by label, but the fallback path exists and would violate the
+  separate-line-items rule (regulatory-sk.md) if ever hit for a period
+  with real GST+PST both present.
+  - [ ] **Status:** open, low priority. Fix direction: either remove the
+    combined-line fallback (fail loudly instead) or confirm/document why
+    it's an acceptable degrade path.
+- **No `service_area_tax_history` (or equivalent) audit table.** The PST
+  enablement's only queryable-in-DB trace is the 4 retroactive `audit_logs`
+  rows (A27); there's no dedicated append-only table capturing
+  rate/enabled transitions over time the way `driver_insurance_periods`
+  does for insurance periods. If SK/CRA ever audits "when exactly did
+  Spinr start collecting PST," the only source of truth is those
+  `audit_logs` rows plus the change-log markdown.
+  - [ ] **Status:** open, low priority — `audit_logs` already covers the
+    "what changed and why" need; a dedicated history table would only add
+    value for high-volume tax-config churn, which this isn't yet. Revisit
+    if tax-rate changes become more frequent.
+
 ## P1 — Fix before launch (code)
 
 ### B0. Migration runner shreds any migration whose text contains "CONCURRENTLY"
@@ -2894,7 +3263,71 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   production via the Session pooler connection string once convenient.
 
 ### B8. Economy and XL quote identical fares (per-vehicle-type pricing unseeded)
-- [ ] **Status:** open — **parked 2026-08-11 pending contributor sign-off on the
+- [x] **Status:** Regina/Saskatoon/Saskatoon Airport/Regina Airpot all
+  CLOSED (2026-08-12) as an explicit **stopgap** — the 1.4×/1.8×
+  multiplier proposal below was applied
+  against production, fixing the "all tiers cost the same" defect for
+  these two areas. **Not a claim about being priced below Uber** — the
+  user explicitly raised that Spinr's 0% driver-commission model gives
+  real room to undercut Uber's list price (distinct from chasing Uber's
+  unsustainable promotional discounts), and just as explicitly deferred
+  that question: this session has no live Uber comparative fare data to
+  compute a real target, so absolute price-level-vs-Uber positioning is
+  tracked as a separate follow-up, not resolved here. Full Change Impact
+  Log: `docs/change-log/2026-08-12-b8-regina-saskatoon-vehicle-pricing.md`.
+  **Two things the original proposal below got wrong, caught before
+  running anything (see the change log for full detail):**
+  1. **Live data had drifted since 2026-08-11.** Regina's live Economy
+     rate was actually `0.02/0.02` (not the documented `2/2` — two orders
+     of magnitude off, confirmed with the user as a decimal-entry error
+     and corrected to `2.00` before applying multipliers). Saskatoon's
+     live Economy `per_km` was `1.2` (not documented `1`), *higher* than
+     XL's `1.0` — an inversion not in this entry's original scope,
+     corrected in the same pass per user direction rather than shipping a
+     second visible pricing oddity alongside the fix.
+  2. **The drafted `UPDATE` statements below use the wrong JSON shape** —
+     they assume `vehicle_pricing` is a JSON object keyed by vehicle-type
+     name (`jsonb_set(..., '{XL}', ...)`), but the live schema is a JSON
+     **array** of `{vehicle_type: "...", ...}` objects (confirmed against
+     `routes/fares.py:249-254`'s actual read path). Running the SQL below
+     as literally written would have been a **silent no-op** — do not run
+     it verbatim; see the change log for the corrected full-array-replace
+     statements that were actually executed.
+  - **Final live values (Regina):** Economy `2.00/2.00`, XL `2.80/2.80`,
+    Premium `3.60/3.60` (base_fare/per_km).
+  - **Final live values (Saskatoon):** Economy `4.00/1.00`, XL
+    `5.60/1.40`, Premium `7.20/1.80`.
+  - **Discovered, not fixed this pass — new follow-up items:**
+    - [x] A 6th service area, **"Saskatoon Airport"** (created 2026-07-30,
+      after the last full-area inventory this entry's original
+      investigation ran), had the identical all-tiers-same-price defect.
+      **CLOSED 2026-08-12** — same stopgap multiplier applied (this area
+      has non-zero `per_min`/`min_fare`/`booking_fee`, unlike Regina/
+      Saskatoon main, so the doc's "~1.2×/~1.5× on per_min/booking_fee"
+      modest-scaling note was extended to `min_fare` too, treated as
+      another floor-amount field rather than a per-unit rate). Final
+      live values: Economy `3.50/1.50/0.25/8.00/2.00`, XL/Van (same
+      multiplier, same resulting numbers per the doc's original "XL/Van
+      ≈1.4×" framing) `4.90/2.10/0.30/9.60/2.40`, Premium
+      `6.30/2.70/0.38/12.00/3.00` (base_fare/per_km/per_min/min_fare/
+      booking_fee). Change Impact Log:
+      `docs/change-log/2026-08-12-b8-airport-vehicle-pricing.md`.
+    - [x] A service area literally named **"Regina Airpot"** (typo — missing
+      the second "r") also carried the defect. **CLOSED 2026-08-12** —
+      same fix applied, same final values as Saskatoon Airport above.
+      The name typo itself was intentionally left untouched — renaming a
+      `service_areas.name` value needs its own blast-radius check (any
+      other table/config that might match on the exact string) before
+      touching it, and that wasn't asked for or investigated this pass.
+      Still open as its own separate item if the typo is ever confirmed
+      to cause a functional bug (not just a cosmetic one).
+    - **Uber competitive positioning** (raised by the user): should
+      Economy's absolute rate undercut Uber's current list price in
+      Regina/Saskatoon, and by how much? Needs real comparative fare data
+      this session doesn't have access to. `riyadh`/`riyadh airport`
+      remain untouched (confirmed intentional international-market
+      pricing per the original investigation).
+- **(historical) Status:** open — **parked 2026-08-11 pending contributor sign-off on the
   multiplier proposal below** (superseding the earlier "parked pending a
   pricing decision (2026-07-27)" note — same blocker, now with the exact
   statements ready to run once approved). No code change needed; the join
@@ -4064,7 +4497,7 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   would mean the fix didn't actually reach the built image.
 
 ### B24. `G4b · yarn audit` / `G4c · npm audit` (JS deps) red on pre-existing transitive findings — blocks all open dependency-bump PRs identically
-- [ ] **Status:** open. Same shape as B22 (which covers `G4a · pip-audit`
+- [x] **CLOSED 2026-08-11.** Same shape as B22 (which covers `G4a · pip-audit`
   only) but for the JS side — no existing item covered this half.
 - **Why:** found while verifying whether the 10 open dependabot PRs
   (#3473–#3487, admin-dashboard + backend) would break anything. `G4b`
@@ -4107,12 +4540,132 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   advisory. `G4b` (all three JS matrix legs) and `G4c` both green is the
   signal the fix is real, same "two gates, one fix" logic as B22's
   `cryptography`/`G4a`+`G6` pairing.
-- **What was NOT verified:** `rider-app`/`driver-app` `npm audit` output
-  directly (see above — inferred, not independently pulled); whether any
-  of these findings are already stale (i.e. already fixed on `main` by
-  unrelated work) as of whenever this item is next picked up — re-run the
-  audit fresh rather than trusting this list, the way B22's own dated
-  updates did each time.
+- **Resolution (2026-08-11):** all three surfaces re-audited fresh (not the
+  stale list above — `rider-app`/`driver-app` use `yarn audit`, not `npm
+  audit`; `admin-dashboard` uses `npm audit`):
+  - **admin-dashboard** (`npm audit fix`, resolves within existing semver
+    ranges declared by parents — no `package.json` change, lockfile only):
+    `brace-expansion` 5.0.8→5.0.9, `dompurify` 3.4.12→3.4.13, `fast-uri`
+    3.1.4→3.1.5, `hono` 4.12.32→4.13.1, `ip-address` 10.2.0→10.5.0,
+    `js-yaml` 4.3.0→4.3.1, `nanoid` 3.3.16→3.3.18. `npm audit
+    --audit-level=high` → 0 vulnerabilities.
+  - **rider-app** and **driver-app** (Yarn Classic 1.22.22, no `npm audit`
+    equivalent — fixed via `package.json`'s `resolutions` block, since both
+    apps pin transitive deps that way already): bumped the existing
+    `js-yaml` floor `^4.3.0`→`^4.3.1` and `fast-uri` floor `^3.1.4`→`^3.1.5`;
+    added `"nanoid": "^3.3.17"`. `brace-expansion` needed 4 **scoped**
+    resolutions, not one blanket pin — it's present via 3 independent
+    incompatible-major chains simultaneously (`minimatch`→1.x,
+    `glob`/`@expo/fingerprint`/`@typescript-eslint/typescript-estree`→5.x)
+    and a blanket resolution would force one major onto a consumer that
+    doesn't want it. Yarn 1's syntax for a deeply-nested scoped resolution
+    needs a `**/` glob prefix — a first attempt without it
+    (`"minimatch/brace-expansion"`) silently no-opped, confirmed via `yarn
+    why brace-expansion` showing unchanged versions before switching to
+    `"**/minimatch/brace-expansion": "^1.1.18"` etc., which collapsed every
+    instance to a single patched version in both apps. `driver-app` turned
+    out to have the identical chain shape as `rider-app` (same 3 parents),
+    so the same 4 scoped keys applied unchanged.
+  - **Unpatchable, left as-is, documented rather than silently dropped:**
+    `image-size` (HIGH, GHSA — via `expo > @expo/cli > @expo/metro >
+    metro > image-size`) in both `rider-app` and `driver-app` — upstream
+    has no patched version yet ("No patch available" per the npm
+    advisory). This is a genuine gap, not a fix we chose to skip; re-check
+    on the next dependency-bump pass rather than assuming it's resolved.
+  - `admin-dashboard`'s `dompurify`/`hono`/`ip-address` findings named in
+    the original writeup above were fixed incidentally by the same `npm
+    audit fix` run (they were transitive siblings of the packages actually
+    named in the `[ ]` acceptance criteria) — not a separate pass.
+- **Verification:** real test suites run against the bumped versions in
+  every surface, not just the audit tool re-run:
+  - `admin-dashboard`: `npx vitest run` (160/160), `npx tsc --noEmit`
+    (clean), a real `npm run build` (succeeded, full route manifest
+    printed — not just dev server/`tsc --noEmit`, per this repo's
+    CLAUDE.md convention), `npx eslint .` (0 errors, pre-existing warnings
+    only).
+  - `rider-app`: `npx jest --silent` → 440/440 passed, 52/52 suites. (A
+    handful of non-fatal "Jest environment torn down" warnings appeared in
+    the output from `privacySettingsToggles.test.tsx` — that file was not
+    touched by this change and the suite fully passed, so this reads as
+    pre-existing async-teardown noise, not a regression, though it was not
+    independently bisected against a pre-change run to prove it.)
+  - `driver-app`: `npx jest --silent` → 364/364 passed, 51/51 suites, no
+    warnings.
+  - Confirmed via `yarn audit --level high --json` in each app that the
+    fix actually landed (not just that `yarn install` succeeded): both
+    `rider-app` and `driver-app` went from `{brace-expansion, image-size}`
+    down to just `{image-size}` (the known-unpatchable one above).
+- **What was NOT verified:** this fix bumps versions but does not add any
+  new automated dependency-audit regression tooling — the next unrelated
+  dependency bump on any of these 3 surfaces can reintroduce a similar
+  finding and won't be caught until CI's `G4b`/`G4c` next runs. No visual
+  or E2E verification was done for any of the 3 apps (pure dependency
+  version bumps, no application code touched) — reasoned as low-risk given
+  every real test suite passed, not screenshotted/manually driven.
+
+### B25. Maestro real-device mobile E2E (`.github/workflows/maestro-e2e.yml`) is wired but never fires — missing secrets, opt-in-only trigger, no iOS lane
+- [ ] **Status:** open. Found while explaining the Playwright vs. Maestro
+  split to a user (2026-08-11) — not a new regression, a pre-existing gap
+  that was never tracked here.
+- **Why this matters:** `rider-app/e2e/` and `driver-app/e2e/` (Playwright)
+  only exercise the Expo **web export** (react-native-web), with backend
+  API, WebSocket, Google Maps, and Firebase all mocked via `page.route()`.
+  That suite cannot reproduce a native-module-only bug (the workflow's own
+  header comment cites #3174 as the motivating example). `.maestro/rider/`
+  and `.maestro/driver/` (12 YAML flows: 5 rider + 7 driver, covering
+  login, ride request/cancel, schedule+cancel, SOS, mid-trip chat,
+  go-online, accept-ride, verify-OTP, complete-trip, payout, in-trip chat)
+  are the only thing in this repo that drives a real native build as an
+  actual user would. `maestro-e2e.yml` exists and is a real implementation
+  (EAS-builds a native Android APK on the `test` profile, uploads it to
+  Maestro Cloud's hosted device farm, runs the flows there) — it is not a
+  stub — but it currently cannot run at all.
+- **Blockers, per the workflow's own inline comments:**
+  1. Two required secrets are undocumented-as-present: `EXPO_TOKEN` (EAS
+     Build permission) and `MAESTRO_CLOUD_API_KEY` (from
+     console.mobile.dev, upload+run permission). Every run fails at the
+     corresponding CLI login step until both exist — confirm with whoever
+     owns repo secrets whether either has actually been added; do not
+     assume from the workflow file's presence that they have.
+  2. Trigger is `workflow_dispatch` or a PR labeled `run-maestro` only —
+     by design, for EAS/Maestro Cloud billing discipline — so even once
+     the secrets exist, this never runs passively; someone has to
+     dispatch it or apply the label.
+  3. iOS has no lane at all. `eas.json`'s `"test"` build profile has no
+     iOS override because no Apple Developer credentials are configured
+     in EAS yet. The workflow comment says to add an iOS job "once Apple
+     credentials are provisioned" — that provisioning hasn't happened.
+- **Historical drift (context, already resolved but worth knowing):**
+  several audit docs (`reports/remediation/driver-new-issues-2026-04-23.md`,
+  `reports/audits/2026-04-23-driver-P4-verification.md`,
+  `reports/audits/OPEN-ITEMS-TRACKER.md`) flag that the original P4-5
+  remediation item was scoped as Maestro E2E flows, but the team shipped
+  Playwright-style web-export specs instead, leaving the `.maestro/` YAML
+  flows "previously unwired to any CI job" (direct quote from
+  `maestro-e2e.yml`'s own header) until this workflow was added. The
+  flows and the workflow both exist now — the remaining gap is purely
+  "never actually fires," not "doesn't exist."
+- **Action:**
+  1. Confirm with a repo/org admin whether `EXPO_TOKEN` and
+     `MAESTRO_CLOUD_API_KEY` are already set; add them if not.
+  2. Run the workflow once (`workflow_dispatch`, `apps: both`) to prove
+     the Android lane actually completes end-to-end against Maestro
+     Cloud, not just that CI YAML parses.
+  3. Decide whether `run-maestro` should be applied automatically (e.g.
+     via label-on-path-touch for `rider-app/`/`driver-app/` native code)
+     rather than purely manual, given it's currently opt-in-only and easy
+     to forget on a PR that actually needs native-device coverage.
+  4. Provision Apple Developer credentials in EAS and add an iOS
+     `eas.json` "test" profile override + iOS job to this workflow —
+     until then there is zero real-device E2E coverage for iOS, Playwright
+     included (Playwright's `chromium` project doesn't emulate iOS Safari
+     / native iOS behavior either).
+- **What was NOT verified:** whether the two secrets are actually present
+  in repo/org settings (no access to check from this session — this item
+  is written assuming they may be missing, per the workflow's own
+  caveat, not confirmed missing); whether `run-maestro` has ever been
+  applied to a real PR; whether a Maestro Cloud account/org is even
+  provisioned yet at console.mobile.dev.
 
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
@@ -5003,8 +5556,41 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   not manually reproduced.
 
 ### C16. `admin-dashboard` test files were never covered by `next build`'s type-check, and where they briefly were (dependabot PR #3483), it broke the build
-- [ ] **Status:** open. Not gating — no user-facing effect (see below); sized
-  S, well under 2 hours for whoever picks it up.
+- [x] **Status:** CLOSED (2026-08-11) — did the "real fix" this entry itself
+  scoped: added `"types": ["vitest/globals", "@testing-library/jest-dom"]`
+  to `tsconfig.json`'s `compilerOptions` and dropped the `src/__tests__`
+  exclusion entirely (all 20 test files are now honestly in the build's
+  type-check scope, not just the 11 that were silently in-scope before).
+  Fixed the 4 error sites that surfaced — 1 more than this entry's own
+  scratch-worktree dry run found, see below:
+  - `src/lib/__tests__/companyApi.test.ts:107` — the flagged one-liner:
+    `as {...}` → `as unknown as {...}` (the mocked `NextResponse.json`
+    return shape doesn't structurally overlap with the real
+    `NextResponse<any>` type; zero functional risk, confirmed by this
+    entry's own investigation).
+  - `src/__tests__/dashboard/pages.smoke.test.tsx:414,449,463` — this
+    entry's dry run had these 3 sites' root cause as "not yet diagnosed";
+    it turned out to be simple: the shared `renderPage()` smoke-test helper
+    expects `ComponentType<{}>`, but 3 page components
+    (`/dashboard/surge`, `/dashboard/notifications`, `/dashboard/documents`
+    — all simple `redirect()`-only stub pages with no explicit `return`)
+    had their return type inferred as `void`, not `ReactNode`, since a
+    function with no `return` statement defaults to `void` regardless of
+    `redirect()`'s own `never` return type. Fixed by adding an explicit
+    `: never` return-type annotation to each of the 3 page functions —
+    `never` satisfies `ReactNode` by TS's covariance rules, and the runtime
+    behavior (call `redirect()`, never actually return) is unchanged. No
+    edit needed to `pages.smoke.test.tsx` itself.
+  - Verification: `npx tsc --noEmit` clean (zero errors), `npx vitest run`
+    — 160/160 passed (all 20 test files, up from the 11 the old build scope
+    covered), and a real `npm run build` — full production build, exit
+    clean, complete route manifest printed (not just `tsc --noEmit` or a
+    dev server per CLAUDE.md's explicit requirement for any admin-dashboard
+    change). `npx eslint` on every touched file — 0 errors, only
+    pre-existing unrelated warnings in `pages.smoke.test.tsx`.
+  - **What was NOT verified**: no visual/browser check of the 3 redirect
+    pages beyond the build succeeding and the existing smoke tests passing
+    — this repo has no visual regression tooling (standing gap, N12).
 - **Why:** `tsconfig.json`'s `exclude` list only excluded `src/__tests__` by
   directory name. 11 of the app's 20 `*.test.ts(x)`/`*.spec.ts(x)` files live
   outside that directory (colocated `_components/*.test.tsx`, `hooks/*.test.tsx`,
@@ -5071,6 +5657,363 @@ _Last updated: 2026-08-10 — B17 CLOSED: `financial_events.ride_id` FK changed 
   driver-app) have the same directory-name-only test-exclude gap in their
   own `tsconfig.json`s — this item is scoped to admin-dashboard only,
   where it was found.
+
+### C17. No CI job ever ran an actual Metro bundle — 8 consecutive EAS Mobile Update jobs failed silently on `main` after the SDK 57 bump before anyone noticed
+- **CORRECTION (2026-08-11, later same day):** the line below ("EAS Mobile
+  Update jobs" now healthy) is **wrong as a production status claim** — it
+  was true only for the specific bundling failure this item and the linked
+  change log describe. Checking the actual `EAS Mobile Update` run history
+  (run #620, `f011ff3`, well after `d4b573c` merged) found bundling now
+  succeeds but `eas update` still fails 100% of the time, at a **different,
+  later step** neither this item's nor the change log's verification ran
+  (`expo export` doesn't reach it; only the real `eas update` command does).
+  See **C19** for the still-open, still-live bug and its fix. Leaving this
+  item's text below as-written (it's accurate about what it actually fixed
+  and verified) rather than editing history — read C19 for current reality.
+- [x] **Status:** CI gate CLOSED (2026-08-11) — the underlying bundle break
+  itself was already fixed same-day by commit `d4b573c` (see
+  `docs/change-log/2026-08-11-metro-rngh-renderer-shim.md`); this item adds
+  the missing preventive control so the *next* dependency-only break of this
+  shape fails a PR check instead of failing 8 production OTA pushes in a row.
+  Added `.github/workflows/mobile-bundle-smoke.yml`: on every PR touching
+  `rider-app/**`, `driver-app/**`, or `shared/**`, runs
+  `npx expo export --platform android` and `--platform ios` for both apps —
+  the same bundling step `eas update`/`eas build` perform, run before merge
+  instead of after. Mirrors `mobile-dep-check.yml`'s job/cache-key shape;
+  intentionally **not** `continue-on-error` — a bundle failure must block
+  merge, not degrade quietly the way `expo install --check` does in that
+  workflow (which needs `EXPO_TOKEN` and degrades on purpose for that
+  reason — this check needs neither and has no legitimate soft-fail case).
+- **Root cause (of the CI gap, not the bundle break — that's in the change
+  log above):** `mobile-dep-check.yml` runs `tsc --noEmit` and
+  `expo install --check`. Neither performs an actual Metro bundle:
+  `tsc` type-checks source, and RNGH's `RNRenderer.ts` typechecks fine (the
+  import path is a valid TS string, the file just doesn't exist in RN 0.86's
+  shipped shims at bundle-resolution time); `expo install --check` only
+  diffs installed package *versions* against Expo's SDK compatibility table,
+  it never resolves a single module. `eas-build.yml` ("EAS Mobile Update")
+  is the only workflow that ever bundles, and it runs **after** merge, on
+  every push to `main` — so the failure mode is: merge lands clean (both
+  existing checks green), then the very next push-triggered OTA job dies at
+  the bundle step, for every push to `main` touching either app, until
+  someone looks at the EAS dashboard. That's the 8-update-in-a-row failure
+  streak (`#605`–`#612`) visible in the EAS activity log the SDK 57 bump
+  (`#605`, the Dependabot expo-stack group bump) kicked off — two follow-up
+  PRs explicitly titled "complete the SDK 57 upgrade... left half-done"
+  (`#607` rider-app, `#609` driver-app) fixed real app-level SDK 57 items but
+  couldn't have caught this one: the break lived inside a third-party
+  dependency's internal import, not in either app's own code, and nothing
+  in the toolchain exercised it before a real EAS job did.
+- **Risk & impact of the new check:** build-time-only CI addition, zero
+  runtime/production code touched. Blast radius: PR merge gate for
+  rider-app/driver-app/shared changes only — does not touch
+  `eas-build.yml`'s OTA publish, `eas-native-build.yml`'s native build
+  trigger, or `mobile-dep-check.yml`'s existing checks (all left as-is,
+  running alongside this one). Failure mode if the new check itself is
+  flaky: a false-red PR block, not a false-green — fails safe.
+- **Effort:** ~1 hour (one workflow file, mirrors existing patterns; no new
+  secrets, no infra). Follow-up not yet done: this check should be added to
+  the repo's required-status-checks branch-protection list for `main` so it
+  actually blocks merge rather than just reporting — that's a GitHub repo
+  settings change outside this diff's scope, needs a repo admin.
+- **Verification performed:** ran the exact commands the new CI job runs,
+  locally, against current `main` (which already has the `d4b573c` shim
+  redirect). `rider-app` — `npx expo export --platform android` exits 0,
+  Hermes bundle produced (already verified same-day in the change-log
+  entry above). `driver-app` — `yarn install --frozen-lockfile` then
+  `npx expo export --platform android`, run fresh in this session (the
+  change log explicitly flagged driver-app as **not** run in its own
+  session — that gap is now closed): exit 0, `_expo/static/js/android/
+  index-*.hbc` (8.2MB) produced, confirming the metro.config.js redirect
+  works for driver-app too, not just rider-app. `--platform ios` not run
+  for either app in this session (no meaningful iOS/Android code-path
+  divergence expected for this specific break — RNGH's `resolveRequest`
+  match is exact-string and platform-agnostic — but the CI job itself does
+  run both platforms going forward, so this gap closes on its first PR run).
+- **What was NOT verified:** whether the new workflow file's YAML is 100%
+  correct GitHub Actions syntax beyond mirroring `mobile-dep-check.yml`
+  structurally — not dry-run through `act` or an actual PR in this session;
+  first real PR touching a mobile app will be the live test. Branch
+  protection was not modified (see Effort above — explicitly out of scope,
+  flagged for a human with repo-admin access).
+- **Files:** `.github/workflows/mobile-bundle-smoke.yml` (new).
+
+### C18. GitHub Actions steps use mutable version tags repo-wide, not pinned commit SHAs — Semgrep/GHAS flags it on every new workflow line
+- [x] **Status:** CLOSED (2026-08-12) — all 176 `uses:` references across 23
+  `.github/workflows/*.yml` files pinned to verified commit SHAs, with the
+  human-readable version kept as a trailing comment
+  (`uses: actions/checkout@<sha> # v7`). Full Change Impact Log:
+  `docs/change-log/2026-08-12-c18-pin-github-actions-shas.md`.
+  **How the "Verification reliability" blocker below was resolved:** this
+  session's git proxy serves anonymous, read-only `git clone`/`git
+  ls-remote` access to any public GitHub repo even when it isn't in this
+  session's attached repository scope (confirmed via `add_repo`, which
+  reports read access already available without needing attachment). Used
+  that channel to clone all 19 distinct action repos referenced (18
+  originally enumerated below + `github/codeql-action`, a subpath-style
+  reference the original grep pattern missed — see the change log's §4) and
+  resolve each `@vN` tag to its exact commit SHA via `git ls-remote --tags`
+  against the real upstream repo, then cross-checked every SHA as a live ref
+  tip on `origin` before use. This is a direct read of the actual git ref
+  database — the same information `gh`/the GitHub API would return — not
+  the release-page scrape the original investigation correctly rejected as
+  unreliable for a character-exact hash.
+  One finding worth flagging on its own: `8398a7/action-slack@v3` had no
+  `v3` **tag** at all — it resolved to a **branch**, which is even more
+  mutable than an unpinned major-version tag normally is. That reference is
+  now pinned like everything else.
+- **(historical) Status:** open — found 2026-08-11, via GitHub Advanced Security /
+  Semgrep OSS comments on PR #3668 (6 findings, rule
+  `yaml.github-actions.security.github-actions-mutable-action-tag`) on the
+  new `mobile-bundle-smoke.yml` workflow added by that PR. Confirmed real:
+  every `uses: actions/checkout@v7` / `actions/setup-node@v7` /
+  `actions/cache@v6` line resolves a floating major-version tag, which the
+  action owner (or anyone who compromises their account) can silently
+  repoint to different code — the exact supply-chain mechanism behind the
+  real-world `tj-actions/changed-files` and `reviewdog/action-setup`
+  incidents Semgrep's rule description cites.
+- **Why not fixed in this PR:** two reasons, not one.
+  1. **Scope/consistency** — this is not specific to the new file. Repo-wide
+     grep: **154 unpinned `uses:` references across 23 of the 24 files** in
+     `.github/workflows/`. Pinning only the 6 lines Semgrep happened to flag
+     (because they're new, not because they're uniquely risky) would leave
+     the actual exposure — the other 148 references — untouched, while
+     making this one file inconsistent with the rest of the repo's own
+     convention.
+  2. **Verification reliability** — pinning to a SHA means hardcoding a
+     40-character string that, if wrong, breaks the workflow outright (a
+     bad SHA doesn't degrade gracefully, it fails to resolve the action at
+     all). This session has no reliable way to confirm one: this repo's
+     GitHub access is scoped to `srikumarimuddana-lab/spinrvm` only — a
+     direct API check against `api.github.com/repos/actions/checkout/...`
+     is rejected at the proxy ("GitHub access to this repository is not
+     enabled for this session"). The only alternative available here was
+     scraping a rendered release page through a small-model web-fetch tool,
+     which is exactly the kind of source you should *not* trust for a
+     character-exact hash — a transposed digit is invisible until CI runs.
+     Guessing was rejected on purpose, consistent with this repo's own
+     "verify a newer/patched version actually works before pinning it"
+     pre-merge gate (`CLAUDE.md` § Pre-merge release gates, item 8) — that
+     principle applies just as much to *what you pin to* as to *what
+     version you bump to*.
+- **What this needs:** a session/operator with real `gh`/authenticated
+  GitHub API access (or Dependabot's own SHA-pinning update mode, if
+  enabled) to resolve all 154 references to verified commit SHAs in one
+  sweep, plus a comment noting the human-readable version next to each pin
+  (`uses: actions/checkout@<sha> # v7`) so future readers don't have to
+  resolve the SHA back to a version themselves.
+- **Risk if left as-is:** repo-wide supply-chain exposure to a compromised
+  or repointed Action tag — not unique to CI/CD pipelines in general, but
+  worth weighing against this repo's existing Trivy/cosign image-signing
+  investment elsewhere in `ci.yml`, which addresses container supply chain
+  but not this GitHub-Actions-level one.
+- **Effort estimate:** small per-reference (find current SHA, replace,
+  comment) but multiplies across 154 references in 23 files — realistically
+  a half-day sweep plus a follow-up PR review pass, not a quick fix.
+- **Files:** all of `.github/workflows/*.yml` except the one file (if any)
+  that's already fully pinned — not individually enumerated here; run the
+  grep in this entry's own investigation to get the current list.
+
+### C19. `eas update` is still 100% broken on `main` today — a second, different bug downstream of the C17/RNGH fix, in `eas update`'s fingerprint-computation step
+- [x] **Status:** DURABLY CLOSED (2026-08-11, same day, follow-up pass) —
+  the actual `yarn.lock` resolution bug is now fixed at the source in both
+  apps; the `EAS_SKIP_AUTO_FINGERPRINT` bypass below has been **removed**,
+  not just documented as removable. Sequence: mitigated first (bypass),
+  then durably fixed once the real root cause in `resolutions` was found —
+  see "Durable fix" below for what actually shipped.
+- **How found:** user asked to check the actual EAS Mobile Update run
+  history from `#604` (last green) onward, rather than trust the C17 fix's
+  own "already fixed" framing. Every run **including the latest at the time
+  (`#620`, commit `f011ff3`, well after `d4b573c` — the C17/RNGH fix —
+  merged)** is red for both apps. That framing gap is itself worth naming:
+  C17's verification ran `expo export`, which stops at "bundle produced."
+  `eas update` (the actual production command `eas-build.yml` runs) does
+  strictly more after that — it also computes a project fingerprint before
+  publishing — and that's where it now dies. **A green `expo export` does
+  not mean a green `eas update`**; the two aren't the same command.
+- **Root cause, reproduced directly (not inferred from a log alone):** ran
+  `require('@expo/fingerprint').createFingerprintAsync(cwd)` in driver-app's
+  installed `node_modules` (same library `eas update` calls internally) and
+  got the identical crash byte-for-byte:
+  `(0 , brace_expansion_1.expand) is not a function`, at
+  `@expo/fingerprint/node_modules/minimatch/dist/commonjs/index.js:157`.
+  `@expo/fingerprint@0.20.6` bundles its own `minimatch@10.2.5`, whose
+  `package.json` declares `"brace-expansion": "^5.0.5"` — but that nested
+  `minimatch` has **no nested `node_modules/brace-expansion` of its own**,
+  so Node's resolution walks up and finds the top-level, incorrectly-hoisted
+  `brace-expansion@1.1.18` instead (confirmed via
+  `require.resolve('brace-expansion', {paths: [...]})`). `brace-expansion`
+  v1's export is a bare function (`module.exports = expandTop`), not an
+  object with an `.expand` property — hence `.expand is not a function`.
+  The `yarn.lock` entry itself looks corrupted/stale: one block claims
+  ranges `^1.1.18, ^1.1.7, ^2.0.1, ^2.0.2, ^5.0.5` **all** resolve to version
+  `1.1.18` — which is semver-impossible for the `^2.x`/`^5.x` ranges in that
+  same line — while a separate, correct `brace-expansion@^5.0.9: version
+  "5.0.9"` entry exists elsewhere in the file but isn't the copy Node
+  actually reaches from `@expo/fingerprint`'s nested `minimatch`. Blast
+  radius of the conflicting range: grepped both apps' lockfiles —
+  `minimatch@^10.2.2` has exactly **one** requester in each app
+  (`@expo/fingerprint`, itself pulled in only via `expo@~57.0.9`), so this
+  is narrow, not a wide dependency-tree conflict.
+- **Why this step matters not at all for OTA compatibility here, and so is
+  safe to skip:** both apps pin a **literal string** `runtimeVersion`
+  (`rider-app/app.config.ts` `'2.0.0'`, `driver-app/app.config.ts`
+  `'2.5.0'`), not the `'fingerprint'` policy — the apps' own code comments
+  say EAS CLI rejects a `fingerprint`/`appVersion` policy for bare workflow.
+  The fingerprint `eas update` computes here is unused dead weight for this
+  app's actual compatibility mechanism, not a load-bearing check being
+  bypassed.
+- **Fix applied:** `EAS_SKIP_AUTO_FINGERPRINT: "1"` added to the `env:` of
+  both `rider` and `driver` jobs' "Publish OTA update" step in
+  `.github/workflows/eas-build.yml` — the exact bypass `eas update`'s own
+  error message names (`⏩ To skip this step, set the environment variable:
+  EAS_SKIP_AUTO_FINGERPRINT=1`).
+- **Durable fix — what actually shipped:** the earlier root-cause writeup
+  said `minimatch@^10.2.2`'s `brace-expansion` requirement resolves wrong
+  because of "a corrupted `yarn.lock` entry." Digging one level further
+  (this repo's own history, `git log -S`) found the actual origin: commit
+  `09cbc59` ("B24 — bump 7 vulnerable transitive JS packages," same day,
+  merged *before* `d4b573c`) added 4 scoped `**/`-glob `resolutions` to
+  `package.json` specifically to avoid forcing one `brace-expansion` major
+  onto every consumer — the right instinct — but two of the four patterns
+  (`**/@expo/fingerprint/**/brace-expansion`, `**/@typescript-eslint/
+  typescript-estree/**/brace-expansion`) use a **mid-path `**` wildcard**
+  that Yarn Classic's selective-resolutions silently doesn't support: the
+  patterns register with zero effect (confirmed empirically — removing them
+  changes nothing; `yarn install --force`, deleting the lockfile entries and
+  reinstalling, and adding a corrected 3-segment exact path
+  `@expo/fingerprint/minimatch/brace-expansion` all produced byte-identical
+  results). That PR's own verification (jest/tsc/build/audit across 3 apps)
+  never exercised `@expo/fingerprint`'s fingerprint computation, so the
+  silent no-op shipped unnoticed. Meanwhile the *other* two patterns'
+  sibling rule, `**/minimatch/brace-expansion: ^1.1.18` (single-level `**/`
+  prefix — the one Yarn Classic *does* support), matches **any** package
+  literally named `minimatch` at any depth, including the `minimatch@10.2.5`
+  instances bundled by `@expo/fingerprint`, `@typescript-eslint/
+  typescript-estree`, and `glob` — forcing all of them down to
+  `brace-expansion@1.1.18` regardless of their own declared `^5.0.5` need.
+  **The actual fix**: scope that one rule to the specific old-minimatch
+  branch it was meant for — `"**/minimatch@^3.0.0/brace-expansion":
+  "^1.1.18"` (adding a semver constraint on the `minimatch` path segment,
+  which Yarn Classic *does* honor) — then delete the two no-op patterns
+  entirely (dead, misleading, no longer needed). One line changed, two
+  deleted, in each app's `package.json`; `yarn.lock` regenerated from that.
+  Result: 3 correctly-separated, semver-valid `brace-expansion` groups
+  (`1.1.18` for the `^3.x` minimatch branch, `2.1.4` for the `^9.x` branch —
+  previously *also* wrongly forced to `1.1.18`, a second latent bug this
+  fix incidentally closes — and `5.0.9` for the `^10.x` branch used by
+  `@expo/fingerprint`, `typescript-estree`, and `glob`). `EAS_SKIP_AUTO_
+  FINGERPRINT` removed from `eas-build.yml` — no longer needed.
+- **Risk & impact:** this bug has blocked **every** `eas update` OTA
+  publish on `main` since at least 2026-08-01 (`#605` onward, 15+
+  consecutive failed runs across both apps by the time this was found) —
+  meaning no JS-only fix, however small or urgent, has actually reached a
+  phone on the `production` channel in that window without a full native
+  rebuild. That is the actual severity of this repo's mobile-update
+  pipeline right now, not just "8 red dashboard rows."
+- **User-experience effect:** none directly from this fix (build-pipeline
+  only) — but its *absence* means every rider/driver-facing JS fix shipped
+  since 2026-08-01 has been silently stuck, undelivered to installed apps,
+  until this unblocks it.
+- **Verification performed (durable fix, both apps):**
+  - `require('@expo/fingerprint').createFingerprintAsync(cwd)` — the exact
+    library call `eas update` makes — now returns a real hash for both apps
+    (`driver-app`: `7dbbc2f9e0470162...`, `rider-app`: `090313f67818aa4a...`)
+    instead of throwing. Re-ran after the dead-pattern cleanup too, with an
+    identical resulting hash both times — confirms the cleanup was a true
+    no-op on top of the real fix, not a coincidental masking change.
+  - Physical `node_modules` nesting inspected directly (not inferred): 5
+    distinct `brace-expansion` install locations across the 3 correct
+    version branches, each resolving from the right consumer
+    (`minimatch/node_modules/brace-expansion@1.1.18`, top-level
+    `brace-expansion@2.1.4` serving the `^9.x` minimatch branch,
+    `glob/`, `@expo/fingerprint/`, and `@typescript-eslint/
+    typescript-estree/`'s own nested `brace-expansion@5.0.9` copies).
+  - `npx expo export --platform android` — exit 0, real Hermes bundle
+    produced — for **both** apps, confirming the resolution fix doesn't
+    regress ordinary bundling.
+  - Full `jest` suite: **driver-app 364/364 passed (51/51 suites)**;
+    **rider-app 455/455 passed (54/54 suites)** on a clean re-run — one
+    test (`verifyEmailScreen.test.tsx`, a 5s-timeout mount assertion) flaked
+    on a single full-suite run but passed twice in isolation and once more
+    on a full-suite re-run, confirming it's pre-existing parallelism
+    flakiness (worker-teardown timing under full-suite load), not a
+    regression from this change.
+  - `git diff` on both `yarn.lock` files: exactly 3 `brace-expansion` lock
+    entries touched, nothing else — confirms the narrow blast radius
+    predicted (only `minimatch@^10.2.2`'s single requester chain, plus the
+    incidental `^9.x`-branch correction) held in practice.
+  - `EAS_SKIP_AUTO_FINGERPRINT` removed from both jobs in
+    `.github/workflows/eas-build.yml` — the workaround is gone, not just
+    documented as removable.
+- **What was NOT verified:** the actual `eas update` command was still
+  **not** run against the real EAS service in this session — no
+  `EXPO_TOKEN`/Expo auth available here. Confidence rests on calling the
+  identical underlying library function `eas update` calls, against the
+  real project directory, with a real result — about as close to the real
+  path as is reachable without production credentials — but the next real
+  push to `main` touching either app is the actual, final proof. Also not
+  independently re-verified: `eslint`/`tsc` full runs in either app after
+  this change (jest + expo export + the direct fingerprint call were judged
+  sufficient coverage for a dependency-resolution-only change; no source
+  file was touched).
+- **Files:** `.github/workflows/eas-build.yml` (bypass removed);
+  `rider-app/package.json`, `rider-app/yarn.lock`, `driver-app/package.json`,
+  `driver-app/yarn.lock` (durable fix).
+
+### C20. SDK 57 alignment follow-ups that are EAS-build-gated (from the 2026-08-11 dependency-alignment pass — see `docs/change-log/2026-08-11-sdk57-dependency-alignment.md`)
+- [ ] **Status:** OPEN — the alignment branch (`claude/sdk-55-57-upgrade-jrz0iv`)
+  brought both apps to SDK 57's expected dependency versions and verified with
+  tsc + jest + production `expo export` in both apps, but this environment
+  cannot run EAS/native builds. Each sub-item below needs one EAS build (or a
+  release-build device test) to close; none should be batched blind with the
+  others — one variable per build, per `docs/dependency-upgrade-runbook.md`.
+- [ ] **First EAS Android + iOS build off the alignment branch** — proves the
+  native side of RNGH 2.32 / safe-area 5.7 / netinfo 12 / datetimepicker 9 /
+  rider picker removals (a green `expo export` is NOT a green `eas build` —
+  C17/C19 lesson). Then a device smoke: gestures (bottom sheets, map pan,
+  hold-to-confirm SOS), safe-area insets, offline banner, driver onboarding
+  date picker, and confirm EAS Observe app-start metrics resume (the
+  `ObserveRoot` fix in BOTH apps' `app/_layout.tsx` — rider's duplicated
+  instance was caught in the 2026-08-12 pre-merge review).
+- [ ] **Try removing `ios.buildReactNativeFromSource: true`** (both
+  app.config.ts): the expo-dev-launcher header mismatch it worked around was
+  fixed upstream in SDK 56. One EAS iOS build with it off; if green, also
+  retire `plugins/withFirebaseNonModularHeaders.js` in the same test (it
+  exists to support the source-build + static-frameworks combo). Large iOS
+  build-time win.
+- [ ] **Try removing `plugins/withForceCompileSdk.js` and
+  `plugins/withKspVersion.js`** — their documented removal criteria ("Expo SDK
+  ≥56 ships compileSdk 36 default"; "expo-updates ksp mapping fixed") are now
+  testable on 57. One EAS Android build with them disabled. See the
+  removal-criteria table in `docs/android-build-strategy.md`.
+- [ ] **@stripe/stripe-react-native 0.63.0 → 0.64.0** (rider; SDK 57 expects
+  0.64.0) — HELD on 2026-08-11 by explicit user decision (payments surface
+  mid-live-testing + Option C Kotlin-toolchain entanglement). Bump criteria:
+  check 0.64.0's Kotlin/Stripe-Android versions against Option C first, EAS
+  Android + iOS builds, `spinr-money-auditor` review, manual payment smoke
+  (add card, PaymentSheet, ride payment, tip, Google Pay). Until then
+  `expo install --check` will keep flagging it — that residue is intentional.
+- [ ] **Try re-enabling Metro `unstable_enablePackageExports`** (both
+  metro.config.js): @sentry/react-native now resolves ≥7.11 which may fix the
+  frozen-ESM-namespace crash — but that crash was RELEASE-BUILD-ONLY under
+  Hermes, so this needs a release-build device test + the bundle-diff check
+  documented in the metro comment. Not flippable on tsc/jest evidence.
+- [ ] **expo-speech-recognition 57.x watch** (rider): no 57-line release
+  exists (npm latest = 56.0.1, verified 2026-08-11). Works on 57 today;
+  re-check each SDK cycle and bump when the community package catches up.
+- [ ] **Mobile lint debt under the SDK 57 ruleset**: rider 379 problems (176
+  errors) after eslint-config-expo ~57.0.1; driver 240 problems (105 errors)
+  on the config it already had. Mobile lint is not a CI gate (ci.yml lints
+  only frontend/ + admin-dashboard/), so this is cleanup debt, not a red
+  pipeline — but the new react-hooks 7 "refs during render" errors are the
+  kind that become real bugs; burn down by surface, don't bulk-disable rules.
+- [ ] **LogRocket major-version split**: rider `@logrocket/react-native`
+  ^2.3.1 vs driver ^3.7.0 — two different native binaries of the same vendor
+  SDK across the fleet, both still gated OFF on Android (hidden-API hang, see
+  `docs/android-build-strategy.md` runtime section). Converge on one major
+  (likely 3.x) next time either app cuts a binary, and re-test the Android 16
+  hang before any re-enable.
 
 ## P3 — Post-launch backlog (tracked, not gating)
 
@@ -5277,7 +6220,7 @@ Remaining, roughly in order of user impact:
     `backend/tests/test_driver_statement_job.py` (4 new cases — opted-out
     skips email but still claims/records totals, opted-in still sends,
     fail-open on lookup error, defaults-true with no prefs row).
-- [ ] **N10. Most rider pushes omit `target_app="rider"` (X5)** — they fall
+- [x] **N10. Most rider pushes omit `target_app="rider"` (X5)** — they fall
   through to the legacy `users.fcm_token` column (`features.py:1664-1670`)
   rather than `fcm_token_rider`. Works today only because registration still
   mirrors both (`routes/notifications.py:329-336`); breaks silently if that
@@ -5308,12 +6251,81 @@ Remaining, roughly in order of user impact:
   (deleted by N8) — moot. That empties the batch-1 change-log's
   "clearly rider-directed, ready to fix" list. What's left per that same
   doc: 3 driver-directed sites missing `target_app="driver"` (a related but
-  distinct, not-yet-tracked gap —
-  `routes/rides/matching.py:1071`, `services/cancellation_service.py:206`,
-  `utils/document_expiry.py:216`), plus an "ambiguous/admin" bucket
+  distinct gap), plus an "ambiguous/admin" bucket
   (`routes/notifications.py:108`'s `/test-push`, and the `routes/admin/*.py`
   broadcast endpoints where recipient role varies per admin selection) that
   needs its own per-call-site read rather than a batch sweep.
+  **2026-08-11 update — driver batch done:** of the 3 flagged driver-directed
+  sites, `utils/document_expiry.py:216` (and its sibling push at line 296)
+  already had `target_app="driver"` — moot, already fixed by an earlier
+  pass. Fixed the 2 genuinely open ones: `routes/rides/matching.py`'s
+  auto-offline push (driver missed too many offers in a row) and
+  `services/cancellation_service.py::pay_driver_cancellation_fee`'s payout
+  push. Both confirmed driver-directed (`driver_user_id`, resolved from
+  `get_driver_by_id`). New test file
+  `tests/test_cancellation_service_driver_push.py` (nothing previously
+  exercised `pay_driver_cancellation_fee` directly — every other
+  cancellation test mocks it out entirely) plus a new assertion on the
+  existing `test_offer_timeout_handler_auto_offline_notifies_and_pushes`.
+  Only the "ambiguous/admin" bucket remains — deliberately not swept here,
+  needs its own per-call-site read.
+  **2026-08-11 update — admin/ambiguous bucket done, N10 fully closed:**
+  read each of the 8 flagged call sites individually rather than batch-fixing
+  — several turned out to already be correct or genuinely fine as-is:
+  - **`routes/notifications.py:108` `/test-push`**: confirmed correct as-is,
+    not a gap — its whole documented purpose is diagnosing the legacy
+    `users.fcm_token` column specifically (`token_on_file`/`token_preview`/
+    `platform_hint` all read that exact field), so staying on the legacy
+    path is the intended behavior, not an oversight.
+  - **`routes/admin/wallet.py`** (`admin_credit_wallet`/`admin_debit_wallet`):
+    already correctly wired via a `_wallet_target_app(user)` helper from the
+    earlier N15/R31 pass this session — no gap, nothing to fix.
+  - **`routes/admin/rides.py:901`** (promo-applied push): already
+    `target_app="rider"` from the N15/R33 pass — no gap.
+  - **Genuinely fixed** (9 sites, 6 files): `routes/admin/documents.py`
+    (document-rejection push → `driver`), `routes/admin/drivers.py` ×3
+    (expiry nudge, photo approved, photo rejected → all `driver`),
+    `routes/admin/rides.py` ×2 more (`admin_cancel_ride`'s driver leg →
+    `driver`, rider leg → `rider`; the new-ride dispatch push → `driver`),
+    `routes/admin/users.py` (`admin_update_user_status`'s account-status
+    push → `rider` — settled by the endpoint's own docstring, which scopes
+    it to "Suspend, ban, or reactivate a rider account"/"cannot request a
+    ride"; it operates on the shared `users` table but is rider-only by
+    design, not by accident), `routes/admin/vehicle_fleet.py`
+    (lost-and-found push → `driver`).
+  - **`routes/admin/faqs.py`**'s `admin_send_notification` broadcast: the
+    `riders`/`drivers` loops now pass `target_app="rider"`/`"driver"`
+    per-iteration. The `all` loop deliberately stays unset — it spans both
+    roles with no per-user role lookup in that branch, so it can't map to a
+    single column; this matches the existing, already-accepted precedent in
+    `routes/admin/messaging.py`'s own `_target_app_for_audience`, which
+    already returns `None` for its equivalent "all" case (legacy `fcm_token`
+    fallback, not a bug — the correct behavior for a role-spanning
+    broadcast is documented there, not just replicated blindly).
+  - Tests: new `tests/test_n10_admin_push_target_app.py` (9 tests, one per
+    fix site, function-level — importing each admin route module and
+    patching its actual bound `send_push_notification` name, module-level
+    for `documents.py`/`drivers.py`/`vehicle_fleet.py`, or the `features`
+    module directly for `faqs.py`/`users.py`, which import it locally
+    inside the function body rather than at module top — patching the
+    wrong target here silently no-ops, the real function runs, and it logs
+    "No user found for X — push dropped" and returns normally: several
+    *pre-existing* tests in `test_admin_drivers_coverage.py` and similar
+    files use exactly this ineffective `patch("features.
+    send_push_notification", ...)` pattern against module-top-level-import
+    call sites and were never actually intercepting the push — a real gap
+    in this repo's test quality, flagged here rather than fixed wholesale
+    since it's a pre-existing issue orthogonal to N10's own scope, not
+    introduced by this change) — plus 2 new assertions extending existing
+    tests in `tests/test_admin_rides_coverage.py`
+    (`test_cancel_notifies_driver_and_rider_with_correct_target_app`,
+    extended `test_create_ride_with_driver_status_driver_assigned_and_dispatches`).
+    382 tests total across every touched/adjacent file, all passing.
+  **What was NOT verified**: no live FCM/Expo push exercised for any of the
+  9 sites (mocked per repo convention, matching every other N10 fix this
+  session). The pre-existing ineffective-patch-target test-quality gap
+  noted above was not audited or fixed across the rest of the test suite —
+  flagged, not swept.
 - [x] ~~**N16. Consolidate the two copies of the company-address assembly**~~
   — done 2026-08-11: `_coalesce`/`_postal_address` were byte-identical logic
   duplicated across `utils/company_details.py` and `utils/marketing_email.py`.
@@ -5395,10 +6407,25 @@ Remaining, roughly in order of user impact:
   once the branded version has been seen in real inboxes. Two shells and a
   switch are a real carrying cost; both `_LEGACY_*` constants are commented
   to say so.
-- [ ] **N12. No visual/snapshot regression tooling for email** — standing gap.
-  `tests/test_email_layout.py` asserts the logo URL, brand colour and footer
-  lines are present, but nothing catches a layout that renders badly in Gmail,
-  Apple Mail or Outlook. Client rendering is verified by hand or not at all.
+- [x] **N12. No visual/snapshot regression tooling for email** — **partially
+  closed (2026-08-12).** The "nothing pins the whole rendered document" half
+  is fixed: new `backend/tests/_html_snapshot.py` (golden-file diffing
+  helper, missing-snapshot-writes-and-passes / drift-fails-with-a-diff /
+  `SPINR_UPDATE_EMAIL_SNAPSHOTS=1` to update deliberately) plus
+  `backend/tests/test_email_snapshots.py` (6 tests, 9 committed golden
+  files under `backend/tests/snapshots/email/`) pins the full HTML+text
+  output of `utils/email_layout.py`'s `render_email`/`render_from_text`
+  (minimal and fully-populated shapes) and `utils/email_receipt.py`'s
+  legacy/branded shells — the two real template generators in this repo.
+  Verified the failure path actually fires (corrupted a golden file,
+  confirmed a readable diff, restored it) before relying on it. No
+  application code changed. **What this does NOT close, still a real
+  gap:** actual rendering in Gmail/Outlook/Apple Mail — that needs a
+  per-client renderer/screenshot pipeline this pass didn't build, same as
+  N12's own original text already said. `utils/subscription_invoice.py`
+  (PDF + kwargs, not raw HTML, DB-dependent) also wasn't brought into this
+  net — different shape of problem. See
+  `docs/change-log/2026-08-12-n12-email-snapshot-tooling.md`.
 - [x] ~~**N13. Rider-side lifecycle emails**~~ — done for welcome (R4),
   email-address-change security notice (R7), account-deletion confirmation
   (R9), no-show fee (R21), refund (R29) and wallet top-up (R30). All live in
@@ -5431,6 +6458,39 @@ Remaining, roughly in order of user impact:
   session, so there is no "verify your email" prompt, banner, or settings
   entry anywhere in `rider-app/` yet. The capability exists and is safe to
   call, but nothing in the product surfaces it to a rider today. Follow-up.
+  **2026-08-11 update: done.** `rider-app/app/verify-email.tsx` (new screen,
+  sibling of `app/otp.tsx`'s phone-OTP flow) calls both endpoints and handles
+  every documented response/error case (`already_verified` short-circuit,
+  `PROFILE_EMAIL_MISSING`, `AUTH_OTP_INVALID`, `AUTH_OTP_EXPIRED`, the 3/hour
+  request rate limit, the 5-failures/hour confirm lockout,
+  `SYSTEM_SERVICE_UNAVAILABLE`) with plain-English copy resolved through the
+  existing i18n `message_key` system, not raw backend sentinels. Entry point
+  is a Verify/Verified pill added to the existing Email row on the Account
+  tab's Personal Info card (`app/(tabs)/account.tsx`) — purely additive,
+  discoverable only there, never a forced/blocking flow. 15 new tests
+  (`__tests__/verifyEmailScreen.test.tsx`, 10;
+  `__tests__/accountEmailVerification.test.tsx`, 5), full rider-app suite run
+  for real: 455 passed / 0 failed across 54 suites. `yarn tsc --noEmit` clean.
+  `yarn build:web` (`expo export --platform web`) production build completed
+  successfully — not just a dev-server/`tsc` check. **Residual gap
+  discovered, not fixed there (backend-file change, out of that PR's scope):**
+  `GET /auth/me`'s response schema (`backend/schemas.py`'s `UserProfile`)
+  didn't return `email_verified`, so the Account-screen badge was sourced
+  from a local store merge (the confirm response itself carries
+  `email_verified: true`) rather than a normal profile refresh — a verified
+  rider's badge reverted to "not verified" after a full app restart. See
+  `docs/change-log/2026-08-11-n14-rider-email-verify-ui.md` for full detail.
+  **2026-08-11 follow-up: done.** `UserProfile` now declares
+  `email_verified`/`email_verified_at`; every `UserProfile(**row)`
+  construction site (11, across `routes/auth.py`/`routes/users.py`) already
+  spreads the full DB row, so no other file needed a change — both fields
+  now flow through automatically wherever a profile is returned, including
+  `/auth/me`. New test pins both the verified-True case and a legacy row
+  with the key entirely missing (defaults to `False`/`None`, no error).
+  102 passed in the direct auth/email-verify suite, 168 in a broader
+  schemas/users/auth sweep, 123 across the admin-users-adjacent files — all
+  clean, 0 failed. See
+  `docs/change-log/2026-08-11-n14-auth-me-email-verified-field.md`.
   (b) **whether/how to gate anything on `email_verified` remains an open
   product decision**, not resolved here — nothing was changed to require
   verification before booking, payouts, or any other flow, and CLAUDE.md's
@@ -5449,7 +6509,7 @@ Remaining, roughly in order of user impact:
   categorically could not. Flagging this explicitly since it's a real,
   immediately-live behavior change on a corporate-adjacent endpoint even
   though no new gating code was written.
-- [ ] **N15. Remaining silent rider surfaces** — grouped rather than split,
+- [x] **N15. Remaining silent rider surfaces** — grouped rather than split,
   since they share one cause (no notification call of any kind at the site):
   rider-initiated ride completion sends the rider nothing while the
   driver-initiated path does (R19, `routes/rides/lifecycle.py:126`); wallet
@@ -5548,8 +6608,61 @@ Remaining, roughly in order of user impact:
     `send_push_notification` and assert exact fire/no-fire per scenario. Full
     Change Impact & Risk Log:
     `docs/change-log/2026-08-11-n15-r43-r44-corporate-allowance-notify.md`.
-    Only R8 (new-device-signed-in alert) remains open under N15; this
-    checkbox stays `[ ]` until that's done too.
+  - [x] **R8 closed** (2026-08-11): new-device sign-in alert, the last open
+    piece of N15. No device-fingerprint infra existed before this — built
+    on the substrate `refresh_tokens` already had rather than adding a new
+    table: `issue_refresh_token` (`utils/refresh_tokens.py`) has always
+    persisted `user_agent` per session, so a new `is_new_device(user_id,
+    audience, user_agent)` checks whether that exact User-Agent string has
+    ever minted a refresh token for this user+audience before. `ip` was
+    deliberately not used as a fingerprint component — too unstable on
+    mobile networks, would false-positive on every login. A blank/missing
+    User-Agent can't be fingerprinted at all and is treated as "not new"
+    (never alerts) rather than risking a false positive on every client
+    that omits the header; a DB error on the check also fails quiet
+    (returns "not new") so a notification-path hiccup can never block or
+    slow down login. New `send_new_device_notice` in `utils/rider_emails.py`
+    mirrors `send_email_changed_notice` (R7)'s established security-notice
+    pattern — email, not push, since the new device's push token may
+    belong to whoever is actually signing in. Wired into the 3 rider login
+    call sites that represent a genuine new sign-in — `verify_otp`'s
+    existing-user branch (the primary phone-OTP login),
+    `reactivate_account` (PIPEDA self-serve reactivation — still a real
+    sign-in), and `verify_company_email_otp`'s existing-user branch
+    (`_issue_company_email_session`) — via one shared `_alert_if_new_device`
+    helper in `routes/auth.py`, called BEFORE `issue_refresh_token` mints
+    the current login's own row (otherwise that row would satisfy its own
+    "have we seen this before" check). Fire-and-forget
+    (`asyncio.create_task`), matching every other post-login side effect in
+    this file (audit log, corporate invite activation) — never blocks or
+    delays the auth response. Deliberately NOT wired: brand-new signups
+    (both the OTP-verify new-user branch and the company-email new-user
+    branch) — every device is "new" by definition on account creation, so
+    alerting there would be pure noise, not a security signal; the driver
+    Firebase-auth login (`audience="driver"`) — R8 is scoped to riders
+    (N15's own title), and driver push-token/device conventions are a
+    separate surface not touched here; the `/auth/refresh` token-rotation
+    endpoint — rotating an already-issued session is not a new sign-in.
+    Tests: 5 new in `tests/test_refresh_tokens_lifecycle.py`
+    (`is_new_device`'s blank-UA/no-prior-row/prior-row-exists/DB-error/
+    audience-scoping branches), 4 new in `tests/test_rider_account_emails.py`
+    (`send_new_device_notice`'s addressing, copy, transactional class,
+    failure-never-propagates), 4 new wiring tests across
+    `tests/test_verify_otp_login_flow.py` and
+    `tests/test_auth_remaining_endpoints.py` confirming `_alert_if_new_device`
+    fires for each of the 3 existing-user login paths and is skipped for
+    both new-signup paths — 90 tests total across the 4 touched test files,
+    all passing (up from 78 before this change, confirming nothing existing
+    broke). **What was NOT verified**: no live-Redis/live-Supabase
+    integration test exercising the actual `refresh_tokens` round-trip
+    across two real logins with the same/different User-Agent — unit tests
+    confirm `is_new_device`'s own logic against a mocked `db.find_one`, not
+    the full query-storage path (same level of verification the file's
+    other DB-touching helpers already have). No rider-app UI change — this
+    is backend/email-only, matching how R7's email-change notice shipped;
+    a rider who signs in from a new device sees nothing different in the
+    app itself, only an email. No frontend build/test run — no frontend
+    files touched by this change.
 
 ### AI assistant / MCP guardrail backlog (2026-07-28 audit, branch `claude/rider-ai-location-selection-yn0mem`)
 
@@ -6049,11 +7162,55 @@ how much they de-risk a public launch._
   monitor (Checkly/UptimeRobot/Grafana synthetic) hitting `/health`, auth, and
   fare-estimate every minute from outside, alerting to PagerDuty. Tie alert
   thresholds to the CLAUDE.md SLA table (SLO + error budget).
-- [ ] **E5. Kill switches / feature flags** — `app_settings` covers config, but
-  there are no documented kill switches for the risky subsystems (surge engine,
-  scheduled dispatch, promo redemption, corporate billing). Add boolean flags
-  checked at the top of each loop/path + admin UI toggles, so a misbehaving
-  subsystem can be disabled in seconds without a deploy.
+- [x] **E5. Kill switches / feature flags** — CLOSED (2026-08-11). Correction
+  found while scoping this: the "no documented kill switches" premise was only
+  3/4 true — `scheduled_dispatch_enabled` already existed and gated
+  `utils/scheduled_rides.py`'s loop (shipped 2026-08-02), it just had no admin
+  API field or dashboard toggle. Built the other 3 from scratch, following
+  that flag's own template (schema default `True`, fail-open on a
+  settings-read error, one `app_settings` flag per subsystem — not per loop):
+  - `surge_engine_enabled` — gates `utils/surge_engine.py`'s automatic
+    recompute cycle only, layered on top of (not replacing) the existing
+    per-service-area `surge_source`/`surge_enabled` controls. Off freezes
+    multipliers at their last value — does not reset live pricing; pair with
+    the existing per-area manual override for that.
+  - `promo_redemption_enabled` — gates the single shared validation
+    chokepoint (`routes/promotions.py::_validate_promo_for_user`) both the
+    rider self-service and admin apply-on-behalf-of-rider paths already
+    funnel through — one flag, one check, covers both.
+  - `corporate_billing_enabled` — gates the automatic money-movement paths
+    only: `services/payment_service.py::settle_corporate` and the 4
+    corporate background loops (autotopup, low-balance, allowance reset, KYB
+    reverification — the last of which already had its own specific toggle,
+    now layered under this master one, same relationship as surge). Does
+    **not** gate `services/corporate_wallet_service.py`'s low-level
+    apply_topup/apply_adjustment/apply_refund helpers directly — those are
+    also how an admin manually corrects/refunds something during the very
+    incident that caused this switch to flip off.
+  - Admin API gap fix: `scheduled_dispatch_enabled` was never added to
+    `SettingsUpdateRequest` — there was previously no way to set it via the
+    admin API at all, only a direct DB update. Fixed alongside the 3 new
+    flags.
+  - Admin dashboard: new "Kill Switches" card on the Settings page's
+    Operations tab (all 4 toggles, help text stating what each pauses and
+    the two scope-boundary notes above).
+  - Discovered mid-implementation, worth recording: a formatter hook in this
+    repo strips additions to some files' module-level except-branch import
+    lists (hit this directly in `routes/promotions.py`). Worked around it
+    the same way `services/payment_service.py::_atomic_settle_enabled`
+    already did — a lazy (function-local) dual import of `get_app_settings`
+    — for every subtask after that point.
+  - Tests: ~24 new across 7 backend test files (schema/PUT-handler
+    round-trip, flag-off/missing-key/settings-error-fails-open per gated
+    path). Full regression sweep across every touched subsystem's test
+    files: 100% pass, no regressions. Admin dashboard: no existing test file
+    for the settings page (checked first, not invented); verified with a
+    real `npm run build` (exit 0), not just `tsc`/dev server.
+  - **Not verified**: no live-Supabase/live-Redis integration test, no
+    staging repro, no manual admin-dashboard click-through of the actual
+    toggles (build-verified only), and none of the 4 flags have been
+    flipped off anywhere — this ships as pure additive capability, same
+    dark-launch posture as every other flag in this backlog.
 - [ ] **E6. Pre-launch DAST + third-party pentest** — SAST/Semgrep run in CI, but
   nothing exercises the running app (OWASP ZAP baseline scan against staging on a
   schedule), and a payments+PII platform should have one external penetration

@@ -78,6 +78,19 @@ class UserProfile(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     email: Optional[str] = None
+    # N14 (ACTION_ITEMS.md): the rider-app verify-email flow (routes/users.py)
+    # flips these two columns on the users row, but until now UserProfile
+    # never declared them -- Pydantic silently drops any dict key passed to
+    # UserProfile(**user) that isn't a declared field, so /auth/me (and every
+    # other UserProfile(**row) call site) returned a profile with no
+    # verification status at all. The Account-screen badge worked around
+    # this by merging the confirm response's own email_verified: true into
+    # local state, but that merge doesn't survive a full app restart -- the
+    # next /auth/me refetch silently reverted it to "not verified". This is
+    # the actual fix; no call site needs to change, since they all already
+    # spread the full DB row into UserProfile(**...).
+    email_verified: bool = False
+    email_verified_at: Optional[datetime] = None
     gender: Optional[str] = None
     profile_image: Optional[str] = None  # Base64 encoded image
     profile_image_status: Optional[str] = None  # pending_review | approved | rejected
@@ -287,6 +300,38 @@ class AppSettings(BaseModel):
     # scheduled rides stay parked in status='scheduled' and dispatch normally
     # once this is flipped back on; nothing is lost or cancelled by disabling it.
     scheduled_dispatch_enabled: bool = True
+    # Kill switch for the surge engine's automatic recompute loop
+    # (utils/surge_engine.py::surge_recalculation_loop, ACTION_ITEMS.md E5).
+    # Defaults to true (current, always-on behavior). Flip to false to stop
+    # the automatic recompute cycle for an incident (e.g. a bug producing
+    # bad multipliers) — this is independent of, and layered on top of, the
+    # existing per-service-area surge_source/surge_enabled controls, which
+    # stay in effect either way. Flipping this off freezes multipliers at
+    # their last computed value; it does NOT reset live pricing back to
+    # 1.0x — pair it with the existing per-area manual override
+    # (surge_source='manual') to actually reset a specific area's price.
+    surge_engine_enabled: bool = True
+    # Kill switch for promo code redemption (ACTION_ITEMS.md E5). Gates the
+    # single shared validation chokepoint both the rider self-service path
+    # (POST /promo/apply) and the admin apply-on-behalf-of-rider path
+    # (apply_promo_for_admin) already funnel through
+    # (routes/promotions.py::_validate_promo_for_user). Defaults to true.
+    # Flip to false to stop all promo redemption during an incident (e.g. a
+    # promo-abuse exploit) — promo *validation* (POST /promo/validate, used
+    # to show available promos before booking) is intentionally NOT gated,
+    # only the state-changing apply path.
+    promo_redemption_enabled: bool = True
+    # Kill switch for automatic corporate-billing money movement
+    # (ACTION_ITEMS.md E5): the ride-settlement saga
+    # (services/payment_service.py::settle_corporate) and the four
+    # corporate background loops (autotopup, low-balance nudge, allowance
+    # reset, KYB re-verification reminder). Defaults to true. Deliberately
+    # does NOT gate services/corporate_wallet_service.py's low-level
+    # apply_topup/apply_adjustment/apply_refund helpers directly — those are
+    # also how an admin manually corrects/refunds something during the very
+    # incident that caused this switch to be flipped off, and blocking that
+    # path would work against the person responding to the incident.
+    corporate_billing_enabled: bool = True
     # New driver-facing behavior (scheduled-rides gap review, Finding #06):
     # a best-effort heads-up push to already-online drivers near an upcoming
     # scheduled pickup, ~60 minutes out. Unlike scheduled_dispatch_enabled
@@ -383,6 +428,21 @@ class AppSettings(BaseModel):
     # a driver's is_online=false (utils/stale_intent_reconciler.py,
     # migration 146). Range 1-48 enforced by the admin API + DB CHECK.
     stale_intent_offline_hours: float = 4.0
+    # Kill switch for the stale in_progress ride alerter
+    # (utils/stale_in_progress_ride_alerter.py, P2 task #16). Alert-only —
+    # never mutates ride state or insurance periods — so this defaults True;
+    # flip off only to silence an alert-noise incident, not as a correctness
+    # control.
+    stale_in_progress_ride_alert_enabled: bool = True
+    # ── Notification throttling (quiet hours + daily cap) ────────────────
+    # Master kill switch. Defaults OFF: existing push/SMS/email delivery is
+    # unchanged until an admin opts in after staging verification. Global for
+    # every rider/driver (no per-user override yet) — see migration 304.
+    # Dispatch/safety/account-priority sends always bypass this.
+    notification_throttling_enabled: bool = False
+    notification_quiet_hours_start: str = "22:00"
+    notification_quiet_hours_end: str = "07:00"
+    notification_daily_cap: int = 6
     # ── AI assistant (rider AI mode, backend/ai/) ────────────────────────
     # Master kill switch. Defaults OFF: the feature ships dark and is enabled
     # from the admin dashboard once a provider key is set. Effective within

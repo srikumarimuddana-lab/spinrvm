@@ -35,6 +35,7 @@ import {
   requestNotificationPermission,
   openNotificationSettings,
 } from '@shared/services/firebase';
+import { useTranslation } from '../../i18n';
 
 const HOME_DATA_TTL_MS = 5 * 60 * 1000;
 
@@ -65,6 +66,7 @@ export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
   const { savedAddresses, fetchSavedAddresses, setUserLocation, currentRide, triggerEmergency, fetchActiveRide } = useRideStore();
+  const { t } = useTranslation();
 
   // Home is a navigation root: the Android back button must background the app,
   // not pop back into the login/OTP screens that sit beneath it in history.
@@ -565,6 +567,7 @@ export default function HomeScreen() {
               }
             }}
             size="small"
+            t={t}
           />
         </View>
       </View>

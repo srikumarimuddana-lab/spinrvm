@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, FlatList,
+  View, Text, StyleSheet, TouchableOpacity, Pressable, ScrollView, Modal, FlatList,
 } from 'react-native';
 import CustomToggle from '../components/CustomToggle';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -191,8 +191,15 @@ export default function SettingsScreen() {
       </ScrollView>
       {/* Language Picker Modal */}
       <Modal visible={showLangModal} animationType="slide" transparent onRequestClose={() => setShowLangModal(false)}>
-        <TouchableOpacity style={styles.langOverlay} activeOpacity={1} onPress={() => setShowLangModal(false)}>
-          <TouchableOpacity activeOpacity={1} style={styles.langSheet}>
+        {/* Backdrop is an absolute-fill SIBLING under the sheet — same
+            restructure as ride-options.tsx's payment modal: language rows
+            nested inside two TouchableOpacity wrappers can lose their presses
+            on the New Architecture (here they aren't even in a ScrollView, so
+            nothing rescues them). The driver app's language modal already
+            uses this sibling-backdrop shape. */}
+        <View style={styles.langOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowLangModal(false)} />
+          <View style={styles.langSheet}>
             <View style={styles.langHandle} />
             <Text style={styles.langTitle}>Select Language</Text>
             {LANGUAGES.map((lang) => (
@@ -211,8 +218,8 @@ export default function SettingsScreen() {
                 )}
               </TouchableOpacity>
             ))}
-          </TouchableOpacity>
-        </TouchableOpacity>
+          </View>
+        </View>
       </Modal>
 
     </SafeAreaView>

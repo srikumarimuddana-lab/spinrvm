@@ -318,7 +318,9 @@ async def admin_update_user_status(user_id: str, status_data: UserStatusRequest,
                 title, body = "Account suspended", reason or "Your account has been suspended. Contact support."
             else:
                 title, body = "Account reactivated", "Your account is active again. Welcome back!"
-            await send_push_notification(user_id, title, body, data={"type": "account_status", "status": new_status})
+            await send_push_notification(
+                user_id, title, body, data={"type": "account_status", "status": new_status}, target_app="rider"
+            )
         except Exception:
             logger.warning("account status push failed", exc_info=True, extra={"domain": "admin", "user_id": user_id})
 

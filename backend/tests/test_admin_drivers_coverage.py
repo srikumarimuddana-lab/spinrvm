@@ -637,6 +637,41 @@ class TestLiveStatsLicenseMask:
         assert resp.json()["license_number_last4"] is None
         assert resp.json()["license_number_on_file"] is False
 
+    def test_earnings_excludes_legacy_imported_rides(self, test_client, super_admin_override):
+        """P1-A / Phase-3 cross-surface finding #2
+        (docs/audit/2026-08-11-driver-rider-migration-audit.md): this header
+        must match the Payouts tab's total, which already excludes
+        legacy-imported rides — previously they disagreed on the same
+        driver, same screen. total_assigned/acceptance_rate are unaffected
+        (legacy rides are always status='completed', so excluding them
+        there would silently change the acceptance-rate denominator, which
+        this fix doesn't touch)."""
+        driver = {"id": "drv-1", "user_id": None, "license_number": None}
+        rides = [
+            {"driver_id": "drv-1", "status": "completed", "driver_earnings": "10.00", "rider_rating": 5},
+            {
+                "driver_id": "drv-1",
+                "status": "completed",
+                "driver_earnings": "400.00",
+                "legacy_import_metadata": {"source": "legacy_mongo_booking_import"},
+            },
+            {"driver_id": "drv-1", "status": "cancelled", "cancellation_reason": "driver_no_show"},
+        ]
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=rides)),
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/live-stats")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["total_earnings"] == 10.0
+        # Legacy row is still status='completed' by construction, so it's
+        # correctly counted toward total_assigned/completed_count (returned
+        # as "total_rides") — only the earnings SUM excludes it.
+        assert body["total_assigned"] == 3
+        assert body["total_rides"] == 2
+
 
 # ---------------------------------------------------------------------------
 # Driver notes CRUD
@@ -1059,6 +1094,54 @@ class TestDriverStats:
                 params={"service_area_id": "area-1", "start_date": "2026-07-01", "end_date": "2026-07-15"},
             )
         assert resp.status_code == 200, resp.text
+
+    def test_total_earnings_computed_live_not_from_dead_column(self, test_client, super_admin_override):
+        """P1-A (docs/audit/2026-08-11-driver-rider-migration-audit.md):
+        drivers.total_earnings is never written anywhere — the fleet-wide
+        and per-area totals must be computed live from completed rides
+        (excluding legacy-imported ones), not read off that dead column."""
+
+        def rows(table, filters=None, **kwargs):
+            filters = filters or {}
+            if table == "service_areas":
+                return [{"id": "area-1", "name": "Regina"}]
+            if table == "drivers":
+                return [
+                    {
+                        "id": "drv-1",
+                        "user_id": "usr-1",
+                        "status": "active",
+                        "service_area_id": "area-1",
+                        "created_at": "2026-07-01T00:00:00Z",
+                        "total_rides": 3,
+                        # Dead column: nonzero here must NOT leak into the
+                        # response — proves the fix reads from rides, not this.
+                        "total_earnings": "999999.00",
+                    }
+                ]
+            if table == "users":
+                return []
+            if table == "driver_documents":
+                return []
+            if table == "rides":
+                if "driver_id" in filters:
+                    # The lifetime earnings-by-driver query (P1-A fix).
+                    assert filters.get("legacy_import_metadata") == {"$eq": {}}
+                    return [
+                        {"driver_id": "drv-1", "status": "completed", "driver_earnings": "42.00"},
+                        {"driver_id": "drv-1", "status": "completed", "driver_earnings": "8.00"},
+                    ]
+                # The daily-chart query.
+                assert filters.get("legacy_import_metadata") == {"$eq": {}}
+                return []
+            return []
+
+        with patch("db_supabase.get_rows", AsyncMock(side_effect=rows)):
+            resp = test_client.get("/api/admin/drivers/stats")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["stats"]["total_earnings"] == 50.0
+        assert body["area_stats"][0]["total_earnings"] == 50.0
 
 
 # ---------------------------------------------------------------------------
@@ -1992,3 +2075,33 @@ class TestAdminUpdateSin:
         body = resp.json()
         assert body["stripe_push"] == "failed"
         assert "old number" in body["message"]
+
+
+class TestFleetWidePayoutTools:
+    """The two fleet-wide money buttons. Both write payout/statement records,
+    so both are super_admin-gated server-side — the dashboard hides them for
+    lower roles, but the gate must not depend on the UI."""
+
+    def test_refresh_all_payouts_forbidden_for_regular_admin(self, test_client, regular_admin_override):
+        resp = test_client.post("/api/admin/drivers/refresh-stripe-payouts", json={})
+        assert resp.status_code == 403
+
+    def test_recompute_totals_forbidden_for_regular_admin(self, test_client, regular_admin_override):
+        resp = test_client.post("/api/admin/drivers/statements/recompute-totals", json={})
+        assert resp.status_code == 403
+
+    def test_recompute_totals_defaults_to_dry_run(self, test_client, super_admin_override):
+        """An empty body must NOT write — apply has to be asked for."""
+        from services import statement_totals_backfill as svc
+
+        captured = {}
+
+        async def _fake(**kwargs):
+            captured.update(kwargs)
+            return svc.BackfillResult(applied=kwargs.get("apply", False), scanned=0)
+
+        with patch.object(svc, "recompute_statement_totals", AsyncMock(side_effect=_fake)):
+            resp = test_client.post("/api/admin/drivers/statements/recompute-totals", json={})
+        assert resp.status_code == 200, resp.text
+        assert captured["apply"] is False
+        assert resp.json()["applied"] is False

@@ -65,14 +65,17 @@ export {
     getReferralPairs,
     getDriverPayoutsSummary,
     refreshAllDriverStripeKyc,
+    refreshAllDriverStripePayouts,
     refreshDriverStripeKyc,
     refreshDriverStripePayouts,
+    recomputeStatementTotals,
     revealDriverSin,
     getDriverStatements,
     downloadDriverStatement,
     emailDriverStatement,
     getDriverStats,
     updateDriver,
+    generateDecalPdf,
 } from "./api/drivers";
 export type {
     DriverLiveStats,

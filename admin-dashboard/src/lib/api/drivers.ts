@@ -306,6 +306,9 @@ export interface DriverPayoutSummary {
         pending_balance: number;
         on_hold: number;
         rides_count: number;
+        /** Completed rides imported from the previous app, excluded from
+         *  lifetime_earnings. -1 means the count was unavailable. */
+        imported_rides_excluded?: number;
         active_days_30d: number;
         last_payout: {
             id: string;
@@ -408,6 +411,57 @@ export const refreshDriverStripePayouts = (id: string) =>
         }>;
     }>(`/api/admin/drivers/${id}/refresh-stripe-payouts`, { method: "POST" });
 
+/* Fleet-wide Stripe payout sync (super_admin). driver_ids omitted = every
+ * mapped driver. Unlike the per-driver call this does not fail the whole run
+ * on one unreachable account — check `synced` and `plan_errors`. */
+export const refreshAllDriverStripePayouts = (opts?: { driver_ids?: string[] }) =>
+    request<{
+        synced: boolean;
+        message: string;
+        drivers_scanned: number;
+        transfers_inserted: number;
+        transfers_skipped: number;
+        bank_payouts_synced: number;
+        ledger_entries_synced: number;
+        plan_errors: { row_ref: string; field: string; message: string }[];
+        ledger_errors: { row_ref: string; field: string; message: string }[];
+    }>(`/api/admin/drivers/refresh-stripe-payouts`, {
+        method: "POST",
+        body: JSON.stringify(opts ?? {}),
+    });
+
+/* Recompute stored driver_statements.totals (super_admin). apply=false is a
+ * pure preview — nothing is written — which is what the UI shows before
+ * asking to confirm. */
+export const recomputeStatementTotals = (opts?: {
+    driver_ids?: string[];
+    since?: string;
+    limit?: number;
+    apply?: boolean;
+}) =>
+    request<{
+        applied: boolean;
+        scanned: number;
+        corrected: number;
+        unchanged: number;
+        has_more: boolean;
+        delta_earnings: number;
+        delta_payouts: number;
+        skipped: string[];
+        failed: string[];
+        changes: {
+            statement_id: string;
+            driver_id: string;
+            period_type: string;
+            period_start: string;
+            before: { earnings: string | null; payouts_total: string | null; trips: number | null };
+            after: { earnings: string | null; payouts_total: string | null; trips: number | null };
+        }[];
+    }>(`/api/admin/drivers/statements/recompute-totals`, {
+        method: "POST",
+        body: JSON.stringify(opts ?? {}),
+    });
+
 /* Fleet-wide KYC refresh (super_admin). With retire_unreachable=false (the
  * default) drivers whose Stripe account the current key cannot see are only
  * REPORTED under account_not_on_key — nothing is detached — so it is safe to
@@ -445,6 +499,9 @@ export interface DriverStatement {
     totals: {
         earnings?: Record<string, string>;
         payouts_total?: string;
+        /** Era split (statements stored before it existed lack these). */
+        payouts_spinr_total?: string | null;
+        payouts_previous_app_total?: string | null;
         trips?: number;
     } | null;
     email_sent_at: string | null;
@@ -548,4 +605,22 @@ export const getDriverStats = (params?: {
 
 export const updateDriver = (id: string, data: Record<string, any>) =>
     request<any>(`/api/admin/drivers/${id}`, { method: "PUT", body: JSON.stringify(data) });
+
+export async function generateDecalPdf(driverIds: string[]): Promise<Blob> {
+    const { useAuthStore } = await import("@/store/authStore");
+    const store = useAuthStore.getState();
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (store.token) headers["Authorization"] = `Bearer ${store.token}`;
+    if (store.csrfToken) headers["X-CSRF-Token"] = store.csrfToken;
+    const res = await fetch("/api/admin/drivers/decals/generate-pdf", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ driver_ids: driverIds }),
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || body.message || res.statusText);
+    }
+    return res.blob();
+}
 

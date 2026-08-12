@@ -1,20 +1,24 @@
-# Android build strategy: Expo SDK 55 / RN 0.85.2
+# Android build strategy: Expo SDK 57 / RN 0.86.2
 
-**Last verified:** 2026-05-08
+**Last verified:** 2026-08-11 (SDK 57 dependency-alignment pass; strategy unchanged since 2026-05-08)
 **Active strategy:** Option C (Kotlin 2.2.21 + ksp 2.2.21-2.0.5 + Stripe at default 23.3+)
-**Branch where this was solved:** `fix/rider-app-expo-sdk55`
+**Branch where this was solved:** `fix/rider-app-expo-sdk55` (under SDK 55 / RN 0.85.2; carried
+forward unchanged through the SDK 57 / RN 0.86.2 upgrade — patch filenames re-targeted to
+`+0.86.2`, `expo-modules-core+55.0.25.patch` retired as fixed upstream)
 
-This doc captures the full reasoning and alternatives for the Android build chain on
-Expo SDK 55 / React Native 0.85.2. If a future build breaks, **read the decision tree**
-before adding a reactive patch.
+This doc captures the full reasoning and alternatives for the Android build chain,
+originally worked out on Expo SDK 55 / RN 0.85.2 and still active on SDK 57 / RN 0.86.2.
+If a future build breaks, **read the decision tree** before adding a reactive patch.
 
 ---
 
 ## TL;DR
 
-Expo SDK 55 was released targeting Kotlin 2.1.20 (per `@react-native/gradle-plugin/gradle/libs.versions.toml`),
-but Stripe Android SDK 23.3+ requires Kotlin 2.2.21. We resolved the conflict by moving
-EVERYTHING forward to Kotlin 2.2.21 — patching `libs.versions.toml`, setting
+React Native's gradle-plugin targets Kotlin 2.1.20 (per
+`@react-native/gradle-plugin/gradle/libs.versions.toml` — true of both RN 0.85.2/SDK 55
+where this was first solved and RN 0.86.2/SDK 57 today), but Stripe Android SDK 23.3+
+requires Kotlin 2.2.21. We resolved the conflict by moving EVERYTHING forward to Kotlin
+2.2.21 — patching `libs.versions.toml`, setting
 `expo-build-properties.android.kotlinVersion: '2.2.21'`, and pinning ksp to `2.2.21-2.0.5`
 to match. No dependencies are pinned backward.
 
@@ -23,15 +27,18 @@ to match. No dependencies are pinned backward.
 ```
 rider-app/                                       (driver-app mirrors this except no Stripe)
 ├── plugins/
-│   ├── withGradleWrapper.js              ← active: Gradle 8.13 pin (RN 0.85 + Gradle 9 incompat)
+│   ├── withGradleWrapper.js              ← active: Gradle 8.13 pin (RN 0.85/0.86 templates default Gradle 9, incompat with pre-2023 native-module build scripts)
 │   ├── withForceCompileSdk.js            ← active: stamps compileSdk=36, targetSdk=36
 │   └── withKspVersion.js                 ← active: stamps kspVersion=2.2.21-2.0.5
 ├── patches/
-│   ├── @react-native+gradle-plugin+0.85.2.patch    ← kotlin = "2.2.21" (was "2.1.20" upstream)
-│   └── expo-modules-core+55.0.25.patch              ← Promise.kt RN 0.85.2 ABI compat
+│   └── @react-native+gradle-plugin+0.86.2.patch    ← kotlin = "2.2.21" (was "2.1.20" upstream)
+│       (companion react-native+0.86.2.patch is New-Arch codegen JS fallbacks, not Kotlin/Gradle)
 ├── app.config.ts                         ← expo-build-properties.android.kotlinVersion: '2.2.21'
 └── build-options/                        ← cold storage (alternative strategies)
 ```
+
+Retired since the SDK 55 writeup: `expo-modules-core+55.0.25.patch` (Promise.kt RN 0.85.2
+ABI compat) — fixed upstream, no equivalent needed on expo-modules-core 57.x.
 
 ## Why three layers exist
 
@@ -159,10 +166,10 @@ Track these:
 
 | Patch / plugin | Remove when |
 |---|---|
-| `withForceCompileSdk` | Expo SDK ≥56 ships compileSdk 36 as default AND `useExpoVersionCatalog()` bridges gradle.properties on EAS (verify with build that has plugin disabled). |
-| `withKspVersion` | `expo-updates/android/build.gradle` is fixed upstream to use a deferred lookup OR Expo SDK ≥56 ships with our kotlinVersion in its hardcoded mapping. |
-| `@react-native+gradle-plugin+0.85.2.patch` (kotlin 2.2.21) | `@react-native/gradle-plugin/gradle/libs.versions.toml` upstream sets `kotlin = "2.2.x"` (i.e., RN itself moves to 2.2). |
-| `expo-modules-core+55.0.25.patch` (Promise.kt) | A new minor of expo-modules-core ships an upstream fix for the RN 0.85 nullable-`code` ABI. |
+| `withForceCompileSdk` | Expo SDK ≥56 ships compileSdk 36 as default AND `useExpoVersionCatalog()` bridges gradle.properties on EAS (verify with build that has plugin disabled). **Now on SDK 57 the criterion is testable — needs one EAS Android build with the plugin disabled; not run in the 2026-08-11 alignment pass (no EAS builds).** |
+| `withKspVersion` | `expo-updates/android/build.gradle` is fixed upstream to use a deferred lookup OR Expo SDK ≥56 ships with our kotlinVersion in its hardcoded mapping. **Same status: testable on 57, needs an EAS build to verify.** |
+| `@react-native+gradle-plugin+0.86.2.patch` (kotlin 2.2.21) | `@react-native/gradle-plugin/gradle/libs.versions.toml` upstream sets `kotlin = "2.2.x"` (i.e., RN itself moves to 2.2). Still 2.1.20 in RN 0.86.2 — patch still required. |
+| ~~`expo-modules-core+55.0.25.patch` (Promise.kt)~~ | **RETIRED** — fixed upstream; no equivalent patch exists for expo-modules-core 57.x. |
 
 ---
 

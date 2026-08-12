@@ -37,9 +37,11 @@ from ._shared import (  # noqa: F401
 
 try:
     from ...services import stripe_kyc_sync as _kyc
+    from ...utils.legacy_rides import previous_app_history_visible
     from ...utils.stripe_mode import is_missing_on_key, key_mode, object_mode
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
     from services import stripe_kyc_sync as _kyc  # type: ignore
+    from utils.legacy_rides import previous_app_history_visible  # type: ignore
     from utils.stripe_mode import is_missing_on_key, key_mode, object_mode  # type: ignore
 
 router = APIRouter()
@@ -1259,9 +1261,19 @@ async def get_payout_history(
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
+    filters: dict = {"driver_id": driver["id"]}
+    # Previous-app transfers (stripe_sync) are transition history with a
+    # sunset (utils/legacy_rides): after the cutoff the driver's history
+    # shows Spinr payouts only. Filtered SERVER-side so pagination stays
+    # honest — dropping rows after a limit/offset fetch would shrink pages
+    # unpredictably. The $or keeps NULL payout_type rows visible: SQL
+    # `payout_type != 'stripe_sync'` is NULL for NULL, and PostgREST neq
+    # would silently hide any pre-backfill row.
+    if not previous_app_history_visible():
+        filters["$or"] = [{"payout_type": {"$ne": "stripe_sync"}}, {"payout_type": None}]
     payouts = await db_supabase.get_rows(
         "payouts",
-        {"driver_id": driver["id"]},
+        filters,
         limit=limit,
         offset=offset,
         order="created_at",

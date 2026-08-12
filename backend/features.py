@@ -920,11 +920,14 @@ async def calculate_all_fees(
     result["fees_total"] = float(_q2(fees_total))
 
     # Calculate taxes — Decimal end-to-end so the receipt line items
-    # reconcile to the cent. Saskatchewan rideshare is GST 5% only — PST does
-    # NOT apply to rideshare here, so pst_enabled defaults off. PST/HST remain
-    # per-area configurable from the admin panel for future markets/cohorts:
-    # GST + optional PST, or a combined HST rate. Each tax is quantized
-    # independently before summing so the breakdown matches the displayed total.
+    # reconcile to the cent. PST DOES apply to Saskatchewan rideshare (6%,
+    # confirmed 2026-08-11 — see docs/change-log/2026-08-11-sk-pst-enable.md;
+    # this comment previously claimed the opposite, which left
+    # Saskatoon/Regina under-collecting PST on every live fare until fixed).
+    # GST + optional PST, or a combined HST rate — per-area configurable from
+    # the admin panel for markets/cohorts with different tax rules. Each tax
+    # is quantized independently before summing so the breakdown matches the
+    # displayed total.
     taxable_amount = subtotal_d + fees_total
     tax_breakdown: Dict[str, Dict[str, float]] = {}
     tax_total = Decimal("0")
@@ -1643,6 +1646,11 @@ async def send_push_notification(
     The push_retry_queue.priority CHECK constraint must list every tier used
     here — see migration 272, which added ``account``.
 
+    Non-time-critical pushes are additionally subject to global quiet-hours +
+    daily-cap throttling (utils/notification_throttle.py) when
+    notification_throttling_enabled is on (defaults False — migration 304).
+    dispatch/safety/account bypass this exactly like they bypass the opt-out.
+
     Every call also writes an in-app notification-inbox row (best-effort,
     non-blocking) regardless of whether device delivery succeeds — the
     underlying event (ride completed, wallet credited, ...) already happened,
@@ -1687,6 +1695,37 @@ async def send_push_notification(
                     f"(type={notif_type}); inbox row still recorded"
                 )
                 return False
+
+            # Global quiet-hours + daily-cap throttling (utils/notification_throttle.py),
+            # gated behind notification_throttling_enabled (defaults False — ships
+            # dark, migration 304). Deliberately last in this block: push_enabled
+            # and ride_updates are per-user opt-outs the user chose; this is an
+            # operational delivery-shaping control layered on top, so it should
+            # never suppress something the two opt-out checks above didn't. Fail
+            # -open behavior for Redis/config errors lives inside should_throttle
+            # itself, not here — this call sites relies on that contract.
+            try:
+                from .settings_loader import get_app_settings
+            except ImportError:
+                from settings_loader import get_app_settings  # type: ignore
+            settings = await get_app_settings()
+            if settings.get("notification_throttling_enabled"):
+                try:
+                    from .utils.notification_throttle import should_throttle
+                except ImportError:
+                    from utils.notification_throttle import should_throttle  # type: ignore
+                throttled = await should_throttle(
+                    user_id,
+                    settings.get("notification_quiet_hours_start") or "22:00",
+                    settings.get("notification_quiet_hours_end") or "07:00",
+                    int(settings.get("notification_daily_cap") or 0),
+                )
+                if throttled:
+                    logger.info(
+                        f"push: suppressed by notification_throttling for user {user_id} "
+                        f"(priority={priority}); inbox row still recorded"
+                    )
+                    return False
         except Exception:
             logger.opt(exception=True).error(
                 f"push: preference lookup failed for user {user_id} — sending anyway (deliberate fail-open)"

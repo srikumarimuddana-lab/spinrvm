@@ -42,16 +42,20 @@ import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client
 import { queryClient, asyncStoragePersister, QUERY_CACHE_BUSTER } from '@shared/api/queryClient';
 import { captureMessage, setUser, initErrorReporting, wrapApp } from '@shared/services/errorReporting';
 
-// EAS Observe (SDK 55 API: AppMetricsRoot / AppMetrics). Native module —
-// present only in binaries built with it, so the guarded require keeps older
-// installed builds and Expo Go booting with metrics simply off (same pattern
-// as the startup-crash trap for module-scope native access).
+// EAS Observe. Native module — present only in binaries built with it, so the
+// guarded require keeps older installed builds and Expo Go booting with
+// metrics simply off (same pattern as the startup-crash trap for module-scope
+// native access). API note: expo-observe ~57 renamed the root wrapper to
+// ObserveRoot (same .wrap() surface); the SDK 55-era AppMetricsRoot export no
+// longer exists, which made this lookup silently resolve null — metrics were
+// off in every SDK 57 build until the ObserveRoot fallback below (2026-08-12,
+// same fix as driver-app/app/_layout.tsx). AppMetrics is still re-exported.
 let ObserveMetricsRoot: any = null;
 let ObserveMetrics: any = null;
 try {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const _observe = require('expo-observe');
-  ObserveMetricsRoot = _observe.AppMetricsRoot ?? null;
+  ObserveMetricsRoot = _observe.ObserveRoot ?? _observe.AppMetricsRoot ?? null;
   ObserveMetrics = _observe.AppMetrics ?? null;
 } catch {
   ObserveMetricsRoot = null;
@@ -926,6 +930,7 @@ function RootLayoutInner({
             <Stack.Screen name="privacy-settings" />
             <Stack.Screen name="accessibility" />
             <Stack.Screen name="settings" />
+            <Stack.Screen name="verify-email" />
             <Stack.Screen name="ride-details" />
             <Stack.Screen name="work-profile" />
             <Stack.Screen name="work-allowance-request" />

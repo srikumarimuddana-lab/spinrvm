@@ -16,8 +16,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     icon: './assets/images/icon.png',
     scheme: SCHEME,
     userInterfaceStyle: 'automatic',
-    // @ts-expect-error newArchEnabled is valid Expo config but not yet typed in ExpoConfig
-    newArchEnabled: true, // REQUIRED: react-native-reanimated 4 / react-native-worklets only run on the New Architecture (old arch crashed on first animated screen)
+    newArchEnabled: true, // REQUIRED: react-native-reanimated 4 / react-native-worklets only run on the New Architecture (old arch crashed on first animated screen). Typed in ExpoConfig since SDK 57 — no suppression needed.
     updates: {
         url: 'https://u.expo.dev/1ed02cf4-97cb-4678-b5a2-0881f89abaa8',
     },
@@ -25,15 +24,22 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 'fingerprint'/'appVersion' rejected by EAS CLI). Bump manually when
     // shipping native changes that break JS-bundle compatibility. Pre-launch
     // with no production users, OTA compatibility risk is zero.
-    runtimeVersion: '2.5.0', // bump from 2.4.0: expo-sqlite adds a native module for the durable trip-location outbox, so SQLite-dependent JS must never reach a pre-SQLite binary over the air. 2.4.0 isolated the react-native-screens 4.23.0 native line after 4.24.0 New-Arch/Bridgeless codegen resolved an expo-router <Screen> to a non-renderable object in release builds. Prior 2.2.0 -> 2.3.0 added react-native-webview (Stripe embedded onboarding) + Android CAMERA, plus @iternio/react-native-auto-play + react-native-nitro-modules (Android Auto).
+    runtimeVersion: '2.6.0', // bump from 2.5.0 (SDK 57 dependency alignment, 2026-08-11): react-native-gesture-handler 2.31→2.32, react-native-safe-area-context 5.6→5.7, netinfo 11→12, datetimepicker 8→9 are all NATIVE-module changes — JS built against these must never OTA onto pre-alignment binaries. History: 2.5.0 added expo-sqlite (durable trip-location outbox); 2.4.0 isolated the react-native-screens 4.23.0 native line after 4.24.0 New-Arch/Bridgeless codegen resolved an expo-router <Screen> to a non-renderable object in release builds; 2.2.0 -> 2.3.0 added react-native-webview (Stripe embedded onboarding) + Android CAMERA, plus @iternio/react-native-auto-play + react-native-nitro-modules (Android Auto).
     splash: {
         image: './assets/images/splash-blank.png',
         resizeMode: 'contain',
         backgroundColor: '#FFFFFF',
     },
-    ios: ({
+    ios: {
         supportsTablet: true,
-        minimumOsVersion: '16.4', // expo-build-properties 57.x requires ios.deploymentTarget >= 16.4 (was 16.0 under 55.0.14); SDK 55 itself only required 16.0
+        // @ts-expect-error minimumOsVersion is not in the SDK 57 ExpoConfig ios type, and a
+        // grep of the installed @expo/* + expo-build-properties tooling finds NO consumer of
+        // it (verified 2026-08-12) — the ENFORCED iOS floor is expo-build-properties'
+        // ios.deploymentTarget: '16.4' below, not this key. Kept only in case store-side/EAS
+        // tooling reads it from the uploaded config; do not edit it expecting to change the
+        // supported-OS floor. (Previously this whole ios block was cast `as any`, which also
+        // hid real type errors — narrowed 2026-08-11; the rest typechecks clean on SDK 57.)
+        minimumOsVersion: '16.4', // matches deploymentTarget — the actual floor (expo-build-properties 57.x hard-validates deploymentTarget >= 16.4; was 16.0 under SDK 55)
         bundleIdentifier: BUNDLE_ID,
         googleServicesFile: './GoogleService-Info.plist',
         // No ios.config.googleMapsApiKey on purpose: iOS uses Apple Maps. Every
@@ -164,7 +170,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 },
             ],
         },
-    } as any),
+    },
     android: {
         adaptiveIcon: {
             foregroundImage: './assets/images/adaptive-icon.png',
@@ -236,8 +242,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             ios: { appCheckProviderFactory: 'DeviceCheck' },
             android: { appCheckProviderFactory: 'playIntegrity' },
         }],
-        // SDK 55 / RN 0.85.2 androidx.* deps require compileSdk 36. LogRocket
-        // requires minSdkVersion 25. Kotlin pinned to 2.2.21 — Option C strategy.
+        // SDK 57 / RN 0.86.2 androidx.* deps require compileSdk 36 (requirement
+        // dates from SDK 55 and still holds). LogRocket requires minSdkVersion 25.
+        // Kotlin pinned to 2.2.21 — Option C strategy.
         // See docs/android-build-strategy.md. ksp must match (handled by
         // withKspVersion plugin below).
         ['expo-build-properties', {
@@ -250,14 +257,16 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             ios: {
                 deploymentTarget: '16.4', // match ios.minimumOsVersion; expo-build-properties 57.x hard-validates this must be >= 16.4 (was 16.0, valid under 55.0.14 -- see maybeThrowInvalidVersions in expo-build-properties/build/pluginConfig.js); Firebase pods need >= 15
                 // Compile React Native from source instead of the prebuilt
-                // ReactNativeCore.xcframework. On SDK 55 the prebuilt 0.85.2 core
-                // exposes a 4-arg RCTDevMenuConfiguration(...,bundleConfiguration:)
-                // while expo-dev-launcher 55.0.36 still calls the 3-arg form that
-                // matches the npm RN *source* headers — so against the prebuilt
-                // binary the dev-launcher Swift fails to compile ("missing argument
-                // for parameter 'bundleConfiguration'"). Building from source aligns
-                // every RN header with what expo-dev-launcher expects. The 4-arg
-                // API only lands in SDK 56; until we migrate, source build is the fix.
+                // ReactNativeCore.xcframework. Added on SDK 55: the prebuilt 0.85.2
+                // core exposed a 4-arg RCTDevMenuConfiguration while expo-dev-launcher
+                // 55.0.36 called the 3-arg form, so dev-launcher Swift failed to
+                // compile against the prebuilt binary. That header mismatch was fixed
+                // upstream in SDK 56, so on SDK 57 this flag is LIKELY removable —
+                // but flipping it is only verifiable via an EAS iOS build (none run
+                // in the SDK 57 alignment pass, 2026-08-11), so it deliberately stays
+                // on. Removal (a large iOS build-time win) is tracked in
+                // ACTION_ITEMS.md alongside withFirebaseNonModularHeaders, which
+                // exists to support this source-build + static-frameworks combo.
                 buildReactNativeFromSource: true,
                 // @react-native-firebase Swift pods (AppCheckCore,
                 // FirebaseCoreInternal, FirebaseCrashlytics, FirebaseSessions)

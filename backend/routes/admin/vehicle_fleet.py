@@ -549,6 +549,7 @@ async def admin_report_lost_item(ride_id: str, req: LostAndFoundRequest):
                     "Lost Item Report",
                     f"A rider reported a lost item: {req.item_description}. Please check your vehicle.",
                     {"type": "lost_and_found", "ride_id": ride_id},
+                    target_app="driver",
                 )
                 # Update status to driver_notified
                 await db_supabase.update_lost_and_found(

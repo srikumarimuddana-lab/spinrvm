@@ -146,6 +146,24 @@
     "alert_title": "\uD83D\uDEA8 Alerte d\u2019urgence envoy\u00e9e",
     "alert_msg": "Votre localisation a \u00e9t\u00e9 partag\u00e9e avec le soutien Spinr et vos contacts d\u2019urgence.\n\nVoulez-vous appeler le 911\u00a0?",
     "call_911": "Appeler le 911",
-    "im_ok": "Je vais bien"
+    "im_ok": "Je vais bien",
+    "failure_title": "\u26a0\ufe0f Alerte non envoy\u00e9e",
+    "failure_msg": "Impossible de joindre Spinr. Le bouton restera rouge \u2014 touchez-le pour r\u00e9essayer.\n\nVous pouvez appeler le 911 directement d\u00e8s maintenant.",
+    "retry_now": "R\u00e9essayer maintenant",
+    "dismiss": "Fermer",
+    "no_active_ride_title": "Aucune course active",
+    "no_active_ride_msg": "L\u2019alerte d\u2019urgence n\u00e9cessite une course active. Appelez le 911 directement pour une aide imm\u00e9diate.",
+    "label_hold": "Maintenir...",
+    "label_sending": "Envoi\u2026",
+    "label_alert_sent": "Alerte envoy\u00e9e",
+    "label_failed": "\u00c9CHEC",
+    "label_default": "SOS",
+    "hold_hint": "Maintenez pendant 1,2 seconde",
+    "retry_hint": "Touchez pour r\u00e9essayer",
+    "a11y_label_sending": "Envoi de l\u2019alerte d\u2019urgence en cours",
+    "a11y_label_failed": "\u00c9chec de l\u2019alerte d\u2019urgence \u2014 touchez pour r\u00e9essayer",
+    "a11y_hint_failed": "Alerte \u00e9chou\u00e9e \u2014 appuyez deux fois pour r\u00e9essayer",
+    "a11y_hint_sent": "Alerte envoy\u00e9e",
+    "a11y_hint_default": "Appuyez deux fois pour envoyer une alerte SOS"
   }
 }

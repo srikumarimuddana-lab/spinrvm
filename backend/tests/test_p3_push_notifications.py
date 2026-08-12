@@ -289,6 +289,78 @@ class TestNotificationPreferences:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# GET /notifications/preferences also surfaces read-only global throttling
+# info (subtask 5/5) — NOT per-user columns, since quiet-hours/cap are global
+# admin settings (migration 304), not on the notification_preferences row.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestPreferencesThrottleInfo:
+    async def test_defaults_row_includes_throttle_info(self):
+        from backend.routes.notifications import get_preferences
+
+        settings = {
+            "notification_throttling_enabled": False,
+            "notification_quiet_hours_start": "22:00",
+            "notification_quiet_hours_end": "07:00",
+            "notification_daily_cap": 6,
+        }
+        with (
+            patch("backend.routes.notifications.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.settings_loader.get_app_settings", AsyncMock(return_value=settings)),
+        ):
+            result = await get_preferences(current_user={"id": USER_ID})
+
+        assert result["notification_throttling_enabled"] is False
+        assert result["notification_quiet_hours_start"] == "22:00"
+        assert result["notification_quiet_hours_end"] == "07:00"
+        assert result["notification_daily_cap"] == 6
+        # Existing per-user default fields are still present alongside it.
+        assert result["push_enabled"] is True
+
+    async def test_existing_row_also_gets_throttle_info(self):
+        from backend.routes.notifications import get_preferences
+
+        row = {"id": "pref-001", "user_id": USER_ID, "push_enabled": False}
+        settings = {
+            "notification_throttling_enabled": True,
+            "notification_quiet_hours_start": "23:00",
+            "notification_quiet_hours_end": "06:30",
+            "notification_daily_cap": 3,
+        }
+        with (
+            patch("backend.routes.notifications.db_supabase.get_rows", AsyncMock(return_value=[row])),
+            patch("backend.settings_loader.get_app_settings", AsyncMock(return_value=settings)),
+        ):
+            result = await get_preferences(current_user={"id": USER_ID})
+
+        # Per-user row fields pass through unchanged...
+        assert result["push_enabled"] is False
+        assert result["user_id"] == USER_ID
+        # ...merged with the global throttle info.
+        assert result["notification_throttling_enabled"] is True
+        assert result["notification_quiet_hours_start"] == "23:00"
+        assert result["notification_daily_cap"] == 3
+
+    async def test_missing_settings_keys_fall_back_to_documented_defaults(self):
+        """get_app_settings can return a bare dict missing these keys (e.g.
+        a stale cache from before migration 304) — must not KeyError."""
+        from backend.routes.notifications import get_preferences
+
+        with (
+            patch("backend.routes.notifications.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.settings_loader.get_app_settings", AsyncMock(return_value={})),
+        ):
+            result = await get_preferences(current_user={"id": USER_ID})
+
+        assert result["notification_throttling_enabled"] is False
+        assert result["notification_quiet_hours_start"] == "22:00"
+        assert result["notification_quiet_hours_end"] == "07:00"
+        assert result["notification_daily_cap"] == 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # create_notification() helper — deeplink injection
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -420,6 +492,159 @@ class TestNativePushDelivery:
         msg_arg = mock_messaging.Message.call_args
         assert msg_arg is not None
         assert msg_arg.kwargs.get("token") == android_token or (msg_arg.args and android_token in str(msg_arg.args))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Quiet-hours + daily-cap throttling (utils/notification_throttle.py), wired
+# into send_push_notification behind notification_throttling_enabled
+# (defaults False — migration 304). get_app_settings and should_throttle are
+# both local imports inside the function (see features.py), so tests patch
+# the *source* modules (backend.settings_loader / backend.utils.
+# notification_throttle) rather than backend.features — a local `from X
+# import Y` re-resolves X.Y at call time, so patching X.Y is what actually
+# takes effect.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestNotificationThrottlingWiring:
+    def _settings(self, **overrides):
+        base = {
+            "notification_throttling_enabled": True,
+            "notification_quiet_hours_start": "22:00",
+            "notification_quiet_hours_end": "07:00",
+            "notification_daily_cap": 6,
+        }
+        base.update(overrides)
+        return base
+
+    async def _send(self, *, priority="normal", settings=None, throttled=None, notif_type=None):
+        import sys
+        from unittest.mock import MagicMock
+
+        mock_messaging = MagicMock()
+        mock_messaging.send = MagicMock(return_value="projects/spinr/messages/ok")
+        mock_firebase = MagicMock()
+        mock_firebase.messaging = mock_messaging
+
+        user_row = {"id": USER_ID, "fcm_token": "fcm-token-abc"}
+
+        patches = [
+            patch.dict(sys.modules, {"firebase_admin": mock_firebase, "firebase_admin.messaging": mock_messaging}),
+            patch("backend.features.db_supabase.find_one", AsyncMock(return_value=user_row)),
+            patch("backend.features.db_supabase.get_user_by_id", AsyncMock(return_value=user_row)),
+            # No notification_preferences row → push_enabled/ride_updates checks
+            # both no-op, isolating this test to the throttle branch alone.
+            patch("backend.features.db_supabase.get_rows", AsyncMock(return_value=[])),
+        ]
+        if settings is not None:
+            patches.append(patch("backend.settings_loader.get_app_settings", AsyncMock(return_value=settings)))
+        if throttled is not None:
+            patches.append(
+                patch("backend.utils.notification_throttle.should_throttle", AsyncMock(return_value=throttled))
+            )
+
+        from contextlib import ExitStack
+
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            from backend import features as features_mod
+
+            result = await features_mod.send_push_notification(
+                user_id=USER_ID,
+                title="Test",
+                body="Test body",
+                data={"type": notif_type} if notif_type else None,
+                priority=priority,
+            )
+        return result, mock_messaging
+
+    async def test_flag_off_ignores_quiet_hours_entirely(self):
+        """notification_throttling_enabled False (default) → should_throttle
+        is never even consulted, matching the ships-dark contract."""
+        result, mock_messaging = await self._send(
+            settings=self._settings(notification_throttling_enabled=False),
+            throttled=True,  # would suppress if the flag were honoured — it must not be
+        )
+        assert result is True
+        mock_messaging.send.assert_called_once()
+
+    async def test_flag_on_and_throttled_suppresses_normal_priority(self):
+        result, mock_messaging = await self._send(
+            priority="normal",
+            settings=self._settings(),
+            throttled=True,
+        )
+        assert result is False
+        mock_messaging.send.assert_not_called()
+
+    async def test_flag_on_and_not_throttled_delivers(self):
+        result, mock_messaging = await self._send(
+            priority="normal",
+            settings=self._settings(),
+            throttled=False,
+        )
+        assert result is True
+        mock_messaging.send.assert_called_once()
+
+    async def test_dispatch_priority_bypasses_throttling_even_when_flag_on(self):
+        """Safety-critical bypass must hold: dispatch/safety/account never
+        reach the throttle check at all (time_critical short-circuits the
+        whole preference/throttle block)."""
+        result, mock_messaging = await self._send(
+            priority="dispatch",
+            settings=self._settings(),
+            throttled=True,  # would suppress a normal-priority push
+        )
+        assert result is True
+        mock_messaging.send.assert_called_once()
+
+    async def test_safety_priority_bypasses_throttling_even_when_flag_on(self):
+        result, mock_messaging = await self._send(
+            priority="safety",
+            settings=self._settings(),
+            throttled=True,
+        )
+        assert result is True
+        mock_messaging.send.assert_called_once()
+
+    async def test_account_priority_bypasses_throttling_even_when_flag_on(self):
+        result, mock_messaging = await self._send(
+            priority="account",
+            settings=self._settings(),
+            throttled=True,
+        )
+        assert result is True
+        mock_messaging.send.assert_called_once()
+
+    async def test_settings_lookup_failure_fails_open(self):
+        """get_app_settings raising must fall into the existing outer
+        fail-open handler for this whole preference block — send proceeds,
+        matching the documented deliberate-fail-open contract."""
+        import sys
+        from unittest.mock import MagicMock
+
+        mock_messaging = MagicMock()
+        mock_messaging.send = MagicMock(return_value="projects/spinr/messages/ok")
+        mock_firebase = MagicMock()
+        mock_firebase.messaging = mock_messaging
+        user_row = {"id": USER_ID, "fcm_token": "fcm-token-abc"}
+
+        with (
+            patch.dict(sys.modules, {"firebase_admin": mock_firebase, "firebase_admin.messaging": mock_messaging}),
+            patch("backend.features.db_supabase.find_one", AsyncMock(return_value=user_row)),
+            patch("backend.features.db_supabase.get_user_by_id", AsyncMock(return_value=user_row)),
+            patch("backend.features.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.settings_loader.get_app_settings", AsyncMock(side_effect=RuntimeError("db down"))),
+        ):
+            from backend import features as features_mod
+
+            result = await features_mod.send_push_notification(
+                user_id=USER_ID, title="Test", body="Test body", priority="normal"
+            )
+
+        assert result is True
+        mock_messaging.send.assert_called_once()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -928,11 +1153,11 @@ class TestStringifyPushData:
         assert all(isinstance(v, str) for v in out.values())
         assert out["type"] == "ride_cancelled"
         assert out["ride_id"] == "r-1"
-        assert out["is_auto"] == "true"   # JS-friendly lowercase
+        assert out["is_auto"] == "true"  # JS-friendly lowercase
         assert out["missed"] == "false"
         assert out["count"] == "3"
         assert out["extra"] == '{"k":1}'  # nested → JSON string
-        assert "ignored" not in out       # None dropped (FCM has no null)
+        assert "ignored" not in out  # None dropped (FCM has no null)
 
     def test_none_and_empty_return_empty_dict(self):
         from backend.features import _stringify_push_data

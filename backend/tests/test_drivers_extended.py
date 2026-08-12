@@ -512,6 +512,47 @@ class TestGetDriverBalance:
                 asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
         assert exc.value.status_code == 503
 
+    def test_incentive_claims_lookup_failure_raises_503_not_zeroed_balance(self):
+        """spinr-money-auditor finding: total_incentives now feeds
+        payable_balance (bounds the Stripe payout Transfer) — a swallowed
+        ride_incentive_claims failure must surface as 503, not silently
+        under-report what a driver can withdraw as $0 incentives."""
+        from fastapi import HTTPException
+
+        from backend.routes import drivers as drv
+
+        rides = [{"id": "ride-1", "base_fare": 10.0}]
+
+        def get_rows_mock(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                status = (filters or {}).get("status")
+                return rides if status == "completed" else []
+            return []
+
+        class _FailingIncentiveQuery:
+            def select(self, *_a, **_k):
+                return self
+
+            def in_(self, *_a, **_k):
+                return self
+
+            def execute(self):
+                raise RuntimeError("ride_incentive_claims lookup down")
+
+        class _FakeSupabase:
+            def table(self, name):
+                return _FailingIncentiveQuery()
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)),
+            patch("backend.routes.drivers._deps.db_supabase.supabase", _FakeSupabase()),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
+        assert exc.value.status_code == 503
+
     def test_returns_zeros_when_driver_not_found(self):
         from fastapi import HTTPException
 

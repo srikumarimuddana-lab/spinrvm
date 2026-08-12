@@ -90,23 +90,31 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         total_tax = sum((_ride_tax(r) for r in rides), Decimal("0"))
 
         # Per-ride pickup/surge incentive bonuses — same source /earnings
-        # and driver statements already fold in.
+        # and driver statements already fold in. Unlike /earnings (a
+        # read-only display), this number feeds payable_balance, which
+        # bounds the Stripe payout Transfer — a swallowed failure here would
+        # silently under-report what a driver can withdraw. Let it propagate
+        # to the outer except below (503), don't soft-fail to 0.
         total_incentives = Decimal("0")
         _ride_ids = [r["id"] for r in rides if r.get("id")]
         if _ride_ids:
-            try:
-                _claims = (
-                    db_supabase.supabase.table("ride_incentive_claims")
-                    .select("bonus_amount")
-                    .in_("ride_id", _ride_ids)
-                    .execute()
-                ).data or []
-                total_incentives = sum((_d(c.get("bonus_amount") or 0) for c in _claims), Decimal("0"))
-            except Exception:
-                logger.debug("balance: ride_incentive_claims lookup failed", exc_info=True)
+            _claims = (
+                db_supabase.supabase.table("ride_incentive_claims")
+                .select("bonus_amount")
+                .in_("ride_id", _ride_ids)
+                .execute()
+            ).data or []
+            total_incentives = sum((_d(c.get("bonus_amount") or 0) for c in _claims), Decimal("0"))
 
         # Cancellation/no-show fees the driver earned — lifetime, no date
-        # filter (matches every other sum in this endpoint).
+        # filter (matches every other sum in this endpoint). No
+        # EXCLUDE_LEGACY_RIDES filter here: booking_import_service.py hard-
+        # filters imports to TARGET_BOOKING_STATUS = "completed" and never
+        # writes status="cancelled", so no legacy-imported row can appear in
+        # this query today. If a future importer change starts importing
+        # cancelled/no-show legacy bookings, this (and the equivalent
+        # unfiltered queries in get_driver_earnings and
+        # utils/driver_statement.py) would need the same exclusion added.
         _cancelled_rides = await db_supabase.get_rows(
             "rides", {"driver_id": driver["id"], "status": RideStatus.CANCELLED}, limit=10000
         )

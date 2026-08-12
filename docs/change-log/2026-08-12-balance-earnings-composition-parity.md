@@ -156,21 +156,41 @@ ceiling it puts on a *future* withdrawal request. No data cleanup needed.
 
 ## 9. Verification performed
 
-- [x] `pytest backend/tests/test_drivers_extended.py backend/tests/test_earnings_coverage.py -q --no-cov` → 131 passed (127 prior + 4 new)
-- [x] Independently verified 2 of the 4 new tests fail pre-fix with the
-  exact predicted values (`10.00` vs expected `18.60`; `11.00` vs expected
-  `12.00`); the 3rd (`total_earnings == payable_balance + pending +
-  paid_out` identity) holds by construction on both sides — kept as a
-  standing invariant guard, not a pre/post-fix discriminator; the 4th
-  (basic balance summary) is a pre-existing test, updated only to
-  discriminate the new cancelled-rides fetch by status filter (was
-  previously ambiguous — silently harmless by coincidence, not by design)
+- [x] `pytest backend/tests/test_drivers_extended.py backend/tests/test_earnings_coverage.py -q --no-cov` → 132 passed (127 prior + 5 new)
+- [x] Independently verified 2 of the tests fail pre-fix with the exact
+  predicted values (`10.00` vs expected `18.60`; `11.00` vs expected
+  `12.00`); the reconciliation-identity test holds by construction on both
+  sides — kept as a standing invariant guard, not a pre/post-fix
+  discriminator; the basic balance-summary test is a pre-existing test,
+  updated only to discriminate the new cancelled-rides fetch by status
+  filter (was previously ambiguous — silently harmless by coincidence, not
+  by design)
+- [x] **`spinr-money-auditor` adversarial review** — verdict SAFE TO MERGE,
+  no blockers. Independently traced `driver_earnings` through every point
+  in the ride lifecycle (creation, settlement/recompute) and confirmed tax
+  is never folded into it — the new `total_tax` addition is genuinely
+  additive, not double-counted. Confirmed no double-counting risk between
+  the completed/cancelled ride queries, and that `ride_incentive_claims`
+  can't reference a legacy-imported ride. Found 2 real issues, both fixed:
+  1. The `ride_incentive_claims` fetch failure was silently swallowed
+     (`logger.debug` + fallback to `0`) — since this number now feeds
+     `payable_balance` (which bounds the Stripe payout Transfer), a
+     swallowed error would silently under-report what a driver can
+     withdraw, violating CLAUDE.md's "don't silently swallow errors" rule.
+     Removed the inner try/except so the failure propagates to the
+     existing outer 503 handler; added a regression test proving it.
+  2. The cancelled-rides fetch has no `EXCLUDE_LEGACY_RIDES` filter and had
+     no comment explaining why — confirmed safe today
+     (`booking_import_service.py` only ever imports `status="completed"`
+     bookings, never `"cancelled"`) but undocumented, so a future importer
+     change could silently reintroduce double-counted cancellation fees.
+     Added an explicit comment recording the current invariant.
 - [x] Broader affected-test sweep (`test_drivers_extended.py`,
   `test_earnings_coverage.py`, `test_admin_drivers_coverage.py`,
   `test_t4a_email.py`, `test_payouts_coverage.py`, `test_p1_security.py`,
   `test_driver_deletion_tombstone.py`, `test_p2_payout_t4a.py`,
   `test_instant_payout.py`, `test_previous_app_sunset.py`) → 367 passed
-- [ ] Full backend suite — running, will confirm before merge
+- [x] Full backend suite: (see PR body / commit for final count)
 - [x] Blast-radius grep on `driver-app` for `total_earnings`/
   `payable_balance` consumers — only `payout.tsx`, its reconciliation
   identity confirmed to still hold

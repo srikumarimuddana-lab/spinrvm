@@ -137,6 +137,18 @@ function PayoutScreen() {
         // effect. Empty deps, runs once.
         // eslint-disable-next-line react-hooks/set-state-in-effect
         loadData();
+        // loadData (and the loadBonuses/loadTaxYears/loadStripeStatus
+        // functions it calls) are plain functions recreated every render,
+        // closing over zero reactive props/state (verified: each only reads
+        // `api`/stable driverStore actions and calls its own local setState —
+        // no component prop or state value feeds into any of them). Adding
+        // loadData directly as a dep would re-fire this balance/bank/tax
+        // fetch on every render since a new function reference is created
+        // each time. Deliberately mount-only per the comment above; a
+        // useCallback-cascade across all 5 functions was considered and
+        // rejected as unnecessary risk on a money-adjacent screen for a
+        // dependency set that never actually varies.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     // Seed the GST input from the cached driver row whenever it changes.
@@ -153,7 +165,9 @@ function PayoutScreen() {
             showToast('error', 'Error', error);
             clearError();
         }
-    }, [error]);
+        // clearError is a stable driverStore action; adding it doesn't
+        // change when this effect fires.
+    }, [error, clearError]);
 
     const handleStripeOnboarding = async () => {
         // Hosted onboarding (Option A): open Stripe's AccountLink in the system

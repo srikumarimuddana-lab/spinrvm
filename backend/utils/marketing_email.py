@@ -100,6 +100,25 @@ async def send_marketing_email(
         from settings_loader import get_app_settings  # type: ignore
     settings = await get_app_settings()
 
+    # Global quiet-hours + daily-cap throttling, gated behind
+    # notification_throttling_enabled (defaults False — migration 304).
+    # Marketing email is unambiguously non-critical (CASL-regulated
+    # commercial messaging, never a receipt/transactional/ops-alert send),
+    # so it is always eligible for throttling once the flag is on.
+    if settings.get("notification_throttling_enabled"):
+        try:
+            from ..utils.notification_throttle import should_throttle
+        except ImportError:  # pragma: no cover
+            from utils.notification_throttle import should_throttle  # type: ignore
+        if await should_throttle(
+            user_id,
+            settings.get("notification_quiet_hours_start") or "22:00",
+            settings.get("notification_quiet_hours_end") or "07:00",
+            int(settings.get("notification_daily_cap") or 0),
+        ):
+            logger.info("[MARKETING] email suppressed by notification_throttling log_id=%s", log_id)
+            return False
+
     unsub = unsubscribe_url(user_id)
 
     # 2. Append the CASL footer to whichever bodies the caller supplied.

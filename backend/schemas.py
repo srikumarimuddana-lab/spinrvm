@@ -434,6 +434,15 @@ class AppSettings(BaseModel):
     # flip off only to silence an alert-noise incident, not as a correctness
     # control.
     stale_in_progress_ride_alert_enabled: bool = True
+    # ── Notification throttling (quiet hours + daily cap) ────────────────
+    # Master kill switch. Defaults OFF: existing push/SMS/email delivery is
+    # unchanged until an admin opts in after staging verification. Global for
+    # every rider/driver (no per-user override yet) — see migration 304.
+    # Dispatch/safety/account-priority sends always bypass this.
+    notification_throttling_enabled: bool = False
+    notification_quiet_hours_start: str = "22:00"
+    notification_quiet_hours_end: str = "07:00"
+    notification_daily_cap: int = 6
     # ── AI assistant (rider AI mode, backend/ai/) ────────────────────────
     # Master kill switch. Defaults OFF: the feature ships dark and is enabled
     # from the admin dashboard once a provider key is set. Effective within

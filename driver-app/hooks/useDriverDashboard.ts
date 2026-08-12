@@ -3,6 +3,7 @@ import { Animated , Platform, Vibration, Linking, AppState , Dimensions } from '
 import { showAlert } from '../components/AlertDialog';
 import * as Location from 'expo-location';
 import NetInfo from '@react-native-community/netinfo';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { showToast } from './useToast';
 import { router } from 'expo-router';
 
@@ -11,7 +12,7 @@ import { useDriverStore } from '../store/driverStore';
 import { useAlertPrefsStore } from '../store/alertPrefsStore';
 import { useRideOfferSound, setOfferSoundUrl } from './useRideOfferSound';
 import { tKey } from '../i18n';
-import api, { getApiErrorMessage } from '@shared/api/client';
+import api, { getApiErrorMessage, ensureFreshToken } from '@shared/api/client';
 import { useDriverConfig } from '@shared/hooks/queries';
 import { API_URL } from '@shared/config';
 // Keep the default import: many test files jest.mock(
@@ -144,6 +145,11 @@ let _dismissRideOfferNotification: (() => Promise<void>) | null = null;
 let _displayRideOfferNotification: ((o: any, opts?: { silent?: boolean; muted?: boolean }) => Promise<void>) | null = null;
 if (Platform.OS === 'android' || Platform.OS === 'ios') {
   try {
+    // Guarded native-module require — notifeeService.ts statically imports
+    // notifee at its own module scope, so requiring it eagerly here would
+    // defeat this android/ios + try/catch guard (see _layout.tsx's matching
+    // comment on the same pattern).
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const _notifee = require('../services/notifeeService');
     _dismissRideOfferNotification = _notifee.dismissRideOfferNotification;
     _displayRideOfferNotification = _notifee.displayRideOfferNotification;
@@ -220,7 +226,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // actually fires.
   const consumePendingAction = useCallback(async () => {
     try {
-      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
       const raw = await AsyncStorage.getItem(PENDING_ACTION_KEY);
       if (!raw) return;
       // Remove first so concurrent runs (mount + resume firing together)
@@ -426,7 +431,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     setLocationStatus(prev => (prev === 'ok' ? prev : 'pending'));
     if (useCache) {
       try {
-        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
         const saved = await AsyncStorage.getItem('spinr_driver_last_location');
         if (saved) {
           const { lat, lng } = JSON.parse(saved);
@@ -482,7 +486,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       locationRef.current = loc;
       setLocationStatus('ok');
       try {
-        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
         AsyncStorage.setItem('spinr_driver_last_location', JSON.stringify({ lat: loc.coords.latitude, lng: loc.coords.longitude }));
       } catch {}
       return loc;
@@ -619,7 +622,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       (async () => {
         try { await uploadLocationBatch(); } catch {}
         try {
-          const AsyncStorage = require('@react-native-async-storage/async-storage').default;
           await AsyncStorage.removeItem('spinr_driver_last_location');
         } catch {}
       })();
@@ -1003,7 +1005,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // with an expired token — the server rejects auth and the socket
     // immediately closes, burning a reconnect cycle.
     try {
-      const { ensureFreshToken } = require('@shared/api/client');
       await ensureFreshToken();
     } catch (err) {
       // Token refresh failed — the stored token may still be valid (short
@@ -1493,7 +1494,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // on resume this only fires for a body tap / a still-pending offer.)
   const consumePendingOffer = useCallback(async () => {
     try {
-      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
       const raw = await AsyncStorage.getItem('spinr_pending_ride_offer');
       if (!raw) return;
       await AsyncStorage.removeItem('spinr_pending_ride_offer');

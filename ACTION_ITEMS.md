@@ -7,7 +7,15 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-12 — A27 CLOSED: audit's 2 P1 findings. P1-A (dead
+_Last updated: 2026-08-12 — A28 CLOSED: audit's 4 P2 findings + P2-B
+triaged. P2-C already closed (same finding as P0-A/#3678). Float-on-money
+in `routes/drivers/earnings.py` (4 sites) fixed — Decimal accumulation
+instead of raw `float()`, with regression tests independently verified to
+fail on the pre-fix file with the predicted drift value. Remaining items
+(driver-import VIN/email/phone validation, `/balance` vs `/earnings`
+composition, rider total-rides definition, missing import change-logs)
+filed as backlog — most need a product decision, not a blind code change.
+Prior same-day: A27 CLOSED: audit's 2 P1 findings. P1-A (dead
 `drivers.total_earnings` fleet-wide stat) fixed with a live, legacy-excluded,
 batched earnings computation; also fixed a related gap on the per-driver
 "Earnings" header (missing legacy exclusion vs. its own "Payouts" tab). P1-B
@@ -2801,10 +2809,72 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     riders or drivers for the pre-fix under-collection period) is needed —
     explicitly out of scope per "no backdating" instruction; flag to
     Finance/Legal if that determination is still pending.
-- P2 findings from the same audit (`driver_import_service.py` validity
-  gaps: VIN/email/phone format checks, document-expiry-on-import,
-  float-on-money in `routes/drivers/earnings.py`) not yet triaged into
-  this file — see the audit doc directly.
+- P2 findings from the same audit: see A28 below, triaged 2026-08-12.
+
+### A28. Audit's 4 P2 findings + P2-B (`docs/audit/2026-08-11-driver-rider-migration-audit.md`) — triaged 2026-08-12
+- **P2-C — rider importer never writes `legacy_import_metadata`.**
+  - [x] **Status:** already DONE — this is the exact same finding as P0-A
+    (see A25 above), fixed in PR #3678. No separate action needed; noting
+    the cross-reference here since the audit lists it under both P0 and P2
+    numbering.
+- **P2 — driver import validity gaps** (`driver_import_service.py`): VIN
+  stored plaintext with no format/checksum check; email/phone accepted
+  with no format validation; a document row can import with
+  `status="approved"` and an already-past `expiry_date`.
+  - [ ] **Status:** open, not fixed. Low urgency per the audit's own
+    triage — the document-expiry gap is defense-in-depth only
+    (`go_online`'s own expiry re-check, `routes/drivers/status.py:309-328`,
+    is the real runtime gate); VIN/email/phone are one-time CLI-operator
+    input, not user-facing. Fix direction if picked up: format-validate
+    (not necessarily checksum-validate) VIN/email/phone in `build_plan`,
+    reject an approved-document row whose `expiry_date` has already
+    passed.
+  - Also noted: `sgi_approved`/`work_authorization_status`/
+    `is_permanent_resident`/`is_citizen`/expiry dates/`decals_sent` are
+    nullable-by-design with no `plan.errors` entry when blank — the audit
+    flags this only to confirm it's the intended model (completeness
+    enforced by downstream `status`/`is_verified` gating), not to request
+    a change. No action needed unless product says otherwise.
+- **Float-on-money in `routes/drivers/earnings.py`** (adjacent finding,
+  flagged because it's inside the file the audit reviewed line-by-line
+  anyway — a genuine CLAUDE.md Decimal-discipline violation, 4 call sites).
+  - [x] **Status:** DONE (2026-08-12) — daily/weekly/monthly/comparison
+    earnings aggregation now uses `_d()`/Decimal throughout instead of raw
+    `float()` accumulation. Display-path only (no money movement), but
+    brings the file into CLAUDE.md compliance. Full Change Impact & Risk
+    Log: `docs/change-log/2026-08-12-driver-earnings-decimal-fix.md`.
+- **`/balance` vs `/earnings` composition can diverge** (Phase 3
+  cross-surface findings #6/#7): `/balance` sums fare components live and
+  excludes `ride_incentive_claims` bonuses/cancellation fees that
+  `/earnings` and driver statements include; `/earnings`-family endpoints
+  trust the stored `driver_earnings` column directly. Undocumented as
+  intentional or accidental.
+  - [ ] **Status:** open — needs a product decision, not a blind code
+    change. Reconciling the two compositions either way is a money-visible
+    behavior change on a live-tested surface (driver balance/payout
+    figures) and CLAUDE.md requires escalation when blast radius/intent is
+    unclear on a surface like this. Flag to product/finance: should
+    `payable_balance` include bonuses/cancellation fees (making it match
+    `/earnings`), or is the current split deliberate (balance = withdrawable
+    ride money only, earnings = full income picture)?
+- **Admin "total rides" vs rider-app "total rides" use different
+  definitions, unreconciled** (Phase 3 cross-surface finding #10): admin
+  counts all-status lifetime rides; rider-app counts completed-only,
+  period-scoped.
+  - [ ] **Status:** open, low priority — the audit itself frames this as
+    "by design," similar to the T4A-vs-earnings date-bucket difference
+    (finding #8) which is already documented in code as intentional. Likely
+    resolution is a one-line code comment on each definition rather than a
+    behavior change, once product confirms both are meant to differ.
+- **P2-B — no Change Impact Log exists for the driver or rider bulk-import
+  paths themselves** (only booking-import and Stripe-mapping migration have
+  runbooks/change-logs, despite both writing directly to `auth`/`users`/
+  `drivers`).
+  - [ ] **Status:** open — documentation-only gap, no code risk. Someone
+    should backfill `docs/change-log/` entries for
+    `driver_import_service.py`/`rider_import_service.py` describing the
+    existing (already-shipped) behavior, per CLAUDE.md's "live-tested
+    surface" documentation requirement.
 
 ## P1 — Fix before launch (code)
 

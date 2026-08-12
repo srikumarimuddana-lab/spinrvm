@@ -121,6 +121,15 @@ export const CarMarker: React.FC<CarMarkerProps> = ({
     imageUri,
 }) => {
     const markerRef = useRef<any>(null);
+    // react-hooks/refs ("Cannot access refs during render"): AnimatedRegion
+    // is the same kind of stable animation-driver object as Animated.Value
+    // elsewhere in this app — mutated only via .timing() inside the
+    // position-update effect below, read only in the JSX `coordinate` prop.
+    // Verified safe — grepped this file for `.current =`: animatedRegion is
+    // never reassigned after creation (the existing "animatedRegion is a
+    // stable ref" comment a few lines down already documents this for the
+    // exhaustive-deps suppression on the same value).
+    // eslint-disable-next-line react-hooks/refs
     const animatedRegion = useRef(
         new AnimatedRegion({
             latitude: coordinate.latitude,

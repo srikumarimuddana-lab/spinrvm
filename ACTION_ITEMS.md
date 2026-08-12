@@ -3334,6 +3334,30 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     Premium `3.60/3.60` (base_fare/per_km).
   - **Final live values (Saskatoon):** Economy `4.00/1.00`, XL
     `5.60/1.40`, Premium `7.20/1.80`.
+  - **2026-08-12 reconciliation addendum:** a second, concurrent session
+    picked up this same item at close to the same time (both independently
+    got explicit user sign-off before writing). By the time the second
+    session queried live production, Regina's Economy rate read
+    `0.20/0.20` — 10× off from **both** this entry's documented before
+    (`0.02/0.02`) and after (`2.00/2.00`) states. Saskatoon's live values
+    matched this entry's documented final state exactly; only Regina had
+    drifted. The second session also introduced and immediately
+    self-corrected its own bug while investigating (a `jsonb_set(...,
+    '{-1}', ...)` call meant to *append* a Premium tier instead *replaced*
+    Regina's last array element, briefly deleting the XL row — caught via
+    the query's own `RETURNING` output within the same turn, fixed with
+    array-concatenation `||` instead). After surfacing the 10× discrepancy
+    to the user directly (rather than guessing) and getting explicit
+    confirmation to match this entry's documented `$2.00` baseline, Regina
+    was reconciled back to the values above. **Net effect: Regina's live
+    state now matches what this entry always said it should be** — the
+    interim `$0.20`-baseline detour is closed, not a new open question.
+    Flagged for anyone doing further live-Supabase pricing/config work:
+    **re-query the specific row immediately before writing, even when
+    ACTION_ITEMS.md says an item is already closed** — a merged doc commit
+    doesn't guarantee the live table hasn't moved since, the way `git log`
+    would for a code change. Full detail:
+    `docs/change-log/2026-08-12-b8-regina-reconciliation.md`.
   - **Discovered, not fixed this pass — new follow-up items:**
     - [x] A 6th service area, **"Saskatoon Airport"** (created 2026-07-30,
       after the last full-area inventory this entry's original

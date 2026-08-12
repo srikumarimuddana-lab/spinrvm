@@ -107,7 +107,7 @@ function PaymentConfirmScreenContent() {
       setSavedCards(cards);
       setSelectedCardId((prev) => selectDefaultCardId(prev, cards));
     }).catch((e) => {
-      console.warn('[PaymentConfirm] Failed to load saved cards:', e?.message ?? e);
+      console.warn('[PaymentConfirm] Failed to load saved cards:', e);
     });
   }, []);
 
@@ -178,6 +178,11 @@ function PaymentConfirmScreenContent() {
         router.replace({ pathname: '/driver-arriving', params: { rideId: bookedRide.id } } as any);
       }
     } catch (error: any) {
+      // Not user-facing: `error.message` here only drives the 409-detection
+      // control-flow branch below (routing to the rider's already-active
+      // ride instead of retrying booking). The actual user-visible message a
+      // few lines down already goes through getApiErrorMessage().
+      // eslint-disable-next-line no-restricted-syntax
       const is409 = error?.response?.status === 409 || error?.message?.includes('already active');
       if (is409) {
         const active = await useRideStore.getState().fetchActiveRide();

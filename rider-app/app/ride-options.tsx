@@ -378,7 +378,7 @@ function RideOptionsScreenContent() {
       // default), so a new customer's first card is auto-selected.
       setSelectedCardId((prev) => selectDefaultCardId(prev, cards));
     }).catch((e) => {
-      console.warn('[RideOptions] Failed to load saved cards:', e?.message ?? e);
+      console.warn('[RideOptions] Failed to load saved cards:', e);
     });
   }, []);
 
@@ -542,6 +542,11 @@ function RideOptionsScreenContent() {
         router.replace({ pathname: '/driver-arriving', params: { rideId: ride.id } } as any);
       }
     } catch (error: any) {
+      // Not user-facing: `error.message` here only drives the 409-detection
+      // control-flow branch below (routing to the rider's already-active
+      // ride instead of retrying booking). The actual user-visible message a
+      // few lines down already goes through getApiErrorMessage().
+      // eslint-disable-next-line no-restricted-syntax
       const is409 = error?.response?.status === 409 || error?.message?.includes('already active');
       if (is409) {
         const active = await useRideStore.getState().fetchActiveRide();
@@ -656,7 +661,7 @@ function RideOptionsScreenContent() {
               strokeWidth={0}
               strokeColor="transparent"
               onReady={onReadyDirections}
-              onError={(err: any) => console.warn('[RideOptions] Directions API error:', err?.message ?? err)}
+              onError={(err: any) => console.warn('[RideOptions] Directions API error:', err)}
               // NO optimizeWaypoints: the backend prices + dispatches `stops` in
               // the rider-entered order, so Directions must keep that order.
               // Optimising would let onReady persist a reordered polyline as

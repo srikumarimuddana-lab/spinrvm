@@ -888,6 +888,17 @@ async def admin_update_area_tax(area_id: str, tax: AreaTaxRequest, admin: dict =
         "hst_enabled",
         "hst_rate",
     ]
+    # A29 follow-up: a nonexistent area_id previously fell through to an
+    # unhandled AttributeError (500) at the final `area.get(...)` below —
+    # worse, an update against a nonexistent area would still have gone
+    # through db_supabase.update_one (a silent no-op match-zero-rows) and
+    # log_admin_action (an audit entry claiming a change to an area that
+    # doesn't exist) before that crash. Checked up front so a bad area_id
+    # 404s cleanly with no write and no audit entry.
+    area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
+    if not area:
+        raise HTTPException(status_code=404, detail="Service area not found")
+
     updates = tax.model_dump(exclude_none=True, exclude={"tax_justification"})
     if updates:
         justification = (tax.tax_justification or "").strip()
@@ -905,7 +916,7 @@ async def admin_update_area_tax(area_id: str, tax: AreaTaxRequest, admin: dict =
             area_id,
             {"updated_fields": [k for k in updates if k in _TAX_FIELDS], "justification": justification},
         )
-    area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
+        area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
     return {k: area.get(k) for k in _TAX_FIELDS}
 
 

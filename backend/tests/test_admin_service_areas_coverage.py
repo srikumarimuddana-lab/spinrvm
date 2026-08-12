@@ -613,11 +613,14 @@ class TestAreaTax:
             "hst_enabled": False,
             "hst_rate": 0,
         }
-        with patch.multiple(
-            "backend.routes.admin.service_areas.db_supabase",
-            update_one=update_one,
-            get_rows=AsyncMock(return_value=[updated_row]),
-        ), patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()) as log_action:
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=update_one,
+                get_rows=AsyncMock(return_value=[updated_row]),
+            ),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()) as log_action,
+        ):
             req = AreaTaxRequest(pst_enabled=True, pst_rate=6.0, tax_justification="SK PST enablement")
             result = await admin_update_area_tax("area-1", req, admin=_ADMIN)
 
@@ -633,7 +636,7 @@ class TestAreaTax:
         with patch.multiple(
             "backend.routes.admin.service_areas.db_supabase",
             update_one=update_one,
-            get_rows=AsyncMock(return_value=[{}]),
+            get_rows=AsyncMock(return_value=[{"id": "area-1"}]),
         ):
             req = AreaTaxRequest(pst_enabled=True, pst_rate=6.0)
             with pytest.raises(HTTPException) as exc_info:
@@ -641,6 +644,29 @@ class TestAreaTax:
 
         assert exc_info.value.status_code == 400
         update_one.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_update_area_tax_404s_on_missing_area_no_write_no_audit(self):
+        """A29 follow-up: previously fell through to an unhandled
+        AttributeError (500) at the final `area.get(...)` — worse, would
+        have already called update_one/log_admin_action for a nonexistent
+        area before crashing. Now 404s up front with neither side effect."""
+        update_one = AsyncMock()
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=update_one,
+                get_rows=AsyncMock(return_value=[]),
+            ),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()) as log_action,
+        ):
+            req = AreaTaxRequest(pst_enabled=True, pst_rate=6.0, tax_justification="test")
+            with pytest.raises(HTTPException) as exc_info:
+                await admin_update_area_tax("missing-area", req, admin=_ADMIN)
+
+        assert exc_info.value.status_code == 404
+        update_one.assert_not_awaited()
+        log_action.assert_not_awaited()
 
     @pytest.mark.anyio
     async def test_update_area_tax_empty_payload_skips_write_still_returns_row(self):

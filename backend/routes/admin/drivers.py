@@ -46,9 +46,9 @@ except ImportError:
     from utils.referral_terms import paid_referral_earnings, resolve_referral_terms  # type: ignore
 
 try:
-    from ...utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts
+    from ...utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts, drop_legacy_rides
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
-    from utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts  # type: ignore
+    from utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts, drop_legacy_rides  # type: ignore
 
 db = db_supabase  # legacy alias
 
@@ -712,7 +712,34 @@ async def admin_get_driver_stats(
     banned_count = sum(1 for d in enriched_drivers if d.get("status") == "banned")
     deleted_count = sum(1 for d in enriched_drivers if d.get("status") == "deleted")
     total_rides_sum = sum(int(d.get("total_rides") or 0) for d in enriched_drivers)
-    total_earnings_sum = float(sum(Decimal(str(d.get("total_earnings") or 0)) for d in enriched_drivers))
+
+    # P1-A (docs/audit/2026-08-11-driver-rider-migration-audit.md): `drivers.
+    # total_earnings` is never written by any code path (same dead column
+    # admin_get_driver_live_stats's docstring already documents and works
+    # around) — this stat card and the per-area breakdown always read $0.
+    # Computed live here instead, mirroring that endpoint's pattern: sum
+    # driver_earnings across each driver's completed rides. Fleet-wide, so
+    # one batched query (bounded, not per-driver — avoids an N+1 scan) is
+    # cheaper than N per-driver round-trips. Lifetime, not date-windowed,
+    # to match total_rides_sum's semantics above (also a lifetime counter).
+    # Excludes legacy-imported rides (EXCLUDE_LEGACY_RIDES) for the same
+    # reason admin_ride_money_rollup/admin_payouts_overview_aggregates do
+    # (P0-B) — previous-app money the driver already received, not new
+    # Spinr income.
+    driver_ids_set = {d["id"] for d in enriched_drivers}
+    earnings_by_driver: Dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    if driver_ids_set:
+        earnings_rides = await db_supabase.get_rows(
+            "rides",
+            {"driver_id": {"$in": list(driver_ids_set)}, "status": "completed", **EXCLUDE_LEGACY_RIDES},
+            limit=50000,
+        )
+        for r in earnings_rides:
+            did = r.get("driver_id")
+            if did:
+                earnings_by_driver[did] += Decimal(str(r.get("driver_earnings") or 0))
+
+    total_earnings_sum = float(sum(earnings_by_driver.values(), Decimal("0")))
     avg_rating = 0.0
     rated = [d for d in enriched_drivers if d.get("rating") and float(d.get("rating", 0)) > 0]
     if rated:
@@ -742,7 +769,7 @@ async def admin_get_driver_stats(
             area_stats[aid]["unverified"] += 1
         area_stats[aid]["total_rides"] += int(d.get("total_rides") or 0)
         area_stats[aid]["total_earnings"] = float(
-            Decimal(str(area_stats[aid]["total_earnings"])) + Decimal(str(d.get("total_earnings") or 0))
+            Decimal(str(area_stats[aid]["total_earnings"])) + earnings_by_driver[d["id"]]
         )
 
     # ── Daily charts (within date range) ──
@@ -760,9 +787,11 @@ async def admin_get_driver_stats(
             day_key = dt.strftime("%Y-%m-%d")
             daily_joins[day_key] += 1
 
-    # Rides + earnings per day (for drivers matching the service_area filter)
-    driver_ids_set = {d["id"] for d in enriched_drivers}
-    ride_filters: Dict[str, Any] = {"created_at": {"$gte": range_start.isoformat()}}
+    # Rides + earnings per day (for drivers matching the service_area filter).
+    # Legacy-imported rides excluded (same P0-B reasoning as above) so a
+    # historical bulk import doesn't show up as a spike in "new" fleet
+    # activity/earnings on whatever day it happened to be imported.
+    ride_filters: Dict[str, Any] = {"created_at": {"$gte": range_start.isoformat()}, **EXCLUDE_LEGACY_RIDES}
     all_rides = await db_supabase.get_rows("rides", ride_filters, order="created_at", desc=True, limit=5000)
 
     # Filter rides to only those belonging to our driver set
@@ -1997,7 +2026,18 @@ async def admin_get_driver_live_stats(driver_id: str):
 
     # driver_earnings is the post-platform-fee amount the driver actually
     # gets — same field the rider receipt + driver payout summary uses.
-    total_earnings = float(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in completed))
+    #
+    # P1-A / Phase-3 cross-surface finding #2 (docs/audit/2026-08-11-driver-
+    # rider-migration-audit.md): this header must exclude legacy-imported
+    # rides the same way admin_get_driver_payouts_summary (the Payouts tab
+    # on the same driver detail screen) already does — previously this
+    # "Earnings" card and that tab showed two different numbers for the
+    # same driver. total_assigned/completed_count/acceptance_rate are left
+    # unfiltered on purpose: legacy rides are always status='completed'
+    # (booking_import_service only imports completed bookings), so
+    # excluding them there would change the acceptance-rate denominator in
+    # a way the audit didn't ask for and this fix doesn't need to touch.
+    total_earnings = float(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in drop_legacy_rides(completed)))
 
     rated = [r for r in completed if (r.get("rider_rating") or 0) > 0]
     avg_rating = round(sum(float(r["rider_rating"]) for r in rated) / len(rated), 2) if rated else None

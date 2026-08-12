@@ -16,7 +16,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useDriverStore } from '../../store/driverStore';
-import { useAuthStore } from '@shared/store/authStore';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import * as WebBrowser from 'expo-web-browser';
 import { useDriverMe, useUpdateDriverMe } from '@shared/hooks/queries';
@@ -32,7 +31,6 @@ function PayoutScreen() {
     const {
         driverBalance,
         hasBankAccount,
-        bankAccount,
         fetchDriverBalance,
         fetchBankAccount,
         requestPayout,
@@ -91,7 +89,7 @@ function PayoutScreen() {
                 loadTaxYears(),
                 // GST is sourced from useDriverMe — no manual fetch needed.
             ]);
-        } catch (err) {
+        } catch {
             // Errors are handled individually in each function
         } finally {
             setInitialLoading(false);

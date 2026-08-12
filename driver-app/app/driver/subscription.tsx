@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  ActivityIndicator, Platform, Alert,
+  ActivityIndicator, Alert,
 } from 'react-native';
 import * as ExpoLinking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
@@ -21,16 +21,6 @@ interface Plan {
   rides_per_day: number;
   description: string;
   features: string[];
-}
-
-interface Subscription {
-  id: string;
-  plan_name: string;
-  price: number;
-  rides_per_day: number;
-  status: string;
-  started_at: string;
-  expires_at: string;
 }
 
 interface Payment {

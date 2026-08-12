@@ -30,7 +30,6 @@ import * as ImagePicker from 'expo-image-picker';
 import { useAuthStore, type User, type Driver } from '@shared/store/authStore';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { useDriverMe } from '@shared/hooks/queries';
-import SpinrConfig from '@shared/config/spinr.config';
 import { showToast } from '../../../hooks/useToast';
 import * as Clipboard from 'expo-clipboard';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -56,7 +55,7 @@ export default function ProfileScreen() {
 function ProfileScreenInner() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { user, driver: driverData, logout, logoutAll, fetchDriverProfile, updateProfileImage } = useAuthStore();
+  const { user, driver: driverData, logout, logoutAll, updateProfileImage } = useAuthStore();
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const modalStyles = useMemo(() => createModalStyles(colors), [colors]);
@@ -137,12 +136,12 @@ function ProfileScreenInner() {
           try {
             const reqRes = await api.get<{id: string; name: string; description?: string}[]>('/drivers/requirements');
             if (!cancelled && reqRes.data) setDocRequirements(reqRes.data);
-          } catch (reqErr) {}
+          } catch {}
 
           try {
             const docsRes = await api.get<any[]>('/drivers/documents');
             if (!cancelled && docsRes.data) setDriverDocs(docsRes.data);
-          } catch (docsErr) {}
+          } catch {}
         } finally {
           if (!cancelled) setIsRefreshing(false);
         }

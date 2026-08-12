@@ -21,7 +21,7 @@ import { useAuthStore } from '@shared/store/authStore';
 import { useLanguageStore } from '../../store/languageStore';
 import { useNavStore } from '../../store/navStore';
 import { useAlertPrefsStore } from '../../store/alertPrefsStore';
-import { languages, Language } from '../../i18n';
+import { languages } from '../../i18n';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import {
     useNotificationPreferences,

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useRef, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,7 +9,6 @@ import {
   TextInput,
   Modal,
   ScrollView,
-  useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -38,7 +37,6 @@ function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): num
 export default function ConfirmPickupScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { height: SCREEN_HEIGHT } = useWindowDimensions();
   const { colors, isDark } = useTheme();
   const { sf } = useResponsive();
   const styles = useMemo(() => createStyles(colors, sf, insets), [colors, sf, insets]);

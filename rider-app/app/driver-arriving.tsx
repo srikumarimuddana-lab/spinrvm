@@ -54,10 +54,9 @@ function DriverArrivingScreenContent() {
   const trackBaseUrl = useContext(TrackBaseUrlContext);
   const {
     currentRide, currentDriver, fetchRide, triggerEmergency,
-    isLoading, error, driverEtaSeconds, cancelRide, clearRide,
-    wsConnected,
+    driverEtaSeconds, cancelRide, clearRide,
     activeRideRouteCoords, activeDriverRouteCoords,
-    setActiveRideRouteCoords, setActiveDriverRouteCoords, setLastEtaMin,
+    setActiveRideRouteCoords, setActiveDriverRouteCoords,
   } = useRideStore();
   const { t } = useTranslation();
   const mapRef = useRef<MapView>(null);

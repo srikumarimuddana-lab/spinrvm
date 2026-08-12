@@ -324,7 +324,7 @@ function RootLayout() {
               useRideStore.getState().setUserLocation({ latitude: lat, longitude: lng });
             }
           }
-        } catch (e) { /* non-fatal */ }
+        } catch { /* non-fatal */ }
 
         await Promise.all([
           initializeAuth(),

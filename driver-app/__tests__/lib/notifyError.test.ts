@@ -6,13 +6,13 @@
  * Code under test: driver-app/lib/notifyError.ts
  */
 
+import { notifyError } from '../../lib/notifyError';
+import { showToast } from '../../hooks/useToast';
+
 jest.mock('../../hooks/useToast', () => ({
   __esModule: true,
   showToast: jest.fn(),
 }));
-
-import { notifyError } from '../../lib/notifyError';
-import { showToast } from '../../hooks/useToast';
 
 const showToastMock = showToast as jest.Mock;
 

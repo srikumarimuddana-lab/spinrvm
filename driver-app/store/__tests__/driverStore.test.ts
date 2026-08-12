@@ -4,6 +4,10 @@
  */
 import { act } from '@testing-library/react-native';
 
+import { useDriverStore } from '../driverStore';
+import api from '@shared/api/client';
+import { tripLocationRecorder } from '../../utils/tripLocationRecorder';
+
 // Mock SpinrConfig before importing the store (imported at module level in driverStore)
 jest.mock('@shared/config/spinr.config', () => ({
   __esModule: true,
@@ -49,10 +53,6 @@ jest.mock('../../utils/tripLocationRecorder', () => ({
 jest.mock('../../utils/tripLocationTransport', () => ({
   apiLocationBatchTransport: jest.fn(),
 }));
-
-import { useDriverStore } from '../driverStore';
-import api from '@shared/api/client';
-import { tripLocationRecorder } from '../../utils/tripLocationRecorder';
 
 const mockApi = api as jest.Mocked<typeof api>;
 const mockTripLocationRecorder = tripLocationRecorder as jest.Mocked<typeof tripLocationRecorder>;

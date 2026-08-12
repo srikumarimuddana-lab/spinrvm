@@ -52,6 +52,8 @@ export function FreeCancelTimer({
       setSecondsLeft(0);
       return;
     }
+    // secondsLeft is read here only as a "haven't already hit zero" guard
+    // at effect-entry time.
     if (!driverAcceptedAt || secondsLeft <= 0) return;
 
     const interval = setInterval(() => {
@@ -65,7 +67,18 @@ export function FreeCancelTimer({
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [driverAcceptedAt, freeCancelWindowSeconds, driverArrived]);
+    // secondsLeft is deliberately NOT a dep: this effect sets up ONE
+    // persistent interval that ticks secondsLeft down every second. Adding
+    // secondsLeft would make the interval get torn down and recreated on
+    // every single tick (since secondsLeft changes every second), which is
+    // exactly the churn this single-interval design avoids.
+    // onExpire: callers must pass a stable reference (useCallback) if they
+    // pass one at all — driver-arriving.tsx (the only current caller that
+    // passes onExpire) does so via a useCallback keyed on cancellationFee;
+    // the other two callers (driver-arrived.tsx, ride-status.tsx) don't
+    // pass onExpire, so it's undefined there and this dep is inert.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driverAcceptedAt, freeCancelWindowSeconds, driverArrived, onExpire]);
 
   const isWindowOpen = secondsLeft > 0 && !!driverAcceptedAt && !driverArrived;
   const displayFee = cancellationFee;

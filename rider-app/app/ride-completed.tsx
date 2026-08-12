@@ -136,7 +136,8 @@ function RideCompletedScreenContent() {
       Animated.spring(successScale, { toValue: 1, tension: 60, friction: 8, useNativeDriver: true }),
       Animated.timing(successOpacity, { toValue: 1, duration: 400, useNativeDriver: true }),
     ]).start();
-  }, []);
+    // Both are stable Animated.Value instances (useAnimatedValue, created once).
+  }, [successScale, successOpacity]);
 
   const tipOptions = [2, 5, 10];
   const fare = toNum((currentRide as any)?.grand_total || currentRide?.total_fare);
@@ -155,7 +156,8 @@ function RideCompletedScreenContent() {
 
   useEffect(() => {
     if (rideId) fetchRide(rideId);
-  }, [rideId]);
+    // fetchRide is a zustand store action (stable reference).
+  }, [rideId, fetchRide]);
 
   // Check if ride was already paid (e.g. coming back to this screen)
   useEffect(() => {
@@ -181,7 +183,10 @@ function RideCompletedScreenContent() {
       clearRide();
       router.replace('/(tabs)');
     }
-  }, [currentRide?.payment_status]);
+    // clearRide is a zustand action (stable); router is expo-router's
+    // stable singleton. initialPaymentChecked ref already guards this to
+    // fire at most once, so adding these doesn't change that.
+  }, [currentRide?.payment_status, clearRide, router]);
 
   // Block back navigation — must complete rating & payment
   useEffect(() => {
@@ -362,7 +367,19 @@ function RideCompletedScreenContent() {
     if (!payWithCard || alreadyPaid) return;
     if (retriedCardRef.current === payWithCard) return;
     retriedCardRef.current = payWithCard;
-    handleSubmit(payWithCard);
+    // Routed through handleSubmitRef (already the established pattern in
+    // this file for the Retry button, line ~279) instead of calling
+    // handleSubmit directly — handleSubmit is a plain async function that
+    // closes over many reactive values (isSubmitting, selectedTip,
+    // customTip, alreadyPaid, rating, comment, confirmPayment, currentRide,
+    // clearRide, router, …); wrapping all of that in a useCallback with a
+    // complete, correct dep list would be high-risk for a payment-path
+    // function. handleSubmitRef.current is kept current every render by the
+    // effect above (runs with no deps array), so by the time this effect
+    // body runs it's always the latest handleSubmit — same behavior as
+    // calling handleSubmit directly, without needing it in this effect's
+    // deps (refs are exempt from exhaustive-deps).
+    handleSubmitRef.current?.(payWithCard);
   }, [payWithCard, alreadyPaid]);
 
   // Google Pay path — presents the Stripe PaymentSheet modal so riders can

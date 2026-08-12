@@ -76,7 +76,10 @@ export default function ChatDriverScreen() {
         console.log('[Chat] Failed to load history:', e);
       }
     })();
-  }, [rideId]);
+    // CHAT_STORAGE_KEY is a pure derivation of rideId (already a dep) so
+    // adding it doesn't change when this fires; router (expo-router's
+    // singleton) and setChatMessages (zustand action) are stable references.
+  }, [rideId, CHAT_STORAGE_KEY, router, setChatMessages]);
 
   // Persist to AsyncStorage whenever the store updates. Filter to only this
   // ride's messages to prevent cross-ride contamination when rideId changes.

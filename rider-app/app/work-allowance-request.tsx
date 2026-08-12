@@ -32,7 +32,8 @@ export default function WorkAllowanceRequestScreen() {
   const [submitting, setSubmitting] = useState(false);
   useEffect(() => {
     fetchRequests();
-  }, [activeCompanyId]);
+    // fetchRequests is a zustand action (stable reference).
+  }, [activeCompanyId, fetchRequests]);
 
   const pendingRequest = requests.find(r => r.status === 'pending');
 

@@ -45,7 +45,10 @@ export default function OtpScreen() {
   useEffect(() => {
     if (!phoneNumber) router.back();
     return () => { resendInFlight.current = false; };
-  }, []);
+    // phoneNumber is a route param fixed at navigation time (doesn't change
+    // while this screen stays mounted); router is expo-router's stable
+    // singleton — adding both doesn't change when this fires in practice.
+  }, [phoneNumber, router]);
 
   useEffect(() => {
     dotAnims.forEach((anim, i) => {
@@ -56,7 +59,8 @@ export default function OtpScreen() {
         useNativeDriver: true,
       }).start();
     });
-  }, [code]);
+    // dotAnims is a stable array (useAnimatedValues, created once).
+  }, [code, dotAnims]);
 
   useEffect(() => {
     if (countdown > 0) {
@@ -80,7 +84,8 @@ export default function OtpScreen() {
         router.replace('/profile-setup');
       }
     }
-  }, [user]);
+    // router is expo-router's stable singleton.
+  }, [user, router]);
 
   const triggerShake = () => {
     Animated.sequence([

@@ -121,9 +121,16 @@ function RideInProgressScreenContent() {
 
   useEffect(() => {
     // Snapshot props at effect entry — the closure shouldn't reach into
-    // currentRide / currentDriver after an async state change.
+    // currentRide / currentDriver after an async state change. Driver lat/
+    // lng are read directly off currentDriver (not via a `const driver =
+    // currentDriver` whole-object alias) so this effect's real dependency —
+    // just those two fields — matches the dep array below; aliasing the
+    // whole object made the linter want it as a dep, which would re-fire
+    // this map animation on every currentDriver field change (name, rating,
+    // vehicle info, …), not just a position update.
     const ride = currentRide;
-    const driver = currentDriver;
+    const dLat = currentDriver?.lat;
+    const dLng = currentDriver?.lng;
     const map = mapRef.current;
     if (!ride || !map) return;
 
@@ -133,10 +140,10 @@ function RideInProgressScreenContent() {
     const dropLat = ride.dropoff_lat;
     const dropLng = ride.dropoff_lng;
 
-    if (isCoord(driver?.lat) && isCoord(driver?.lng) && isCoord(dropLat) && isCoord(dropLng)) {
+    if (isCoord(dLat) && isCoord(dLng) && isCoord(dropLat) && isCoord(dropLng)) {
       map.fitToCoordinates(
         [
-          { latitude: driver.lat, longitude: driver.lng },
+          { latitude: dLat, longitude: dLng },
           { latitude: dropLat, longitude: dropLng },
         ],
         {
@@ -158,6 +165,8 @@ function RideInProgressScreenContent() {
         longitudeDelta: 0.05,
       });
     }
+    // currentRide is intentionally kept as a whole-object dep (pre-existing,
+    // not changed by this round) — only currentDriver was narrowed.
   }, [currentRide, currentDriver?.lat, currentDriver?.lng]);
 
   useEffect(() => {
@@ -167,7 +176,8 @@ function RideInProgressScreenContent() {
     if (wsConnected) return;
     const interval = setInterval(() => fetchRide(rideId), 15000);
     return () => clearInterval(interval);
-  }, [rideId, wsConnected]);
+    // fetchRide is a zustand action (stable); router is expo-router's stable singleton.
+  }, [rideId, wsConnected, fetchRide, router]);
 
   useEffect(() => {
     // Calculate estimated arrival time
@@ -183,7 +193,8 @@ function RideInProgressScreenContent() {
     if (currentRide?.status === RideStatus.COMPLETED && rideId) {
       router.replace({ pathname: '/ride-completed', params: { rideId } });
     }
-  }, [currentRide?.status]);
+    // rideId is the route param; router is expo-router's stable singleton.
+  }, [currentRide?.status, rideId, router]);
 
   // Stable objects keyed to ride ID so MapViewDirections only calls the
   // Directions API once per ride instead of once per driver GPS ping.
@@ -235,7 +246,10 @@ function RideInProgressScreenContent() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setEta(etaMin);
     setLastEtaMin(etaMin);
-  }, [routeFetched, currentDriver?.lat, currentDriver?.lng]);
+    // dropoff coords are fixed for the life of a ride (added for
+    // correctness, not expected to change mid-ride); setLastEtaMin is a
+    // zustand action (stable).
+  }, [routeFetched, currentDriver?.lat, currentDriver?.lng, currentRide?.dropoff_lat, currentRide?.dropoff_lng, setLastEtaMin]);
 
   // OSRM road-matched route + ETA for the live map. Google stays the map
   // canvas — we just draw this road-snapped line and use the routed ETA when
@@ -271,7 +285,8 @@ function RideInProgressScreenContent() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [rideId]);
+    // setActiveRideRouteCoords/setLastEtaMin are zustand actions (stable).
+  }, [rideId, setActiveRideRouteCoords, setLastEtaMin]);
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -296,7 +311,13 @@ function RideInProgressScreenContent() {
       return true;
     });
     return () => sub.remove();
-  }, [currentRide?.status]);
+    // riderBill is a plain number recomputed every render from currentRide
+    // (not memoized) — adding it means the confirm dialog's fare text stays
+    // fresh if the fare updates mid-ride without a status change, matching
+    // the same fix applied to the sibling cancellation dialogs in
+    // driver-arrived.tsx/driver-arriving.tsx. currentRide?.id/rideId are
+    // primitives; fetchRide is a zustand action (stable).
+  }, [currentRide?.status, currentRide?.id, riderBill, fetchRide, rideId]);
 
   const handleShareTrip = async () => {
     // Public tracking URL base is served by GET /settings → app_settings.track_base_url

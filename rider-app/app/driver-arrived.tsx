@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View, Text, Image, StyleSheet, TouchableOpacity, Share, Platform, BackHandler, ActivityIndicator,
@@ -66,7 +66,7 @@ function DriverArrivedScreenContent() {
   const freeCancelWindowSeconds = (currentRide as any)?.free_cancel_window_seconds ?? 120;
   const pickupOtp = currentRide?.pickup_otp || '----';
 
-  const handleCancelPress = () => {
+  const handleCancelPress = useCallback(() => {
     setConfirmSheet({
       visible: true,
       title: 'Driver is waiting',
@@ -81,7 +81,7 @@ function DriverArrivedScreenContent() {
         { text: 'Keep Ride', style: 'cancel' },
       ],
     });
-  };
+  }, [cancellationFee]);
 
   const doCancel = async (reason: string) => {
     try {
@@ -98,7 +98,14 @@ function DriverArrivedScreenContent() {
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => { handleCancelPress(); return true; });
     return () => sub.remove();
-  }, [currentRide?.total_fare, (currentRide as any)?.grand_total]);
+    // Was keyed on [currentRide?.total_fare, grand_total] — neither of which
+    // is what handleCancelPress's dialog text actually depends on
+    // (cancellationFee). Re-registering on handleCancelPress itself (now a
+    // useCallback keyed on cancellationFee) means the listener always closes
+    // over the current fee, fixing a real staleness: previously, if
+    // cancellation_fee changed on a ride poll without total_fare/grand_total
+    // also changing, the back-button dialog could show a stale fee.
+  }, [handleCancelPress]);
 
   useEffect(() => {
     if (!rideId) return;
@@ -106,16 +113,19 @@ function DriverArrivedScreenContent() {
     if (wsConnected) return;
     const interval = setInterval(() => fetchRide(rideId), 15000);
     return () => clearInterval(interval);
-  }, [rideId, wsConnected]);
+    // fetchRide is a zustand store action (stable reference).
+  }, [rideId, wsConnected, fetchRide]);
 
   useEffect(() => {
     if (currentRide?.status === RideStatus.IN_PROGRESS) {
       router.replace({ pathname: '/ride-in-progress', params: { rideId } } as any);
     }
-  }, [currentRide?.status]);
+    // router is expo-router's stable singleton; rideId is a route param that
+    // only changes if this screen instance is reused for a different ride.
+  }, [currentRide?.status, rideId, router]);
 
   useEffect(() => {
-    if (currentRide && mapRef.current) {
+    if (currentRide?.pickup_lat != null && currentRide?.pickup_lng != null && mapRef.current) {
       const coords = [{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }];
       if (currentDriver?.lat && currentDriver?.lng) {
         coords.push({ latitude: currentDriver.lat, longitude: currentDriver.lng });
@@ -125,7 +135,14 @@ function DriverArrivedScreenContent() {
         animated: true,
       });
     }
-  }, [currentRide?.pickup_lat, currentDriver?.lat]);
+    // Narrowed to the specific fields the map fit actually needs (previously
+    // only currentRide?.pickup_lat + currentDriver?.lat were tracked, missing
+    // currentDriver?.lng and currentRide?.pickup_lng entirely — a driver
+    // longitude-only update wouldn't have refit the map). Deliberately NOT
+    // depending on the whole `currentRide`/`currentDriver` objects: those
+    // update on every ride poll (fare, status, etc.), which would refit the
+    // map far more often than the pickup/driver-position use case calls for.
+  }, [currentRide?.pickup_lat, currentRide?.pickup_lng, currentDriver?.lat, currentDriver?.lng]);
 
   const handleMessage = () => router.push({ pathname: '/chat-driver', params: { rideId } } as any);
 

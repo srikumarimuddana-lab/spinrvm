@@ -103,6 +103,15 @@ export default function PickOnMapScreen() {
       }
       setLoading(false);
     })();
+    // Deliberately mount-only: this reads hasApprox/approxLat/approxLng (the
+    // route params this screen was opened with) once to seed the initial
+    // region, then falls through to requesting device location permission.
+    // Re-running on a params change would re-request location permission
+    // (a user-visible OS prompt) and re-fetch GPS/re-geocode on every
+    // render where these derived values happen to differ in reference,
+    // which they would even though the underlying route params don't
+    // actually change while this screen stays mounted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /** ~metres between two points at city scale (equirectangular — fine under a

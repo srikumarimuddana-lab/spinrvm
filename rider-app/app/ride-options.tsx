@@ -294,10 +294,13 @@ function RideOptionsScreenContent() {
 
   // ── Effects ──
 
-  const handleFetchEstimates = async () => {
+  // Wrapped in useCallback (deps: [fetchEstimates], a stable zustand
+  // action) so the effect below can list it as a dep without recreating it
+  // — and thus refiring the effect — on every render.
+  const handleFetchEstimates = useCallback(async () => {
     setFetchError(null);
     try { await fetchEstimates(); } catch { setFetchError('Could not load fares. Tap to retry.'); }
-  };
+  }, [fetchEstimates]);
 
   useEffect(() => {
     if (pickup && dropoff) {
@@ -310,11 +313,15 @@ function RideOptionsScreenContent() {
       const estimatesInterval = setInterval(() => void handleFetchEstimates(), 15000);
       return () => { clearInterval(driversInterval); clearInterval(estimatesInterval); };
     }
-  }, [pickup, dropoff]);
+    // fetchNearbyDrivers is a zustand action (stable); handleFetchEstimates
+    // is now a useCallback keyed on the also-stable fetchEstimates — neither
+    // addition changes when this fires (still keyed on pickup/dropoff).
+  }, [pickup, dropoff, handleFetchEstimates, fetchNearbyDrivers]);
 
   useEffect(() => {
     if (workModeEnabled && activeCompanyId) fetchPolicy();
-  }, [workModeEnabled, activeCompanyId]);
+    // fetchPolicy is a zustand selector for a store action (stable).
+  }, [workModeEnabled, activeCompanyId, fetchPolicy]);
 
   useEffect(() => {
     if (estimates.length > 0) {
@@ -323,7 +330,13 @@ function RideOptionsScreenContent() {
       const ridePortion = parseFloat(est.base_fare || '0') + parseFloat(est.distance_fare || '0') + parseFloat(est.time_fare || '0');
       fetchAvailablePromos(grandTotal, ridePortion);
     }
-  }, [estimates]);
+    // selectedIndex/fetchAvailablePromos are read here too; fetchAvailablePromos
+    // is a stable zustand action. selectedIndex is added deliberately: the
+    // promo lookup uses whichever estimate is currently selected, so if the
+    // rider changes vehicle type (selectedIndex) without a new estimates
+    // array arriving, the promo fetch should recompute for the newly
+    // selected fare instead of staying pinned to the previous selection.
+  }, [estimates, selectedIndex, fetchAvailablePromos]);
 
   useEffect(() => {
     if (!estimates || estimates.length === 0) return;
@@ -341,7 +354,15 @@ function RideOptionsScreenContent() {
         selectVehicle(estimates[0].vehicle_type);
       }
     }
-  }, [estimates, isLoading]);
+    // selectVehicle is a zustand action (stable). selectedVehicle is added
+    // deliberately: the auto-select block is already guarded by
+    // `if (!selectedVehicle)`, so once a vehicle is selected (by the rider
+    // tapping a card, or by this effect itself) any further re-run of this
+    // effect is a no-op past that guard — the top setSelectedIndex clamp is
+    // idempotent too. No new re-run risk, and it makes the effect correctly
+    // react if selectedVehicle is ever cleared elsewhere (e.g. resetting
+    // the booking flow) while estimates/isLoading stay the same.
+  }, [estimates, isLoading, selectVehicle, selectedVehicle]);
 
   useEffect(() => {
     if (mapRef.current && mapReady && pickup && dropoff) {
@@ -360,13 +381,21 @@ function RideOptionsScreenContent() {
         }, 300);
       }
     }
-  }, [pickup, dropoff, nearbyDrivers, routeCoordinates, mapReady]);
+    // mapBottomInset is a primitive derived from SCREEN_HEIGHT (safe to
+    // add). stops is real store state (an array of ride stops, not a
+    // stable action) — adding it closes a real gap: previously the map
+    // only refit when pickup/dropoff/nearbyDrivers/routeCoordinates/
+    // mapReady changed, so adding or removing a stop mid-flow wouldn't
+    // refit the map to include the new marker until one of those other
+    // deps happened to change too.
+  }, [pickup, dropoff, nearbyDrivers, routeCoordinates, mapReady, mapBottomInset, stops]);
 
   // Work profiles + wallet: load once on mount.
   useEffect(() => {
     fetchWorkProfiles();
     fetchWallet();
-  }, []);
+    // Both are zustand store actions (stable references).
+  }, [fetchWorkProfiles, fetchWallet]);
 
   // Load saved cards on mount AND every time this screen regains focus.
   // The rider adds a card on /manage-cards (reached via router.push) and
@@ -400,7 +429,15 @@ function RideOptionsScreenContent() {
       setUseCorporate(true);
       setSelectedCorporateId(prev => prev ?? activeCompanyId ?? corporateAccounts[0]?.id ?? null);
     }
-  }, [workModeEnabled, corporateAccounts.length]);
+    // corporateAccounts is a useMemo'd array (stable unless workProfiles
+    // changes) — safe to depend on directly here, unlike the equivalent
+    // effect in payment-confirm.tsx where the same-named array is a plain
+    // unmemoized literal (narrowed there instead; see that file's commit).
+    // activeCompanyId is real reactive store state: closes the same gap
+    // fixed in payment-confirm.tsx — a later activeCompanyId update can now
+    // re-trigger this effect to fill in selectedCorporateId if it was still
+    // null when workModeEnabled/corporateAccounts first became true.
+  }, [workModeEnabled, corporateAccounts, activeCompanyId]);
 
   // Populate route coordinates from the server-provided polyline (returned
   // with the estimate response). Falls back to MapViewDirections on-device
@@ -1367,7 +1404,8 @@ function AnimatedVehicleCard({
       toValue: isSelected ? 1 : 0,
       tension: 120, friction: 14, useNativeDriver: true,
     }).start();
-  }, [isSelected]);
+    // Both are stable Animated.Value instances (useAnimatedValue, created once).
+  }, [isSelected, scaleAnim, imageSizeAnim]);
 
   const scale = scaleAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.03] });
   // Car art keeps the original sizes — selected is the full 150×98 hero,

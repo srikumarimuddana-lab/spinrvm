@@ -2947,11 +2947,20 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   paths themselves** (only booking-import and Stripe-mapping migration have
   runbooks/change-logs, despite both writing directly to `auth`/`users`/
   `drivers`).
-  - [ ] **Status:** open — documentation-only gap, no code risk. Someone
-    should backfill `docs/change-log/` entries for
-    `driver_import_service.py`/`rider_import_service.py` describing the
-    existing (already-shipped) behavior, per CLAUDE.md's "live-tested
-    surface" documentation requirement.
+  - [x] **Status:** DONE (2026-08-12) — backfilled both:
+    `docs/change-log/2026-08-12-driver-import-service-backfill.md` and
+    `docs/change-log/2026-08-12-rider-import-service-backfill.md`. Each
+    documents the existing (already-shipped) validation rules, matching/
+    resume-safety behavior, write order, blast radius (every other reader/
+    writer of `users`/`drivers`/`driver_documents`/`legacy_import_metadata`
+    found via grep), and — not previously written down anywhere — an
+    operational rollback procedure for a bad batch. One asymmetry surfaced
+    while writing the rider-import doc, flagged there rather than fixed
+    here since it's out of scope for a docs-only pass: the rider importer's
+    *updates* to already-existing users (fill-in-if-missing fields) are not
+    cleanly revertible by batch tag the way newly-*created* rows are, since
+    no pre-commit snapshot of the overwritten values is captured. Pure
+    documentation, no code changed, nothing to test.
 
 ### A29. `spinr-regulatory-compliance-checker` follow-ups from the SK PST enablement (A27/#3723) — not previously filed
 - **Correction note:** PR #3723's body said these 3 findings were "filed as

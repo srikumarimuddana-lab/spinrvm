@@ -180,7 +180,7 @@ export default function NotificationsScreen() {
             <View style={styles.empty}>
               <Ionicons name="notifications-off-outline" size={52} color="#DDD" />
               <Text style={styles.emptyTitle}>No notifications</Text>
-              <Text style={styles.emptySub}>You're all caught up! Check back later.</Text>
+              <Text style={styles.emptySub}>You&apos;re all caught up! Check back later.</Text>
             </View>
           }
         />

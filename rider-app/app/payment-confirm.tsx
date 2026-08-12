@@ -68,7 +68,7 @@ function PaymentConfirmScreenContent() {
     buttons: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', message: '', variant: 'info', buttons: [] });
 
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const { sf } = useResponsive();
   const styles = useMemo(() => createStyles(colors, sf), [colors, sf]);
   const { scheduleReminder } = useScheduledRideReminder();
@@ -483,7 +483,7 @@ function PaymentConfirmScreenContent() {
             <Ionicons name="lock-closed-outline" size={15} color={colors.textDim} style={{ marginRight: 8, marginTop: 1 }} />
             <Text style={styles.holdNoteText}>
               A temporary hold of ${(totalFare + 10).toFixed(2)} (estimated fare + $10) is placed on your card.
-              You're only charged the final fare plus any tip you add after the ride.
+              You&apos;re only charged the final fare plus any tip you add after the ride.
             </Text>
           </View>
         )}

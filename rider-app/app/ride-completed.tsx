@@ -392,7 +392,7 @@ function RideCompletedScreenContent() {
               <Ionicons name="checkmark" size={32} color="#FFF" />
             </View>
           </View>
-          <Text style={styles.title}>You've arrived!</Text>
+          <Text style={styles.title}>You&apos;ve arrived!</Text>
           <Text style={styles.subtitle} numberOfLines={1}>
             {currentRide?.dropoff_address || 'Destination'}
           </Text>
@@ -687,7 +687,7 @@ function RideCompletedScreenContent() {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.actionBtnTitle}>Report Lost Item</Text>
-              <Text style={styles.actionBtnDesc}>Left something in the car? We'll help</Text>
+              <Text style={styles.actionBtnDesc}>Left something in the car? We&apos;ll help</Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color={colors.border} />
           </TouchableOpacity>

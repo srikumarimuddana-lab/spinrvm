@@ -239,7 +239,7 @@ export default function ConfirmPickupScreen() {
           <View style={styles.warningRow}>
             <Ionicons name="information-circle" size={16} color="#D97706" />
             <Text style={styles.warningText}>
-              You've moved {Math.round(distanceM)}m from your searched location
+              You&apos;ve moved {Math.round(distanceM)}m from your searched location
             </Text>
           </View>
         )}

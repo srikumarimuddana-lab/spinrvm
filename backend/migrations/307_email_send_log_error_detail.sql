@@ -1,4 +1,4 @@
--- 305_email_send_log_error_detail.sql
+-- 307_email_send_log_error_detail.sql
 --
 -- email_send_log records provider/status/message_id for every transactional
 -- email attempt, but never the actual provider error string — so a
@@ -15,6 +15,10 @@
 --
 -- Append-only table (per CLAUDE.md migration conventions) — this is an
 -- additive column, no backfill, no data mutation of existing rows.
+--
+-- rollback: ALTER TABLE public.email_send_log DROP COLUMN IF EXISTS error_detail;
+--   Safe at any time — no other code reads this column, and it carries no
+--   FK/index/constraint for anything else to depend on.
 
 ALTER TABLE public.email_send_log
     ADD COLUMN IF NOT EXISTS error_detail TEXT;

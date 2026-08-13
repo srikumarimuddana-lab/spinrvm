@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { AppState } from 'react-native';
 import api from '@shared/api/client';
 
@@ -28,6 +28,12 @@ export type ForecastEntry = {
   day_name: string;
   demand: number;
   is_peak: boolean;
+};
+
+export type Hotspot = {
+  lat: number;
+  lng: number;
+  intensity: 'high' | 'medium';
 };
 
 export type HeatmapStatus = 'loading' | 'ready' | 'empty' | 'stale' | 'error' | 'disabled';
@@ -184,6 +190,16 @@ export function useDemandHeatmap(rideState: string, isOnline: boolean) {
     return () => sub.remove();
   }, [rideState, isOnline, fetchHeatmap]);
 
+  const hotspots = useMemo<Hotspot[]>(() => {
+    if (!isV2 || cells.length === 0) return [];
+    const sorted = [...cells].sort((a, b) => b.weight - a.weight);
+    return sorted.slice(0, 3).map((c, i) => ({
+      lat: c.lat,
+      lng: c.lng,
+      intensity: i === 0 ? 'high' : 'medium',
+    }));
+  }, [isV2, cells]);
+
   return {
     cells,
     status,
@@ -193,5 +209,6 @@ export function useDemandHeatmap(rideState: string, isOnline: boolean) {
     layer,
     setLayer,
     forecast,
+    hotspots,
   };
 }

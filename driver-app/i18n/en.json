@@ -528,6 +528,10 @@
         "forecast": {
             "title": "Next few hours",
             "peak": "Peak at {{hour}}"
+        },
+        "hotspot": {
+            "high": "High demand",
+            "busy": "Busy area"
         }
     }
 }

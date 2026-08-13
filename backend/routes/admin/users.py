@@ -194,8 +194,11 @@ async def _list_user_cards(user: Dict[str, Any]) -> tuple[Optional[List[Dict[str
 # Columns the admin detail view renders for a rider's recent rides. Explicitly
 # EXCLUDES raw GPS (pickup_lat/lng, dropoff_lat/lng) and any route polyline —
 # PIPEDA forbids raw coordinates leaving the data store; the UI only shows the
-# address text, status, fare and date.
-_DETAIL_RIDE_COLUMNS = "id,status,pickup_address,dropoff_address,total_fare,created_at"
+# address text, status, fare and date. `legacy_import_metadata` is included
+# so the panel can flag a row as imported from the previous app (JSONB import
+# provenance only — batch/source/timestamps — never PII, see
+# docs/audit/2026-08-13-migrated-data-visibility-audit.md Finding 4).
+_DETAIL_RIDE_COLUMNS = "id,status,pickup_address,dropoff_address,total_fare,created_at,legacy_import_metadata"
 
 
 @router.get("/users/{user_id}")

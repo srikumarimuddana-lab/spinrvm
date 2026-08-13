@@ -89,8 +89,20 @@ export interface MonitoringFilters {
   showOnline: boolean;
   showOffline: boolean;
   showRides: boolean;
+  showDemand: boolean;
   serviceAreaId: string | null;
   vehicleTypeId: string | null;
+}
+
+export interface AreaDemandSupply {
+  area_id: string;
+  name: string;
+  demand_count: number;
+  supply_count: number;
+  ratio: number;
+  multiplier: number;
+  surge_active: boolean;
+  source: string;
 }
 
 export type SelectedItem =

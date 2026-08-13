@@ -16,7 +16,7 @@ import {
     ROUTE_PIN_COLORS,
     ROUTE_STROKE_WIDTH,
 } from "@spinr/shared/constants/routeMapStyle";
-import { MonitoringDriver, MonitoringFilters, MonitoringRide, SelectedItem } from "./types";
+import { AreaDemandSupply, MonitoringDriver, MonitoringFilters, MonitoringRide, SelectedItem } from "./types";
 
 const DEFAULT_ZOOM = 12;
 
@@ -121,6 +121,7 @@ interface MonitoringMapProps {
     selected: SelectedItem;
     followMode: boolean;
     serviceAreas?: MonitoringServiceArea[];
+    demandData?: AreaDemandSupply[];
     onSelectDriver: (id: string) => void;
     onSelectRide: (id: string) => void;
     /** Exposes imperative update handles to parent */
@@ -145,6 +146,25 @@ function rideLineLayerId(rideId: string): string {
 
 const MAP_CONTAINER_STYLE: React.CSSProperties = { width: "100%", height: "100%" };
 
+function demandFillColor(areaId: string, demandData: AreaDemandSupply[] | undefined, showDemand: boolean): string {
+    if (!showDemand || !demandData) return "#8b5cf6";
+    const d = demandData.find(a => a.area_id === areaId);
+    if (!d) return "#8b5cf6";
+    const r = d.ratio;
+    if (r >= 3.0) return "#ef4444";
+    if (r >= 2.0) return "#f97316";
+    if (r >= 1.2) return "#eab308";
+    if (r >= 0.5) return "#22c55e";
+    return "#8b5cf6";
+}
+
+function demandFillOpacity(areaId: string, demandData: AreaDemandSupply[] | undefined, showDemand: boolean): number {
+    if (!showDemand || !demandData) return 0.08;
+    const d = demandData.find(a => a.area_id === areaId);
+    if (!d || d.demand_count === 0) return 0.08;
+    return Math.min(0.35, 0.1 + d.ratio * 0.06);
+}
+
 export function MonitoringMap({
     driversMap,
     ridesMap,
@@ -153,6 +173,7 @@ export function MonitoringMap({
     selected,
     followMode,
     serviceAreas,
+    demandData,
     onSelectDriver,
     onSelectRide,
     onReady,
@@ -457,7 +478,7 @@ export function MonitoringMap({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // Keep the areas source in sync with the prop
+    // Keep the areas source in sync with the prop + demand overlay
     useEffect(() => {
         const map = mapRef.current;
         if (!map || !isLoaded) return;
@@ -466,13 +487,24 @@ export function MonitoringMap({
             if (!area.geojson) return;
             features.push({
                 type: "Feature",
-                properties: { id: area.id, name: area.name ?? "Service Area" },
+                properties: {
+                    id: area.id,
+                    name: area.name ?? "Service Area",
+                    fillColor: demandFillColor(area.id, demandData, filters.showDemand),
+                    fillOpacity: demandFillOpacity(area.id, demandData, filters.showDemand),
+                },
                 geometry: area.geojson,
             });
         });
         const src = map.getSource(AREAS_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
         src?.setData({ type: "FeatureCollection", features });
-    }, [serviceAreas, isLoaded]);
+
+        const fillLayer = map.getLayer(AREAS_FILL_LAYER_ID);
+        if (fillLayer) {
+            map.setPaintProperty(AREAS_FILL_LAYER_ID, "fill-color", ["get", "fillColor"]);
+            map.setPaintProperty(AREAS_FILL_LAYER_ID, "fill-opacity", ["get", "fillOpacity"]);
+        }
+    }, [serviceAreas, isLoaded, demandData, filters.showDemand]);
 
     // Re-apply filter visibility when filters change
     useEffect(() => {
@@ -513,6 +545,26 @@ export function MonitoringMap({
             {!isLoaded && (
                 <div className="absolute inset-0 flex items-center justify-center bg-muted">
                     <p className="text-sm text-muted-foreground">Loading map…</p>
+                </div>
+            )}
+            {demandData && demandData.length > 0 && (
+                <div className="absolute bottom-3 left-3 z-10 rounded-lg border border-border bg-background/90 p-3 text-xs shadow-md backdrop-blur-sm">
+                    <p className="mb-1.5 font-medium">Demand / Supply</p>
+                    {[
+                        { color: "#ef4444", label: "Critical (≥3.0×)" },
+                        { color: "#f97316", label: "High (2.0–3.0×)" },
+                        { color: "#eab308", label: "Moderate (1.2–2.0×)" },
+                        { color: "#22c55e", label: "Balanced (0.5–1.2×)" },
+                        { color: "#a855f7", label: "Oversupply (<0.5×)" },
+                    ].map((item) => (
+                        <div key={item.label} className="flex items-center gap-2 py-0.5">
+                            <span
+                                className="inline-block h-3 w-3 rounded-sm"
+                                style={{ backgroundColor: item.color, opacity: 0.6 }}
+                            />
+                            <span className="text-muted-foreground">{item.label}</span>
+                        </div>
+                    ))}
                 </div>
             )}
         </div>

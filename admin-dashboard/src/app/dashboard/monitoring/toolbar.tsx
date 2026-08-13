@@ -86,6 +86,16 @@ export function MonitoringToolbar({
                 >
                     🚗 {counts.activeRides} Rides
                 </button>
+                <button
+                    onClick={() => onFilterChange({ showDemand: !filters.showDemand })}
+                    className={`flex items-center gap-1 rounded px-2 py-1 transition-colors ${
+                        filters.showDemand
+                            ? "bg-orange-500/10 text-orange-600 ring-1 ring-orange-500/30"
+                            : "text-muted-foreground hover:bg-muted"
+                    }`}
+                >
+                    🔥 Demand
+                </button>
             </div>
 
             <div className="mx-1 h-5 w-px bg-border" />

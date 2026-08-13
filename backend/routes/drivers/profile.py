@@ -314,6 +314,31 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
     return response_data
 
 
+def _clamp_int(value, lo: int, hi: int, default: int) -> int:
+    """Coerce an admin-supplied setting to an int within [lo, hi].
+
+    Any non-numeric value (None, "", "abc") falls back to ``default`` rather
+    than raising — these run on a per-request driver path where a bad settings
+    row must not 500 the whole fleet.
+    """
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, n))
+
+
+def _clamp_float(value, lo: float, hi: float, default: float) -> float:
+    """Float counterpart to :func:`_clamp_int` (cell sizes, decay half-life)."""
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return default
+    if n != n:  # NaN
+        return default
+    return max(lo, min(hi, n))
+
+
 def _heatmap_cell_key(lat: float, lng: float, cell_lat: float, cell_lng: float):
     import math
 
@@ -344,12 +369,6 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
             await db_supabase.get_rows("service_areas", {"id": driver["service_area_id"]}, limit=1)
         )
 
-    enabled = bool(service_area and service_area.get("show_demand_heatmap"))
-    if not enabled:
-        return {"enabled": False, "points": [], "total_rides": 0}
-
-    area_id = driver["service_area_id"]
-
     try:
         from ...settings_loader import get_app_settings  # type: ignore
     except ImportError:
@@ -370,8 +389,25 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
     app_settings = {}
     try:
         app_settings = await get_app_settings() or {}
-    except Exception:
-        pass
+    except Exception as e:
+        # Degrades to safe defaults (v2 off, k_floor 3) but must not be silent —
+        # this is a settings-table read failure on a per-request path.
+        logger.error(f"get_demand_heatmap: failed to read app_settings: {e}", exc_info=True)
+        app_settings = {}
+
+    # Global kill switch first: one flip takes the feature down fleet-wide
+    # without touching every service area. Deliberately checked BEFORE the
+    # per-area toggle and before any cache read, so disabling it takes effect
+    # within one client refresh rather than one cache TTL. Absent key => True,
+    # preserving pre-migration-311 behaviour.
+    if not bool(app_settings.get("driver_heatmap_enabled", True)):
+        return {"enabled": False, "points": [], "total_rides": 0}
+
+    enabled = bool(service_area and service_area.get("show_demand_heatmap"))
+    if not enabled:
+        return {"enabled": False, "points": [], "total_rides": 0}
+
+    area_id = driver["service_area_id"]
 
     v2_global = bool(app_settings.get("driver_heatmap_v2_enabled", False))
     v2_allowlist = app_settings.get("heatmap_internal_driver_ids") or []
@@ -379,7 +415,15 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
 
     cache_version = "v2" if v2_enabled else "v1"
     cache_key = f"spinr:heatmap:{area_id}:{cache_version}"
-    cached = await _redis_get(cache_key)
+    # Cache failure must degrade to a cache miss, never to a 500. redis_get
+    # re-raises when REDIS_URL is set, so an unguarded read turns a Redis blip
+    # into a hard-down heatmap for every polling driver while the DB is healthy.
+    cached = None
+    try:
+        cached = await _redis_get(cache_key)
+    except Exception as e:
+        logger.warning(f"get_demand_heatmap: cache read failed, rebuilding: {e}")
+        _metric_inc("spinr_drivers_heatmap_cache_errors_total", {"op": "get"})
     if cached is not None:
         _metric_inc("spinr_drivers_heatmap_requests_total", {"cache": "hit"})
         return _json.loads(cached)
@@ -390,11 +434,16 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
 
     _build_start = _time.monotonic()
 
-    k_floor = int(app_settings.get("heatmap_k_floor", 3))
-    cell_lat = float(app_settings.get("heatmap_cell_lat_deg", 0.004))
-    cell_lng = float(app_settings.get("heatmap_cell_lng_deg", 0.006))
-    decay_half_life = float(app_settings.get("heatmap_decay_half_life_days", 3))
-    refresh_seconds = int(app_settings.get("heatmap_refresh_seconds", 90))
+    # Clamp every admin-tunable knob at point of use. The settings row is
+    # writable out-of-band (direct DB edit), so schema-level bounds on the
+    # admin PUT are not sufficient on their own: a null/garbage/zero value
+    # reaching these lines would otherwise 500 every driver poll, disable the
+    # k-anonymity floor, or divide by zero in the cell-key math.
+    k_floor = _clamp_int(app_settings.get("heatmap_k_floor"), 1, 50, 3)
+    cell_lat = _clamp_float(app_settings.get("heatmap_cell_lat_deg"), 0.0005, 0.05, 0.004)
+    cell_lng = _clamp_float(app_settings.get("heatmap_cell_lng_deg"), 0.0005, 0.05, 0.006)
+    decay_half_life = _clamp_float(app_settings.get("heatmap_decay_half_life_days"), 0.5, 30.0, 3.0)
+    refresh_seconds = _clamp_int(app_settings.get("heatmap_refresh_seconds"), 30, 600, 90)
 
     now = datetime.now(timezone.utc)
     cutoff_7d = (now - timedelta(days=7)).isoformat()
@@ -493,19 +542,32 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
                 key = _heatmap_cell_key(float(lat), float(lng), cell_lat, cell_lng)
                 baseline_grid[key] = baseline_grid.get(key, 0) + 1
 
-        # normalize baseline 0-1
-        bl_max = max(baseline_grid.values()) if baseline_grid else 1
-        if bl_max > 0:
-            for k in baseline_grid:
-                baseline_grid[k] = round(baseline_grid[k] / bl_max, 2)
+        # Suppress below-floor cells on the RAW count before normalizing.
+        # Normalizing first and then testing the score is a k-anonymity hole:
+        # a cell with a single historical ride still normalizes to a non-zero
+        # value, so a lone rider's recurring pickup (e.g. their home, same
+        # hour every week) would be emitted with its centroid.
+        baseline_raw = {k: v for k, v in baseline_grid.items() if v >= k_floor}
+        suppressed += len(baseline_grid) - len(baseline_raw)
 
-        # scheduled: rides with status='scheduled' and pickup in next 2h
+        # normalize baseline 0-1 over the surviving cells only
+        bl_max = max(baseline_raw.values()) if baseline_raw else 1
+        baseline_grid = {}
+        if bl_max > 0:
+            for k, v in baseline_raw.items():
+                baseline_grid[k] = round(v / bl_max, 2)
+
+        # scheduled: rides with status='scheduled' and pickup in next 2h.
+        # The lower bound is load-bearing: without it, scheduled rides stuck
+        # past their pickup time (dispatch loop lagging, or the scheduled
+        # dispatch kill switch off) are counted forever and drivers reposition
+        # toward pickups that will never dispatch.
         sched_rides = await db_supabase.get_rows(
             "rides",
             {
                 "status": "scheduled",
                 "service_area_id": area_id,
-                "scheduled_pickup_time": {"$lte": cutoff_2h},
+                "scheduled_pickup_time": {"$gte": now.isoformat(), "$lte": cutoff_2h},
             },
             limit=5_000,
             columns="pickup_lat,pickup_lng",
@@ -527,10 +589,14 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
             bl_val = baseline_grid.get(key, 0.0)
             sched_val = sched_grid.get(key, 0)
 
-            # cell survives if ANY component clears k-floor; below-floor zeroed
+            # cell survives if ANY component clears k-floor; below-floor zeroed.
+            # baseline_grid only ever contains cells whose RAW count already
+            # cleared k_floor (filtered above), so presence here is the floor
+            # check — never test the normalized score, which is non-zero for a
+            # single-ride cell.
             live_ok = live_val >= k_floor
             sched_ok = sched_val >= k_floor
-            bl_ok = bl_val > 0  # baseline is already normalized, always passes if present
+            bl_ok = key in baseline_grid
             if not (live_ok or sched_ok or bl_ok):
                 suppressed += 1
                 continue
@@ -546,10 +612,16 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
                 }
             )
 
-        # surge mirror from service_area fields
+        # Surge mirror from service_area fields. Gated on surge_enabled the same
+        # way the public /service-areas projection is: a stale surge_active /
+        # multiplier on an area where surge is administratively off must never
+        # surface to a client, or drivers chase surge earnings riders are not
+        # being charged. `or 1.0` guards an explicit NULL column (.get returns
+        # None, not the default).
+        _surge_on = bool(service_area.get("surge_enabled"))
         v2_surge = {
-            "multiplier": float(service_area.get("surge_multiplier", 1.0)),
-            "active": bool(service_area.get("surge_active", False)),
+            "multiplier": float(service_area.get("surge_multiplier") or 1.0) if _surge_on else 1.0,
+            "active": bool(service_area.get("surge_active", False)) if _surge_on else False,
         }
 
         # forecast: next 6h hourly demand from the forecast engine (HM-23)

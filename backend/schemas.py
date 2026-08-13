@@ -551,6 +551,18 @@ class AppSettings(BaseModel):
     # Dark-launch allowlist: only these driver user IDs see v2 cells when
     # the global flag is still off. Empty = respect the global flag only.
     heatmap_internal_driver_ids: List[str] = Field(default_factory=list)
+    # Global master kill switch — checked before the per-area
+    # service_areas.show_demand_heatmap toggle, so the whole feature can be
+    # taken down fleet-wide in one flip. True preserves existing behaviour.
+    driver_heatmap_enabled: bool = True
+    # Tuning knobs (migration 311). Defaults mirror the historical hardcoded
+    # fallbacks; every one is re-clamped at point of use in
+    # routes/drivers/profile.py because this row is writable out-of-band.
+    heatmap_k_floor: int = 3
+    heatmap_cell_lat_deg: float = 0.004
+    heatmap_cell_lng_deg: float = 0.006
+    heatmap_decay_half_life_days: float = 3.0
+    heatmap_refresh_seconds: int = 90
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

@@ -2,7 +2,7 @@
 
 Route the current diff to the specialist subagent(s) that actually cover it,
 run a lightweight generic code-quality pass yourself, and present one
-consolidated report. This command does not reinvent domain rules — the 19
+consolidated report. This command does not reinvent domain rules — the 20
 `spinr-*` subagents already encode them in more depth than any inline
 checklist here could; this command's job is dispatch, not duplication.
 
@@ -41,6 +41,7 @@ different failure mode over the same lines.
 | `backend/services/dispatch_service.py`, `backend/routes/rides.py`, `backend/socket_manager.py`, `backend/utils/ws_pubsub.py`, `backend/utils/scheduled_rides.py` (`area:dispatch`) | `spinr-dispatch-reviewer` |
 | Any diff touching `driver_insurance_periods` writes, `go_online`, or ride-state transitions that cross a period boundary | `spinr-insurance-period-auditor` |
 | New/modified `backend/migrations/*.sql` | `spinr-migration-reviewer` |
+| `backend/routes/admin/__init__.py` router mounts, `backend/routes/admin/staff.py` (`AVAILABLE_MODULES`/`ROLE_PRESETS`), `backend/dependencies.py` (`require_module`/`require_super_admin`), or any new `routes/admin/*.py` sub-router | `spinr-admin-rbac-reviewer` |
 | `backend/routes/safety.py`, `routes/sos.py`, `services/insurance_*.py`, `utils/emergency_*.py` (`area:safety`) | `spinr-security-auditor` **and** `spinr-regulatory-compliance-checker` |
 | Anything touching driver eligibility, trip/GPS retention, receipt tax line items, accessibility (WAV/service animal), logging/analytics/Sentry payloads, or data-deletion flows | `spinr-regulatory-compliance-checker` |
 | `backend/ai/**`, `backend/routes/ai.py`, `backend/routes/admin/ai_console.py`, `rider-app/app/ai-assistant.tsx` (`area:ai`) | `spinr-ai-guardrail-reviewer` |
@@ -67,7 +68,7 @@ force an irrelevant subagent to run just to have output.
 
 ## 3 · Generic code-quality pass (inline, not delegated)
 
-None of the 19 subagents cover this — it's intentionally generic, not
+None of the 20 subagents cover this — it's intentionally generic, not
 Spinr-specific, so keep it here rather than inventing another subagent for it:
 
 - Python: type hints present, no bare `except:` clauses

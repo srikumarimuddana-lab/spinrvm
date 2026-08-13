@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Download, Loader2, FileText } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Download, Loader2, FileText, MapPin } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,12 +9,14 @@ import { Label } from "@/components/ui/label";
 import {
     Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { MultiSelect, type MultiSelectOption } from "@/components/ui/multi-select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/components/ui/use-toast";
 import { InfoHint as Hint } from "@/components/info-hint";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useAuthStore } from "@/store/authStore";
 import { monthToDateDefaults } from "@/lib/utils";
+import { getServiceAreas } from "@/lib/api";
 import {
     downloadAirportTrips,
     downloadDriverRoster,
@@ -122,6 +124,58 @@ export default function CompliancePage() {
     const [airportFormat, setAirportFormat] = useState<ComplianceReportFormat>("pdf");
     const [airportLoading, setAirportLoading] = useState(false);
 
+    // Page-level service-area scope, applied to every report below except
+    // T4A. Empty = every area, which is the pre-existing behaviour of all
+    // of these reports — an admin who never opens the control downloads
+    // exactly what they downloaded before it existed.
+    //
+    // Deliberately NOT reusing support/_components/service-area-select.tsx's
+    // useServiceAreas: that lives in a route-private `_components` folder,
+    // and importing across two unrelated dashboard routes would make an
+    // edit for Support silently change Compliance's exports.
+    const [serviceAreaIds, setServiceAreaIds] = useState<string[]>([]);
+    const [areaOptions, setAreaOptions] = useState<MultiSelectOption[]>([]);
+    const [areasLoading, setAreasLoading] = useState(true);
+    const [areasFailed, setAreasFailed] = useState(false);
+
+    useEffect(() => {
+        let cancelled = false;
+        getServiceAreas()
+            .then((data) => {
+                if (cancelled) return;
+                setAreaOptions(
+                    (data || []).map((a: { id: string; name?: string; city?: string }) => ({
+                        value: a.id,
+                        label: a.name || a.city || a.id,
+                    })),
+                );
+                setAreasFailed(false);
+            })
+            .catch(() => {
+                if (cancelled) return;
+                setAreaOptions([]);
+                // Surfaced in the UI rather than silently rendering an empty
+                // dropdown: an empty list and "the fetch failed" are the same
+                // picture to an admin, and the second one would leave them
+                // believing no areas exist.
+                setAreasFailed(true);
+            })
+            .finally(() => {
+                if (!cancelled) setAreasLoading(false);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    const areaScopeLabel = useMemo(() => {
+        if (serviceAreaIds.length === 0) return "All service areas";
+        const names = serviceAreaIds
+            .map((id) => areaOptions.find((o) => o.value === id)?.label)
+            .filter(Boolean) as string[];
+        return names.join(", ") || `${serviceAreaIds.length} areas`;
+    }, [serviceAreaIds, areaOptions]);
+
     if (!allowed) return null;
 
     const onError = (e: any) =>
@@ -130,7 +184,12 @@ export default function CompliancePage() {
     const onDownloadGstPst = async () => {
         setGstPstLoading(true);
         try {
-            const { blob, filename } = await downloadGstPstRemittance(gstPstFormat, gstPstFrom, gstPstTo);
+            const { blob, filename } = await downloadGstPstRemittance(
+                gstPstFormat,
+                gstPstFrom,
+                gstPstTo,
+                serviceAreaIds,
+            );
             triggerBrowserDownload(blob, filename);
         } catch (e: any) {
             onError(e);
@@ -145,6 +204,7 @@ export default function CompliancePage() {
             const { blob, filename } = await downloadDriverRoster(
                 rosterFormat,
                 rosterStatus === "all" ? undefined : rosterStatus,
+                serviceAreaIds,
             );
             triggerBrowserDownload(blob, filename);
         } catch (e: any) {
@@ -169,7 +229,12 @@ export default function CompliancePage() {
     const onDownloadSgi = async () => {
         setSgiLoading(true);
         try {
-            const { blob, filename } = await downloadInsuranceBillingSgi(sgiFormat, sgiFrom, sgiTo);
+            const { blob, filename } = await downloadInsuranceBillingSgi(
+                sgiFormat,
+                sgiFrom,
+                sgiTo,
+                serviceAreaIds,
+            );
             triggerBrowserDownload(blob, filename);
         } catch (e: any) {
             onError(e);
@@ -181,7 +246,12 @@ export default function CompliancePage() {
     const onDownloadKa = async () => {
         setKaLoading(true);
         try {
-            const { blob, filename } = await downloadInsuranceBillingKnightArcher(kaFormat, kaFrom, kaTo);
+            const { blob, filename } = await downloadInsuranceBillingKnightArcher(
+                kaFormat,
+                kaFrom,
+                kaTo,
+                serviceAreaIds,
+            );
             triggerBrowserDownload(blob, filename);
         } catch (e: any) {
             onError(e);
@@ -193,7 +263,12 @@ export default function CompliancePage() {
     const onDownloadAirport = async () => {
         setAirportLoading(true);
         try {
-            const { blob, filename } = await downloadAirportTrips(airportFormat, airportFrom, airportTo);
+            const { blob, filename } = await downloadAirportTrips(
+                airportFormat,
+                airportFrom,
+                airportTo,
+                serviceAreaIds,
+            );
             triggerBrowserDownload(blob, filename);
         } catch (e: any) {
             onError(e);
@@ -214,6 +289,48 @@ export default function CompliancePage() {
                     re-styles those into Spinr branding.
                 </p>
             </div>
+
+            {/* Page-level scope, not per-tab: it applies to every report on
+                this page except T4A, and one control makes it obvious that
+                changing it changes all of them. The selected areas are
+                printed onto each generated report's subtitle server-side, so
+                a filtered export can never be mistaken for a complete one
+                once it has left the dashboard. */}
+            <Card>
+                <CardContent className="flex flex-wrap items-end gap-4 py-4">
+                    <div className="space-y-1.5">
+                        <Label className="flex items-center gap-1.5">
+                            <MapPin className="h-3.5 w-3.5 text-muted-foreground" />
+                            Service Area
+                        </Label>
+                        <MultiSelect
+                            options={areaOptions}
+                            selected={serviceAreaIds}
+                            onChange={setServiceAreaIds}
+                            allLabel="All service areas"
+                            itemNoun="areas"
+                            ariaLabel="Filter reports by service area"
+                            loading={areasLoading}
+                            className="w-56"
+                        />
+                    </div>
+                    <p className="text-xs text-muted-foreground flex-1 min-w-60 pb-2">
+                        {areasFailed ? (
+                            <span className="text-destructive">
+                                Could not load service areas — reports will cover every area. Reload to retry.
+                            </span>
+                        ) : (
+                            <>
+                                Applies to every report on this page except T4A Filer Handoff, which is
+                                per-driver and Canada-wide. Currently exporting: <strong>{areaScopeLabel}</strong>.
+                                Ride-based reports (GST/PST, Airport Trips) scope by the ride&apos;s own service
+                                area; driver-based reports (Driver Roster, both insurance billings) scope by the
+                                driver&apos;s home area.
+                            </>
+                        )}
+                    </p>
+                </CardContent>
+            </Card>
 
             <Tabs defaultValue="gst-pst">
                 <TabsList>
@@ -495,6 +612,12 @@ export default function CompliancePage() {
                                     address in bulk, more sensitive than the aggregate totals in the other
                                     reports on this page. Download and hand off through your own secure
                                     channel to the filer.
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                    The Service Area filter above does not apply to this report. A T4A /
+                                    Part XX.1 return is per-driver and Canada-wide, so an area-scoped slice
+                                    would split a driver who works across two areas into two partial
+                                    exports and under-report them in both.
                                 </p>
                             </CardContent>
                         </Card>

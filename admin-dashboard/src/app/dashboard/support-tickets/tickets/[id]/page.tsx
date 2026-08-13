@@ -16,6 +16,7 @@ import {
     getDeskTicketServiceArea,
     setDeskTicketServiceArea,
     aiSuggestDeskReply,
+    getZohoConfig,
     type DeskServiceArea,
     type DeskTicketServiceArea,
 } from "@/lib/api";
@@ -128,6 +129,8 @@ export default function TicketDetailPage() {
     // the decision to convey). Empty = let the AI draft from the ticket alone.
     const [aiInstruction, setAiInstruction] = useState("");
 
+    const [emailSignature, setEmailSignature] = useState("");
+
     // Service area (Spinr-local; auto-derived from the contact's ride history
     // when possible, else highlighted for an optional manual assignment).
     const [areas, setAreas] = useState<DeskServiceArea[]>([]);
@@ -192,6 +195,11 @@ export default function TicketDetailPage() {
         if (!allowed) return;
         getDeskAgents().then((r) => setAgents(r.data || [])).catch(() => {});
         getDeskServiceAreas().then((r) => setAreas(r.data || [])).catch(() => {});
+        getZohoConfig().then((c) => {
+            if (c.helpdesk_signature_enabled && c.helpdesk_signature_preview) {
+                setEmailSignature(c.helpdesk_signature_preview);
+            }
+        }).catch(() => {});
     }, [allowed]);
 
     // Resolve/auto-assign the ticket's service area once, on mount. The endpoint
@@ -442,6 +450,15 @@ export default function TicketDetailPage() {
                                 <p className="text-[11px] text-muted-foreground">
                                     AI drafts are suggestions — review for accuracy before sending. Nothing is sent until you click Send reply.
                                 </p>
+                                {emailSignature && (
+                                    <div className="rounded-md border border-dashed bg-muted/30 p-3">
+                                        <p className="mb-1 text-[11px] font-medium text-muted-foreground">Signature (auto-appended)</p>
+                                        <div
+                                            className="text-sm text-muted-foreground [&_a]:text-blue-600 [&_a]:underline"
+                                            dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(emailSignature) }}
+                                        />
+                                    </div>
+                                )}
                                 <div className="flex justify-end">
                                     <Button onClick={sendReply} disabled={sending || suggesting || !toText(reply).trim()}>
                                         <Send className="mr-2 h-4 w-4" /> Send reply

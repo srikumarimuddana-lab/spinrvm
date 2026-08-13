@@ -30,6 +30,7 @@ try:
     from ...services import zoho_ticket_service_area as ticket_area
     from ...services.zoho_desk_service import ZohoDeskError
     from ...utils.audit_logger import log_admin_action
+    from ...utils.company_details import CompanyDetails, load_company_details
     from ...utils.rate_limiter import admin_ai_suggest_limit
 except ImportError:  # pragma: no cover - direct module import in tests
     import db_supabase
@@ -39,6 +40,7 @@ except ImportError:  # pragma: no cover - direct module import in tests
     from services import zoho_ticket_service_area as ticket_area
     from services.zoho_desk_service import ZohoDeskError
     from utils.audit_logger import log_admin_action
+    from utils.company_details import CompanyDetails, load_company_details
     from utils.rate_limiter import admin_ai_suggest_limit
 
 logger = logging.getLogger(__name__)
@@ -52,6 +54,59 @@ _MIRROR_TABLE = "zoho_desk_tickets"
 
 def _err(e: ZohoDeskError) -> HTTPException:
     return HTTPException(status_code=e.status, detail=str(e.message))
+
+
+import html as _html
+
+
+def _render_helpdesk_signature(company: CompanyDetails, tagline: str = "") -> str:
+    """Build a branded email signature from company settings.
+
+    Uses the same identity source as transactional emails
+    (``load_company_details``). All values are HTML-escaped.
+    """
+    esc = _html.escape
+    tagline_html = ""
+    if tagline.strip():
+        tagline_html = f'<p style="margin:0 0 6px;font-size:12px;color:#6B7280;">{esc(tagline.strip())}</p>'
+
+    links: list[str] = []
+    if company.support_email:
+        links.append(
+            f'<a href="mailto:{esc(company.support_email)}" '
+            f'style="color:#D32F2F;text-decoration:none;">{esc(company.support_email)}</a>'
+        )
+    website = company.contact_line.split(" · ")
+    for part in website:
+        part = part.strip()
+        if part.startswith("http") or part.startswith("www"):
+            url = part if part.startswith("http") else f"https://{part}"
+            links.append(f'<a href="{esc(url)}" style="color:#D32F2F;text-decoration:none;">{esc(part)}</a>')
+            break
+
+    dot = '<span style="color:#E5E7EB;margin:0 4px;">&middot;</span>'
+    links_html = dot.join(links)
+
+    return (
+        f'<table cellpadding="0" cellspacing="0" border="0" '
+        f"style=\"font-family:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,"
+        f"'Segoe UI',Roboto,Helvetica,Arial,sans-serif;\">"
+        f"<tr>"
+        f'<td style="vertical-align:top;padding-right:14px;">'
+        f'<img src="{esc(company.logo_url)}" alt="{esc(company.name)}" width="36" '
+        f'style="display:block;border:0;outline:none;border-radius:6px;width:36px;height:auto;" />'
+        f"</td>"
+        f'<td style="vertical-align:top;">'
+        f'<p style="margin:0 0 2px;font-size:14px;font-weight:700;color:#1A1A1A;">'
+        f"{esc(company.name)} Support</p>"
+        f"{tagline_html}"
+        f'<p style="margin:0;font-size:12px;">{links_html}</p>'
+        f'<p style="margin:8px 0 0;font-size:10px;color:#6B7280;opacity:0.7;">'
+        f"{esc(company.identity_line)}</p>"
+        f"</td>"
+        f"</tr>"
+        f"</table>"
+    )
 
 
 async def _resolve_department(department_id: Optional[str]) -> Optional[str]:
@@ -91,16 +146,28 @@ class ZohoConfigUpdate(BaseModel):
     org_id: Optional[str] = None
     default_department_id: Optional[str] = None
     default_from_email: Optional[str] = None
+    helpdesk_signature_enabled: Optional[bool] = None
+    helpdesk_email_signature: Optional[str] = None
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
     refresh_token: Optional[str] = None
 
 
-def _config_status(cfg: Dict[str, Any]) -> Dict[str, Any]:
+async def _config_status(cfg: Dict[str, Any]) -> Dict[str, Any]:
     """Presence-only view of the config — never leaks secret values."""
 
     def _has(key: str) -> bool:
         return bool((cfg.get(key) or "").strip())
+
+    sig_enabled = bool(cfg.get("helpdesk_signature_enabled"))
+    sig_tagline = cfg.get("helpdesk_email_signature") or ""
+    sig_preview = ""
+    if sig_enabled:
+        try:
+            company = await load_company_details()
+            sig_preview = _render_helpdesk_signature(company, sig_tagline)
+        except Exception:
+            logger.warning("Could not render signature preview", exc_info=True)
 
     return {
         "enabled": bool(cfg.get("enabled")),
@@ -109,6 +176,9 @@ def _config_status(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "org_id": cfg.get("org_id") or "",
         "default_department_id": cfg.get("default_department_id") or "",
         "default_from_email": cfg.get("default_from_email") or "",
+        "helpdesk_signature_enabled": sig_enabled,
+        "helpdesk_email_signature": sig_tagline,
+        "helpdesk_signature_preview": sig_preview,
         "has_client_id": _has("client_id"),
         "has_client_secret": _has("client_secret"),
         "has_refresh_token": _has("refresh_token"),
@@ -128,7 +198,7 @@ def _config_status(cfg: Dict[str, Any]) -> Dict[str, Any]:
 @router.get("/config")
 async def get_config(admin: dict = Depends(require_module("support_tickets"))):
     cfg = await db_supabase.find_one(_CONFIG_TABLE, {"id": _CONFIG_ID}) or {}
-    return _config_status(cfg)
+    return await _config_status(cfg)
 
 
 @router.put("/config")
@@ -160,7 +230,7 @@ async def update_config(payload: ZohoConfigUpdate, admin: dict = Depends(require
         {"fields_changed": [k for k in fields if k not in ("updated_at",)]},
     )
     cfg = await db_supabase.find_one(_CONFIG_TABLE, {"id": _CONFIG_ID}) or {}
-    return _config_status(cfg)
+    return await _config_status(cfg)
 
 
 @router.post("/sync")
@@ -551,10 +621,16 @@ async def reply_ticket(
             status_code=400,
             detail="No reply-from email configured. Set a default reply-from address in Help Desk settings.",
         )
+    content = payload.content
+    if cfg.get("helpdesk_signature_enabled") and payload.channel.upper() == "EMAIL":
+        company = await load_company_details()
+        tagline = (cfg.get("helpdesk_email_signature") or "").strip()
+        sig_html = _render_helpdesk_signature(company, tagline)
+        content = f'{content}<br><br><div style="margin-top:16px;border-top:1px solid #e5e7eb;padding-top:12px;">{sig_html}</div>'
     try:
         result = await zoho.send_reply(
             ticket_id,
-            content=payload.content,
+            content=content,
             to=payload.to,
             from_email=from_email,
             channel=payload.channel,

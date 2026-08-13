@@ -48,6 +48,9 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
     const [orgId, setOrgId] = useState("");
     const [departmentId, setDepartmentId] = useState("");
     const [fromEmail, setFromEmail] = useState("");
+    const [signatureEnabled, setSignatureEnabled] = useState(false);
+    const [signature, setSignature] = useState("");
+    const [signaturePreview, setSignaturePreview] = useState("");
     const [clientId, setClientId] = useState("");
     const [clientSecret, setClientSecret] = useState("");
     const [refreshToken, setRefreshToken] = useState("");
@@ -62,6 +65,9 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
             setOrgId(s.org_id || "");
             setDepartmentId(s.default_department_id || "");
             setFromEmail(s.default_from_email || "");
+            setSignatureEnabled(!!s.helpdesk_signature_enabled);
+            setSignature(s.helpdesk_email_signature || "");
+            setSignaturePreview(s.helpdesk_signature_preview || "");
         } catch {
             toast({ title: "Failed to load Zoho config", variant: "destructive" });
         } finally {
@@ -84,6 +90,8 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
                 org_id: orgId,
                 default_department_id: departmentId,
                 default_from_email: fromEmail,
+                helpdesk_signature_enabled: signatureEnabled,
+                helpdesk_email_signature: signature,
             };
             // Only send secrets the admin actually typed.
             if (clientId.trim()) body.client_id = clientId.trim();
@@ -91,6 +99,7 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
             if (refreshToken.trim()) body.refresh_token = refreshToken.trim();
             const s = await updateZohoConfig(body);
             setStatus(s);
+            setSignaturePreview(s.helpdesk_signature_preview || "");
             setClientId("");
             setClientSecret("");
             setRefreshToken("");
@@ -188,6 +197,43 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
                             Must be a verified support address in your Zoho Desk portal. Required to send email replies.
                         </p>
                     </div>
+                </div>
+
+                <div className="space-y-3 rounded-lg border p-3">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <p className="font-medium">Email signature</p>
+                            <p className="text-sm text-muted-foreground">
+                                Auto-generated from your company settings (name, logo, address).
+                            </p>
+                        </div>
+                        <Switch checked={signatureEnabled} onCheckedChange={setSignatureEnabled} disabled={!enabled} aria-label="Enable email signature" />
+                    </div>
+                    {signatureEnabled && (
+                        <>
+                            <div className="space-y-1">
+                                <Label htmlFor="zoho-sig-tagline">Tagline (optional)</Label>
+                                <Input
+                                    id="zoho-sig-tagline"
+                                    value={signature}
+                                    onChange={(e) => setSignature(e.target.value)}
+                                    placeholder="We're here to help — replies usually within a few hours."
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    Short message shown under your team name. Leave blank to omit.
+                                </p>
+                            </div>
+                            {signaturePreview && (
+                                <div className="space-y-1">
+                                    <p className="text-xs font-medium text-muted-foreground">Preview</p>
+                                    <div
+                                        className="rounded-md border bg-white p-3 dark:bg-zinc-950"
+                                        dangerouslySetInnerHTML={{ __html: signaturePreview }}
+                                    />
+                                </div>
+                            )}
+                        </>
+                    )}
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-2">

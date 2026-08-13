@@ -1991,7 +1991,22 @@ async def admin_get_driver_rides(
         rider = users_map.get(r.get("rider_id"))
         enriched.append({**r, "rider_name": _user_display_name(rider)})
 
-    return {"rides": enriched, "total": len(rides), "offset": offset, "limit": limit}
+    # `total` historically means "rows actually fetched this call" (bounded
+    # by fetch_size, NOT the driver's true ride count) — kept as-is so no
+    # existing caller's arithmetic changes. `total_count` is new: a real
+    # count_documents() so the UI can tell "50 of 50 fetched, that IS
+    # everything" apart from "50 of 50 fetched, 900 more exist" (Finding 2,
+    # docs/audit/2026-08-13-migrated-data-visibility-audit.md) — previously
+    # nothing in the response distinguished those two cases.
+    total_count = await db_supabase.count_documents("rides", {"driver_id": driver_id})
+
+    return {
+        "rides": enriched,
+        "total": len(rides),
+        "total_count": total_count,
+        "offset": offset,
+        "limit": limit,
+    }
 
 
 @router.get("/drivers/{driver_id}/live-stats")

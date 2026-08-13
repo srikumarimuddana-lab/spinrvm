@@ -34,7 +34,18 @@ const DATA_CENTERS = [
 
 /** Connection + OAuth config for Zoho Desk. Secrets are write-only — the
  *  backend returns presence flags only, so empty secret inputs mean
- *  "leave unchanged". */
+ *  "leave unchanged".
+ *
+ *  The credential inputs stay unmounted behind an explicit "Replace
+ *  credentials" toggle. Rendering a text field labelled like an identifier
+ *  next to a password field makes browsers and password managers treat the
+ *  card as a login form: on 2026-08-13 an autofill dropped the admin's own
+ *  email + password into Client ID / Client Secret, a routine save wrote them
+ *  over the working Zoho OAuth credentials, and every subsequent token
+ *  refresh failed with Zoho's opaque `general_error`. Not rendering the
+ *  inputs unless the admin is deliberately changing credentials removes the
+ *  autofill target entirely; the autoComplete/ignore attributes below are the
+ *  second layer for when they are on screen. */
 export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) => void }) {
     const { toast } = useToast();
     const [status, setStatus] = useState<ZohoConfigStatus | null>(null);
@@ -54,6 +65,18 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
     const [clientId, setClientId] = useState("");
     const [clientSecret, setClientSecret] = useState("");
     const [refreshToken, setRefreshToken] = useState("");
+    const [editingCredentials, setEditingCredentials] = useState(false);
+
+    const clearCredentialInputs = () => {
+        setClientId("");
+        setClientSecret("");
+        setRefreshToken("");
+    };
+
+    const closeCredentialEditor = () => {
+        clearCredentialInputs();
+        setEditingCredentials(false);
+    };
 
     const load = async () => {
         try {
@@ -100,9 +123,7 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
             const s = await updateZohoConfig(body);
             setStatus(s);
             setSignaturePreview(s.helpdesk_signature_preview || "");
-            setClientId("");
-            setClientSecret("");
-            setRefreshToken("");
+            closeCredentialEditor();
             toast({ title: "Zoho Desk configuration saved" });
             onSaved?.(s);
         } catch (e: any) {
@@ -236,29 +257,90 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
                     )}
                 </div>
 
-                <div className="grid gap-4 sm:grid-cols-2">
-                    <div className="space-y-1">
-                        <Label htmlFor="zoho-client-id">Client ID {status?.has_client_id && <span className="text-xs text-emerald-600 dark:text-emerald-400">(saved)</span>}</Label>
-                        <Input id="zoho-client-id" value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder={status?.has_client_id ? "•••••• (unchanged)" : ""} />
+                <div className="space-y-3 rounded-lg border p-3">
+                    <div className="flex items-center justify-between gap-4">
+                        <div>
+                            <p className="font-medium">OAuth credentials</p>
+                            <p className="text-sm text-muted-foreground">
+                                {[
+                                    status?.has_client_id && "Client ID",
+                                    status?.has_client_secret && "Client Secret",
+                                    status?.has_refresh_token && "Refresh Token",
+                                ].filter(Boolean).length === 3
+                                    ? "Client ID, Client Secret and Refresh Token are saved."
+                                    : "Not fully configured — add the values from your Zoho API console."}
+                            </p>
+                        </div>
+                        {editingCredentials ? (
+                            <Button variant="ghost" onClick={closeCredentialEditor}>Cancel</Button>
+                        ) : (
+                            <Button variant="outline" onClick={() => setEditingCredentials(true)}>
+                                {status?.has_refresh_token ? "Replace credentials" : "Add credentials"}
+                            </Button>
+                        )}
                     </div>
-                    <div className="space-y-1">
-                        <Label htmlFor="zoho-client-secret">Client Secret {status?.has_client_secret && <span className="text-xs text-emerald-600 dark:text-emerald-400">(saved)</span>}</Label>
-                        <Input id="zoho-client-secret" type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder={status?.has_client_secret ? "•••••• (unchanged)" : ""} />
-                    </div>
-                    <div className="space-y-1 sm:col-span-2">
-                        <Label htmlFor="zoho-refresh-token">Refresh Token {status?.has_refresh_token && <span className="text-xs text-emerald-600 dark:text-emerald-400">(saved)</span>}</Label>
-                        <Input id="zoho-refresh-token" type="password" value={refreshToken} onChange={(e) => setRefreshToken(e.target.value)} placeholder={status?.has_refresh_token ? "•••••• (unchanged)" : ""} />
-                        <p className="text-xs text-muted-foreground">
-                            Generate a self-client refresh token in the Zoho API console with the
-                            <code className="mx-1">Desk.tickets.ALL</code>,
-                            <code className="mx-1">Desk.search.READ</code>,
-                            <code className="mx-1">Desk.agents.READ</code>,
-                            <code className="mx-1">Desk.settings.READ</code> and
-                            <code className="mx-1">Desk.basic.READ</code> scopes.
-                            <code className="ml-1">Desk.search.READ</code> powers the dashboard counts and
-                            <code className="mx-1">Desk.agents.READ</code> the assignee filters/assignment controls.
-                        </p>
-                    </div>
+
+                    {/* Rendered only on demand — see the note above the component. */}
+                    {editingCredentials && (
+                        <div className="grid gap-4 sm:grid-cols-2">
+                            <div className="space-y-1">
+                                <Label htmlFor="zoho-client-id">Client ID {status?.has_client_id && <span className="text-xs text-emerald-600 dark:text-emerald-400">(saved)</span>}</Label>
+                                <Input
+                                    id="zoho-client-id"
+                                    name="zoho-oauth-client-id"
+                                    autoComplete="off"
+                                    data-1p-ignore
+                                    data-lpignore="true"
+                                    data-form-type="other"
+                                    value={clientId}
+                                    onChange={(e) => setClientId(e.target.value)}
+                                    placeholder={status?.has_client_id ? "•••••• (unchanged)" : "1000.…"}
+                                />
+                            </div>
+                            <div className="space-y-1">
+                                <Label htmlFor="zoho-client-secret">Client Secret {status?.has_client_secret && <span className="text-xs text-emerald-600 dark:text-emerald-400">(saved)</span>}</Label>
+                                <Input
+                                    id="zoho-client-secret"
+                                    name="zoho-oauth-client-secret"
+                                    type="password"
+                                    autoComplete="new-password"
+                                    data-1p-ignore
+                                    data-lpignore="true"
+                                    data-form-type="other"
+                                    value={clientSecret}
+                                    onChange={(e) => setClientSecret(e.target.value)}
+                                    placeholder={status?.has_client_secret ? "•••••• (unchanged)" : ""}
+                                />
+                            </div>
+                            <div className="space-y-1 sm:col-span-2">
+                                <Label htmlFor="zoho-refresh-token">Refresh Token {status?.has_refresh_token && <span className="text-xs text-emerald-600 dark:text-emerald-400">(saved)</span>}</Label>
+                                <Input
+                                    id="zoho-refresh-token"
+                                    name="zoho-oauth-refresh-token"
+                                    type="password"
+                                    autoComplete="new-password"
+                                    data-1p-ignore
+                                    data-lpignore="true"
+                                    data-form-type="other"
+                                    value={refreshToken}
+                                    onChange={(e) => setRefreshToken(e.target.value)}
+                                    placeholder={status?.has_refresh_token ? "•••••• (unchanged)" : "1000.…"}
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    Paste these from the Zoho API console — never let your browser fill them in.
+                                    Leave a field blank to keep the saved value. Generate a self-client refresh
+                                    token with the
+                                    <code className="mx-1">Desk.tickets.ALL</code>,
+                                    <code className="mx-1">Desk.search.READ</code>,
+                                    <code className="mx-1">Desk.agents.READ</code>,
+                                    <code className="mx-1">Desk.settings.READ</code> and
+                                    <code className="mx-1">Desk.basic.READ</code> scopes.
+                                    <code className="ml-1">Desk.search.READ</code> powers the dashboard counts and
+                                    <code className="mx-1">Desk.agents.READ</code> the assignee filters/assignment controls.
+                                </p>
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 <div className="flex gap-2">

@@ -201,8 +201,8 @@ export default function PayoutHistoryScreen() {
                                 <View style={{ marginLeft: 8, flex: 1 }}>
                                     <Text style={styles.previousAppTitle}>Previous app</Text>
                                     <Text style={styles.previousAppSub}>
-                                        Payments made by the previous Spinr app — shown for your records
-                                        until Aug 31, 2026. Not part of your Spinr earnings.
+                                        Payments made by the previous Spinr app — included in your
+                                        Total Earnings on the balance screen.
                                     </Text>
                                 </View>
                             </View>

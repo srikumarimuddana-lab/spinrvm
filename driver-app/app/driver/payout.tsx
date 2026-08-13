@@ -472,7 +472,19 @@ function PayoutScreen() {
                         <View style={styles.balanceItem}>
                             <Text style={styles.balanceItemLabel}>Total Earnings</Text>
                             <Text style={styles.balanceItemValue}>
-                                {driverBalance ? formatCurrency(driverBalance.total_earnings) : '$0.00'}
+                                {/* Lifetime, blended: Spinr earnings + money already paid by
+                                    the previous Spinr app (Previously Paid item below). Matches
+                                    the Activity screen's Total Earned — one blended number
+                                    everywhere, not two different "Total Earnings" figures on two
+                                    screens. Business decision 2026-08-13 (see
+                                    docs/change-log/2026-08-13-blended-lifetime-earnings.md). */}
+                                {driverBalance
+                                    ? formatCurrency(
+                                          (parseFloat(driverBalance.total_earnings || '0') +
+                                              parseFloat(driverBalance.previous_app_paid_total || '0')
+                                          ).toFixed(2)
+                                      )
+                                    : '$0.00'}
                             </Text>
                         </View>
                         <View style={styles.balanceDivider} />
@@ -489,17 +501,25 @@ function PayoutScreen() {
                                 {driverBalance ? formatCurrency(driverBalance.total_paid_out) : '$0.00'}
                             </Text>
                         </View>
+                        {/* Additive: only rendered for a driver with real previous-app
+                            money, so a driver with none sees the original 3-item row
+                            byte-identical to before. A visible line item (not a footnote)
+                            — Total Earnings above sums Paid Out + Pending + Previously Paid
+                            (+ Available), so every dollar is accounted for and verifiable
+                            against the payout history list below, which carries the real
+                            transfer dates. */}
+                        {parseFloat(driverBalance?.previous_app_paid_total || '0') > 0 && (
+                            <>
+                                <View style={styles.balanceDivider} />
+                                <View style={styles.balanceItem}>
+                                    <Text style={styles.balanceItemLabel}>Previously Paid</Text>
+                                    <Text style={styles.balanceItemValue}>
+                                        {formatCurrency(driverBalance!.previous_app_paid_total!)}
+                                    </Text>
+                                </View>
+                            </>
+                        )}
                     </View>
-
-                    {/* Migrated drivers: name the previous-app money instead of
-                        letting "Total Earnings $0.00" sit unexplained above a
-                        payment history full of transfers they remember. */}
-                    {parseFloat(driverBalance?.previous_app_paid_total || '0') > 0 && (
-                        <Text style={styles.previousAppNote}>
-                            Payments from the previous Spinr app ({formatCurrency(driverBalance!.previous_app_paid_total!)})
-                            stay in your payment history, but aren&apos;t part of your Spinr earnings above.
-                        </Text>
-                    )}
                 </View>
 
                 {/* Bonuses & Rewards — quest/referral payable earnings, included in balance */}
@@ -913,12 +933,6 @@ function createStyles(colors: ThemeColors) {
             paddingTop: 16,
             borderTopWidth: 1,
             borderTopColor: 'rgba(255,255,255,0.2)',
-        },
-        previousAppNote: {
-            marginTop: 12,
-            fontSize: 11,
-            lineHeight: 15,
-            color: 'rgba(255,255,255,0.75)',
         },
         balanceItem: { flex: 1, alignItems: 'center' },
         balanceItemLabel: {

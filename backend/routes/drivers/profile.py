@@ -314,16 +314,25 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
     return response_data
 
 
+def _heatmap_cell_key(lat: float, lng: float, cell_lat: float, cell_lng: float):
+    import math
+
+    return (math.floor(lat / cell_lat), math.floor(lng / cell_lng))
+
+
+def _heatmap_centroid(cr: int, cc: int, cell_lat: float, cell_lng: float):
+    return (round((cr + 0.5) * cell_lat, 6), round((cc + 0.5) * cell_lng, 6))
+
+
 @router.get("/demand-heatmap")
 async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
     """Return aggregated demand heatmap cells for the driver's service area.
 
-    Server-side grid aggregation with k-anonymity floor and recency decay.
-    Response shape is backwards-compatible: ``points: [[lat, lng, weight]]``
-    where each point is now a cell centroid and weight is the decayed count.
+    v1 (always): ``points: [[lat, lng, weight]]`` — decayed 7-day aggregate.
+    v2 (gated):  ``cells: [{lat, lng, live, baseline, scheduled}]`` +
+    ``surge: {multiplier, active}`` — component-separated for layer UI.
     """
     import json as _json
-    import math
 
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
@@ -358,7 +367,18 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
         from utils.metrics import inc as _metric_inc  # type: ignore
         from utils.metrics import observe as _metric_observe
 
-    cache_key = f"spinr:heatmap:{area_id}:v1"
+    app_settings = {}
+    try:
+        app_settings = await get_app_settings() or {}
+    except Exception:
+        pass
+
+    v2_global = bool(app_settings.get("driver_heatmap_v2_enabled", False))
+    v2_allowlist = app_settings.get("heatmap_internal_driver_ids") or []
+    v2_enabled = v2_global or (current_user["id"] in v2_allowlist)
+
+    cache_version = "v2" if v2_enabled else "v1"
+    cache_key = f"spinr:heatmap:{area_id}:{cache_version}"
     cached = await _redis_get(cache_key)
     if cached is not None:
         _metric_inc("spinr_drivers_heatmap_requests_total", {"cache": "hit"})
@@ -370,12 +390,6 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
 
     _build_start = _time.monotonic()
 
-    app_settings = {}
-    try:
-        app_settings = await get_app_settings() or {}
-    except Exception:
-        pass
-
     k_floor = int(app_settings.get("heatmap_k_floor", 3))
     cell_lat = float(app_settings.get("heatmap_cell_lat_deg", 0.004))
     cell_lng = float(app_settings.get("heatmap_cell_lng_deg", 0.006))
@@ -383,11 +397,12 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
     refresh_seconds = int(app_settings.get("heatmap_refresh_seconds", 90))
 
     now = datetime.now(timezone.utc)
-    cutoff = (now - timedelta(days=7)).isoformat()
+    cutoff_7d = (now - timedelta(days=7)).isoformat()
 
+    # ── v1 aggregate (always built) ──────────────────────────────────────
     rides = await db_supabase.get_rows(
         "rides",
-        {"created_at": {"$gte": cutoff}, "service_area_id": area_id},
+        {"created_at": {"$gte": cutoff_7d}, "service_area_id": area_id},
         order="created_at",
         desc=True,
         limit=5_000,
@@ -404,9 +419,7 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
         total_rides += 1
         lat_f = float(lat)
         lng_f = float(lng)
-        cell_row = math.floor(lat_f / cell_lat)
-        cell_col = math.floor(lng_f / cell_lng)
-        key = (cell_row, cell_col)
+        key = _heatmap_cell_key(lat_f, lng_f, cell_lat, cell_lng)
         created_str = r.get("created_at", "")
         try:
             created = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
@@ -425,9 +438,119 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
         if cell["count"] < k_floor:
             suppressed += 1
             continue
-        centroid_lat = round((cr + 0.5) * cell_lat, 6)
-        centroid_lng = round((cc + 0.5) * cell_lng, 6)
-        points.append([centroid_lat, centroid_lng, round(cell["weight"], 2)])
+        clat, clng = _heatmap_centroid(cr, cc, cell_lat, cell_lng)
+        points.append([clat, clng, round(cell["weight"], 2)])
+
+    # ── v2 components (only when enabled) ────────────────────────────────
+    v2_cells = None
+    v2_surge = None
+    if v2_enabled:
+        _ACTIVE = {"searching", "driver_assigned", "driver_accepted", "driver_arrived", "in_progress"}
+        cutoff_10m = (now - timedelta(minutes=10)).isoformat()
+        cutoff_28d = (now - timedelta(days=28)).isoformat()
+        cutoff_2h = (now + timedelta(hours=2)).isoformat()
+
+        # live: rides in active statuses requested in last 10 min
+        live_rides = await db_supabase.get_rows(
+            "rides",
+            {"created_at": {"$gte": cutoff_10m}, "service_area_id": area_id},
+            limit=5_000,
+            columns="pickup_lat,pickup_lng,status",
+        )
+
+        live_grid: dict = {}
+        for r in live_rides:
+            if r.get("status") not in _ACTIVE:
+                continue
+            lat, lng = r.get("pickup_lat"), r.get("pickup_lng")
+            if lat is None or lng is None:
+                continue
+            key = _heatmap_cell_key(float(lat), float(lng), cell_lat, cell_lng)
+            live_grid[key] = live_grid.get(key, 0) + 1
+
+        # baseline: 28-day hour-of-week demand, normalized 0-1 per area
+        current_dow = now.weekday()
+        current_hour = now.hour
+
+        baseline_rides = await db_supabase.get_rows(
+            "rides",
+            {"created_at": {"$gte": cutoff_28d}, "service_area_id": area_id},
+            limit=5_000,
+            columns="pickup_lat,pickup_lng,created_at",
+        )
+
+        baseline_grid: dict = {}
+        for r in baseline_rides:
+            lat, lng = r.get("pickup_lat"), r.get("pickup_lng")
+            if lat is None or lng is None:
+                continue
+            created_str = r.get("created_at", "")
+            try:
+                created = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                continue
+            if created.weekday() == current_dow and created.hour == current_hour:
+                key = _heatmap_cell_key(float(lat), float(lng), cell_lat, cell_lng)
+                baseline_grid[key] = baseline_grid.get(key, 0) + 1
+
+        # normalize baseline 0-1
+        bl_max = max(baseline_grid.values()) if baseline_grid else 1
+        if bl_max > 0:
+            for k in baseline_grid:
+                baseline_grid[k] = round(baseline_grid[k] / bl_max, 2)
+
+        # scheduled: rides with status='scheduled' and pickup in next 2h
+        sched_rides = await db_supabase.get_rows(
+            "rides",
+            {
+                "status": "scheduled",
+                "service_area_id": area_id,
+                "scheduled_pickup_time": {"$lte": cutoff_2h},
+            },
+            limit=5_000,
+            columns="pickup_lat,pickup_lng",
+        )
+
+        sched_grid: dict = {}
+        for r in sched_rides:
+            lat, lng = r.get("pickup_lat"), r.get("pickup_lng")
+            if lat is None or lng is None:
+                continue
+            key = _heatmap_cell_key(float(lat), float(lng), cell_lat, cell_lng)
+            sched_grid[key] = sched_grid.get(key, 0) + 1
+
+        # merge all cell keys; per-component k-floor
+        all_keys = set(live_grid) | set(baseline_grid) | set(sched_grid)
+        v2_cells = []
+        for key in all_keys:
+            live_val = live_grid.get(key, 0)
+            bl_val = baseline_grid.get(key, 0.0)
+            sched_val = sched_grid.get(key, 0)
+
+            # cell survives if ANY component clears k-floor; below-floor zeroed
+            live_ok = live_val >= k_floor
+            sched_ok = sched_val >= k_floor
+            bl_ok = bl_val > 0  # baseline is already normalized, always passes if present
+            if not (live_ok or sched_ok or bl_ok):
+                suppressed += 1
+                continue
+
+            clat, clng = _heatmap_centroid(key[0], key[1], cell_lat, cell_lng)
+            v2_cells.append(
+                {
+                    "lat": clat,
+                    "lng": clng,
+                    "live": live_val if live_ok else 0,
+                    "baseline": bl_val if bl_ok else 0,
+                    "scheduled": sched_val if sched_ok else 0,
+                }
+            )
+
+        # surge mirror from service_area fields
+        v2_surge = {
+            "multiplier": float(service_area.get("surge_multiplier", 1.0)),
+            "active": bool(service_area.get("surge_active", False)),
+        }
 
     _build_ms = (_time.monotonic() - _build_start) * 1000
     _metric_observe("spinr_drivers_heatmap_build_duration_ms", _build_ms)
@@ -440,6 +563,9 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
         "refresh_seconds": refresh_seconds,
         "generated_at": now.isoformat(),
     }
+    if v2_cells is not None:
+        result["cells"] = v2_cells
+        result["surge"] = v2_surge
 
     try:
         await _redis_set(cache_key, _json.dumps(result), ttl=60)

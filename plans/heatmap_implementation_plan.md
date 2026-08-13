@@ -1,5 +1,13 @@
 # Heat Map Implementation Plan for Spinr Rideshare Platform
 
+> **SUPERSEDED (2026-08-13).** This early-era draft predates the real corporate
+> implementation (it proposes creating `corporate_accounts` tables that now exist
+> with different shapes) and assumes a Leaflet stack the admin dashboard never
+> adopted (admin uses MapLibre GL). Much of Phase 3 shipped in a different form
+> (`/dashboard/heatmap`, driver `GET /drivers/demand-heatmap`). Current planning
+> lives in `docs/superpowers/plans/2026-08-13-driver-heatmap-parity.md` and its
+> paired design spec. Kept for history only — do not implement from this file.
+
 ## Overview
 
 This plan outlines the implementation of a comprehensive heat map system in the admin dashboard that displays ride density patterns, with separate views for corporate accounts and regular riders, following rideshare industry standards.

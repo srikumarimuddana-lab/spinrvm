@@ -86,15 +86,29 @@ class TestGetHistoricalHourlyDemand:
         assert all(result[d][h] == 0 for d in range(7) for h in range(24))
 
     @pytest.mark.anyio
-    async def test_area_filter_excludes_non_matching_rows(self, monkeypatch):
+    async def test_area_and_window_are_filtered_in_sql_not_python(self, monkeypatch):
+        """The area and lookback window must be pushed into the query.
+
+        Previously both were applied in Python after fetching the OLDEST
+        10,000 completed rides platform-wide (get_rows defaults desc=False).
+        Once lifetime completed rides passed ~10k, none of the fetched rows
+        fell inside the window, so the forecast silently and permanently
+        degraded to the default curve while still paying the full query cost.
+        Asserting on the filter dict is what pins that fix — a mock that
+        ignores filters cannot distinguish the two implementations.
+        """
         from backend.utils import demand_forecast
 
-        rows = [
-            _ride("2026-07-01T08:15:00Z", service_area_id="area-a"),
-            _ride("2026-07-01T08:20:00Z", service_area_id="area-b"),
-        ]
-        monkeypatch.setattr(demand_forecast.db, "get_rows", AsyncMock(return_value=rows))
+        get_rows = AsyncMock(return_value=[_ride("2026-07-01T08:15:00Z", service_area_id="area-a")])
+        monkeypatch.setattr(demand_forecast.db, "get_rows", get_rows)
         result = await demand_forecast._get_historical_hourly_demand(area_id="area-a", lookback_days=365)
+
+        assert get_rows.await_count == 1
+        _table, filters = get_rows.await_args.args
+        kwargs = get_rows.await_args.kwargs
+        assert filters["service_area_id"] == "area-a", "area must be filtered in SQL"
+        assert "$gte" in filters["created_at"], "lookback window must be filtered in SQL"
+        assert kwargs.get("desc") is True, "must fetch the NEWEST rides, not the oldest"
         assert result[2][8] == 1.0
 
     @pytest.mark.anyio

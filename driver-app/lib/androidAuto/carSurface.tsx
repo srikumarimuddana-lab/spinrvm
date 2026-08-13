@@ -20,9 +20,11 @@
  * UNPROVEN ON HARDWARE: validated at the JS level only. The on-surface render
  * must still be confirmed on an EAS dev build + Android Auto DHU.
  */
-import React from 'react';
+import React, { useMemo } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useDriverStore } from '../../store/driverStore';
+import { useAuthStore } from '@shared/store/authStore';
+import { useDemandHeatmap, type HeatmapCell } from '../../hooks/useDemandHeatmap';
 import { selectCarRoute } from './carRoute';
 import { buildTripCard, type OfferLike } from './carCard';
 import { CarTripCard } from './CarTripCard';
@@ -37,6 +39,36 @@ import { useCarLocation } from './useCarLocation';
 // last-known location loads, so the idle map never opens on null-island (0,0).
 const FALLBACK_CENTER = { latitude: 52.1332, longitude: -106.67 };
 
+// Heatmap cell geometry (same as HeatmapCells.tsx)
+const CELL_LAT = 0.004;
+const CELL_LNG = 0.006;
+const CAR_MAX_POLYGONS = 80;
+// Dark-theme ramp (car surface is always dark)
+const CAR_RAMP = ['#4E211E', '#7F2D26', '#B2382E', '#FF453A', '#FF8A80'];
+
+function cellCorners(lat: number, lng: number) {
+  const bLat = Math.floor(lat / CELL_LAT) * CELL_LAT;
+  const bLng = Math.floor(lng / CELL_LNG) * CELL_LNG;
+  return [
+    { latitude: bLat, longitude: bLng },
+    { latitude: bLat + CELL_LAT, longitude: bLng },
+    { latitude: bLat + CELL_LAT, longitude: bLng + CELL_LNG },
+    { latitude: bLat, longitude: bLng + CELL_LNG },
+  ];
+}
+
+function rampColor(weight: number, max: number): { fill: string; stroke: string; sw: number } {
+  const r = max > 0 ? weight / max : 0;
+  const idx = r < 0.2 ? 0 : r < 0.4 ? 1 : r < 0.6 ? 2 : r < 0.8 ? 3 : 4;
+  const hex = CAR_RAMP[idx];
+  const [rv, gv, bv] = [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
+  return {
+    fill: `rgba(${rv},${gv},${bv},0.4)`,
+    stroke: idx === 4 ? `rgba(${rv},${gv},${bv},0.7)` : 'transparent',
+    sw: idx === 4 ? 1 : 0,
+  };
+}
+
 export function CarMapSurface(): React.ReactElement | null {
   // Hooks first — unconditional, before any early return (rules-of-hooks).
   const rideState = useDriverStore((s) => s.rideState);
@@ -45,8 +77,20 @@ export function CarMapSurface(): React.ReactElement | null {
   const delta = useCarMapCamera((s) => s.delta);
   const here = useCarLocation();
   const route = selectCarRoute(rideState, activeRide);
-  // The same glanceable card the offer alert is built from, drawn over the map.
   const card = buildTripCard(rideState, activeRide, incomingRide as OfferLike | null);
+  const isOnline = !!useAuthStore((s) => s.driver?.is_online);
+  const { cells: heatmapCells } = useDemandHeatmap(rideState, isOnline);
+
+  const carHeatCells = useMemo(() => {
+    if (!heatmapCells.length || rideState !== 'idle') return [];
+    const sorted = [...heatmapCells].sort((a, b) => b.weight - a.weight);
+    return sorted.slice(0, CAR_MAX_POLYGONS);
+  }, [heatmapCells, rideState]);
+
+  const carHeatMax = useMemo(
+    () => carHeatCells.reduce((m, c) => Math.max(m, c.weight), 0),
+    [carHeatCells],
+  );
 
   let Maps: typeof import('react-native-maps') | null = null;
   try {
@@ -58,6 +102,7 @@ export function CarMapSurface(): React.ReactElement | null {
   if (!Maps) return null;
 
   const MapView = Maps.default;
+  const MapsPolygon = Maps.Polygon;
 
   // CarMarker hard-imports react-native-maps; require it only after the maps
   // guard above so it can never crash a maps-less context (web / Expo Go).
@@ -110,6 +155,20 @@ export function CarMapSurface(): React.ReactElement | null {
           longitudeDelta: delta,
         }}
       >
+        {/* Heatmap demand cells — idle state only (HM-30) */}
+        {carHeatCells.map((c, i) => {
+          const rc = rampColor(c.weight, carHeatMax);
+          return (
+            <MapsPolygon
+              key={`ch-${i}-${c.lat}-${c.lng}`}
+              coordinates={cellCorners(c.lat, c.lng)}
+              fillColor={rc.fill}
+              strokeColor={rc.stroke}
+              strokeWidth={rc.sw}
+            />
+          );
+        })}
+
         {/* THE uniform route line + pins. `route.polyline` is the SAME stored
             pickup→dropoff geometry as before (empty on the pre-pickup leg); it is
             now drawn as one orange→red gradient via the shared RouteLine so the

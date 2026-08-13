@@ -135,8 +135,7 @@ vi.mock("lucide-react", () => {
     // sortable-table (used by users/earnings/analytics/corporate/disputes)
     ChevronsUpDown: Icon, Percent: Icon, Receipt: Icon, Undo2: Icon, Landmark: Icon,
     // heatmap / service-areas AD-* additions
-    Flame: Icon, ArrowRightLeft: Icon, DollarSign: Icon, ToggleLeft: Icon, ToggleRight: Icon,
-    FileCheck: Icon, FileWarning: Icon,
+    Flame: Icon, ArrowRightLeft: Icon,
   };
 });
 
@@ -283,26 +282,44 @@ vi.mock("@/components/heat-map", () => ({
   default: () => <div data-sub="HeatMap" />,
 }));
 
-// Stub settings-ai and analytics-payouts (imported directly by service-areas)
-vi.mock("@/lib/api/settings-ai", () => ({
-  getSettings: vi.fn().mockResolvedValue({}),
-  updateSettings: vi.fn().mockResolvedValue({}),
-}));
+// Stub the per-domain API submodules that pages import directly (bypassing the
+// "@/lib/api" barrel). These MUST be built from the real module via
+// importOriginal: a hand-written literal silently drops every export it forgets,
+// and because the barrel re-exports these same module ids, a dropped export
+// becomes `undefined` for barrel importers too — which is how an incomplete
+// settings-ai mock broke the unrelated /dashboard/settings page test.
+const wrapApiModule = async (
+  importOriginal: () => Promise<Record<string, unknown>>,
+  overrides: Record<string, unknown> = {},
+) => {
+  const actual = await importOriginal();
+  const noop = vi.fn().mockResolvedValue({});
+  const list = vi.fn().mockResolvedValue([]);
+  return {
+    ...Object.fromEntries(
+      Object.entries(actual).map(([key, val]) => {
+        if (typeof val !== "function") return [key, val];
+        return [key, /^(get|list|fetch)/.test(key) ? list : noop];
+      })
+    ),
+    ...overrides,
+  };
+};
 
-vi.mock("@/lib/api/analytics-payouts", () => ({
-  getSurgeHistory: vi.fn().mockResolvedValue([]),
-  getAnalyticsOverview: vi.fn().mockResolvedValue({}),
-  getCancellationBreakdown: vi.fn().mockResolvedValue({}),
-  getDriverAcceptanceRates: vi.fn().mockResolvedValue({}),
-  getDriverOfferStats: vi.fn().mockResolvedValue({}),
-  getDriverOfferTrends: vi.fn().mockResolvedValue({ daily_chart: [] }),
-  getDemandForecast: vi.fn().mockResolvedValue({}),
-  getDemandForecastSummary: vi.fn().mockResolvedValue({}),
-  getDashboardOverview: vi.fn().mockResolvedValue({}),
-  getPayouts: vi.fn().mockResolvedValue([]),
-  getPayoutById: vi.fn().mockResolvedValue({}),
-  getPayoutStats: vi.fn().mockResolvedValue({}),
-}));
+vi.mock("@/lib/api/settings-ai", (io) =>
+  wrapApiModule(io as () => Promise<Record<string, unknown>>, {
+    getSettings: vi.fn().mockResolvedValue({}),
+    updateSettings: vi.fn().mockResolvedValue({}),
+  })
+);
+
+vi.mock("@/lib/api/analytics-payouts", (io) =>
+  wrapApiModule(io as () => Promise<Record<string, unknown>>, {
+    getSurgeHistory: vi.fn().mockResolvedValue([]),
+    getDriverOfferTrends: vi.fn().mockResolvedValue({ daily_chart: [] }),
+    getDemandForecast: vi.fn().mockResolvedValue({}),
+  })
+);
 
 // Stub Google Maps (used by heatmap/service-areas)
 vi.mock("@react-google-maps/api", () => ({

@@ -1350,6 +1350,92 @@ class TestGetDemandHeatmapV2:
 
         assert result["surge"] == {"multiplier": 2.0, "active": True}
 
+    async def test_v2_includes_forecast_when_available(self):
+        """v2 response includes a 6-hour forecast array (HM-23)."""
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+        rides = _make_rides([(52.132, -106.664)] * 3)
+
+        mock_forecast = [
+            {
+                "hour": 14,
+                "day_name": "Thu",
+                "predicted_rides": 5.0,
+                "data_basis": "historical_average",
+                "is_peak": False,
+                "timestamp": "2026-08-13T14:00:00+00:00",
+            },
+            {
+                "hour": 15,
+                "day_name": "Thu",
+                "predicted_rides": 8.0,
+                "data_basis": "historical_average",
+                "is_peak": True,
+                "timestamp": "2026-08-13T15:00:00+00:00",
+            },
+            {
+                "hour": 16,
+                "day_name": "Thu",
+                "predicted_rides": 10.0,
+                "data_basis": "historical_average",
+                "is_peak": True,
+                "timestamp": "2026-08-13T16:00:00+00:00",
+            },
+        ]
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                return [self._service_area()]
+            if table == "rides":
+                return rides
+            return []
+
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx(self._v2_settings()),
+            patch("backend.utils.demand_forecast.forecast_demand", AsyncMock(return_value=mock_forecast)),
+        ):
+            result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        assert "forecast" in result
+        assert len(result["forecast"]) == 3
+        for entry in result["forecast"]:
+            assert "hour" in entry
+            assert "day_name" in entry
+            assert "demand" in entry
+            assert 0 <= entry["demand"] <= 1.0
+            assert "is_peak" in entry
+
+    async def test_v2_forecast_gracefully_degrades(self):
+        """If forecast_demand raises, v2 response still works without forecast."""
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+        rides = _make_rides([(52.132, -106.664)] * 3)
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                return [self._service_area()]
+            if table == "rides":
+                return rides
+            return []
+
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx(self._v2_settings()),
+            patch("backend.utils.demand_forecast.forecast_demand", AsyncMock(side_effect=Exception("DB error"))),
+        ):
+            result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        assert result["enabled"] is True
+        assert "cells" in result
+        assert "forecast" not in result
+
 
 class TestDestinationMode404s:
     async def test_clear_destination_mode_404_when_no_driver(self):

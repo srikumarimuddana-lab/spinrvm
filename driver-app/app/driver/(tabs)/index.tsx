@@ -22,6 +22,7 @@ import {
   HotspotChips,
 } from '../../../components/dashboard';
 import { useDemandHeatmap } from '../../../hooks/useDemandHeatmap';
+import { useAirportZones } from '../../../hooks/useAirportZones';
 import { RideOfferPanel } from '../../../components/panels/RideOfferPanel';
 import { useDriverDashboard } from '../../../hooks/useDriverDashboard';
 import { CarMarker, resolveMarkerVariant, type CarMarkerVariant } from '../../../components/CarMarker';
@@ -292,6 +293,14 @@ function DriverDashboard() {
     forecast: heatmapForecast,
     hotspots: heatmapHotspots,
   } = useDemandHeatmap(rideState, isOnline);
+
+  // Airport sub-zones — rendered as blue dashed polygons on idle map (HM-21)
+  const { zones: airportZones, activeZone: activeAirportZone } = useAirportZones(
+    (driverData?.service_area_id as string) ?? null,
+    isOnline,
+    location?.coords?.latitude,
+    location?.coords?.longitude,
+  );
 
   const [countdown, setCountdownState] = useState(countdownSeconds);
 
@@ -770,8 +779,30 @@ function DriverDashboard() {
         {heatmapCells.length > 0 && Platform.OS !== 'web' && (
           <HeatmapCells cells={heatmapCells} region={null} />
         )}
+
+        {/* Airport sub-zone polygons — blue dashed outlines (HM-21) */}
+        {rideState === 'idle' && airportZones.map(zone => (
+          zone.polygon?.length >= 3 && (
+            <Polygon
+              key={`airport-${zone.id}`}
+              coordinates={zone.polygon.map(p => ({ latitude: p.lat, longitude: p.lng }))}
+              strokeColor="#0ea5e9"
+              fillColor="rgba(14,165,233,0.08)"
+              strokeWidth={2}
+              lineDashPattern={[6, 4]}
+            />
+          )
+        ))}
       </MapView>
       </View>
+
+      {/* Airport zone chip — shows when driver is inside an airport polygon (HM-21) */}
+      {rideState === 'idle' && activeAirportZone && (
+        <View style={{ position: 'absolute', bottom: 210, right: 16, zIndex: 55, flexDirection: 'row', alignItems: 'center', backgroundColor: '#0ea5e9', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 5, gap: 4 }}>
+          <Ionicons name="airplane" size={13} color="#FFFFFF" />
+          <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700' }}>{activeAirportZone.name || t('heatmap.airport.zone')}</Text>
+        </View>
+      )}
 
       {/* Surge multiplier chip — on map when active (HM-11) */}
       {rideState === 'idle' && surgeMultiplier > 1.0 && (

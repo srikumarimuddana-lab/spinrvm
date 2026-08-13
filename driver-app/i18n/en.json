@@ -532,6 +532,10 @@
         "hotspot": {
             "high": "High demand",
             "busy": "Busy area"
+        },
+        "airport": {
+            "zone": "Airport Zone",
+            "fee": "Airport fee applies"
         }
     }
 }

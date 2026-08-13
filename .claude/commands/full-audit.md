@@ -20,7 +20,7 @@ Note: not every quality dimension of the app is agent-shaped. Load/chaos testing
 
 If the diff is empty, say so and stop.
 
-## 2 · Dispatch all 20 reviewer agents, in parallel, unconditionally
+## 2 · Dispatch all 21 reviewer agents, in parallel, unconditionally
 
 Launch every agent below in a **single batch of parallel `Agent` tool calls** (all in one response — not sequential). Each agent gets the same scope and works independently; none of them talk to each other, and a quiet one is a real finding ("nothing wrong here"), not a skipped step.
 
@@ -42,6 +42,7 @@ Launch every agent below in a **single batch of parallel `Agent` tool calls** (a
 | `spinr-realtime-reliability-reviewer` | WS auth/heartbeat/rate-limit contract, cross-replica fan-out, background-loop replay-safety |
 | `spinr-migration-reviewer` | Filename ordering, append-only, RLS coverage, reversibility, indexing (only if `.sql` files in scope) |
 | `spinr-admin-rbac-reviewer` | Admin module-grant workflow — every sub-router gated, every `require_module()` string reachable via an actual grant path, sensitive surfaces held at `require_super_admin` not a module grant |
+| `spinr-cicd-infra-reviewer` | CI/CD workflow + Docker/Fly/Railway config correctness — health checks, secrets handling, required-check wiring, dual-deploy parity (only if `.github/workflows/*.yml`/Docker/Fly/Railway config in scope) |
 
 **Compliance & quality**
 | Agent | Independent angle |
@@ -56,7 +57,7 @@ Launch every agent below in a **single batch of parallel `Agent` tool calls** (a
 | `spinr-corporate-reporting-reviewer` | Cross-tenant data scoping in corporate reports/exports, tax-line-item export correctness |
 | `spinr-edge-case-reviewer` | Network-retry safety, app-lifecycle state reconciliation, client/server version skew, multi-device races, clock-trust — the failure modes that live *between* domains |
 
-That's 20 agents. Dispatch **all of them**, every run — do not pre-filter by path the way `/review` does. An agent finding nothing is itself useful signal ("audited, clean"); an agent that was never dispatched tells you nothing. The only legitimate skip: `spinr-migration-reviewer` and `spinr-ai-guardrail-reviewer` may report "not applicable — no matching files in scope" themselves rather than being excluded from dispatch, so the consolidated report shows they were checked.
+That's 21 agents. Dispatch **all of them**, every run — do not pre-filter by path the way `/review` does. An agent finding nothing is itself useful signal ("audited, clean"); an agent that was never dispatched tells you nothing. The only legitimate skip: `spinr-migration-reviewer` and `spinr-ai-guardrail-reviewer` may report "not applicable — no matching files in scope" themselves rather than being excluded from dispatch, so the consolidated report shows they were checked.
 
 ## 3 · Generic code-quality pass (inline, not delegated)
 
@@ -64,13 +65,13 @@ Same as `/review` step 3 — Python type hints/no bare `except`, TypeScript no `
 
 ## 4 · Consolidate and report
 
-Present all 20 verbatim, grouped by the four tables above, then the code-quality pass, then one rollup:
+Present all 21 verbatim, grouped by the four tables above, then the code-quality pass, then one rollup:
 
 ```
 SPINR FULL-FLEET AUDIT — <scope>
 ==================================
 Files: X changed | +Y -Z lines
-Agents dispatched: 20/20
+Agents dispatched: 21/21
 
 ── MONEY & BUSINESS LOGIC ──────────────────────
   spinr-money-auditor                <verdict>
@@ -87,6 +88,7 @@ Agents dispatched: 20/20
   spinr-realtime-reliability-reviewer <verdict>
   spinr-migration-reviewer            <verdict, or "n/a — no migrations in scope">
   spinr-admin-rbac-reviewer           <verdict, or "n/a — no admin routes/staff.py in scope">
+  spinr-cicd-infra-reviewer           <verdict, or "n/a — no CI/Docker/Fly/Railway config in scope">
   spinr-edge-case-reviewer            <verdict>
 
 ── COMPLIANCE & QUALITY ────────────────────────
@@ -106,7 +108,7 @@ Agents dispatched: 20/20
 VERDICT: SAFE TO MERGE / FIX BLOCKERS / NEEDS HUMAN REVIEW
 ```
 
-The rollup is the worst verdict across all 20 plus the inline pass. Never soften any single agent's verdict.
+The rollup is the worst verdict across all 21 plus the inline pass. Never soften any single agent's verdict.
 
 ## When to run
 

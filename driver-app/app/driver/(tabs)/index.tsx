@@ -19,6 +19,7 @@ import {
   DemandLegend,
   ForecastStrip,
   HeatmapCells,
+  HotspotChips,
 } from '../../../components/dashboard';
 import { useDemandHeatmap } from '../../../hooks/useDemandHeatmap';
 import { RideOfferPanel } from '../../../components/panels/RideOfferPanel';
@@ -289,6 +290,7 @@ function DriverDashboard() {
     layer: heatmapLayer,
     setLayer: setHeatmapLayer,
     forecast: heatmapForecast,
+    hotspots: heatmapHotspots,
   } = useDemandHeatmap(rideState, isOnline);
 
   const [countdown, setCountdownState] = useState(countdownSeconds);
@@ -797,6 +799,24 @@ function DriverDashboard() {
           <ForecastStrip
             forecast={heatmapForecast}
             visible={heatmapForecast.length > 0}
+          />
+        </View>
+      )}
+
+      {/* Hotspot chips — top-3 busiest cells (HM-22) */}
+      {rideState === 'idle' && heatmapIsV2 && heatmapHotspots.length > 0 && (
+        <View style={{ position: 'absolute', bottom: 200, left: 16, right: 16, zIndex: 55 }}>
+          <HotspotChips
+            hotspots={heatmapHotspots}
+            visible
+            onPress={(lat, lng) => {
+              mapRef.current?.animateToRegion({
+                latitude: lat,
+                longitude: lng,
+                latitudeDelta: 0.015,
+                longitudeDelta: 0.015,
+              }, 500);
+            }}
           />
         </View>
       )}

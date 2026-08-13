@@ -6,3 +6,4 @@ export { DriverTopBar } from './DriverTopBar';
 export { DemandLegend } from './DemandLegend';
 export { ForecastStrip } from './ForecastStrip';
 export { HeatmapCells } from './HeatmapCells';
+export { HotspotChips } from './HotspotChips';

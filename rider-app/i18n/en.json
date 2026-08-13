@@ -110,6 +110,10 @@
       "transfer_self": "You can't transfer funds to yourself.",
       "transfer_recipient_not_found": "We couldn't find that recipient. Please double-check and try again."
     },
+    "profile": {
+      "email_missing": "Add an email to your profile before verifying it.",
+      "email_verification_stale": "Your email address has changed since this code was sent. Request a new code."
+    },
     "system": {
       "internal": "Something went wrong on our end. Please try again.",
       "service_unavailable": "Spinr is temporarily unavailable. Please try again shortly.",

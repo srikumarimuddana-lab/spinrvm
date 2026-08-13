@@ -29,6 +29,7 @@ async def _apply(
     actor_user_id: Optional[str] = None,
     notes: Optional[str] = None,
     floor: Optional[Union[Decimal, float]] = None,
+    ride_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     params = {
         "p_wallet_id": wallet_id,
@@ -44,6 +45,24 @@ async def _apply(
         "p_notes": notes,
         "p_floor": str(floor) if floor is not None else None,
     }
+    # ride-scoped idempotency (migration 297) — a retried settle_corporate
+    # call for the same ride returns the original ledger pair untouched
+    # instead of debiting/crediting a second time. Only ride_debit and
+    # ride_debit_reversal pass this; grant/reset/rollback are not ride-scoped
+    # and never call _apply with one.
+    #
+    # p_ride_id is a NEW parameter on corporate_allowance_apply_delta
+    # (migration 297) that the pre-297 function signature does not accept at
+    # all — PostgREST resolves RPC calls by exact named-parameter match, so
+    # sending an unrecognized key makes EVERY call fail (function does not
+    # exist) against a Supabase instance that hasn't had migration 297
+    # applied yet. Only include the key when ride_id is actually set, so
+    # grant/reset/rollback (which never pass one) keep working regardless of
+    # migration/deploy ordering — see this migration's Change Impact Log
+    # ("mandatory deploy sequence") for why ride_debit/ride_debit_reversal
+    # still require the migration to land first.
+    if ride_id is not None:
+        params["p_ride_id"] = ride_id
 
     def _fn():
         return supabase.rpc("corporate_allowance_apply_delta", params).execute()
@@ -108,6 +127,7 @@ async def apply_ride_debit(
     actor_user_id: Optional[str] = None,
     notes: Optional[str] = None,
     floor: Optional[Union[Decimal, float]] = None,
+    ride_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Charge the allowance-covered portion of a ride.
 
@@ -115,6 +135,10 @@ async def apply_ride_debit(
     allowance is consumed). Ride settlement previously called apply_rollback for
     this, whose master delta is POSITIVE — so every allowance-covered ride
     credited the company instead of charging it. See migration 248.
+
+    Pass ``ride_id`` so a retried settle_corporate call for the same ride is
+    deduped by the RPC instead of debiting the allowance a second time
+    (migration 297).
     """
     if amount <= 0:
         raise ValueError("ride debit amount must be positive")
@@ -127,6 +151,7 @@ async def apply_ride_debit(
         actor_user_id=actor_user_id,
         notes=notes,
         floor=floor,
+        ride_id=ride_id,
     )
 
 
@@ -138,12 +163,17 @@ async def apply_ride_debit_reversal(
     amount: Union[Decimal, float],
     actor_user_id: Optional[str] = None,
     notes: Optional[str] = None,
+    ride_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Exact inverse of apply_ride_debit: master +amount, used -amount.
 
     Used to compensate the allowance charge when a later step of the same
     settlement fails. apply_grant must NOT be used for this — its master delta
     is negative, so it would charge the company a second time.
+
+    Pass ``ride_id`` for the same dedup reason as apply_ride_debit — note this
+    reversal uses ``type_="ride_debit_reversal"``, a distinct dedup key from
+    the debit it compensates, so a retried reversal is deduped independently.
     """
     if amount <= 0:
         raise ValueError("ride debit reversal amount must be positive")
@@ -155,6 +185,7 @@ async def apply_ride_debit_reversal(
         amount=amount,
         actor_user_id=actor_user_id,
         notes=notes,
+        ride_id=ride_id,
     )
 
 

@@ -29,7 +29,7 @@ boto3 is synchronous, so the SES call runs in a worker thread via
 
 import asyncio
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 try:
     from .pii import redact_email
@@ -51,6 +51,115 @@ async def _load_settings() -> Dict[str, Any]:
     except ImportError:
         from settings_loader import get_app_settings  # type: ignore
     return await get_app_settings()
+
+
+# ── Ops alerting: a deliberately DB-free send path ──────────────────────────
+# Provider credentials cached from the last successful settings load, so an
+# operational alert can be sent when the database is unavailable. Populated by
+# prime_ops_email_settings(); read by send_ops_alert_email().
+_ops_settings_cache: Dict[str, Any] = {}
+
+
+async def prime_ops_email_settings() -> bool:
+    """Cache provider credentials while the database is healthy.
+
+    Call this at startup (and opportunistically thereafter). It is the only
+    part of the ops-alert path that touches the DB, and it runs at a moment of
+    our choosing rather than mid-incident.
+
+    Returns True if credentials are now cached.
+    """
+    try:
+        settings = await _load_settings()
+    except Exception as exc:
+        logger.warning("[EMAIL] ops settings prime failed: %s", exc)
+        return False
+    if settings:
+        _ops_settings_cache.update(settings)
+    return bool(_ops_settings_cache)
+
+
+async def send_ops_alert_email(
+    *,
+    to: str,
+    subject: str,
+    text: str,
+    log_id: str = "ops",
+) -> bool:
+    """Send an operational alert **without touching the database**.
+
+    `send_transactional_email` performs three DB operations per send: it loads
+    `app_settings`, queries `email_suppressions`, and INSERTs `email_send_log`.
+    That is correct for a receipt and wrong for an alert whose entire purpose
+    may be to report that the database is saturated or unreachable — the alert
+    would queue on the very pool it is complaining about, and fail exactly when
+    it is most needed.
+
+    So this path deliberately drops all three:
+
+    * **Settings** come from the cache primed by `prime_ops_email_settings()`.
+      A cold cache falls back to one DB read, which is the best available
+      option on a first-ever alert and still better than three.
+    * **Suppression check skipped.** Recipients are internal ops addresses, not
+      users. Silently suppressing an infrastructure alert because the inbox
+      once bounced is a worse failure than sending to a dead address.
+    * **`email_send_log` insert skipped.** No audit row is written for ops
+      alerts. This is an accepted trade: the delivery outcome is logged to
+      stdout instead, and the log table exists for user-facing mail (PIPEDA
+      auditability), which this is not.
+
+    Returns True if either provider accepted the message.
+    """
+    if not to or not text:
+        logger.error("[EMAIL] ops alert skipped log_id=%s — missing recipient or body", log_id)
+        return False
+
+    settings = dict(_ops_settings_cache)
+    if not settings:
+        # Cold cache (e.g. first alert after a restart). One DB read is still
+        # far better than three, and if the DB is down this simply fails and we
+        # fall through to logging — the webhook channel is unaffected.
+        try:
+            settings = await _load_settings() or {}
+            if settings:
+                _ops_settings_cache.update(settings)
+        except Exception as exc:
+            logger.error(
+                "[EMAIL] ops alert log_id=%s — no cached credentials and settings "
+                "load failed (DB likely unavailable): %s",
+                log_id,
+                exc,
+            )
+            return False
+
+    message_id, _ = await _try_ses(
+        settings,
+        to=to,
+        subject=subject,
+        html=None,
+        text=text,
+        default_from=_DEFAULT_FROM,
+        log_id=log_id,
+    )
+    provider = "ses"
+    if message_id is None:
+        message_id, _ = await _try_resend(
+            settings,
+            to=to,
+            subject=subject,
+            html=None,
+            text=text,
+            default_from=_DEFAULT_FROM,
+            log_id=log_id,
+        )
+        provider = "resend"
+
+    if message_id is None:
+        logger.error("[EMAIL] ops alert log_id=%s — no provider accepted the message", log_id)
+        return False
+
+    logger.info("[EMAIL] ops alert sent log_id=%s provider=%s to=%s", log_id, provider, redact_email(to))
+    return True
 
 
 def _send_ses_sync(
@@ -180,12 +289,15 @@ async def _try_ses(
     attachments: Optional[list] = None,
     from_email: Optional[str] = None,
     extra_headers: Optional[Dict[str, str]] = None,
-) -> Optional[str]:
+) -> Tuple[Optional[str], Optional[str]]:
     """Attempt delivery via AWS SES.
 
-    Returns the SES MessageId (possibly "") on success, or None when SES is
-    unconfigured (so the caller falls through to the Resend guardrail) or a
-    runtime failure occurs (already logged here).
+    Returns ``(message_id, error_detail)``:
+    - Success: ``(message_id, None)`` — ``message_id`` may be ``""``.
+    - Unconfigured (so the caller falls through to the Resend guardrail):
+      ``(None, None)``.
+    - Runtime failure (already logged here): ``(None, error_detail)`` — a
+      PIPEDA-redacted string suitable for persisting to ``email_send_log``.
 
     ``from_email`` overrides the configured sender (e.g. the marketing sender);
     ``extra_headers`` adds headers such as ``List-Unsubscribe``.
@@ -193,7 +305,7 @@ async def _try_ses(
     access_key_id = (settings.get("aws_ses_access_key_id") or "").strip()
     secret_access_key = (settings.get("aws_ses_secret_access_key") or "").strip()
     if not access_key_id or not secret_access_key:
-        return None  # unconfigured — fall through to Resend
+        return None, None  # unconfigured — fall through to Resend
 
     region = (settings.get("aws_ses_region") or "").strip() or _DEFAULT_SES_REGION
     sender = (from_email or "").strip() or (settings.get("aws_ses_from_email") or "").strip() or default_from
@@ -219,7 +331,7 @@ async def _try_ses(
             subject,
             message_id,
         )
-        return message_id or ""
+        return message_id or "", None
     except Exception as e:
         # Do not swallow — SES failures must surface so the root cause is fixed.
         # PIPEDA: botocore's MessageRejected echoes the recipient address in its
@@ -234,7 +346,7 @@ async def _try_ses(
             subject,
             safe,
         )
-        return None
+        return None, safe
 
 
 async def _try_resend(
@@ -249,11 +361,16 @@ async def _try_resend(
     attachments: Optional[list] = None,
     from_email: Optional[str] = None,
     extra_headers: Optional[Dict[str, str]] = None,
-) -> Optional[str]:
+) -> Tuple[Optional[str], Optional[str]]:
     """Attempt delivery via Resend (the guardrail).
 
-    Returns the Resend message id (possibly "") on a 2xx, or None when Resend
-    is unconfigured or the call fails (already logged here).
+    Returns ``(message_id, error_detail)``:
+    - Success (2xx): ``(message_id, None)`` — ``message_id`` may be ``""``.
+    - Unconfigured: ``(None, None)``.
+    - Non-2xx / runtime failure (already logged here): ``(None,
+      error_detail)`` — a short, PIPEDA-safe string suitable for persisting
+      to ``email_send_log`` (never the response body — see the PIPEDA note
+      below on why the body itself is never logged or returned).
 
     ``from_email`` overrides the configured sender; ``extra_headers`` adds
     headers such as ``List-Unsubscribe``.
@@ -262,7 +379,7 @@ async def _try_resend(
 
     resend_key = (settings.get("resend_api_key") or "").strip()
     if not resend_key:
-        return None  # unconfigured
+        return None, None  # unconfigured
 
     sender = (from_email or "").strip() or (settings.get("resend_from_email") or "").strip() or default_from
     payload: Dict[str, Any] = {
@@ -305,9 +422,9 @@ async def _try_resend(
                 response.status_code,
             )
             try:
-                return (response.json() or {}).get("id", "") or ""
+                return (response.json() or {}).get("id", "") or "", None
             except Exception:
-                return ""
+                return "", None
         # PIPEDA: never log response.text — Resend's 4xx validation errors echo
         # the recipient address back in the body. Status code is enough to act.
         logger.error(
@@ -316,15 +433,15 @@ async def _try_resend(
             log_id,
             subject,
         )
-        return None
-    except Exception:
+        return None, f"Resend HTTP {response.status_code}"
+    except Exception as e:
         logger.error(
             "[EMAIL] Resend (guardrail) send failed log_id=%s subject=%r",
             log_id,
             subject,
             exc_info=True,
         )
-        return None
+        return None, str(e)
 
 
 def normalize_email(email: str) -> str:
@@ -363,10 +480,13 @@ async def _log_send(
     status: str,
     email_type: Optional[str],
     recipient_user_id: Optional[str],
+    error_detail: Optional[str] = None,
 ) -> None:
     """Best-effort append to email_send_log. Never raises (observability only).
 
-    PIPEDA: stores recipient_user_id, never the email address.
+    PIPEDA: stores recipient_user_id, never the email address. ``error_detail``
+    is the already-PIPEDA-redacted string _try_ses/_try_resend return on
+    failure — never the raw provider response body.
     """
     try:
         try:
@@ -381,6 +501,7 @@ async def _log_send(
                 "status": status,
                 "email_type": email_type,
                 "recipient_user_id": recipient_user_id,
+                "error_detail": error_detail,
             },
         )
     except Exception:
@@ -443,10 +564,25 @@ async def send_transactional_email(
         )
         return False
 
-    settings = await _load_settings()
+    # Fail-open, matching _is_suppressed just above: a transient app_settings
+    # read failure (DB hiccup) must degrade to "no provider configured" (the
+    # existing, already-handled "neither provider sent it" branch below), not
+    # propagate. Before this guard, send_transactional_email violated its own
+    # documented "returns bool, never raises" contract — every one of its 12
+    # call sites (including the corporate-portal email-OTP send) assumes that
+    # contract and calls it unwrapped, so a bare exception here surfaced as a
+    # raw 500 instead of a clean "could not send" response. See CLAUDE.md:
+    # "don't silently swallow errors" — this still logs loudly, it just
+    # doesn't crash the caller for a condition every other branch here
+    # already handles gracefully.
+    try:
+        settings = await _load_settings()
+    except Exception:
+        logger.error("[EMAIL] app_settings load failed log_id=%s — treating as unconfigured", log_id, exc_info=True)
+        settings = {}
 
     # 1. Primary: AWS SES.
-    ses_id = await _try_ses(
+    ses_id, ses_err = await _try_ses(
         settings,
         to=to,
         subject=subject,
@@ -469,7 +605,7 @@ async def send_transactional_email(
         return True
 
     # 2. Guardrail: Resend (fires when SES unconfigured OR SES failed).
-    resend_id = await _try_resend(
+    resend_id, resend_err = await _try_resend(
         settings,
         to=to,
         subject=subject,
@@ -491,11 +627,15 @@ async def send_transactional_email(
         )
         return True
 
-    # 3. Neither provider sent it.
+    # 3. Neither provider sent it. Prefer the SES error (the primary) when
+    # both attempted and failed; a None here just means that provider was
+    # never configured/attempted, not that it succeeded.
+    error_detail = ses_err or resend_err
     logger.warning(
-        "[EMAIL] no provider configured/succeeded log_id=%s subject=%r — not sent",
+        "[EMAIL] no provider configured/succeeded log_id=%s subject=%r err=%s — not sent",
         log_id,
         subject,
+        error_detail,
     )
     await _log_send(
         provider="none",
@@ -503,5 +643,6 @@ async def send_transactional_email(
         status="failed",
         email_type=email_type,
         recipient_user_id=recipient_user_id,
+        error_detail=error_detail,
     )
     return False

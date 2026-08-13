@@ -78,7 +78,8 @@ class TestCardCancellationFeeCharge:
             ) as charge_mock,
             patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=_driver())),
             patch("backend.routes.rides._deps.db.update_one", AsyncMock()),
-            patch("backend.routes.rides._deps.db.insert_one", AsyncMock()) as insert_one_mock,
+            patch("backend.routes.rides._deps.db.insert_one", AsyncMock()),
+            patch("backend.routes.rides._deps.record_ledger_event", AsyncMock(return_value="evt_1")) as ledger_mock,
             patch("backend.routes.rides._deps.db_supabase.update_ride", update_ride_mock),
             patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride_cancelled)),
             patch("backend.routes.rides._deps.db_supabase.set_driver_available", AsyncMock()),
@@ -114,16 +115,19 @@ class TestCardCancellationFeeCharge:
         # never chases the wrong PaymentIntent.
         assert written["cancel_fee_payment_intent_id"] == "pi_test_ok"
 
-        # A successful Stripe charge must leave a reconciliation trail — a
-        # financial_events row written BEFORE the ride update, mirroring
-        # settle_card's record_payment_event, so a crash between the two
-        # never loses track of money already collected.
-        ledger_calls = [c for c in insert_one_mock.call_args_list if c.args[0] == "financial_events"]
-        assert len(ledger_calls) == 1
-        ledger_row = ledger_calls[0].args[1]
-        assert ledger_row["ride_id"] == RIDE_ID
-        assert ledger_row["ref"] == "pi_test_ok"
-        assert ledger_row["delta_cents"] == 450
+        # A successful Stripe charge must leave a reconciliation trail via the
+        # durable ledger writer (retries + Sentry escalation live in
+        # ledger_service, covered by test_ledger_service.py). The fee split
+        # rides in metadata so the double-entry projection can decompose it.
+        ledger_mock.assert_awaited_once()
+        ledger_kwargs = ledger_mock.call_args.kwargs
+        assert ledger_kwargs["event_type"] == "stripe_charge"
+        assert ledger_kwargs["ride_id"] == RIDE_ID
+        assert ledger_kwargs["ref"] == "pi_test_ok"
+        assert ledger_kwargs["delta_cents"] == 450
+        assert ledger_kwargs["metadata"]["source"] == "cancellation_fee"
+        assert ledger_kwargs["metadata"]["fee_admin"] == "0.50"
+        assert ledger_kwargs["metadata"]["fee_driver"] == "4.00"
 
     async def test_declined_charge_marks_ride_failed(self):
         from backend.routes import rides as rides_mod
@@ -176,6 +180,55 @@ class TestCardCancellationFeeCharge:
         # blind payment_status scan reads.
         assert "cancel_fee_payment_intent_id" in written
         assert written["cancel_fee_payment_intent_id"] is None
+
+    async def test_lost_ledger_row_never_blocks_the_cancel(self):
+        """record_ledger_event returning None means the financial_events row
+        was lost after retries (escalated to Sentry inside ledger_service).
+        The cancel — and the paid status of a charge that DID succeed — must
+        be completely unaffected."""
+        from backend.routes import rides as rides_mod
+
+        ride_arrived = _ride(status="driver_arrived")
+        ride_cancelled = _ride(status="cancelled")
+        update_ride_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=ride_arrived)),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value=SETTINGS)),
+            patch("backend.routes.rides._deps.db_supabase.get_user_by_id", AsyncMock(return_value=_rider_user())),
+            patch(
+                "backend.routes.rides._deps.charge_ancillary_fee",
+                AsyncMock(
+                    return_value=ChargeOutcome(
+                        status="succeeded", payment_intent_id="pi_test_ok", charged_amount=Decimal("4.50")
+                    )
+                ),
+            ),
+            patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=_driver())),
+            patch("backend.routes.rides._deps.db.update_one", AsyncMock()),
+            patch("backend.routes.rides._deps.db.insert_one", AsyncMock()),
+            patch("backend.routes.rides._deps.record_ledger_event", AsyncMock(return_value=None)) as ledger_mock,
+            patch("backend.routes.rides._deps.db_supabase.update_ride", update_ride_mock),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride_cancelled)),
+            patch("backend.routes.rides._deps.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
+        ):
+            fn = getattr(rides_mod.cancel_ride_rider, "__wrapped__", rides_mod.cancel_ride_rider)
+            result = await fn(
+                request=MagicMock(),
+                ride_id=RIDE_ID,
+                reason="",
+                current_user={"id": RIDER_ID},
+            )
+
+        assert result["success"] is True
+        assert result["cancellation_fee"] == Decimal("4.50")
+        ledger_mock.assert_awaited_once()
+        written = update_ride_mock.call_args_list[0].args[1]
+        assert written["payment_status"] == "paid", "charge succeeded — ledger loss must not unmark it"
 
     async def test_requires_action_also_marks_ride_failed(self):
         """No 3DS retry flow exists for a cancellation fee, so requires_action

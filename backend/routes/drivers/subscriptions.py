@@ -1644,11 +1644,22 @@ async def check_expiring_subscriptions():
         # the expiry check per 6-hour window. Prevents N offline-kick push
         # notifications being sent to the same driver on multi-replica deploys.
         if _redis_set_nx is not None:
-            lock_acquired = await _redis_set_nx(
-                "spinr:subscription:expiry:lock",
-                f"{socket.gethostname()}:{os.getpid()}",
-                6 * 3600 + 300,  # 6h + 5 min grace
-            )
+            try:
+                lock_acquired = await _redis_set_nx(
+                    "spinr:subscription:expiry:lock",
+                    f"{socket.gethostname()}:{os.getpid()}",
+                    6 * 3600 + 300,  # 6h + 5 min grace
+                )
+            except Exception as _lock_err:
+                # redis_set_nx now raises on a real (Redis-configured-but-
+                # unavailable) error instead of silently falling back
+                # per-replica (2026-08-11 P1 fix). This lock only prevents
+                # redundant duplicate notifications, not an unsafe state —
+                # proceed with the tick (every replica may notify once, an
+                # over-notification, not an under-enforcement) rather than
+                # go dark on subscription expiry enforcement for 6h.
+                logger.error("[SUB-EXPIRY] leader lock unavailable (%s), proceeding without it", _lock_err)
+                lock_acquired = True
         else:
             lock_acquired = True  # no Redis in dev → run on all replicas
         if not lock_acquired:

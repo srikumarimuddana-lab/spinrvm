@@ -191,6 +191,27 @@ async def test_process_payment_wallet_redrive_lock_blocks_concurrent_retry():
     assert "retry already in progress" in exc.value.detail
 
 
+async def test_process_payment_wallet_redrive_lock_error_fails_closed_503():
+    """2026-08-11 P1 fix: redis_set_nx now raises on a real Redis error
+    instead of silently falling back per-replica. Unlike the background-
+    loop throttle locks, this one IS the exclusivity guard for a
+    concurrent re-drive of a stuck 'processing' wallet settlement -- must
+    fail CLOSED (503, ask the client to retry) rather than silently
+    proceeding as if exclusivity didn't matter on a money path."""
+    from backend.routes.rides.payments import ProcessPaymentRequest, process_payment
+
+    ride = _completed_ride(payment_method="wallet", payment_status="processing")
+    with (
+        patch("backend.routes.rides.payments._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.utils.redis_client.redis_set_nx", AsyncMock(side_effect=ConnectionError("redis down"))),
+    ):
+        req = ProcessPaymentRequest(tip_amount=Decimal("0"))
+        with pytest.raises(HTTPException) as exc:
+            await process_payment(RIDE_ID, req, current_user={"id": RIDER_ID})
+
+    assert exc.value.status_code == 503
+
+
 async def test_process_payment_wallet_redrive_success_logs_and_settles():
     """Wallet ride 'processing' -> lock acquired -> claim succeeds (marker
     no-op) -> settle_wallet succeeds -> lock released."""

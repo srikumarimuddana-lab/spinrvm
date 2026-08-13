@@ -47,6 +47,9 @@ export default function CancelReasonSheet({
 
   useEffect(() => {
     if (visible) {
+      // Resets local form state when the sheet opens; visible is the only
+      // dep, and neither selected nor note is a dep, so no loop.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelected(null);
       setNote('');
       sheetRef.current?.snapToIndex(0);

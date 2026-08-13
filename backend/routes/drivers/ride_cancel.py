@@ -28,6 +28,13 @@ from ._deps import (  # noqa: F401
 
 router = APIRouter()
 
+# Case-insensitive substring match against the free-text cancellation_reason
+# column. Matches the driver-app preset "Service animal — could not
+# accommodate" (driver-app/components/CancelReasonSheet.tsx's
+# DRIVER_CANCEL_REASONS) regardless of an appended free-text note. Keep in
+# sync with that string.
+_SERVICE_ANIMAL_CANCEL_MARKER = "service animal"
+
 
 @router.post("/rides/{ride_id}/cancel")
 async def cancel_ride(
@@ -132,6 +139,36 @@ async def cancel_ride(
             status_code=409,
             detail="Ride can no longer be cancelled (it has started or already ended)",
         )
+
+    # Saskatchewan Regulatory / Accessibility: service animal accommodation
+    # is mandatory and a driver refusal is a tracked terms violation subject
+    # to account review (CLAUDE.md). Driver cancels don't otherwise write an
+    # audit_logs row (only cancellation_reason free text on the ride itself),
+    # so this specific reason gets a dedicated audit event to make it
+    # queryable/reportable for trust & safety, plus an info log tagged
+    # domain=safety per the Sentry-tag conventions for correlation. IDs
+    # only — no PII. Automated account-review enforcement on repeated
+    # refusals is a separate, deferred follow-up.
+    if reason and _SERVICE_ANIMAL_CANCEL_MARKER in reason.lower():
+        logger.info(
+            "[CANCEL] driver reported inability to accommodate a service animal",
+            extra={"domain": "safety", "surface": "backend", "ride_id": ride_id, "driver_id": driver["id"]},
+        )
+        try:
+            await db_supabase.insert_one(
+                "audit_logs",
+                {
+                    "id": str(uuid.uuid4()),
+                    "action": "ride_cancel_service_animal_refusal",
+                    "entity_type": "ride",
+                    "entity_id": ride_id,
+                    "actor_id": driver["id"],
+                    "details": {"driver_id": driver["id"]},
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+        except Exception as _exc:
+            logger.error(f"Could not log service animal refusal to audit_logs: {_exc}", exc_info=True)
 
     # WS-8 (finding 11): release the booking-time pre-auth hold so the
     # rider's card isn't blocked for up to 7 days after a driver cancel.

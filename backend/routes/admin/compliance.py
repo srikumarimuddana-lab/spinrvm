@@ -87,6 +87,49 @@ def _resolve_date_window(date_from: Optional[str], date_to: Optional[str]) -> tu
     return start, end
 
 
+def _parse_service_area_ids(raw: Optional[str]) -> Optional[list[str]]:
+    """Comma-separated service_area ids from the Compliance page's
+    Service Area multi-select. None/blank means "every area" — the
+    pre-existing behaviour of every report here, so an admin who never
+    touches the control gets exactly the export they got before.
+
+    Same param spelling as routes/admin/subscriptions.py's
+    `service_area_ids`, so the two admin surfaces stay consistent.
+    Deduped and sorted, which matters beyond tidiness: this list feeds
+    the dual-approval gate's params dict, and an approval granted for
+    {A,B} must match a later request for {B,A} rather than forcing a
+    second approval for the same export."""
+    if not raw:
+        return None
+    ids = sorted({s.strip() for s in raw.split(",") if s.strip()})
+    return ids or None
+
+
+async def _service_area_scope_label(area_ids: Optional[list[str]]) -> str:
+    """Human-readable "which areas does this cover" line for the report
+    subtitle. Not cosmetic — these exports go to SGI, Knight Archer, the
+    CRA-facing tax file, and an airport authority, and a filtered report
+    that doesn't say it is filtered reads as a complete one. Every report
+    states its scope, including the unfiltered "All service areas" case,
+    so the absence of a filter is affirmative rather than inferred."""
+    if not area_ids:
+        return "All service areas"
+    try:
+        rows = await db_supabase.get_rows(
+            "service_areas", {"id": {"$in": area_ids}}, columns="id,name", limit=len(area_ids)
+        )
+    except Exception as e:
+        # The report itself is already correctly filtered by id at this
+        # point; only the label lookup failed. Surface it (CLAUDE.md: no
+        # silent DB-error swallowing) but don't fail the export over a
+        # cosmetic name — fall back to the ids so the scope is still
+        # stated on the document rather than silently omitted.
+        logger.error(f"Failed to resolve service area names for report subtitle: {e}", exc_info=True)
+        return f"Service areas: {', '.join(area_ids)}"
+    by_id = {a["id"]: (a.get("name") or a["id"]) for a in rows}
+    return "Service areas: " + ", ".join(by_id.get(a, a) for a in area_ids)
+
+
 def _capture_export_failure(report_type: str, error: Exception) -> None:
     """Explicit domain-tagged Sentry event for a compliance-export failure.
     Best-effort — never raises, no-op if SENTRY_DSN isn't configured. Same
@@ -200,17 +243,27 @@ def _check_truncated(fetched_count: int, report_type: str) -> bool:
     return True
 
 
-async def _gst_pst_rows(start_date: datetime, end_date: datetime) -> tuple[list[dict], Decimal, Decimal, Decimal, bool]:
+async def _gst_pst_rows(
+    start_date: datetime, end_date: datetime, service_area_ids: Optional[list[str]] = None
+) -> tuple[list[dict], Decimal, Decimal, Decimal, bool]:
     """Sum GST/PST/HST from completed rides' persisted tax_breakdown, grouped
     by calendar month. Reads what was actually charged (ride.tax_breakdown),
     the same field the rider receipt (utils/receipt_pdf.py) and email
-    receipt (utils/email_receipt.py) render from — never recomputed."""
+    receipt (utils/email_receipt.py) render from — never recomputed.
+
+    `service_area_ids` narrows to rides in those areas via the ride's own
+    `service_area_id` — the area the ride was actually dispatched in, which
+    is what a per-jurisdiction tax remittance needs, not the driver's home
+    area. None means every area (the pre-filter behaviour)."""
+    filters: dict = {
+        "status": "completed",
+        "ride_completed_at": {"$gte": start_date.isoformat(), "$lte": end_date.isoformat()},
+    }
+    if service_area_ids:
+        filters["service_area_id"] = {"$in": service_area_ids}
     rides = await db_supabase.get_rows(
         "rides",
-        {
-            "status": "completed",
-            "ride_completed_at": {"$gte": start_date.isoformat(), "$lte": end_date.isoformat()},
-        },
+        filters,
         columns="id,ride_completed_at,tax_breakdown,total_fare",
         limit=_ROW_LIMIT,
     )
@@ -378,6 +431,9 @@ async def get_gst_pst_remittance(
     request: Request,
     date_from: Optional[str] = Query(None, description="YYYY-MM-DD; defaults to the 1st of the current month"),
     date_to: Optional[str] = Query(None, description="YYYY-MM-DD; defaults to today"),
+    service_area_ids: Optional[str] = Query(
+        None, description="Comma-separated service_area ids; omit for every service area"
+    ),
     format: str = Query("pdf", pattern="^(pdf|csv|xlsx|docx)$"),
     admin: dict = Depends(get_admin_user),
 ):
@@ -386,9 +442,10 @@ async def get_gst_pst_remittance(
     regulator format — CRA remittance filing has no prescribed layout,
     unlike SGI's forms)."""
     start_date, end_date = _resolve_date_window(date_from, date_to)
+    area_ids = _parse_service_area_ids(service_area_ids)
 
     try:
-        rows, gst_total, pst_total, hst_total, truncated = await _gst_pst_rows(start_date, end_date)
+        rows, gst_total, pst_total, hst_total, truncated = await _gst_pst_rows(start_date, end_date, area_ids)
     except Exception as e:
         logger.error(f"Failed to build GST/PST remittance summary: {e}", exc_info=True)
         _capture_export_failure("gst_pst_remittance", e)
@@ -398,7 +455,7 @@ async def get_gst_pst_remittance(
     gate_response = await _check_export_gate(
         admin,
         "compliance.gst_pst_remittance",
-        {"date_from": date_from, "date_to": date_to, "format": format},
+        {"date_from": date_from, "date_to": date_to, "format": format, "service_area_ids": area_ids},
         len(rows),
     )
     if gate_response is not None:
@@ -410,7 +467,7 @@ async def get_gst_pst_remittance(
     # below), not crammed under the title next to the date range. Previously
     # this put a "GST: $x  PST: $y  HST: $z" line directly under the title,
     # which read as a stray calculation rather than part of the document.
-    subtitle = report_branding.period_label(start_date, end_date)
+    subtitle = f"{report_branding.period_label(start_date, end_date)} — {await _service_area_scope_label(area_ids)}"
     if truncated:
         subtitle += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rides; narrow the date range for a complete filing"
 
@@ -431,7 +488,12 @@ async def get_gst_pst_remittance(
     await _log_compliance_export(
         admin,
         "gst_pst_remittance",
-        {"format": format, "start": start_date.isoformat(), "end": end_date.isoformat()},
+        {
+            "format": format,
+            "start": start_date.isoformat(),
+            "end": end_date.isoformat(),
+            "service_area_ids": area_ids,
+        },
         month_row_count,
     )
     metrics.inc("spinr_admin_compliance_export_total", {"report_type": "gst_pst_remittance", "outcome": "success"})
@@ -470,7 +532,36 @@ _PERIOD_LABELS = {
 }
 
 
-async def _driver_roster_rows(status: Optional[str], include_deleted: bool = False) -> tuple[list[dict], bool]:
+async def _driver_ids_in_service_areas(area_ids: list[str]) -> tuple[list[str], bool]:
+    """Resolve every driver whose home service area is one of `area_ids`.
+
+    PostgREST cannot filter a child table by an embedded parent, so the
+    two-table lookup goes id-first per CLAUDE.md's query-filter rules:
+    resolve driver ids here, pass them to the child query as `$in`. The
+    caller must guard the empty result — an empty `$in` list would widen
+    back to every row, i.e. silently ignore the admin's filter.
+
+    Home area (drivers.service_area_id) is the scoping convention already
+    used by migrations 164/165 and 194's analytics/payout functions, so a
+    given area's numbers reconcile across those surfaces and this one.
+
+    Returns (ids, truncated). `truncated` propagates into the report's own
+    truncation marker: hitting the cap here means the driver set is short,
+    so the export under-reports rather than over-reports — exactly the
+    silent-cap case that must be visible on a billing document."""
+    rows = await db_supabase.get_rows(
+        "drivers",
+        {"service_area_id": {"$in": area_ids}},
+        columns="id",
+        limit=_ROW_LIMIT,
+    )
+    truncated = _check_truncated(len(rows), "service_area_driver_scope")
+    return sorted({r["id"] for r in rows if r.get("id")}), truncated
+
+
+async def _driver_roster_rows(
+    status: Optional[str], include_deleted: bool = False, service_area_ids: Optional[list[str]] = None
+) -> tuple[list[dict], bool]:
     """Pull every onboarded driver's license/status info. Deliberately
     covers every driver status, not just active — Knight Archer's original
     ask was for "driver onboarded, driver license, with all status", i.e.
@@ -490,12 +581,20 @@ async def _driver_roster_rows(status: Optional[str], include_deleted: bool = Fal
     `include_deleted=True` restores the old behavior for an operator auditing
     historical roster membership, and tags each row so the two are never
     confused on the page.
+
+    `service_area_ids` narrows to drivers whose home service area is one of
+    those ids; None means every area (the pre-filter behaviour).
     """
     filters: dict = {}
     if status:
         filters["status"] = status
     if not include_deleted:
         filters["deleted_at"] = None  # compiles to PostgREST `is.null`
+    if service_area_ids:
+        # Filtered directly on the drivers query — no id-resolution hop
+        # needed, unlike the insurance-billing reports, because the roster
+        # already reads `drivers` as its source table.
+        filters["service_area_id"] = {"$in": service_area_ids}
 
     drivers = await db_supabase.get_rows(
         "drivers",
@@ -539,6 +638,9 @@ async def get_driver_roster(
         False,
         description="Include drivers who deleted their account (excluded by default; they are not on the road)",
     ),
+    service_area_ids: Optional[str] = Query(
+        None, description="Comma-separated service_area ids; matches the driver's home area. Omit for every area"
+    ),
     format: str = Query("pdf", pattern="^(pdf|csv|xlsx|docx)$"),
     admin: dict = Depends(get_admin_user),
 ):
@@ -552,8 +654,10 @@ async def get_driver_roster(
     Drivers who deleted their account are excluded unless `include_deleted`
     is set — see `_driver_roster_rows` for why a status filter alone does not
     catch them."""
+    area_ids = _parse_service_area_ids(service_area_ids)
+
     try:
-        rows, truncated = await _driver_roster_rows(status, include_deleted=include_deleted)
+        rows, truncated = await _driver_roster_rows(status, include_deleted=include_deleted, service_area_ids=area_ids)
     except Exception as e:
         logger.error(f"Failed to build driver roster export: {e}", exc_info=True)
         _capture_export_failure("driver_roster", e)
@@ -568,13 +672,14 @@ async def get_driver_roster(
     # State the exclusion on the page itself — an insurer reading this needs to
     # know whether departed drivers are in or out of the count they are seeing.
     subtitle += " — including deleted accounts" if include_deleted else " — excluding deleted accounts"
+    subtitle += f" — {await _service_area_scope_label(area_ids)}"
     if truncated:
         subtitle += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rows; narrow with the status filter"
 
     await _log_compliance_export(
         admin,
         "driver_roster",
-        {"status": status, "format": format},
+        {"status": status, "format": format, "service_area_ids": area_ids},
         len(rows),
     )
     metrics.inc(
@@ -659,7 +764,7 @@ async def _t4a_filer_handoff_rows(year: int) -> tuple[list[dict], bool, int]:
             await db_supabase.get_rows(
                 "drivers",
                 {"id": {"$in": batch}},
-                columns="id,name,first_name,last_name,stripe_account_id,stripe_id_number_provided",
+                columns="id,name,first_name,last_name,stripe_account_id,sin,sin_collected_at",
                 limit=len(batch),
             )
         )
@@ -687,7 +792,18 @@ async def _t4a_filer_handoff_rows(year: int) -> tuple[list[dict], bool, int]:
                 "country": stripe_info.get("country") or "",
                 "total_trips": trips_by_driver.get(driver_id, 0),
                 "total_earnings": f"{earnings_by_driver[driver_id]:.2f}",
-                "sin_on_file_at_stripe": "Yes" if d.get("stripe_id_number_provided") else "No",
+                # OUR record, not Stripe's. `stripe_id_number_provided` used to
+                # fill this column, which was worse than useless for filing: it
+                # said Stripe held a number Stripe will never hand back
+                # (individual.id_number is write-only on Connect), so a "Yes"
+                # read as "ready to file" when nothing was.
+                "sin_on_file": "Yes" if d.get("sin") else "NO - CANNOT FILE",
+                # Deliberately NOT sin_last4. This export leaves Spinr for a
+                # third-party filer, and no part of the number is needed to
+                # answer the only question it asks: can this driver be filed?
+                # The full SIN comes later, per driver, through the audited
+                # reveal. Internal admin views may show last 4; this may not.
+                "sin_collected_at": d.get("sin_collected_at") or "",
             }
         )
     return rows, truncated, len(qualifying_ids)
@@ -707,7 +823,13 @@ async def get_t4a_filer_handoff(
     itself (see the module-section docstring above). Restricted to
     super_admin: unlike the other Compliance reports, this one surfaces
     verified legal name + mailing address in bulk, a meaningfully more
-    sensitive combination than aggregate tax totals."""
+    sensitive combination than aggregate tax totals.
+
+    Deliberately has no `service_area_ids` filter, unlike every other
+    report in this module: a T4A/Part XX.1 filing is per-driver and
+    Canada-wide, so an area-scoped slice of it is never a valid filing —
+    a driver working out of two areas would be split across two partial
+    exports and under-reported in each."""
     if (admin.get("role") or "").lower() != "super_admin":
         raise HTTPException(status_code=403, detail="t4a_filer_handoff requires super_admin role")
 
@@ -739,11 +861,14 @@ async def get_t4a_filer_handoff(
         "country",
         "total_trips",
         "total_earnings",
-        "sin_on_file_at_stripe",
+        "sin_on_file",
+        "sin_collected_at",
     ]
     subtitle = (
         f"Tax year {year} — {qualifying_count} driver(s) at or above the ${_T4A_THRESHOLD} CRA threshold. "
-        "SIN not included — retrieve per-driver via the audited reveal-sin admin endpoint when filing."
+        "Full SINs are deliberately absent — retrieve them per driver via the audited, "
+        "super_admin-only reveal-sin endpoint at filing time, so every disclosure is logged. "
+        "Any row marked 'NO - CANNOT FILE' has no SIN on record and must be chased before the deadline."
     )
     if truncated:
         subtitle += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rides; narrow the query"
@@ -791,7 +916,10 @@ _KNIGHT_ARCHER_RATE_PER_KM = Decimal("0.011")
 
 
 async def _insurance_billing_detail_rows(
-    start_date: datetime, end_date: datetime, rate_per_km: Decimal
+    start_date: datetime,
+    end_date: datetime,
+    rate_per_km: Decimal,
+    service_area_ids: Optional[list[str]] = None,
 ) -> tuple[list[dict], Decimal, bool, list[tuple[dict, list[dict]]]]:
     """Per-trip, per-phase insured-km detail: one row per (driver, ride,
     period) with driver identity, trip date, which phase (2 or 3), km
@@ -804,19 +932,38 @@ async def _insurance_billing_detail_rows(
     xlsx renderer uses `groups` (Excel's native collapsible row grouping —
     see report_branding.write_branded_grouped_table); PDF/CSV/Word use the
     flat `rows` and ignore `groups` entirely, since none of those formats
-    has a collapse mechanism."""
+    has a collapse mechanism.
+
+    `service_area_ids` scopes the report to drivers whose home area
+    (drivers.service_area_id) is one of those ids — driver-home scoping,
+    not per-ride, because these rows are billed against the driver's
+    policy and driver_period_distances has no service area of its own. A
+    driver who occasionally works outside their home area still bills
+    entirely to that home area here. None means every area."""
+    area_scope_truncated = False
+    distance_filters: dict = {
+        "period": {"$in": [2, 3]},
+        "started_at": {"$gte": start_date.isoformat(), "$lte": end_date.isoformat()},
+    }
+    if service_area_ids:
+        scoped_driver_ids, area_scope_truncated = await _driver_ids_in_service_areas(service_area_ids)
+        if not scoped_driver_ids:
+            # No drivers in the selected areas. Return empty rather than
+            # falling through with no driver filter — an empty `$in` would
+            # widen back to every driver and bill the insurer for areas
+            # the admin explicitly excluded.
+            return [], Decimal("0"), area_scope_truncated, []
+        distance_filters["driver_id"] = {"$in": scoped_driver_ids}
+
     distances = await db_supabase.get_rows(
         "driver_period_distances",
-        {
-            "period": {"$in": [2, 3]},
-            "started_at": {"$gte": start_date.isoformat(), "$lte": end_date.isoformat()},
-        },
+        distance_filters,
         columns="driver_id,ride_id,period,distance_km,started_at",
         order="started_at",
         desc=True,
         limit=_ROW_LIMIT,
     )
-    truncated = _check_truncated(len(distances), "insurance_billing_detail")
+    truncated = _check_truncated(len(distances), "insurance_billing_detail") or area_scope_truncated
     if not distances:
         return [], Decimal("0"), truncated, []
 
@@ -920,15 +1067,17 @@ async def _render_insurance_billing_report(
     date_from: Optional[str],
     date_to: Optional[str],
     format: str,
+    service_area_ids: Optional[str] = None,
 ) -> Response:
     """Shared handler body for the SGI and Knight Archer billing endpoints
     below — same query, same row shape, only the insurer label and
     contracted rate differ."""
     start_date, end_date = _resolve_date_window(date_from, date_to)
+    area_ids = _parse_service_area_ids(service_area_ids)
 
     try:
         rows, grand_total_km, truncated, groups = await _insurance_billing_detail_rows(
-            start_date, end_date, rate_per_km
+            start_date, end_date, rate_per_km, area_ids
         )
     except Exception as e:
         logger.error(f"Failed to build {insurer_label} insurance billing report: {e}", exc_info=True)
@@ -939,7 +1088,7 @@ async def _render_insurance_billing_report(
     gate_response = await _check_export_gate(
         admin,
         f"compliance.{report_type}",
-        {"date_from": date_from, "date_to": date_to, "format": format},
+        {"date_from": date_from, "date_to": date_to, "format": format, "service_area_ids": area_ids},
         len(rows),
     )
     if gate_response is not None:
@@ -958,12 +1107,21 @@ async def _render_insurance_billing_report(
     total_amount = (grand_total_km * rate_per_km).quantize(Decimal("0.01"))
     subtitle = [
         f"{start_date.date().isoformat()} to {end_date.date().isoformat()} — {insurer_label} — Periods 2+3 only",
+        # Scoping is by the driver's home area, so say so on the document:
+        # an insurer reconciling this against their own per-area policy
+        # count must not read it as "trips that happened in these areas".
+        await _service_area_scope_label(area_ids) + (" (by driver's home area)" if area_ids else ""),
         f"Total: {grand_total_km:.2f} km  ·  Rate: ${rate_per_km:.3f}/km  ·  Total billed: ${total_amount}",
     ]
     if truncated:
         subtitle[-1] += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rows; narrow the date range"
 
-    await _log_compliance_export(admin, report_type, {"date_from": date_from, "date_to": date_to}, len(rows))
+    await _log_compliance_export(
+        admin,
+        report_type,
+        {"date_from": date_from, "date_to": date_to, "service_area_ids": area_ids},
+        len(rows),
+    )
     metrics.inc("spinr_admin_compliance_export_total", {"report_type": report_type, "outcome": "success"})
 
     resp = _render_tabular_report(
@@ -986,6 +1144,9 @@ async def get_insurance_billing_sgi(
     request: Request,
     date_from: Optional[str] = Query(None, description="YYYY-MM-DD; defaults to the 1st of the current month"),
     date_to: Optional[str] = Query(None, description="YYYY-MM-DD; defaults to today"),
+    service_area_ids: Optional[str] = Query(
+        None, description="Comma-separated service_area ids; matches the driver's home area. Omit for every area"
+    ),
     format: str = Query("pdf", pattern="^(pdf|csv|xlsx|docx)$"),
     admin: dict = Depends(get_admin_user),
 ):
@@ -994,7 +1155,7 @@ async def get_insurance_billing_sgi(
     Spinr-branded; this is Spinr's own reconciliation report, not a fixed
     insurer form."""
     return await _render_insurance_billing_report(
-        admin, "SGI", _SGI_RATE_PER_KM, "insurance_billing_sgi", date_from, date_to, format
+        admin, "SGI", _SGI_RATE_PER_KM, "insurance_billing_sgi", date_from, date_to, format, service_area_ids
     )
 
 
@@ -1004,6 +1165,9 @@ async def get_insurance_billing_knight_archer(
     request: Request,
     date_from: Optional[str] = Query(None, description="YYYY-MM-DD; defaults to the 1st of the current month"),
     date_to: Optional[str] = Query(None, description="YYYY-MM-DD; defaults to today"),
+    service_area_ids: Optional[str] = Query(
+        None, description="Comma-separated service_area ids; matches the driver's home area. Omit for every area"
+    ),
     format: str = Query("pdf", pattern="^(pdf|csv|xlsx|docx)$"),
     admin: dict = Depends(get_admin_user),
 ):
@@ -1018,6 +1182,7 @@ async def get_insurance_billing_knight_archer(
         date_from,
         date_to,
         format,
+        service_area_ids,
     )
 
 
@@ -1046,13 +1211,22 @@ async def get_insurance_billing_knight_archer(
 # queryable today.
 
 
-async def _airport_trips_rows(start_date: datetime, end_date: datetime) -> tuple[list[dict], bool]:
+async def _airport_trips_rows(
+    start_date: datetime, end_date: datetime, service_area_ids: Optional[list[str]] = None
+) -> tuple[list[dict], bool]:
+    """`service_area_ids` narrows to rides in those areas via the ride's own
+    `service_area_id` — the right scoping here, since an airport authority
+    invoices for trips touching *its* airport, not for whichever area the
+    driver happens to live in. None means every area."""
+    filters: dict = {
+        "status": "completed",
+        "ride_completed_at": {"$gte": start_date.isoformat(), "$lte": end_date.isoformat()},
+    }
+    if service_area_ids:
+        filters["service_area_id"] = {"$in": service_area_ids}
     rides = await db_supabase.get_rows(
         "rides",
-        {
-            "status": "completed",
-            "ride_completed_at": {"$gte": start_date.isoformat(), "$lte": end_date.isoformat()},
-        },
+        filters,
         columns="id,rider_id,driver_id,service_area_id,pickup_address,dropoff_address,distance_km,ride_completed_at",
         limit=_ROW_LIMIT,
     )
@@ -1147,6 +1321,9 @@ async def get_airport_trips(
     request: Request,
     date_from: Optional[str] = Query(None, description="YYYY-MM-DD; defaults to the 1st of the current month"),
     date_to: Optional[str] = Query(None, description="YYYY-MM-DD; defaults to today"),
+    service_area_ids: Optional[str] = Query(
+        None, description="Comma-separated service_area ids; omit for every service area"
+    ),
     format: str = Query("pdf", pattern="^(pdf|csv|xlsx|docx)$"),
     admin: dict = Depends(get_admin_user),
 ):
@@ -1160,9 +1337,10 @@ async def get_airport_trips(
     authority's fixed form (see module docstring for why: general
     TNC-airport reporting convention, not a confirmed published spec)."""
     start_date, end_date = _resolve_date_window(date_from, date_to)
+    area_ids = _parse_service_area_ids(service_area_ids)
 
     try:
-        rows, truncated = await _airport_trips_rows(start_date, end_date)
+        rows, truncated = await _airport_trips_rows(start_date, end_date, area_ids)
     except Exception as e:
         logger.error(f"Failed to build airport trips report: {e}", exc_info=True)
         _capture_export_failure("airport_trips", e)
@@ -1172,7 +1350,7 @@ async def get_airport_trips(
     gate_response = await _check_export_gate(
         admin,
         "compliance.airport_trips",
-        {"date_from": date_from, "date_to": date_to, "format": format},
+        {"date_from": date_from, "date_to": date_to, "format": format, "service_area_ids": area_ids},
         len(rows),
     )
     if gate_response is not None:
@@ -1197,14 +1375,17 @@ async def get_airport_trips(
     pickup_count = sum(1 for r in rows if r["trip_type"] in ("Airport Pickup", "Both"))
     dropoff_count = sum(1 for r in rows if r["trip_type"] in ("Airport Dropoff", "Both"))
     subtitle = [
-        report_branding.period_label(start_date, end_date),
+        f"{report_branding.period_label(start_date, end_date)} — {await _service_area_scope_label(area_ids)}",
         f"{len(rows)} trip(s)  ·  {pickup_count} pickup(s)  ·  {dropoff_count} dropoff(s)  ·  {total_km:.2f} total km",
     ]
     if truncated:
         subtitle[-1] += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rides scanned; narrow the date range"
 
     await _log_compliance_export(
-        admin, "airport_trips", {"date_from": date_from, "date_to": date_to, "format": format}, len(rows)
+        admin,
+        "airport_trips",
+        {"date_from": date_from, "date_to": date_to, "format": format, "service_area_ids": area_ids},
+        len(rows),
     )
     metrics.inc("spinr_admin_compliance_export_total", {"report_type": "airport_trips", "outcome": "success"})
 

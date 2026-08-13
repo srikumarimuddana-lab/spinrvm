@@ -100,6 +100,7 @@ async def create_dispute(
                 "Dispute received",
                 "We've received your dispute and will review it within 1-2 business days.",
                 data={"type": "dispute_created", "dispute_id": str(dispute["id"])},
+                target_app="rider",
             )
         except Exception as notif_err:
             logger.debug(f"Dispute created notification failed: {notif_err}")
@@ -314,6 +315,7 @@ async def admin_resolve_dispute(
                     "dispute_id": str(dispute_id),
                     "resolution": req.resolution,
                 },
+                target_app="rider",
             )
         except Exception as notif_err:
             logger.debug(f"Dispute resolved notification failed: {notif_err}")

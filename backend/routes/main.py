@@ -1,6 +1,15 @@
 """
 Main router aggregator
-Import all route modules and combine them here
+
+NOT CURRENTLY MOUNTED. ``server.py`` builds its router set by importing each
+``routes.<module>`` directly (see the `from routes.<x> import api_router as
+..._router` block plus `v1_api_router.include_router(...)` calls) — it never
+imports `routes.main` or its `api_router`. The real liveness/readiness probe
+Railway and the post-deploy smoke test hit is `server.py`'s own `@app.get
+("/health")`, not the `health_check()` below. Keep this docstring accurate
+if that changes — the previous version claimed this endpoint was what
+Railway/the smoke test depend on, which was false and could mislead someone
+debugging a health-check incident into looking at the wrong file.
 """
 
 import logging
@@ -22,9 +31,13 @@ async def root():
 
 @api_router.get("/health")
 async def health_check(request: Request = None):
-    """Liveness + readiness probe used by Railway health checks and the
-    post-deploy smoke test. Verifies the DB connection is functional so
-    Railway will not route traffic to a replica that cannot serve requests.
+    """DB + background-loop liveness/readiness probe.
+
+    NOT the endpoint Railway health checks or the post-deploy smoke test
+    hit — this module isn't mounted (see the module docstring above); the
+    live one is `server.py`'s own `@app.get("/health")`. Kept here (and
+    kept correct) in case this router is ever wired in, but do not assume
+    it's exercised in production today.
 
     Also surfaces background loop liveness: any loop that has not ticked
     within 2× its expected interval appears as "stale" and flips the
@@ -40,9 +53,7 @@ async def health_check(request: Request = None):
         db_info = await db_supabase.ping()
         db_ok = True
     except Exception:  # noqa: S110
-        logger.warning(
-            "health_check: db_supabase absolute import failed", exc_info=True
-        )
+        logger.warning("health_check: db_supabase absolute import failed", exc_info=True)
     if not db_ok:
         try:
             from .. import db_supabase as _db  # noqa: PLC0415
@@ -84,11 +95,7 @@ async def health_check(request: Request = None):
 
     # ── Aggregate ────────────────────────────────────────────────────────────
     overall_healthy = db_ok and loop_status.get("healthy", True)
-    db_payload = (
-        {"status": "ok", **db_info}
-        if db_ok
-        else {"status": "error", "error": db_error, **db_info}
-    )
+    db_payload = {"status": "ok", **db_info} if db_ok else {"status": "error", "error": db_error, **db_info}
     payload = {
         "status": "healthy" if overall_healthy else "degraded",
         "db": db_payload,

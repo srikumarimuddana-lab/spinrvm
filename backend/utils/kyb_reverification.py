@@ -77,6 +77,14 @@ def kyb_reverify_cutoff_iso(threshold_months: int) -> str:
 
 async def run_kyb_reverification_tick() -> None:
     settings = await get_app_settings()
+    # Master kill switch (ACTION_ITEMS.md E5): pauses ALL automatic
+    # corporate-billing money movement for an incident, layered on top of
+    # (not replacing) this loop's own existing, more specific
+    # corporate_kyb_reverification_enabled toggle below -- same relationship
+    # as surge_engine_enabled to the per-area surge_source/surge_enabled
+    # controls.
+    if not settings.get("corporate_billing_enabled", True):
+        return
     if not settings.get("corporate_kyb_reverification_enabled", True):
         return
 

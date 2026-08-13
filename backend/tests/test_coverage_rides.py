@@ -705,7 +705,10 @@ async def test_add_tip_duplicate():
 async def test_record_payment_event_success():
     from backend.services.payment_service import record_payment_event
 
-    with patch("backend.services.payment_service.db_supabase") as mock_db:
+    # Patch target is ledger_service, not payment_service: record_payment_event
+    # delegates the INSERT to services/ledger_service.py, so that is the module
+    # whose db_supabase binding actually issues the write.
+    with patch("backend.services.ledger_service.db_supabase") as mock_db:
         mock_db.insert_one = AsyncMock()
         await record_payment_event(_RIDE_ID, _RIDER_ID, 1500, "pi_test")
     mock_db.insert_one.assert_called_once()
@@ -713,13 +716,23 @@ async def test_record_payment_event_success():
 
 @pytest.mark.anyio
 async def test_record_payment_event_swallows_error():
-    """Ledger write failure must not propagate."""
+    """Ledger write failure must not propagate — the charge already settled.
+
+    It is still retried and escalated (see test_ledger_service.py); what must
+    never happen is the exception reaching the settlement caller.
+    """
+    from backend.services import ledger_service
     from backend.services.payment_service import record_payment_event
 
-    with patch("backend.services.payment_service.db_supabase") as mock_db:
+    with (
+        patch("backend.services.ledger_service.db_supabase") as mock_db,
+        patch.object(ledger_service, "_INSERT_BACKOFF_SECONDS", (0, 0)),
+    ):
         mock_db.insert_one = AsyncMock(side_effect=Exception("DB error"))
         # Should not raise
         await record_payment_event(_RIDE_ID, _RIDER_ID, 1500, "pi_test")
+
+    assert mock_db.insert_one.await_count == 3, "a lost ledger row must be retried, not dropped"
 
 
 # ── process_payment ────────────────────────────────────────────────────────────
@@ -943,7 +956,7 @@ async def test_ride_search_timeout_cancels_searching_ride():
         patch("backend.routes.rides._deps.asyncio.sleep", new_callable=AsyncMock),
         patch("backend.routes.rides._deps.db_supabase") as mock_db,
         patch("backend.routes.rides._deps.manager") as mock_manager,
-        patch("backend.routes.rides._deps.send_push_notification", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.send_push_notification", new_callable=AsyncMock) as mock_push,
     ):
         mock_db.get_ride = AsyncMock(return_value=searching_ride)
         mock_db.update_ride = AsyncMock()
@@ -954,6 +967,11 @@ async def test_ride_search_timeout_cancels_searching_ride():
         await ride_search_timeout(_RIDE_ID, timeout_seconds=0)
 
     mock_db.update_ride.assert_called()
+    # N10 regression: the auto-cancel push goes to the rider, so it must pass
+    # target_app='rider' -- fails if target_app reverts to the omitted default.
+    mock_push.assert_awaited_once()
+    assert mock_push.await_args.args[0] == _RIDER_ID
+    assert mock_push.await_args.kwargs.get("target_app") == "rider"
 
 
 @pytest.mark.anyio
@@ -2167,6 +2185,48 @@ async def test_rider_start_ride_success():
     assert result["success"] is True
 
 
+@pytest.mark.anyio
+async def test_rider_start_ride_push_target_app_is_rider():
+    """N10 regression: the 'Ride Started' push is fired to the rider, so it
+    must pass target_app='rider' (features.send_push_notification uses this to
+    pick fcm_token_rider over the legacy fcm_token column). Fails if
+    target_app reverts to the omitted/None default."""
+    import asyncio
+
+    from backend.routes.rides import rider_start_ride
+
+    driver_user = {"id": _RIDER_ID, "is_driver": True}
+    driver_row = {"id": _DRIVER_ID}
+    ride = _ride(status="driver_arrived", driver_id=_DRIVER_ID)
+
+    push_calls: list = []
+
+    async def _push(uid, title, body, data=None, priority="normal", target_app=None):
+        push_calls.append({"uid": uid, "target_app": target_app})
+
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.manager") as mock_manager,
+        patch("backend.routes.rides._deps.send_push_notification", AsyncMock(side_effect=_push)),
+        patch("backend.routes.rides.lifecycle.send_live_activity_update", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.spawn", side_effect=lambda c: asyncio.ensure_future(c)),
+    ):
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_rows = AsyncMock(return_value=[driver_row])
+        mock_db.update_ride = AsyncMock()
+        mock_db.update_one = AsyncMock(return_value=ride)
+        mock_manager.send_personal_message = AsyncMock()
+        mock_manager.broadcast_ride_status = AsyncMock()
+        result = await rider_start_ride(ride_id=_RIDE_ID, current_user=driver_user)
+        await asyncio.sleep(0)  # let the spawned push task run
+
+    assert result["success"] is True
+    assert push_calls, "No push was fired"
+    assert push_calls[0]["uid"] == _RIDER_ID
+    assert push_calls[0]["target_app"] == "rider"
+
+
 # ── rider_complete_ride ───────────────────────────────────────────────────────
 
 
@@ -2221,6 +2281,47 @@ async def test_rider_complete_ride_success():
         mock_db.get_driver_by_id = AsyncMock(return_value={"id": _DRIVER_ID, "user_id": "driver-user-1"})
         result = await rider_complete_ride(ride_id=_RIDE_ID, current_user=_USER)
     assert result["status"] == "completed"
+
+
+@pytest.mark.anyio
+async def test_rider_complete_ride_also_pushes_rider_not_just_ws():
+    """N15/R19 (ACTION_ITEMS.md): rider-initiated completion must push the
+    rider, not just send a WS message -- a backgrounded app previously got
+    no confirmation at all that the ride it just ended was recorded, while
+    the driver-initiated completion path (drivers/ride_complete.py) already
+    pushed. Mirrors that path's title/body/data; priority="normal" and
+    target_app="rider" since this is informational, not dispatch/safety.
+    """
+    import asyncio
+
+    from backend.routes.rides import rider_complete_ride
+
+    ride = _ride(status="in_progress", rider_id=_RIDER_ID)
+    completed_ride = {**ride, "status": "completed", "grand_total": 25.50, "total_fare": 25.50}
+    push_mock = AsyncMock()
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.send_push_notification", push_mock),
+    ):
+        mock_db.get_ride = AsyncMock(side_effect=[ride, completed_ride])
+        mock_db.update_ride = AsyncMock()
+        mock_db.update_one = AsyncMock(return_value=ride)
+        mock_db.set_driver_available = AsyncMock()
+        mock_db.get_driver_by_id = AsyncMock(return_value={"id": _DRIVER_ID, "user_id": "driver-user-1"})
+        result = await rider_complete_ride(ride_id=_RIDE_ID, current_user=_USER)
+        # The push is fired via spawn() (fire-and-forget) -- yield once so
+        # the scheduled task actually runs before asserting on it.
+        await asyncio.sleep(0)
+
+    assert result["status"] == "completed"
+    push_mock.assert_awaited_once()
+    call = push_mock.await_args
+    assert call.args[0] == _RIDER_ID
+    assert call.kwargs.get("priority") == "normal"
+    assert call.kwargs.get("target_app") == "rider"
+    assert call.kwargs.get("data", {}).get("type") == "ride_completed"
+    assert call.kwargs.get("data", {}).get("ride_id") == str(_RIDE_ID)
 
 
 @pytest.mark.anyio
@@ -2539,17 +2640,18 @@ async def test_rider_complete_ride_quest_scheduling_failure_is_swallowed():
     ride = _ride(status="in_progress", rider_id=_RIDER_ID)
     completed_ride = {**ride, "status": "completed"}
 
-    # _deps.spawn is used for BOTH the live-activity update (unwrapped) and
-    # the quest-progress scheduling (wrapped in try/except) -- let the first
-    # call through and only fail the second. Each call still gets its
-    # coroutine argument closed (via close_spawned_coro) so it doesn't leak
-    # un-awaited and fail an unrelated test on GC (A8).
+    # _deps.spawn is used for the rider completion push (N15/R19, unwrapped),
+    # the live-activity update (unwrapped) and the quest-progress scheduling
+    # (wrapped in try/except) -- let the first two calls through and only
+    # fail the third. Each call still gets its coroutine argument closed
+    # (via close_spawned_coro) so it doesn't leak un-awaited and fail an
+    # unrelated test on GC (A8).
     _spawn_call_count = [0]
 
     def _spawn_first_ok_then_fails(coro, *_args, **_kwargs):
         close_spawned_coro(coro)
         _spawn_call_count[0] += 1
-        if _spawn_call_count[0] == 1:
+        if _spawn_call_count[0] <= 2:
             return None
         raise RuntimeError("event loop full")
 
@@ -3636,12 +3738,16 @@ async def test_get_share_trip_link_not_found():
 
 @pytest.mark.anyio
 async def test_get_share_trip_link_wrong_rider():
+    """A caller who is neither the ride's rider nor its assigned driver
+    (no drivers row at all) must stay 403 -- confirms B16's driver-allow
+    fix didn't loosen authorization for a true stranger."""
     from fastapi import HTTPException
 
     from backend.routes.rides import get_share_trip_link
 
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=_ride(rider_id="other"))
+        mock_db.get_rows = AsyncMock(return_value=[])
         with pytest.raises(HTTPException) as exc:
             await get_share_trip_link(ride_id=_RIDE_ID, current_user=_USER)
     assert exc.value.status_code == 403
@@ -3655,6 +3761,7 @@ async def test_get_share_trip_link_completed():
 
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=_ride(status="completed", rider_id=_RIDER_ID))
+        mock_db.get_rows = AsyncMock(return_value=[])
         with pytest.raises(HTTPException) as exc:
             await get_share_trip_link(ride_id=_RIDE_ID, current_user=_USER)
     assert exc.value.status_code == 400
@@ -3668,8 +3775,28 @@ async def test_get_share_trip_link_success_new_token():
         mock_db.get_ride = AsyncMock(
             return_value=_ride(status="in_progress", rider_id=_RIDER_ID, shared_trip_token=None)
         )
+        mock_db.get_rows = AsyncMock(return_value=[])
         mock_db.update_ride = AsyncMock()
         result = await get_share_trip_link(ride_id=_RIDE_ID, current_user=_USER)
+    assert result["success"] is True
+    assert "share_token" in result
+
+
+@pytest.mark.anyio
+async def test_get_share_trip_link_assigned_driver_success():
+    """B16: the ride's assigned driver (not the rider) must also be able to
+    fetch the share link, for the driver-app Safety overlay's 'Share Live
+    Trip Link' action."""
+    from backend.routes.rides import get_share_trip_link
+
+    driver_row = {"id": _DRIVER_ID, "user_id": "driver-user"}
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(
+            return_value=_ride(status="in_progress", rider_id=_RIDER_ID, driver_id=_DRIVER_ID, shared_trip_token=None)
+        )
+        mock_db.get_rows = AsyncMock(return_value=[driver_row])
+        mock_db.update_ride = AsyncMock()
+        result = await get_share_trip_link(ride_id=_RIDE_ID, current_user={"id": "driver-user"})
     assert result["success"] is True
     assert "share_token" in result
 

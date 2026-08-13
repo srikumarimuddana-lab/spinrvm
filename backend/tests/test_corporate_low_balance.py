@@ -158,3 +158,68 @@ async def test_skips_when_company_suspended():
 
     m_send.assert_not_awaited()
     m_mark.assert_not_awaited()
+
+
+# ── E5 kill switch: corporate_billing_enabled ──────────────────────────────
+#
+# get_app_settings is a lazy (function-local) dual import in this file --
+# see settle_corporate's identical pattern in services/payment_service.py
+# for why -- so these tests patch it at its source (settings_loader) rather
+# than as a corporate_low_balance module attribute.
+
+
+@pytest.mark.asyncio
+async def test_no_op_when_corporate_billing_disabled():
+    with (
+        patch(
+            "backend.settings_loader.get_app_settings",
+            AsyncMock(return_value={"corporate_billing_enabled": False}),
+        ),
+        patch(
+            "utils.corporate_low_balance.list_wallets_low_balance_no_autotopup",
+            AsyncMock(),
+        ) as m_list,
+    ):
+        from utils.corporate_low_balance import run_low_balance_tick
+
+        await run_low_balance_tick()
+
+    m_list.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_proceeds_when_corporate_billing_key_missing():
+    """A settings dict with no corporate_billing_enabled key (legacy row)
+    must still proceed -- the flag defaults to enabled."""
+    with (
+        patch("backend.settings_loader.get_app_settings", AsyncMock(return_value={})),
+        patch(
+            "utils.corporate_low_balance.list_wallets_low_balance_no_autotopup",
+            AsyncMock(return_value=[]),
+        ) as m_list,
+    ):
+        from utils.corporate_low_balance import run_low_balance_tick
+
+        await run_low_balance_tick()
+
+    m_list.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_fails_open_on_settings_lookup_error():
+    """A settings-read error must never itself block the tick."""
+    with (
+        patch(
+            "backend.settings_loader.get_app_settings",
+            AsyncMock(side_effect=RuntimeError("settings down")),
+        ),
+        patch(
+            "utils.corporate_low_balance.list_wallets_low_balance_no_autotopup",
+            AsyncMock(return_value=[]),
+        ) as m_list,
+    ):
+        from utils.corporate_low_balance import run_low_balance_tick
+
+        await run_low_balance_tick()
+
+    m_list.assert_awaited_once()

@@ -1,4 +1,4 @@
-"""Auto-reactivation loop for expired temporary rider suspensions."""
+"""Auto-reactivation loop for expired temporary rider/driver suspensions."""
 
 from unittest.mock import AsyncMock, patch
 
@@ -31,6 +31,7 @@ async def test_reactivate_tick_flips_expired_suspension():
         ),
         patch("db_supabase.update_one", new=AsyncMock(side_effect=_update)),
         patch("db_supabase.insert_one", new=AsyncMock(side_effect=_insert)),
+        patch("utils.suspension_reactivation.send_push_notification", new_callable=AsyncMock) as mock_push,
     ):
         await _reactivate_tick()
 
@@ -43,6 +44,12 @@ async def test_reactivate_tick_flips_expired_suspension():
     # Audited exactly once (only because the update returned a row).
     assert [t for t, _ in audited] == ["audit_logs"]
     assert audited[0][1]["details"]["new_status"] == "active"
+    # A successful reactivation also notifies the user, target_app=None
+    # (legacy fcm_token — see module docstring for why no per-role resolution).
+    mock_push.assert_awaited_once()
+    push_args, push_kwargs = mock_push.await_args
+    assert push_args[0] == "u1"
+    assert push_kwargs["target_app"] is None
 
 
 @pytest.mark.anyio
@@ -58,7 +65,10 @@ async def test_reactivate_tick_skips_audit_when_update_lost_race():
         # Another replica already flipped it → conditional update matches nothing.
         patch("db_supabase.update_one", new_callable=AsyncMock, return_value=None),
         patch("db_supabase.insert_one", new_callable=AsyncMock) as mock_insert,
+        patch("utils.suspension_reactivation.send_push_notification", new_callable=AsyncMock) as mock_push,
     ):
         await _reactivate_tick()
 
     mock_insert.assert_not_called()
+    # A race-loss must not notify either — mirrors the audit-log guard exactly.
+    mock_push.assert_not_called()

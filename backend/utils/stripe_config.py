@@ -37,3 +37,32 @@ def configure_stripe() -> None:
         STRIPE_MAX_RETRIES,
         STRIPE_API_VERSION,
     )
+
+
+def stripe_object_to_dict(obj) -> dict:
+    """Convert a StripeObject to a plain dict, safely across SDK versions.
+
+    NEVER use ``dict(obj)`` on a Stripe object. On SDK builds where
+    StripeObject is not a Mapping (it exposes ``__getitem__`` over an internal
+    ``_data`` without ``keys()``), ``dict()`` falls back to Python's integer-
+    index sequence protocol and dies with ``KeyError: 0`` — observed in
+    production on ``stripe.Account.list(...).auto_paging_iter()``. The
+    documented ``to_dict_recursive`` accessor (private spelling on some
+    versions) is what the battle-tested retrieve path in
+    ``services/stripe_mapping_import_service`` already relies on; this makes
+    that logic reusable everywhere we page Stripe listings.
+    """
+    if isinstance(obj, dict):
+        return dict(obj)
+    for attr in ("to_dict_recursive", "_to_dict_recursive", "to_dict"):
+        fn = getattr(obj, attr, None)
+        if callable(fn):
+            try:
+                out = fn()
+                if isinstance(out, dict):
+                    return out
+            except Exception:  # noqa: S112 - fall through to the next accessor
+                continue
+    # Last resort for mapping-like objects; may still raise for exotic shapes,
+    # which is preferable to silently returning an empty dict for money data.
+    return dict(obj)

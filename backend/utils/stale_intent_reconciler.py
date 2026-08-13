@@ -24,8 +24,11 @@ state). Safeguards against that failure class:
     never flipped, even with a stale row (e.g. location permission revoked
     while the WebSocket still heartbeats).
   * **Active-ride guard.** Drivers linked to an active ride are skipped —
-    a Period 0 write while a ride is open would corrupt the insurance log;
-    stuck rides are the stuck-ride sweeper's job.
+    a Period 0 write while a ride is open would corrupt the insurance log.
+    A stuck `searching` ride is the stuck-ride sweeper's job
+    (`utils/stuck_ride_sweeper.py`); it does NOT cover any other status —
+    a stuck `in_progress` ride has no automated recovery today, only alerting
+    via `utils/stale_in_progress_ride_alerter.py`.
   * **Atomic claim.** The flip filters on ``is_online = true``; zero rows
     back means another replica (or the driver) won the race.
 

@@ -27,6 +27,7 @@ NOT used here — a statement is a fixed company document, not a live UI.
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
@@ -34,8 +35,15 @@ from zoneinfo import ZoneInfo
 
 try:
     from .. import db_supabase
+    from .legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts
 except ImportError:  # pragma: no cover
     import db_supabase  # type: ignore
+    from utils.legacy_rides import (  # type: ignore
+        EXCLUDE_LEGACY_RIDES,
+        drop_legacy_offset_payouts,
+    )
+
+logger = logging.getLogger(__name__)
 
 STATEMENT_TZ = ZoneInfo("America/Regina")
 
@@ -138,7 +146,10 @@ _PAYOUT_TYPE_LABELS = {
     "standard": "Standard payout",
     "instant": "Instant payout",
     "legacy_import": "Settled in previous app",
-    "stripe_sync": "Payout (synced from Stripe history)",
+    # Driver-facing wording: name the era, not our sync mechanism —
+    # "synced from Stripe history" is internal jargon that reads as noise
+    # on a statement.
+    "stripe_sync": "Previous app payout",
 }
 
 
@@ -187,10 +198,21 @@ async def _build(
     driver_id = driver["id"]
     window = {"$gte": win_gte, "$lt": win_lt}
 
+    # Legacy-imported rides are excluded here, and their 'legacy_import' offset
+    # payout is dropped below. Keeping either would break this statement badly:
+    # an imported ride keeps its ORIGINAL completion date while the offset is
+    # stamped with the import date, so the two halves land in different
+    # periods — one statement showing inflated earnings with no offset, another
+    # showing a large payout with no earnings. See utils/legacy_rides.
     rides = (
         await db_supabase.get_rows(
             "rides",
-            {"driver_id": driver_id, "status": "completed", "ride_completed_at": window},
+            {
+                "driver_id": driver_id,
+                "status": "completed",
+                "ride_completed_at": window,
+                **EXCLUDE_LEGACY_RIDES,
+            },
             limit=10000,
         )
         or []
@@ -211,7 +233,7 @@ async def _build(
         )
         or []
     )
-    payout_rows = (
+    payout_rows = drop_legacy_offset_payouts(
         await db_supabase.get_rows(
             "payouts",
             {"driver_id": driver_id, "created_at": window},
@@ -241,6 +263,13 @@ async def _build(
 
     payouts_out: list[dict] = []
     payouts_total = _ZERO
+    # One era per number: money the previous app paid (stripe_sync mirrors of
+    # real Stripe Transfers) is summed apart from Spinr payouts. Blending them
+    # produced statements reading "$0.00 earned · $30.77 paid out" with
+    # nothing explaining that the $30.77 predates Spinr — which reads as a
+    # bookkeeping error, not as history.
+    payouts_spinr = _ZERO
+    payouts_previous_app = _ZERO
     for p in sorted(payout_rows, key=lambda x: x.get("created_at") or ""):
         status = str(p.get("status") or "").lower()
         amount = _d(p.get("amount"))
@@ -248,6 +277,10 @@ async def _build(
         net = _d(p.get("net_amount")) if p.get("net_amount") is not None else amount - fee
         if status not in ("reversed", "failed"):
             payouts_total += amount
+            if p.get("payout_type") == "stripe_sync":
+                payouts_previous_app += amount
+            else:
+                payouts_spinr += amount
         payouts_out.append(
             {
                 "date": (p.get("created_at") or "")[:10],
@@ -263,9 +296,25 @@ async def _build(
     distance_km = float(sum((_d(r.get("distance_km")) for r in rides), _ZERO))
     duration_minutes = float(sum((_d(r.get("duration_minutes")) for r in rides), _ZERO))
 
+    # Company identity from app_settings — the SAME source outgoing emails
+    # use (utils/company_details). Resolved here because this builder is
+    # async and PDF rendering is not; without it the PDF footer kept the
+    # shipped constants forever, so a rebrand showed up in emails but never
+    # on the documents drivers download. Never fatal: a settings failure
+    # falls back to the constants rather than blocking a statement.
+    company_lines: tuple[str, str] | None = None
+    try:
+        from .company_details import load_company_details  # local: avoids a cycle at import time
+
+        details = await load_company_details()
+        company_lines = (details.identity_line, details.contact_line)
+    except Exception:
+        logger.warning("statement: company details unavailable; using shipped branding", exc_info=True)
+
     return {
         "driver_id": driver_id,
         "driver_name": driver_name or driver.get("name") or "Driver",
+        "company_lines": company_lines,
         "period_type": period_type,
         "period_start": start_d.isoformat(),
         "period_end": end_d.isoformat(),
@@ -284,5 +333,29 @@ async def _build(
         },
         "payouts": payouts_out,
         "payouts_total": _money(payouts_total),
+        "payouts_spinr_total": _money(payouts_spinr),
+        "payouts_previous_app_total": _money(payouts_previous_app),
+        # Business decision 2026-08-13 (docs/change-log/2026-08-13-blended-
+        # lifetime-earnings.md): previous-app payouts are now a PERMANENT
+        # part of every driver-facing surface, statements included — no more
+        # sunset. This used to read utils.legacy_rides.
+        # previous_app_history_visible() (PREVIOUS_APP_VISIBLE_UNTIL,
+        # 2026-08-31); that helper is unchanged and still correct, it's just
+        # no longer called here. Key name kept as `previous_app_visible`
+        # (always True now) rather than removed — utils/driver_statement_pdf.py
+        # branches on it, and always-True is a strict subset of what it
+        # already handles correctly.
+        "previous_app_visible": True,
+        # True when the ONLY money in the period is previous-app transfers:
+        # the PDF renders an explainer instead of leaving "$0.00 earned"
+        # sitting unexplained beside a real paid-out figure.
+        "previous_app_only": bool(
+            payouts_previous_app > _ZERO
+            and payouts_spinr == _ZERO
+            and not rides
+            and not bonuses
+            and not incentive_claims
+            and cancel_fees == _ZERO
+        ),
         "has_activity": bool(rides or bonuses or incentive_claims or payouts_out or cancel_fees != _ZERO),
     }

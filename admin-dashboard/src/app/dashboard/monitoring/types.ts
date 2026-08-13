@@ -89,8 +89,23 @@ export interface MonitoringFilters {
   showOnline: boolean;
   showOffline: boolean;
   showRides: boolean;
+  showDemand: boolean;
   serviceAreaId: string | null;
   vehicleTypeId: string | null;
+}
+
+export interface AreaDemandSupply {
+  area_id: string;
+  name: string;
+  demand_count: number;
+  supply_count: number;
+  ratio: number;
+  multiplier: number;
+  surge_active: boolean;
+  /** Per-area surge master toggle. The backend sends it; dropping it made
+   *  areas with surge deliberately off look like surge candidates. */
+  surge_enabled: boolean;
+  source: string;
 }
 
 export type SelectedItem =

@@ -149,6 +149,40 @@ def _is_unique_violation(exc: Exception) -> bool:
     return "unique" in s or "duplicate" in s or "23505" in s
 
 
+# notification_preferences row is absent for a driver who never opened the
+# app's notification settings screen — matches routes/notifications.py's
+# GET-defaults default of True (absence means "not yet configured", not
+# "opted out").
+_DEFAULT_EARNINGS_SUMMARY_ENABLED = True
+
+
+async def _earnings_summary_enabled(user_id: str | None) -> bool:
+    """Read notification_preferences.earnings_summary for a driver.
+
+    Fails **open** (same posture as ``push_enabled`` in
+    ``features.send_push_notification``): a prefs-table hiccup must not
+    silently stop a driver's statement email — this is a scheduled,
+    once-per-period send, not a high-frequency channel where a stuck-open
+    gate would spam anyone.
+    """
+    if not user_id:
+        return _DEFAULT_EARNINGS_SUMMARY_ENABLED
+    try:
+        rows = await db_supabase.get_rows("notification_preferences", {"user_id": user_id}, limit=1)
+    except Exception:
+        logger.error(
+            "driver_statement_job: earnings_summary preference lookup failed for user %s — "
+            "sending anyway (deliberate fail-open)",
+            user_id,
+            exc_info=True,
+        )
+        return _DEFAULT_EARNINGS_SUMMARY_ENABLED
+    if not rows:
+        return _DEFAULT_EARNINGS_SUMMARY_ENABLED
+    value = rows[0].get("earnings_summary")
+    return _DEFAULT_EARNINGS_SUMMARY_ENABLED if value is None else bool(value)
+
+
 async def driver_statement_loop() -> None:
     """Entry point spawned by lifespan.py. Runs indefinitely."""
     while True:
@@ -284,10 +318,28 @@ async def _process_driver(driver: dict, period_type: str, start_d: date) -> None
             or "Driver"
         )
         stmt = await build_statement(driver, period_type, start_d, driver_name=name)
-        totals = {"earnings": stmt["earnings"], "payouts_total": stmt["payouts_total"], "trips": stmt["trips"]}
+        totals = {
+            "earnings": stmt["earnings"],
+            "payouts_total": stmt["payouts_total"],
+            # Era split, so the admin statements list can label previous-app
+            # money instead of blending it into one "paid out" figure.
+            "payouts_spinr_total": stmt.get("payouts_spinr_total"),
+            "payouts_previous_app_total": stmt.get("payouts_previous_app_total"),
+            "trips": stmt["trips"],
+        }
 
         if not stmt["has_activity"]:
             await _finish("skipped_inactive", {"totals": totals})
+            return
+
+        # ACTION_ITEMS.md N9: notification_preferences.earnings_summary was
+        # persisted + surfaced in the driver-app settings toggle but read by
+        # nothing. Checked after the activity gate (so an inactive driver's
+        # skip reason stays "no activity", not "opted out" — matches what
+        # actually determined the outcome) and before the PDF/email work, so
+        # an opted-out driver doesn't pay the render cost either.
+        if not await _earnings_summary_enabled(driver.get("user_id")):
+            await _finish("skipped_opted_out", {"totals": totals})
             return
 
         email = ((user or {}).get("email") or "").strip()

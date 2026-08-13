@@ -76,6 +76,7 @@ async def test_process_driver_sends_email_and_marks_sent():
         db.insert_one = AsyncMock()
         db.update_one = AsyncMock()
         db.get_user_by_id = AsyncMock(return_value=USER)
+        db.get_rows = AsyncMock(return_value=[])  # no prefs row -> earnings_summary defaults True
         await job._process_driver(DRIVER, "weekly", date(2026, 7, 20))
 
     claim = db.insert_one.call_args.args[1]
@@ -150,6 +151,7 @@ async def test_process_driver_no_email_recorded():
         db.insert_one = AsyncMock()
         db.update_one = AsyncMock()
         db.get_user_by_id = AsyncMock(return_value={**USER, "email": ""})
+        db.get_rows = AsyncMock(return_value=[])
         await job._process_driver(DRIVER, "weekly", date(2026, 7, 20))
 
     send.assert_not_awaited()
@@ -167,11 +169,70 @@ async def test_process_driver_send_failure_marks_failed():
         db.insert_one = AsyncMock()
         db.update_one = AsyncMock()
         db.get_user_by_id = AsyncMock(return_value=USER)
+        db.get_rows = AsyncMock(return_value=[])
         await job._process_driver(DRIVER, "weekly", date(2026, 7, 20))
 
     final = db.update_one.call_args.args[2]
     assert final["status"] == "failed"
     assert "SES down" in final["failure_reason"]
+
+
+@pytest.mark.asyncio
+async def test_process_driver_opted_out_skips_email_but_still_claims():
+    """ACTION_ITEMS.md N9: notification_preferences.earnings_summary=false
+    must stop the email — the toggle previously did nothing."""
+    with (
+        patch.object(job, "db_supabase") as db,
+        patch.object(job, "build_statement", AsyncMock(return_value=_stmt())),
+        patch.object(job, "generate_driver_statement_pdf") as gen_pdf,
+        patch.object(job, "send_email", AsyncMock()) as send,
+    ):
+        db.insert_one = AsyncMock()
+        db.update_one = AsyncMock()
+        db.get_user_by_id = AsyncMock(return_value=USER)
+        db.get_rows = AsyncMock(return_value=[{"user_id": "u1", "earnings_summary": False}])
+        await job._process_driver(DRIVER, "weekly", date(2026, 7, 20))
+
+    send.assert_not_awaited()
+    gen_pdf.assert_not_called()  # opted-out driver shouldn't pay the render cost either
+    final = db.update_one.call_args.args[2]
+    assert final["status"] == "skipped_opted_out"
+    assert final["totals"]["payouts_total"] == "60.00"  # totals still recorded for the admin listing
+
+
+@pytest.mark.asyncio
+async def test_process_driver_opted_in_still_sends_email():
+    """earnings_summary=true (or an absent prefs row, the default) must not
+    regress the existing send path."""
+    with (
+        patch.object(job, "db_supabase") as db,
+        patch.object(job, "build_statement", AsyncMock(return_value=_stmt())),
+        patch.object(job, "generate_driver_statement_pdf", return_value=b"%PDF-fake"),
+        patch.object(job, "send_email", AsyncMock(return_value=True)) as send,
+    ):
+        db.insert_one = AsyncMock()
+        db.update_one = AsyncMock()
+        db.get_user_by_id = AsyncMock(return_value=USER)
+        db.get_rows = AsyncMock(return_value=[{"user_id": "u1", "earnings_summary": True}])
+        await job._process_driver(DRIVER, "weekly", date(2026, 7, 20))
+
+    send.assert_awaited_once()
+    assert db.update_one.call_args.args[2]["status"] == "sent"
+
+
+@pytest.mark.asyncio
+async def test_earnings_summary_enabled_fails_open_on_lookup_error():
+    """A prefs-table hiccup must not silently stop statement emails."""
+    with patch.object(job, "db_supabase") as db:
+        db.get_rows = AsyncMock(side_effect=RuntimeError("db down"))
+        assert await job._earnings_summary_enabled("u1") is True
+
+
+@pytest.mark.asyncio
+async def test_earnings_summary_enabled_defaults_true_with_no_prefs_row():
+    with patch.object(job, "db_supabase") as db:
+        db.get_rows = AsyncMock(return_value=[])
+        assert await job._earnings_summary_enabled("u1") is True
 
 
 @pytest.mark.asyncio

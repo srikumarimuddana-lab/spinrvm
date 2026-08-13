@@ -64,8 +64,15 @@ export const adminSearchUsers = (opts: {
         method: "POST",
         body: JSON.stringify(opts),
     });
-export const getDriverRides = (id: string) =>
-    request<any>(`/api/admin/drivers/${id}/rides`);
+// `limit` defaults to the backend's own max (500, routes/admin/drivers.py)
+// rather than its 50-row default -- the Rides tab's own filter/sort/paginate
+// is entirely client-side over whatever this call fetches, so a driver with
+// 51+ rides used to silently never show rows past the old default (A30
+// Finding 2, docs/audit/2026-08-13-migrated-data-visibility-audit.md). The
+// response's `total_count` (added alongside this) still tells the caller
+// when even 500 wasn't enough.
+export const getDriverRides = (id: string, limit = 500) =>
+    request<any>(`/api/admin/drivers/${id}/rides?limit=${limit}`);
 
 export const getDriverDailyActivity = (id: string, date?: string) =>
     request<any>(`/api/admin/drivers/${id}/daily-activity${date ? `?date=${date}` : ""}`);
@@ -87,6 +94,16 @@ export interface DriverLiveStats {
     /** True when a licence number exists on the row (even if it could not be
      * decrypted), so the panel can distinguish "none on file" from "unreadable". */
     license_number_on_file: boolean;
+    /** Last 4 of the driver's SIN. Stored in the clear precisely so T4A
+     * readiness is visible without decrypting anything — unlike the licence,
+     * this needs no round-trip through Vault. */
+    sin_last4: string | null;
+    /** True when Spinr holds an encrypted SIN. This is the T4A gate: without
+     * it a slip cannot be filed, and it is NOT the same as Stripe's
+     * `id_number_provided` above, which reports a number Stripe never returns. */
+    sin_on_file: boolean;
+    /** When the driver supplied it. */
+    sin_collected_at: string | null;
 }
 export const getDriverLiveStats = (id: string) =>
     request<DriverLiveStats>(`/api/admin/drivers/${id}/live-stats`);
@@ -283,13 +300,22 @@ export const getReferralPairs = (params: { source?: "driver" | "rider"; limit?: 
 export interface DriverPayoutSummary {
     summary: {
         lifetime_earnings: number;
+        lifetime_ride_earnings?: number;
+        lifetime_bonuses?: number;
         lifetime_tips: number;
         ytd_earnings: number;
         total_paid_out: number;
+        /** Completed payout_type='stripe_sync' rows — legacy-app money paid
+         * via Stripe Transfers, shown separately because it must not deduct
+         * from pending_balance (the earnings it cashed out predate this DB). */
+        legacy_stripe_transfers?: number;
         pending_in_flight: number;
         pending_balance: number;
         on_hold: number;
         rides_count: number;
+        /** Completed rides imported from the previous app, excluded from
+         *  lifetime_earnings. -1 means the count was unavailable. */
+        imported_rides_excluded?: number;
         active_days_30d: number;
         last_payout: {
             id: string;
@@ -319,6 +345,8 @@ export interface DriverPayoutSummary {
         id: string;
         amount: number;
         status: "pending" | "processing" | "completed" | "failed" | string;
+        payout_type?: string | null;
+        stripe_transfer_id?: string | null;
         stripe_payout_id: string | null;
         bank_name: string | null;
         account_last4: string | null;
@@ -326,9 +354,16 @@ export interface DriverPayoutSummary {
         created_at: string;
         processed_at: string | null;
     }>;
+    bonuses?: Array<{
+        id: string;
+        amount: number;
+        kind: string;
+        description: string | null;
+        created_at: string;
+    }>;
     // Stripe Connect KYC + tax identity mirror (migration 92).
-    // SIN itself is never exposed here — only id_number_provided and
-    // last4. Use /reveal-sin for the one-shot retrieval.
+    // SIN itself is never exposed here — only on-file flags and last4.
+    // Use /reveal-sin for the one-shot retrieval.
     kyc: {
         details_submitted: boolean;
         charges_enabled: boolean;
@@ -337,6 +372,11 @@ export interface DriverPayoutSummary {
         business_type: string | null;
         id_number_provided: boolean;
         id_number_last4: string | null;
+        /** True when Spinr holds a Vault-encrypted SIN (migration 289) — the
+         * copy /reveal-sin decrypts and the T4A reads. NOT the same as
+         * `id_number_provided`, which reports a number Stripe never returns. */
+        sin_on_file: boolean;
+        sin_last4: string | null;
         gst_hst_number: string | null;
         requirements_due: string[];
         requirements_past_due: string[];
@@ -349,7 +389,103 @@ export const getDriverPayoutsSummary = (id: string) =>
     request<DriverPayoutSummary>(`/api/admin/drivers/${id}/payouts-summary`);
 
 export const refreshDriverStripeKyc = (id: string) =>
-    request<{ status: string }>(`/api/admin/drivers/${id}/refresh-stripe-kyc`, { method: "POST" });
+    request<{ status: string; synced: boolean; message: string }>(
+        `/api/admin/drivers/${id}/refresh-stripe-kyc`,
+        { method: "POST" },
+    );
+
+export const refreshDriverStripePayouts = (id: string) =>
+    request<{
+        synced: boolean;
+        message: string;
+        transfers_inserted: number;
+        transfers_skipped: number;
+        bank_payouts_synced: number;
+        ledger_entries_synced: number;
+        payouts: DriverPayoutSummary["payouts"];
+        bank_payouts: Array<{
+            id: string;
+            amount: number;
+            currency: string;
+            status: string;
+            method: string | null;
+            arrival_date: string | null;
+            bank_last4: string | null;
+            failure_code: string | null;
+            failure_message: string | null;
+            created_at: string;
+            synced_at: string;
+        }>;
+    }>(`/api/admin/drivers/${id}/refresh-stripe-payouts`, { method: "POST" });
+
+/* Fleet-wide Stripe payout sync (super_admin). driver_ids omitted = every
+ * mapped driver. Unlike the per-driver call this does not fail the whole run
+ * on one unreachable account — check `synced` and `plan_errors`. */
+export const refreshAllDriverStripePayouts = (opts?: { driver_ids?: string[] }) =>
+    request<{
+        synced: boolean;
+        message: string;
+        drivers_scanned: number;
+        transfers_inserted: number;
+        transfers_skipped: number;
+        bank_payouts_synced: number;
+        ledger_entries_synced: number;
+        plan_errors: { row_ref: string; field: string; message: string }[];
+        ledger_errors: { row_ref: string; field: string; message: string }[];
+    }>(`/api/admin/drivers/refresh-stripe-payouts`, {
+        method: "POST",
+        body: JSON.stringify(opts ?? {}),
+    });
+
+/* Recompute stored driver_statements.totals (super_admin). apply=false is a
+ * pure preview — nothing is written — which is what the UI shows before
+ * asking to confirm. */
+export const recomputeStatementTotals = (opts?: {
+    driver_ids?: string[];
+    since?: string;
+    limit?: number;
+    apply?: boolean;
+}) =>
+    request<{
+        applied: boolean;
+        scanned: number;
+        corrected: number;
+        unchanged: number;
+        has_more: boolean;
+        delta_earnings: number;
+        delta_payouts: number;
+        skipped: string[];
+        failed: string[];
+        changes: {
+            statement_id: string;
+            driver_id: string;
+            period_type: string;
+            period_start: string;
+            before: { earnings: string | null; payouts_total: string | null; trips: number | null };
+            after: { earnings: string | null; payouts_total: string | null; trips: number | null };
+        }[];
+    }>(`/api/admin/drivers/statements/recompute-totals`, {
+        method: "POST",
+        body: JSON.stringify(opts ?? {}),
+    });
+
+/* Fleet-wide KYC refresh (super_admin). With retire_unreachable=false (the
+ * default) drivers whose Stripe account the current key cannot see are only
+ * REPORTED under account_not_on_key — nothing is detached — so it is safe to
+ * run first and read. Re-run with retire_unreachable=true to also repair. */
+export const refreshAllDriverStripeKyc = (opts?: { driver_ids?: string[]; retire_unreachable?: boolean }) =>
+    request<{
+        total: number;
+        ok?: number;
+        no_stripe_account?: number;
+        account_not_on_key?: number;
+        stripe_error?: number;
+        drivers: Record<string, string>;
+        note: string;
+    }>(`/api/admin/drivers/refresh-stripe-kyc`, {
+        method: "POST",
+        body: JSON.stringify(opts ?? {}),
+    });
 
 /* ── Driver earnings statements ──────────────────────────
  * Weekly/monthly statements the backend statement job emails to drivers
@@ -370,6 +506,9 @@ export interface DriverStatement {
     totals: {
         earnings?: Record<string, string>;
         payouts_total?: string;
+        /** Era split (statements stored before it existed lack these). */
+        payouts_spinr_total?: string | null;
+        payouts_previous_app_total?: string | null;
         trips?: number;
     } | null;
     email_sent_at: string | null;
@@ -473,4 +612,22 @@ export const getDriverStats = (params?: {
 
 export const updateDriver = (id: string, data: Record<string, any>) =>
     request<any>(`/api/admin/drivers/${id}`, { method: "PUT", body: JSON.stringify(data) });
+
+export async function generateDecalPdf(driverIds: string[]): Promise<Blob> {
+    const { useAuthStore } = await import("@/store/authStore");
+    const store = useAuthStore.getState();
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (store.token) headers["Authorization"] = `Bearer ${store.token}`;
+    if (store.csrfToken) headers["X-CSRF-Token"] = store.csrfToken;
+    const res = await fetch("/api/admin/drivers/decals/generate-pdf", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ driver_ids: driverIds }),
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || body.message || res.statusText);
+    }
+    return res.blob();
+}
 

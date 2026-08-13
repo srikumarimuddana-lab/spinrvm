@@ -15,28 +15,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAuthStore, type User } from '@shared/store/authStore';
-import api, { setInMemoryToken, getApiErrorMessage } from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { logCompleteRegistration } from '@shared/analytics/meta';
 import { showToast } from '../hooks/useToast';
 import { useLanguageStore } from '../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-
-// Platform-safe token storage
-const storage = {
-  async setItem(key: string, value: string) {
-    try {
-      if (Platform.OS === 'web') {
-        localStorage.setItem(key, value);
-      } else {
-        const SecureStore = require('expo-secure-store');
-        await SecureStore.setItemAsync(key, value);
-      }
-    } catch (e) {
-      console.log('[Auth] Storage setItem FAILED:', e);
-    }
-  },
-};
 
 export default function OtpScreen() {
   const router = useRouter();
@@ -57,6 +41,14 @@ export default function OtpScreen() {
   const inputRef = useRef<TextInput>(null);
 
   // Animations
+  // react-hooks/refs ("Cannot access refs during render"): standard
+  // Animated.Value driver idiom — both are mutated only via
+  // Animated.spring()/.timing() inside effects/event handlers below, read
+  // only in JSX interpolate()/transform bindings. Verified safe — grepped
+  // this file for `.current =`: zero matches, neither ref is ever
+  // reassigned after creation, so a discarded/replayed render always reads
+  // the same instance(s).
+  // eslint-disable-next-line react-hooks/refs
   const shakeAnim = useRef(new Animated.Value(0)).current;
   const dotAnims = useRef(
     Array.from({ length: codeLength }, () => new Animated.Value(0))
@@ -66,7 +58,12 @@ export default function OtpScreen() {
     if (!phoneNumber) {
       router.back();
     }
-  }, []);
+    // phoneNumber is a route param that doesn't change for the lifetime of
+    // this already-mounted screen (a new phone number means a fresh
+    // navigation, i.e. a new screen instance); router is treated as a
+    // stable/safe dep elsewhere in this codebase (app/index.tsx). Adding
+    // both doesn't change this effect's practical firing.
+  }, [phoneNumber, router]);
 
   // Animate dots as user types
   useEffect(() => {
@@ -78,6 +75,18 @@ export default function OtpScreen() {
         useNativeDriver: true,
       }).start();
     });
+    // dotAnims is intentionally excluded: it's the same verified-safe stable
+    // useRef(...).current animation-driver idiom as shakeAnim above (never
+    // reassigned after creation — grepped this file for `.current =`, zero
+    // matches). Adding it here doesn't just fail to change behavior, it
+    // actively introduces a DIFFERENT violation: a dependency array is
+    // evaluated during render, so listing a ref-derived value there counts
+    // as a render-time ref read under react-hooks/refs (confirmed by
+    // testing — adding it made the linter report "Cannot access refs during
+    // render" at this line). Leaving it out avoids that while changing
+    // nothing about when this effect fires (dotAnims' identity never
+    // changes across the component's lifetime).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code]);
 
   // Resend countdown
@@ -86,6 +95,9 @@ export default function OtpScreen() {
       const timer = setTimeout(() => setCountdown(countdown - 1), 1000);
       return () => clearTimeout(timer);
     } else {
+      // Countdown finished — allow resend. Doesn't feed back into
+      // `countdown`, and React bails out once canResend is already true.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCanResend(true);
     }
   }, [countdown]);
@@ -101,7 +113,8 @@ export default function OtpScreen() {
         router.replace('/profile-setup');
       }
     }
-  }, [user, hasAttemptedVerification]);
+    // router treated as a stable/safe dep, matching app/index.tsx.
+  }, [user, hasAttemptedVerification, router]);
 
   const triggerShake = () => {
     Animated.sequence([
@@ -199,10 +212,6 @@ export default function OtpScreen() {
     }
   };
 
-  const maskedPhone = phoneNumber
-    ? `${phoneNumber.slice(0, -4)}${'•'.repeat(4)}`
-    : '';
-
   return (
     <KeyboardAvoidingView
       style={styles.container}
@@ -268,6 +277,7 @@ export default function OtpScreen() {
             activeOpacity={1}
             onPress={() => inputRef.current?.focus()}
           >
+            {/* eslint-disable-next-line react-hooks/refs -- stable Animated.Value driver array, see note above declaration */}
             {Array.from({ length: codeLength }).map((_, i) => {
               const isFilled = i < code.length;
               const isActive = i === code.length;

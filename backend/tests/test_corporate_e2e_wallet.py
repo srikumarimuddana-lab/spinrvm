@@ -31,7 +31,7 @@ def test_wallet_lifecycle(test_client, admin_override):
             AsyncMock(return_value={"id": "w1", "company_id": "c1", "balance": 0}),
         ),
         patch(
-            "routes.corporate_accounts.update_corporate_stripe_customer_id",
+            "services.corporate_stripe_identity.db_supabase.update_one",
             AsyncMock(),
         ) as m_set_cust,
         patch(
@@ -46,7 +46,9 @@ def test_wallet_lifecycle(test_client, admin_override):
         )
         assert r.status_code == 200, r.text
         m_set_cust.assert_awaited_once()
-        assert m_set_cust.call_args.kwargs["stripe_customer_id"] == "cus_A"
+        # Persisted via the shared corporate identity service, which writes the
+        # id and its Stripe mode together (positional update_one args).
+        assert m_set_cust.await_args.args[2]["stripe_customer_id"] == "cus_A"
 
     # --- 2) Manual top-up intent ───────────────────────────────────────
     with (

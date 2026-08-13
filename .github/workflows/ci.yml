@@ -32,15 +32,15 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Cache pip packages
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements-locked.txt') }}
@@ -82,13 +82,32 @@ jobs:
           pytest --cov=. --cov-report=xml --cov-report=term-missing --timeout=30 -v
 
       - name: Upload coverage to Codecov
+        id: codecov_upload
         if: always()
         continue-on-error: true
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
         with:
           file: ./backend/coverage.xml
           flags: backend
           name: backend-coverage
+
+      # C12 (ACTION_ITEMS.md): continue-on-error above means a rejected
+      # upload (e.g. tokenless mode on a push-triggered run, no
+      # CODECOV_TOKEN secret configured) still reports this job as green
+      # with nothing telling you Codecov has no data for this run. This
+      # step doesn't fix the underlying cause — that needs a human to add
+      # CODECOV_TOKEN as a repo secret — it only stops the failure from
+      # being silent. `steps.*.outcome` reflects the step's real result
+      # before continue-on-error rewrites `conclusion` to success.
+      - name: Flag Codecov upload failure (was previously silent)
+        if: always() && steps.codecov_upload.outcome == 'failure'
+        run: |
+          echo "::warning title=Codecov upload failed::Coverage for this run was not recorded on Codecov (upload step failed but continue-on-error keeps this job green). See ACTION_ITEMS.md C12 — most likely cause is a missing CODECOV_TOKEN repository secret on a push-triggered run (tokenless uploads are rejected outside same-repo PRs)."
+          {
+            echo "### ⚠️ Codecov upload failed"
+            echo ""
+            echo "Coverage for this run was **not** recorded on Codecov, even though this job is green (\`continue-on-error\` masks it from the check conclusion). See \`ACTION_ITEMS.md\` **C12**."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # Python dependency CVE audit.
   # Runs as its own job — NOT as a step inside backend-test — because a newly
@@ -102,10 +121,10 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -127,15 +146,15 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Cache node modules
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: frontend/node_modules
           key: ${{ runner.os }}-frontend-node-${{ hashFiles('frontend/yarn.lock') }}
@@ -156,7 +175,7 @@ jobs:
 
       - name: Upload coverage
         if: always()
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
         with:
           file: ./frontend/coverage/coverage-final.json
           flags: frontend
@@ -168,15 +187,15 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Cache node modules
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: driver-app/node_modules
           # No restore-keys: a partial restore from an older key keeps a
@@ -206,13 +225,27 @@ jobs:
 
 
       - name: Upload coverage
+        id: codecov_upload
         if: always()
         continue-on-error: true
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
         with:
           file: ./driver-app/coverage/coverage-final.json
           flags: driver-app
           name: driver-app-coverage
+
+      # C12 (ACTION_ITEMS.md): see backend-test's identical step above for
+      # the full rationale — surfaces a silently-swallowed upload failure
+      # without changing this job's overall (green) conclusion.
+      - name: Flag Codecov upload failure (was previously silent)
+        if: always() && steps.codecov_upload.outcome == 'failure'
+        run: |
+          echo "::warning title=Codecov upload failed::Coverage for this run was not recorded on Codecov (upload step failed but continue-on-error keeps this job green). See ACTION_ITEMS.md C12 — most likely cause is a missing CODECOV_TOKEN repository secret on a push-triggered run (tokenless uploads are rejected outside same-repo PRs)."
+          {
+            echo "### ⚠️ Codecov upload failed"
+            echo ""
+            echo "Coverage for this run was **not** recorded on Codecov, even though this job is green (\`continue-on-error\` masks it from the check conclusion). See \`ACTION_ITEMS.md\` **C12**."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # Rider App Tests (dedicated app — rider-app/)
   # Note: frontend/ is the legacy combined app, still tested by frontend-test.
@@ -222,15 +255,15 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Cache node modules
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: rider-app/node_modules
           key: ${{ runner.os }}-rider-node-${{ hashFiles('rider-app/yarn.lock', 'rider-app/patches/**') }}
@@ -256,13 +289,27 @@ jobs:
         run: yarn test --ci --coverage --forceExit --reporters=default
 
       - name: Upload coverage
+        id: codecov_upload
         if: always()
         continue-on-error: true
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
         with:
           file: ./rider-app/coverage/coverage-final.json
           flags: rider-app
           name: rider-app-coverage
+
+      # C12 (ACTION_ITEMS.md): see backend-test's identical step above for
+      # the full rationale — surfaces a silently-swallowed upload failure
+      # without changing this job's overall (green) conclusion.
+      - name: Flag Codecov upload failure (was previously silent)
+        if: always() && steps.codecov_upload.outcome == 'failure'
+        run: |
+          echo "::warning title=Codecov upload failed::Coverage for this run was not recorded on Codecov (upload step failed but continue-on-error keeps this job green). See ACTION_ITEMS.md C12 — most likely cause is a missing CODECOV_TOKEN repository secret on a push-triggered run (tokenless uploads are rejected outside same-repo PRs)."
+          {
+            echo "### ⚠️ Codecov upload failed"
+            echo ""
+            echo "Coverage for this run was **not** recorded on Codecov, even though this job is green (\`continue-on-error\` masks it from the check conclusion). See \`ACTION_ITEMS.md\` **C12**."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # Admin Dashboard Tests
   admin-test:
@@ -270,15 +317,15 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Cache node modules
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: admin-dashboard/node_modules
           # No restore-keys: a partial restore from an older key (e.g. before
@@ -323,9 +370,9 @@ jobs:
       run:
         working-directory: admin-dashboard
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -356,7 +403,7 @@ jobs:
 
       - name: Upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: playwright-report
           path: admin-dashboard/playwright-report/
@@ -381,7 +428,7 @@ jobs:
       run:
         working-directory: admin-dashboard
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # `continue-on-error: true` above stops a baseline-less run blocking a
       # merge, but it does NOT stop the check reporting `failure` — so this
@@ -408,7 +455,7 @@ jobs:
             echo "::notice title=Visual regression skipped::No Playwright snapshot baselines are committed under admin-dashboard/e2e/**-snapshots/, so there is nothing to compare against. Seed them via the update-visual-baselines workflow to enable this gate."
           fi
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         if: steps.baselines.outputs.present == 'true'
         with:
           node-version: '22'
@@ -448,7 +495,7 @@ jobs:
         # that made this job look like it ran and found nothing, rather than
         # like it never ran at all.
         if: always() && steps.baselines.outputs.present == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: visual-regression-report
           path: admin-dashboard/playwright-report/
@@ -471,14 +518,14 @@ jobs:
       run:
         working-directory: rider-app
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Cache node modules
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: rider-app/node_modules
           key: ${{ runner.os }}-rider-node-${{ hashFiles('rider-app/yarn.lock', 'rider-app/patches/**') }}
@@ -504,7 +551,7 @@ jobs:
 
       - name: Upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: rider-app-playwright-report
           path: rider-app/playwright-report/
@@ -522,14 +569,14 @@ jobs:
       run:
         working-directory: driver-app
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Cache node modules
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: driver-app/node_modules
           key: ${{ runner.os }}-driver-node-${{ hashFiles('driver-app/yarn.lock', 'driver-app/patches/**') }}
@@ -552,7 +599,7 @@ jobs:
 
       - name: Upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: driver-app-playwright-report
           path: driver-app/playwright-report/
@@ -565,10 +612,10 @@ jobs:
     if: false
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -583,7 +630,7 @@ jobs:
         run: npx expo export --platform web
 
       - name: Deploy to Vercel
-        uses: amondnet/vercel-action@v42
+        uses: amondnet/vercel-action@de09aeac2ace6599ec9b11ef87558759a496bac4 # v42
         with:
           vercel-token: ${{ secrets.VERCEL_TOKEN }}
           vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
@@ -597,10 +644,10 @@ jobs:
     if: github.ref == 'refs/heads/main'
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -644,7 +691,7 @@ jobs:
           exit $RC
 
       - name: Deploy to Vercel
-        uses: amondnet/vercel-action@v42
+        uses: amondnet/vercel-action@de09aeac2ace6599ec9b11ef87558759a496bac4 # v42
         with:
           vercel-token: ${{ secrets.VERCEL_TOKEN }}
           vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
@@ -659,10 +706,10 @@ jobs:
     if: github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[build]')
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup EAS
-        uses: expo/expo-github-action@v8
+        uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
@@ -687,7 +734,7 @@ jobs:
       security-events: write
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0  # full history required for trufflehog --since-commit
 
@@ -710,7 +757,7 @@ jobs:
           trufflehog git file://. --since-commit "$SINCE" --fail
 
       - name: Run Trivy vulnerability scanner (filesystem)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: 'fs'
           scan-ref: '.'
@@ -718,7 +765,7 @@ jobs:
           output: 'trivy-results.sarif'
 
       - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
         if: always()
         with:
           sarif_file: 'trivy-results.sarif'
@@ -735,7 +782,7 @@ jobs:
       id-token: write    # cosign keyless OIDC signing (main only)
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Build backend Docker image
         run: |
@@ -795,7 +842,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: spinr-backend:ci-${{ github.sha }}
           format: 'table'
@@ -813,7 +860,7 @@ jobs:
 
       - name: Upload SARIF report
         if: always()
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: spinr-backend:ci-${{ github.sha }}
           format: 'sarif'
@@ -825,7 +872,7 @@ jobs:
 
       - name: Upload image scan results to GitHub Security
         if: always()
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
         with:
           sarif_file: 'trivy-image.sarif'
 
@@ -838,11 +885,11 @@ jobs:
       #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
       - name: Install cosign
         if: github.ref == 'refs/heads/main'
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
 
       - name: Log in to GHCR
         if: github.ref == 'refs/heads/main'
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -993,7 +1040,7 @@ jobs:
         # continue-on-error so a missing/invalid SLACK_WEBHOOK secret does not
         # itself count as a CI failure and obscure the real upstream failures.
         continue-on-error: true
-        uses: 8398a7/action-slack@v3
+        uses: 8398a7/action-slack@77eaa4f1c608a7d68b38af4e3f739dcd8cba273e # v3
         with:
           status: failure
           webhook_url: ${{ secrets.SLACK_WEBHOOK }}

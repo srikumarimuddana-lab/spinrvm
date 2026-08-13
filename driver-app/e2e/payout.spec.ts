@@ -93,9 +93,7 @@ test.describe('driver-app: payout / earnings screen', () => {
     await seedAuthedDriverSession(page);
     await mockDriverBackend(page, { earnings: MOCK_EARNINGS });
 
-    let exportCalled = false;
     await page.route('**/api/v1/drivers/earnings/export**', async (route) => {
-      exportCalled = true;
       await route.fulfill({
         status: 200,
         contentType: 'text/csv',
@@ -154,13 +152,6 @@ test.describe('driver-app: payout / earnings screen', () => {
           currency: 'CAD',
         }),
       });
-    });
-
-    const balanceCalled = new Promise<boolean>((resolve) => {
-      page.on('request', (req) => {
-        if (/\/api\/v1\/drivers\/balance/.test(req.url())) resolve(true);
-      });
-      setTimeout(() => resolve(false), 6000);
     });
 
     await page.goto('/');

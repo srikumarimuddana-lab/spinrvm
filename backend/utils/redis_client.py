@@ -145,18 +145,35 @@ async def redis_set(key: str, value: str, ttl: Optional[int] = None) -> None:
 async def redis_set_nx(key: str, value: str, ttl: int) -> bool:
     """SET key value NX EX ttl — returns True iff the caller acquired the
     lock. Used by daily background loops to elect a single replica per run
-    (belt-and-braces over the application logic's own idempotency).
+    (belt-and-braces over the application logic's own idempotency), and by
+    request-handler code as a dedupe/mutual-exclusion gate.
 
     In-process fallback: behaves the same within a single replica, so it's
     only meaningful when REDIS_URL is set in production.
+
+    Raises on a real (Redis-configured-but-unavailable) error, matching
+    every other function in this module (redis_get/set/incr/expire/delete) —
+    previously this one alone caught the error and silently fell through to
+    the in-process fallback with only a warning log. On a real production
+    Redis blip, every replica's call independently "wins" its own local
+    lock, so the "only one caller proceeds" guarantee silently became "every
+    replica proceeds independently" — for a leader-election lock that means
+    N replicas all doing the locked work; for a dedupe/mutual-exclusion gate
+    it means N duplicate sends or a lost exclusivity guarantee, all without
+    a log louder than a warning. Callers now decide explicitly how to
+    degrade (see e.g. utils/scheduled_rides.py's leader lock, which fails
+    open with a loud log; routes/rides/payments.py's wallet re-drive lock,
+    which fails closed with a 503, since that lock IS a correctness guard)
+    instead of that decision being made silently inside this function.
     """
     r = await _get_redis()
-    if r:
+    if r is not None:
         try:
             ok = await r.set(key, value, nx=True, ex=ttl)
             return bool(ok)
         except Exception as e:
-            logger.warning(f"redis_set_nx error: {e}")
+            logger.error(f"[REDIS] redis_set_nx({key!r}) failed — Redis configured but unavailable: {e}")
+            raise
     if _local_get(key) is not None:
         return False
     _local_set(key, value, ttl)

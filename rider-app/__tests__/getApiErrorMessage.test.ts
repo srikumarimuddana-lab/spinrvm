@@ -10,6 +10,8 @@
  * Code under test: shared/api/client.ts::getApiErrorMessage / clampToastMessage
  */
 
+import { getApiErrorMessage, clampToastMessage, TOAST_MESSAGE_MAX } from '@shared/api/client';
+
 jest.mock('@shared/config/spinr.config', () => ({
   __esModule: true,
   default: { backendUrl: 'http://localhost:8000' },
@@ -26,8 +28,6 @@ jest.mock('@shared/store/authStore', () => ({
     getState: jest.fn(() => ({ token: null, logout: jest.fn() })),
   },
 }));
-
-import { getApiErrorMessage, clampToastMessage, TOAST_MESSAGE_MAX } from '@shared/api/client';
 
 const FALLBACK = 'Failed to save your profile. Please try again.';
 

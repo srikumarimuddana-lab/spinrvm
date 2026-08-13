@@ -262,7 +262,7 @@ export default function PolicyPage() {
                                 </div>
                             ))}
                             {invalidWindow && (
-                                <p className="text-xs text-red-600">
+                                <p className="text-xs text-destructive">
                                     Every window end must be after start.
                                 </p>
                             )}
@@ -275,9 +275,9 @@ export default function PolicyPage() {
                             {saving ? "Saving…" : "Save policy"}
                         </Button>
                         {feedback && (
-                            <span className="text-xs text-emerald-700">{feedback}</span>
+                            <span className="text-xs text-emerald-700 dark:text-emerald-300">{feedback}</span>
                         )}
-                        {error && <span className="text-xs text-red-600">{error}</span>}
+                        {error && <span className="text-xs text-destructive">{error}</span>}
                     </div>
                 </>
             )}

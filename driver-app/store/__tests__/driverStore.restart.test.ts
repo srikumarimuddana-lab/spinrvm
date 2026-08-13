@@ -11,6 +11,9 @@
  * Key: @spinr:driver_active_ride, DRIVER_TERMINAL_STATES, _persistDriverState
  */
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useDriverStore } from '../driverStore';
+
 jest.mock('@react-native-async-storage/async-storage', () => ({
   __esModule: true,
   default: {
@@ -56,9 +59,6 @@ jest.mock('../../utils/tripLocationRecorder', () => ({
 jest.mock('../../utils/tripLocationTransport', () => ({
   apiLocationBatchTransport: jest.fn(),
 }));
-
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useDriverStore } from '../driverStore';
 
 const DRIVER_RIDE_KEY = '@spinr:driver_active_ride';
 

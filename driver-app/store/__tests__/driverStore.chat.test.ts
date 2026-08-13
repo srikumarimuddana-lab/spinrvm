@@ -11,6 +11,8 @@
  * Code under test: driver-app/store/driverStore.ts::addChatMessage (~line 660)
  */
 
+import { useDriverStore } from '../driverStore';
+
 jest.mock('react-native', () => ({
   Platform: { OS: 'ios' },
   NativeModules: {},
@@ -42,8 +44,6 @@ jest.mock('../../utils/tripLocationRecorder', () => ({
 jest.mock('../../utils/tripLocationTransport', () => ({
   apiLocationBatchTransport: jest.fn(),
 }));
-
-import { useDriverStore } from '../driverStore';
 
 const _msg = (id: string, text = 'hi', sender: 'rider' | 'driver' = 'rider') => ({
   id,

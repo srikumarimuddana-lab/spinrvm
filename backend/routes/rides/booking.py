@@ -4,6 +4,8 @@ Split from ``backend/routes/rides.py`` (god-file refactor). Pure code
 motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
+import asyncio
+
 from . import _deps, matching
 from ._deps import (  # noqa: F401
     ROUND_HALF_UP,
@@ -35,6 +37,7 @@ from ._deps import (  # noqa: F401
     pg_error_code,
     ride_request_limit,
     timezone,
+    verify_address_matches_coordinate,
     verify_estimate_token,
 )
 from ._shared import (  # noqa: F401
@@ -522,6 +525,37 @@ async def create_ride(
                         ),
                     },
                 )
+
+    # Address<->coordinate consistency (B9): reject a confident text/pin
+    # mismatch before any fare/dispatch work begins — the same class of bug
+    # the Glide Crescent incident exposed, but for a live ride booking
+    # instead of a saved address. Deliberately placed AFTER the geofence
+    # gates above so a request that's outside the service area is rejected
+    # by the free, in-memory polygon check first, without spending a paid
+    # Maps geocode call on a booking that would be rejected anyway. Runs
+    # both legs concurrently to bound the added latency to one Maps
+    # round-trip, not two. Best-effort — fails open (see
+    # utils/address_verification.py's docstring) on no API key, exhausted
+    # budget, network error, or an ambiguous/imprecise geocode; only rejects
+    # when Google is CONFIDENT the address text and the supplied coordinate
+    # describe different places. Mirrors the identical check already
+    # enforced at POST /addresses and POST /favorites.
+    _pickup_match, _dropoff_match = await asyncio.gather(
+        verify_address_matches_coordinate(body.pickup_address, body.pickup_lat, body.pickup_lng),
+        verify_address_matches_coordinate(body.dropoff_address, body.dropoff_lat, body.dropoff_lng),
+    )
+    _pickup_ok, _pickup_mismatch_reason, _ = _pickup_match
+    _dropoff_ok, _dropoff_mismatch_reason, _ = _dropoff_match
+    if not _pickup_ok:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Pickup address and location don't match: {_pickup_mismatch_reason}",
+        )
+    if not _dropoff_ok:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Dropoff address and location don't match: {_dropoff_mismatch_reason}",
+        )
 
     # Vehicle types are also needed by fare building — fetch once, reuse.
     vehicle_types = await _deps.db_supabase.get_rows("vehicle_types", {"is_active": True}, limit=100)
@@ -1220,6 +1254,28 @@ async def create_ride(
         logger.info(
             f"create_ride: ride {ride.id} scheduled for {body.scheduled_time} — "
             "parked in 'scheduled', deferring dispatch to scheduler loop"
+        )
+        # N15/R35,R37 (ACTION_ITEMS.md): scheduled rides previously had a
+        # reminder ~10 minutes out (utils/scheduled_rides.py::_send_reminder)
+        # but nothing at the moment of booking itself — a rider tapping
+        # "Schedule" got no confirmation their request was actually saved,
+        # only silence until the reminder fired (or never fired, if the
+        # scheduler had an issue). Best-effort/informational, so this mirrors
+        # the existing scheduled-ride pushes in utils/scheduled_rides.py
+        # (_send_reminder, _notify_schedule_delayed): default priority
+        # ("normal") and no target_app override — none of those set either,
+        # so this keeps rider scheduled-ride copy on one consistent channel.
+        # Backgrounded via spawn() like the rest of this function's
+        # post-insert side effects, so a slow push send never holds up the
+        # booking response.
+        _deps.spawn(
+            _deps.send_push_notification(
+                ride.rider_id,
+                "Scheduled ride confirmed",
+                f"Your ride to {ride.dropoff_address} is booked. "
+                "We'll remind you before pickup and let you know once a driver is assigned.",
+                data={"type": "scheduled_ride_confirmed", "ride_id": ride.id},
+            )
         )
     _deps.spawn(
         _prep_and_dispatch(

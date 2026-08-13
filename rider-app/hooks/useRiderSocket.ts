@@ -3,6 +3,7 @@ import { AppState, Vibration } from 'react-native';
 import { showToast } from '../store/toastStore';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
+import { ensureFreshToken } from '@shared/api/client';
 import { useRideStore } from '../store/rideStore';
 import { API_URL } from '@shared/config';
 import { RideStatus } from '../constants/rideStatus';
@@ -211,7 +212,11 @@ export function useRiderSocket() {
       default:
         console.log('[WS] Unhandled rider message type:', data.type);
     }
-  }, []);
+    // router is expo-router's stable singleton — adding it doesn't change
+    // handleMessage's identity (still effectively stable across renders),
+    // so `connect` below (deps: [handleMessage]) and the lifecycle effects
+    // that depend on `connect` staying stable are unaffected.
+  }, [router]);
 
   // ── Connect / disconnect ────────────────────────────────────────
   const connect = useCallback(async () => {
@@ -230,7 +235,6 @@ export function useRiderSocket() {
     // the reconnect loop spins forever with a stale token, freezing the
     // live driver position on the rider's map.
     try {
-      const { ensureFreshToken } = require('@shared/api/client');
       await ensureFreshToken();
     } catch (err) {
       console.warn('[WS] ensureFreshToken failed, proceeding with current token:', err);
@@ -311,13 +315,27 @@ export function useRiderSocket() {
         console.log(`[WS] Rider reconnecting in ${Math.round(delay)}ms (attempt ${reconnectAttemptRef.current + 1})`);
         reconnectTimeoutRef.current = setTimeout(() => {
           reconnectAttemptRef.current++;
+          // Genuine self-reference (exponential-backoff reconnect calling
+          // the same useCallback it's defined inside), not a reorderable
+          // "used before declared" case like the other react-hooks/
+          // immutability findings fixed alongside this one — `connect`
+          // cannot be declared before itself. Safe because this callback
+          // only runs from the setTimeout above, well after `connect` has
+          // been assigned; the "stale closure" risk the rule flags (this
+          // recursive call could resolve to an old `connect` if
+          // `handleMessage`'s deps changed between opens) is bounded by
+          // `myGen`/`connectGenRef` inside connect() itself, which already
+          // guards against a superseded connect() attempt doing anything.
+          // eslint-disable-next-line react-hooks/immutability
           connect();
         }, delay);
       } else {
         setConnectionState('disconnected');
       }
     };
-  }, [handleMessage]);
+    // setConnectionState is itself a useCallback with deps: [] (stable),
+    // so adding it doesn't change connect's identity/stability either.
+  }, [handleMessage, setConnectionState]);
 
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current) {
@@ -332,11 +350,23 @@ export function useRiderSocket() {
       wsRef.current = null;
     }
     setConnectionState('disconnected');
-  }, []);
+    // setConnectionState is a stable useCallback (deps: []).
+  }, [setConnectionState]);
 
   // ── Lifecycle: connect when ride starts, disconnect when it ends ─
   useEffect(() => {
+    // Canonical "synchronize an external system (the WS connection) with
+    // React state" effect — exactly the pattern the rule's own guidance
+    // text (react.dev/learn/you-might-not-need-an-effect) describes as
+    // correct. connectionState (set inside disconnect()/connect()) isn't a
+    // dep of this effect; connect/disconnect are stable useCallbacks
+    // (disconnect: [], connect: [handleMessage]), so this only re-runs on
+    // an actual user/ride identity change, never as a result of its own
+    // connectionState write. Reviewed carefully given this hook drives the
+    // live ride WebSocket and is shared by 4 consumers (ai-assistant.tsx,
+    // app/_layout.tsx, ride-status.tsx, store/rideStore.ts).
     if (!user?.id || !currentRide?.id) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       disconnect();
       return;
     }

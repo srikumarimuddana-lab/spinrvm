@@ -404,6 +404,37 @@ async def test_failed_send_logged_as_failed():
     row = inserts[0][1]
     assert row["provider"] == "none"
     assert row["status"] == "failed"
+    assert row["error_detail"] is None  # unconfigured, not a provider error
+
+
+@pytest.mark.anyio
+async def test_failed_send_persists_ses_error_detail():
+    """A configured-but-failing SES send (with no Resend fallback configured)
+    must persist the actual provider error to email_send_log, not just
+    provider='none'/status='failed' with no diagnosable detail.
+
+    This is the real production shape found while investigating the
+    corporate-portal OTP send: every attempt since it shipped logged
+    provider='none'/status='failed' with nothing else to go on, requiring
+    live app-log/Sentry access neither this session nor on-call always has
+    to find the actual SES rejection reason.
+    """
+    factory, _ = _boto3_mock(send_side_effect=RuntimeError("MessageRejected: identity not verified"))
+    inserts: list = []
+    with (
+        patch("settings_loader.get_app_settings", _settings(**_SES_SETTINGS)),  # SES only, no Resend
+        patch("boto3.client", factory),
+        patch("db_supabase.find_one", AsyncMock(return_value=None)),
+        patch("db_supabase.insert_one", AsyncMock(side_effect=lambda t, d: inserts.append((t, d)))),
+    ):
+        ok = await send_transactional_email(to="r@example.com", subject="x", text="hi")
+
+    assert ok is False
+    row = inserts[0][1]
+    assert row["provider"] == "none"
+    assert row["status"] == "failed"
+    assert row["error_detail"] is not None
+    assert "MessageRejected" in row["error_detail"]
 
 
 @pytest.mark.anyio
@@ -420,3 +451,32 @@ async def test_suppression_lookup_error_fails_open():
     # Fail-open: a suppression-lookup error must not block the send.
     assert ok is True
     ses_client.send_raw_email.assert_called_once()
+
+
+@pytest.mark.anyio
+async def test_settings_load_error_fails_open_not_raises():
+    """An app_settings read failure (DB hiccup) must degrade to "no provider
+    configured" like every other failure branch here, not propagate.
+
+    Regression: send_transactional_email is documented to return bool and
+    never raise — every one of its 12 call sites (including the corporate
+    portal's send_company_email_otp) calls it unwrapped on that assumption.
+    Before this fix, a transient get_app_settings() failure on the *second*
+    read inside this function (the first, already-guarded read in the OTP
+    endpoint can succeed off the 60s cache while this one misses it) bubbled
+    up as a raw exception — surfacing to the corporate-portal caller as a 500
+    Internal Server Error instead of the existing, already-handled "could not
+    send verification code" 502.
+    """
+    inserts: list = []
+    with (
+        patch("settings_loader.get_app_settings", AsyncMock(side_effect=RuntimeError("db down"))),
+        patch("db_supabase.find_one", AsyncMock(return_value=None)),
+        patch("db_supabase.insert_one", AsyncMock(side_effect=lambda t, d: inserts.append((t, d)))),
+    ):
+        ok = await send_transactional_email(to="r@example.com", subject="x", text="hi")
+
+    assert ok is False
+    row = inserts[0][1]
+    assert row["provider"] == "none"
+    assert row["status"] == "failed"

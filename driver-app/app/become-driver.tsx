@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -20,6 +20,11 @@ import * as DocumentPicker from 'expo-document-picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useAuthStore } from '@shared/store/authStore';
 import api, { getApiErrorMessage } from '@shared/api/client';
+// Keep the default import: many test files jest.mock(
+// '@shared/config/spinr.config', () => ({ default: {...} })) without a
+// matching named 'SpinrConfig' export, so switching to a named import
+// breaks those mocks (confirmed in rider-app's utils/aiChat.ts).
+// eslint-disable-next-line import/no-named-as-default
 import SpinrConfig from '@shared/config/spinr.config';
 import { uploadFile } from '@shared/api/upload';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -27,6 +32,13 @@ import type { ThemeColors } from '@shared/theme/index';
 
 // Steps: 0=Intro, 1=Personal, 2=Vehicle, 3=Docs, 4=Review
 const STEPS = ['Intro', 'Personal', 'Vehicle', 'Documents', 'Review'];
+
+// Module-level (not component-scope) so react-hooks/purity doesn't treat this
+// as an impure call "during render" — it's only ever invoked from the
+// pickImage event handler, well after mount, never during render itself.
+function genFallbackFileName(): string {
+  return `photo_${Date.now()}.jpg`;
+}
 
 interface Requirement {
   id: string;
@@ -69,13 +81,13 @@ export default function BecomeDriverScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await api.get('/vehicle-types');  // just to verify API works
+        await api.get('/vehicle-types');  // just to verify API works
         // Public endpoint — returns only active areas, no admin auth required.
         const areasRes = await api.get<any[]>('/service-areas');
         const active = areasRes.data || [];
         setServiceAreas(active);
         if (active.length > 0 && !serviceAreaId) setServiceAreaId(active[0].id);
-      } catch (e) {
+      } catch {
         // Fallback — hardcode areas if API fails
         setServiceAreas([
           { id: 'saskatoon', name: 'Saskatoon, SK' },
@@ -83,6 +95,12 @@ export default function BecomeDriverScreen() {
         ]);
       }
     })();
+    // serviceAreaId is intentionally excluded: this effect only READS it as a
+    // "don't clobber an already-picked area" guard on first mount. Adding it
+    // as a dep would re-fire this fetch every time the driver picks a
+    // different service area in the form below, causing a redundant
+    // GET /vehicle-types + GET /service-areas round trip on every selection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Vehicle Info
@@ -107,19 +125,133 @@ export default function BecomeDriverScreen() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [datePickerTarget, setDatePickerTarget] = useState<string | null>(null); // reqId
 
+  // Declared here (before first use below) rather than further down with the
+  // other handlers — react-hooks/immutability (React Compiler) flags
+  // referencing a function value before its declaration in source order.
+  // Runtime behavior is unchanged: a useEffect body always runs after the
+  // full render commits, once every const in the component is initialized,
+  // so this is a pure source-order reshuffle, not a behavior change.
+  const loadDraft = async () => {
+    try {
+      const savedDraft = await AsyncStorage.getItem('driver_application_draft');
+      if (savedDraft) {
+        const data = JSON.parse(savedDraft);
+        // Only load if it matches the current user (if we stored user ID, but for now assuming local device is 1 user)
+        // Or better yet, we can clear it on logout.
+
+        if (data.step !== undefined) setCurrentStep(data.step);
+        if (data.personal) {
+          setFirstName(data.personal.firstName || '');
+          setLastName(data.personal.lastName || '');
+          setEmail(data.personal.email || '');
+          setGender(data.personal.gender || '');
+          setCity(data.personal.city || '');
+        }
+        if (data.vehicle) {
+          setVehicleMake(data.vehicle.make || '');
+          setVehicleModel(data.vehicle.model || '');
+          setVehicleColor(data.vehicle.color || '');
+          setVehicleYear(data.vehicle.year || '');
+          setLicensePlate(data.vehicle.plate || '');
+          setVehicleVin(data.vehicle.vin || '');
+          setVehicleType(data.vehicle.type || '');
+        }
+        if (data.docs) {
+          setLicenseNumber(data.docs.licenseNumber || '');
+          setDocs(data.docs.files || {});
+        }
+      }
+    } catch (e) {
+      console.log('Failed to load draft:', e);
+    }
+  };
+
+  // useCallback so its identity only changes when one of the fields it
+  // actually reads changes — the same set already listed in the save-draft
+  // effect's dep array below. Without this, a plain function re-created
+  // every render would make that effect fire on every render if we also
+  // added it as a listed dependency there (the exhaustive-deps fix this
+  // wrapping exists for).
+  const saveDraft = useCallback(async () => {
+    try {
+      const draftData = {
+        step: currentStep,
+        personal: { firstName, lastName, email, gender, city },
+        vehicle: { make: vehicleMake, model: vehicleModel, color: vehicleColor, year: vehicleYear, plate: licensePlate, vin: vehicleVin, type: vehicleType },
+        docs: { licenseNumber, files: docs }
+      };
+      await AsyncStorage.setItem('driver_application_draft', JSON.stringify(draftData));
+    } catch (e) {
+      console.log('Failed to save draft:', e);
+    }
+  }, [currentStep, firstName, lastName, email, gender, city, vehicleMake, vehicleModel, vehicleColor, vehicleYear, licensePlate, vehicleVin, vehicleType, licenseNumber, docs]);
+
+  // useCallback keyed on serviceAreaId (its fallback-arg closure value) so
+  // its identity only changes on the same trigger the effect below already
+  // re-fires on — adding it to that effect's deps therefore doesn't cause
+  // any extra re-runs.
+  const fetchVehicleTypes = useCallback(async (areaId?: string) => {
+    const area = areaId || serviceAreaId;
+    if (!area) {
+      setVehicleTypes([]);
+      return;
+    }
+    setLoadingTypes(true);
+    try {
+      const url = `${SpinrConfig.backendUrl}/api/v1/vehicle-types?service_area_id=${area}`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const data = await response.json();
+      const types = Array.isArray(data) ? data : [];
+      // Show only the vehicle types configured for the selected service area.
+      // An empty result used to fall back to the unfiltered global list, which
+      // surfaced every seeded type (Economy / Premium / Van / XL) regardless of
+      // the area — the bug drivers reported. The empty state below handles a
+      // genuinely unconfigured area instead of masking it.
+      setVehicleTypes(types);
+    } catch (e: any) {
+      console.log('Error fetching vehicle types:', e);
+      Alert.alert('Connection Error', getApiErrorMessage(e, 'Could not load vehicle types. Check your connection.'));
+    } finally {
+      setLoadingTypes(false);
+    }
+  }, [serviceAreaId]);
+
+  const fetchRequirements = async () => {
+    try {
+      const response = await fetch(`${SpinrConfig.backendUrl}/api/v1/drivers/requirements`);
+      if (response.ok) {
+        const data = await response.json();
+        setRequirements(data);
+      }
+    } catch (e) {
+      console.log('Error fetching requirements:', e);
+    }
+  };
+
   useEffect(() => {
+    // Mount-only fetch + local-draft restore; both are async functions that
+    // set state after their own await, not synchronously at the top of the
+    // effect. Empty deps, runs once — no re-render loop risk.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchRequirements();
     loadDraft();
   }, []);
 
   useEffect(() => {
     if (serviceAreaId) {
+      // Refetch + reset the selected vehicle type when the driver picks a
+      // different service area. setVehicleType('') doesn't feed back into
+      // serviceAreaId, so this can't loop.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       fetchVehicleTypes(serviceAreaId);
       setVehicleType('');
     } else {
       setVehicleTypes([]);
     }
-  }, [serviceAreaId]);
+  }, [serviceAreaId, fetchVehicleTypes]);
 
   const onDateChange = (event: any, selectedDate?: Date) => {
     setShowDatePicker(Platform.OS === 'ios'); // Keep open on iOS, close on Android
@@ -162,97 +294,7 @@ export default function BecomeDriverScreen() {
   // Save draft whenever relevant state changes
   useEffect(() => {
     saveDraft();
-  }, [currentStep, firstName, lastName, email, gender, city, vehicleMake, vehicleModel, vehicleColor, vehicleYear, licensePlate, vehicleVin, vehicleType, licenseNumber, docs]);
-
-  const loadDraft = async () => {
-    try {
-      const savedDraft = await AsyncStorage.getItem('driver_application_draft');
-      if (savedDraft) {
-        const data = JSON.parse(savedDraft);
-        // Only load if it matches the current user (if we stored user ID, but for now assuming local device is 1 user)
-        // Or better yet, we can clear it on logout.
-
-        if (data.step !== undefined) setCurrentStep(data.step);
-        if (data.personal) {
-          setFirstName(data.personal.firstName || '');
-          setLastName(data.personal.lastName || '');
-          setEmail(data.personal.email || '');
-          setGender(data.personal.gender || '');
-          setCity(data.personal.city || '');
-        }
-        if (data.vehicle) {
-          setVehicleMake(data.vehicle.make || '');
-          setVehicleModel(data.vehicle.model || '');
-          setVehicleColor(data.vehicle.color || '');
-          setVehicleYear(data.vehicle.year || '');
-          setLicensePlate(data.vehicle.plate || '');
-          setVehicleVin(data.vehicle.vin || '');
-          setVehicleType(data.vehicle.type || '');
-        }
-        if (data.docs) {
-          setLicenseNumber(data.docs.licenseNumber || '');
-          setDocs(data.docs.files || {});
-        }
-      }
-    } catch (e) {
-      console.log('Failed to load draft:', e);
-    }
-  };
-
-  const saveDraft = async () => {
-    try {
-      const draftData = {
-        step: currentStep,
-        personal: { firstName, lastName, email, gender, city },
-        vehicle: { make: vehicleMake, model: vehicleModel, color: vehicleColor, year: vehicleYear, plate: licensePlate, vin: vehicleVin, type: vehicleType },
-        docs: { licenseNumber, files: docs }
-      };
-      await AsyncStorage.setItem('driver_application_draft', JSON.stringify(draftData));
-    } catch (e) {
-      console.log('Failed to save draft:', e);
-    }
-  };
-
-  const fetchVehicleTypes = async (areaId?: string) => {
-    const area = areaId || serviceAreaId;
-    if (!area) {
-      setVehicleTypes([]);
-      return;
-    }
-    setLoadingTypes(true);
-    try {
-      const url = `${SpinrConfig.backendUrl}/api/v1/vehicle-types?service_area_id=${area}`;
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      const data = await response.json();
-      const types = Array.isArray(data) ? data : [];
-      // Show only the vehicle types configured for the selected service area.
-      // An empty result used to fall back to the unfiltered global list, which
-      // surfaced every seeded type (Economy / Premium / Van / XL) regardless of
-      // the area — the bug drivers reported. The empty state below handles a
-      // genuinely unconfigured area instead of masking it.
-      setVehicleTypes(types);
-    } catch (e: any) {
-      console.log('Error fetching vehicle types:', e);
-      Alert.alert('Connection Error', getApiErrorMessage(e, 'Could not load vehicle types. Check your connection.'));
-    } finally {
-      setLoadingTypes(false);
-    }
-  };
-
-  const fetchRequirements = async () => {
-    try {
-      const response = await fetch(`${SpinrConfig.backendUrl}/api/v1/drivers/requirements`);
-      if (response.ok) {
-        const data = await response.json();
-        setRequirements(data);
-      }
-    } catch (e) {
-      console.log('Error fetching requirements:', e);
-    }
-  };
+  }, [currentStep, firstName, lastName, email, gender, city, vehicleMake, vehicleModel, vehicleColor, vehicleYear, licensePlate, vehicleVin, vehicleType, licenseNumber, docs, saveDraft]);
 
   const processUpload = async (uri: string, name: string, mimeType: string, reqId: string, side: 'front' | 'back') => {
     try {
@@ -305,12 +347,12 @@ export default function BecomeDriverScreen() {
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const asset = result.assets[0];
         // Generate a name if missing (common with camera)
-        const name = asset.fileName || `photo_${Date.now()}.jpg`;
+        const name = asset.fileName || genFallbackFileName();
         const mimeType = asset.type === 'image' || !asset.type ? 'image/jpeg' : asset.type;
 
         await processUpload(asset.uri, name, mimeType, reqId, side);
       }
-    } catch (e) {
+    } catch {
       Alert.alert('Error', 'Failed to pick image');
     }
   };
@@ -326,7 +368,7 @@ export default function BecomeDriverScreen() {
 
       const asset = result.assets[0];
       await processUpload(asset.uri, asset.name, asset.mimeType || 'image/jpeg', reqId, side);
-    } catch (e) {
+    } catch {
       Alert.alert('Error', 'Failed to pick file');
     }
   };

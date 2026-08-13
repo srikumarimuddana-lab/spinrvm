@@ -2,7 +2,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 try:
     from ...utils.audit_logger import log_admin_action  # noqa: F401
@@ -181,6 +181,10 @@ class SettingsUpdateRequest(BaseModel):
     stripe_webhook_secret: Optional[str] = None
     # Connected-accounts endpoint signing secret (account.updated, payout.*).
     stripe_connect_webhook_secret: Optional[str] = None
+    # Kill switch for re-provisioning Stripe identities stranded by a
+    # test→live key rotation (see AppSettings for the full rationale).
+    # Settable here so it can be turned off without a redeploy.
+    stripe_reprovision_stale_ids: Optional[bool] = None
     twilio_account_sid: Optional[str] = None
     twilio_auth_token: Optional[str] = None
     twilio_from_number: Optional[str] = None
@@ -204,6 +208,10 @@ class SettingsUpdateRequest(BaseModel):
     # Company info shown on rider receipts + driver T4A slips + the
     # admin dashboard footer. Edited via the Settings page → Company tab.
     company_name: Optional[str] = None
+    # Product/brand name for email BODY copy, independent of the legal-entity
+    # company_name above. See schemas.AppSettings.company_app_name and
+    # ACTION_ITEMS.md N17.
+    company_app_name: Optional[str] = None
     company_address: Optional[str] = None
     company_phone: Optional[str] = None
     company_email: Optional[str] = None
@@ -260,12 +268,37 @@ class SettingsUpdateRequest(BaseModel):
     # Hours of unreachability before the stale-intent reconciler flips a
     # driver's is_online=false (migration 146). Bounds mirror the DB CHECK.
     stale_intent_offline_hours: Optional[float] = Field(default=None, ge=1, le=48)
+    # ── Driver demand heatmap (HM-13 / AD-05, columns from migration 311) ──
+    # These MUST stay declared here. The model is extra="ignore", so an
+    # undeclared field is dropped at validation while the endpoint still
+    # returns 200 and writes an audit row with changed_keys: [] — which is
+    # exactly how the heatmap config shipped as a silent no-op that reported
+    # success. Bounds mirror the DB CHECK in migration 311 and the runtime
+    # clamps in routes/drivers/profile.py (three layers, deliberately).
+    driver_heatmap_enabled: Optional[bool] = None
+    driver_heatmap_v2_enabled: Optional[bool] = None
+    # Dark-launch allowlist of driver *user* IDs (users.id — not drivers.id).
+    # Capped so an admin paste cannot park an unbounded list in the row.
+    heatmap_internal_driver_ids: Optional[List[str]] = Field(default=None, max_length=500)
+    heatmap_k_floor: Optional[int] = Field(default=None, ge=1, le=50)
+    heatmap_cell_lat_deg: Optional[float] = Field(default=None, ge=0.0005, le=0.05)
+    heatmap_cell_lng_deg: Optional[float] = Field(default=None, ge=0.0005, le=0.05)
+    heatmap_decay_half_life_days: Optional[float] = Field(default=None, ge=0.5, le=30)
+    # Floored at 30s: this interval multiplies across every online driver.
+    heatmap_refresh_seconds: Optional[int] = Field(default=None, ge=30, le=600)
     # Payments — auto-heal of rides stranded in payment_status='processing'.
     # When true, the daily Stripe reconcile finalises such rides (mark-paid
     # ONLY, from Stripe truth) instead of just flagging them. Defaults OFF; see
     # utils/stripe_reconcile._maybe_heal_stuck_processing. Money-moving — enable
     # only after staging validation.
     stripe_auto_heal_processing: Optional[bool] = None
+    # Notification throttling (quiet hours + daily cap) — see migration 304.
+    # Defaults OFF; ship dark, verify in staging, then flip on. Global for
+    # every rider/driver — no per-user override yet.
+    notification_throttling_enabled: Optional[bool] = None
+    notification_quiet_hours_start: Optional[str] = Field(default=None, pattern="^([01]\\d|2[0-3]):[0-5]\\d$")
+    notification_quiet_hours_end: Optional[str] = Field(default=None, pattern="^([01]\\d|2[0-3]):[0-5]\\d$")
+    notification_daily_cap: Optional[int] = Field(default=None, ge=0, le=100)
     # AI assistant (rider AI mode, backend/ai/) — provider/model swap at
     # runtime, keys masked like the Stripe/Twilio credentials above.
     ai_assistant_enabled: Optional[bool] = None
@@ -319,6 +352,19 @@ class SettingsUpdateRequest(BaseModel):
     # the shared shell/typography/radius restyle. Not a credential, no
     # special masking/super-admin gate needed.
     admin_theme_v2_enabled: Optional[bool] = None
+    # Driver SOS discreet-hold-shield rollout gate (ACTION_ITEMS.md B16) —
+    # dark-launched, driver-app only. Not a credential, no masking/
+    # super-admin gate needed.
+    driver_discreet_sos_enabled: Optional[bool] = None
+    # Kill switches (ACTION_ITEMS.md E5). scheduled_dispatch_enabled already
+    # existed in AppSettings/gated the loop (2026-08-02) but was never added
+    # here — there was previously no way to set it via the admin API at all,
+    # only a direct DB update. All four are plain booleans, no credential
+    # masking/super-admin gate needed.
+    scheduled_dispatch_enabled: Optional[bool] = None
+    surge_engine_enabled: Optional[bool] = None
+    promo_redemption_enabled: Optional[bool] = None
+    corporate_billing_enabled: Optional[bool] = None
     # Dual-approval gate for large PII-bearing exports (migration 268,
     # routes/admin/compliance.py, routes/admin/data_transfer_export.py) —
     # requires a second super_admin to approve before a large driver/rider

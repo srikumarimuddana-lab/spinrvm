@@ -45,6 +45,8 @@ class ErrorKeys:
 
     # Profile / account
     PROFILE_EMAIL_IN_USE: Final[str] = "errors.profile.email_in_use"
+    PROFILE_EMAIL_MISSING: Final[str] = "errors.profile.email_missing"
+    PROFILE_EMAIL_VERIFICATION_STALE: Final[str] = "errors.profile.email_verification_stale"
 
     # System
     SYSTEM_INTERNAL: Final[str] = "errors.system.internal"

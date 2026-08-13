@@ -29,10 +29,14 @@ from urllib.parse import urlparse
 try:
     from ..core.config import settings as _cfg
     from ..settings_loader import get_app_settings
+    from ..utils.address_format import coalesce_setting as _coalesce
+    from ..utils.address_format import postal_address as _postal_address
     from ..utils.report_branding import COMPANY_CONTACT_LINE, COMPANY_LINE
 except ImportError:  # pragma: no cover - direct module imports in tests
     from core.config import settings as _cfg  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
+    from utils.address_format import coalesce_setting as _coalesce  # type: ignore
+    from utils.address_format import postal_address as _postal_address  # type: ignore
     from utils.report_branding import COMPANY_CONTACT_LINE, COMPANY_LINE  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -206,6 +210,7 @@ async def load_company_details() -> CompanyDetails:
         settings = {}
 
     name = _coalesce(settings, "company_name") or "Spinr"
+    app_name = _coalesce(settings, "company_app_name") or "Spinr"
     address = _postal_address(settings)
     # Only claim an assembled identity line when an address is actually
     # configured; otherwise keep the shipped constant, which already carries
@@ -232,6 +237,7 @@ async def load_company_details() -> CompanyDetails:
 
     return CompanyDetails(
         name=name,
+        app_name=app_name,
         identity_line=identity_line,
         address=address,
         contact_line=contact_line,

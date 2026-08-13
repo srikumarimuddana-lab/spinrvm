@@ -30,6 +30,9 @@
       "react-native-reanimated/*": [
         "./node_modules/react-native-reanimated/*"
       ],
+      "react-native-svg": [
+        "./node_modules/react-native-svg"
+      ],
       "expo-clipboard": [
         "./node_modules/expo-clipboard"
       ],

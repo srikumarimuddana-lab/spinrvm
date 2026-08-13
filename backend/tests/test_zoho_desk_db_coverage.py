@@ -312,6 +312,20 @@ class TestCountByStatus:
 
         assert await zoho_desk_db.count_by_status(None, ["Open"]) is None
 
+    @pytest.mark.anyio
+    async def test_department_id_filters_both_total_and_per_status_queries(self, monkeypatch):
+        """A truthy department_id must be applied to every _count() call —
+        both the unfiltered-by-status total and each per-status count."""
+        from backend.services import zoho_desk_db
+
+        q = _chaining_query_mock(execute_side_effect=[_res(count=25), _res(count=25)])
+        monkeypatch.setattr(zoho_desk_db.db_supabase, "supabase", q)
+
+        total, by_status = await zoho_desk_db.count_by_status("dept-1", ["Open"])
+        assert total == 25
+        assert by_status == {"Open": 25}
+        q.eq.assert_any_call("department_id", "dept-1")
+
 
 class TestFetchWindow:
     @pytest.mark.anyio

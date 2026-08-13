@@ -9,7 +9,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   StatusBar,
-  Animated,
   ScrollView,
   Image,
 } from 'react-native';
@@ -19,7 +18,6 @@ import { useRouter } from 'expo-router';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import api, { getApiErrorMessage } from '@shared/api/client';
-import SpinrConfig from '@shared/config/spinr.config';
 import { useLanguageStore } from '../store/languageStore';
 import { showToast } from '../hooks/useToast';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -163,7 +161,7 @@ export default function LoginScreen() {
           <Text style={styles.greeting}>Welcome back 👋</Text>
           <Text style={styles.title}>Enter your phone number</Text>
           <Text style={styles.subtitle}>
-            We'll send you a verification code to confirm your identity
+            We&apos;ll send you a verification code to confirm your identity
           </Text>
         </View>
 

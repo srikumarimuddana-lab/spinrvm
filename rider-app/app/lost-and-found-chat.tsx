@@ -79,6 +79,9 @@ export default function LostAndFoundChatScreen() {
     }
   }, [caseId]);
 
+  // loadAll is a useCallback keyed only on caseId, so this fires once per
+  // caseId value; the state it sets (lostCase/messages/loading) isn't a dep.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { loadAll(); }, [loadAll]);
 
   useEffect(() => {

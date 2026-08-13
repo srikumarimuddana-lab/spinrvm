@@ -57,6 +57,40 @@ def _make_driver(driver_id, vehicle_type_id="vt-std", lat=52.14, lng=-106.68):
     }
 
 
+def _rows_by_table(*, drivers=None, subscriptions=None, areas=None, cascade_drivers=None):
+    """Build a ``get_rows`` side_effect keyed on TABLE, not call order.
+
+    The dispatch path reads several tables (``drivers``, ``service_areas`` for
+    the cross-service-area scope, ``driver_subscriptions``, ``subscription_plans``
+    …) and the exact sequence changes whenever a filter is added. A positional
+    ``side_effect=[...]`` list silently mis-assigns its values when that happens
+    — the driver pool receives a subscription payload, an intended exception
+    fires on the wrong query — so these fakes match on intent instead.
+
+    Any value may be an Exception instance, which is raised for that table.
+    ``cascade_drivers``, when given, answers the second ``drivers`` query (the
+    vehicle-cascade pool); the first gets ``drivers``.
+    """
+    areas = [{"id": "area-1", "parent_service_area_id": None}] if areas is None else areas
+    seen_drivers = {"n": 0}
+
+    async def _side_effect(table, filters=None, **kwargs):
+        if table == "drivers":
+            seen_drivers["n"] += 1
+            value = cascade_drivers if (cascade_drivers is not None and seen_drivers["n"] > 1) else drivers
+        elif table == "service_areas":
+            value = areas
+        elif table == "driver_subscriptions":
+            value = subscriptions
+        else:
+            value = []
+        if isinstance(value, BaseException):
+            raise value
+        return [] if value is None else value
+
+    return _side_effect
+
+
 async def test_stale_ride_status_skips_dispatch():
     from backend.routes.rides.matching import _match_driver_to_ride_attempt
 
@@ -91,7 +125,9 @@ async def test_subscription_filter_db_error_fails_closed_and_retries():
         patch("backend.routes.rides.matching._dispatch_retry", AsyncMock()) as mock_retry,
         patch("backend.routes.rides.matching._deps.spawn", side_effect=lambda coro: coro.close()),
     ):
-        mock_db.get_rows = AsyncMock(side_effect=[[driver], RuntimeError("subscriptions table down")])
+        mock_db.get_rows = AsyncMock(
+            side_effect=_rows_by_table(drivers=[driver], subscriptions=RuntimeError("subscriptions table down"))
+        )
         mock_db.find_one = AsyncMock(return_value={"id": "area-1", "subscription_required": True})
 
         result = await _match_driver_to_ride_attempt("ride-1", ride=ride)
@@ -140,11 +176,11 @@ async def test_quota_filter_db_error_fails_open_and_keeps_dispatching():
             AsyncMock(side_effect=RuntimeError("quota table down")),
         ):
             # Force the quota block to actually run its DB read by returning a
-            # non-empty active-subscription row on the (only remaining, since
-            # subscription_required=False skips the sub-filter's own get_rows)
-            # get_rows call.
+            # non-empty active-subscription row. Keyed by table so the extra
+            # service_areas read for the cross-service-area scope cannot consume
+            # the driver pool's slot.
             mock_db.get_rows = AsyncMock(
-                side_effect=[[driver], [{"driver_id": "drv-1", "rides_per_day": 5}]]
+                side_effect=_rows_by_table(drivers=[driver], subscriptions=[{"driver_id": "drv-1", "rides_per_day": 5}])
             )
             mock_db.claim_driver_atomic = AsyncMock(return_value=False)
             result = await _match_driver_to_ride_attempt("ride-1", ride=ride)
@@ -267,16 +303,16 @@ async def test_cascade_subscription_subfilter_drops_non_subscribers():
         patch("backend.routes.rides.matching._deps.spawn", side_effect=lambda coro: coro.close()),
     ):
         mock_db.find_one = AsyncMock(return_value=area)
-        # Sequence: 1) empty initial SUV pool -> triggers cascade;
-        # 2) subscription-required block is skipped for the initial (empty)
-        # pool since `all_drivers` is already []; 3) cascade XL pool;
-        # 4) cascade subscription rows (only drv-sub is active);
+        # Keyed by table: the initial SUV pool is empty (triggering cascade), the
+        # second `drivers` query is the cascade XL pool, and only drv-sub holds an
+        # active subscription. The subscription-required block is skipped for the
+        # initial pool because `all_drivers` is already [].
         mock_db.get_rows = AsyncMock(
-            side_effect=[
-                [],  # initial SUV pool
-                [xl_subscribed, xl_unsubscribed],  # cascade XL pool
-                [{"driver_id": "drv-sub", "plan_id": None}],  # cascade active subs
-            ]
+            side_effect=_rows_by_table(
+                drivers=[],
+                cascade_drivers=[xl_subscribed, xl_unsubscribed],
+                subscriptions=[{"driver_id": "drv-sub", "plan_id": None}],
+            )
         )
 
         result = await _match_driver_to_ride_attempt("ride-1", ride=ride)

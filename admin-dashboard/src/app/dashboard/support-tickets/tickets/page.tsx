@@ -318,7 +318,7 @@ export default function TicketListPage() {
                 </div>
             </div>
 
-            {error && <Card><CardContent className="p-4 text-sm text-red-600">{error}</CardContent></Card>}
+            {error && <Card><CardContent className="p-4 text-sm text-destructive">{error}</CardContent></Card>}
 
             <div className="rounded-lg border">
                 <Table>
@@ -344,7 +344,7 @@ export default function TicketListPage() {
                         {!loading && sorted.map((t) => (
                             <TableRow key={t.id} className="cursor-pointer">
                                 <TableCell>
-                                    <Link href={`/dashboard/support-tickets/tickets/${t.id}`} className="font-mono text-sm text-blue-600">
+                                    <Link href={`/dashboard/support-tickets/tickets/${t.id}`} className="font-mono text-sm text-blue-600 dark:text-blue-400">
                                         {t.ticketNumber}
                                     </Link>
                                 </TableCell>

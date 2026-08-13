@@ -290,6 +290,89 @@ class TestGetDriverEarnings:
         assert result["average_per_ride"] == "0.00"
 
 
+class TestGetDriverEarningsLegacyActivityStats:
+    """Regression for the bug reported against a migrated driver's Activity
+    screen: "All Time" showed 17 real rides in the list below a stat block
+    reading Total Earned $0.00 / 0 Total Trips / 0.0 KM Driven / 0h Online
+    Time — even though the rides existed. Root cause: total_rides/
+    total_distance_km/total_duration_minutes were summed over the SAME
+    EXCLUDE_LEGACY_RIDES-filtered `rides` list used for money, so a driver
+    whose completed rides in the period are entirely legacy-imported got 0
+    for all three despite utils/legacy_rides being explicit that the
+    exclusion "only governs money math" and imported rides "remain fully
+    visible in ride history"."""
+
+    def _get_rows_legacy_and_real(self, legacy_rides, real_rides):
+        """Mimics EXCLUDE_LEGACY_RIDES's PostgREST predicate: a filters dict
+        carrying that key returns only non-legacy rows; without it, both."""
+
+        def get_rows(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                if filters and filters.get("legacy_import_metadata") == {"$eq": {}}:
+                    return list(real_rides)
+                if filters and filters.get("status") == "cancelled":
+                    return []
+                return list(legacy_rides) + list(real_rides)
+            return []
+
+        return get_rows
+
+    async def test_all_legacy_rides_report_real_trip_count_but_zero_money(self):
+        from backend.routes.drivers import get_driver_earnings
+
+        legacy_rides = [
+            _ride(
+                id=f"legacy-{i}",
+                legacy_import_metadata={"source": "previous_app"},
+                distance_km=5.0,
+                duration_minutes=10,
+            )
+            for i in range(3)
+        ]
+
+        with patch(
+            "backend.db_supabase.get_rows",
+            AsyncMock(side_effect=self._get_rows_legacy_and_real(legacy_rides, [])),
+        ):
+            result = await get_driver_earnings(period="all", current_user={"id": USER_ID})
+
+        # Activity stats reflect all completed rides, legacy included.
+        assert result["total_rides"] == 3
+        assert result["total_distance_km"] == 15.0
+        assert result["total_duration_minutes"] == 30
+        # Money stays legacy-excluded — those dollars were already paid out
+        # by the previous app (Finding 3, A30).
+        assert result["total_earnings"] == "0.00"
+        assert result["average_per_ride"] == "0.00"
+
+    async def test_mixed_legacy_and_real_rides_split_correctly(self):
+        from backend.routes.drivers import get_driver_earnings
+
+        legacy_rides = [
+            _ride(
+                id="legacy-1", legacy_import_metadata={"source": "previous_app"}, distance_km=8.0, duration_minutes=20
+            )
+        ]
+        real_rides = [_ride(id="real-1", distance_km=4.2, duration_minutes=12)]
+
+        with patch(
+            "backend.db_supabase.get_rows",
+            AsyncMock(side_effect=self._get_rows_legacy_and_real(legacy_rides, real_rides)),
+        ):
+            result = await get_driver_earnings(period="all", current_user={"id": USER_ID})
+
+        # Trip count/distance/duration include the legacy ride.
+        assert result["total_rides"] == 2
+        assert result["total_distance_km"] == pytest.approx(12.2)
+        assert result["total_duration_minutes"] == 32
+        # Average is over the one real, earning ride only — not diluted by
+        # the legacy ride's $0 contribution.
+        assert Decimal(result["total_earnings"]) > Decimal("0")
+        assert result["average_per_ride"] == result["total_earnings"]
+
+
 # ============================================================
 # get_driver_daily_earnings
 # ============================================================
@@ -326,6 +409,37 @@ class TestGetDriverDailyEarnings:
             with pytest.raises(HTTPException) as exc:
                 await get_driver_daily_earnings(days=7, current_user={"id": USER_ID})
         assert exc.value.status_code == 503
+
+    async def test_earnings_accumulate_via_decimal_not_float(self):
+        """A26-adjacent P2 finding (docs/audit/2026-08-11-driver-rider-migration-audit.md):
+        raw float() accumulation over many rides drifts off the exact cent
+        value. 10 rides at $0.10+$0.10+$0.10+$0.10 each sum to exactly $4.00
+        with Decimal; the old raw-float accumulation gave 3.9999999999999996."""
+        from backend.routes.drivers import get_driver_daily_earnings
+
+        rides = [
+            _ride(
+                base_fare=0.1,
+                distance_fare=0.1,
+                time_fare=0.1,
+                tip_amount=0.1,
+                ride_completed_at="2026-08-01T12:00:00+00:00",
+            )
+            for _ in range(10)
+        ]
+
+        def get_rows(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                return rides
+            return []
+
+        with patch("backend.db_supabase.get_rows", AsyncMock(side_effect=get_rows)):
+            result = await get_driver_daily_earnings(days=7, current_user={"id": USER_ID})
+
+        assert len(result) == 1
+        assert result[0]["earnings"] == 4.0
 
 
 # ============================================================
@@ -476,6 +590,38 @@ class TestGetDriverWeeklyEarnings:
         assert len(result) == 1
         assert result[0]["earnings"] == pytest.approx(20.0)
 
+    async def test_rides_fallback_earnings_accumulate_via_decimal(self):
+        """See TestGetDriverDailyEarnings.test_earnings_accumulate_via_decimal_not_float —
+        same fix, same drift-prone inputs, in the rides-table fallback path."""
+        from backend.routes.drivers import get_driver_weekly_earnings
+
+        rides = [
+            _ride(
+                base_fare=0.1,
+                distance_fare=0.1,
+                time_fare=0.1,
+                tip_amount=0.1,
+                ride_completed_at="2026-08-01T12:00:00+00:00",
+            )
+            for _ in range(10)
+        ]
+
+        def get_rows(table, filters=None, **kw):
+            if table == "driver_daily_stats":
+                return []
+            if table == "rides":
+                return rides
+            return []
+
+        with (
+            patch("backend.db_supabase.find_one", AsyncMock(return_value=_driver())),
+            patch("backend.db_supabase.get_rows", AsyncMock(side_effect=get_rows)),
+        ):
+            result = await get_driver_weekly_earnings(weeks=4, current_user={"id": USER_ID})
+
+        assert len(result) == 1
+        assert result[0]["earnings"] == 4.0
+
     async def test_rides_fallback_db_error_raises_503(self):
         from backend.routes.drivers import get_driver_weekly_earnings
 
@@ -550,6 +696,38 @@ class TestGetDriverMonthlyEarnings:
         assert len(result) == 1
         assert result[0]["rides"] == 1
 
+    async def test_rides_fallback_earnings_accumulate_via_decimal(self):
+        """See TestGetDriverDailyEarnings.test_earnings_accumulate_via_decimal_not_float —
+        same fix, same drift-prone inputs, in the rides-table fallback path."""
+        from backend.routes.drivers import get_driver_monthly_earnings
+
+        rides = [
+            _ride(
+                base_fare=0.1,
+                distance_fare=0.1,
+                time_fare=0.1,
+                tip_amount=0.1,
+                ride_completed_at="2026-08-01T12:00:00+00:00",
+            )
+            for _ in range(10)
+        ]
+
+        def get_rows(table, filters=None, **kw):
+            if table == "driver_daily_stats":
+                return []
+            if table == "rides":
+                return rides
+            return []
+
+        with (
+            patch("backend.db_supabase.find_one", AsyncMock(return_value=_driver())),
+            patch("backend.db_supabase.get_rows", AsyncMock(side_effect=get_rows)),
+        ):
+            result = await get_driver_monthly_earnings(months=6, current_user={"id": USER_ID})
+
+        assert len(result) == 1
+        assert result[0]["earnings"] == 4.0
+
     async def test_rides_fallback_db_error_raises_503(self):
         from backend.routes.drivers import get_driver_monthly_earnings
 
@@ -580,6 +758,30 @@ class TestGetDriverEarningsComparison:
             with pytest.raises(HTTPException) as exc:
                 await get_driver_earnings_comparison(period="week", current_user={"id": "ghost"})
         assert exc.value.status_code == 404
+
+    async def test_earnings_accumulate_via_decimal_not_float(self):
+        """See TestGetDriverDailyEarnings.test_earnings_accumulate_via_decimal_not_float —
+        same fix, same drift-prone inputs, applied to summarize()'s current-period sum."""
+        from backend.routes.drivers import get_driver_earnings_comparison
+
+        rides = [
+            _ride(
+                base_fare=0.1,
+                distance_fare=0.1,
+                time_fare=0.1,
+                tip_amount=0.1,
+                ride_completed_at="2026-08-01T00:00:00+00:00",
+            )
+            for _ in range(10)
+        ]
+
+        with (
+            patch("backend.db_supabase.find_one", AsyncMock(return_value=_driver())),
+            patch("backend.db_supabase.get_rows", AsyncMock(return_value=rides)),
+        ):
+            result = await get_driver_earnings_comparison(period="week", current_user={"id": USER_ID})
+
+        assert result["current"]["earnings"] == 4.0
 
     async def test_week_period_computes_pct_change(self):
         from backend.routes.drivers import get_driver_earnings_comparison

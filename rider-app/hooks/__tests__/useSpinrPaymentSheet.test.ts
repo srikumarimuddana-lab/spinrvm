@@ -9,6 +9,11 @@
  *  - Canceled error (rider taps back) returns ok:false with "cancelled" message
  */
 
+import { renderHook, act } from '@testing-library/react-native';
+import { useStripe } from '@stripe/stripe-react-native';
+import api from '@shared/api/client';
+import { useSpinrPaymentSheet } from '../useSpinrPaymentSheet';
+
 jest.mock('@shared/api/client', () => ({
   __esModule: true,
   default: { post: jest.fn() },
@@ -17,11 +22,6 @@ jest.mock('@shared/api/client', () => ({
 jest.mock('@stripe/stripe-react-native', () => ({
   useStripe: jest.fn(),
 }));
-
-import { renderHook, act } from '@testing-library/react-native';
-import { useStripe } from '@stripe/stripe-react-native';
-import api from '@shared/api/client';
-import { useSpinrPaymentSheet } from '../useSpinrPaymentSheet';
 
 const mockApi = api as jest.Mocked<typeof api>;
 const mockUseStripe = useStripe as jest.MockedFunction<typeof useStripe>;

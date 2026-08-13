@@ -29,6 +29,7 @@ import {
     ArrowRight,
 } from "lucide-react";
 import {
+    adminDiscoverStripeDriverAccounts,
     adminValidateStripeImport,
     adminCommitStripeImport,
     adminStripeImportStatus,
@@ -314,6 +315,7 @@ export default function BulkOperationsPage() {
     const [statusBatch, setStatusBatch] = useState<string | null>(null);
     const [status, setStatus] = useState<StripeImportStatus | null>(null);
     const [statusLoading, setStatusLoading] = useState(false);
+    const [discovering, setDiscovering] = useState(false);
 
     const isSuperAdmin = user?.role === "super_admin";
     if (!isSuperAdmin) {
@@ -342,6 +344,43 @@ export default function BulkOperationsPage() {
     const onPickKind = (k: StripeImportKind) => {
         setKind(k);
         resetReport();
+    };
+
+    const handleDiscover = async () => {
+        setDiscovering(true);
+        try {
+            const rep = await adminDiscoverStripeDriverAccounts();
+            const bits = [
+                `${rep.matched} matched by email`,
+                rep.ambiguous.length ? `${rep.ambiguous.length} ambiguous (skipped)` : null,
+                rep.unmatched_drivers ? `${rep.unmatched_drivers} drivers with no matching account` : null,
+                rep.matches_without_phone.length
+                    ? `${rep.matches_without_phone.length} matched but missing a phone (cannot ride the CSV)`
+                    : null,
+            ].filter(Boolean).join(" · ");
+            if (!rep.csv) {
+                toast({ title: "No importable matches", description: bits || "Nothing to download.", variant: "destructive" });
+                return;
+            }
+            // Download the CSV; the operator uploads it below through the same
+            // validate → commit flow as a hand-built file. Nothing was written.
+            const blob = new Blob([rep.csv], { type: "text/csv" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "drivers_mapping_by_email.csv";
+            a.click();
+            URL.revokeObjectURL(url);
+            toast({ title: "Mapping CSV downloaded", description: `${bits}. Upload it below, validate, then commit.` });
+        } catch (e) {
+            toast({
+                title: "Discovery failed",
+                description: e instanceof Error ? e.message : "Could not read Stripe accounts",
+                variant: "destructive",
+            });
+        } finally {
+            setDiscovering(false);
+        }
     };
 
     const handleValidate = async () => {
@@ -492,13 +531,31 @@ export default function BulkOperationsPage() {
                                 </SelectContent>
                             </Select>
                         </div>
-                        <div className="flex items-end">
+                        <div className="flex items-end gap-2">
                             <Button variant="outline" onClick={() => downloadTemplate(kind)}>
                                 <FileDown className="mr-2 h-4 w-4" />
                                 Download CSV template
                             </Button>
+                            {kind === "drivers" && (
+                                <Button variant="outline" onClick={handleDiscover} disabled={discovering}>
+                                    {discovering ? (
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    ) : (
+                                        <FileDown className="mr-2 h-4 w-4" />
+                                    )}
+                                    Find matches by email
+                                </Button>
+                            )}
                         </div>
                     </div>
+                    {kind === "drivers" && (
+                        <p className="text-xs text-muted-foreground">
+                            &ldquo;Find matches by email&rdquo; reads your Stripe connected accounts and matches
+                            them to drivers that have no Stripe account linked, by exact email. It writes
+                            nothing — it downloads a pre-filled mapping CSV that you upload and validate below
+                            like any other. Ambiguous emails are skipped and reported, never guessed.
+                        </p>
+                    )}
                 </CardContent>
             </Card>
 
@@ -770,12 +827,18 @@ function DuplicateTable({ items }: { items: RiderImportDuplicate[] }) {
                             <TableCell>
                                 <span
                                     className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                                        it.match_type === "driver"
-                                            ? "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200"
-                                            : "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
+                                        it.match_type === "protected_skip"
+                                            ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
+                                            : it.match_type === "driver"
+                                              ? "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200"
+                                              : "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
                                     }`}
                                 >
-                                    {it.match_type === "driver" ? "Driver" : "Existing rider"}
+                                    {it.match_type === "protected_skip"
+                                        ? "Skipped — needs review"
+                                        : it.match_type === "driver"
+                                          ? "Driver"
+                                          : "Existing rider"}
                                 </span>
                             </TableCell>
                             <TableCell className="font-mono text-xs">{it.existing_user_id}</TableCell>
@@ -829,10 +892,14 @@ function RiderImportSection() {
             if (res.committed) {
                 const created = res.created_users ?? 0;
                 const updated = res.updated_users ?? 0;
+                const protectedSkips = res.duplicates?.filter((d) => d.match_type === "protected_skip").length ?? 0;
                 setCommittedSummary(
                     `Created ${created} rider(s), updated ${updated} existing user(s).` +
                         (res.duplicates?.length
                             ? ` ${res.duplicates.length} duplicate(s) detected (${res.duplicates.filter((d) => d.match_type === "driver").length} are drivers).`
+                            : "") +
+                        (protectedSkips
+                            ? ` ${protectedSkips} row(s) skipped — matched a pending-deletion/deleted account and require manual review.`
                             : ""),
                 );
                 setReport(null);
@@ -843,7 +910,14 @@ function RiderImportSection() {
                 setReport({
                     batch: res.batch,
                     can_commit: false,
-                    counts: res.counts ?? { rows: 0, to_create: 0, to_update: 0, duplicates: 0, duplicate_drivers: 0 },
+                    counts: res.counts ?? {
+                        rows: 0,
+                        to_create: 0,
+                        to_update: 0,
+                        duplicates: 0,
+                        duplicate_drivers: 0,
+                        protected_skips: 0,
+                    },
                     duplicates: res.duplicates ?? [],
                     warnings: res.warnings ?? [],
                     errors: res.errors ?? [],
@@ -966,11 +1040,14 @@ function RiderImportSection() {
                         </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-5">
-                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
                             <Stat label="Rows" value={counts?.rows ?? 0} />
                             <Stat label="New riders" value={counts?.to_create ?? 0} />
                             <Stat label="To update" value={counts?.to_update ?? 0} />
                             <Stat label="Duplicate (driver)" value={counts?.duplicate_drivers ?? 0} tone="warn" />
+                            {/* P0-C: rows matched to a pending_deletion/deleted account — PII
+                                left untouched, needs manual admin review before importing. */}
+                            <Stat label="Needs review" value={counts?.protected_skips ?? 0} tone="error" />
                             <Stat label="Errors" value={report.errors.length} tone="error" />
                         </div>
 

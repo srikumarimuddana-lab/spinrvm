@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useState, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
   ActivityIndicator, RefreshControl,
@@ -17,7 +17,7 @@ import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
 export default function ScheduledRidesScreen() {
   const router = useRouter();
   const { scheduledRides, fetchScheduledRides, cancelScheduledRide } = useRideStore();
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const { cancelReminder } = useScheduledRideReminder();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [loading, setLoading] = useState(true);
@@ -25,18 +25,24 @@ export default function ScheduledRidesScreen() {
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean; title: string; message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+    buttons?: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
-  useEffect(() => {
-    loadRides();
-  }, []);
-
-  const loadRides = async () => {
+  // fetchScheduledRides is a zustand action (stable), so loadRides wrapped
+  // in useCallback is also stable — depending on it below doesn't change
+  // when the mount effect fires.
+  const loadRides = useCallback(async () => {
     setLoading(true);
     await fetchScheduledRides();
     setLoading(false);
-  };
+  }, [fetchScheduledRides]);
+
+  useEffect(() => {
+    // Mount-only load; deps are empty so the state loadRides sets can't
+    // retrigger this effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadRides();
+  }, [loadRides]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -76,6 +82,15 @@ export default function ScheduledRidesScreen() {
   };
 
   const getTimeUntil = (dateStr: string) => {
+    // Display-only "roughly how long from now" label, called from
+    // renderRide (FlatList renderItem — runs during render). It intentionally
+    // is NOT a live-ticking countdown (no setInterval anywhere in this
+    // screen): it reflects "now" as of whenever the list last happened to
+    // re-render, same as before this rule existed. Nothing money/state/
+    // booking-critical reads this value — only display text and a badge
+    // color below — so the render-to-render staleness this rule warns
+    // about has no functional consequence here.
+    // eslint-disable-next-line react-hooks/purity
     const diff = new Date(dateStr).getTime() - Date.now();
     if (diff <= 0) return 'Dispatching...';
     const hours = Math.floor(diff / (1000 * 60 * 60));
@@ -87,6 +102,9 @@ export default function ScheduledRidesScreen() {
   const renderRide = ({ item }: { item: any }) => {
     const { date, time } = formatDateTime(item.scheduled_time);
     const timeUntil = getTimeUntil(item.scheduled_time);
+    // Same display-only rationale as getTimeUntil above — only gates a
+    // badge color, not booking/money logic.
+    // eslint-disable-next-line react-hooks/purity
     const isImminent = new Date(item.scheduled_time).getTime() - Date.now() < 15 * 60 * 1000;
 
     return (

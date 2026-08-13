@@ -36,10 +36,12 @@ from typing import Any
 
 try:
     from ..supabase_client import supabase
+    from ..utils.stripe_mode import key_mode, object_mode
     from .driver_import_service import _select_in, normalize_phone, read_csv_text
 except ImportError:  # pragma: no cover - allow direct/CLI module imports
     from services.driver_import_service import _select_in, normalize_phone, read_csv_text
     from supabase_client import supabase  # type: ignore  # noqa: F401
+    from utils.stripe_mode import key_mode, object_mode  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +116,41 @@ def _row_ref(row: dict[str, str], idx: int, key: str) -> str:
     return legacy if legacy else f"row-{idx + 2}"
 
 
+def _phone_lookup_keys(raw: str) -> list[str]:
+    """Every spelling of ``raw`` a driver row might legitimately be stored as.
+
+    ``users.phone`` / ``drivers.phone`` are E.164 by convention (auth validates
+    on signup, the legacy import normalizes), so the normalized form is tried
+    first. The verbatim spelling is carried too because a row written by any
+    path that skipped normalization would otherwise be invisible to the ``IN``
+    query and every CSV row referencing it would fail ``no_match`` — including
+    rows produced by our own email discovery, which reads the phone straight
+    off the driver row. Order is significant: callers take the first hit.
+
+    Deliberately NOT canonicalized to last-10-digits — that would let a
+    non-NANP number collide with a NANP one and redirect a payout destination
+    to the wrong driver.
+    """
+    keys: list[str] = []
+    for candidate in (normalize_phone(raw or ""), (raw or "").strip()):
+        if candidate and candidate not in keys:
+            keys.append(candidate)
+    return keys
+
+
+def _csv_safe_phone(raw: str) -> str:
+    """The stored phone if it can ride an unquoted CSV cell, else "".
+
+    Returning "" routes the match to ``matches_without_phone``, where the
+    operator sees it, rather than emitting a cell that shifts every column to
+    its right and silently maps a payout destination onto the wrong driver.
+    """
+    value = (raw or "").strip()
+    if not value or any(ch in value for ch in ',"\r\n'):
+        return ""
+    return value
+
+
 def _prefetch_drivers(
     rows: list[dict[str, str]],
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
@@ -126,7 +163,7 @@ def _prefetch_drivers(
     detects value collisions across the whole table.
     """
     old_ids = sorted({(r.get("old_driver_id") or "").strip() for r in rows} - {""})
-    phones = sorted({normalize_phone(r.get("phone") or "") for r in rows if (r.get("phone") or "").strip()})
+    phones = sorted({k for r in rows for k in _phone_lookup_keys(r.get("phone") or "")})
     accts = sorted({(r.get("stripe_account_id") or "").strip() for r in rows} - {""})
 
     cols = "id,phone,stripe_account_id,legacy_import_metadata"
@@ -255,9 +292,11 @@ def _build_local_driver_plan(rows: list[dict[str, str]], plan: StripeMappingPlan
 
     for _idx, row, row_ref, acct in candidates:
         old_id = (row.get("old_driver_id") or "").strip()
-        phone = normalize_phone(row.get("phone") or "") if (row.get("phone") or "").strip() else ""
         matched_by_old = by_old_id.get(old_id) if old_id else None
-        matched_by_phone = by_phone.get(phone) if phone else None
+        matched_by_phone = next(
+            (by_phone[k] for k in _phone_lookup_keys(row.get("phone") or "") if k in by_phone),
+            None,
+        )
 
         if matched_by_old and matched_by_phone and matched_by_old["id"] != matched_by_phone["id"]:
             plan.errors.append(
@@ -405,11 +444,33 @@ def _build_local_rider_plan(rows: list[dict[str, str]], plan: StripeMappingPlan)
 
 def _livemode_error(obj: dict[str, Any], stripe_secret: str) -> tuple[str, str] | None:
     """Hard error: a test-mode object must never be mapped as a live payout
-    destination (or vice versa). Normally unreachable — a key can't retrieve
-    the other mode's objects — so if it fires, something is deeply wrong."""
-    live_key = stripe_secret.startswith("sk_live_")
-    if bool(obj.get("livemode")) != live_key:
-        return ("livemode", "object livemode does not match the configured key mode")
+    destination (or vice versa).
+
+    This is a **cross-check, not the primary evidence**. The retrieve in
+    `_retrieve_stripe` already proves mode: Stripe cannot return an object
+    from the other mode, it 404s, which lands as `not_accessible`. So this
+    only ever fires on a contradiction Stripe should be incapable of
+    producing — and it must stay silent when it has nothing to compare:
+
+    - **A Connect `Account` carries no `livemode` field at all** (unlike
+      `Customer`, which does). Reading it as a falsy boolean made every live
+      account look test-mode and failed 100% of driver rows.
+    - **A restricted key (`rk_live_…`) is a live key.** Matching only the
+      `sk_live_` prefix made every live object look mode-mismatched.
+
+    Both are handled by delegating to `object_mode` / `key_mode`, which return
+    None for "cannot tell" rather than guessing. None on either side means no
+    finding — never a hard error inferred from absent evidence.
+    """
+    observed = object_mode(obj)
+    configured = key_mode(stripe_secret)
+    if observed is None or configured is None:
+        return None
+    if observed != configured:
+        return (
+            "livemode",
+            f"object is {observed}-mode but the configured Stripe key is {configured}-mode",
+        )
     return None
 
 
@@ -877,3 +938,178 @@ async def sync_kyc_after_commit(
         extra={"domain": "payments"},
     )
     return {"ok": len(ok), "failed": len(failed), "failed_driver_ids": failed}
+
+
+# ------------------------------------------------------ email discovery
+
+# The refresh/KYC tooling follows drivers.stripe_account_id and never guesses,
+# so an operator who can SEE a driver's account in the Stripe dashboard (same
+# email) still gets "no_stripe_account" until the column is filled. This is
+# the bridge: read-only matching of unlinked drivers to connected accounts by
+# email, emitting the exact CSV the validated import consumes. All WRITES stay
+# in the import's validate/commit path — discovery never touches a row, so a
+# wrong guess here can cost at most a rejected CSV row, never a payout.
+
+
+def _list_connected_accounts(stripe_secret: str, cap: int = 1000) -> list[dict[str, Any]]:
+    """Every connected account on the running key (Stripe has no email filter
+    on /v1/accounts, so we page and match locally). Blocking; call in a thread.
+    Capped defensively — a platform with more accounts than the cap gets a
+    loud error rather than silent partial matching."""
+    import stripe
+
+    try:
+        from ..utils.stripe_config import stripe_object_to_dict
+    except ImportError:  # pragma: no cover - dual-import pattern
+        from utils.stripe_config import stripe_object_to_dict  # type: ignore
+
+    out: list[dict[str, Any]] = []
+    for acct in stripe.Account.list(limit=100, api_key=stripe_secret).auto_paging_iter():
+        # stripe_object_to_dict, never dict(acct): on the deployed SDK the
+        # paged objects are not Mappings and dict() dies with KeyError: 0.
+        d = stripe_object_to_dict(acct)
+        out.append(
+            {
+                "id": d.get("id"),
+                "email": (d.get("email") or "").strip().lower(),
+                "country": d.get("country"),
+                "type": d.get("type"),
+                "details_submitted": bool(d.get("details_submitted")),
+                "payouts_enabled": bool(d.get("payouts_enabled")),
+                "created": d.get("created"),
+            }
+        )
+        if len(out) > cap:
+            raise RuntimeError(f"more than {cap} connected accounts; refusing to match partially")
+    return out
+
+
+def _unlinked_drivers_with_emails() -> list[dict[str, Any]]:
+    """Drivers with no stripe_account_id, each annotated with their email.
+
+    Email comes from the ``users`` row via ``user_id`` — the ``drivers`` table
+    has NO email column (selecting one 42703s in production; the
+    ``driver.get("email")`` reads elsewhere in the codebase only work on dicts
+    already merged with user data). Blocking; call in a thread.
+    """
+    drivers = (
+        supabase.table("drivers")
+        .select("id,phone,user_id,stripe_account_id,stripe_account_id_superseded")
+        .is_("stripe_account_id", "null")
+        .execute()
+        .data
+        or []
+    )
+    user_ids = sorted({d["user_id"] for d in drivers if d.get("user_id")})
+    user_emails: dict[str, str] = {}
+    if user_ids:
+        for u in _select_in("users", "id,email", "id", user_ids):
+            if (u.get("email") or "").strip():
+                user_emails[u["id"]] = u["email"]
+    for d in drivers:
+        d["email"] = (user_emails.get(d.get("user_id") or "", "") or "").strip().lower()
+    return drivers
+
+
+async def discover_driver_accounts_by_email(stripe_secret: str) -> dict[str, Any]:
+    """Propose driver ↔ connected-account links by exact email match.
+
+    Matching criteria, deliberately strict:
+      - exact, case-insensitive email equality — no fuzzy/name matching;
+      - the account must not already be linked to ANY driver row;
+      - one driver ↔ one account. An email seen on several accounts, or an
+        account whose email matches several drivers, is reported under
+        ``ambiguous`` for a human to resolve — never auto-proposed.
+
+    Returns ``matches`` (with the account's live state so the operator can eye
+    it), ``ambiguous``, ``unmatched_drivers``/``unmatched_accounts`` counts,
+    and ``csv`` — a ``stripe_account_id,phone`` document ready for the
+    existing ``/api/admin/stripe/import`` validate → commit flow, which
+    re-validates every row live against Stripe and only ever fills NULL
+    columns. Discovery itself writes nothing.
+    """
+    drivers, accounts = await asyncio.gather(
+        asyncio.to_thread(_unlinked_drivers_with_emails),
+        asyncio.to_thread(_list_connected_accounts, stripe_secret),
+    )
+
+    linked_accts: set[str] = set()
+    already = await asyncio.to_thread(
+        lambda: supabase.table("drivers").select("stripe_account_id").not_.is_("stripe_account_id", "null").execute()
+    )
+    for row in already.data or []:
+        if row.get("stripe_account_id"):
+            linked_accts.add(row["stripe_account_id"])
+
+    accounts = [a for a in accounts if a["id"] not in linked_accts]
+
+    # Lower-case at match time, not just in the fetchers — the equality
+    # invariant lives HERE, so a future caller feeding raw emails cannot
+    # silently miss matches.
+    drivers_by_email: dict[str, list[dict[str, Any]]] = {}
+    for d in drivers:
+        email = (d.get("email") or "").strip().lower()
+        if email:
+            drivers_by_email.setdefault(email, []).append(d)
+    accounts_by_email: dict[str, list[dict[str, Any]]] = {}
+    for a in accounts:
+        email = (a.get("email") or "").strip().lower()
+        if email:
+            accounts_by_email.setdefault(email, []).append(a)
+
+    matches: list[dict[str, Any]] = []
+    ambiguous: list[dict[str, Any]] = []
+    for email, ds in sorted(drivers_by_email.items()):
+        accts = accounts_by_email.get(email) or []
+        if not accts:
+            continue
+        if len(ds) == 1 and len(accts) == 1:
+            d, a = ds[0], accts[0]
+            matches.append(
+                {
+                    "driver_id": d["id"],
+                    "stripe_account_id": a["id"],
+                    "matched_on": "email",
+                    # Live account state so the operator can eyeball sanity
+                    # before importing. The import re-validates regardless.
+                    "account_country": a["country"],
+                    "account_type": a["type"],
+                    "details_submitted": a["details_submitted"],
+                    "payouts_enabled": a["payouts_enabled"],
+                    # Superseded set means this driver was retired by the
+                    # key-mode repair — expected after a cutover; flagged so
+                    # the operator understands why the slot is empty.
+                    "was_retired": bool(d.get("stripe_account_id_superseded")),
+                    # Verbatim, NOT normalized: the import looks this value up
+                    # against drivers.phone, so echoing what is stored is the
+                    # spelling guaranteed to match. A value carrying CSV
+                    # delimiters would corrupt the file, so it is dropped to
+                    # matches_without_phone instead of silently mangled.
+                    "phone": _csv_safe_phone(d.get("phone") or ""),
+                }
+            )
+        else:
+            ambiguous.append(
+                {
+                    "email_drivers": [d["id"] for d in ds],
+                    "email_accounts": [a["id"] for a in accts],
+                    "reason": "same email on multiple drivers and/or multiple accounts",
+                }
+            )
+
+    csv_rows = ["stripe_account_id,phone"]
+    csv_rows += [f"{m['stripe_account_id']},{m['phone']}" for m in matches if m["phone"]]
+    phoneless = [m["driver_id"] for m in matches if not m["phone"]]
+
+    return {
+        "matches": matches,
+        "ambiguous": ambiguous,
+        "matched": len(matches),
+        "unmatched_drivers": len([e for e in drivers_by_email if e not in accounts_by_email])
+        + len([d for d in drivers if not (d.get("email") or "").strip()]),
+        "unmatched_accounts": len([e for e in accounts_by_email if e not in drivers_by_email]),
+        # A match whose driver row has no phone can't ride the CSV (the import
+        # matches on old_driver_id/phone) — surfaced instead of dropped.
+        "matches_without_phone": phoneless,
+        "csv": "\n".join(csv_rows) + "\n" if len(csv_rows) > 1 else "",
+    }

@@ -16,7 +16,14 @@ import {
     ROUTE_PIN_COLORS,
     ROUTE_STROKE_WIDTH,
 } from "@spinr/shared/constants/routeMapStyle";
-import { MonitoringDriver, MonitoringFilters, MonitoringRide, SelectedItem } from "./types";
+import { AreaDemandSupply, MonitoringDriver, MonitoringFilters, MonitoringRide, SelectedItem } from "./types";
+import {
+    DEMAND_BANDS,
+    NO_DATA_COLOR,
+    bandRangeLabel,
+    demandFillColor,
+    demandFillOpacity,
+} from "@/lib/demand-bands";
 
 const DEFAULT_ZOOM = 12;
 
@@ -121,6 +128,7 @@ interface MonitoringMapProps {
     selected: SelectedItem;
     followMode: boolean;
     serviceAreas?: MonitoringServiceArea[];
+    demandData?: AreaDemandSupply[];
     onSelectDriver: (id: string) => void;
     onSelectRide: (id: string) => void;
     /** Exposes imperative update handles to parent */
@@ -145,6 +153,33 @@ function rideLineLayerId(rideId: string): string {
 
 const MAP_CONTAINER_STYLE: React.CSSProperties = { width: "100%", height: "100%" };
 
+/** Pre-overlay appearance — unchanged from before the demand feature existed,
+ *  so toggling the overlay off is pixel-identical to the original map. */
+const DEFAULT_AREA_FILL = "#8b5cf6";
+const DEFAULT_AREA_OPACITY = 0.08;
+
+/** Fill colour for a service-area polygon when the demand overlay is on.
+ *
+ * Thresholds and colours come from the shared band module so this map and the
+ * heatmap page's cards can never disagree about what a ratio means. An area
+ * missing from the response (airport sub-zones, which get_surge_status skips,
+ * or a brand-new area) is NOT the same as an oversupplied one — it gets the
+ * neutral no-data treatment rather than being painted "Oversupply" purple,
+ * which previously made a surge-engine outage look like a healthy market. */
+function areaFillColor(areaId: string, demandData: AreaDemandSupply[] | undefined, showDemand: boolean): string {
+    if (!showDemand || !demandData) return DEFAULT_AREA_FILL;
+    const d = demandData.find(a => a.area_id === areaId);
+    if (!d) return NO_DATA_COLOR;
+    return demandFillColor(d.demand_count, d.supply_count, d.ratio);
+}
+
+function areaFillOpacity(areaId: string, demandData: AreaDemandSupply[] | undefined, showDemand: boolean): number {
+    if (!showDemand || !demandData) return DEFAULT_AREA_OPACITY;
+    const d = demandData.find(a => a.area_id === areaId);
+    if (!d) return DEFAULT_AREA_OPACITY;
+    return demandFillOpacity(d.demand_count, d.supply_count, d.ratio);
+}
+
 export function MonitoringMap({
     driversMap,
     ridesMap,
@@ -153,6 +188,7 @@ export function MonitoringMap({
     selected,
     followMode,
     serviceAreas,
+    demandData,
     onSelectDriver,
     onSelectRide,
     onReady,
@@ -457,7 +493,7 @@ export function MonitoringMap({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // Keep the areas source in sync with the prop
+    // Keep the areas source in sync with the prop + demand overlay
     useEffect(() => {
         const map = mapRef.current;
         if (!map || !isLoaded) return;
@@ -466,13 +502,24 @@ export function MonitoringMap({
             if (!area.geojson) return;
             features.push({
                 type: "Feature",
-                properties: { id: area.id, name: area.name ?? "Service Area" },
+                properties: {
+                    id: area.id,
+                    name: area.name ?? "Service Area",
+                    fillColor: areaFillColor(area.id, demandData, filters.showDemand),
+                    fillOpacity: areaFillOpacity(area.id, demandData, filters.showDemand),
+                },
                 geometry: area.geojson,
             });
         });
         const src = map.getSource(AREAS_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
         src?.setData({ type: "FeatureCollection", features });
-    }, [serviceAreas, isLoaded]);
+
+        const fillLayer = map.getLayer(AREAS_FILL_LAYER_ID);
+        if (fillLayer) {
+            map.setPaintProperty(AREAS_FILL_LAYER_ID, "fill-color", ["get", "fillColor"]);
+            map.setPaintProperty(AREAS_FILL_LAYER_ID, "fill-opacity", ["get", "fillOpacity"]);
+        }
+    }, [serviceAreas, isLoaded, demandData, filters.showDemand]);
 
     // Re-apply filter visibility when filters change
     useEffect(() => {
@@ -513,6 +560,37 @@ export function MonitoringMap({
             {!isLoaded && (
                 <div className="absolute inset-0 flex items-center justify-center bg-muted">
                     <p className="text-sm text-muted-foreground">Loading map…</p>
+                </div>
+            )}
+            {demandData && demandData.length > 0 && (
+                // bg-background (not /90): a translucent panel over live map tiles
+                // put the muted legend text right at the contrast floor with the
+                // underlying imagery unknowable.
+                <div className="absolute bottom-3 left-3 z-10 rounded-lg border border-border bg-background p-3 text-xs shadow-md">
+                    <p className="mb-1.5 font-medium">Demand : supply ratio</p>
+                    {DEMAND_BANDS.map((band) => (
+                        <div key={band.key} className="flex items-center gap-2 py-0.5">
+                            <span
+                                aria-hidden="true"
+                                className="inline-block h-3 w-3 rounded-sm"
+                                style={{ backgroundColor: band.color, opacity: 0.7 }}
+                            />
+                            <span className="text-foreground">
+                                {band.label}{" "}
+                                <span className="text-muted-foreground">
+                                    ({bandRangeLabel(band)}) → {band.multiplier.toFixed(2)}× fare
+                                </span>
+                            </span>
+                        </div>
+                    ))}
+                    <div className="mt-1 flex items-center gap-2 border-t border-border pt-1.5">
+                        <span
+                            aria-hidden="true"
+                            className="inline-block h-3 w-3 rounded-sm"
+                            style={{ backgroundColor: NO_DATA_COLOR, opacity: 0.7 }}
+                        />
+                        <span className="text-muted-foreground">No data reported</span>
+                    </div>
                 </div>
             )}
         </div>

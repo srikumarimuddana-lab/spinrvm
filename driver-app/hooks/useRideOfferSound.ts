@@ -23,7 +23,7 @@
  *                 after /drivers/config resolves. Pass null/empty to
  *                 revert to the bundled placeholder.
  */
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useMemo } from 'react';
 import {
     createAudioPlayer,
     setAudioModeAsync,
@@ -161,5 +161,14 @@ export function useRideOfferSound(): RideOfferSoundControls {
         };
     }, []);
 
-    return { play, stop };
+    // play/stop are both permanently stable (playOnce/stop's own useCallback
+    // deps are both `[]`), so this object's identity is stable forever too —
+    // memoized so callers (useDriverDashboard.ts) can safely list the
+    // returned object itself in a dependency array without it changing
+    // every render. Previously this returned a fresh `{ play, stop }`
+    // object literal on every call, which is why that consumer's effect
+    // had to leave it out of its own deps array (exhaustive-deps couldn't
+    // be satisfied safely) — this fixes the root cause instead of just
+    // suppressing the warning downstream.
+    return useMemo(() => ({ play, stop }), [play, stop]);
 }

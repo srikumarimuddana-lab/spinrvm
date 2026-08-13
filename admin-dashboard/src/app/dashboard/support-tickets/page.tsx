@@ -121,7 +121,7 @@ export default function HelpDeskPage() {
                 table / expired token / network failure is visible instead of a
                 blank page. */}
             {!loading && error && (
-                <Card><CardContent className="p-4 text-sm text-red-600">{error}</CardContent></Card>
+                <Card><CardContent className="p-4 text-sm text-destructive">{error}</CardContent></Card>
             )}
 
             {!loading && connected === false && (

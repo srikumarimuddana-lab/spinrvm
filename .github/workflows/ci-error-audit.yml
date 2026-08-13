@@ -99,12 +99,12 @@ jobs:
       error_summary: ${{ steps.parse.outputs.error_summary }}
       top_severity:  ${{ steps.parse.outputs.top_severity }}  # C1/H8: needed by notify-critical
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
 
@@ -145,7 +145,7 @@ jobs:
           PYEOF
 
       - name: Upload classified errors
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ci-audit-classified-errors
           path: /tmp/classified_errors.json
@@ -164,18 +164,18 @@ jobs:
       report_file: ${{ steps.generate-report.outputs.report_file }}
     steps:
       # C4: checkout the FAILING commit so git diff / impact analysis is correct
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           ref: ${{ needs.check-trigger.outputs.head_sha || github.sha }}
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
 
       - name: Download classified errors
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ci-audit-classified-errors
           path: /tmp/
@@ -229,7 +229,7 @@ jobs:
             --output /tmp/change_requests.json
 
       - name: Upload full audit bundle
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ci-audit-full-report
           path: |
@@ -250,15 +250,15 @@ jobs:
       needs.check-trigger.outputs.should_run == 'true' &&
       needs.run-audit.result == 'success'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
 
       - name: Download audit bundle
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ci-audit-full-report
           path: /tmp/audit/
@@ -296,7 +296,7 @@ jobs:
       needs.collect-failure-data.outputs.top_severity == 'P0'
     steps:
       - name: Send critical Slack alert
-        uses: 8398a7/action-slack@v3
+        uses: 8398a7/action-slack@77eaa4f1c608a7d68b38af4e3f739dcd8cba273e # v3
         with:
           status: failure
           webhook_url: ${{ secrets.SLACK_WEBHOOK }}

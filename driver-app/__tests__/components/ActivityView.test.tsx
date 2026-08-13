@@ -71,6 +71,7 @@ const makeStore = (overrides = {}) => ({
   },
   rideHistory: [makeRide()],
   historyTotal: 1,
+  driverBalance: { previous_app_paid_total: '0.00' },
   fetchEarnings: jest.fn().mockResolvedValue(undefined),
   fetchRideHistory: jest.fn().mockResolvedValue(undefined),
   fetchDriverBalance: jest.fn().mockResolvedValue(undefined),
@@ -195,6 +196,71 @@ describe('ActivityView', () => {
 
     await waitFor(() => expect(getByText('Monthly Pickup')).toBeTruthy());
     expect(getByText('Load more rides')).toBeTruthy();
+  });
+
+  // Business decision 2026-08-13 (docs/change-log/2026-08-13-blended-
+  // lifetime-earnings.md): superseded A30 Finding 4's driver/rider-facing
+  // "Imported" badge and Finding 3's "not counted here" explainer. A
+  // migrated ride now renders identically to any other ride in the driver
+  // app; the distinction stays in the backend/admin portal only.
+  it('never shows an imported/legacy badge or explainer on a ride card', async () => {
+    mockStore = makeStore({
+      rideHistory: [
+        makeRide({
+          id: 'ride-legacy',
+          pickup_address: 'Old App Pickup',
+          legacy_import_metadata: { batch: '20260726', source: 'legacy_mongo_booking_import' },
+        }),
+      ],
+    });
+    mockUseDriverStore.mockReturnValue(mockStore);
+
+    const { getByText, queryByText } = render(<ActivityView />);
+
+    await waitFor(() => expect(getByText('Old App Pickup')).toBeTruthy());
+    expect(queryByText('Imported from your previous account')).toBeNull();
+    expect(queryByText(/from your previous account/)).toBeNull();
+    expect(queryByText(/imported/i)).toBeNull();
+  });
+
+  it('blends previous-app money into the All Time total and average as a Previously Paid line item', async () => {
+    mockStore = makeStore({
+      earnings: {
+        total_earnings: 100,
+        total_tips: 0,
+        total_incentives: 0,
+        total_tax: 0,
+        total_rides: 5,
+        total_distance_km: 25,
+        total_duration_minutes: 60,
+        average_per_ride: 20,
+      },
+      driverBalance: { previous_app_paid_total: '50.00' },
+    });
+    mockUseDriverStore.mockReturnValue(mockStore);
+
+    const { getByText } = render(<ActivityView />);
+    await waitFor(() => expect(getByText('123 Main St')).toBeTruthy());
+
+    fireEvent.press(getByText('All Time'));
+    await waitFor(() => expect(mockStore.fetchEarnings).toHaveBeenLastCalledWith('all'));
+
+    // Total Earned blends Spinr earnings ($100) + previous-app money ($50).
+    await waitFor(() => expect(getByText('$150.00')).toBeTruthy());
+    expect(getByText('Previously Paid')).toBeTruthy();
+    // Avg per Trip = blended total / total trips = 150 / 5.
+    expect(getByText('$30.00')).toBeTruthy();
+  });
+
+  it('does not blend previous-app money outside the All Time period (no reliable per-period split)', async () => {
+    mockStore = makeStore({ driverBalance: { previous_app_paid_total: '50.00' } });
+    mockUseDriverStore.mockReturnValue(mockStore);
+
+    const { getByText, queryByText } = render(<ActivityView />);
+
+    // Default period is 'today'.
+    await waitFor(() => expect(getByText('123 Main St')).toBeTruthy());
+    expect(queryByText('Previously Paid')).toBeNull();
   });
 
   it('refetches only earnings on a period change (list re-filters client-side)', async () => {

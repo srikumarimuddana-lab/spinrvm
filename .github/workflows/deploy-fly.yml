@@ -44,7 +44,7 @@ jobs:
       FLY_APP: spinr-backend-yyz
       FLY_HEALTH_URL: ${{ secrets.FLY_HEALTH_URL }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Verify FLY_API_TOKEN is set
         run: |
@@ -99,6 +99,22 @@ jobs:
       - name: Deploy to Fly.io
         working-directory: backend
         run: flyctl deploy --remote-only --config fly.toml
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      # Machine count and fly.toml's concurrency limits are ONE capacity
+      # decision and must never ship apart. fly.toml deploys automatically on
+      # every push to main, so if the pool size lived only in the manual
+      # bootstrap workflow, a merge would raise soft/hard limits to 750/1000
+      # while the app still ran on 2 machines — admitting 4x the connections on
+      # the same two shared-cpu-1x/1gb VMs with no burst pool behind them, which
+      # is strictly worse than the 200/250 it replaced.
+      #
+      # `scale count` is idempotent: it is a no-op when the app already has 8
+      # machines, so running it on every deploy simply keeps the two halves in
+      # sync. See docs/runbooks/capacity-scaling.md §2.
+      - name: Ensure burst machine pool (2 warm + 6 suspended)
+        run: flyctl scale count 8 --region yyz -a "${FLY_APP}" --yes
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 

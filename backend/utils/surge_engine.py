@@ -27,15 +27,16 @@ except ImportError:
 try:
     from db import db
     from geo_utils import get_service_area_polygon, point_in_polygon
+    from settings_loader import get_app_settings
     from utils.driver_presence import present_driver_ids
     from utils.metrics import inc as _metric_inc
-    from utils.redis_client import redis_set_nx
+    from utils.redis_client import redis_get, redis_set, redis_set_nx
 except ImportError:
     from ..db import db
     from ..geo_utils import get_service_area_polygon, point_in_polygon
     from .driver_presence import present_driver_ids
     from .metrics import inc as _metric_inc
-    from .redis_client import redis_set_nx
+    from .redis_client import redis_get, redis_set, redis_set_nx
 
 # Per-area supply/demand fetch cap. Surge = demand/supply, a regulated rider-
 # facing price; if a fetch hits this cap the count is TRUNCATED and the
@@ -234,6 +235,18 @@ async def recalculate_all_surges() -> List[Dict[str, Any]]:
     """
     results = []
 
+    # Kill switch (ACTION_ITEMS.md E5): pauses the automatic recompute cycle
+    # for an incident. Independent of the per-area surge_source/surge_enabled
+    # controls below, which stay in effect either way. Fail-open on a
+    # settings-read error -- a transient lookup hiccup must never itself act
+    # as a kill switch.
+    try:
+        settings = await get_app_settings()
+        if not settings.get("surge_engine_enabled", True):
+            return results
+    except Exception as settings_err:
+        logger.warning(f"Surge: app_settings lookup failed ({settings_err}), proceeding as enabled")
+
     try:
         areas = await db.get_rows("service_areas", {"is_active": True, "surge_enabled": True}, limit=100)
     except Exception as e:
@@ -305,11 +318,34 @@ async def recalculate_all_surges() -> List[Dict[str, Any]]:
     return results
 
 
-async def get_surge_status() -> List[Dict[str, Any]]:
+_SURGE_STATUS_CACHE_KEY = "spinr:surge:status:all"
+# Well inside the engine's own 120s recalculation cadence, so a cached read is
+# never more stale than the underlying numbers already are.
+_SURGE_STATUS_CACHE_TTL = 30
+
+
+async def get_surge_status(*, use_cache: bool = True) -> List[Dict[str, Any]]:
     """
     Get current surge status for all active service areas.
     Used by the admin dashboard to display live surge info.
+
+    Cached briefly because this is genuinely expensive: it live-recomputes
+    demand and supply per area, and the supply count fetches the platform's
+    online+available drivers once *per area* (1 + 2N sequential reads against
+    `drivers` and `rides` — the same tables dispatch and the driver-location
+    write path use). That was tolerable when nothing polled it; admin screens
+    now do, from every open tab. The cache collapses concurrent viewers onto
+    one computation without changing what any of them sees.
     """
+    if use_cache:
+        try:
+            cached = await redis_get(_SURGE_STATUS_CACHE_KEY)
+            if cached is not None:
+                return json.loads(cached)
+        except Exception as exc:
+            # Cache failure must degrade to a live recompute, never to an error.
+            logger.warning(f"Surge status: cache read failed, recomputing: {exc}")
+
     areas = await db.get_rows("service_areas", {"is_active": True}, limit=100)
 
     statuses = []
@@ -347,6 +383,13 @@ async def get_surge_status() -> List[Dict[str, Any]]:
                 "last_updated": area.get("updated_at"),
             }
         )
+
+    if use_cache:
+        try:
+            await redis_set(_SURGE_STATUS_CACHE_KEY, json.dumps(statuses), ttl=_SURGE_STATUS_CACHE_TTL)
+        except Exception as exc:
+            logger.warning(f"Surge status: cache write failed: {exc}")
+
     return statuses
 
 

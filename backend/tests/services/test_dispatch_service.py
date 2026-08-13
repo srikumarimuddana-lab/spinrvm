@@ -450,9 +450,7 @@ class TestDispatchServiceFindCandidates:
             patch("services.dispatch_service.present_driver_ids", AsyncMock(return_value={"d1", "d2"})),
             patch("services.dispatch_service.exhausted_driver_ids", AsyncMock(return_value=set())),
         ):
-            out = await svc.find_candidate_drivers(
-                {"vehicle_type_id": "economy", "service_area_id": "area1"}
-            )
+            out = await svc.find_candidate_drivers({"vehicle_type_id": "economy", "service_area_id": "area1"})
         assert [d["id"] for d in out] == ["d1"]
 
     async def test_required_area_falls_back_to_parent_area_flag(self):
@@ -482,9 +480,7 @@ class TestDispatchServiceFindCandidates:
             patch("services.dispatch_service.present_driver_ids", AsyncMock(return_value={"d1", "d2"})),
             patch("services.dispatch_service.exhausted_driver_ids", AsyncMock(return_value=set())),
         ):
-            out = await svc.find_candidate_drivers(
-                {"vehicle_type_id": "economy", "service_area_id": "child1"}
-            )
+            out = await svc.find_candidate_drivers({"vehicle_type_id": "economy", "service_area_id": "child1"})
         assert [d["id"] for d in out] == ["d2"]
 
     async def test_expired_subscription_is_not_counted_as_active(self):
@@ -507,9 +503,7 @@ class TestDispatchServiceFindCandidates:
             patch("services.dispatch_service.present_driver_ids", AsyncMock(return_value={"d1"})),
             patch("services.dispatch_service.exhausted_driver_ids", AsyncMock(return_value=set())),
         ):
-            out = await svc.find_candidate_drivers(
-                {"vehicle_type_id": "economy", "service_area_id": "area1"}
-            )
+            out = await svc.find_candidate_drivers({"vehicle_type_id": "economy", "service_area_id": "area1"})
         assert out == []
 
     async def test_daily_quota_exhausted_drivers_dropped_in_any_area(self):
@@ -532,9 +526,7 @@ class TestDispatchServiceFindCandidates:
             patch("services.dispatch_service.present_driver_ids", AsyncMock(return_value={"d1", "d2"})),
             patch("services.dispatch_service.exhausted_driver_ids", AsyncMock(return_value={"d2"})),
         ):
-            out = await svc.find_candidate_drivers(
-                {"vehicle_type_id": "economy", "service_area_id": "area1"}
-            )
+            out = await svc.find_candidate_drivers({"vehicle_type_id": "economy", "service_area_id": "area1"})
         assert [d["id"] for d in out] == ["d1"]
 
     async def test_quota_lookup_failure_fails_open(self):
@@ -552,9 +544,7 @@ class TestDispatchServiceFindCandidates:
                 AsyncMock(side_effect=RuntimeError("redis down")),
             ),
         ):
-            out = await svc.find_candidate_drivers(
-                {"vehicle_type_id": "economy", "service_area_id": "area1"}
-            )
+            out = await svc.find_candidate_drivers({"vehicle_type_id": "economy", "service_area_id": "area1"})
         assert [d["id"] for d in out] == ["d1", "d2"]
 
     async def test_pass_filter_db_error_fails_open(self):
@@ -566,9 +556,7 @@ class TestDispatchServiceFindCandidates:
         svc = DispatchService(db)
 
         with patch("services.dispatch_service.present_driver_ids", AsyncMock(return_value={"d1", "d2"})):
-            out = await svc.find_candidate_drivers(
-                {"vehicle_type_id": "economy", "service_area_id": "area1"}
-            )
+            out = await svc.find_candidate_drivers({"vehicle_type_id": "economy", "service_area_id": "area1"})
         assert out == rows
 
     async def test_no_service_area_skips_pass_filter_entirely(self):
@@ -584,14 +572,25 @@ class TestDispatchServiceFindCandidates:
         db.find_one.assert_not_awaited()
 
     async def test_empty_driver_rows_returns_early(self):
-        """No online/available drivers -> empty list, no presence/pass lookups attempted."""
+        """No online/available drivers -> empty list, no presence/pass lookups attempted.
+
+        Note: ``find_one`` IS awaited for the service-area guard (building the
+        compatible-area set for the DB filter), but NOT for subscription/pass
+        checks — those run only when the driver pool is non-empty.
+        """
         db = _make_db()
-        db.get_rows = AsyncMock(return_value=[])
+
+        async def _get_rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                return []
+            return []
+
+        db.get_rows = AsyncMock(side_effect=_get_rows)
+        db.find_one = AsyncMock(return_value={"id": "area1"})
         svc = DispatchService(db)
 
         out = await svc.find_candidate_drivers({"vehicle_type_id": "economy", "service_area_id": "area1"})
         assert out == []
-        db.find_one.assert_not_awaited()
 
     async def test_presence_filter_failure_falls_back_to_db_online_drivers(self):
         """Redis outage on the presence check must not take every driver offline."""

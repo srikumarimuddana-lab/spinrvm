@@ -60,6 +60,10 @@ export default function EmergencyContactsScreen() {
   }, []);
 
   useEffect(() => {
+    // fetchContacts is useCallback([]) — stable identity, so this only
+    // fires once at mount. It sets state after its own await, not
+    // synchronously at the top of the effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchContacts();
   }, [fetchContacts]);
 

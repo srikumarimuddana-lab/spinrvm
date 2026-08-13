@@ -25,7 +25,7 @@ import {
 
 export default function PrivacySettingsScreen() {
   const router = useRouter();
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { logout } = useAuthStore();
   const { t } = useTranslation();
@@ -36,6 +36,9 @@ export default function PrivacySettingsScreen() {
   const updatePreferences = useUpdateNotificationPreferences();
   useEffect(() => {
     const prefs: any = notificationPrefs;
+    // Syncs local toggle state from the fetched preference; pushNotifications
+    // isn't a dep of this effect (only notificationPrefs is), so no loop.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (prefs?.push_enabled != null) setPushNotifications(Boolean(prefs.push_enabled));
   }, [notificationPrefs]);
   const handlePushToggle = async (value: boolean) => {
@@ -97,7 +100,7 @@ export default function PrivacySettingsScreen() {
     title: string;
     message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+    buttons?: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
   // R-P1-6: PIPEDA — wire Download My Data to real backend endpoint

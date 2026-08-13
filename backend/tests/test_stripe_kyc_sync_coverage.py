@@ -142,6 +142,196 @@ class TestApplyAccountUpdate:
             await stripe_kyc_sync.apply_account_update({"id": "acct_123"})
 
 
+# ── apply_account_update: payouts-transition notification (N6) ──────────
+#
+# Stripe redelivers account.updated freely, so these pin the *edge*-only
+# firing rule: a genuine True->False (or False->True) change on
+# stripe_payouts_enabled, never a repeat delivery of an unchanged value, and
+# never a first-ever sync where the pre-update value is unset (None).
+#
+# send_push_notification is imported lazily inside
+# _send_payouts_notice (`from ..features import send_push_notification`), so
+# it is patched on its defining module (backend.features) — the same
+# late-binding local-import pattern documented for db_supabase elsewhere in
+# this file, just one module over.
+
+
+class TestApplyAccountUpdatePayoutsNotification:
+    @pytest.mark.anyio
+    async def test_enabled_to_blocked_fires_exactly_one_account_priority_push(self, monkeypatch):
+        from backend.services import stripe_kyc_sync
+
+        driver = {
+            "id": "driver-1",
+            "user_id": "user-1",
+            "stripe_account_id": "acct_123",
+            "stripe_payouts_enabled": True,
+        }
+        monkeypatch.setattr(stripe_kyc_sync.db_supabase, "get_rows", AsyncMock(return_value=[driver]))
+        monkeypatch.setattr(stripe_kyc_sync.db_supabase, "update_one", AsyncMock())
+
+        push_mock = AsyncMock(return_value=True)
+        monkeypatch.setattr("backend.features.send_push_notification", push_mock)
+
+        # payouts_enabled absent from the payload -> bool(None) == False: the
+        # blocked state.
+        await stripe_kyc_sync.apply_account_update({"id": "acct_123", "details_submitted": True})
+
+        push_mock.assert_awaited_once()
+        args, kwargs = push_mock.await_args
+        assert args[0] == "user-1"  # users.id, not drivers.id
+        assert kwargs["priority"] == "account"
+        assert kwargs["data"]["type"] == "stripe_payouts_blocked"
+        assert kwargs["data"]["deeplink"] == "/driver/payout"
+        assert kwargs["target_app"] == "driver"
+
+    @pytest.mark.anyio
+    async def test_redelivery_of_already_blocked_account_does_not_spam(self, monkeypatch):
+        """Same webhook redelivered for an account that was already blocked
+        (no transition — pre-update value is already False) must not fire a
+        duplicate push."""
+        from backend.services import stripe_kyc_sync
+
+        driver = {
+            "id": "driver-1",
+            "user_id": "user-1",
+            "stripe_account_id": "acct_123",
+            "stripe_payouts_enabled": False,
+        }
+        monkeypatch.setattr(stripe_kyc_sync.db_supabase, "get_rows", AsyncMock(return_value=[driver]))
+        monkeypatch.setattr(stripe_kyc_sync.db_supabase, "update_one", AsyncMock())
+
+        push_mock = AsyncMock(return_value=True)
+        monkeypatch.setattr("backend.features.send_push_notification", push_mock)
+
+        await stripe_kyc_sync.apply_account_update({"id": "acct_123", "payouts_enabled": False})
+
+        push_mock.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_first_ever_sync_with_unset_prior_value_does_not_spuriously_fire(self, monkeypatch):
+        """A drivers row that has never been synced before has no
+        stripe_payouts_enabled key at all (None, not False). The very first
+        account.updated for it landing on payouts_enabled=False must not read
+        as a "newly blocked" transition — there is no prior enabled state to
+        have transitioned from."""
+        from backend.services import stripe_kyc_sync
+
+        driver = {"id": "driver-1", "user_id": "user-1", "stripe_account_id": "acct_123"}  # key absent -> None
+        assert "stripe_payouts_enabled" not in driver
+        monkeypatch.setattr(stripe_kyc_sync.db_supabase, "get_rows", AsyncMock(return_value=[driver]))
+        monkeypatch.setattr(stripe_kyc_sync.db_supabase, "update_one", AsyncMock())
+
+        push_mock = AsyncMock(return_value=True)
+        monkeypatch.setattr("backend.features.send_push_notification", push_mock)
+
+        await stripe_kyc_sync.apply_account_update({"id": "acct_123", "payouts_enabled": False})
+
+        push_mock.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_first_ever_sync_landing_enabled_does_not_fire_recovery(self, monkeypatch):
+        """Symmetric first-sync guard for the recovery direction: None -> True
+        is a driver's normal onboarding completion, not a "recovery"."""
+        from backend.services import stripe_kyc_sync
+
+        driver = {"id": "driver-1", "user_id": "user-1", "stripe_account_id": "acct_123"}
+        monkeypatch.setattr(stripe_kyc_sync.db_supabase, "get_rows", AsyncMock(return_value=[driver]))
+        monkeypatch.setattr(stripe_kyc_sync.db_supabase, "update_one", AsyncMock())
+
+        push_mock = AsyncMock(return_value=True)
+        monkeypatch.setattr("backend.features.send_push_notification", push_mock)
+
+        await stripe_kyc_sync.apply_account_update({"id": "acct_123", "payouts_enabled": True})
+
+        push_mock.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_blocked_to_enabled_fires_recovery_push_at_normal_priority(self, monkeypatch):
+        from backend.services import stripe_kyc_sync
+
+        driver = {
+            "id": "driver-1",
+            "user_id": "user-1",
+            "stripe_account_id": "acct_123",
+            "stripe_payouts_enabled": False,
+        }
+        monkeypatch.setattr(stripe_kyc_sync.db_supabase, "get_rows", AsyncMock(return_value=[driver]))
+        monkeypatch.setattr(stripe_kyc_sync.db_supabase, "update_one", AsyncMock())
+
+        push_mock = AsyncMock(return_value=True)
+        monkeypatch.setattr("backend.features.send_push_notification", push_mock)
+
+        await stripe_kyc_sync.apply_account_update({"id": "acct_123", "payouts_enabled": True})
+
+        push_mock.assert_awaited_once()
+        _, kwargs = push_mock.await_args
+        assert kwargs["priority"] == "normal"
+        assert kwargs["data"]["type"] == "stripe_payouts_recovered"
+
+    @pytest.mark.anyio
+    async def test_no_change_enabled_to_enabled_does_not_fire(self, monkeypatch):
+        from backend.services import stripe_kyc_sync
+
+        driver = {
+            "id": "driver-1",
+            "user_id": "user-1",
+            "stripe_account_id": "acct_123",
+            "stripe_payouts_enabled": True,
+        }
+        monkeypatch.setattr(stripe_kyc_sync.db_supabase, "get_rows", AsyncMock(return_value=[driver]))
+        monkeypatch.setattr(stripe_kyc_sync.db_supabase, "update_one", AsyncMock())
+
+        push_mock = AsyncMock(return_value=True)
+        monkeypatch.setattr("backend.features.send_push_notification", push_mock)
+
+        await stripe_kyc_sync.apply_account_update({"id": "acct_123", "payouts_enabled": True})
+
+        push_mock.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_push_failure_does_not_raise_and_persist_already_committed(self, monkeypatch):
+        """The mirror write must not be undone, and apply_account_update must
+        not raise, if the best-effort notification blows up."""
+        from backend.services import stripe_kyc_sync
+
+        driver = {
+            "id": "driver-1",
+            "user_id": "user-1",
+            "stripe_account_id": "acct_123",
+            "stripe_payouts_enabled": True,
+        }
+        monkeypatch.setattr(stripe_kyc_sync.db_supabase, "get_rows", AsyncMock(return_value=[driver]))
+        update_mock = AsyncMock()
+        monkeypatch.setattr(stripe_kyc_sync.db_supabase, "update_one", update_mock)
+
+        push_mock = AsyncMock(side_effect=RuntimeError("fcm down"))
+        monkeypatch.setattr("backend.features.send_push_notification", push_mock)
+
+        result = await stripe_kyc_sync.apply_account_update({"id": "acct_123", "payouts_enabled": False})
+
+        update_mock.assert_awaited_once()  # persisted before the notify attempt
+        push_mock.assert_awaited_once()
+        assert result["id"] == "driver-1"
+        assert result["stripe_payouts_enabled"] is False
+
+    @pytest.mark.anyio
+    async def test_no_user_id_skips_notification_without_raising(self, monkeypatch):
+        from backend.services import stripe_kyc_sync
+
+        driver = {"id": "driver-1", "stripe_account_id": "acct_123", "stripe_payouts_enabled": True}  # no user_id
+        monkeypatch.setattr(stripe_kyc_sync.db_supabase, "get_rows", AsyncMock(return_value=[driver]))
+        monkeypatch.setattr(stripe_kyc_sync.db_supabase, "update_one", AsyncMock())
+
+        push_mock = AsyncMock(return_value=True)
+        monkeypatch.setattr("backend.features.send_push_notification", push_mock)
+
+        result = await stripe_kyc_sync.apply_account_update({"id": "acct_123", "payouts_enabled": False})
+
+        push_mock.assert_not_awaited()
+        assert result["id"] == "driver-1"
+
+
 # ── refresh_driver_kyc ───────────────────────────────────────────────────
 
 
@@ -199,58 +389,10 @@ class TestRefreshDriverKyc:
         assert result["updates"]["stripe_details_submitted"] is False
 
 
-# ── reveal_sin_from_stripe ───────────────────────────────────────────────
-
-
-class TestRevealSinFromStripe:
-    @pytest.mark.anyio
-    async def test_no_stripe_account_returns_none(self):
-        from backend.services.stripe_kyc_sync import reveal_sin_from_stripe
-
-        assert await reveal_sin_from_stripe({"id": "driver-1"}) is None
-
-    @pytest.mark.anyio
-    async def test_not_configured_returns_none(self, monkeypatch):
-        from backend.services import stripe_kyc_sync
-
-        monkeypatch.setattr(stripe_kyc_sync, "get_app_settings", AsyncMock(return_value={}))
-        assert await stripe_kyc_sync.reveal_sin_from_stripe({"id": "d1", "stripe_account_id": "acct_1"}) is None
-
-    @pytest.mark.anyio
-    async def test_retrieve_error_returns_none(self, monkeypatch):
-        from backend.services import stripe_kyc_sync
-
-        monkeypatch.setattr(stripe_kyc_sync, "get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk"}))
-        with patch("stripe.Account.retrieve", side_effect=RuntimeError("boom")):
-            result = await stripe_kyc_sync.reveal_sin_from_stripe({"id": "d1", "stripe_account_id": "acct_1"})
-        assert result is None
-
-    @pytest.mark.anyio
-    async def test_missing_id_number_returns_none(self, monkeypatch):
-        from backend.services import stripe_kyc_sync
-
-        monkeypatch.setattr(stripe_kyc_sync, "get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk"}))
-        with patch("stripe.Account.retrieve", return_value={"individual": {}}):
-            result = await stripe_kyc_sync.reveal_sin_from_stripe({"id": "d1", "stripe_account_id": "acct_1"})
-        assert result is None
-
-    @pytest.mark.anyio
-    async def test_non_canonical_sin_format_returns_none(self, monkeypatch):
-        from backend.services import stripe_kyc_sync
-
-        monkeypatch.setattr(stripe_kyc_sync, "get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk"}))
-        with patch("stripe.Account.retrieve", return_value={"individual": {"id_number": "not-9-digits"}}):
-            result = await stripe_kyc_sync.reveal_sin_from_stripe({"id": "d1", "stripe_account_id": "acct_1"})
-        assert result is None
-
-    @pytest.mark.anyio
-    async def test_valid_sin_is_returned(self, monkeypatch):
-        from backend.services import stripe_kyc_sync
-
-        monkeypatch.setattr(stripe_kyc_sync, "get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk"}))
-        with patch("stripe.Account.retrieve", return_value={"individual": {"id_number": "123456789"}}):
-            result = await stripe_kyc_sync.reveal_sin_from_stripe({"id": "d1", "stripe_account_id": "acct_1"})
-        assert result == "123456789"
+# ── reveal_sin_from_stripe: REMOVED ─────────────────────────────────────
+# The function is gone. `individual.id_number` is write-only on Connect, so
+# it could never return a SIN. The reveal now decrypts Spinr's own column
+# and is covered by TestRevealSin in test_admin_drivers_coverage.py.
 
 
 # ── get_legal_name_and_address_from_stripe ──────────────────────────────

@@ -104,7 +104,7 @@ describe("/api/company-auth/verify-email-otp route", () => {
     const { POST } = await import("@/app/api/company-auth/verify-email-otp/route");
     const response = (await POST(
       makeRequest({ email: "owner@acme.test", code: "123456" }) as never
-    )) as { _data: Record<string, unknown> };
+    )) as unknown as { _data: Record<string, unknown> };
 
     expect(global.fetch).toHaveBeenCalledWith(
       "https://backend.spinr.test/api/portal/auth/verify-email-otp",

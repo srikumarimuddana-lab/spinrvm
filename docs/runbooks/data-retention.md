@@ -34,10 +34,18 @@ finds zero matching rows.
 | `refresh_tokens` | `expires_at` + 30 days | Hard DELETE | Tokens are already invalid at expiry; 30d grace lets `/auth/logout-all` forensics inspect recently-revoked sessions (B-P1-13) |
 | `stripe_events` | 90 days | Hard DELETE | Stripe replays only within 30 days; 90d gives margin for late-investigated payment disputes |
 | `audit_logs` | 7 years | Hard DELETE | Saskatchewan Transportation Act ceiling on action history; PIPEDA "no longer needed" applies after the regulatory window. Append-only between then; UPDATE blocked by trigger. |
+| DSAR-deleted accounts (`users`, cascaded `drivers`/`saved_addresses`/`support_tickets`) | 7 years from `deletion_scheduled_at` | Hard DELETE (Step H, migration 216, made operative by 289) | PIPEDA right-to-delete, gated by the 7y regulatory floor — only accounts with no `rides`, `driver_insurance_periods`, `payouts`, or `bank_accounts` rows are eligible; everything else stays retained by its own window. |
+| `ride_routes` GPS geometry (`phase_polylines`, `road_polyline`, `road_polyline_pickup`) | 3 years | NULL/empty out (Step I, migrations 117/129) | Same Saskatchewan Transportation Act GPS ceiling as Step A, applied to the separate route-quality table |
+| `ai_messages` / `ai_conversations` | 90 days | Hard DELETE (Step J, migration 141) | In-app AI assistant chat — same chargeback/dispute-lifecycle window as `ride_messages` |
+| `surge_pricing` history | 90 days | Hard DELETE (Step K, migration 143) | Pricing-history PII surface beyond any dispute window |
+| `price_searches` | 90 days anonymize `user_id`, 25 months hard delete | Anonymize then delete (Step L, migration 228) | Pre-booking fare estimates tied to a user; anonymized early since the estimate itself has analytics value, deleted later since PIPEDA "no longer needed" eventually applies to the anonymized rows too |
+| `compliance_export_events` | 7 years | Hard DELETE, gated by session-flag (Step M, migration 285) | Same append-only/service-role-only delete pattern as `audit_logs` (Step G) — both are compliance audit trails with "only the retention purge may delete" |
+| `users.first_name/last_name/email/profile_image` + `saved_addresses`, for `pending_deletion` accounts | 30 days from `deletion_requested_at` | NULL out profile fields, hard-delete `saved_addresses` (Step N, migration 296) | PIPEDA right-to-delete #1 (`regulatory-sk.md`) — "personal profile fields scrubbed within 30 days" of a deletion request. Independent of Step H's 7-year hard delete window; see ACTION_ITEMS.md B18. |
 
 **Out of scope for this job** (handled elsewhere or follow-ups):
 - `disputes` — retain 7y by policy; separate migration
-- `saved_addresses`, `emergency_contacts` — cascaded with user soft-delete
+- `saved_addresses`, `emergency_contacts` — cascaded with user soft-delete (also reachable via Step H for a DSAR-deleted account, and now via Step N's 30-day scrub for `saved_addresses` specifically)
+- `driver_insurance_periods`, `driver_period_distances`, `stripe_disputes` — each has its own `NO ACTION` FK on `rides(id)`; Step B does not (yet) account for any of the three the way it now does for `financial_events` — see ACTION_ITEMS.md B23
 
 Changing any of the windows above is a **compliance event**, not a code
 tweak. Process:
@@ -66,6 +74,107 @@ tweak. Process:
   no silent swallowing. The Postgres function never returns partial
   state: if any DELETE/UPDATE fails, the whole transaction rolls back
   and the next day's run will re-attempt the same windows.
+
+---
+
+## Append-only tables Step B's ride purge interacts with
+
+Two tables retained independently of `rides` reference it by `ride_id`/`user_id`
+and must survive a ride or account being purged out from under them:
+
+- **`financial_events`** (the 7-year CRA/SOC2 money ledger, migration 58) —
+  `ride_id` is `ON DELETE SET NULL` as of migration 294 (ACTION_ITEMS.md B17).
+  Before 294, Step B's `DELETE FROM rides WHERE created_at < now() - 7y` had
+  no exception handler and `financial_events.ride_id` had no `ON DELETE`
+  action (default `NO ACTION`) — the first paid ride to cross 7 years would
+  raise `foreign_key_violation` and abort the **entire** purge transaction,
+  including Step A's GPS anonymization, repeating on every subsequent daily
+  run. `ON DELETE SET NULL` (not `CASCADE`) was chosen deliberately: the
+  transaction record itself must be retained for the full 7 years regardless
+  of whether its ride has aged out — only the back-link to the (now-deleted)
+  ride is lost.
+  **Erratum (migration 295):** 294 alone did not actually fix this. Postgres
+  implements `ON DELETE SET NULL` by issuing an internal `UPDATE` against the
+  referencing table that goes through the normal trigger machinery — and
+  `financial_events_no_mutate` (the table's append-only trigger, migration
+  58/289) unconditionally raises on any `UPDATE` it doesn't recognize. So the
+  SET NULL action itself would fail, and Step B would still abort — just with
+  a trigger-raised error instead of a raw `foreign_key_violation`. 295 fixes
+  this by extending `_financial_events_immutable()` to permit exactly one
+  UPDATE shape unconditionally (no GUC — the FK action fires internally, with
+  no chance for application code to set a session GUC first): nulling
+  `ride_id` with every other column pinned unchanged. The column-pinning
+  itself is the safety boundary.
+- **`financial_events`** is also involved in **Step H** (DSAR hard-delete,
+  below) via a different mechanism: a transaction-local GUC
+  (`spinr.financial_events.allow_delete`), not an `ON DELETE` action, because
+  Step H deletes the `financial_events` rows themselves (for a DSAR-deleted
+  account whose full 7-year footprint has cleared), not just a `rides` row
+  they point at. The table's `financial_events_no_mutate` trigger blocks
+  UPDATE unconditionally and blocks DELETE unless that GUC is `'true'` —
+  set immediately before Step H's DELETE and cleared immediately after,
+  including on the error path (migration 289).
+- **`compliance_export_events`** (Step M) uses the identical GUC-gate pattern
+  (`spinr.compliance_export_events.allow_delete`) for the same reason —
+  both are append-only compliance/audit logs where "only the retention purge
+  may delete" is enforced by a trigger, not by table permissions alone.
+
+If you're adding a new append-only table that Step B, H, or M might need to
+reach into, follow whichever pattern matches: `ON DELETE SET NULL`/`CASCADE`
+on the FK if the table is a *sibling* record independent of the row being
+purged (financial_events → rides), or the GUC-gate pattern if the retention
+purge itself needs to delete rows *from* that append-only table (financial_events
+→ Step H, compliance_export_events → Step M).
+
+---
+
+## Step N: 30-day profile-PII scrub (ACTION_ITEMS.md B18)
+
+`.claude/context/regulatory-sk.md`'s Right-to-delete section promises
+"personal profile fields (name, email, home address, payment methods) →
+scrubbed within 30 days" of a deletion request. Nothing implemented this
+promise until migration 296 — `delete_account_pipeda` (the DSAR `/account`
+endpoint) only set `deletion_requested_at`/`deletion_scheduled_at`/`status`
+and revoked tokens; profile fields and `saved_addresses` stayed fully live
+and queryable for the entire 7-year window until Step H's hard delete.
+
+Step N runs independently of Step H, 30 days after `deletion_requested_at`
+(not `deletion_scheduled_at`, which is `deletion_requested_at + 7y` and is
+Step H's own eligibility field — a different anchor for a different purpose):
+
+- NULLs `users.first_name`, `last_name`, `email`, `profile_image` and stamps
+  `profile_scrubbed_at` (append-only marker, mirrors `gps_anonymized_at`).
+- Hard-deletes `saved_addresses` for the account.
+- Deliberately does **not** touch `phone` — `delete_account_pipeda`'s own
+  response promises "sign in again anytime to reactivate" (a phone-OTP
+  login), and `regulatory-sk.md`'s own field list excludes phone too.
+- Payment methods are not touched by this migration — Spinr holds no local
+  payment-methods table (Stripe is the system of record); a Stripe-side
+  detach/delete is a separate API call, not a DB purge step, and is tracked
+  as a follow-up rather than assumed handled.
+- Does **not** touch `rides` rows, which stay attributable (Step H's model)
+  through the full 7-year window regardless of profile scrub status.
+
+**Decision record for B18 (anonymize-vs-delete):** three governing docs
+(`regulatory-sk.md`, `CLAUDE.md` §Compliance, this runbook) previously stated
+records are "anonymized... not deleted" after the retention window, while
+migration 216 (operative since 289) actually hard-deletes DSAR accounts with
+no anonymization at 7 years (Step H). This runbook does not reverse that —
+Step H's hard-delete model ships and stays as-is; un-shipping it needs real
+legal/founder review given its scope (Step H's subtransaction logic, the
+driver-footprint eligibility guard, and the reactivation promise all depend
+on it). What Step N closes is the separate, unambiguous 30-day promise that
+nothing implemented at all — additive to user privacy regardless of which
+way the anonymize-vs-delete question is eventually decided.
+
+**Known gap, not implemented:** `regulatory-sk.md` also promises "rider
+identity linked to trip: 7 years (hashed after 2)" — a general rule for
+every ride, not just DSAR-requested ones. Implementing this literally
+(hashing/nulling `rides.rider_id` at 2 years) would break every active
+rider's own trip-history screen and any admin/refund lookup by rider for a
+ride older than 2 years — a live, real-user-facing regression that needs its
+own product/legal scoping before any code change, not a narrow backend fix.
+Left as an open, documented gap — see ACTION_ITEMS.md B18.
 
 ---
 

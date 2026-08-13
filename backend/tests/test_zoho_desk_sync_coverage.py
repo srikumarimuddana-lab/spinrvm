@@ -166,6 +166,25 @@ class TestUpsertBatch:
         await zoho_desk_sync._upsert_batch([{"zoho_id": "1"}])
         run_sync.assert_awaited_once()
 
+    @pytest.mark.anyio
+    async def test_upsert_batch_executes_real_write_path(self, monkeypatch):
+        """Unlike test_upserts_serialized_rows above (which mocks run_sync
+        itself, so the _fn() closure it's handed is never actually called),
+        this leaves the real db_supabase.run_sync in place so the
+        table().upsert().execute() call chain genuinely runs (in run_sync's
+        thread pool) and is exercised, not just constructed."""
+        from backend.utils import zoho_desk_sync
+
+        q = MagicMock()
+        monkeypatch.setattr(zoho_desk_sync.db_supabase, "supabase", q)
+        monkeypatch.setattr(zoho_desk_sync.db_supabase, "_serialize_for_api", lambda r: r)
+
+        await zoho_desk_sync._upsert_batch([{"zoho_id": "1"}])
+
+        q.table.assert_called_once_with(zoho_desk_sync._TABLE)
+        q.table.return_value.upsert.assert_called_once_with([{"zoho_id": "1"}])
+        q.table.return_value.upsert.return_value.execute.assert_called_once()
+
 
 # ── run_sync ─────────────────────────────────────────────────────────────
 

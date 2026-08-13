@@ -127,6 +127,9 @@ around.
 ## Related documents
 
 - `docs/incident-response.md` — full response playbook once an incident is declared
+- `docs/runbooks/ledger-alerts.md` — the six `spinr_alert` tags on the payment ledger
+  and card-settlement path: what each means, which page and which do not, and the
+  Sentry rule spec for each (**the rules are not created yet**)
 - `docs/runbooks/sos-incident.md` — SOS-specific flow
 - `docs/runbooks/data-breach.md` — PII breach-specific flow
 - `docs/runbooks/security-incident.md` — security-specific flow

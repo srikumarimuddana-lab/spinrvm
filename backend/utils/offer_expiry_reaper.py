@@ -128,8 +128,24 @@ async def offer_expiry_reaper_loop() -> None:
     """Background loop: durable backstop for offer-timeout timers lost on restart."""
     logger.info(f"Offer expiry reaper started (interval={REAP_INTERVAL_SECONDS}s)")
     while True:
-        lock_ttl = int(REAP_INTERVAL_SECONDS * 2)
-        if not await redis_set_nx("spinr:offer_expiry_reaper:lock", _pod_id(), lock_ttl):
+        # TTL must be SHORTER than the minimum possible sleep below (interval *
+        # 0.9, worst-case jitter), or the pod that ran the last tick wakes to
+        # find its OWN key still alive, fails SET NX, and sleeps another full
+        # interval — halving the documented cadence. `interval * 2` doesn't
+        # (2x > 0.9x). Matches ledger_projection.py's `_LOCK_TTL_SECONDS`
+        # formula (ACTION_ITEMS B21): 0.05 headroom under the 0.9 floor.
+        lock_ttl = int(REAP_INTERVAL_SECONDS * 0.85)
+        try:
+            got_lock = await redis_set_nx("spinr:offer_expiry_reaper:lock", _pod_id(), lock_ttl)
+        except Exception as lock_err:
+            # redis_set_nx now raises on a real (Redis-configured-but-
+            # unavailable) error instead of silently falling back per-replica
+            # (2026-08-11 P1 fix). This is a durable backstop loop — going
+            # dark on a Redis blip defeats its whole purpose — so proceed
+            # with the tick rather than skip it.
+            logger.error(f"offer_expiry_reaper: leader lock unavailable ({lock_err}), proceeding without it")
+            got_lock = True
+        if not got_lock:
             _record_heartbeat(_LOOP_NAME)
             await asyncio.sleep(REAP_INTERVAL_SECONDS)
             continue

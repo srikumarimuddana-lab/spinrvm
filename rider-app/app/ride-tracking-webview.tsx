@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Share, Platform,
 } from 'react-native';
@@ -56,13 +56,9 @@ export default function RideTrackingWebviewScreen() {
     trackingUrl && !sanitizedInitialUrl ? 'Invalid tracking link.' : null,
   );
 
-  useEffect(() => {
-    if (!trackingUrl && rideId) {
-      fetchTrackingUrl(rideId);
-    }
-  }, [rideId, trackingUrl, trackBaseUrl]);
-
-  const fetchTrackingUrl = async (id: string) => {
+  // Wrapped in useCallback (deps: [trackBaseUrl]) so the effect below can
+  // safely depend on it without recreating (and refiring) on every render.
+  const fetchTrackingUrl = useCallback(async (id: string) => {
     // Public tracking URL base is served by GET /settings → app_settings.track_base_url
     // so ops can rotate the domain without a mobile rebuild. Fail loud if it
     // isn't configured rather than fall back to a hardcoded spinr-track.app
@@ -82,7 +78,19 @@ export default function RideTrackingWebviewScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [trackBaseUrl]);
+
+  useEffect(() => {
+    if (!trackingUrl && rideId) {
+      // trackingUrl is a route param, never set by fetchTrackingUrl (which
+      // sets resolvedUrl/loading/error instead), so this guard can't
+      // self-retrigger via this effect's own deps.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      fetchTrackingUrl(rideId);
+    }
+    // fetchTrackingUrl is now a useCallback keyed on [trackBaseUrl], the
+    // same value already tracked here directly — equivalent firing.
+  }, [rideId, trackingUrl, trackBaseUrl, fetchTrackingUrl]);
 
   const handleShare = async () => {
     if (!resolvedUrl) return;

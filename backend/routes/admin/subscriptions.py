@@ -760,7 +760,21 @@ async def admin_resend_subscription_invoice(
     except ImportError:
         from utils.redis_client import redis_delete, redis_set_nx  # type: ignore
     _cooldown_key = f"spinr:sub_invoice_resend:{payment_id}"
-    if not await redis_set_nx(_cooldown_key, "1", 60):
+    try:
+        _cooldown_acquired = await redis_set_nx(_cooldown_key, "1", 60)
+    except Exception as _lock_err:
+        # redis_set_nx now raises on a real (Redis-configured-but-
+        # unavailable) error instead of silently falling back per-replica
+        # (2026-08-11 P1 fix). This cooldown exists specifically to stop a
+        # stuck/looping admin action from email-bombing a driver — fail
+        # CLOSED (503) rather than silently proceeding as if the anti-spam
+        # guard didn't matter.
+        logger.error(f"[ADMIN] subscription invoice resend cooldown unavailable for {payment_id}: {_lock_err}")
+        raise HTTPException(
+            status_code=503,
+            detail="Please try again in a moment.",
+        ) from _lock_err
+    if not _cooldown_acquired:
         raise HTTPException(
             status_code=429,
             detail="Invoice was just resent — please wait a minute before retrying.",

@@ -278,8 +278,16 @@ function DriverDashboard() {
   }, [rideState]);
 
   // Demand heatmap — aggregated cells with auto-refresh (HM-03/04/05)
-  const { cells: heatmapCells, status: heatmapStatus, visible: heatmapVisible } =
-    useDemandHeatmap(rideState, isOnline);
+  // v2 adds layer selection (HM-12) and surge mirror (HM-11)
+  const {
+    cells: heatmapCells,
+    status: heatmapStatus,
+    visible: heatmapVisible,
+    surge: heatmapSurge,
+    isV2: heatmapIsV2,
+    layer: heatmapLayer,
+    setLayer: setHeatmapLayer,
+  } = useDemandHeatmap(rideState, isOnline);
 
   const [countdown, setCountdownState] = useState(countdownSeconds);
 
@@ -723,18 +731,32 @@ function DriverDashboard() {
           );
         })()}
 
-        {/* Service area boundary polygon */}
+        {/* Service area boundary polygon — surge-tinted when active (HM-11) */}
         {(() => {
           const rawPoly: { lat: number; lng: number }[] | null | undefined =
             rideState === 'ride_offered'
               ? (incomingRide as any)?.service_area_polygon
               : (activeRide as any)?.service_area_polygon;
           if (!rawPoly || rawPoly.length < 3) return null;
+
+          const sm = heatmapSurge?.active ? (heatmapSurge?.multiplier ?? surgeMultiplier) : surgeMultiplier;
+          let surgeFill = 'rgba(0,212,170,0.07)';
+          let surgeStroke = 'rgba(0,212,170,0.65)';
+          if (sm >= 1.25) {
+            const rampIdx = sm >= 2.0 ? 4 : sm >= 1.75 ? 3 : sm >= 1.5 ? 2 : 2;
+            const hex = colors.heatmapRamp[rampIdx];
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
+            surgeFill = `rgba(${r},${g},${b},0.12)`;
+            surgeStroke = `rgba(${r},${g},${b},0.55)`;
+          }
+
           return (
             <Polygon
               coordinates={rawPoly.map(p => ({ latitude: p.lat, longitude: p.lng }))}
-              strokeColor="rgba(0,212,170,0.65)"
-              fillColor="rgba(0,212,170,0.07)"
+              strokeColor={surgeStroke}
+              fillColor={surgeFill}
               strokeWidth={2}
             />
           );
@@ -747,10 +769,23 @@ function DriverDashboard() {
       </MapView>
       </View>
 
-      {/* Demand legend pill — above the top bar */}
+      {/* Surge multiplier chip — on map when active (HM-11) */}
+      {rideState === 'idle' && surgeMultiplier > 1.0 && (
+        <View style={{ position: 'absolute', bottom: 180, right: 16, zIndex: 55, backgroundColor: colors.primary, borderRadius: 16, paddingHorizontal: 10, paddingVertical: 4 }}>
+          <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: '700' }}>{surgeMultiplier.toFixed(1)}x</Text>
+        </View>
+      )}
+
+      {/* Demand legend pill — above the top bar (HM-04 + HM-12 layer selector) */}
       {rideState === 'idle' && heatmapVisible && (
         <View style={{ position: 'absolute', top: insets.top + 4, alignSelf: 'center', zIndex: 60 }}>
-          <DemandLegend status={heatmapStatus === 'disabled' ? 'ready' : heatmapStatus} visible={heatmapVisible} />
+          <DemandLegend
+            status={heatmapStatus === 'disabled' ? 'ready' : heatmapStatus}
+            visible={heatmapVisible}
+            isV2={heatmapIsV2}
+            layer={heatmapLayer}
+            onLayerChange={setHeatmapLayer}
+          />
         </View>
       )}
 

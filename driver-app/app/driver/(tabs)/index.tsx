@@ -815,7 +815,7 @@ function DriverDashboard() {
       {rideState === 'idle' && heatmapVisible && (
         <View style={{ position: 'absolute', top: insets.top + 4, alignSelf: 'center', zIndex: 60 }}>
           <DemandLegend
-            status={heatmapStatus === 'disabled' ? 'ready' : heatmapStatus}
+            status={heatmapStatus}
             visible={heatmapVisible}
             isV2={heatmapIsV2}
             layer={heatmapLayer}

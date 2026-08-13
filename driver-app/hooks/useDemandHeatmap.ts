@@ -36,7 +36,12 @@ export type Hotspot = {
   intensity: 'high' | 'medium';
 };
 
-export type HeatmapStatus = 'loading' | 'ready' | 'empty' | 'stale' | 'error' | 'disabled';
+export type HeatmapStatus =
+  // 'idle' = not polling (offline, or on a ride). Distinct from 'loading',
+  // which previously stuck forever for offline drivers: nothing ever
+  // resolved it because no request was in flight, so every driver who
+  // opened the app before going online saw a permanent loading shimmer.
+  'idle' | 'loading' | 'ready' | 'empty' | 'stale' | 'error' | 'disabled';
 
 type HeatmapResponse = {
   enabled: boolean;
@@ -50,6 +55,9 @@ type HeatmapResponse = {
 };
 
 const DEFAULT_REFRESH_SECONDS = 90;
+// Bounds mirror the backend clamp in routes/drivers/profile.py.
+const MIN_REFRESH_SECONDS = 30;
+const MAX_REFRESH_SECONDS = 600;
 const STALE_THRESHOLD_MS = 5 * 60 * 1000;
 const MAX_CONSECUTIVE_ERRORS = 3;
 
@@ -100,7 +108,10 @@ export function useDemandHeatmap(rideState: string, isOnline: boolean) {
         return;
       }
 
-      if (data.cells && data.cells.length > 0) {
+      // Array.isArray, not length: an empty-but-present cells array is a quiet
+      // night under v2, not a v1 response. Testing length made the layer
+      // selector and forecast strip vanish whenever demand dropped to zero.
+      if (Array.isArray(data.cells)) {
         setV2Cells(data.cells);
         setIsV2(true);
         setSurge(data.surge || null);
@@ -122,7 +133,12 @@ export function useDemandHeatmap(rideState: string, isOnline: boolean) {
         setStatus(pts.length > 0 ? 'ready' : 'empty');
       }
 
-      if (data.refresh_seconds) setRefreshSeconds(data.refresh_seconds);
+      // Clamp: this value multiplies across every online driver. The backend
+      // clamps too, but a stale build or a proxy must not be able to
+      // turn the fleet into 1-second pollers.
+      if (typeof data.refresh_seconds === 'number' && Number.isFinite(data.refresh_seconds)) {
+        setRefreshSeconds(Math.min(MAX_REFRESH_SECONDS, Math.max(MIN_REFRESH_SECONDS, data.refresh_seconds)));
+      }
       lastFetchRef.current = Date.now();
       errorCountRef.current = 0;
     } catch {
@@ -148,7 +164,17 @@ export function useDemandHeatmap(rideState: string, isOnline: boolean) {
       setCells([]);
       setV2Cells([]);
       setForecast([]);
-      setStatus('loading');
+      setSurge(null);
+      setIsV2(false);
+      setStatus('idle');
+      return;
+    }
+
+    // Once the server says the feature is off for this area, stop polling
+    // entirely — re-asking every 90s for the rest of the shift is pure waste
+    // on the driver's battery and data.
+    if (status === 'disabled') {
+      clearTimer();
       return;
     }
 
@@ -169,7 +195,7 @@ export function useDemandHeatmap(rideState: string, isOnline: boolean) {
     scheduleNext();
 
     return clearTimer;
-  }, [rideState, isOnline, refreshSeconds, fetchHeatmap, clearTimer]);
+  }, [rideState, isOnline, refreshSeconds, fetchHeatmap, clearTimer, status]);
 
   useEffect(() => {
     if (status !== 'ready' && status !== 'empty') return;
@@ -203,12 +229,19 @@ export function useDemandHeatmap(rideState: string, isOnline: boolean) {
   return {
     cells,
     status,
-    visible: status !== 'disabled',
+    // Hidden when the feature is off for this area, when we aren't polling
+    // (offline / on a ride), and while errored — an error pill that persists
+    // for the rest of a shift in a rural dead zone is not the "degrade
+    // silently" behaviour this feature promised.
+    visible: status !== 'disabled' && status !== 'idle' && status !== 'error',
     surge,
     isV2,
     layer,
     setLayer,
     forecast,
     hotspots,
+    // Exposed so the effective poll interval (post-clamp) is observable —
+    // it drives fleet-wide request volume and must be assertable in tests.
+    refreshSeconds,
   };
 }

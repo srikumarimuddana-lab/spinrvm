@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
+import { useLanguageStore } from '../../store/languageStore';
 import type { ThemeColors } from '@shared/theme/index';
 import type { Hotspot } from '../../hooks/useDemandHeatmap';
 
@@ -11,10 +12,12 @@ interface HotspotChipsProps {
   onPress?: (lat: number, lng: number) => void;
 }
 
-const HOTSPOT_LABELS = ['High demand', 'Busy area', 'Busy area'];
+// i18n keys; the top hotspot reads stronger than the rest.
+const HOTSPOT_LABEL_KEYS = ['heatmap.hotspot.high', 'heatmap.hotspot.busy', 'heatmap.hotspot.busy'];
 
 export const HotspotChips: React.FC<HotspotChipsProps> = ({ hotspots, visible, onPress }) => {
   const { colors } = useTheme();
+  const { t } = useLanguageStore();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   if (!visible || hotspots.length === 0) return null;
@@ -34,7 +37,7 @@ export const HotspotChips: React.FC<HotspotChipsProps> = ({ hotspots, visible, o
             color={spot.intensity === 'high' ? colors.heatmapRamp[4] : colors.heatmapRamp[2]}
           />
           <Text style={[styles.chipText, spot.intensity === 'high' && styles.chipTextHigh]}>
-            {HOTSPOT_LABELS[i] ?? 'Busy area'}
+            {t(HOTSPOT_LABEL_KEYS[i] ?? 'heatmap.hotspot.busy')}
           </Text>
         </TouchableOpacity>
       ))}

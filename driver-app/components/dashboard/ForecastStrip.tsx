@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { useTheme } from '@shared/theme/ThemeContext';
+import { useLanguageStore } from '../../store/languageStore';
 import type { ThemeColors } from '@shared/theme/index';
 import type { ForecastEntry } from '../../hooks/useDemandHeatmap';
 
@@ -17,6 +18,7 @@ function formatHour(hour: number): string {
 
 export const ForecastStrip: React.FC<ForecastStripProps> = ({ forecast, visible }) => {
   const { colors } = useTheme();
+  const { t } = useLanguageStore();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   if (!visible || forecast.length === 0) return null;
@@ -26,10 +28,10 @@ export const ForecastStrip: React.FC<ForecastStripProps> = ({ forecast, visible 
   return (
     <View style={styles.container}>
       <View style={styles.headerRow}>
-        <Text style={styles.title}>Next few hours</Text>
+        <Text style={styles.title}>{t('heatmap.forecast.title')}</Text>
         {nextPeak && (
           <Text style={styles.peakHint}>
-            Peak at {formatHour(nextPeak.hour)}
+            {t('heatmap.forecast.peak').replace('{{hour}}', formatHour(nextPeak.hour))}
           </Text>
         )}
       </View>

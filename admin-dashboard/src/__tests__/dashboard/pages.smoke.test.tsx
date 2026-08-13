@@ -34,6 +34,13 @@ vi.mock("next/image", () => ({
   default: (props: React.ImgHTMLAttributes<HTMLImageElement>) => <img {...props} />,
 }));
 
+vi.mock("next/dynamic", () => ({
+  default: () => {
+    const Stub = () => <div data-component="DynamicImport" />;
+    return Stub;
+  },
+}));
+
 vi.mock("@/store/authStore", () => {
   const state = {
     token: "fake-token",
@@ -127,6 +134,9 @@ vi.mock("lucide-react", () => {
     Upload: Icon, FileDown: Icon, CheckCircle2: Icon, Info: Icon,
     // sortable-table (used by users/earnings/analytics/corporate/disputes)
     ChevronsUpDown: Icon, Percent: Icon, Receipt: Icon, Undo2: Icon, Landmark: Icon,
+    // heatmap / service-areas AD-* additions
+    Flame: Icon, ArrowRightLeft: Icon, DollarSign: Icon, ToggleLeft: Icon, ToggleRight: Icon,
+    FileCheck: Icon, FileWarning: Icon,
   };
 });
 
@@ -264,7 +274,34 @@ vi.mock("recharts", () => ({
   CartesianGrid: () => null,
   Tooltip: () => null,
   Legend: () => null,
+  ReferenceLine: () => null,
   ResponsiveContainer: ({ children }: React.PropsWithChildren) => <div>{children}</div>,
+}));
+
+// Stub HeatMap component (used by heatmap page, dynamically imported)
+vi.mock("@/components/heat-map", () => ({
+  default: () => <div data-sub="HeatMap" />,
+}));
+
+// Stub settings-ai and analytics-payouts (imported directly by service-areas)
+vi.mock("@/lib/api/settings-ai", () => ({
+  getSettings: vi.fn().mockResolvedValue({}),
+  updateSettings: vi.fn().mockResolvedValue({}),
+}));
+
+vi.mock("@/lib/api/analytics-payouts", () => ({
+  getSurgeHistory: vi.fn().mockResolvedValue([]),
+  getAnalyticsOverview: vi.fn().mockResolvedValue({}),
+  getCancellationBreakdown: vi.fn().mockResolvedValue({}),
+  getDriverAcceptanceRates: vi.fn().mockResolvedValue({}),
+  getDriverOfferStats: vi.fn().mockResolvedValue({}),
+  getDriverOfferTrends: vi.fn().mockResolvedValue({ daily_chart: [] }),
+  getDemandForecast: vi.fn().mockResolvedValue({}),
+  getDemandForecastSummary: vi.fn().mockResolvedValue({}),
+  getDashboardOverview: vi.fn().mockResolvedValue({}),
+  getPayouts: vi.fn().mockResolvedValue([]),
+  getPayoutById: vi.fn().mockResolvedValue({}),
+  getPayoutStats: vi.fn().mockResolvedValue({}),
 }));
 
 // Stub Google Maps (used by heatmap/service-areas)
@@ -474,6 +511,26 @@ describe("Dashboard page — /dashboard/drivers/import", () => {
 describe("Dashboard page — /dashboard/bulk-operations", () => {
   it("renders without crashing", async () => {
     const { default: Page } = await import("@/app/dashboard/bulk-operations/page");
+    await expect(renderPage(Page)).resolves.not.toThrow();
+  });
+});
+
+describe("Dashboard page — /dashboard/heatmap", () => {
+  it("renders without crashing", async () => {
+    const { default: Page } = await import("@/app/dashboard/heatmap/page");
+    await expect(renderPage(Page)).resolves.not.toThrow();
+  });
+
+  it("shows unmet demand section heading", async () => {
+    const { default: Page } = await import("@/app/dashboard/heatmap/page");
+    await act(async () => { render(<Page />); });
+    expect(screen.getByText("Unmet Demand")).toBeTruthy();
+  });
+});
+
+describe("Dashboard page — /dashboard/service-areas", () => {
+  it("renders without crashing", async () => {
+    const { default: Page } = await import("@/app/dashboard/service-areas/page");
     await expect(renderPage(Page)).resolves.not.toThrow();
   });
 });

@@ -601,6 +601,37 @@ class TestConversationLock:
         assert [n for n, _ in frames2][-1] == "done"
 
     @pytest.mark.anyio
+    async def test_conversation_lock_error_fails_open(self):
+        """2026-08-11 P1 fix: redis_set_nx now raises on a real Redis error
+        instead of silently falling back per-replica. The conversation lock
+        must fail OPEN with a loud log (mirrors _over_daily_cap's own
+        documented policy) -- blocking every AI conversation on a Redis
+        blip is worse than occasionally racing two concurrent turns on the
+        same conversation (the AI10 bug this lock guards against, a
+        data-quality edge case, not a safety one)."""
+        adapter = FakeAdapter([[_text("hi"), _end()]])
+        patches, mocks = _patches(adapter)
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6],
+            patches[7],
+            patches[8],
+            patch.object(orch, "redis_set_nx", AsyncMock(side_effect=ConnectionError("redis down"))),
+            patch.object(orch, "redis_delete", AsyncMock()),
+        ):
+            frames = []
+            async for frame in orch.run_chat_turn(user=USER, conversation_id="conv-1", user_message="hi"):
+                frames.append(frame)
+        names = [n for n, _ in frames]
+        assert "conversation_busy" not in [p.get("code") for n, p in frames if n == "error"]
+        assert names[-1] == "done"
+
+    @pytest.mark.anyio
     async def test_new_conversation_skips_the_lock(self):
         """conversation_id=None (brand-new conversation) has no shared id for
         another request to race against -- must not even attempt a lock."""

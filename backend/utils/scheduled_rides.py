@@ -96,6 +96,7 @@ async def _notify_schedule_delayed(ride_id: str, rider_id, ride: dict, *, escala
                 "Your ride is taking longer than expected to start because your other trip "
                 "hasn't finished yet. We'll keep trying — contact support if you'd like to cancel or rebook.",
                 data={"type": "scheduled_ride_delayed_escalated", "ride_id": ride_id},
+                target_app="rider",
             )
         else:
             await send_push_notification(
@@ -103,6 +104,7 @@ async def _notify_schedule_delayed(ride_id: str, rider_id, ride: dict, *, escala
                 "Your scheduled ride is waiting",
                 "We'll start finding a driver as soon as your current trip ends.",
                 data={"type": "scheduled_ride_delayed", "ride_id": ride_id},
+                target_app="rider",
             )
     except Exception as e:
         logger.warning(f"scheduled dispatch: delayed-notice push failed for {ride_id}: {e}")
@@ -231,20 +233,30 @@ async def _maybe_nudge_nearby_drivers(ride: dict) -> None:
 
 
 async def _corporate_policy_still_allows_dispatch(ride: dict) -> bool:
-    """Re-check corporate policy/allowance for a corporate-paid scheduled
-    ride right before dispatch (Finding #17, scheduled-rides gap review).
+    """Re-check corporate company-active/membership-active/policy state for a
+    corporate-paid scheduled ride right before dispatch (Finding #17,
+    scheduled-rides gap review; company-active + membership-active gates
+    added by the 2026-08-11 corporate scheduled-ride audit — see
+    docs/change-log/2026-08-11-corporate-scheduled-dispatch-recheck.md).
 
-    Policy/allowance is otherwise only ever checked once, at booking time,
-    against a snapshot that can be days stale by dispatch time (tightened
-    policy, exhausted allowance, a suspended company that the suspension
-    sweep didn't catch in time). Mirrors why card pre-auth was deliberately
-    moved to dispatch time for the same "things change over days" reason.
+    This snapshot is otherwise only ever checked once, at booking time,
+    against state that can be days stale by dispatch time (a suspended
+    company or removed member the suspension/offboarding sweep didn't catch
+    in time, tightened policy, exhausted allowance). Mirrors why card
+    pre-auth was deliberately moved to dispatch time for the same "things
+    change over days" reason, and mirrors the exact fail-closed checks
+    routes/rides/booking.py runs at booking time (require_company_bookable,
+    then policy rules, then active-membership) — this function previously
+    only ran the middle one, so a company suspended or a member removed
+    between booking and dispatch sailed through dispatch and only failed at
+    settlement, stuck at payment_status='pending' with no valid payer.
 
-    Non-corporate rides are unaffected (returns True immediately). Fails
-    OPEN on a lookup/evaluation error — matching
-    evaluate_policy_for_ride's own documented fail-open contract, so a
-    transient policy-service hiccup can't strand every corporate scheduled
-    ride in the fleet.
+    Non-corporate rides are unaffected (returns True immediately). Every
+    gate fails OPEN only on a lookup/evaluation error (DB hiccup, settings
+    fetch failure) — never on a confirmed inactive company, failed policy
+    rule, or inactive membership — so a transient outage can't strand every
+    corporate scheduled ride in the fleet, but a real "this shouldn't
+    dispatch" verdict is never silently ignored.
     """
     if (ride.get("payment_method") or "").lower() != "company_allowance":
         return True
@@ -254,10 +266,49 @@ async def _corporate_policy_still_allows_dispatch(ride: dict) -> bool:
 
     ride_id = ride["id"]
     try:
-        from ..services.corporate_policy_service import evaluate_policy_for_ride
+        from ..services.corporate_policy_service import (
+            evaluate_policy_for_ride,
+            require_company_bookable,
+        )
     except ImportError:
-        from services.corporate_policy_service import evaluate_policy_for_ride  # type: ignore
+        from services.corporate_policy_service import (  # type: ignore
+            evaluate_policy_for_ride,
+            require_company_bookable,
+        )
 
+    try:
+        settings = await get_app_settings() or {}
+    except Exception as settings_err:
+        logger.error(
+            f"scheduled dispatch: could not load app_settings for corporate re-check on {ride_id}, "
+            f"skipping company/membership gates this tick (fail-open on lookup error): {settings_err}",
+            exc_info=True,
+        )
+        settings = None
+
+    # ── Gate 1: company still bookable. This gate did not exist before the
+    # 2026-08-11 audit, despite this function's docstring having claimed all
+    # along to cover "a suspended company the suspension sweep didn't catch
+    # in time" — it never actually called require_company_bookable. Mirrors
+    # routes/rides/booking.py's require_company_bookable call exactly.
+    if settings is not None:
+        try:
+            from fastapi import HTTPException
+
+            await require_company_bookable(corporate_account_id, settings=settings)
+        except HTTPException:
+            logger.warning(f"scheduled dispatch: company no longer bookable, blocking dispatch for ride {ride_id}")
+            _metric_inc("spinr_dispatch_scheduled_corporate_policy_blocked_total")
+            await _notify_corporate_dispatch_blocked(ride, corporate_account_id, ["company_inactive"])
+            return False
+        except Exception as company_err:
+            logger.error(
+                f"scheduled dispatch: company-active re-check failed for {ride_id}, dispatching anyway "
+                f"(fail-open on lookup error, not on a confirmed-inactive company): {company_err}",
+                exc_info=True,
+            )
+
+    # ── Gate 2: fare/time-window/allowance policy rules (pre-existing).
     try:
         from decimal import Decimal
 
@@ -279,18 +330,69 @@ async def _corporate_policy_still_allows_dispatch(ride: dict) -> bool:
         )
         return True
 
-    if result.passed:
-        return True
+    if not result.passed:
+        logger.warning(f"scheduled dispatch: corporate policy re-check blocked ride {ride_id}: {result.failed_rules}")
+        _metric_inc("spinr_dispatch_scheduled_corporate_policy_blocked_total")
+        await _notify_corporate_dispatch_blocked(ride, corporate_account_id, result.failed_rules)
+        return False
 
-    logger.warning(f"scheduled dispatch: corporate policy re-check blocked ride {ride_id}: {result.failed_rules}")
-    _metric_inc("spinr_dispatch_scheduled_corporate_policy_blocked_total")
+    # ── Gate 3: rider still an active company member. evaluate_policy_for_ride
+    # (gate 2) only degrades `allowance` to {} when the membership lookup
+    # finds nothing — it never fails the ride unless the company also has an
+    # allowed_payment_source == "allowance_only" policy, so a removed member
+    # at a company without that policy sailed through both gates above.
+    # Mirrors booking.py's fail-closed membership check (corporate module
+    # review gap #3) at dispatch time too.
+    if settings is not None and settings.get("corporate_member_removal_blocks_booking", True):
+        try:
+            from ..db_supabase import list_active_memberships_for_user
+        except ImportError:
+            from db_supabase import list_active_memberships_for_user  # type: ignore
 
-    # Notify/escalate once per ride (Redis NX, 24h TTL) — the ride stays in
-    # 'scheduled' and this re-checks every tick, so without a dedupe guard
-    # this would re-notify every ~60s for as long as the policy stays failed.
+        rider_id = ride.get("rider_id")
+        corporate_member_id = ride.get("corporate_member_id")
+        member_still_active = True
+        try:
+            memberships = await list_active_memberships_for_user(rider_id)
+            # A company_allowance-booked ride stamps the specific membership
+            # it was booked under (routes/rides/booking.py); a work_profile
+            # ride does not, so fall back to "any active membership at this
+            # company" — matching that path's own booking-time check.
+            if corporate_member_id:
+                member_still_active = any(m.get("id") == corporate_member_id for m in memberships)
+            else:
+                member_still_active = any(m.get("company_id") == corporate_account_id for m in memberships)
+        except Exception as membership_err:
+            logger.error(
+                f"scheduled dispatch: membership re-check failed for {ride_id}, dispatching anyway "
+                f"(fail-open on lookup error): {membership_err}",
+                exc_info=True,
+            )
+
+        if not member_still_active:
+            logger.warning(
+                f"scheduled dispatch: rider membership no longer active, blocking dispatch for ride {ride_id}"
+            )
+            _metric_inc("spinr_dispatch_scheduled_corporate_policy_blocked_total")
+            await _notify_corporate_dispatch_blocked(ride, corporate_account_id, ["membership_inactive"])
+            return False
+
+    return True
+
+
+async def _notify_corporate_dispatch_blocked(ride: dict, corporate_account_id: str, failed_rules: list) -> None:
+    """Shared notify/escalate for a scheduled corporate ride blocked from
+    dispatch by _corporate_policy_still_allows_dispatch, regardless of which
+    gate (company-active, fare/policy rules, or membership-active) blocked
+    it. Notifies/escalates once per ride (Redis NX, 24h TTL) — the blocked
+    ride stays in 'scheduled' and the caller re-checks every tick, so
+    without this dedupe guard it would re-notify every ~60s for as long as
+    the ride stays blocked.
+    """
+    ride_id = ride["id"]
     try:
         if not await redis_set_nx(f"spinr:sched_corp_policy_blocked:{ride_id}", "1", ttl=86400):
-            return False
+            return
     except Exception as dedup_err:
         logger.debug(f"scheduled dispatch: corp-policy-block dedup check failed for {ride_id}: {dedup_err}")
 
@@ -302,6 +404,7 @@ async def _corporate_policy_still_allows_dispatch(ride: dict) -> bool:
                 "Your scheduled ride is on hold",
                 "Your company's booking policy no longer allows this ride. Contact your company admin for help.",
                 data={"type": "scheduled_ride_policy_blocked", "ride_id": ride_id},
+                target_app="rider",
             )
         except Exception as push_err:
             logger.warning(f"scheduled dispatch: policy-blocked push failed for {ride_id}: {push_err}")
@@ -311,12 +414,11 @@ async def _corporate_policy_still_allows_dispatch(ride: dict) -> bool:
                 "type": "scheduled_ride_policy_blocked",
                 "ride_id": ride_id,
                 "corporate_account_id": corporate_account_id,
-                "failed_rules": result.failed_rules,
+                "failed_rules": failed_rules,
             }
         )
     except Exception as admin_err:
         logger.warning(f"scheduled dispatch: policy-blocked admin broadcast failed for {ride_id}: {admin_err}")
-    return False
 
 
 async def _dispatch_scheduled_ride(ride: dict):
@@ -491,6 +593,7 @@ async def _dispatch_scheduled_ride(ride: dict):
                 "Your scheduled ride is starting!",
                 f"We're finding a driver for your ride to {ride.get('dropoff_address', 'your destination')}.",
                 data={"type": "scheduled_ride_dispatched", "ride_id": ride_id},
+                target_app="rider",
             )
 
     except Exception as e:
@@ -535,6 +638,7 @@ async def _send_reminder(ride: dict):
                     "Ride reminder - 10 minutes",
                     f"Your ride to {ride.get('dropoff_address', 'your destination')} is scheduled soon. A driver will be assigned shortly.",
                     data={"type": "scheduled_ride_reminder", "ride_id": ride_id},
+                    target_app="rider",
                 )
             except Exception:
                 try:
@@ -578,76 +682,100 @@ async def check_scheduled_rides() -> Optional[bool]:
         # convention for non-dispatch-critical failures.
         logger.warning(f"scheduled_rides: app_settings lookup failed ({settings_err}), proceeding as enabled")
 
+    # Lock TTL (45s) is deliberately BELOW the loop's ~54-66s jittered
+    # interval (60±6s) and is also released explicitly in the `finally`
+    # below on every exit path. Previously the TTL was 90s with no explicit
+    # release: since 90s > the loop interval, the replica that won the lock
+    # would fail to re-acquire its OWN still-live lock on the very next
+    # tick and skip it, halving the real dispatch cadence to ~120s on every
+    # replica, always — not just under contention. The short TTL is a
+    # crash-safety net (self-heals within well under one cycle if a replica
+    # dies mid-tick before reaching the release); the explicit release is
+    # what makes the common case (tick completes normally) free the lock
+    # immediately instead of waiting out the TTL.
+    _holds_lock = False
     try:
-        if not await redis_set_nx("spinr:scheduled_rides:lock", "1", ttl=90):
+        if not await redis_set_nx("spinr:scheduled_rides:lock", "1", ttl=45):
             return None
+        _holds_lock = True
     except Exception as _lock_err:
         logger.warning(f"scheduled_rides: Redis leader lock unavailable ({_lock_err}), proceeding without lock")
 
-    now = datetime.now(timezone.utc)
-    ten_min_from_now = now + timedelta(minutes=10)
-    nudge_window_end = now + timedelta(minutes=_DRIVER_NUDGE_LEAD_MINUTES)
-
     try:
-        # Get all pending scheduled rides. These sit in status 'scheduled'
-        # (set by create_ride for deferred bookings) until their scheduled_time
-        # arrives — querying 'searching' here meant the loop never saw a
-        # correctly-stored scheduled ride (CR-2).
-        scheduled = await db.get_rows(
-            "rides",
-            {
-                "is_scheduled": True,
-                "status": "scheduled",
-            },
-            limit=_SCHEDULED_RIDES_TICK_LIMIT,
-            order="scheduled_time",
-            columns=(
-                "id,rider_id,scheduled_time,scheduled_dispatched,reminder_sent,dropoff_address,"
-                "pickup_lat,pickup_lng,payment_method,corporate_account_id,grand_total,total_fare"
-            ),
-        )
-    except Exception as e:
-        original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
-        logger.error(f"Failed to fetch scheduled rides: {e} | original={original}", exc_info=True)
-        return False
+        now = datetime.now(timezone.utc)
+        ten_min_from_now = now + timedelta(minutes=10)
+        nudge_window_end = now + timedelta(minutes=_DRIVER_NUDGE_LEAD_MINUTES)
 
-    if len(scheduled) >= _SCHEDULED_RIDES_TICK_LIMIT:
-        # Every row this tick will still dispatch in scheduled_time order, but
-        # anything beyond the cap is deferred to the next tick — worth knowing
-        # about before it turns into a real dispatch-latency regression.
-        logger.warning(
-            f"scheduled_rides: tick hit the {_SCHEDULED_RIDES_TICK_LIMIT}-row candidate cap; "
-            "some due/near-due scheduled rides are deferred to the next tick"
-        )
-        _metric_inc("spinr_dispatch_scheduled_candidates_capped_total")
+        try:
+            # Get all pending scheduled rides. These sit in status 'scheduled'
+            # (set by create_ride for deferred bookings) until their scheduled_time
+            # arrives — querying 'searching' here meant the loop never saw a
+            # correctly-stored scheduled ride (CR-2).
+            scheduled = await db.get_rows(
+                "rides",
+                {
+                    "is_scheduled": True,
+                    "status": "scheduled",
+                },
+                limit=_SCHEDULED_RIDES_TICK_LIMIT,
+                order="scheduled_time",
+                columns=(
+                    "id,rider_id,scheduled_time,scheduled_dispatched,reminder_sent,dropoff_address,"
+                    "pickup_lat,pickup_lng,payment_method,corporate_account_id,grand_total,total_fare"
+                ),
+            )
+        except Exception as e:
+            original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
+            logger.error(f"Failed to fetch scheduled rides: {e} | original={original}", exc_info=True)
+            return False
 
-    for ride in scheduled:
-        scheduled_time_str = ride.get("scheduled_time")
-        if not scheduled_time_str:
-            continue
+        if len(scheduled) >= _SCHEDULED_RIDES_TICK_LIMIT:
+            # Every row this tick will still dispatch in scheduled_time order, but
+            # anything beyond the cap is deferred to the next tick — worth knowing
+            # about before it turns into a real dispatch-latency regression.
+            logger.warning(
+                f"scheduled_rides: tick hit the {_SCHEDULED_RIDES_TICK_LIMIT}-row candidate cap; "
+                "some due/near-due scheduled rides are deferred to the next tick"
+            )
+            _metric_inc("spinr_dispatch_scheduled_candidates_capped_total")
 
-        scheduled_time = parse_iso_utc(scheduled_time_str)
-        if scheduled_time is None:
-            continue
+        for ride in scheduled:
+            scheduled_time_str = ride.get("scheduled_time")
+            if not scheduled_time_str:
+                continue
 
-        already_dispatched = ride.get("scheduled_dispatched", False)
-        already_reminded = ride.get("reminder_sent", False)
+            scheduled_time = parse_iso_utc(scheduled_time_str)
+            if scheduled_time is None:
+                continue
 
-        # Send reminder 10 minutes before (if not already sent)
-        if not already_reminded and now <= scheduled_time and scheduled_time <= ten_min_from_now:
-            await _send_reminder(ride)
+            already_dispatched = ride.get("scheduled_dispatched", False)
+            already_reminded = ride.get("reminder_sent", False)
 
-        # Heads-up nudge to nearby online drivers ~60 minutes before pickup.
-        # Best-effort and self-deduped (Redis NX inside the function) — safe
-        # to call every tick within the window.
-        if now <= scheduled_time and scheduled_time <= nudge_window_end:
-            await _maybe_nudge_nearby_drivers(ride)
+            # Send reminder 10 minutes before (if not already sent)
+            if not already_reminded and now <= scheduled_time and scheduled_time <= ten_min_from_now:
+                await _send_reminder(ride)
 
-        # Dispatch when it's time (or past time)
-        if not already_dispatched and now >= scheduled_time:
-            await _dispatch_scheduled_ride(ride)
+            # Heads-up nudge to nearby online drivers ~60 minutes before pickup.
+            # Best-effort and self-deduped (Redis NX inside the function) — safe
+            # to call every tick within the window.
+            if now <= scheduled_time and scheduled_time <= nudge_window_end:
+                await _maybe_nudge_nearby_drivers(ride)
 
-    return True
+            # Dispatch when it's time (or past time)
+            if not already_dispatched and now >= scheduled_time:
+                await _dispatch_scheduled_ride(ride)
+
+        return True
+    finally:
+        if _holds_lock:
+            try:
+                await redis_delete("spinr:scheduled_rides:lock")
+            except Exception as _release_err:
+                # Not fatal — the short TTL above self-heals this within
+                # well under one loop cycle either way.
+                logger.warning(
+                    f"scheduled_rides: failed to release leader lock ({_release_err}), will self-heal via TTL"
+                )
 
 
 # Consecutive check_scheduled_rides() fetch failures (per replica, in-process

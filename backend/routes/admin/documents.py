@@ -513,6 +513,7 @@ async def admin_review_driver_document(
                             "document_id": document_id,
                             "document_type": doc_type,
                         },
+                        target_app="driver",
                     )
             except Exception:
                 logger.warning(

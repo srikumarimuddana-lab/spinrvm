@@ -40,9 +40,19 @@ See `domain-safety.md` and CLAUDE.md for the 0/1/2/3 table. Regulatory-specific 
 | GPS trace — pickup + dropoff only (not full route) | 3 years | Provincial audit |
 | Insurance period transitions | 7 years | SGI audit |
 | Receipts with tax line items | 7 years | CRA |
-| Rider identity linked to trip | 7 years (hashed after 2) | Balance audit vs. privacy |
+| Rider identity linked to trip | 7 years (hashed after 2 — **not yet implemented, ACTION_ITEMS.md B23**) | Balance audit vs. privacy |
 
-After the retention window, rows are anonymized (user_id nulled, coordinates rounded to city centroid), not deleted — preserves statistical continuity for regulatory reporting.
+After the 7-year window, trip records are **hard-deleted**, not anonymized
+(recorded decision, ACTION_ITEMS.md B18, 2026-08-10 — corrects this file's
+prior "anonymized... not deleted" claim, which never matched what
+`purge_pii_retention()` Step H actually ships: migration 216's "Uber/Lyft
+attributable retention" model, made operative by 289). GPS pickup/dropoff
+still drops earlier, at the separate 3-year ceiling in Step A. The "hashed
+after 2 years" identity promise on the row above is a distinct, still-open
+gap — see B23; it is not satisfied by the 7-year hard delete, and the
+literal fix (hashing `rides.rider_id` for every ride, not just DSAR ones)
+would break active riders' own trip-history screens, so it needs its own
+product/legal scoping before implementation.
 
 ## Tax display
 
@@ -83,11 +93,11 @@ Any UX copy or feature that arguably crosses this line goes through legal before
 
 When a user requests deletion:
 
-1. Personal profile fields (name, email, home address, payment methods) → scrubbed within 30 days
-2. Trip records → **retained** but anonymized: `user_id` nulled, coordinates rounded to city, narrative fields redacted
+1. Personal profile fields (name, email, home address, payment methods) → scrubbed within 30 days (implemented: `purge_pii_retention()` Step N, migration 296, ACTION_ITEMS.md B18). Home address specifically means `saved_addresses` — hard-deleted alongside the profile scrub, not anonymized. Payment methods are Stripe-held (no local table); a Stripe-side detach is a separate follow-up, not covered by Step N.
+2. Trip records → **retained**, then **hard-deleted** (not anonymized) at the 7-year floor: recorded decision, ACTION_ITEMS.md B18, 2026-08-10 — corrects this line's prior claim, which never matched migration 216/289's shipped "Uber/Lyft attributable retention" model.
 3. Safety incidents involving the user → retained in full for the longer of (7 years, investigation close + 2 years)
 4. Driver documents (license scan, insurance proof) → retained 7 years post-deactivation for SGI defence
-5. Communication logs (chat, support) → anonymized after 1 year; retained for dispute window
+5. Communication logs (chat, support) → not yet verified against this exact wording — `ride_messages` (Step D) hard-deletes at 90 days, not "anonymized after 1 year." Flagged here as a further doc/code divergence found while reconciling this file for B18, not itself fixed by B18 — worth its own follow-up ticket rather than silently left.
 
 Always log the deletion request in `user_deletion_requests` with the scope applied, for proof-of-compliance in audits.
 

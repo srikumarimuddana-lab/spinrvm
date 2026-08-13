@@ -244,6 +244,27 @@ async def test_driver_assigned_guard_when_not_a_guest():
     mocks[_GNS + "db_supabase.update_ride"].assert_not_awaited()
 
 
+# ── notify_guest_booking_created: app-holder push branch ────────────────
+
+
+@pytest.mark.anyio
+async def test_booking_app_holder_push_targets_rider_app():
+    """N10 batch 2: customer_has_app=True sends a push, not SMS, and it
+    must pass target_app="rider" (fcm_token_rider) — an app-holding guest
+    booked by a corporate account is always a rider account."""
+    from backend.services.guest_notification_service import notify_guest_booking_created
+
+    patchers, mocks = _start(_patches())
+    try:
+        await notify_guest_booking_created(dict(_RIDE), dict(_GUEST), customer_has_app=True, tracking_url=None)
+    finally:
+        _stop(patchers)
+    push = mocks[_GNS + "send_push_notification"]
+    push.assert_awaited_once()
+    assert push.await_args.kwargs["target_app"] == "rider"
+    mocks[_GNS + "send_sms"].assert_not_awaited()
+
+
 # ── notify_guest_booking_created: no-phone guard + scheduled body ───────
 
 

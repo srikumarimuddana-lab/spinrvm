@@ -30,20 +30,26 @@ function formatEta(seconds: number | null | undefined): string {
   return mins === 1 ? '1 min away' : `${mins} min away`;
 }
 
+// Takes flat scalar fields rather than the whole ride/driver store objects
+// so its one caller (the effect below) can depend on just those fields
+// instead of the whole objects, which change on every ride poll.
 function buildContent(
   status: string,
-  ride: any,
-  driver: any,
+  dropoffAddress: string | null | undefined,
+  pickupOtp: string | null | undefined,
+  driverFullName: string | null | undefined,
+  vehicleColor: string | null | undefined,
+  vehicleMake: string | null | undefined,
+  vehicleModel: string | null | undefined,
+  licensePlate: string | null | undefined,
   etaSeconds: number | null,
 ): { title: string; body: string } {
-  const driverName = driver?.name?.split(' ')[0] || 'Driver';
-  const vehicle = driver
-    ? [driver.vehicle_color, driver.vehicle_make, driver.vehicle_model].filter(Boolean).join(' ')
-    : '';
-  const plate = driver?.license_plate || '';
+  const driverName = driverFullName?.split(' ')[0] || 'Driver';
+  const vehicle = [vehicleColor, vehicleMake, vehicleModel].filter(Boolean).join(' ');
+  const plate = licensePlate || '';
   const eta = formatEta(etaSeconds);
-  const dropoff = ride?.dropoff_address || '';
-  const otp = ride?.pickup_otp;
+  const dropoff = dropoffAddress || '';
+  const otp = pickupOtp;
 
   switch (status) {
     case 'searching':
@@ -86,15 +92,46 @@ export function useRideStatusNotification() {
     if (Platform.OS !== 'android') return;
 
     const status = currentRide?.status as string | undefined;
+    const rideId = currentRide?.id;
 
-    if (status && ACTIVE_STATUSES.has(status)) {
-      const { title, body } = buildContent(status, currentRide, currentDriver, driverEtaSeconds);
-      rideLive.showOrUpdate({ title, body, rideId: currentRide!.id })
+    if (status && rideId && ACTIVE_STATUSES.has(status)) {
+      const { title, body } = buildContent(
+        status,
+        currentRide?.dropoff_address,
+        currentRide?.pickup_otp,
+        currentDriver?.name,
+        currentDriver?.vehicle_color,
+        currentDriver?.vehicle_make,
+        currentDriver?.vehicle_model,
+        currentDriver?.license_plate,
+        driverEtaSeconds,
+      );
+      rideLive.showOrUpdate({ title, body, rideId })
         .then(() => { isPostedRef.current = true; })
         .catch((e: any) => console.warn('[RideNotif] Failed to post status notification:', e));
     } else if (isPostedRef.current) {
       rideLive.cancel().catch(() => {});
       isPostedRef.current = false;
     }
-  }, [currentRide?.status, currentRide?.id, currentDriver?.name, driverEtaSeconds]);
+    // Narrowed to the specific fields buildContent() actually reads, rather
+    // than the whole currentRide/currentDriver objects: those update on
+    // every ride poll (fare, timestamps, …), and re-posting a native
+    // Android notification that often would be visible churn (icon
+    // flicker/re-buzz), not just a wasted render. Previously only
+    // status/id/driver.name/driverEtaSeconds were tracked, so vehicle info,
+    // plate, dropoff address, or the pickup OTP changing without one of
+    // those four also changing would leave the posted notification showing
+    // stale text — a real, if narrow, gap this closes.
+  }, [
+    currentRide?.status,
+    currentRide?.id,
+    currentRide?.dropoff_address,
+    currentRide?.pickup_otp,
+    currentDriver?.name,
+    currentDriver?.vehicle_color,
+    currentDriver?.vehicle_make,
+    currentDriver?.vehicle_model,
+    currentDriver?.license_plate,
+    driverEtaSeconds,
+  ]);
 }

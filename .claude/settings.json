@@ -109,15 +109,15 @@
           },
           {
             "type": "command",
-            "command": "bash -c 'test -d rider-app/node_modules && echo \"rider-app deps ok\" || (cd rider-app && yarn install --frozen-lockfile --silent && echo \"rider-app deps installed\")'"
+            "command": "bash -c 'cd rider-app && (test -d node_modules && yarn check --integrity --silent 2>/dev/null) && echo \"rider-app deps ok\" || (yarn install --check-files --silent && echo \"rider-app deps synced\")'"
           },
           {
             "type": "command",
-            "command": "bash -c 'test -d driver-app/node_modules && echo \"driver-app deps ok\" || (cd driver-app && yarn install --frozen-lockfile --silent && echo \"driver-app deps installed\")'"
+            "command": "bash -c 'cd driver-app && (test -d node_modules && yarn check --integrity --silent 2>/dev/null) && echo \"driver-app deps ok\" || (yarn install --check-files --silent && echo \"driver-app deps synced\")'"
           },
           {
             "type": "command",
-            "command": "bash -c 'test -d admin-dashboard/node_modules && echo \"admin deps ok\" || (cd admin-dashboard && npm ci --silent && echo \"admin deps installed\")'"
+            "command": "bash -c 'cd admin-dashboard && npm ci --silent && echo \"admin deps ok\"'"
           }
         ]
       }

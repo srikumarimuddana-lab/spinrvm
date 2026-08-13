@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useRef, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,7 +9,6 @@ import {
   TextInput,
   Modal,
   ScrollView,
-  useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -38,7 +37,6 @@ function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): num
 export default function ConfirmPickupScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { height: SCREEN_HEIGHT } = useWindowDimensions();
   const { colors, isDark } = useTheme();
   const { sf } = useResponsive();
   const styles = useMemo(() => createStyles(colors, sf, insets), [colors, sf, insets]);
@@ -48,12 +46,19 @@ export default function ConfirmPickupScreen() {
   const mapRef = useRef<MapView>(null);
   const geocodeTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const originalLat = useRef(pickup?.lat ?? 52.1332);
-  const originalLng = useRef(pickup?.lng ?? -106.67);
+  // Captured once at mount and never reassigned — the map's "original pin"
+  // reference point for the 50m radius circle and recenter button. Needs to
+  // be readable during render (JSX `<Circle center=.../>` below), so this is
+  // `useState` (no setter used) rather than `useRef`, per react-hooks/refs:
+  // reading `ref.current` synchronously during render isn't safe under the
+  // React Compiler's memoization model even though this particular ref was
+  // never mutated after init.
+  const [originalLat] = useState(() => pickup?.lat ?? 52.1332);
+  const [originalLng] = useState(() => pickup?.lng ?? -106.67);
 
   const [region, setRegion] = useState<Region>({
-    latitude: originalLat.current,
-    longitude: originalLng.current,
+    latitude: originalLat,
+    longitude: originalLng,
     latitudeDelta: 0.003,
     longitudeDelta: 0.003,
   });
@@ -74,8 +79,8 @@ export default function ConfirmPickupScreen() {
   // debounced 400 ms, so on a fast pan-then-confirm `address` still describes
   // the previous pin — booking would bind the old label to the new coordinate.
   const addressForRef = useRef<{ lat: number; lng: number }>({
-    lat: originalLat.current,
-    lng: originalLng.current,
+    lat: originalLat,
+    lng: originalLng,
   });
 
   const reverseGeocode = useCallback(async (lat: number, lng: number) => {
@@ -96,11 +101,14 @@ export default function ConfirmPickupScreen() {
 
   const handleRegionChange = useCallback((r: Region) => {
     setRegion(r);
-    const d = haversineM(originalLat.current, originalLng.current, r.latitude, r.longitude);
+    const d = haversineM(originalLat, originalLng, r.latitude, r.longitude);
     setDistanceM(d);
     if (geocodeTimeout.current) clearTimeout(geocodeTimeout.current);
     geocodeTimeout.current = setTimeout(() => reverseGeocode(r.latitude, r.longitude), 400);
-  }, [reverseGeocode]);
+    // originalLat/originalLng are lazy-initialized useState values with no
+    // setter in scope — they never change after mount, so listing them is
+    // a no-op for when this callback's identity is recreated.
+  }, [reverseGeocode, originalLat, originalLng]);
 
   const proceed = (lat: number, lng: number, addr: string, noteValue: string) => {
     setPickup({ address: addr, lat, lng });
@@ -143,8 +151,8 @@ export default function ConfirmPickupScreen() {
   const handleRecenter = () => {
     mapRef.current?.animateToRegion(
       {
-        latitude: originalLat.current,
-        longitude: originalLng.current,
+        latitude: originalLat,
+        longitude: originalLng,
         latitudeDelta: 0.003,
         longitudeDelta: 0.003,
       },
@@ -172,7 +180,7 @@ export default function ConfirmPickupScreen() {
       >
         {/* 50 m suggested radius */}
         <Circle
-          center={{ latitude: originalLat.current, longitude: originalLng.current }}
+          center={{ latitude: originalLat, longitude: originalLng }}
           radius={PICKUP_RADIUS_M}
           fillColor="rgba(16,185,129,0.10)"
           strokeColor="rgba(16,185,129,0.35)"
@@ -241,7 +249,7 @@ export default function ConfirmPickupScreen() {
           <View style={styles.warningRow}>
             <Ionicons name="information-circle" size={16} color="#D97706" />
             <Text style={styles.warningText}>
-              You've moved {Math.round(distanceM)}m from your searched location
+              You&apos;ve moved {Math.round(distanceM)}m from your searched location
             </Text>
           </View>
         )}

@@ -89,7 +89,11 @@ export default function ChatScreen() {
                 console.log('[Chat] Failed to load history:', e);
             }
         })();
-    }, [rideId]);
+        // CHAT_STORAGE_KEY is a pure derivation of rideId (already a dep) —
+        // its value can't change without rideId also changing. setChatMessages
+        // is a stable driverStore action. Neither addition changes when this
+        // effect fires.
+    }, [rideId, CHAT_STORAGE_KEY, setChatMessages]);
 
     // Persist to AsyncStorage whenever the store updates. Guard: don't write an
     // empty array before the initial cache read completes to avoid clobbering a

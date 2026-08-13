@@ -1,18 +1,4 @@
-import React, { useEffect, useState, useMemo, useRef, useContext } from 'react';
-
-// Straight-line ETA at urban speed — used during trip so we don't re-call
-// the Directions API on every GPS ping (that would be ~60 calls / 15-min ride).
-function _haversineEtaMin(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const R = 6371;
-  const toRad = (d: number) => (d * Math.PI) / 180;
-  const dlat = toRad(lat2 - lat1);
-  const dlng = toRad(lng2 - lng1);
-  const a =
-    Math.sin(dlat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dlng / 2) ** 2;
-  const km = R * 2 * Math.asin(Math.sqrt(a));
-  return Math.max(1, Math.round((km / 30) * 60)); // 30 km/h urban average
-}
+import React, { useEffect, useState, useMemo, useContext } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
@@ -23,7 +9,6 @@ import {
   ScrollView,
   useWindowDimensions,
   Share,
-  Linking,
   Platform,
   ActivityIndicator,
   BackHandler,
@@ -50,17 +35,33 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { TrackBaseUrlContext } from './_layout';
 import { getRideMapCoords } from '../utils/rideMapCoords';
+import { useTranslation } from '../i18n';
+
+// Straight-line ETA at urban speed — used during trip so we don't re-call
+// the Directions API on every GPS ping (that would be ~60 calls / 15-min ride).
+function _haversineEtaMin(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dlat = toRad(lat2 - lat1);
+  const dlng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dlat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dlng / 2) ** 2;
+  const km = R * 2 * Math.asin(Math.sqrt(a));
+  return Math.max(1, Math.round((km / 30) * 60)); // 30 km/h urban average
+}
 
 function RideInProgressScreenContent() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
   const trackBaseUrl = useContext(TrackBaseUrlContext);
   const {
-    currentRide, currentDriver, fetchRide, cancelRide, clearRide,
+    currentRide, currentDriver, fetchRide,
     triggerEmergency, isLoading, error, wsConnected,
     activeRideRouteCoords, lastEtaMin,
     setActiveRideRouteCoords, setLastEtaMin,
   } = useRideStore();
+  const { t } = useTranslation();
   // Seed ETA and route from store so this screen shows correct values
   // immediately even before the first Directions fetch completes — and
   // skips the fetch entirely if driver-arriving already retrieved the route.
@@ -95,7 +96,7 @@ function RideInProgressScreenContent() {
     title: string;
     message?: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+    buttons?: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', message: '', variant: 'info' });
   const mapRef = React.useRef<MapView>(null);
   const bottomSheetRef = React.useRef<any>(null);
@@ -120,9 +121,16 @@ function RideInProgressScreenContent() {
 
   useEffect(() => {
     // Snapshot props at effect entry — the closure shouldn't reach into
-    // currentRide / currentDriver after an async state change.
+    // currentRide / currentDriver after an async state change. Driver lat/
+    // lng are read directly off currentDriver (not via a `const driver =
+    // currentDriver` whole-object alias) so this effect's real dependency —
+    // just those two fields — matches the dep array below; aliasing the
+    // whole object made the linter want it as a dep, which would re-fire
+    // this map animation on every currentDriver field change (name, rating,
+    // vehicle info, …), not just a position update.
     const ride = currentRide;
-    const driver = currentDriver;
+    const dLat = currentDriver?.lat;
+    const dLng = currentDriver?.lng;
     const map = mapRef.current;
     if (!ride || !map) return;
 
@@ -132,10 +140,10 @@ function RideInProgressScreenContent() {
     const dropLat = ride.dropoff_lat;
     const dropLng = ride.dropoff_lng;
 
-    if (isCoord(driver?.lat) && isCoord(driver?.lng) && isCoord(dropLat) && isCoord(dropLng)) {
+    if (isCoord(dLat) && isCoord(dLng) && isCoord(dropLat) && isCoord(dropLng)) {
       map.fitToCoordinates(
         [
-          { latitude: driver.lat, longitude: driver.lng },
+          { latitude: dLat, longitude: dLng },
           { latitude: dropLat, longitude: dropLng },
         ],
         {
@@ -157,6 +165,8 @@ function RideInProgressScreenContent() {
         longitudeDelta: 0.05,
       });
     }
+    // currentRide is intentionally kept as a whole-object dep (pre-existing,
+    // not changed by this round) — only currentDriver was narrowed.
   }, [currentRide, currentDriver?.lat, currentDriver?.lng]);
 
   useEffect(() => {
@@ -166,12 +176,16 @@ function RideInProgressScreenContent() {
     if (wsConnected) return;
     const interval = setInterval(() => fetchRide(rideId), 15000);
     return () => clearInterval(interval);
-  }, [rideId, wsConnected]);
+    // fetchRide is a zustand action (stable); router is expo-router's stable singleton.
+  }, [rideId, wsConnected, fetchRide, router]);
 
   useEffect(() => {
     // Calculate estimated arrival time
     const now = new Date();
     now.setMinutes(now.getMinutes() + eta);
+    // estimatedTime isn't a dep of this effect (only eta is) — pure
+    // derived-display state, can't loop.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setEstimatedTime(now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
   }, [eta]);
 
@@ -179,7 +193,8 @@ function RideInProgressScreenContent() {
     if (currentRide?.status === RideStatus.COMPLETED && rideId) {
       router.replace({ pathname: '/ride-completed', params: { rideId } });
     }
-  }, [currentRide?.status]);
+    // rideId is the route param; router is expo-router's stable singleton.
+  }, [currentRide?.status, rideId, router]);
 
   // Stable objects keyed to ride ID so MapViewDirections only calls the
   // Directions API once per ride instead of once per driver GPS ping.
@@ -225,9 +240,16 @@ function RideInProgressScreenContent() {
     // Use != null (not !dLat) so coords of exactly 0 are treated as valid.
     if (dLat == null || dLng == null || dropLat == null || dropLng == null) return;
     const etaMin = _haversineEtaMin(dLat, dLng, dropLat, dropLng);
+    // Neither eta nor lastEtaMin is a dep of this effect (routeFetched and
+    // the driver's live lat/lng are) — recomputed display state driven by
+    // GPS updates, can't loop.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setEta(etaMin);
     setLastEtaMin(etaMin);
-  }, [routeFetched, currentDriver?.lat, currentDriver?.lng]);
+    // dropoff coords are fixed for the life of a ride (added for
+    // correctness, not expected to change mid-ride); setLastEtaMin is a
+    // zustand action (stable).
+  }, [routeFetched, currentDriver?.lat, currentDriver?.lng, currentRide?.dropoff_lat, currentRide?.dropoff_lng, setLastEtaMin]);
 
   // OSRM road-matched route + ETA for the live map. Google stays the map
   // canvas — we just draw this road-snapped line and use the routed ETA when
@@ -263,7 +285,8 @@ function RideInProgressScreenContent() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [rideId]);
+    // setActiveRideRouteCoords/setLastEtaMin are zustand actions (stable).
+  }, [rideId, setActiveRideRouteCoords, setLastEtaMin]);
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -288,29 +311,13 @@ function RideInProgressScreenContent() {
       return true;
     });
     return () => sub.remove();
-  }, [currentRide?.status]);
-
-  const handleSafety = () => {
-    setConfirmSheet({
-      visible: true,
-      title: 'Emergency',
-      message: 'Are you sure you want to contact emergency services?',
-      variant: 'danger',
-      buttons: [
-        {
-          text: 'Call 911',
-          style: 'destructive',
-          onPress: () => {
-            if (rideId) void triggerEmergency(rideId as string).catch(() => {
-              showToast('Alert Not Sent', "We couldn't reach Spinr's emergency service. Please call 911 directly.", 'danger');
-            });
-            Linking.openURL('tel:911');
-          },
-        },
-        { text: 'Cancel', style: 'cancel' },
-      ],
-    });
-  };
+    // riderBill is a plain number recomputed every render from currentRide
+    // (not memoized) — adding it means the confirm dialog's fare text stays
+    // fresh if the fare updates mid-ride without a status change, matching
+    // the same fix applied to the sibling cancellation dialogs in
+    // driver-arrived.tsx/driver-arriving.tsx. currentRide?.id/rideId are
+    // primitives; fetchRide is a zustand action (stable).
+  }, [currentRide?.status, currentRide?.id, riderBill, fetchRide, rideId]);
 
   const handleShareTrip = async () => {
     // Public tracking URL base is served by GET /settings → app_settings.track_base_url
@@ -553,7 +560,7 @@ function RideInProgressScreenContent() {
           <Text style={styles.actionBtnText}>Live Map</Text>
         </TouchableOpacity>
         <View style={styles.actionBtn}>
-          <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} />
+          <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} t={t} />
           <Text style={styles.actionBtnText}>SOS</Text>
         </View>
         <TouchableOpacity style={styles.actionBtn} onPress={() => {
@@ -611,7 +618,7 @@ function RideInProgressScreenContent() {
 
       {/* SOS — floating top-right, always visible even when bottom sheet is collapsed */}
       <SafeAreaView edges={['top']} style={styles.sosOverlay} pointerEvents="box-none">
-        <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} size="small" />
+        <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} size="small" t={t} />
       </SafeAreaView>
 
       {/* Map Area */}

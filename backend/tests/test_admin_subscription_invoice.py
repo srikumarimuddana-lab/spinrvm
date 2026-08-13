@@ -110,6 +110,25 @@ def test_admin_resend_invoice_429_on_cooldown(admin_client):
     send.assert_not_awaited()
 
 
+def test_admin_resend_invoice_503_on_redis_error(admin_client):
+    """2026-08-11 P1 fix: redis_set_nx now raises on a real Redis error
+    instead of silently falling back per-replica. This cooldown exists
+    specifically to stop a stuck/looping admin action from email-bombing a
+    driver -- must fail CLOSED (503) rather than silently proceeding as if
+    the anti-spam guard didn't matter."""
+    with (
+        patch("backend.db_supabase.find_one", new=AsyncMock(return_value=_PAYMENT)),
+        patch(
+            "utils.subscription_invoice.build_invoice_email_kwargs", new=AsyncMock(return_value={"driver_id": "drv_1"})
+        ),
+        patch("utils.redis_client.redis_set_nx", new=AsyncMock(side_effect=ConnectionError("redis down"))),
+        patch("routes.drivers.subscriptions._send_subscription_invoice_email", new=AsyncMock(return_value=True)) as send,
+    ):
+        resp = admin_client.post("/api/admin/subscription/payments/pay_1/resend-invoice")
+    assert resp.status_code == 503
+    send.assert_not_awaited()
+
+
 # ── auth (denied path) ──────────────────────────────────────────────────────
 
 

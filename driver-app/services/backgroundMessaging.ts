@@ -26,6 +26,11 @@
 
 import { Platform } from 'react-native';
 import { setBackgroundMessageHandler, getAppCheckToken, initFirebaseServices } from '@shared/services/firebase';
+// Keep the default import: many test files jest.mock(
+// '@shared/config/spinr.config', () => ({ default: {...} })) without a
+// matching named 'SpinrConfig' export, so switching to a named import
+// breaks those mocks (confirmed in rider-app's utils/aiChat.ts).
+// eslint-disable-next-line import/no-named-as-default
 import SpinrConfig from '@shared/config/spinr.config';
 import { getBackgroundAuthToken } from '../utils/backgroundLocation';
 
@@ -47,12 +52,18 @@ let displayRideOfferNotification: any = null;
 let dismissRideOfferNotification: any = null;
 if (Platform.OS === 'android' || Platform.OS === 'ios') {
   try {
+    // Guarded native-module requires — same reasoning as _layout.tsx:
+    // notifeeService.ts statically imports notifee at its own module scope,
+    // so requiring it eagerly here would defeat the android/ios + try/catch
+    // guard around it.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     notifee = require('@notifee/react-native').default;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const svc = require('./notifeeService');
     parseRideOfferEvent = svc.parseRideOfferEvent;
     displayRideOfferNotification = svc.displayRideOfferNotification;
     dismissRideOfferNotification = svc.dismissRideOfferNotification;
-  } catch (e) {
+  } catch {
     console.log('[Notifee] native module not available — background ride-offer notifications disabled');
   }
 }
@@ -116,6 +127,11 @@ export function registerBackgroundMessageHandlers(): void {
     // 1. Persist the full offer payload so the in-app panel can hydrate
     //    instantly on cold start (driver dashboard reads on mount).
     try {
+      // Deliberately lazy — see the alertPrefsStore require below and the
+      // file header: handlers register at bundle load (headless JS launch),
+      // so AsyncStorage is deferred to only when a message actually arrives
+      // rather than loaded unconditionally on that critical path.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const AsyncStorage = require('@react-native-async-storage/async-storage').default;
       await AsyncStorage.setItem(
         PENDING_OFFER_KEY,
@@ -163,6 +179,12 @@ export function registerBackgroundMessageHandlers(): void {
           // Headless launch: the alert-prefs store hasn't hydrated, so read
           // it explicitly before ringing. muted kills audio only — the
           // heads-up card and full-screen wake still fire.
+          // Deliberately lazy: this file's handlers register at bundle load
+          // (headless JS launch, see file header) — a static import would
+          // pull alertPrefsStore's module scope into that critical path even
+          // when no offer ever arrives. Deferred to only when this branch
+          // (Android + an actual ride-offer FCM message) actually runs.
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
           const { useAlertPrefsStore } = require('../store/alertPrefsStore');
           await useAlertPrefsStore.getState().loadAlertPrefs();
           const muted = !useAlertPrefsStore.getState().soundEffects;
@@ -223,6 +245,8 @@ export function registerBackgroundMessageHandlers(): void {
 }
 
 async function _stashAction(action: string, rideId: string): Promise<void> {
+  // Deliberately lazy — see the require in the message handler above.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const AsyncStorage = require('@react-native-async-storage/async-storage').default;
   await AsyncStorage.setItem(
     PENDING_ACTION_KEY,
@@ -232,6 +256,8 @@ async function _stashAction(action: string, rideId: string): Promise<void> {
 
 async function _clearPendingOffer(): Promise<void> {
   try {
+    // Deliberately lazy — see the require in the message handler above.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const AsyncStorage = require('@react-native-async-storage/async-storage').default;
     await AsyncStorage.removeItem(PENDING_OFFER_KEY);
   } catch (e) {

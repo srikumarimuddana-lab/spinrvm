@@ -1,2 +1,2 @@
 import { redirect } from "next/navigation";
-export default function SurgeRedirect() { redirect("/dashboard/service-areas"); }
+export default function SurgeRedirect(): never { redirect("/dashboard/service-areas"); }

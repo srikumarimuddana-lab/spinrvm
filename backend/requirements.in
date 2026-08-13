@@ -20,8 +20,8 @@ realtime>=0.9.0
 psycopg2-binary>=2.9.9
 
 # Authentication
-firebase-admin>=6.0.0
-PyJWT>=2.8.0
+firebase-admin>=7.5.0
+PyJWT>=2.13.0
 bcrypt>=4.0.0
 google-auth>=2.0.0
 # Admin MFA (TOTP). Used by routes/admin/auth.py for mfa_setup_init,
@@ -89,7 +89,7 @@ boto3>=1.42.89
 # staticmap composites OSM tiles + our phase_polylines server-side.
 # Pillow is a transitive dep; pin it explicitly for clarity.
 staticmap>=0.5.7
-Pillow>=10.4.0
+Pillow>=12.3.0
 
 # CRA T4A PDF generation (pure-Python, no system deps).
 # Used by backend/utils/t4a_pdf.py for on-demand driver tax slip download.
@@ -113,10 +113,10 @@ python-docx>=1.1.2
 sentry-sdk>=2.59.0
 
 # Testing
-pytest>=9.0.3
+pytest>=9.1.1
 pytest-cov>=5.0.0
-pytest-asyncio>=0.24.0
-pytest-env>=1.1.0
+pytest-asyncio>=1.4.0
+pytest-env>=1.7.0
 # pytest-mock is used directly in several test files; was being installed via
 # a bare `pip install pytest-mock` in ci.yml AFTER the --require-hashes
 # lockfile install, which bypassed hash verification. Declaring it here ensures

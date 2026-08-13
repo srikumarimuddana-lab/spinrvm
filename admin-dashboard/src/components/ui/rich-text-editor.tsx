@@ -14,6 +14,38 @@ import { Bold, Italic, Underline, List, ListOrdered, Link as LinkIcon } from "lu
  * reply). Writing innerHTML mid-typing would reset the caret, so we skip it
  * while focused (during typing value already mirrors innerHTML via onInput).
  */
+
+// Hoisted out of RichTextEditor — a component defined inside another
+// component's render body is recreated (a new identity) on every render,
+// which the React Compiler flags (react-hooks/static-components) since it
+// defeats memoization and can cause the toolbar buttons to remount instead
+// of just re-rendering. Takes its command/handler as props instead of
+// closing over the parent's render-scope variables.
+function ToolbarButton({
+    title,
+    disabled,
+    onClick,
+    children,
+}: {
+    title: string;
+    disabled?: boolean;
+    onClick: () => void;
+    children: React.ReactNode;
+}) {
+    return (
+        <button
+            type="button"
+            title={title}
+            disabled={disabled}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={onClick}
+            className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+        >
+            {children}
+        </button>
+    );
+}
+
 export function RichTextEditor({
     value,
     onChange,
@@ -55,30 +87,29 @@ export function RichTextEditor({
         if (url) exec("createLink", url);
     };
 
-    const Btn = ({ cmd, arg, title, children }: { cmd?: string; arg?: string; title: string; children: React.ReactNode }) => (
-        <button
-            type="button"
-            title={title}
-            disabled={disabled}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => (cmd ? exec(cmd, arg) : addLink())}
-            className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
-        >
-            {children}
-        </button>
-    );
-
     return (
         <div className="rounded-md border focus-within:ring-1 focus-within:ring-ring">
             <div className="flex items-center gap-0.5 border-b px-1 py-1">
-                <Btn cmd="bold" title="Bold"><Bold className="h-4 w-4" /></Btn>
-                <Btn cmd="italic" title="Italic"><Italic className="h-4 w-4" /></Btn>
-                <Btn cmd="underline" title="Underline"><Underline className="h-4 w-4" /></Btn>
+                <ToolbarButton title="Bold" disabled={disabled} onClick={() => exec("bold")}>
+                    <Bold className="h-4 w-4" />
+                </ToolbarButton>
+                <ToolbarButton title="Italic" disabled={disabled} onClick={() => exec("italic")}>
+                    <Italic className="h-4 w-4" />
+                </ToolbarButton>
+                <ToolbarButton title="Underline" disabled={disabled} onClick={() => exec("underline")}>
+                    <Underline className="h-4 w-4" />
+                </ToolbarButton>
                 <span className="mx-1 h-4 w-px bg-border" />
-                <Btn cmd="insertUnorderedList" title="Bullet list"><List className="h-4 w-4" /></Btn>
-                <Btn cmd="insertOrderedList" title="Numbered list"><ListOrdered className="h-4 w-4" /></Btn>
+                <ToolbarButton title="Bullet list" disabled={disabled} onClick={() => exec("insertUnorderedList")}>
+                    <List className="h-4 w-4" />
+                </ToolbarButton>
+                <ToolbarButton title="Numbered list" disabled={disabled} onClick={() => exec("insertOrderedList")}>
+                    <ListOrdered className="h-4 w-4" />
+                </ToolbarButton>
                 <span className="mx-1 h-4 w-px bg-border" />
-                <Btn title="Insert link"><LinkIcon className="h-4 w-4" /></Btn>
+                <ToolbarButton title="Insert link" disabled={disabled} onClick={addLink}>
+                    <LinkIcon className="h-4 w-4" />
+                </ToolbarButton>
             </div>
             <div
                 ref={ref}

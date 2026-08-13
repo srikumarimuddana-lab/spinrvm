@@ -1,4 +1,6 @@
 // Mock SpinrConfig before importing the store
+import { useDriverStore } from '../driverStore';
+
 jest.mock('@shared/config/spinr.config', () => ({
   __esModule: true,
   default: {
@@ -46,8 +48,6 @@ jest.mock('../../utils/tripLocationRecorder', () => ({
 jest.mock('../../utils/tripLocationTransport', () => ({
   apiLocationBatchTransport: jest.fn(),
 }));
-
-import { useDriverStore } from '../driverStore';
 
 const api = jest.requireMock('@shared/api/client').default;
 

@@ -170,7 +170,7 @@ export default function LegalDocumentsTab() {
                                     />
                                     <p className="text-xs text-muted-foreground mt-2">
                                         {draft.length.toLocaleString()} characters
-                                        {dirty && <span className="ml-2 text-amber-600">· unsaved changes</span>}
+                                        {dirty && <span className="ml-2 text-amber-600 dark:text-amber-400">· unsaved changes</span>}
                                     </p>
                                 </CardContent>
                             </Card>

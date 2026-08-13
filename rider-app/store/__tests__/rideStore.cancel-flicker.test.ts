@@ -17,6 +17,9 @@
  * Code under test: rider-app/store/rideStore.ts::{cancelRide, clearRide, fetchActiveRide}
  */
 
+import { useRideStore } from '../rideStore';
+import api from '@shared/api/client';
+
 jest.mock('@react-native-async-storage/async-storage', () => ({
   setItem: jest.fn(() => Promise.resolve()),
   getItem: jest.fn(() => Promise.resolve(null)),
@@ -44,9 +47,6 @@ jest.mock('@shared/store/authStore', () => ({
 jest.mock('expo-router', () => ({
   router: { push: jest.fn(), replace: jest.fn() },
 }));
-
-import { useRideStore } from '../rideStore';
-import api from '@shared/api/client';
 
 const mockApi = api as jest.Mocked<typeof api>;
 

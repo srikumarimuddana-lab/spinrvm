@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
@@ -26,9 +26,10 @@ import ConfirmSheet from '../components/ConfirmSheet';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import Analytics from '@shared/analytics';
+import { Analytics } from '@shared/analytics';
 import { useResponsive } from '@shared/utils/responsive';
 import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
+import { useAnimatedValue, useAnimatedValues } from '../hooks/useAnimatedValue';
 
 interface CorporateAccount {
   id: string;
@@ -56,6 +57,7 @@ function PaymentConfirmScreenContent() {
   const corporateAccounts: CorporateAccount[] = workProfiles
     .map(p => ({ id: p.company.id ?? '', company_name: p.company.name ?? '' }))
     .filter(a => a.id);
+  const firstCorporateAccountId = corporateAccounts[0]?.id;
   const [useCorporate, setUseCorporate] = useState(workModeEnabled);
   const [selectedCorporateId, setSelectedCorporateId] = useState<string | null>(
     workModeEnabled ? (activeCompanyId ?? null) : null,
@@ -65,21 +67,21 @@ function PaymentConfirmScreenContent() {
     title: string;
     message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+    buttons: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', message: '', variant: 'info', buttons: [] });
 
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const { sf } = useResponsive();
   const styles = useMemo(() => createStyles(colors, sf), [colors, sf]);
   const { scheduleReminder } = useScheduledRideReminder();
   const [fareExpanded, setFareExpanded] = useState(false);
-  const fareHeightAnim = useRef(new Animated.Value(0)).current;
+  const fareHeightAnim = useAnimatedValue(0);
 
   const selectedEstimate = estimates.find((e) => e.vehicle_type.id === selectedVehicle?.id);
 
   // Staggered fade-in + slide-up for each section
-  const sectionAnims = useRef([0, 1, 2].map(() => new Animated.Value(0))).current;
-  const slideAnims = useRef([0, 1, 2].map(() => new Animated.Value(20))).current;
+  const sectionAnims = useAnimatedValues(3, 0);
+  const slideAnims = useAnimatedValues(3, 20);
 
   useEffect(() => {
     const animations = sectionAnims.map((anim, i) =>
@@ -89,12 +91,14 @@ function PaymentConfirmScreenContent() {
       ]),
     );
     Animated.stagger(80, animations).start();
-  }, []);
+    // sectionAnims/slideAnims are stable arrays (useAnimatedValues, created once).
+  }, [sectionAnims, slideAnims]);
 
   useEffect(() => {
     fetchWorkProfiles();
     fetchWallet();
-  }, []);
+    // Both are zustand store actions (stable references).
+  }, [fetchWorkProfiles, fetchWallet]);
 
   // Refetch saved cards on focus so a card added on /manage-cards (pushed,
   // then returned via router.back()) shows up and is auto-selected without
@@ -106,7 +110,7 @@ function PaymentConfirmScreenContent() {
       setSavedCards(cards);
       setSelectedCardId((prev) => selectDefaultCardId(prev, cards));
     }).catch((e) => {
-      console.warn('[PaymentConfirm] Failed to load saved cards:', e?.message ?? e);
+      console.warn('[PaymentConfirm] Failed to load saved cards:', e);
     });
   }, []);
 
@@ -115,10 +119,26 @@ function PaymentConfirmScreenContent() {
   // Keep corporate toggle in sync when work mode is toggled elsewhere
   useEffect(() => {
     if (workModeEnabled && corporateAccounts.length > 0) {
+      // Keeps the corporate toggle in sync when work mode is enabled
+      // elsewhere; neither useCorporate nor selectedCorporateId is a dep of
+      // this effect (workModeEnabled/corporateAccounts.length are), so no
+      // loop.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setUseCorporate(true);
-      setSelectedCorporateId(prev => prev ?? activeCompanyId ?? corporateAccounts[0]?.id ?? null);
+      setSelectedCorporateId(prev => prev ?? activeCompanyId ?? firstCorporateAccountId ?? null);
     }
-  }, [workModeEnabled, corporateAccounts.length]);
+    // Narrowed to firstCorporateAccountId rather than the whole
+    // `corporateAccounts` array: that array is a plain `.map().filter()`
+    // literal recreated with a new reference every render (not memoized),
+    // so depending on it directly would re-run this effect — and re-call
+    // setUseCorporate(true) — on every render while work mode is on, not
+    // just when the account list's first entry actually changes.
+    // activeCompanyId is added because it's real reactive store state (not
+    // a stable action): previously, if workModeEnabled/corporateAccounts
+    // became true before activeCompanyId caught up (both null/no accounts
+    // at that instant), a later activeCompanyId update couldn't re-trigger
+    // this effect to fill in selectedCorporateId — a real, if narrow, gap.
+  }, [workModeEnabled, corporateAccounts.length, firstCorporateAccountId, activeCompanyId]);
 
   const [isBooking, setIsBooking] = useState(false);
   const handleBookRide = async () => {
@@ -177,6 +197,11 @@ function PaymentConfirmScreenContent() {
         router.replace({ pathname: '/driver-arriving', params: { rideId: bookedRide.id } } as any);
       }
     } catch (error: any) {
+      // Not user-facing: `error.message` here only drives the 409-detection
+      // control-flow branch below (routing to the rider's already-active
+      // ride instead of retrying booking). The actual user-visible message a
+      // few lines down already goes through getApiErrorMessage().
+      // eslint-disable-next-line no-restricted-syntax
       const is409 = error?.response?.status === 409 || error?.message?.includes('already active');
       if (is409) {
         const active = await useRideStore.getState().fetchActiveRide();
@@ -483,7 +508,7 @@ function PaymentConfirmScreenContent() {
             <Ionicons name="lock-closed-outline" size={15} color={colors.textDim} style={{ marginRight: 8, marginTop: 1 }} />
             <Text style={styles.holdNoteText}>
               A temporary hold of ${(totalFare + 10).toFixed(2)} (estimated fare + $10) is placed on your card.
-              You're only charged the final fare plus any tip you add after the ride.
+              You&apos;re only charged the final fare plus any tip you add after the ride.
             </Text>
           </View>
         )}

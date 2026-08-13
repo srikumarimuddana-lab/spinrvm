@@ -26,8 +26,10 @@ export default function PayoutHistoryScreen() {
     const STATUS_FILTERS = ['all', 'completed', 'pending', 'processing', 'failed'] as const;
 
     useEffect(() => {
+        // fetchPayoutHistory is a stable driverStore action; adding it
+        // doesn't change this mount-only effect's firing.
         fetchPayoutHistory();
-    }, []);
+    }, [fetchPayoutHistory]);
 
     const filteredHistory = useMemo(() => {
         const sorted = [...(payoutHistory || [])].sort((a, b) =>
@@ -36,6 +38,20 @@ export default function PayoutHistoryScreen() {
         if (statusFilter === 'all') return sorted;
         return sorted.filter(p => p.status === statusFilter);
     }, [payoutHistory, statusFilter]);
+
+    // Previous-app transfers get their own section below the Spinr list so
+    // the two eras never interleave. The server stops sending these rows
+    // after the transition cutoff (Aug 31, 2026 — see backend
+    // utils/legacy_rides), so this section retires itself with no app
+    // release needed.
+    const spinrHistory = useMemo(
+        () => filteredHistory.filter((p: any) => p.payout_type !== 'stripe_sync'),
+        [filteredHistory],
+    );
+    const previousAppHistory = useMemo(
+        () => filteredHistory.filter((p: any) => p.payout_type === 'stripe_sync'),
+        [filteredHistory],
+    );
 
     const getStatusColor = (status: string) => {
         switch (status) {
@@ -167,7 +183,7 @@ export default function PayoutHistoryScreen() {
             </View>
 
             <FlatList
-                data={filteredHistory}
+                data={spinrHistory}
                 renderItem={renderPayoutItem}
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 40 }}
@@ -176,7 +192,26 @@ export default function PayoutHistoryScreen() {
                 maxToRenderPerBatch={10}
                 windowSize={5}
                 removeClippedSubviews={true}
-                ListEmptyComponent={renderEmpty}
+                ListEmptyComponent={previousAppHistory.length === 0 ? renderEmpty : null}
+                ListFooterComponent={
+                    previousAppHistory.length > 0 ? (
+                        <View>
+                            <View style={styles.previousAppHeader}>
+                                <Ionicons name="time-outline" size={16} color={colors.textDim} />
+                                <View style={{ marginLeft: 8, flex: 1 }}>
+                                    <Text style={styles.previousAppTitle}>Previous app</Text>
+                                    <Text style={styles.previousAppSub}>
+                                        Payments made by the previous Spinr app — shown for your records
+                                        until Aug 31, 2026. Not part of your Spinr earnings.
+                                    </Text>
+                                </View>
+                            </View>
+                            {previousAppHistory.map((item: any) => (
+                                <React.Fragment key={item.id}>{renderPayoutItem({ item })}</React.Fragment>
+                            ))}
+                        </View>
+                    ) : null
+                }
                 refreshControl={
                     <SafeRefreshControl
                         refreshing={isLoading}
@@ -192,6 +227,26 @@ export default function PayoutHistoryScreen() {
 function createStyles(colors: ThemeColors) {
     return StyleSheet.create({
         container: { flex: 1, backgroundColor: colors.background },
+        previousAppHeader: {
+            flexDirection: 'row',
+            alignItems: 'flex-start',
+            marginTop: 20,
+            marginBottom: 10,
+            paddingTop: 14,
+            borderTopWidth: 1,
+            borderTopColor: colors.border,
+        },
+        previousAppTitle: {
+            fontSize: 13,
+            fontWeight: '700',
+            color: colors.text,
+        },
+        previousAppSub: {
+            marginTop: 2,
+            fontSize: 11,
+            lineHeight: 15,
+            color: colors.textDim,
+        },
         header: {
             paddingBottom: 12,
             paddingHorizontal: 16,

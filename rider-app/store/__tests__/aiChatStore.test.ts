@@ -6,6 +6,12 @@
  * stop/new-conversation. streamChat and the API client are mocked.
  */
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import api from '@shared/api/client';
+import type { AiSseEvent } from '@shared/types/ai';
+import { useAiChatStore } from '../aiChatStore';
+import { streamChat } from '../../utils/aiChat';
+
 jest.mock('@shared/api/client', () => ({
   __esModule: true,
   default: { get: jest.fn(), post: jest.fn(), delete: jest.fn() },
@@ -26,12 +32,6 @@ jest.mock('expo-location', () => ({
   getForegroundPermissionsAsync: jest.fn(() => Promise.resolve({ granted: false })),
   getLastKnownPositionAsync: jest.fn(() => Promise.resolve(null)),
 }));
-
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import api from '@shared/api/client';
-import type { AiSseEvent } from '@shared/types/ai';
-import { useAiChatStore } from '../aiChatStore';
-import { streamChat } from '../../utils/aiChat';
 
 const mockApi = api as jest.Mocked<typeof api>;
 const mockStream = streamChat as jest.MockedFunction<typeof streamChat>;

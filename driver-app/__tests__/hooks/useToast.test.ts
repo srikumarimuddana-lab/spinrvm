@@ -7,14 +7,14 @@
  * Code under test: driver-app/hooks/useToast.ts::showToast
  */
 
+import Toast from 'react-native-toast-message';
+import { showToast } from '../../hooks/useToast';
+import { TOAST_MESSAGE_MAX, TOAST_TITLE_MAX } from '@shared/utils/toastMessage';
+
 jest.mock('react-native-toast-message', () => ({
   __esModule: true,
   default: { show: jest.fn() },
 }));
-
-import Toast from 'react-native-toast-message';
-import { showToast } from '../../hooks/useToast';
-import { TOAST_MESSAGE_MAX, TOAST_TITLE_MAX } from '@shared/utils/toastMessage';
 
 const shown = () => (Toast.show as jest.Mock).mock.calls.at(-1)![0];
 

@@ -359,6 +359,128 @@ def test_reply_zoho_error(client, _set_admin, monkeypatch):
     assert resp.status_code == 502
 
 
+def _mock_company():
+    from utils.company_details import CompanyDetails
+
+    return CompanyDetails(
+        name="Spinr",
+        identity_line="Spinr Technologies Inc. — Saskatoon, SK",
+        address="Saskatoon, SK",
+        contact_line="support@spinr.ca · www.spinr.ca",
+        support_email="support@spinr.ca",
+        logo_url="https://api-spinr.spinr.ca/api/v1/branding/spinr-logo.png",
+    )
+
+
+def test_reply_appends_signature_when_enabled(client, _set_admin, monkeypatch):
+    monkeypatch.setattr(
+        m.db_supabase,
+        "find_one",
+        AsyncMock(
+            return_value={
+                "default_from_email": "support@spinr.ca",
+                "helpdesk_signature_enabled": True,
+                "helpdesk_email_signature": "We're here to help",
+            }
+        ),
+    )
+    monkeypatch.setattr(m, "load_company_details", AsyncMock(return_value=_mock_company()))
+    send_reply = AsyncMock(return_value={"id": "r1"})
+    monkeypatch.setattr(m.zoho, "send_reply", send_reply)
+    resp = client.post(
+        "/api/admin/support-tickets/tickets/T1/reply",
+        json={"content": "<p>Thanks!</p>", "channel": "EMAIL"},
+    )
+    assert resp.status_code == 200
+    sent_content = send_reply.call_args.kwargs["content"]
+    assert "<p>Thanks!</p>" in sent_content
+    assert "Spinr Support" in sent_content
+    assert "border-top" in sent_content
+    assert "We&#x27;re here to help" in sent_content or "We're here to help" in sent_content
+
+
+def test_reply_no_signature_when_disabled(client, _set_admin, monkeypatch):
+    monkeypatch.setattr(
+        m.db_supabase,
+        "find_one",
+        AsyncMock(
+            return_value={
+                "default_from_email": "support@spinr.ca",
+                "helpdesk_signature_enabled": False,
+            }
+        ),
+    )
+    send_reply = AsyncMock(return_value={"id": "r1"})
+    monkeypatch.setattr(m.zoho, "send_reply", send_reply)
+    resp = client.post(
+        "/api/admin/support-tickets/tickets/T1/reply",
+        json={"content": "<p>Thanks!</p>", "channel": "EMAIL"},
+    )
+    assert resp.status_code == 200
+    sent_content = send_reply.call_args.kwargs["content"]
+    assert sent_content == "<p>Thanks!</p>"
+
+
+def test_reply_no_signature_for_non_email_channel(client, _set_admin, monkeypatch):
+    monkeypatch.setattr(
+        m.db_supabase,
+        "find_one",
+        AsyncMock(
+            return_value={
+                "default_from_email": "support@spinr.ca",
+                "helpdesk_signature_enabled": True,
+            }
+        ),
+    )
+    send_reply = AsyncMock(return_value={"id": "r1"})
+    monkeypatch.setattr(m.zoho, "send_reply", send_reply)
+    resp = client.post(
+        "/api/admin/support-tickets/tickets/T1/reply",
+        json={"content": "hi", "channel": "CHAT"},
+    )
+    assert resp.status_code == 200
+    sent_content = send_reply.call_args.kwargs["content"]
+    assert sent_content == "hi"
+
+
+def test_config_returns_signature_preview(client, _set_admin, monkeypatch):
+    monkeypatch.setattr(
+        m.db_supabase,
+        "find_one",
+        AsyncMock(
+            return_value={
+                "helpdesk_signature_enabled": True,
+                "helpdesk_email_signature": "Custom tagline",
+            }
+        ),
+    )
+    monkeypatch.setattr(m, "load_company_details", AsyncMock(return_value=_mock_company()))
+    resp = client.get("/api/admin/support-tickets/config")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["helpdesk_signature_enabled"] is True
+    assert "Spinr Support" in data["helpdesk_signature_preview"]
+    assert "Custom tagline" in data["helpdesk_signature_preview"]
+
+
+def test_config_no_preview_when_disabled(client, _set_admin, monkeypatch):
+    monkeypatch.setattr(
+        m.db_supabase,
+        "find_one",
+        AsyncMock(
+            return_value={
+                "helpdesk_signature_enabled": False,
+                "helpdesk_email_signature": "tagline",
+            }
+        ),
+    )
+    resp = client.get("/api/admin/support-tickets/config")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["helpdesk_signature_enabled"] is False
+    assert data.get("helpdesk_signature_preview", "") == ""
+
+
 def test_comment_ticket(client, _set_admin, monkeypatch):
     monkeypatch.setattr(m.zoho, "add_comment", AsyncMock(return_value={"id": "c1"}))
     resp = client.post("/api/admin/support-tickets/tickets/T1/comment", json={"content": "note"})

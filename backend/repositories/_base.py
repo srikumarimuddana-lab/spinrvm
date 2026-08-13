@@ -612,6 +612,14 @@ def _postgrest_or_value(value: Any) -> str:
     return s
 
 
+# Operators `_apply_filters` knows how to compile. `$options` is a modifier on
+# `$regex`, not an operator of its own. Anything outside this set raises rather
+# than being silently ignored — see the comment in _apply_filters.
+_SUPPORTED_FILTER_OPS = frozenset(
+    {"$in", "$nin", "$gt", "$gte", "$lt", "$lte", "$ne", "$eq", "$notnull", "$regex", "$options"}
+)
+
+
 def _build_or_clause_term(col: str, val: Any) -> Optional[str]:
     """Convert one {col: predicate} pair into a PostgREST or_() leaf term.
 
@@ -624,6 +632,19 @@ def _build_or_clause_term(col: str, val: Any) -> Optional[str]:
     surface loudly rather than change what the query matches.
     """
     if isinstance(val, dict):
+        # Each branch below returns ONE leaf, so a multi-operator predicate
+        # (e.g. a two-sided range) would emit only its first operator and
+        # silently widen the OR — the same class of bug `_apply_filters` had.
+        # PostgREST can nest `and(...)` inside `or(...)`, but that spelling is
+        # unverified here, so this raises rather than guessing: loud beats a
+        # query that quietly matches more rows.
+        _ops = set(val) - {"$options"}
+        if len(_ops) > 1:
+            raise ValueError(
+                f"$or term {col!r}: multiple operators {sorted(_ops)} in one predicate are not supported "
+                "as a single or() leaf — split them into separate $and/$or terms rather than letting "
+                "one be dropped (a dropped leaf WIDENS the match)."
+            )
         if "$regex" in val:
             op = "ilike" if val.get("$options") == "i" else "like"
             # Escape LIKE wildcards before PostgREST-escaping, mirroring the
@@ -697,20 +718,61 @@ def _apply_filters(q, filters: Optional[Dict[str, Any]]):
                 q = _apply_filters(q, sub)
             continue
         if isinstance(v, dict):
-            if "$in" in v and isinstance(v["$in"], (list, tuple)):
-                clean = [_unwrap_enum(x) for x in v["$in"]]
-                q = q.in_(k, clean)
-            elif "$gt" in v:
+            # EVERY operator in the dict is applied, not just the first match.
+            # This was an if/elif chain, so a two-sided range —
+            # {"$gte": start, "$lt": end}, the ordinary way to express "inside
+            # this period" — silently compiled to the lower bound ALONE. The
+            # query then returned everything from `start` onward, and because
+            # nothing signalled the drop it read as correct data.
+            #
+            # That produced real money errors: every weekly/monthly driver
+            # statement summed payouts from its period start to the present
+            # (so all periods reported the same total), and the T4A year
+            # windows pulled later years into an earlier slip, over-reporting
+            # income to the CRA. Some callers had already worked around it by
+            # hand with $and of single-operator dicts
+            # (routes/admin/analytics.py) — that workaround is now unnecessary
+            # but stays correct.
+            #
+            # A predicate this compiler does not recognise still raises rather
+            # than being ignored, for the same reason the $or builder raises:
+            # a dropped predicate WIDENS the result set, and _apply_filters is
+            # shared with update/delete.
+            unknown = set(v) - _SUPPORTED_FILTER_OPS
+            if unknown:
+                raise ValueError(
+                    f"filter {k!r}: unsupported operator(s) {sorted(unknown)} in {v!r}. "
+                    "Add it to _apply_filters rather than letting it be dropped — "
+                    "a silently ignored predicate matches MORE rows, not fewer."
+                )
+            if "$in" in v:
+                if not isinstance(v["$in"], (list, tuple)):
+                    raise ValueError(f"filter {k!r}: $in expects a list/tuple, got {v['$in']!r}")
+                q = q.in_(k, [_unwrap_enum(x) for x in v["$in"]])
+            if "$eq" in v:
+                # Explicit equality, distinct from the bare `{col: value}` form
+                # below: a bare `None` value compiles to `IS NULL` (needed for
+                # nullable columns), but some columns are NOT NULL with a
+                # non-null default (e.g. `legacy_import_metadata JSONB NOT
+                # NULL DEFAULT '{}'::jsonb`) where "no data" is represented by
+                # that default value, not SQL NULL — `{col: None}` against
+                # such a column is unsatisfiable and silently matches zero
+                # rows instead of raising (found live via A26,
+                # docs/audit/2026-08-11-driver-rider-migration-audit.md).
+                # `{col: {"$eq": <value>}}` lets a caller filter on the exact
+                # value (including a dict/list, e.g. `{}`) without that trap.
+                q = q.eq(k, _unwrap_enum(v["$eq"]))
+            if "$gt" in v:
                 q = q.gt(k, _unwrap_enum(v["$gt"]))
-            elif "$gte" in v:
+            if "$gte" in v:
                 q = q.gte(k, _unwrap_enum(v["$gte"]))
-            elif "$lt" in v:
+            if "$lt" in v:
                 q = q.lt(k, _unwrap_enum(v["$lt"]))
-            elif "$lte" in v:
+            if "$lte" in v:
                 q = q.lte(k, _unwrap_enum(v["$lte"]))
-            elif "$ne" in v:
+            if "$ne" in v:
                 q = q.neq(k, _unwrap_enum(v["$ne"]))
-            elif "$notnull" in v:
+            if "$notnull" in v:
                 # SQL `<> NULL` never matches; PostgREST needs `not.is.null`.
                 # Lets callers filter server-side instead of scanning every row
                 # and dropping the nulls in Python (e.g. users with a
@@ -719,9 +781,11 @@ def _apply_filters(q, filters: Optional[Dict[str, Any]]):
                     q = q.not_.is_(k, "null")
                 else:
                     q = q.is_(k, "null")
-            elif "$nin" in v and isinstance(v["$nin"], (list, tuple)):
+            if "$nin" in v:
+                if not isinstance(v["$nin"], (list, tuple)):
+                    raise ValueError(f"filter {k!r}: $nin expects a list/tuple, got {v['$nin']!r}")
                 q = q.not_.in_(k, [_unwrap_enum(x) for x in v["$nin"]])
-            elif "$regex" in v:
+            if "$regex" in v:
                 # Escape LIKE wildcards in user input so `%`/`_` can't over-match
                 # or be used as a cheap scan vector (C6).
                 pattern = f"%{_escape_like(v['$regex'])}%"

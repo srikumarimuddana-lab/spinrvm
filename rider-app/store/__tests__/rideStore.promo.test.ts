@@ -4,6 +4,8 @@
  * Covers the promo and scheduled-time store actions that had no test coverage.
  */
 
+import { useRideStore } from '../rideStore';
+
 jest.mock('@react-native-async-storage/async-storage', () => ({
   setItem: jest.fn(() => Promise.resolve()),
   getItem: jest.fn(() => Promise.resolve(null)),
@@ -19,8 +21,6 @@ jest.mock('@shared/store/authStore', () => ({
   registerLogoutCallback: jest.fn(),
   useAuthStore: { getState: jest.fn(() => ({ user: { id: 'user-abc' } })) },
 }));
-
-import { useRideStore } from '../rideStore';
 
 beforeEach(() => {
   useRideStore.setState({

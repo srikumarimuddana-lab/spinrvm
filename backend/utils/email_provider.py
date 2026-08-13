@@ -552,7 +552,22 @@ async def send_transactional_email(
         )
         return False
 
-    settings = await _load_settings()
+    # Fail-open, matching _is_suppressed just above: a transient app_settings
+    # read failure (DB hiccup) must degrade to "no provider configured" (the
+    # existing, already-handled "neither provider sent it" branch below), not
+    # propagate. Before this guard, send_transactional_email violated its own
+    # documented "returns bool, never raises" contract — every one of its 12
+    # call sites (including the corporate-portal email-OTP send) assumes that
+    # contract and calls it unwrapped, so a bare exception here surfaced as a
+    # raw 500 instead of a clean "could not send" response. See CLAUDE.md:
+    # "don't silently swallow errors" — this still logs loudly, it just
+    # doesn't crash the caller for a condition every other branch here
+    # already handles gracefully.
+    try:
+        settings = await _load_settings()
+    except Exception:
+        logger.error("[EMAIL] app_settings load failed log_id=%s — treating as unconfigured", log_id, exc_info=True)
+        settings = {}
 
     # 1. Primary: AWS SES.
     ses_id = await _try_ses(

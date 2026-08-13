@@ -21,10 +21,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 try:
     from ..db import db
     from ..dependencies import get_current_user
+    from ..features import send_push_notification
     from ..utils.error_handling import DuplicateRecordError
 except ImportError:
     from db import db
     from dependencies import get_current_user
+    from features import send_push_notification
     from utils.error_handling import DuplicateRecordError
 
 # db is the db_supabase module (re-exported by backend/db.py shim); .rpc is the
@@ -177,6 +179,28 @@ async def earn_points_for_ride(ride_id: str = Query(...), current_user: dict = D
     )
 
     tier_upgraded = new_tier != tier
+
+    if tier_upgraded:
+        # N15/R34 (ACTION_ITEMS.md): tier changes previously had zero
+        # notification call — a rider only found out by opening the loyalty
+        # screen. Best-effort/informational (priority="normal", respects the
+        # push opt-out); the account row above already committed, so a push
+        # failure must never surface as a failed points-earn call — the
+        # response the client is waiting on already reflects the new tier.
+        try:
+            await send_push_notification(
+                current_user["id"],
+                "You've reached a new tier!",
+                f"Congratulations — you're now {new_tier.capitalize()} tier "
+                f"with a {TIER_MULTIPLIERS.get(new_tier, 1.0)}x points multiplier.",
+                data={"type": "loyalty_tier_upgraded", "tier": new_tier, "previous_tier": tier},
+                target_app="rider",
+            )
+        except Exception as e:
+            logger.warning(
+                f"earn_points_for_ride: tier-upgrade push failed user_id={current_user['id']} tier={new_tier}: {e}",
+                exc_info=True,
+            )
 
     return {
         "points_earned": total_points,

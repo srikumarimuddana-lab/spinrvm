@@ -659,7 +659,7 @@ async def _t4a_filer_handoff_rows(year: int) -> tuple[list[dict], bool, int]:
             await db_supabase.get_rows(
                 "drivers",
                 {"id": {"$in": batch}},
-                columns="id,name,first_name,last_name,stripe_account_id,stripe_id_number_provided",
+                columns="id,name,first_name,last_name,stripe_account_id,sin,sin_collected_at",
                 limit=len(batch),
             )
         )
@@ -687,7 +687,18 @@ async def _t4a_filer_handoff_rows(year: int) -> tuple[list[dict], bool, int]:
                 "country": stripe_info.get("country") or "",
                 "total_trips": trips_by_driver.get(driver_id, 0),
                 "total_earnings": f"{earnings_by_driver[driver_id]:.2f}",
-                "sin_on_file_at_stripe": "Yes" if d.get("stripe_id_number_provided") else "No",
+                # OUR record, not Stripe's. `stripe_id_number_provided` used to
+                # fill this column, which was worse than useless for filing: it
+                # said Stripe held a number Stripe will never hand back
+                # (individual.id_number is write-only on Connect), so a "Yes"
+                # read as "ready to file" when nothing was.
+                "sin_on_file": "Yes" if d.get("sin") else "NO - CANNOT FILE",
+                # Deliberately NOT sin_last4. This export leaves Spinr for a
+                # third-party filer, and no part of the number is needed to
+                # answer the only question it asks: can this driver be filed?
+                # The full SIN comes later, per driver, through the audited
+                # reveal. Internal admin views may show last 4; this may not.
+                "sin_collected_at": d.get("sin_collected_at") or "",
             }
         )
     return rows, truncated, len(qualifying_ids)
@@ -739,11 +750,14 @@ async def get_t4a_filer_handoff(
         "country",
         "total_trips",
         "total_earnings",
-        "sin_on_file_at_stripe",
+        "sin_on_file",
+        "sin_collected_at",
     ]
     subtitle = (
         f"Tax year {year} — {qualifying_count} driver(s) at or above the ${_T4A_THRESHOLD} CRA threshold. "
-        "SIN not included — retrieve per-driver via the audited reveal-sin admin endpoint when filing."
+        "Full SINs are deliberately absent — retrieve them per driver via the audited, "
+        "super_admin-only reveal-sin endpoint at filing time, so every disclosure is logged. "
+        "Any row marked 'NO - CANNOT FILE' has no SIN on record and must be chased before the deadline."
     )
     if truncated:
         subtitle += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rides; narrow the query"

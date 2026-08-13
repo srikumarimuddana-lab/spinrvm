@@ -111,30 +111,8 @@ export default function ManageCardsScreen() {
     title: string;
     message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+    buttons: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', message: '', variant: 'info', buttons: [] });
-
-  useEffect(() => {
-    fetchCards();
-  }, []);
-
-  // Keep exactly one valid card expanded: preserve the user's pick if it still
-  // exists, otherwise open the default card (or the first one).
-  useEffect(() => {
-    if (cards.length === 0) {
-      setSelectedId(null);
-      return;
-    }
-    setSelectedId(prev => {
-      if (prev && cards.some(c => c.id === prev)) return prev;
-      return (cards.find(c => c.is_default) ?? cards[0]).id;
-    });
-  }, [cards]);
-
-  const selectCard = (id: string) => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setSelectedId(id);
-  };
 
   const fetchCards = async () => {
     setLoading(true);
@@ -147,6 +125,34 @@ export default function ManageCardsScreen() {
     } finally {
       setLoading(false);
     }
+  };
+
+  useEffect(() => {
+    // Mount-only load; deps are empty so the loading/cards state
+    // fetchCards sets can't retrigger this effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchCards();
+  }, []);
+
+  // Keep exactly one valid card expanded: preserve the user's pick if it still
+  // exists, otherwise open the default card (or the first one).
+  useEffect(() => {
+    if (cards.length === 0) {
+      // Deps are [cards]; selectedId isn't a dep, so setting it here
+      // can't retrigger this effect.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSelectedId(null);
+      return;
+    }
+    setSelectedId(prev => {
+      if (prev && cards.some(c => c.id === prev)) return prev;
+      return (cards.find(c => c.is_default) ?? cards[0]).id;
+    });
+  }, [cards]);
+
+  const selectCard = (id: string) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setSelectedId(id);
   };
 
   const handleAddCard = async () => {
@@ -167,7 +173,7 @@ export default function ManageCardsScreen() {
       });
 
       if (error || !paymentMethod) {
-        showToast('Processing Failed', error?.message || 'Could not process card. Please try again.', 'danger');
+        showToast('Processing Failed', getApiErrorMessage(error, 'Could not process card. Please try again.'), 'danger');
         return;
       }
 

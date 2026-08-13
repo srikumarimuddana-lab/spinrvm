@@ -3,9 +3,12 @@
 Maps a Stripe Express ``account.updated`` payload (or a live
 ``Account.retrieve()`` response) into the cache columns on the
 ``drivers`` row added by migration 92. The SIN itself is never stored —
-we keep only ``id_number_provided`` (boolean) and ``id_number_last4`` so
-the admin slideout can display "On file · ••••1234" without us holding
-the regulated data.
+we keep only ``id_number_provided`` (boolean). The ``id_number_last4``
+column exists but is always NULL: Stripe returns no digits of an ID number
+in any form, so the slideout's "On file · ••••1234" shows only the on-file
+state. Spinr's own SIN — the one T4A is filed from — is a separate,
+Vault-encrypted column (migration 289) and has nothing to do with this
+mirror; see the note above ``get_legal_name_and_address_from_stripe``.
 
 Sources:
   - routes/webhooks.py  — fires apply_account_update on the webhook event
@@ -118,9 +121,17 @@ def _kyc_mirror_fields(account: Dict[str, Any]) -> Dict[str, Any]:
     verification = (individual.get("verification") or {}) if individual else {}
     tos = account.get("tos_acceptance") or {}
 
-    # Stripe reports id_number_provided + id_number_last_4 on the
-    # `individual` object when the SIN has been collected. The actual
-    # number stays on Stripe's side.
+    # `id_number_provided` is real and works. `id_number_last_4` is NOT a
+    # Stripe field — it does not exist anywhere in the API (verified against
+    # the installed SDK: zero occurrences). Stripe exposes only booleans about
+    # the ID number: `id_number_provided` and, for US SSNs,
+    # `ssn_last_4_provided` — the *digits* are never returned in any form.
+    #
+    # So `stripe_id_number_last4` is always NULL and the admin slideout's
+    # "On file · ••••1234" has never rendered digits. Kept reading the absent
+    # key (a harmless None) rather than deleting the column, because the fix
+    # is a product decision — Spinr must collect the last 4 itself or drop the
+    # display — not a rename. See the SIN section of the Stripe runbook.
     id_provided = bool(individual.get("id_number_provided"))
     id_last4_raw = individual.get("id_number_last_4")
     id_last4: Optional[str] = None
@@ -214,7 +225,110 @@ async def apply_account_update(account: Dict[str, Any], *, event_id: Optional[st
         updates["stripe_id_number_provided"],
         extra={"event_id": event_id, "domain": "drivers"},
     )
+
+    await _notify_payouts_transition(driver, updates, event_id=event_id)
+
     return {**driver, **updates}
+
+
+async def _notify_payouts_transition(
+    driver: Dict[str, Any], updates: Dict[str, Any], *, event_id: Optional[str] = None
+) -> None:
+    """Notify the driver on a genuine ``stripe_payouts_enabled`` edge only.
+
+    Stripe redelivers ``account.updated`` freely (retries, replays, or the
+    event just carries an unrelated field change on the same account) — most
+    deliveries do not change ``payouts_enabled`` at all. Firing on every
+    delivery of an already-blocked account would spam a driver stuck blocked
+    for days with the same push over and over, so this keys off the *edge*
+    (comparing the pre-update ``driver`` row, already in scope, against the
+    freshly computed ``updates``) rather than the level.
+
+    ``updates["stripe_payouts_enabled"]`` is always a real bool — see
+    ``_kyc_mirror_fields``'s ``bool(account.get("payouts_enabled"))`` — never
+    ``None``. ``driver.get("stripe_payouts_enabled")`` (the pre-update value)
+    genuinely can be ``None`` though: a drivers row that predates this mirror
+    column, or a driver's very first ``account.updated`` since starting
+    onboarding. That first-ever observation must never read as a transition
+    in either direction — a new driver who starts out blocked (``None`` ->
+    ``False``) has not been "newly blocked", and one whose account starts
+    enabled (``None`` -> ``True``) has not "recovered" from anything. Only an
+    explicit ``True`` <-> ``False`` edge on a row synced at least once before
+    counts as either transition.
+    """
+    was_enabled = driver.get("stripe_payouts_enabled")
+    now_enabled = updates["stripe_payouts_enabled"]
+
+    if was_enabled is True and now_enabled is False:
+        await _send_payouts_notice(
+            driver,
+            title="Your account needs attention",
+            body=("Stripe has paused payouts on your account pending verification. Open the app to see what's needed."),
+            data_type="stripe_payouts_blocked",
+            priority="account",
+            event_id=event_id,
+        )
+    elif was_enabled is False and now_enabled is True:
+        # Recovery case: symmetric, separate condition — deliberately not
+        # merged with the block above into a single "changed" check, so each
+        # direction's copy/priority stays independently correct. Uses the
+        # "normal" tier (informational good news, not the guaranteed-delivery
+        # "account" tier reserved for a driver who can no longer earn).
+        await _send_payouts_notice(
+            driver,
+            title="Payouts are back on",
+            body="Your Stripe verification is complete — payouts have resumed.",
+            data_type="stripe_payouts_recovered",
+            priority="normal",
+            event_id=event_id,
+        )
+
+
+async def _send_payouts_notice(
+    driver: Dict[str, Any],
+    *,
+    title: str,
+    body: str,
+    data_type: str,
+    priority: str,
+    event_id: Optional[str],
+) -> None:
+    """Best-effort push for a payouts-enabled transition. Never raises —
+    a notification failure must not block or undo the mirror write that
+    already committed above (matches the subscription-cancelled push and
+    every other best-effort side-effect in routes/webhooks.py).
+    """
+    user_id = driver.get("user_id")
+    if not user_id:
+        logger.warning(
+            "[STRIPE-KYC] payouts transition for driver=%s has no user_id on the drivers row — cannot notify",
+            driver.get("id"),
+            extra={"event_id": event_id, "domain": "drivers"},
+        )
+        return
+
+    try:
+        try:
+            from ..features import send_push_notification
+        except ImportError:
+            from features import send_push_notification  # type: ignore
+
+        await send_push_notification(
+            user_id,
+            title,
+            body,
+            data={"type": data_type, "deeplink": "/driver/payout"},
+            priority=priority,
+            target_app="driver",
+        )
+    except Exception:
+        logger.warning(
+            "[STRIPE-KYC] payouts transition push failed for driver=%s (%s)",
+            driver.get("id"),
+            data_type,
+            exc_info=True,
+            extra={"event_id": event_id, "domain": "drivers"},
+        )
 
 
 async def refresh_driver_kyc(
@@ -298,55 +412,27 @@ async def refresh_driver_kyc(
     return {"status": "ok", "updates": updates}
 
 
-async def reveal_sin_from_stripe(driver: Dict[str, Any]) -> Optional[str]:
-    """Return the plaintext SIN once, for a single audit-logged admin reveal.
-
-    Uses Stripe's expand mechanism to retrieve ``individual.id_number``,
-    which Stripe surfaces only to the platform owner and not in normal
-    Account.retrieve responses. **The returned value is NEVER persisted
-    anywhere on our side.** Caller MUST write the audit_log entry around
-    this call so we have an authoritative record of who saw it and when.
-    """
-    account_id = driver.get("stripe_account_id")
-    if not account_id:
-        return None
-
-    settings = await get_app_settings()
-    stripe_secret = settings.get("stripe_secret_key", "")
-    if not stripe_secret:
-        return None
-
-    import stripe
-
-    try:
-        account = stripe.Account.retrieve(
-            account_id,
-            api_key=stripe_secret,
-            expand=["individual.id_number"],
-        )
-    except Exception:
-        # B-P3-leak-cleanup: full traceback to logs (server-side only),
-        # no Stripe error detail in the return.
-        logger.error(
-            "[STRIPE-KYC] reveal-sin: Account.retrieve failed for %s",
-            account_id,
-            exc_info=True,
-        )
-        return None
-
-    sin = (account.get("individual") or {}).get("id_number")
-    if not sin:
-        return None
-    # Defensive: SIN must be 9 digits. Anything else is a Stripe-side
-    # data quality issue we don't want to surface as-is.
-    sin_str = str(sin).strip()
-    if not (len(sin_str) == 9 and sin_str.isdigit()):
-        logger.error(
-            "[STRIPE-KYC] reveal-sin: Stripe returned non-canonical SIN format for %s",
-            account_id,
-        )
-        return None
-    return sin_str
+# ── Why there is no SIN reveal here ──────────────────────────────────────
+# There used to be a `reveal_sin_from_stripe`. It could not work, and no
+# amount of retrying, re-keying or re-onboarding would have made it work:
+#
+#   `individual.id_number` is WRITE-ONLY on Stripe Connect. In the SDK
+#   (generated from Stripe's API spec) it appears in six request-parameter
+#   modules and in ZERO response models. Stripe returns `id_number_provided`
+#   and `ssn_last_4_provided` — booleans, never digits. Asking for it with
+#   `expand=["individual.id_number"]` earns "This property cannot be
+#   expanded", which is Stripe saying no such response property exists.
+#
+# Spinr now collects its own Vault-encrypted copy (migration 289) and the
+# reveal lives in `routes/admin/drivers.py::admin_reveal_driver_sin`, which
+# decrypts our column under a super_admin gate with an audit row.
+#
+# If you are here because you want the SIN: it is not obtainable from Stripe.
+# Do not add an expand back.
+#
+# `stripe_id_number_provided`, mirrored below, remains meaningful for exactly
+# one thing — whether STRIPE has what IT needs to enable payouts. It says
+# nothing about whether Spinr can file a T4A.
 
 
 async def get_legal_name_and_address_from_stripe(driver: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -354,8 +440,8 @@ async def get_legal_name_and_address_from_stripe(driver: Dict[str, Any]) -> Opti
     for handoff to a third-party tax filer (T4A / Reportable Platform
     Operator reporting) — never the SIN.
 
-    Unlike ``reveal_sin_from_stripe``, this does NOT expand
-    ``individual.id_number`` — ``individual.first_name``/``last_name``/
+    Does NOT expand ``individual.id_number`` (which is impossible anyway,
+    see the note above) — ``individual.first_name``/``last_name``/
     ``address`` are already present on an ordinary ``Account.retrieve()``
     response for the platform owner, no special expand permission needed.
     Deliberately kept as a separate function from the SIN reveal (not a

@@ -8,6 +8,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { ROUTE_PIN_COLORS } from '@shared/constants/routeMapStyle';
 import { useLanguageStore } from '../../store/languageStore';
+import { onRideRated } from '@shared/utils/appRating';
 import { showAlert } from '../AlertDialog';
 
 const n = (v: number | string | null | undefined): number => {
@@ -90,7 +91,6 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
     }
 
     try {
-      const { onRideRated } = require('@shared/utils/appRating');
       await onRideRated(rating > 0 ? rating : 5);
     } catch { /* non-critical */ }
 

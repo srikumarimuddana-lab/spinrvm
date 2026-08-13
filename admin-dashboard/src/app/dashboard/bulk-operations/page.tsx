@@ -315,6 +315,7 @@ export default function BulkOperationsPage() {
     const [statusBatch, setStatusBatch] = useState<string | null>(null);
     const [status, setStatus] = useState<StripeImportStatus | null>(null);
     const [statusLoading, setStatusLoading] = useState(false);
+    const [discovering, setDiscovering] = useState(false);
 
     const isSuperAdmin = user?.role === "super_admin";
     if (!isSuperAdmin) {
@@ -345,7 +346,6 @@ export default function BulkOperationsPage() {
         resetReport();
     };
 
-    const [discovering, setDiscovering] = useState(false);
     const handleDiscover = async () => {
         setDiscovering(true);
         try {
@@ -827,12 +827,18 @@ function DuplicateTable({ items }: { items: RiderImportDuplicate[] }) {
                             <TableCell>
                                 <span
                                     className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                                        it.match_type === "driver"
-                                            ? "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200"
-                                            : "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
+                                        it.match_type === "protected_skip"
+                                            ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
+                                            : it.match_type === "driver"
+                                              ? "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200"
+                                              : "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
                                     }`}
                                 >
-                                    {it.match_type === "driver" ? "Driver" : "Existing rider"}
+                                    {it.match_type === "protected_skip"
+                                        ? "Skipped — needs review"
+                                        : it.match_type === "driver"
+                                          ? "Driver"
+                                          : "Existing rider"}
                                 </span>
                             </TableCell>
                             <TableCell className="font-mono text-xs">{it.existing_user_id}</TableCell>
@@ -886,10 +892,14 @@ function RiderImportSection() {
             if (res.committed) {
                 const created = res.created_users ?? 0;
                 const updated = res.updated_users ?? 0;
+                const protectedSkips = res.duplicates?.filter((d) => d.match_type === "protected_skip").length ?? 0;
                 setCommittedSummary(
                     `Created ${created} rider(s), updated ${updated} existing user(s).` +
                         (res.duplicates?.length
                             ? ` ${res.duplicates.length} duplicate(s) detected (${res.duplicates.filter((d) => d.match_type === "driver").length} are drivers).`
+                            : "") +
+                        (protectedSkips
+                            ? ` ${protectedSkips} row(s) skipped — matched a pending-deletion/deleted account and require manual review.`
                             : ""),
                 );
                 setReport(null);
@@ -900,7 +910,14 @@ function RiderImportSection() {
                 setReport({
                     batch: res.batch,
                     can_commit: false,
-                    counts: res.counts ?? { rows: 0, to_create: 0, to_update: 0, duplicates: 0, duplicate_drivers: 0 },
+                    counts: res.counts ?? {
+                        rows: 0,
+                        to_create: 0,
+                        to_update: 0,
+                        duplicates: 0,
+                        duplicate_drivers: 0,
+                        protected_skips: 0,
+                    },
                     duplicates: res.duplicates ?? [],
                     warnings: res.warnings ?? [],
                     errors: res.errors ?? [],
@@ -1023,11 +1040,14 @@ function RiderImportSection() {
                         </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-5">
-                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
                             <Stat label="Rows" value={counts?.rows ?? 0} />
                             <Stat label="New riders" value={counts?.to_create ?? 0} />
                             <Stat label="To update" value={counts?.to_update ?? 0} />
                             <Stat label="Duplicate (driver)" value={counts?.duplicate_drivers ?? 0} tone="warn" />
+                            {/* P0-C: rows matched to a pending_deletion/deleted account — PII
+                                left untouched, needs manual admin review before importing. */}
+                            <Stat label="Needs review" value={counts?.protected_skips ?? 0} tone="error" />
                             <Stat label="Errors" value={report.errors.length} tone="error" />
                         </div>
 

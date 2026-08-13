@@ -351,6 +351,55 @@ async def test_batch_pending_offers_cancelled_and_drivers_released():
     mock_supabase.set_driver_available.assert_awaited_once_with("offer-drv-1", True)
 
 
+async def test_batch_pending_offer_driver_also_gets_push_not_just_ws():
+    """N5 follow-up (ACTION_ITEMS.md): the batch-dispatch pending-offers path
+    had the same WS-only gap the assigned-driver case was fixed for -- a
+    driver with a pending offer on this ride, backgrounded when the rider
+    cancels, never learned the ride vanished. Mirrors
+    test_driver_arrived_also_pushes_driver_not_just_ws's patch/assert shape
+    (test_e2e_cancellation.py): patch send_push_notification directly and
+    let the real spawn() run the fire-and-forget task, instead of stubbing
+    spawn to close() the coroutine like the sibling tests in this file do.
+    """
+    import asyncio
+
+    from backend.routes.rides.cancellation import cancel_ride_rider
+
+    searching = _ride(status="searching", driver_id=None)
+    cancelled = _ride(status="cancelled", driver_id=None)
+    offer_driver = {"id": "offer-drv-1", "user_id": "offer-user-1"}
+    req = _starlette_request()
+
+    push_mock = AsyncMock()
+    with (
+        patch("backend.routes.rides.cancellation._deps.db") as mock_db,
+        patch("backend.routes.rides.cancellation._deps.db_supabase") as mock_supabase,
+        patch("backend.routes.rides.cancellation._deps.manager") as mock_manager,
+        patch("backend.routes.rides.cancellation._deps.send_push_notification", push_mock),
+    ):
+        mock_db.find_one = AsyncMock(return_value=searching)
+        _base_patches(mock_db, mock_supabase, mock_manager, cancelled)
+        mock_supabase.update_one = AsyncMock(return_value=cancelled)
+        mock_supabase.set_driver_available = AsyncMock(return_value=None)
+        mock_supabase.get_driver_by_id = AsyncMock(return_value=offer_driver)
+        mock_supabase.run_sync = AsyncMock(
+            side_effect=[MagicMock(data=[{"driver_id": "offer-drv-1"}]), MagicMock(data=[])]
+        )
+
+        result = await cancel_ride_rider(request=req, ride_id=_RIDE_ID, reason="", current_user=_USER)
+        # The push is fired via spawn() (fire-and-forget) -- yield once so
+        # the scheduled task actually runs before asserting on it.
+        await asyncio.sleep(0)
+
+    assert result["success"] is True
+    push_mock.assert_awaited_once()
+    call = push_mock.await_args
+    assert call.args[0] == "offer-user-1"
+    assert call.kwargs.get("priority") == "dispatch"
+    assert call.kwargs.get("target_app") == "driver"
+    assert call.kwargs.get("data", {}).get("type") == "ride_cancelled"
+
+
 async def test_batch_offer_cleanup_failure_is_non_fatal():
     from backend.routes.rides.cancellation import cancel_ride_rider
 

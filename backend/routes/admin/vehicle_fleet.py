@@ -538,11 +538,18 @@ async def admin_report_lost_item(ride_id: str, req: LostAndFoundRequest):
                     from ...features import send_push_notification
                 except ImportError:
                     from features import send_push_notification
+                # N3 (ACTION_ITEMS.md): send_push_notification's first arg is
+                # a users.id, which it looks up itself to find the token —
+                # not the raw fcm_token string. Passing the token here meant
+                # the internal `db.find_one("users", {"id": user_id})` always
+                # missed (a token never equals a user id), silently dropping
+                # every lost-item push.
                 await send_push_notification(
-                    driver_user["fcm_token"],
+                    driver["user_id"],
                     "Lost Item Report",
                     f"A rider reported a lost item: {req.item_description}. Please check your vehicle.",
                     {"type": "lost_and_found", "ride_id": ride_id},
+                    target_app="driver",
                 )
                 # Update status to driver_notified
                 await db_supabase.update_lost_and_found(

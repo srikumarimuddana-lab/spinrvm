@@ -31,14 +31,17 @@ from ._deps import (  # noqa: F401
 )
 from ._shared import (  # noqa: F401
     _money_str,
+    _vault_decrypt,
     serialize_doc,
 )
 
 try:
     from ...services import stripe_kyc_sync as _kyc
+    from ...utils.legacy_rides import previous_app_history_visible
     from ...utils.stripe_mode import is_missing_on_key, key_mode, object_mode
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
     from services import stripe_kyc_sync as _kyc  # type: ignore
+    from utils.legacy_rides import previous_app_history_visible  # type: ignore
     from utils.stripe_mode import is_missing_on_key, key_mode, object_mode  # type: ignore
 
 router = APIRouter()
@@ -140,7 +143,99 @@ async def _ensure_stripe_account(driver: dict, user: dict, stripe_secret: str) -
     return await _create_stripe_account(driver, user, stripe_secret, superseded=superseded)
 
 
-async def with_account_repair(driver: dict, user: dict, stripe_secret: str, op):
+async def _mirror_id_number_provided(driver_id: str, account_id: str) -> None:
+    """Record on the drivers row that Stripe now holds an id_number.
+
+    This is the same mirror column stripe_kyc_sync maintains from the
+    account.updated webhook — setting it here just gets there first, so the
+    next prefill_sin_to_stripe call short-circuits instead of paying an
+    Account.retrieve. Best-effort: prefill must never raise, and losing this
+    write costs one redundant retrieve, not correctness — the webhook/sync
+    will set it anyway."""
+    try:
+        await db_supabase.update_one("drivers", {"id": driver_id}, {"stripe_id_number_provided": True})
+    except Exception:
+        logger.error(
+            "[SIN-PREFILL] could not mirror stripe_id_number_provided; next prefill will re-check Stripe",
+            exc_info=True,
+            extra={"driver_id": driver_id, "stripe_account_id": account_id},
+        )
+
+
+async def prefill_sin_to_stripe(driver: dict, account_id: str, stripe_secret: str) -> str:
+    """Give Stripe the SIN we already hold, so its form stops asking for it.
+
+    Without this the driver types their SIN twice — once into Stripe's hosted
+    page, once into ours — because the AccountLink below deliberately requests
+    ``eventually_due`` fields to pull ``individual.id_number`` forward. Being
+    asked twice for the single most sensitive number a driver has is the kind
+    of thing that costs trust, so we supply it and Stripe stops asking:
+    onboarding only collects what is still in ``currently_due``.
+
+    Write-only cuts one way. We cannot *read* ``individual.id_number`` back
+    (that is why Spinr had to start collecting it), but it has always been a
+    valid *request* parameter — see ``params/_account_update_params.py``.
+
+    This is the second and last place that decrypts ``drivers.sin``, and it is
+    materially different from the admin reveal: the plaintext goes straight to
+    Stripe over TLS and is never returned to a client, logged, or re-stored.
+
+    Best-effort by design. A driver setting up payouts must not be blocked
+    because a pre-fill failed — the worst case is Stripe asking them for it,
+    which is exactly where we were before. Returns a short status string for
+    the caller to report; never raises.
+    """
+    if not driver.get("sin"):
+        return "no_sin_on_file"
+
+    # Skip Stripe entirely when our mirror already says this account holds an
+    # id_number. /stripe-account-session is called repeatedly by the WebView's
+    # fetchClientSecret and must stay cheap — without this, every mint paid an
+    # Account.retrieve round-trip long after the first one settled the matter.
+    # Guarded on the account matching the driver's current row: a repaired
+    # (freshly re-created) account carries a different id than the stale
+    # in-memory dict, so it always takes the full path below.
+    if driver.get("stripe_id_number_provided") and driver.get("stripe_account_id") == account_id:
+        return "already_provided"
+
+    try:
+        account = await asyncio.to_thread(stripe.Account.retrieve, account_id, api_key=stripe_secret)
+        if ((account.get("individual") or {}).get("id_number_provided")) is True:
+            # Stripe already has one — from its own form, or from a previous
+            # run of this. Writing again would be a pointless round-trip.
+            await _mirror_id_number_provided(driver["id"], account_id)
+            return "already_provided"
+
+        plain = await _vault_decrypt(str(driver["sin"]), "sin_stripe_prefill")
+        # _vault_decrypt hands back its input when it cannot decrypt, so an
+        # unchecked call would send Stripe a UUID as somebody's SIN.
+        if not plain or plain == str(driver["sin"]) or not (len(plain.strip()) == 9 and plain.strip().isdigit()):
+            logger.error(
+                "[SIN-PREFILL] stored SIN did not decrypt to a canonical 9-digit value; skipping Stripe pre-fill",
+                extra={"driver_id": driver["id"]},
+            )
+            return "decrypt_failed"
+
+        await asyncio.to_thread(
+            stripe.Account.modify,
+            account_id,
+            individual={"id_number": plain.strip()},
+            api_key=stripe_secret,
+        )
+        await _mirror_id_number_provided(driver["id"], account_id)
+        return "prefilled"
+    except Exception:
+        # Loud, but not fatal. exc_info carries the Stripe error; the SIN is
+        # never in it because we never put it in a message.
+        logger.error(
+            "[SIN-PREFILL] could not pre-fill individual.id_number; the driver will be asked by Stripe",
+            exc_info=True,
+            extra={"driver_id": driver["id"], "stripe_account_id": account_id},
+        )
+        return "failed"
+
+
+async def with_account_repair(driver: dict, user: dict, stripe_secret: str, op, *, before=None):
     """Run ``op(account_id)``, retiring and re-creating a stranded account once.
 
     Shared by both onboarding entry points (hosted AccountLink and embedded
@@ -154,6 +249,11 @@ async def with_account_repair(driver: dict, user: dict, stripe_secret: str, op):
     do nothing about. Any other Stripe error propagates untouched.
     """
     account_id = await _ensure_stripe_account(driver, user, stripe_secret)
+    # `before` runs against whichever account the op will actually address —
+    # including the replacement below, which is a brand-new account and needs
+    # the pre-fill just as much as the original did.
+    if before is not None:
+        await before(account_id)
     try:
         return account_id, op(account_id)
     except Exception as exc:
@@ -167,6 +267,8 @@ async def with_account_repair(driver: dict, user: dict, stripe_secret: str, op):
         fresh = await _create_stripe_account(
             {**driver, "stripe_account_id": None}, user, stripe_secret, superseded=account_id
         )
+        if before is not None:
+            await before(fresh)
         # One retry only. If the fresh account also fails, the key or the
         # platform is wrong, not this row — let it surface.
         return fresh, op(fresh)
@@ -224,6 +326,10 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
     if not driver or not user:
         raise HTTPException(status_code=404, detail="Driver/User profile not found")
 
+    # Hard gate: no Stripe onboarding without a SIN on file. Applied before
+    # the mock/dev branch too, so dev behaves like production.
+    _require_sin_for_onboarding(driver)
+
     try:
         from ...settings_loader import get_app_settings
     except ImportError:
@@ -270,7 +376,16 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
                 api_key=stripe_secret,
             )
 
-        account_id, account_link = await with_account_repair(driver, user, stripe_secret, _account_link)
+        # Hand Stripe the SIN we already hold BEFORE minting the link, so the
+        # `eventually_due` collection above no longer surfaces id_number and
+        # the driver is not asked for it a second time.
+        account_id, account_link = await with_account_repair(
+            driver,
+            user,
+            stripe_secret,
+            _account_link,
+            before=lambda acct: prefill_sin_to_stripe(driver, acct, stripe_secret),
+        )
         # The real onboarded gate is now stripe_details_submitted, set by
         # the account.updated webhook handler in services/stripe_kyc_sync.py.
         # We used to flip stripe_account_onboarded=True here optimistically,
@@ -404,9 +519,10 @@ async def stripe_account_session(current_user: dict = Depends(get_current_user))
     """Mint a single-use Stripe AccountSession client secret for the embedded
     account-onboarding component (Option B — fully in-app, no browser redirect).
 
-    The connected account collects and *holds* the SIN itself; we never see the
-    raw value, preserving the PIPEDA posture (only last-4 + status is mirrored
-    back via the account.updated webhook). Called repeatedly by the WebView's
+    The SIN we collected in-app is pre-filled onto the connected account before
+    the session is minted (prefill_sin_to_stripe), so the embedded form does not
+    ask for it again. Only last-4 + status is mirrored back via the
+    account.updated webhook. Called repeatedly by the WebView's
     fetchClientSecret callback, so it must stay cheap and idempotent."""
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
@@ -414,6 +530,9 @@ async def stripe_account_session(current_user: dict = Depends(get_current_user))
     user = await db_supabase.get_user_by_id(current_user.get("id"))
     if not driver or not user:
         raise HTTPException(status_code=404, detail="Driver/User profile not found")
+
+    # Same hard gate as the hosted-link flow: SIN before Stripe.
+    _require_sin_for_onboarding(driver)
 
     try:
         from ...settings_loader import get_app_settings
@@ -445,7 +564,13 @@ async def stripe_account_session(current_user: dict = Depends(get_current_user))
         # Same repair posture as the hosted-link flow: an unstamped account
         # stranded by a key rotation is retired and re-created here rather than
         # 502ing a driver who is actively trying to set up payouts.
-        _, session = await with_account_repair(driver, user, stripe_secret, _account_session)
+        _, session = await with_account_repair(
+            driver,
+            user,
+            stripe_secret,
+            _account_session,
+            before=lambda acct: prefill_sin_to_stripe(driver, acct, stripe_secret),
+        )
         return {"client_secret": session.client_secret}
     except HTTPException:
         raise
@@ -646,23 +771,48 @@ def _require_gst_for_payout(driver: dict) -> None:
         )
 
 
-def _require_sin_for_payout(driver: dict) -> None:
-    """Block payout until the driver's SIN is on file with Stripe.
+def _sin_on_file(driver: dict) -> bool:
+    """True when the driver's SIN is captured somewhere we can rely on for
+    T4A filing: our own Vault-encrypted column (new flow — collected in-app
+    before Stripe onboarding), or Stripe's individual.id_number (legacy flow —
+    drivers who entered it inside Stripe's hosted form before we started
+    collecting it ourselves, mirrored as stripe_id_number_provided)."""
+    return bool(driver.get("sin")) or bool(driver.get("stripe_id_number_provided"))
 
-    Stripe collects and *holds* the SIN (individual.id_number); we only mirror
-    the boolean stripe_id_number_provided (+ last4), never the number itself.
-    CRA T4A / platform reporting (Income Tax Act Part XX) requires the SIN, so
-    we treat it as a hard precondition for payout — stricter than Stripe, which
-    leaves the full SIN "eventually due" until a payout-volume threshold. The
-    driver supplies it by re-opening Stripe onboarding (Payouts -> Update); on
-    an Express account it cannot be pushed via the platform API."""
-    if not driver.get("stripe_id_number_provided"):
+
+def _require_sin_for_onboarding(driver: dict) -> None:
+    """SIN must be on file BEFORE Stripe onboarding starts — enforced, not
+    just ordered in the app checklist. The onboarding link pre-fills Stripe
+    with our copy (prefill_sin_to_stripe); minting a link without a SIN on
+    file would push the question back into Stripe's form and leave us with
+    no copy for the T4A. Legacy drivers whose SIN already lives at Stripe
+    (stripe_id_number_provided) pass — asking them again would be worse."""
+    if not _sin_on_file(driver):
         raise HTTPException(
             status_code=422,
             detail=(
-                "Your SIN must be on file before you can be paid. Open "
-                "Payouts and tap Update to add it securely through Stripe "
-                "(we never see or store it — Stripe holds it)."
+                "Add your SIN before connecting your payout account. It is "
+                "needed for your T4A tax slip and is passed to Stripe so you "
+                "are only asked once."
+            ),
+        )
+
+
+def _require_sin_for_payout(driver: dict) -> None:
+    """Block payout until the driver's SIN is on file.
+
+    CRA T4A / platform reporting (Income Tax Act Part XX) requires the SIN,
+    so it is a hard precondition for payout — stricter than Stripe, which
+    leaves the full SIN "eventually due" until a payout-volume threshold.
+    Either our Vault copy or Stripe's (legacy) satisfies the gate; the new
+    in-app collection path fills ours before Stripe onboarding even starts."""
+    if not _sin_on_file(driver):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Your SIN must be on file before you can be paid. Add it in "
+                "Payouts — it is needed for your T4A tax slip and is stored "
+                "encrypted."
             ),
         )
 
@@ -1111,9 +1261,19 @@ async def get_payout_history(
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
+    filters: dict = {"driver_id": driver["id"]}
+    # Previous-app transfers (stripe_sync) are transition history with a
+    # sunset (utils/legacy_rides): after the cutoff the driver's history
+    # shows Spinr payouts only. Filtered SERVER-side so pagination stays
+    # honest — dropping rows after a limit/offset fetch would shrink pages
+    # unpredictably. The $or keeps NULL payout_type rows visible: SQL
+    # `payout_type != 'stripe_sync'` is NULL for NULL, and PostgREST neq
+    # would silently hide any pre-backfill row.
+    if not previous_app_history_visible():
+        filters["$or"] = [{"payout_type": {"$ne": "stripe_sync"}}, {"payout_type": None}]
     payouts = await db_supabase.get_rows(
         "payouts",
-        {"driver_id": driver["id"]},
+        filters,
         limit=limit,
         offset=offset,
         order="created_at",

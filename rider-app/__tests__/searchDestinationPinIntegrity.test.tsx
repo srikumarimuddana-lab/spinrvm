@@ -21,6 +21,9 @@ import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import { TextInput, TouchableOpacity, Text } from 'react-native';
 
+import { useRideStore } from '../store/rideStore';
+import SearchDestinationScreen from '../app/search-destination';
+
 // react-native's real FlatList mounts VirtualizedList, which schedules its
 // own internal setState via a real (non-fake-timer-controlled) setTimeout on
 // every render — even with an empty `data` array (this screen always renders
@@ -109,9 +112,6 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
     removeItem: jest.fn((k: string) => { delete mockAsync[k]; return Promise.resolve(); }),
   },
 }));
-
-import { useRideStore } from '../store/rideStore';
-import SearchDestinationScreen from '../app/search-destination';
 
 const GORDON = { address: '4500 Gordon Rd, Regina, SK S4S 6H7', lat: 50.4079, lng: -104.6501 };
 const WAKELING = { address: '4325 Wakeling St, Regina, SK', lat: 50.4214, lng: -104.6641 };

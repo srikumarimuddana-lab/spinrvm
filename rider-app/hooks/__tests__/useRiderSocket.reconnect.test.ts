@@ -12,6 +12,12 @@
 
 // ── Module mocks (before any import) ──────────────────────────────────────
 
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+import { renderHook, act } from '@testing-library/react-native';
+import { useRiderSocket } from '../useRiderSocket';
+import { useRideStore } from '../../store/rideStore';
+
 jest.mock('@shared/api/client', () => ({
   ensureFreshToken: jest.fn().mockResolvedValue(undefined),
 }));
@@ -42,7 +48,17 @@ jest.mock('@shared/store/authStore', () => ({
 
 jest.mock('@shared/config', () => ({ API_URL: 'http://localhost:8000' }));
 jest.mock('../../constants/rideStatus', () => ({ RideStatus: { COMPLETED: 'completed' } }));
-jest.mock('expo-router', () => ({ useRouter: () => ({ push: jest.fn(), replace: jest.fn() }) }));
+// Real expo-router's useRouter() returns a module-level singleton object
+// (see node_modules/expo-router/build/hooks/useRouter.js), not a fresh
+// object per call — the mock router below is created once inside the
+// factory closure to match that, since useRiderSocket now depends on
+// `router` being referentially stable across renders (an unstable router
+// would make handleMessage/connect recreate every render and defeat the
+// hook's connect-once lifecycle effect).
+jest.mock('expo-router', () => {
+  const mockRouter = { push: jest.fn(), replace: jest.fn() };
+  return { useRouter: () => mockRouter };
+});
 jest.mock('react-native', () => ({
   AppState: { addEventListener: jest.fn(() => ({ remove: jest.fn() })) },
   Alert: { alert: jest.fn() },
@@ -72,12 +88,6 @@ class MockWebSocket {
 const instances: MockWebSocket[] = [];
 (global as any).WebSocket = MockWebSocket;
 
-// ── Tests ──────────────────────────────────────────────────────────────────
-
-import { renderHook, act } from '@testing-library/react-native';
-import { useRiderSocket } from '../useRiderSocket';
-import { useRideStore } from '../../store/rideStore';
-
 beforeEach(() => {
   instances.length = 0;
   jest.clearAllMocks();
@@ -101,7 +111,7 @@ const mockFetchRide = jest.fn(() => Promise.resolve());
 
 describe('useRiderSocket — reconnect state preservation (P1-6)', () => {
   it('calls fetchRide on initial connect so state is in sync', async () => {
-    const { unmount } = renderHook(() => useRiderSocket());
+    renderHook(() => useRiderSocket());
 
     // connect() is async (awaits ensureFreshToken) — flush the promise chain
     // so the WebSocket constructor has run before we fire onopen.
@@ -116,7 +126,7 @@ describe('useRiderSocket — reconnect state preservation (P1-6)', () => {
   });
 
   it('calls fetchRide again after a reconnect following WS close', async () => {
-    const { unmount } = renderHook(() => useRiderSocket());
+    renderHook(() => useRiderSocket());
     await act(async () => { await Promise.resolve(); });
 
     // First connect

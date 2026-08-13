@@ -277,7 +277,11 @@ export default function ActivityView() {
         </TouchableOpacity>
       </View>
     );
-  }, [router, styles]);
+    // styles is a module-level `StyleSheet.create()` constant (declared
+    // below the component), not component/render state — removed per the
+    // linter's own guidance ("outer scope values... aren't valid
+    // dependencies"); it never changes, so this is a pure no-op.
+  }, [router]);
 
   // #6: FlatList virtualizes the (potentially long, 'all'-period) ride history
   // that was previously a filteredRides.map() inside a ScrollView — rendering

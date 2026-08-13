@@ -1,6 +1,5 @@
 import { PermissionsAndroid, Platform, Linking } from 'react-native';
 import {
-  requestNotificationPermission,
   checkNotificationPermission,
   openNotificationSettings,
   requestAndroidNotificationPermission,

@@ -68,7 +68,8 @@ export default function WalletScreen() {
   useEffect(() => {
     clearError();
     void Promise.all([fetchWallet(), fetchTransactions(30)]).catch(() => {});
-  }, []);
+    // clearError/fetchWallet/fetchTransactions are all zustand actions (stable).
+  }, [clearError, fetchWallet, fetchTransactions]);
 
   const selectPreset = (amt: number) => {
     setSelectedPreset(amt);

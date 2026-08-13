@@ -1,16 +1,35 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { getHeatMapData, getHeatMapSettings, getServiceAreas, HeatMapData, HeatMapSettings } from "@/lib/api";
+import { getHeatMapData, getHeatMapSettings, getServiceAreas, getSurgeStatus, getDemandForecast, HeatMapData, HeatMapSettings } from "@/lib/api";
 import dynamic from "next/dynamic";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Loader2, RefreshCw, Users, Car, Building2 } from "lucide-react";
+import { Loader2, RefreshCw, Users, Car, Building2, AlertTriangle, TrendingUp, TrendingDown } from "lucide-react";
+
+interface AreaDemand {
+    area_id: string;
+    name: string;
+    demand_count: number;
+    supply_count: number;
+    ratio: number;
+    multiplier: number;
+    surge_active: boolean;
+    source: string;
+    gap: number;
+}
+
+interface ForecastSlot {
+    hour: string;
+    predicted_demand: number;
+    label?: string;
+}
 
 // Dynamic import — MapLibre GL needs window, so defer to client.
 const HeatMap = dynamic(() => import("@/components/heat-map"), {
@@ -48,6 +67,11 @@ export default function HeatMapPage() {
     // Display toggles
     const [showPickups, setShowPickups] = useState(true);
     const [showDropoffs, setShowDropoffs] = useState(true);
+
+    // Unmet demand state
+    const [demandAreas, setDemandAreas] = useState<AreaDemand[]>([]);
+    const [demandLoading, setDemandLoading] = useState(false);
+    const [forecast, setForecast] = useState<ForecastSlot[]>([]);
 
     // Fetch initial data
     useEffect(() => {
@@ -127,6 +151,45 @@ export default function HeatMapPage() {
     useEffect(() => {
         fetchHeatMapData();
     }, [fetchHeatMapData]);
+
+    // Fetch unmet demand data
+    const fetchDemandData = useCallback(() => {
+        setDemandLoading(true);
+        const areaIdParam = serviceAreaId === "all" ? undefined : serviceAreaId;
+        Promise.all([
+            getSurgeStatus(),
+            getDemandForecast(6, areaIdParam),
+        ])
+            .then(([surgeRes, forecastRes]) => {
+                const areas: AreaDemand[] = (surgeRes || []).map((a: any) => ({
+                    area_id: a.area_id,
+                    name: a.name,
+                    demand_count: a.demand_count ?? 0,
+                    supply_count: a.supply_count ?? 0,
+                    ratio: a.ratio ?? 0,
+                    multiplier: a.multiplier ?? 1.0,
+                    surge_active: a.surge_active ?? false,
+                    source: a.source ?? "auto",
+                    gap: Math.max(0, (a.demand_count ?? 0) - (a.supply_count ?? 0)),
+                }));
+                areas.sort((a, b) => b.ratio - a.ratio);
+                setDemandAreas(areas);
+                const slots: ForecastSlot[] = (forecastRes?.forecast || forecastRes?.slots || []).map((s: any) => ({
+                    hour: s.hour ?? s.time ?? "",
+                    predicted_demand: s.predicted_demand ?? s.demand ?? 0,
+                    label: s.label,
+                }));
+                setForecast(slots);
+            })
+            .catch(console.error)
+            .finally(() => setDemandLoading(false));
+    }, [serviceAreaId]);
+
+    useEffect(() => {
+        fetchDemandData();
+        const interval = setInterval(fetchDemandData, 120_000);
+        return () => clearInterval(interval);
+    }, [fetchDemandData]);
 
     // Convert API data to HeatMap component format
     const pickupPoints = heatMapData?.pickup_points?.map((p) => ({
@@ -364,6 +427,203 @@ export default function HeatMapPage() {
                     </div>
                 </CardContent>
             </Card>
+
+            {/* ── Unmet Demand Section ─────────────────────────── */}
+            <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h2 className="text-xl font-semibold tracking-tight">Unmet Demand</h2>
+                        <p className="text-sm text-muted-foreground">
+                            Live demand/supply gaps across service areas. Updates every 2 minutes.
+                        </p>
+                    </div>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={fetchDemandData}
+                        disabled={demandLoading}
+                    >
+                        <RefreshCw className={`mr-2 h-4 w-4 ${demandLoading ? "animate-spin" : ""}`} />
+                        Refresh
+                    </Button>
+                </div>
+
+                {/* Summary stats */}
+                {demandAreas.length > 0 && (
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <Card>
+                            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                                <CardTitle className="text-sm font-medium">Total Demand</CardTitle>
+                                <TrendingUp className="h-4 w-4 text-orange-500" />
+                            </CardHeader>
+                            <CardContent>
+                                <div className="text-2xl font-bold">
+                                    {demandAreas.reduce((s, a) => s + a.demand_count, 0)}
+                                </div>
+                                <p className="text-xs text-muted-foreground">active ride requests</p>
+                            </CardContent>
+                        </Card>
+                        <Card>
+                            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                                <CardTitle className="text-sm font-medium">Total Supply</CardTitle>
+                                <Car className="h-4 w-4 text-green-500" />
+                            </CardHeader>
+                            <CardContent>
+                                <div className="text-2xl font-bold">
+                                    {demandAreas.reduce((s, a) => s + a.supply_count, 0)}
+                                </div>
+                                <p className="text-xs text-muted-foreground">available drivers</p>
+                            </CardContent>
+                        </Card>
+                        <Card>
+                            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                                <CardTitle className="text-sm font-medium">Unmet Gap</CardTitle>
+                                <AlertTriangle className="h-4 w-4 text-destructive" />
+                            </CardHeader>
+                            <CardContent>
+                                <div className="text-2xl font-bold text-destructive">
+                                    {demandAreas.reduce((s, a) => s + a.gap, 0)}
+                                </div>
+                                <p className="text-xs text-muted-foreground">unfulfilled requests</p>
+                            </CardContent>
+                        </Card>
+                        <Card>
+                            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                                <CardTitle className="text-sm font-medium">Surge Active</CardTitle>
+                                <TrendingDown className="h-4 w-4 text-amber-500" />
+                            </CardHeader>
+                            <CardContent>
+                                <div className="text-2xl font-bold">
+                                    {demandAreas.filter(a => a.surge_active).length} / {demandAreas.length}
+                                </div>
+                                <p className="text-xs text-muted-foreground">areas with surge pricing</p>
+                            </CardContent>
+                        </Card>
+                    </div>
+                )}
+
+                {/* Per-area demand cards */}
+                {demandLoading && demandAreas.length === 0 ? (
+                    <div className="flex items-center justify-center py-8">
+                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                    </div>
+                ) : demandAreas.length === 0 ? (
+                    <Card>
+                        <CardContent className="py-8 text-center text-sm text-muted-foreground">
+                            No demand data available. Surge engine may not be running.
+                        </CardContent>
+                    </Card>
+                ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {demandAreas.map((area) => (
+                            <Card key={area.area_id} className={
+                                area.ratio >= 3.0
+                                    ? "border-destructive/50 bg-destructive/5"
+                                    : area.ratio >= 2.0
+                                    ? "border-orange-500/50 bg-orange-500/5"
+                                    : area.ratio >= 1.2
+                                    ? "border-amber-500/50 bg-amber-500/5"
+                                    : ""
+                            }>
+                                <CardHeader className="pb-2">
+                                    <div className="flex items-center justify-between">
+                                        <CardTitle className="text-sm font-medium">{area.name}</CardTitle>
+                                        <div className="flex items-center gap-1.5">
+                                            {area.surge_active && (
+                                                <Badge variant="outline" className="text-xs bg-amber-500/10 text-amber-600 border-amber-500/30">
+                                                    {area.multiplier.toFixed(2)}x surge
+                                                </Badge>
+                                            )}
+                                            {area.source === "manual" && (
+                                                <Badge variant="outline" className="text-xs">Manual</Badge>
+                                            )}
+                                        </div>
+                                    </div>
+                                </CardHeader>
+                                <CardContent>
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between text-sm">
+                                            <span className="text-muted-foreground">Demand / Supply</span>
+                                            <span className="font-mono font-medium">
+                                                {area.demand_count} / {area.supply_count}
+                                            </span>
+                                        </div>
+                                        <div className="flex items-center justify-between text-sm">
+                                            <span className="text-muted-foreground">Ratio</span>
+                                            <span className={`font-mono font-medium ${
+                                                area.ratio >= 3.0 ? "text-destructive" :
+                                                area.ratio >= 2.0 ? "text-orange-600" :
+                                                area.ratio >= 1.2 ? "text-amber-600" :
+                                                area.ratio >= 0.5 ? "text-green-600" :
+                                                "text-purple-600"
+                                            }`}>
+                                                {area.ratio.toFixed(2)}
+                                            </span>
+                                        </div>
+                                        {area.gap > 0 && (
+                                            <div className="flex items-center justify-between text-sm">
+                                                <span className="text-muted-foreground">Unmet gap</span>
+                                                <span className="font-mono font-medium text-destructive">
+                                                    {area.gap} requests
+                                                </span>
+                                            </div>
+                                        )}
+                                        {/* Demand bar */}
+                                        <div className="mt-1">
+                                            <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted">
+                                                <div
+                                                    className="h-full bg-green-500 transition-all"
+                                                    style={{ width: `${Math.min(100, area.supply_count > 0 ? (area.supply_count / Math.max(area.demand_count, area.supply_count)) * 100 : (area.demand_count === 0 ? 100 : 0))}%` }}
+                                                />
+                                                <div
+                                                    className="h-full bg-destructive transition-all"
+                                                    style={{ width: `${Math.min(100, area.gap > 0 ? (area.gap / Math.max(area.demand_count, area.supply_count)) * 100 : 0)}%` }}
+                                                />
+                                            </div>
+                                            <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
+                                                <span>Supply (green)</span>
+                                                <span>Unmet (red)</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        ))}
+                    </div>
+                )}
+
+                {/* Demand forecast preview */}
+                {forecast.length > 0 && (
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="text-lg">6-Hour Demand Forecast</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="flex items-end gap-2 h-32">
+                                {forecast.slice(0, 12).map((slot, i) => {
+                                    const max = Math.max(...forecast.slice(0, 12).map(s => s.predicted_demand), 1);
+                                    const pct = (slot.predicted_demand / max) * 100;
+                                    return (
+                                        <div key={i} className="flex flex-1 flex-col items-center gap-1">
+                                            <div
+                                                className="w-full rounded-t bg-orange-500/80 transition-all"
+                                                style={{ height: `${Math.max(4, pct)}%` }}
+                                                title={`${slot.hour}: ${slot.predicted_demand} predicted`}
+                                            />
+                                            <span className="text-[9px] text-muted-foreground truncate w-full text-center">
+                                                {slot.label || slot.hour}
+                                            </span>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                            <p className="mt-2 text-xs text-muted-foreground text-center">
+                                Predicted ride demand by hour (next 6 hours)
+                            </p>
+                        </CardContent>
+                    </Card>
+                )}
+            </div>
         </div>
     );
 }

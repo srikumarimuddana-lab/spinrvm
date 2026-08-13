@@ -316,17 +316,19 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
 
 @router.get("/demand-heatmap")
 async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
-    """Return recent ride pickup locations as heatmap points for the driver.
+    """Return aggregated demand heatmap cells for the driver's service area.
 
-    Scoped to the driver's service area (if set) and the last 7 days.
-    Only returns data when the admin has enabled `show_demand_heatmap`
-    on the driver's service area.
+    Server-side grid aggregation with k-anonymity floor and recency decay.
+    Response shape is backwards-compatible: ``points: [[lat, lng, weight]]``
+    where each point is now a cell centroid and weight is the decayed count.
     """
+    import json as _json
+    import math
+
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
     )
 
-    # Check if heatmap is enabled for this driver's service area
     service_area = None
     if driver and driver.get("service_area_id"):
         service_area = (lambda _r: _r[0] if _r else None)(
@@ -337,30 +339,114 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
     if not enabled:
         return {"enabled": False, "points": [], "total_rides": 0}
 
-    query_filters: dict = {}
+    area_id = driver["service_area_id"]
 
-    # Last 7 days
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-    query_filters["created_at"] = {"$gte": cutoff}
-    query_filters["service_area_id"] = driver["service_area_id"]
+    try:
+        from ...settings_loader import get_app_settings  # type: ignore
+    except ImportError:
+        from settings_loader import get_app_settings  # type: ignore
+    try:
+        from ...utils.redis_client import redis_get as _redis_get  # type: ignore
+        from ...utils.redis_client import redis_set as _redis_set
+    except ImportError:
+        from utils.redis_client import redis_get as _redis_get  # type: ignore
+        from utils.redis_client import redis_set as _redis_set
+    try:
+        from ...utils.metrics import inc as _metric_inc  # type: ignore
+        from ...utils.metrics import observe as _metric_observe
+    except ImportError:
+        from utils.metrics import inc as _metric_inc  # type: ignore
+        from utils.metrics import observe as _metric_observe
+
+    cache_key = f"spinr:heatmap:{area_id}:v1"
+    cached = await _redis_get(cache_key)
+    if cached is not None:
+        _metric_inc("spinr_drivers_heatmap_requests_total", {"cache": "hit"})
+        return _json.loads(cached)
+
+    _metric_inc("spinr_drivers_heatmap_requests_total", {"cache": "miss"})
+
+    import time as _time
+
+    _build_start = _time.monotonic()
+
+    app_settings = {}
+    try:
+        app_settings = await get_app_settings() or {}
+    except Exception:
+        pass
+
+    k_floor = int(app_settings.get("heatmap_k_floor", 3))
+    cell_lat = float(app_settings.get("heatmap_cell_lat_deg", 0.004))
+    cell_lng = float(app_settings.get("heatmap_cell_lng_deg", 0.006))
+    decay_half_life = float(app_settings.get("heatmap_decay_half_life_days", 3))
+    refresh_seconds = int(app_settings.get("heatmap_refresh_seconds", 90))
+
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=7)).isoformat()
 
     rides = await db_supabase.get_rows(
         "rides",
-        query_filters,
+        {"created_at": {"$gte": cutoff}, "service_area_id": area_id},
         order="created_at",
         desc=True,
-        limit=2_000,
-        columns="pickup_lat,pickup_lng",
+        limit=5_000,
+        columns="pickup_lat,pickup_lng,created_at,status",
     )
 
-    points = []
+    cells: dict = {}
+    total_rides = 0
     for r in rides:
         lat = r.get("pickup_lat")
         lng = r.get("pickup_lng")
-        if lat is not None and lng is not None:
-            points.append([float(lat), float(lng), 1])
+        if lat is None or lng is None:
+            continue
+        total_rides += 1
+        lat_f = float(lat)
+        lng_f = float(lng)
+        cell_row = math.floor(lat_f / cell_lat)
+        cell_col = math.floor(lng_f / cell_lng)
+        key = (cell_row, cell_col)
+        created_str = r.get("created_at", "")
+        try:
+            created = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            created = now
+        age_days = max((now - created).total_seconds() / 86400.0, 0)
+        weight = 0.5 ** (age_days / decay_half_life) if decay_half_life > 0 else 1.0
+        if key not in cells:
+            cells[key] = {"weight": 0.0, "count": 0}
+        cells[key]["weight"] += weight
+        cells[key]["count"] += 1
 
-    return {"enabled": True, "points": points, "total_rides": len(rides)}
+    suppressed = 0
+    points = []
+    for (cr, cc), cell in cells.items():
+        if cell["count"] < k_floor:
+            suppressed += 1
+            continue
+        centroid_lat = round((cr + 0.5) * cell_lat, 6)
+        centroid_lng = round((cc + 0.5) * cell_lng, 6)
+        points.append([centroid_lat, centroid_lng, round(cell["weight"], 2)])
+
+    _build_ms = (_time.monotonic() - _build_start) * 1000
+    _metric_observe("spinr_drivers_heatmap_build_duration_ms", _build_ms)
+    _metric_inc("spinr_drivers_heatmap_cells_suppressed_total", by=suppressed)
+
+    result = {
+        "enabled": True,
+        "points": points,
+        "total_rides": total_rides,
+        "refresh_seconds": refresh_seconds,
+        "generated_at": now.isoformat(),
+    }
+
+    try:
+        await _redis_set(cache_key, _json.dumps(result), ttl=60)
+    except Exception as e:
+        logger.warning(f"demand-heatmap: cache write failed: {e}")
+
+    return result
 
 
 @router.post("/register")

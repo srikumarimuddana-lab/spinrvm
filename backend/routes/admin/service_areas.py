@@ -688,7 +688,76 @@ async def admin_update_service_area(
             area_id,
             {"updated_fields": list(update_payload.keys())},
         )
+        await _record_manual_surge_history(area_id, update_payload)
     return {"message": "Service area updated"}
+
+
+async def _record_manual_surge_history(
+    area_id: str, update_payload: dict, source: str | None = None
+) -> None:
+    """Append a ``surge_pricing`` row when an admin changes surge by hand.
+
+    This is the only UI path that sets a manual surge multiplier, and it
+    previously wrote nothing to the history table. The surge engine
+    deliberately skips areas with ``surge_source == 'manual'``, so for the
+    entire duration of an override *no rows existed at all*: the admin Surge
+    History chart flatlined at the last automatic value and its "contains
+    manual overrides" marker could never fire — precisely for the periods
+    (including above-cap overrides) that carry regulatory weight and are the
+    reason anyone opens that chart.
+
+    Appended, never updated: this is an audit trail. Failures are logged and
+    swallowed because losing a history row must not fail the operator's
+    surge change itself — but they are logged loudly, not silently dropped.
+    """
+    if not any(k in update_payload for k in ("surge_multiplier", "surge_source", "surge_active", "surge_enabled")):
+        return
+
+    try:
+        area = await db_supabase.find_one("service_areas", {"id": area_id}) or {}
+        multiplier = float(update_payload.get("surge_multiplier", area.get("surge_multiplier") or 1.0) or 1.0)
+        row_source = source or update_payload.get("surge_source") or area.get("surge_source") or "manual"
+        is_active = update_payload.get("surge_active", area.get("surge_active") or False)
+
+        # Record the live demand/supply the override was made against, so the
+        # chart can show what the operator was reacting to. Best-effort: a
+        # metrics failure must not cost us the history row.
+        demand = supply = 0
+        ratio = 0.0
+        try:
+            from ...utils.surge_engine import _count_demand_in_area, _count_supply_in_area  # type: ignore
+        except ImportError:
+            try:
+                from utils.surge_engine import _count_demand_in_area, _count_supply_in_area  # type: ignore
+            except ImportError:
+                _count_demand_in_area = _count_supply_in_area = None  # type: ignore
+        if _count_demand_in_area and _count_supply_in_area:
+            try:
+                demand = await _count_demand_in_area(area_id)
+                supply = await _count_supply_in_area(area)
+                ratio = round(demand / max(supply, 1), 2)
+            except Exception as e:  # noqa: BLE001 - metrics are optional context
+                logger.warning("surge history: demand/supply snapshot failed for area %s: %s", area_id, e)
+
+        await db_supabase.insert_one(
+            "surge_pricing",
+            {
+                "service_area_id": area_id,
+                "multiplier": multiplier,
+                "demand_count": demand,
+                "supply_count": supply,
+                "ratio": ratio,
+                "source": row_source,
+                "is_active": bool(is_active),
+            },
+        )
+    except Exception as e:  # noqa: BLE001 - never fail the surge change itself
+        logger.error(
+            "surge history: failed to append manual-override row for area %s: %s",
+            area_id,
+            e,
+            exc_info=True,
+        )
 
 
 @router.delete("/service-areas/{area_id}")
@@ -735,26 +804,13 @@ async def admin_update_surge_pricing(area_id: str, surge: SurgePricingRequest, a
         }
     await db_supabase.update_one("service_areas", {"id": area_id}, area_update)
 
-    surge_doc = {
-        "id": str(uuid.uuid4()),
-        "service_area_id": area_id,
-        "multiplier": surge.multiplier,
-        "demand_count": 0,
-        "supply_count": 0,
-        "ratio": 0,
-        "source": "manual",
-        "is_active": surge.is_active,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-    existing = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("surge_pricing", {"service_area_id": area_id}, limit=1, columns="id")
-    )
-    if existing:
-        await db_supabase.update_one("surge_pricing", {"service_area_id": area_id}, surge_doc)
-    else:
-        await db_supabase.insert_one("surge_pricing", surge_doc)
+    # surge_pricing is an append-only audit trail, so always insert.
+    # This previously read for an existing row and, when one was found, called
+    # update_one with a filter matching EVERY row for the area while the
+    # payload carried a freshly-generated `id` — which both destroys history
+    # and tries to set the same primary key on multiple rows (unique violation
+    # -> 500) the moment the surge engine has appended more than one row.
+    await _record_manual_surge_history(area_id, area_update, source="manual")
 
     # PERF-001: Invalidate fare cache
     await invalidate_fare_cache()

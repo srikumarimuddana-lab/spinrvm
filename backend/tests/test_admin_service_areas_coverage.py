@@ -251,6 +251,76 @@ class TestUpdateServiceAreaGuards:
         assert "surge_override_above_cap" in actions
 
     @pytest.mark.anyio
+    async def test_manual_surge_change_appends_a_history_row(self):
+        """A manual surge override must land in surge_pricing.
+
+        Regression test: this is the only UI path that sets a manual
+        multiplier, and it wrote no history at all. Because the surge engine
+        skips areas with surge_source='manual', *no rows existed* for the
+        whole duration of an override — so the admin Surge History chart
+        flatlined at the last automatic value and its "contains manual
+        overrides" marker could never fire, for exactly the periods that
+        carry regulatory weight.
+        """
+        insert_one = AsyncMock()
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=AsyncMock(),
+                find_one=AsyncMock(return_value={"id": "area-1", "surge_source": "manual"}),
+                insert_one=insert_one,
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            req = ServiceAreaUpdateRequest(surge_multiplier=2.0, surge_active=True)
+            await admin_update_service_area("area-1", req, admin=_ADMIN)
+
+        assert insert_one.await_count == 1, "manual surge change wrote no history row"
+        table, doc = insert_one.await_args.args
+        assert table == "surge_pricing"
+        assert doc["service_area_id"] == "area-1"
+        assert doc["multiplier"] == 2.0
+        assert doc["source"] == "manual"
+
+    @pytest.mark.anyio
+    async def test_non_surge_update_writes_no_history_row(self):
+        """Renaming an area must not pollute the surge history."""
+        insert_one = AsyncMock()
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=AsyncMock(),
+                find_one=AsyncMock(return_value={"id": "area-1"}),
+                insert_one=insert_one,
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            await admin_update_service_area("area-1", ServiceAreaUpdateRequest(name="Saskatoon North"), admin=_ADMIN)
+
+        assert insert_one.await_count == 0
+
+    @pytest.mark.anyio
+    async def test_history_write_failure_does_not_fail_the_surge_change(self):
+        """Losing an audit row must not block the operator's actual change."""
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=AsyncMock(),
+                find_one=AsyncMock(return_value={"id": "area-1"}),
+                insert_one=AsyncMock(side_effect=RuntimeError("surge_pricing unavailable")),
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            result = await admin_update_service_area(
+                "area-1", ServiceAreaUpdateRequest(surge_multiplier=1.5), admin=_ADMIN
+            )
+
+        assert result == {"message": "Service area updated"}
+
+    @pytest.mark.anyio
     async def test_surge_above_cap_allowed_when_disabling_surge(self):
         """An above-cap multiplier being turned OFF (surge_enabled=False)
         should not require justification."""
@@ -463,13 +533,24 @@ class TestUpdateSurgePricing:
         insert_one.assert_awaited_once()
 
     @pytest.mark.anyio
-    async def test_deactivate_surge_resets_multiplier_and_updates_existing_row(self):
+    async def test_deactivate_surge_resets_multiplier_and_appends_history(self):
+        """Deactivating surge writes the service_areas row and APPENDS history.
+
+        This previously read surge_pricing for an existing row and, when it
+        found one, called update_one with a filter matching every row for the
+        area while the payload carried a freshly-generated `id`. That both
+        destroyed the audit trail and would raise a unique violation (-> 500)
+        as soon as the surge engine had appended more than one row — i.e.
+        within ~4 minutes of surge being enabled. surge_pricing is append-only.
+        """
         update_one = AsyncMock()
+        insert_one = AsyncMock()
         with (
             patch.multiple(
                 "backend.routes.admin.service_areas.db_supabase",
                 update_one=update_one,
-                insert_one=AsyncMock(),
+                insert_one=insert_one,
+                find_one=AsyncMock(return_value={"id": "area-1"}),
                 get_rows=AsyncMock(return_value=[{"id": "surge-1"}]),
             ),
             patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
@@ -478,9 +559,15 @@ class TestUpdateSurgePricing:
             req = SurgePricingRequest(multiplier=1.0, is_active=False)
             await admin_update_surge_pricing("area-1", req, admin=_ADMIN)
 
-        # Second update_one call updates the existing surge_pricing row.
-        surge_call = update_one.await_args_list[1]
-        assert surge_call.args[0] == "surge_pricing"
+        # The only update_one is the authoritative service_areas write.
+        assert [c.args[0] for c in update_one.await_args_list] == ["service_areas"]
+        # History is appended, never rewritten.
+        insert_one.assert_awaited_once()
+        table, doc = insert_one.await_args.args
+        assert table == "surge_pricing"
+        assert doc["source"] == "manual"
+        assert doc["is_active"] is False
+        assert "id" not in doc, "let the DB generate the PK; a client-set id is what collided"
 
 
 # ── admin_get_surge_status ────────────────────────────────────────────────

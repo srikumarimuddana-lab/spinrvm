@@ -23,7 +23,7 @@ admin's keystroke is a different decision (see the 2026-08-08 change log).
 from __future__ import annotations
 
 import logging
-from typing import NamedTuple, Optional
+from typing import Any, Dict, NamedTuple, Optional, Tuple
 from urllib.parse import urlparse
 
 try:
@@ -60,13 +60,12 @@ class CompanyDetails(NamedTuple):
     support_email: str
     #: Absolute URL of the logo to render in the header.
     logo_url: str
-    #: Product/brand name for email BODY copy ("Open the {app_name} driver
-    #: app", "your {app_name} wallet"), independent of the legal entity
-    #: ``name`` above. Falls back to "Spinr" — see ``company_app_name`` in
-    #: ``schemas.AppSettings`` and ACTION_ITEMS.md N17. Defaulted (rather than
-    #: required) so existing keyword-only ``CompanyDetails(...)`` test
-    #: fixtures built before this field existed keep constructing.
-    app_name: str = "Spinr"
+    #: The mailing address split into display lines — street, then locality.
+    #: The email footer prints one per line (the shape Uber and every other
+    #: receipt uses) rather than the comma-joined ``address`` above, which
+    #: reads as a run-on at footer type sizes. Defaulted so existing
+    #: constructions keep working.
+    address_lines: Tuple[str, ...] = ()
 
     @property
     def name_sentence(self) -> str:
@@ -79,6 +78,60 @@ class CompanyDetails(NamedTuple):
         in review, and it is now in front of customers on every email.
         """
         return self.name.rstrip(".") + "."
+
+
+def _coalesce(settings: Dict[str, Any], key: str) -> str:
+    """Settings value as a clean string.
+
+    The settings loader can surface a DB NULL as Python ``None`` (it overrides
+    the schema default), so a bare ``.get()`` would render the string "None" in
+    a footer. Same guard ``marketing_email._coalesce`` applies for the CASL
+    footer; kept separate because that one is on a consent-critical path this
+    module must not disturb.
+    """
+    return str(settings.get(key) or "").strip()
+
+
+def _address_lines(settings: Dict[str, Any]) -> Tuple[str, ...]:
+    """The mailing address as display lines: street, then locality.
+
+    Same parts as :func:`_postal_address`, not joined. A footer prints these
+    one per line; ``_postal_address`` keeps the single-line form for the PDF
+    header and the plain-text identity line.
+    """
+    street = _coalesce(settings, "company_address")
+    locality = " ".join(
+        p
+        for p in (
+            _coalesce(settings, "company_city"),
+            _coalesce(settings, "company_province"),
+            _coalesce(settings, "company_postal_code"),
+        )
+        if p
+    )
+    return tuple(p for p in (street, locality) if p)
+
+
+def _postal_address(settings: Dict[str, Any]) -> str:
+    """Assemble the mailing address from its configured parts.
+
+    ``company_address`` is a free-text field on the admin Settings page and
+    often holds the whole address on its own; ``company_city`` /
+    ``company_province`` / ``company_postal_code`` came later (migration 192)
+    and are not on that page, so they are usually blank. Joining only the
+    non-empty parts handles both shapes without producing stray commas.
+    """
+    street = _coalesce(settings, "company_address")
+    locality = " ".join(
+        p
+        for p in (
+            _coalesce(settings, "company_city"),
+            _coalesce(settings, "company_province"),
+            _coalesce(settings, "company_postal_code"),
+        )
+        if p
+    )
+    return ", ".join(p for p in (street, locality) if p)
 
 
 def _bundled_logo_url() -> str:
@@ -190,4 +243,5 @@ async def load_company_details() -> CompanyDetails:
         contact_line=contact_line,
         support_email=support_email,
         logo_url=_safe_logo_url(_coalesce(settings, "company_logo_url")) or _bundled_logo_url(),
+        address_lines=_address_lines(settings),
     )

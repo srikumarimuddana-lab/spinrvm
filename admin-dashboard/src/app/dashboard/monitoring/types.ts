@@ -102,6 +102,9 @@ export interface AreaDemandSupply {
   ratio: number;
   multiplier: number;
   surge_active: boolean;
+  /** Per-area surge master toggle. The backend sends it; dropping it made
+   *  areas with surge deliberately off look like surge candidates. */
+  surge_enabled: boolean;
   source: string;
 }
 

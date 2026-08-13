@@ -17,6 +17,13 @@ import {
     ROUTE_STROKE_WIDTH,
 } from "@spinr/shared/constants/routeMapStyle";
 import { AreaDemandSupply, MonitoringDriver, MonitoringFilters, MonitoringRide, SelectedItem } from "./types";
+import {
+    DEMAND_BANDS,
+    NO_DATA_COLOR,
+    bandRangeLabel,
+    demandFillColor,
+    demandFillOpacity,
+} from "@/lib/demand-bands";
 
 const DEFAULT_ZOOM = 12;
 
@@ -146,23 +153,31 @@ function rideLineLayerId(rideId: string): string {
 
 const MAP_CONTAINER_STYLE: React.CSSProperties = { width: "100%", height: "100%" };
 
-function demandFillColor(areaId: string, demandData: AreaDemandSupply[] | undefined, showDemand: boolean): string {
-    if (!showDemand || !demandData) return "#8b5cf6";
+/** Pre-overlay appearance — unchanged from before the demand feature existed,
+ *  so toggling the overlay off is pixel-identical to the original map. */
+const DEFAULT_AREA_FILL = "#8b5cf6";
+const DEFAULT_AREA_OPACITY = 0.08;
+
+/** Fill colour for a service-area polygon when the demand overlay is on.
+ *
+ * Thresholds and colours come from the shared band module so this map and the
+ * heatmap page's cards can never disagree about what a ratio means. An area
+ * missing from the response (airport sub-zones, which get_surge_status skips,
+ * or a brand-new area) is NOT the same as an oversupplied one — it gets the
+ * neutral no-data treatment rather than being painted "Oversupply" purple,
+ * which previously made a surge-engine outage look like a healthy market. */
+function areaFillColor(areaId: string, demandData: AreaDemandSupply[] | undefined, showDemand: boolean): string {
+    if (!showDemand || !demandData) return DEFAULT_AREA_FILL;
     const d = demandData.find(a => a.area_id === areaId);
-    if (!d) return "#8b5cf6";
-    const r = d.ratio;
-    if (r >= 3.0) return "#ef4444";
-    if (r >= 2.0) return "#f97316";
-    if (r >= 1.2) return "#eab308";
-    if (r >= 0.5) return "#22c55e";
-    return "#8b5cf6";
+    if (!d) return NO_DATA_COLOR;
+    return demandFillColor(d.demand_count, d.supply_count, d.ratio);
 }
 
-function demandFillOpacity(areaId: string, demandData: AreaDemandSupply[] | undefined, showDemand: boolean): number {
-    if (!showDemand || !demandData) return 0.08;
+function areaFillOpacity(areaId: string, demandData: AreaDemandSupply[] | undefined, showDemand: boolean): number {
+    if (!showDemand || !demandData) return DEFAULT_AREA_OPACITY;
     const d = demandData.find(a => a.area_id === areaId);
-    if (!d || d.demand_count === 0) return 0.08;
-    return Math.min(0.35, 0.1 + d.ratio * 0.06);
+    if (!d) return DEFAULT_AREA_OPACITY;
+    return demandFillOpacity(d.demand_count, d.supply_count, d.ratio);
 }
 
 export function MonitoringMap({
@@ -490,8 +505,8 @@ export function MonitoringMap({
                 properties: {
                     id: area.id,
                     name: area.name ?? "Service Area",
-                    fillColor: demandFillColor(area.id, demandData, filters.showDemand),
-                    fillOpacity: demandFillOpacity(area.id, demandData, filters.showDemand),
+                    fillColor: areaFillColor(area.id, demandData, filters.showDemand),
+                    fillOpacity: areaFillOpacity(area.id, demandData, filters.showDemand),
                 },
                 geometry: area.geojson,
             });
@@ -548,23 +563,34 @@ export function MonitoringMap({
                 </div>
             )}
             {demandData && demandData.length > 0 && (
-                <div className="absolute bottom-3 left-3 z-10 rounded-lg border border-border bg-background/90 p-3 text-xs shadow-md backdrop-blur-sm">
-                    <p className="mb-1.5 font-medium">Demand / Supply</p>
-                    {[
-                        { color: "#ef4444", label: "Critical (≥3.0×)" },
-                        { color: "#f97316", label: "High (2.0–3.0×)" },
-                        { color: "#eab308", label: "Moderate (1.2–2.0×)" },
-                        { color: "#22c55e", label: "Balanced (0.5–1.2×)" },
-                        { color: "#a855f7", label: "Oversupply (<0.5×)" },
-                    ].map((item) => (
-                        <div key={item.label} className="flex items-center gap-2 py-0.5">
+                // bg-background (not /90): a translucent panel over live map tiles
+                // put the muted legend text right at the contrast floor with the
+                // underlying imagery unknowable.
+                <div className="absolute bottom-3 left-3 z-10 rounded-lg border border-border bg-background p-3 text-xs shadow-md">
+                    <p className="mb-1.5 font-medium">Demand : supply ratio</p>
+                    {DEMAND_BANDS.map((band) => (
+                        <div key={band.key} className="flex items-center gap-2 py-0.5">
                             <span
+                                aria-hidden="true"
                                 className="inline-block h-3 w-3 rounded-sm"
-                                style={{ backgroundColor: item.color, opacity: 0.6 }}
+                                style={{ backgroundColor: band.color, opacity: 0.7 }}
                             />
-                            <span className="text-muted-foreground">{item.label}</span>
+                            <span className="text-foreground">
+                                {band.label}{" "}
+                                <span className="text-muted-foreground">
+                                    ({bandRangeLabel(band)}) → {band.multiplier.toFixed(2)}× fare
+                                </span>
+                            </span>
                         </div>
                     ))}
+                    <div className="mt-1 flex items-center gap-2 border-t border-border pt-1.5">
+                        <span
+                            aria-hidden="true"
+                            className="inline-block h-3 w-3 rounded-sm"
+                            style={{ backgroundColor: NO_DATA_COLOR, opacity: 0.7 }}
+                        />
+                        <span className="text-muted-foreground">No data reported</span>
+                    </div>
                 </div>
             )}
         </div>

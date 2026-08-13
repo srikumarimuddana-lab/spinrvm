@@ -250,6 +250,11 @@ export default function RideList({
                                                 {ride.ride_code}
                                             </p>
                                         )}
+                                        {ride.legacy_import_metadata && Object.keys(ride.legacy_import_metadata).length > 0 && (
+                                            <span className="inline-block text-[10px] font-medium text-muted-foreground bg-muted rounded px-1.5 py-0.5 mb-0.5">
+                                                Imported
+                                            </span>
+                                        )}
                                         <p className="text-sm font-medium truncate">{ride.pickup_address || "—"}</p>
                                         <p className="text-xs text-muted-foreground truncate mt-0.5">
                                             <span className="text-muted-foreground/60">to</span> {ride.dropoff_address || "—"}

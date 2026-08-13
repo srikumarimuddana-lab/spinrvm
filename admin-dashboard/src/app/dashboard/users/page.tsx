@@ -863,30 +863,51 @@ export default function UsersPage() {
                                 ) : !userDetail.recent_rides || userDetail.recent_rides.length === 0 ? (
                                     <p className="text-sm text-muted-foreground">No rides yet.</p>
                                 ) : (
-                                    <div className="space-y-1 max-h-72 overflow-y-auto border rounded-md">
-                                        {userDetail.recent_rides.map((r: any) => (
-                                            <a
-                                                key={r.id}
-                                                href={`/dashboard/rides?id=${r.id}`}
-                                                className="block px-3 py-2 border-b last:border-b-0 hover:bg-muted/30 text-xs"
-                                            >
-                                                <div className="flex items-center justify-between gap-2">
-                                                    <span className="font-medium truncate">
-                                                        {(r.pickup_address || "Pickup").split(",")[0]} → {(r.dropoff_address || "Dropoff").split(",")[0]}
-                                                    </span>
-                                                    <Badge variant="outline" className={`text-[10px] shrink-0 ${
-                                                        r.status === "completed" ? "text-emerald-600"
-                                                        : r.status === "cancelled" ? "text-red-600" : "text-amber-600"}`}>
-                                                        {r.status}
-                                                    </Badge>
-                                                </div>
-                                                <div className="mt-0.5 flex items-center justify-between text-muted-foreground">
-                                                    <span>{formatDate(r.created_at)}</span>
-                                                    <span>{r.total_fare != null ? `$${Number(r.total_fare).toFixed(2)}` : "—"}</span>
-                                                </div>
-                                            </a>
-                                        ))}
-                                    </div>
+                                    <>
+                                        {/* This panel only ever fetches the 10 most recent rides
+                                            (backend/routes/admin/users.py); older rows -- including
+                                            any legacy-imported ones -- won't appear here. Surface the
+                                            true total so that reads as "not on this page", not "never
+                                            imported" (A30 Finding 2,
+                                            docs/audit/2026-08-13-migrated-data-visibility-audit.md). */}
+                                        {typeof userDetail.total_rides === "number" && userDetail.total_rides > userDetail.recent_rides.length && (
+                                            <p className="text-[11px] text-muted-foreground mb-1.5">
+                                                Showing {userDetail.recent_rides.length} most recent of {userDetail.total_rides} total rides —{" "}
+                                                <a href={`/dashboard/rides?search=${encodeURIComponent(userDetail.phone || userDetail.email || "")}`} className="underline hover:text-foreground">
+                                                    view all
+                                                </a>
+                                            </p>
+                                        )}
+                                        <div className="space-y-1 max-h-72 overflow-y-auto border rounded-md">
+                                            {userDetail.recent_rides.map((r: any) => (
+                                                <a
+                                                    key={r.id}
+                                                    href={`/dashboard/rides?id=${r.id}`}
+                                                    className="block px-3 py-2 border-b last:border-b-0 hover:bg-muted/30 text-xs"
+                                                >
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <span className="font-medium truncate">
+                                                            {(r.pickup_address || "Pickup").split(",")[0]} → {(r.dropoff_address || "Dropoff").split(",")[0]}
+                                                        </span>
+                                                        <Badge variant="outline" className={`text-[10px] shrink-0 ${
+                                                            r.status === "completed" ? "text-emerald-600"
+                                                            : r.status === "cancelled" ? "text-red-600" : "text-amber-600"}`}>
+                                                            {r.status}
+                                                        </Badge>
+                                                    </div>
+                                                    <div className="mt-0.5 flex items-center justify-between text-muted-foreground">
+                                                        <span className="flex items-center gap-1">
+                                                            {formatDate(r.created_at)}
+                                                            {r.legacy_import_metadata && Object.keys(r.legacy_import_metadata).length > 0 && (
+                                                                <span className="text-[9px] font-medium bg-muted rounded px-1 py-0.5">Imported</span>
+                                                            )}
+                                                        </span>
+                                                        <span>{r.total_fare != null ? `$${Number(r.total_fare).toFixed(2)}` : "—"}</span>
+                                                    </div>
+                                                </a>
+                                            ))}
+                                        </div>
+                                    </>
                                 )}
                             </div>
                         </div>

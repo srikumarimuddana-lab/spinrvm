@@ -303,7 +303,14 @@ class TestAuditLogs:
     async def test_get_audit_logs_no_filters(self):
         with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[{"id": "log1"}])) as mock:
             result = await maint.get_audit_logs(
-                limit=10, offset=0, action=None, entity_type=None, search=None, _admin=ADMIN
+                limit=10,
+                offset=0,
+                action=None,
+                entity_type=None,
+                search=None,
+                start=None,
+                end=None,
+                _admin=ADMIN,
             )
         assert result == [{"id": "log1"}]
         _, filters = mock.call_args.args
@@ -313,7 +320,14 @@ class TestAuditLogs:
     async def test_get_audit_logs_applies_action_and_entity_filters(self):
         with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock:
             await maint.get_audit_logs(
-                limit=10, offset=0, action="staff_created", entity_type="staff", search=None, _admin=ADMIN
+                limit=10,
+                offset=0,
+                action="staff_created",
+                entity_type="staff",
+                search=None,
+                start=None,
+                end=None,
+                _admin=ADMIN,
             )
         _, filters = mock.call_args.args
         assert filters == {"action": "staff_created", "entity_type": "staff"}
@@ -409,6 +423,125 @@ class TestAuditLogTopActors:
         assert result["days"] == 30
         _, filters = mock.call_args.args
         assert "created_at" in filters
+        assert "$gte" in filters["created_at"]
+
+
+# ---------------------------------------------------------------------------
+# audit log date-range window + facets
+# ---------------------------------------------------------------------------
+
+
+class TestAuditLogDateRange:
+    """An incident investigation is "what happened between these two
+    timestamps"; without a window that needed raw SQL."""
+
+    @pytest.mark.asyncio
+    async def test_start_and_end_bound_created_at(self):
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock:
+            await maint.get_audit_logs(
+                limit=10,
+                offset=0,
+                action=None,
+                entity_type=None,
+                search=None,
+                start="2026-08-13T19:00:00+00:00",
+                end="2026-08-13T21:00:00+00:00",
+                _admin=ADMIN,
+            )
+        _, filters = mock.call_args.args
+        assert filters["created_at"] == {
+            "$gte": "2026-08-13T19:00:00+00:00",
+            "$lte": "2026-08-13T21:00:00+00:00",
+        }
+
+    @pytest.mark.asyncio
+    async def test_open_ended_ranges_supported(self):
+        for kwargs, expected in (
+            ({"start": "2026-08-13T19:00:00+00:00"}, {"$gte": "2026-08-13T19:00:00+00:00"}),
+            ({"end": "2026-08-13T21:00:00+00:00"}, {"$lte": "2026-08-13T21:00:00+00:00"}),
+        ):
+            with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock:
+                await maint.get_audit_logs(
+                    limit=10,
+                    offset=0,
+                    action=None,
+                    entity_type=None,
+                    search=None,
+                    start=kwargs.get("start"),
+                    end=kwargs.get("end"),
+                    _admin=ADMIN,
+                )
+            _, filters = mock.call_args.args
+            assert filters["created_at"] == expected
+
+    @pytest.mark.asyncio
+    async def test_no_range_leaves_created_at_unfiltered(self):
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock:
+            await maint.get_audit_logs(
+                limit=10,
+                offset=0,
+                action=None,
+                entity_type=None,
+                search=None,
+                start=None,
+                end=None,
+                _admin=ADMIN,
+            )
+        _, filters = mock.call_args.args
+        assert "created_at" not in filters
+
+
+class TestAuditLogFacets:
+    """The filter dropdowns were a hand-written list that matched almost
+    nothing in the table — every action option and most entity options
+    returned zero rows silently. Facets come from the data instead."""
+
+    @pytest.mark.asyncio
+    async def test_counts_distinct_actions_and_entities_descending(self):
+        rows = [
+            {"action": "driver_approve", "entity_type": "drivers"},
+            {"action": "driver_approve", "entity_type": "drivers"},
+            {"action": "otp_sent", "entity_type": "users"},
+        ]
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=rows)):
+            result = await maint.get_audit_log_facets(days=90, _admin=ADMIN)
+        assert result["actions"][0] == {"value": "driver_approve", "count": 2}
+        assert {"value": "otp_sent", "count": 1} in result["actions"]
+        assert result["entity_types"][0] == {"value": "drivers", "count": 2}
+        assert result["rows_scanned"] == 3
+        assert result["rows_scanned_capped"] is False
+
+    @pytest.mark.asyncio
+    async def test_real_world_action_names_survive_verbatim(self):
+        """Regression: the old hardcoded list assumed generic verbs like
+        "updated". Writers emit specific ones — don't normalise them away."""
+        rows = [{"action": "zoho_desk_config_updated", "entity_type": "zoho_desk_config"}]
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=rows)):
+            result = await maint.get_audit_log_facets(days=90, _admin=ADMIN)
+        assert result["actions"] == [{"value": "zoho_desk_config_updated", "count": 1}]
+        assert result["entity_types"] == [{"value": "zoho_desk_config", "count": 1}]
+
+    @pytest.mark.asyncio
+    async def test_blank_values_skipped(self):
+        rows = [{"action": None, "entity_type": ""}, {"action": "otp_sent", "entity_type": "users"}]
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=rows)):
+            result = await maint.get_audit_log_facets(days=90, _admin=ADMIN)
+        assert result["actions"] == [{"value": "otp_sent", "count": 1}]
+        assert result["entity_types"] == [{"value": "users", "count": 1}]
+
+    @pytest.mark.asyncio
+    async def test_flags_scan_cap_so_counts_are_not_read_as_complete(self):
+        rows = [{"action": "x", "entity_type": "y"} for _ in range(maint._FACET_SCAN_CAP)]
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=rows)):
+            result = await maint.get_audit_log_facets(days=90, _admin=ADMIN)
+        assert result["rows_scanned_capped"] is True
+
+    @pytest.mark.asyncio
+    async def test_days_window_passed_to_query(self):
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock:
+            result = await maint.get_audit_log_facets(days=30, _admin=ADMIN)
+        assert result["days"] == 30
+        _, filters = mock.call_args.args
         assert "$gte" in filters["created_at"]
 
 

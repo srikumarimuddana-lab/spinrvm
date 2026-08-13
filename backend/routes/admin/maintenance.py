@@ -281,6 +281,10 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
 # Audit Logs
 # ============================================================
 
+# Upper bound on rows pulled for the facet rollup. Matches the top-actors
+# cap; past it the response flags itself as a sample.
+_FACET_SCAN_CAP = 5000
+
 
 @router.get("/audit-logs")
 async def get_audit_logs(
@@ -289,14 +293,29 @@ async def get_audit_logs(
     action: Optional[str] = Query(None),
     entity_type: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
+    start: Optional[str] = Query(None, description="ISO-8601 lower bound on created_at (inclusive)"),
+    end: Optional[str] = Query(None, description="ISO-8601 upper bound on created_at (inclusive)"),
     _admin: dict = Depends(require_module("audit")),
 ):
-    """Get audit log entries with optional filters and pagination."""
+    """Get audit log entries with optional filters and pagination.
+
+    ``start``/``end`` bound ``created_at``. An incident investigation is
+    almost always "what happened between these two timestamps", and without
+    a window the only way to answer it was raw SQL — the same gap the
+    top-actors rollup below was added to close for actors.
+    """
     filters: Dict[str, Any] = {}
     if action:
         filters["action"] = action
     if entity_type:
         filters["entity_type"] = entity_type
+    if start or end:
+        bounds: Dict[str, Any] = {}
+        if start:
+            bounds["$gte"] = start
+        if end:
+            bounds["$lte"] = end
+        filters["created_at"] = bounds
     if search:
         term = search.strip()
         if term:
@@ -365,6 +384,57 @@ async def get_audit_log_top_actors(
         "rows_scanned": len(rows),
         "rows_scanned_capped": len(rows) >= 5000,
         "actors": top,
+    }
+
+
+@router.get("/audit-logs/facets")
+async def get_audit_log_facets(
+    days: int = Query(90, ge=1, le=365),
+    _admin: dict = Depends(require_module("audit")),
+):
+    """Distinct ``action`` / ``entity_type`` values actually present in
+    audit_logs, with counts.
+
+    The admin filter dropdowns used to be a hand-written list ("created",
+    "updated", "deleted", "login", "status_change" / "driver", "user",
+    "ride", ...). Writers emit specific verbs instead — "driver_approve",
+    "otp_sent", "zoho_desk_config_updated" — and plural table names for
+    entities, so *every* action option and most entity options matched zero
+    rows. Because ``get_rows`` returns an empty list rather than raising for
+    a value that exists nowhere, the filters looked like they worked and
+    silently hid the whole table. Serving the facets from the data makes the
+    dropdowns impossible to drift out of sync again.
+
+    Same bounded-window + Counter shape as get_audit_log_top_actors: this
+    table has no GROUP BY RPC and standing one up is out of scope.
+    """
+    from collections import Counter
+
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    rows = await db_supabase.get_rows(
+        "audit_logs",
+        {"created_at": {"$gte": since}},
+        order="created_at",
+        desc=True,
+        limit=_FACET_SCAN_CAP,
+    )
+    actions: Counter = Counter()
+    entity_types: Counter = Counter()
+    for row in rows:
+        if row.get("action"):
+            actions[row["action"]] += 1
+        if row.get("entity_type"):
+            entity_types[row["entity_type"]] += 1
+
+    return {
+        "days": days,
+        "window_start": since,
+        "rows_scanned": len(rows),
+        # Callers must surface this: past the cap the counts are a sample of
+        # the most recent rows, not the full window.
+        "rows_scanned_capped": len(rows) >= _FACET_SCAN_CAP,
+        "actions": [{"value": v, "count": c} for v, c in actions.most_common()],
+        "entity_types": [{"value": v, "count": c} for v, c in entity_types.most_common()],
     }
 
 

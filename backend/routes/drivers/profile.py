@@ -329,8 +329,8 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
     """Return aggregated demand heatmap cells for the driver's service area.
 
     v1 (always): ``points: [[lat, lng, weight]]`` — decayed 7-day aggregate.
-    v2 (gated):  ``cells: [{lat, lng, live, baseline, scheduled}]`` +
-    ``surge: {multiplier, active}`` — component-separated for layer UI.
+    v2 (gated):  ``cells``, ``surge``, ``forecast`` — component-separated
+    for layer UI + next-6h demand timeline.
     """
     import json as _json
 
@@ -552,6 +552,29 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
             "active": bool(service_area.get("surge_active", False)),
         }
 
+        # forecast: next 6h hourly demand from the forecast engine (HM-23)
+        v2_forecast = None
+        try:
+            try:
+                from ...utils.demand_forecast import forecast_demand as _forecast_demand  # type: ignore
+            except ImportError:
+                from utils.demand_forecast import forecast_demand as _forecast_demand  # type: ignore
+
+            raw_fc = await _forecast_demand(area_id=area_id, hours_ahead=6, lookback_days=28)
+            if raw_fc:
+                max_pred = max((f["predicted_rides"] for f in raw_fc), default=1) or 1
+                v2_forecast = [
+                    {
+                        "hour": f["hour"],
+                        "day_name": f["day_name"],
+                        "demand": round(f["predicted_rides"] / max_pred, 2),
+                        "is_peak": f["is_peak"],
+                    }
+                    for f in raw_fc
+                ]
+        except Exception as e:
+            logger.warning(f"demand-heatmap: forecast build failed: {e}")
+
     _build_ms = (_time.monotonic() - _build_start) * 1000
     _metric_observe("spinr_drivers_heatmap_build_duration_ms", _build_ms)
     _metric_inc("spinr_drivers_heatmap_cells_suppressed_total", by=suppressed)
@@ -566,6 +589,8 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
     if v2_cells is not None:
         result["cells"] = v2_cells
         result["surge"] = v2_surge
+        if v2_forecast:
+            result["forecast"] = v2_forecast
 
     try:
         await _redis_set(cache_key, _json.dumps(result), ttl=60)

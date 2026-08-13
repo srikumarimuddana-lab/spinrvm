@@ -4233,6 +4233,13 @@ Remaining, roughly in order of user impact:
   additionally now **escapes** admin-authored free text, which the previous
   bare `<h2>`/`<p>` interpolation did not. See
   `docs/change-log/2026-08-09-all-emails-on-shared-branded-shell.md`.
+- [ ] **N18. No light-on-dark variant of the Spinr logo** — `spinr_logo.png` is
+  a charcoal wordmark with a red spiral "o", drawn for a light ground. That
+  constrains the email layout in two places: the header band must stay light
+  even in dark mode, and the dark footer carries the company name as text
+  rather than the mark. A light-on-dark variant would let the email invert
+  fully. Design decision, not a code one — see
+  `docs/change-log/2026-08-09-email-header-uber-format.md`.
 - [ ] **N17. Product name in email copy is still literal "Spinr"** — "Open the
   Spinr driver app", "your Spinr wallet", "— The Spinr Team". Deliberate, not
   an oversight: the `company_name` setting holds the *legal entity* name, and

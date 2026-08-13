@@ -290,6 +290,89 @@ class TestGetDriverEarnings:
         assert result["average_per_ride"] == "0.00"
 
 
+class TestGetDriverEarningsLegacyActivityStats:
+    """Regression for the bug reported against a migrated driver's Activity
+    screen: "All Time" showed 17 real rides in the list below a stat block
+    reading Total Earned $0.00 / 0 Total Trips / 0.0 KM Driven / 0h Online
+    Time — even though the rides existed. Root cause: total_rides/
+    total_distance_km/total_duration_minutes were summed over the SAME
+    EXCLUDE_LEGACY_RIDES-filtered `rides` list used for money, so a driver
+    whose completed rides in the period are entirely legacy-imported got 0
+    for all three despite utils/legacy_rides being explicit that the
+    exclusion "only governs money math" and imported rides "remain fully
+    visible in ride history"."""
+
+    def _get_rows_legacy_and_real(self, legacy_rides, real_rides):
+        """Mimics EXCLUDE_LEGACY_RIDES's PostgREST predicate: a filters dict
+        carrying that key returns only non-legacy rows; without it, both."""
+
+        def get_rows(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                if filters and filters.get("legacy_import_metadata") == {"$eq": {}}:
+                    return list(real_rides)
+                if filters and filters.get("status") == "cancelled":
+                    return []
+                return list(legacy_rides) + list(real_rides)
+            return []
+
+        return get_rows
+
+    async def test_all_legacy_rides_report_real_trip_count_but_zero_money(self):
+        from backend.routes.drivers import get_driver_earnings
+
+        legacy_rides = [
+            _ride(
+                id=f"legacy-{i}",
+                legacy_import_metadata={"source": "previous_app"},
+                distance_km=5.0,
+                duration_minutes=10,
+            )
+            for i in range(3)
+        ]
+
+        with patch(
+            "backend.db_supabase.get_rows",
+            AsyncMock(side_effect=self._get_rows_legacy_and_real(legacy_rides, [])),
+        ):
+            result = await get_driver_earnings(period="all", current_user={"id": USER_ID})
+
+        # Activity stats reflect all completed rides, legacy included.
+        assert result["total_rides"] == 3
+        assert result["total_distance_km"] == 15.0
+        assert result["total_duration_minutes"] == 30
+        # Money stays legacy-excluded — those dollars were already paid out
+        # by the previous app (Finding 3, A30).
+        assert result["total_earnings"] == "0.00"
+        assert result["average_per_ride"] == "0.00"
+
+    async def test_mixed_legacy_and_real_rides_split_correctly(self):
+        from backend.routes.drivers import get_driver_earnings
+
+        legacy_rides = [
+            _ride(
+                id="legacy-1", legacy_import_metadata={"source": "previous_app"}, distance_km=8.0, duration_minutes=20
+            )
+        ]
+        real_rides = [_ride(id="real-1", distance_km=4.2, duration_minutes=12)]
+
+        with patch(
+            "backend.db_supabase.get_rows",
+            AsyncMock(side_effect=self._get_rows_legacy_and_real(legacy_rides, real_rides)),
+        ):
+            result = await get_driver_earnings(period="all", current_user={"id": USER_ID})
+
+        # Trip count/distance/duration include the legacy ride.
+        assert result["total_rides"] == 2
+        assert result["total_distance_km"] == pytest.approx(12.2)
+        assert result["total_duration_minutes"] == 32
+        # Average is over the one real, earning ride only — not diluted by
+        # the legacy ride's $0 contribution.
+        assert Decimal(result["total_earnings"]) > Decimal("0")
+        assert result["average_per_ride"] == result["total_earnings"]
+
+
 # ============================================================
 # get_driver_daily_earnings
 # ============================================================

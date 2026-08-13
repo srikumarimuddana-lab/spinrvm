@@ -64,8 +64,15 @@ export const adminSearchUsers = (opts: {
         method: "POST",
         body: JSON.stringify(opts),
     });
-export const getDriverRides = (id: string) =>
-    request<any>(`/api/admin/drivers/${id}/rides`);
+// `limit` defaults to the backend's own max (500, routes/admin/drivers.py)
+// rather than its 50-row default -- the Rides tab's own filter/sort/paginate
+// is entirely client-side over whatever this call fetches, so a driver with
+// 51+ rides used to silently never show rows past the old default (A30
+// Finding 2, docs/audit/2026-08-13-migrated-data-visibility-audit.md). The
+// response's `total_count` (added alongside this) still tells the caller
+// when even 500 wasn't enough.
+export const getDriverRides = (id: string, limit = 500) =>
+    request<any>(`/api/admin/drivers/${id}/rides?limit=${limit}`);
 
 export const getDriverDailyActivity = (id: string, date?: string) =>
     request<any>(`/api/admin/drivers/${id}/daily-activity${date ? `?date=${date}` : ""}`);

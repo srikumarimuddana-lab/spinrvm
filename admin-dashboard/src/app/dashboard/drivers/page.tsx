@@ -122,6 +122,10 @@ export default function DriversPage() {
     const [endDate, setEndDate] = useState("");
     const [serviceAreas, setServiceAreas] = useState<{ id: string; name: string }[]>([]);
     const [driverRides, setDriverRides] = useState<any[]>([]);
+    // Real count via count_documents(), independent of the fetch cap --
+    // lets the Rides tab tell "fetched everything" apart from "there's more"
+    // (A30 Finding 2, docs/audit/2026-08-13-migrated-data-visibility-audit.md).
+    const [driverRidesTotalCount, setDriverRidesTotalCount] = useState<number | null>(null);
     const [ridesLoading, setRidesLoading] = useState(false);
     const [ridesLoaded, setRidesLoaded] = useState<string | null>(null);
     const [detailTab, setDetailTab] = useState<string>("overview");
@@ -166,9 +170,11 @@ export default function DriversPage() {
         try {
             const res = await getDriverRides(driverId);
             setDriverRides(res?.rides || []);
+            setDriverRidesTotalCount(typeof res?.total_count === "number" ? res.total_count : null);
             setRidesLoaded(driverId);
         } catch {
             setDriverRides([]);
+            setDriverRidesTotalCount(null);
         } finally {
             setRidesLoading(false);
         }
@@ -350,6 +356,7 @@ export default function DriversPage() {
     useEffect(() => {
         if (!selected?.id) {
             setDriverRides([]);
+            setDriverRidesTotalCount(null);
             setRidesLoaded(null);
             setReferrals(null);
             setReferralsLoaded(null);
@@ -1459,6 +1466,7 @@ export default function DriversPage() {
                                 <TabsContent value="rides" className="mt-4">
                                     <DriverRidesTab
                                         rides={driverRides}
+                                        totalCount={driverRidesTotalCount}
                                         loading={ridesLoading}
                                         driverName={`${selected.first_name || ""} ${selected.last_name || ""}`.trim()}
                                         fmtDate={fmtDate}
@@ -2855,8 +2863,9 @@ function DriverTrainingTab({ data, loading, error, onRefresh, fmtDate }: {
     );
 }
 
-function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
+function DriverRidesTab({ rides, totalCount, loading, driverName, fmtDate }: {
     rides: any[];
+    totalCount?: number | null;
     loading: boolean;
     driverName: string;
     fmtDate: (d: string) => string;
@@ -2994,6 +3003,16 @@ function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
 
     return (
         <div className="space-y-3">
+            {/* This tab fetches up to 500 rides in one call (getDriverRides);
+                totalCount (count_documents(), independent of that cap) tells
+                us when even that wasn't enough, so filtering/sorting below is
+                silently operating on a partial set (A30 Finding 2,
+                docs/audit/2026-08-13-migrated-data-visibility-audit.md). */}
+            {typeof totalCount === "number" && totalCount > rides.length && (
+                <p className="text-xs text-amber-600 dark:text-amber-500">
+                    Showing the {rides.length} most recent of {totalCount} total rides. Use the date filters below to find older ones.
+                </p>
+            )}
             <div className="flex items-center gap-2 flex-wrap">
                 <div className="flex items-center gap-1.5">
                     <Search className="h-4 w-4 text-muted-foreground" />
@@ -3099,6 +3118,11 @@ function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
                                         <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold ${style.bg} ${style.text}`}>
                                             {style.label}
                                         </span>
+                                        {r.legacy_import_metadata && Object.keys(r.legacy_import_metadata).length > 0 && (
+                                            <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-muted text-muted-foreground">
+                                                Imported
+                                            </span>
+                                        )}
                                     </TableCell>
                                     <TableCell className="text-xs text-right tabular-nums">
                                         {r.distance_km != null ? `${Number(r.distance_km).toFixed(1)} km` : "—"}

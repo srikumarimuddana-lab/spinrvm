@@ -17,6 +17,7 @@ import {
   TripCompletedPanel,
   MapControls,
   DemandLegend,
+  ForecastStrip,
   HeatmapCells,
 } from '../../../components/dashboard';
 import { useDemandHeatmap } from '../../../hooks/useDemandHeatmap';
@@ -287,6 +288,7 @@ function DriverDashboard() {
     isV2: heatmapIsV2,
     layer: heatmapLayer,
     setLayer: setHeatmapLayer,
+    forecast: heatmapForecast,
   } = useDemandHeatmap(rideState, isOnline);
 
   const [countdown, setCountdownState] = useState(countdownSeconds);
@@ -785,6 +787,16 @@ function DriverDashboard() {
             isV2={heatmapIsV2}
             layer={heatmapLayer}
             onLayerChange={setHeatmapLayer}
+          />
+        </View>
+      )}
+
+      {/* Forecast strip — next 6h demand timeline (HM-23) */}
+      {rideState === 'idle' && heatmapIsV2 && (
+        <View style={{ position: 'absolute', top: insets.top + 68, left: 16, right: 16, zIndex: 55 }}>
+          <ForecastStrip
+            forecast={heatmapForecast}
+            visible={heatmapForecast.length > 0}
           />
         </View>
       )}

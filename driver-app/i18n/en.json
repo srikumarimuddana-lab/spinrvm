@@ -524,6 +524,10 @@
         },
         "stale": "Demand info may be outdated",
         "empty": "No busy areas right now",
-        "unavailable": "Demand info unavailable"
+        "unavailable": "Demand info unavailable",
+        "forecast": {
+            "title": "Next few hours",
+            "peak": "Peak at {{hour}}"
+        }
     }
 }

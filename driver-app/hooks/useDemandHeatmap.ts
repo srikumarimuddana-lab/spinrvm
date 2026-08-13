@@ -23,6 +23,13 @@ export type HeatmapSurge = {
 
 export type HeatmapLayer = 'blend' | 'live' | 'baseline' | 'scheduled';
 
+export type ForecastEntry = {
+  hour: number;
+  day_name: string;
+  demand: number;
+  is_peak: boolean;
+};
+
 export type HeatmapStatus = 'loading' | 'ready' | 'empty' | 'stale' | 'error' | 'disabled';
 
 type HeatmapResponse = {
@@ -30,6 +37,7 @@ type HeatmapResponse = {
   points?: number[][];
   cells?: V2Cell[];
   surge?: HeatmapSurge;
+  forecast?: ForecastEntry[];
   total_rides?: number;
   refresh_seconds?: number;
   generated_at?: string;
@@ -58,6 +66,7 @@ export function useDemandHeatmap(rideState: string, isOnline: boolean) {
   const [surge, setSurge] = useState<HeatmapSurge | null>(null);
   const [layer, setLayer] = useState<HeatmapLayer>('blend');
   const [isV2, setIsV2] = useState(false);
+  const [forecast, setForecast] = useState<ForecastEntry[]>([]);
   const [status, setStatus] = useState<HeatmapStatus>('loading');
   const [refreshSeconds, setRefreshSeconds] = useState(DEFAULT_REFRESH_SECONDS);
   const lastFetchRef = useRef<number>(0);
@@ -79,6 +88,7 @@ export function useDemandHeatmap(rideState: string, isOnline: boolean) {
         setCells([]);
         setV2Cells([]);
         setSurge(null);
+        setForecast([]);
         setIsV2(false);
         setStatus('disabled');
         return;
@@ -88,7 +98,7 @@ export function useDemandHeatmap(rideState: string, isOnline: boolean) {
         setV2Cells(data.cells);
         setIsV2(true);
         setSurge(data.surge || null);
-        // apply current layer filter
+        setForecast(data.forecast || []);
         const weighted = v2CellsToWeighted(data.cells, layer);
         setCells(weighted);
         setStatus(weighted.length > 0 ? 'ready' : 'empty');
@@ -102,6 +112,7 @@ export function useDemandHeatmap(rideState: string, isOnline: boolean) {
         setV2Cells([]);
         setIsV2(false);
         setSurge(data.surge || null);
+        setForecast([]);
         setStatus(pts.length > 0 ? 'ready' : 'empty');
       }
 
@@ -130,6 +141,7 @@ export function useDemandHeatmap(rideState: string, isOnline: boolean) {
       clearTimer();
       setCells([]);
       setV2Cells([]);
+      setForecast([]);
       setStatus('loading');
       return;
     }
@@ -180,5 +192,6 @@ export function useDemandHeatmap(rideState: string, isOnline: boolean) {
     isV2,
     layer,
     setLayer,
+    forecast,
   };
 }

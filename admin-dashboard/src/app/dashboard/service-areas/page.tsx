@@ -11,6 +11,7 @@ import {
 import { getServiceAreas, createServiceArea, updateServiceArea, deleteServiceArea, getSubscriptionPlans, createSubscriptionPlan, updateSubscriptionPlan, deleteSubscriptionPlan, getDriverSubscriptions, getAreaFees, createAreaFee, updateAreaFee, deleteAreaFee, getVehicleTypes, getIncentives, createIncentive, toggleIncentive, deleteIncentive } from "@/lib/api";
 import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, FileText, Clock, ShieldCheck, ShieldAlert, CheckCircle, Image, Plane, Radar, Gift, ArrowRightLeft, Flame } from "lucide-react";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import { Switch } from "@/components/ui/switch";
 import { getSettings, updateSettings } from "@/lib/api/settings-ai";
 import { getSurgeHistory } from "@/lib/api/analytics-payouts";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
@@ -367,7 +368,10 @@ export default function ServiceAreasPage() {
                         { key: 'incentives', label: 'Incentives', icon: Gift },
                         { key: 'subregions', label: 'Airport Zones', icon: Plane },
                         { key: 'cascade', label: 'Dispatch Cascade', icon: ArrowRightLeft },
-                        { key: 'heatmap', label: 'Heatmap Config', icon: Flame },
+                        // Labelled "(All Areas)" at the tab itself, not only inside the
+                        // panel: the scope warning has to reach the operator before they
+                        // decide this is a per-area screen.
+                        { key: 'heatmap', label: 'Driver Heatmap (All Areas)', icon: Flame },
                       ].map(tab => (
                         <button key={tab.key} onClick={() => setEditTab(tab.key)}
                           className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold rounded-t-lg transition ${editTab === tab.key ? 'bg-card text-primary border-t-2 border-primary' : 'text-muted-foreground hover:text-foreground'}`}>
@@ -2235,6 +2239,9 @@ function SurgeHistoryChart({ areaId, areaName }: { areaId: string; areaName: str
 // ─── Heatmap Config Tab (global app_settings — AD-05) ───
 
 const HEATMAP_DEFAULTS = {
+  // Master switch defaults ON so an unconfigured row behaves exactly as before
+  // the setting existed; the per-area toggle still governs.
+  driver_heatmap_enabled: true,
   driver_heatmap_v2_enabled: false,
   heatmap_internal_driver_ids: [] as string[],
   heatmap_k_floor: 3,
@@ -2248,6 +2255,7 @@ function HeatmapConfigTab({ onSuccess, onError }: { onSuccess: () => void; onErr
   const [form, setForm] = useState(HEATMAP_DEFAULTS);
   const [driverIdsText, setDriverIdsText] = useState("");
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
@@ -2255,6 +2263,7 @@ function HeatmapConfigTab({ onSuccess, onError }: { onSuccess: () => void; onErr
     getSettings().then((s: any) => {
       const next = { ...HEATMAP_DEFAULTS };
       if (s.driver_heatmap_v2_enabled !== undefined) next.driver_heatmap_v2_enabled = !!s.driver_heatmap_v2_enabled;
+      if (s.driver_heatmap_enabled !== undefined) next.driver_heatmap_enabled = Boolean(s.driver_heatmap_enabled);
       if (s.heatmap_k_floor !== undefined) next.heatmap_k_floor = Number(s.heatmap_k_floor);
       if (s.heatmap_cell_lat_deg !== undefined) next.heatmap_cell_lat_deg = Number(s.heatmap_cell_lat_deg);
       if (s.heatmap_cell_lng_deg !== undefined) next.heatmap_cell_lng_deg = Number(s.heatmap_cell_lng_deg);
@@ -2264,8 +2273,21 @@ function HeatmapConfigTab({ onSuccess, onError }: { onSuccess: () => void; onErr
       next.heatmap_internal_driver_ids = ids;
       setForm(next);
       setDriverIdsText(ids.join("\n"));
+      setLoadError(null);
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch((e: any) => {
+      // Do NOT fall through to an editable form pre-filled with defaults. It is
+      // visually identical to a successful load, so an operator who edits one
+      // field and saves would silently overwrite the real k-anonymity floor and
+      // dark-launch allowlist with hardcoded defaults.
+      console.error("heatmap config load failed", e);
+      setLoadError(
+        e?.status === 403
+          ? "You don't have the Settings module, so heatmap config can't be loaded or changed here."
+          : "Couldn't load the current heatmap config. Refresh to retry — editing is disabled to avoid overwriting live settings with defaults."
+      );
+      setLoading(false);
+    });
   }, []);
 
   const set = <K extends keyof typeof HEATMAP_DEFAULTS>(key: K, val: (typeof HEATMAP_DEFAULTS)[K]) => {
@@ -2276,8 +2298,11 @@ function HeatmapConfigTab({ onSuccess, onError }: { onSuccess: () => void; onErr
   const handleSave = async () => {
     setSaving(true);
     try {
-      const ids = driverIdsText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+      // Split on any whitespace as well as commas: a space-separated paste
+      // previously survived as one junk token that matched no driver, silently.
+      const ids = driverIdsText.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
       await updateSettings({
+        driver_heatmap_enabled: form.driver_heatmap_enabled,
         driver_heatmap_v2_enabled: form.driver_heatmap_v2_enabled,
         heatmap_internal_driver_ids: ids,
         heatmap_k_floor: form.heatmap_k_floor,
@@ -2297,52 +2322,109 @@ function HeatmapConfigTab({ onSuccess, onError }: { onSuccess: () => void; onErr
 
   if (loading) return <div className="py-10 text-center text-muted-foreground">Loading heatmap config…</div>;
 
+  if (loadError) {
+    return (
+      <div role="alert" className="rounded-xl border border-destructive/40 bg-destructive/5 p-4">
+        <p className="text-sm font-semibold text-destructive">Heatmap config unavailable</p>
+        <p className="mt-1 text-sm text-muted-foreground">{loadError}</p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div>
-        <h4 className="font-bold text-foreground text-base">Heatmap Configuration</h4>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          Global settings for the driver demand heatmap. Changes apply to <span className="font-semibold">all service areas</span>.
-        </p>
+        <h4 className="font-bold text-foreground text-base">Driver App Heatmap — Platform Settings</h4>
+        {/* This panel sits inside one service area's card but every control here
+            is PLATFORM-WIDE, and it governs what the DRIVER APP shows — not this
+            dashboard's own Heat Map page. Both facts have to be unmissable:
+            an operator who reads this as "tuning Saskatoon's display" can change
+            what every driver in every region sees in one click. */}
+        <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 px-3 py-2">
+          <p className="text-sm text-amber-900 dark:text-amber-200">
+            <span className="font-semibold">Applies to all service areas and all drivers.</span>{" "}
+            These settings control the demand heatmap inside the <span className="font-semibold">driver app</span>,
+            not the Heat Map page in this dashboard. They are not per-area.
+          </p>
+        </div>
+      </div>
+
+      {/* Global kill switch */}
+      <div className="flex items-center justify-between p-4 rounded-xl border bg-card">
+        <div className="pr-4">
+          <label htmlFor="heatmap-master-enabled" className="text-sm font-semibold text-foreground">
+            Driver Heatmap Enabled
+          </label>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Master switch. Turning this off hides the heatmap for every driver in every
+            region within one refresh, regardless of each area&apos;s own toggle. Use this to
+            take the feature down without editing areas one by one.
+          </p>
+        </div>
+        <Switch
+          id="heatmap-master-enabled"
+          checked={form.driver_heatmap_enabled}
+          onCheckedChange={(v: boolean) => set('driver_heatmap_enabled', v)}
+        />
       </div>
 
       {/* v2 enabled toggle */}
       <div className="flex items-center justify-between p-4 rounded-xl border bg-card">
-        <div>
-          <p className="text-sm font-semibold text-foreground">Heatmap v2 Enabled</p>
-          <p className="text-xs text-muted-foreground mt-0.5">When off, drivers see the legacy v1 heatmap (simple points). When on, drivers get cell-based demand layers, forecast, and hotspot chips.</p>
+        <div className="pr-4">
+          <label htmlFor="heatmap-v2-enabled" className="text-sm font-semibold text-foreground">
+            Heatmap v2 Enabled
+          </label>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            When off, drivers see the legacy v1 heatmap (simple points). When on, drivers get
+            cell-based demand layers, forecast, and hotspot chips.
+          </p>
         </div>
-        <button onClick={() => { set('driver_heatmap_v2_enabled', !form.driver_heatmap_v2_enabled); }}>
-          {form.driver_heatmap_v2_enabled
-            ? <ToggleRight className="h-7 w-7 text-green-500" />
-            : <ToggleLeft className="h-7 w-7 text-muted-foreground" />}
-        </button>
+        <Switch
+          id="heatmap-v2-enabled"
+          checked={form.driver_heatmap_v2_enabled}
+          onCheckedChange={(v: boolean) => set('driver_heatmap_v2_enabled', v)}
+        />
       </div>
 
       {/* Numeric config */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        <HeatmapNumericField label="Privacy floor (k-anonymity)" description="Minimum ride count per cell before it appears on the heatmap. Higher = more private, fewer visible cells."
-          value={form.heatmap_k_floor} min={1} max={50} step={1}
+        <HeatmapNumericField id="heatmap-k-floor" label="Privacy floor (k-anonymity)" description="Minimum ride count per cell before it appears on the heatmap. Higher = more private, fewer visible cells."
+          value={form.heatmap_k_floor} min={1} max={50} step={1} disabled={!!loadError}
           onChange={v => set('heatmap_k_floor', v)} />
-        <HeatmapNumericField label="Cell latitude (degrees)" description="Height of each grid cell. Default 0.004° ≈ 445m."
-          value={form.heatmap_cell_lat_deg} min={0.001} max={0.05} step={0.001}
+        <HeatmapNumericField id="heatmap-cell-lat" label="Cell latitude (degrees)" description="Height of each grid cell. Default 0.004° ≈ 445m."
+          value={form.heatmap_cell_lat_deg} min={0.0005} max={0.05} step={0.001} disabled={!!loadError}
           onChange={v => set('heatmap_cell_lat_deg', v)} />
-        <HeatmapNumericField label="Cell longitude (degrees)" description="Width of each grid cell. Default 0.006° ≈ 430m at 52°N."
-          value={form.heatmap_cell_lng_deg} min={0.001} max={0.05} step={0.001}
+        <HeatmapNumericField id="heatmap-cell-lng" label="Cell longitude (degrees)" description="Width of each grid cell. Default 0.006° ≈ 430m at 52°N."
+          value={form.heatmap_cell_lng_deg} min={0.0005} max={0.05} step={0.001} disabled={!!loadError}
           onChange={v => set('heatmap_cell_lng_deg', v)} />
-        <HeatmapNumericField label="Decay half-life (days)" description="Ride weighting decay. Rides from this many days ago count as half."
-          value={form.heatmap_decay_half_life_days} min={0.5} max={30} step={0.5}
+        <HeatmapNumericField id="heatmap-decay" label="Decay half-life (days)" description="Ride weighting decay. Rides from this many days ago count as half."
+          value={form.heatmap_decay_half_life_days} min={0.5} max={30} step={0.5} disabled={!!loadError}
           onChange={v => set('heatmap_decay_half_life_days', v)} />
-        <HeatmapNumericField label="Refresh interval (seconds)" description="How often the driver app re-fetches heatmap data."
-          value={form.heatmap_refresh_seconds} min={30} max={600} step={10}
+        <HeatmapNumericField id="heatmap-refresh" label="Refresh interval (seconds)" description="How often the driver app re-fetches heatmap data. Applies to every online driver."
+          value={form.heatmap_refresh_seconds} min={30} max={600} step={10} disabled={!!loadError}
           onChange={v => set('heatmap_refresh_seconds', v)} />
       </div>
 
       {/* Internal driver IDs */}
       <div className="p-4 rounded-xl border bg-card">
-        <label className="block text-sm font-semibold text-foreground mb-1">Internal Driver IDs (allowlist)</label>
-        <p className="text-xs text-muted-foreground mb-2">Only these driver IDs see the v2 heatmap when v2 is enabled. Leave empty to show v2 to all drivers. One ID per line or comma-separated.</p>
+        <label htmlFor="heatmap-driver-allowlist" className="block text-sm font-semibold text-foreground mb-1">
+          Dark-launch allowlist (driver user IDs)
+        </label>
+        {/* Backend semantics (routes/drivers/profile.py):
+              v2_enabled = v2_global OR (user_id in allowlist)
+            i.e. this list GRANTS early access while the global flag is off; it
+            does NOT restrict who sees v2 once the flag is on. The previous copy
+            said the opposite, so an operator flipping the flag believing this
+            list limited the blast radius would in fact release v2 to everyone. */}
+        <p className="text-xs text-muted-foreground mb-2">
+          These drivers see v2 <span className="font-semibold">even while the switch above is off</span> —
+          use it to test with staff before release. It does not limit anyone once v2 is on:
+          with v2 enabled, every driver sees it regardless of this list.
+          One ID per line or comma-separated. Use the <span className="font-semibold">user</span> ID
+          (users.id), not the driver record ID.
+        </p>
         <textarea
+          id="heatmap-driver-allowlist"
           className="w-full border rounded-lg px-3 py-2 text-sm font-mono"
           rows={4}
           value={driverIdsText}
@@ -2371,19 +2453,33 @@ function HeatmapConfigTab({ onSuccess, onError }: { onSuccess: () => void; onErr
   );
 }
 
-function HeatmapNumericField({ label, description, value, min, max, step, onChange }: {
-  label: string; description: string; value: number; min: number; max: number; step: number;
-  onChange: (v: number) => void;
+function HeatmapNumericField({ id, label, description, value, min, max, step, disabled, onChange }: {
+  id: string; label: string; description: string; value: number; min: number; max: number; step: number;
+  disabled?: boolean; onChange: (v: number) => void;
 }) {
+  const describedBy = `${id}-desc`;
   return (
     <div className="p-3 rounded-lg border bg-card">
-      <label className="block text-sm font-semibold text-foreground mb-0.5">{label}</label>
-      <p className="text-xs text-muted-foreground mb-2">{description}</p>
+      {/* htmlFor/id is load-bearing, not decoration: without it a screen reader
+          announces five adjacent "spin button"s with no way to tell which
+          setting is which. */}
+      <label htmlFor={id} className="block text-sm font-semibold text-foreground mb-0.5">{label}</label>
+      <p id={describedBy} className="text-xs text-muted-foreground mb-2">{description}</p>
       <input
+        id={id}
+        aria-describedby={describedBy}
         type="number" min={min} max={max} step={step}
         value={value}
-        onChange={e => onChange(parseFloat(e.target.value) || min)}
-        className="w-full border rounded-lg px-3 py-2 text-sm"
+        disabled={disabled}
+        // Clamp on the way out. HTML min/max do not constrain typed values, and
+        // these feed a driver-fleet poll interval and a privacy floor — a typed
+        // 9 instead of 90 would be a self-inflicted load spike.
+        onChange={e => {
+          const parsed = parseFloat(e.target.value);
+          if (Number.isNaN(parsed)) return;
+          onChange(Math.min(max, Math.max(min, parsed)));
+        }}
+        className="w-full border rounded-lg px-3 py-2 text-sm disabled:opacity-60"
       />
     </div>
   );

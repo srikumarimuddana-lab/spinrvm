@@ -543,6 +543,14 @@ class AppSettings(BaseModel):
     # — this flag is read by driver-app only. Not a credential/destination
     # field, no masking/super-admin gate needed.
     driver_discreet_sos_enabled: bool = False
+    # ── Demand heatmap v2 (P1 HM-10/HM-13) ──────────────────────────────
+    # v2 adds per-cell {live, baseline, scheduled} components + surge mirror
+    # to the driver heatmap endpoint. Gated by this flag; legacy `points`
+    # array continues to be served either way. Ships dark.
+    driver_heatmap_v2_enabled: bool = False
+    # Dark-launch allowlist: only these driver user IDs see v2 cells when
+    # the global flag is still off. Empty = respect the global flag only.
+    heatmap_internal_driver_ids: List[str] = Field(default_factory=list)
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

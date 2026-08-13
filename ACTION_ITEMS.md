@@ -3064,6 +3064,58 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     value for high-volume tax-config churn, which this isn't yet. Revisit
     if tax-rate changes become more frequent.
 
+### A30. Migrated-data visibility audit (2026-08-13) — Finding 0 resolved live, 3 findings remain open
+- **Source:** `docs/audit/2026-08-13-migrated-data-visibility-audit.md`
+  (follow-up to A25-A28, this time auditing whether legacy-imported data
+  actually *renders* on rider/driver/admin screens, not just whether the
+  underlying money math is correct).
+- **Finding 0 — was the legacy ride importer ever actually committed to
+  production?**
+  - [x] **Status:** CLOSED (2026-08-13), live-verified via Supabase MCP
+    against `soavhtdhefowwvforzwb`. **Yes** — 224 legacy rides exist in
+    `rides` (`legacy_import_metadata->>'source' = 'legacy_mongo_booking_import'`),
+    all `status='completed'`, matching the documented CSV-scope count
+    exactly. The 2026-07-29 change-log's "not run against live Supabase"
+    note was stale/undocumented, not an accurate description of current
+    production state — the commit did happen, no follow-up doc ever
+    recorded it. Two sample rides spot-checked end-to-end (rider/driver
+    accounts active, offsetting `legacy_import` payout rows present and
+    correctly amounted) — the visibility mechanism works correctly for
+    matched records.
+  - **Follow-up (not yet done):** backfill a short change-log note
+    recording when/how the real production commit happened, since nothing
+    in the repo currently documents it.
+- **Finding 1 — real phone-match rate.**
+  - [x] **Status:** measured (2026-08-13, live query). **100% of legacy
+    rides have a matched rider** (0/224 NULL), **94.2% have a matched
+    driver** (211/224, 13 NULL affecting 4 distinct riders — those riders
+    see the ride, just without driver details). Downgraded from the
+    original audit's P1 ("needs a live query to size") — this is a good
+    real-world result, not an open risk. No action needed unless the 4
+    affected riders specifically report an issue.
+- **Finding 2 — two admin-dashboard detail panels (rider "Recent rides",
+  10-row cap; driver "Rides" tab, 50-row cap, no pagination params sent)
+  silently drop older imported rides with no "more exists" signal.**
+  - [ ] **Status:** open — confirmed as a real gap by code read; not
+    triggered by either of the two live sample accounts checked (both well
+    under the caps), so real-world blast radius on legacy rows specifically
+    is unconfirmed, but the caps are unconditional (would also hide
+    non-legacy history) so worth fixing regardless. Small, additive fix:
+    real pagination or at minimum a total-count label.
+- **Finding 3 — driver-app earnings totals correctly exclude legacy-ride
+  dollars (by design, avoids double-counting old-app payouts) with no
+  on-screen explanation for the resulting trip-count-vs-earnings mismatch.**
+  - [ ] **Status:** open — UX-only, needs a one-line explainer on the
+    driver-app Activity/Earnings screen. Backend already has everything
+    needed (`legacy_import_metadata` on every ride row).
+- **Finding 4 — no screen in rider-app, driver-app, or admin-dashboard
+  visually marks a ride as "imported from the previous app" (one admin
+  driver-summary stat card excepted).**
+  - [ ] **Status:** open — additive, no behavior change; a badge/label on
+    `legacy_import_metadata`-non-empty rides would resolve both this and
+    give context to the placeholder `"Address unavailable (imported
+    ride)"` text those rows sometimes carry.
+
 ## P1 — Fix before launch (code)
 
 ### B0. Migration runner shreds any migration whose text contains "CONCURRENTLY"

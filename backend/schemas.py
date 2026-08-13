@@ -203,6 +203,28 @@ class AppSettings(BaseModel):
     driver_matching_algorithm: str = "nearest"
     min_driver_rating: float = 4.0
     search_radius_km: float = 10.0
+    # ── Cross-service-area dispatch guard ────────────────────────────────
+    # Driver approval is per service area (municipal licensing, SGI ride-share
+    # endorsement, regulator-filed background check), so a Saskatoon-approved
+    # driver must not be offered a Regina ride just because they are parked
+    # inside that ride's search radius. Proximity is not authorisation.
+    #
+    # enforce_driver_service_area=False is the kill switch: dispatch reverts to
+    # the pre-guard, proximity-only behaviour within the 60 s settings cache and
+    # needs no redeploy — the rollback path for this feature.
+    enforce_driver_service_area: bool = True
+    # Whether a driver whose service_area_id is NULL/empty is still dispatchable.
+    #
+    # Defaults True, and the default is load-bearing. drivers.service_area_id is
+    # documented "assigned area (optional)", has no DB default, and no migration
+    # backfills it; the in-app signup path and the admin approve path can both
+    # leave it NULL. Setting this False before every active driver row has an
+    # area would drop that whole cohort out of dispatch and strand rides
+    # fleet-wide — a much worse failure than the cross-area offer the guard
+    # exists to prevent. Flip to False only after verifying the backfill:
+    #   SELECT count(*) FROM drivers
+    #    WHERE service_area_id IS NULL AND deleted_at IS NULL AND status='active';
+    service_area_allow_unassigned_drivers: bool = True
     # ── Pre-match driver map visibility (PIPEDA / launch gate) ───────────
     # A driver's live position is personal information about a contractor's
     # whereabouts. Before a ride is assigned there is no relationship that

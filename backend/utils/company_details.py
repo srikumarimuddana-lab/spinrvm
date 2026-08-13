@@ -23,7 +23,7 @@ admin's keystroke is a different decision (see the 2026-08-08 change log).
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, NamedTuple, Optional
+from typing import Any, Dict, NamedTuple, Optional, Tuple
 from urllib.parse import urlparse
 
 try:
@@ -56,6 +56,12 @@ class CompanyDetails(NamedTuple):
     support_email: str
     #: Absolute URL of the logo to render in the header.
     logo_url: str
+    #: The mailing address split into display lines — street, then locality.
+    #: The email footer prints one per line (the shape Uber and every other
+    #: receipt uses) rather than the comma-joined ``address`` above, which
+    #: reads as a run-on at footer type sizes. Defaulted so existing
+    #: constructions keep working.
+    address_lines: Tuple[str, ...] = ()
 
     @property
     def name_sentence(self) -> str:
@@ -80,6 +86,26 @@ def _coalesce(settings: Dict[str, Any], key: str) -> str:
     module must not disturb.
     """
     return str(settings.get(key) or "").strip()
+
+
+def _address_lines(settings: Dict[str, Any]) -> Tuple[str, ...]:
+    """The mailing address as display lines: street, then locality.
+
+    Same parts as :func:`_postal_address`, not joined. A footer prints these
+    one per line; ``_postal_address`` keeps the single-line form for the PDF
+    header and the plain-text identity line.
+    """
+    street = _coalesce(settings, "company_address")
+    locality = " ".join(
+        p
+        for p in (
+            _coalesce(settings, "company_city"),
+            _coalesce(settings, "company_province"),
+            _coalesce(settings, "company_postal_code"),
+        )
+        if p
+    )
+    return tuple(p for p in (street, locality) if p)
 
 
 def _postal_address(settings: Dict[str, Any]) -> str:
@@ -211,4 +237,5 @@ async def load_company_details() -> CompanyDetails:
         contact_line=contact_line,
         support_email=support_email,
         logo_url=_safe_logo_url(_coalesce(settings, "company_logo_url")) or _bundled_logo_url(),
+        address_lines=_address_lines(settings),
     )

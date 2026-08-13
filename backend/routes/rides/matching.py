@@ -6,6 +6,14 @@ motion — no behaviour changes. See docs/refactors/god-file-split.md.
 
 from datetime import timedelta
 
+try:
+    from ...utils.service_area_scope import build_driver_area_filter, resolve_dispatch_area_scope
+except ImportError:  # pragma: no cover - dual-import pattern
+    from utils.service_area_scope import (  # type: ignore
+        build_driver_area_filter,
+        resolve_dispatch_area_scope,
+    )
+
 from . import _deps, _shared
 from ._deps import (  # noqa: F401
     Optional,
@@ -265,43 +273,24 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     if ride.get("requires_wav"):
         _dispatch_filter["is_wav"] = True
     # ── Cross-service-area ride guard ─────────────────────────────
-    # A driver approved for Saskatoon must never receive a Regina ride offer
-    # just because they happen to be physically within the search radius.
-    # Build the set of service area IDs whose drivers may serve this ride:
-    #   • the ride's own area
-    #   • its parent (so parent-area drivers serve sub-area rides)
-    #   • direct children (so sub-area drivers serve parent-area rides)
-    # Drivers whose service_area_id is NULL (unapproved) are also excluded.
-    _compatible_area_ids: Optional[list] = None
-    if ride.get("service_area_id"):
-        _compatible_set: set = {ride["service_area_id"]}
-        try:
-            _sa_row = await _deps.db_supabase.find_one("service_areas", {"id": ride["service_area_id"]})
-            if _sa_row and _sa_row.get("parent_service_area_id"):
-                _compatible_set.add(_sa_row["parent_service_area_id"])
-            _child_areas = await _deps.db_supabase.get_rows(
-                "service_areas",
-                {"parent_service_area_id": ride["service_area_id"], "is_active": True},
-                columns="id",
-                limit=50,
-            )
-            for _ca in _child_areas or []:
-                _compatible_set.add(_ca["id"])
-        except Exception:
-            logger.error(
-                "[DISPATCH] service-area guard lookup failed for area=%s — failing open",
-                ride["service_area_id"],
-                exc_info=True,
-            )
-            _compatible_set = None  # type: ignore[assignment]
-        if _compatible_set is not None:
-            _compatible_area_ids = list(_compatible_set)
-            _dispatch_filter["service_area_id"] = {"$in": _compatible_area_ids}
-            logger.info(
-                "[DISPATCH] service-area guard: ride area=%s, compatible driver areas=%s",
-                ride["service_area_id"],
-                _compatible_area_ids,
-            )
+    # Driver approval is per service area, so a Saskatoon-approved driver must
+    # not be offered a Regina ride merely because they are parked inside its
+    # search radius. Scope resolution (whole area tree, NULL handling, flags)
+    # lives in utils/service_area_scope so this path and DispatchService cannot
+    # drift. Enforced again in Python by filter_and_rank_drivers below and a
+    # third time at accept (routes/drivers/ride_flow.py) — same layering the
+    # subscription gate uses.
+    _area_ids, _allow_unassigned_area = await resolve_dispatch_area_scope(
+        _deps.db_supabase, ride.get("service_area_id"), app_settings
+    )
+    if _area_ids is not None:
+        _dispatch_filter.update(build_driver_area_filter(_area_ids, allow_unassigned=_allow_unassigned_area))
+        logger.info(
+            "[DISPATCH] service-area guard: ride area=%s → %d compatible driver area(s), unassigned_allowed=%s",
+            ride.get("service_area_id"),
+            len(_area_ids),
+            _allow_unassigned_area,
+        )
     # A transient Supabase failure here is NOT "no drivers" — it raises to the
     # match_driver_to_ride recovery shell, which re-arms the retry chain with
     # backoff instead of letting the ride strand until the sweeper cancels it.
@@ -533,7 +522,15 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
 
     # Pure filter+rank: drops orphan/no-location/low-rated drivers and
     # attaches per-driver distance. Pure function — no I/O.
-    drivers_with_distance = _deps.filter_and_rank_drivers(ride, all_drivers, algorithm, min_rating, search_radius)
+    drivers_with_distance = _deps.filter_and_rank_drivers(
+        ride,
+        all_drivers,
+        algorithm,
+        min_rating,
+        search_radius,
+        allowed_area_ids=_area_ids,
+        allow_unassigned_area=_allow_unassigned_area,
+    )
     logger.info(
         f"[DISPATCH] candidate pool (post-filter): {len(drivers_with_distance)} "
         f"real drivers within {search_radius}km with valid lat/lng and "
@@ -578,8 +575,8 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 }
                 if ride.get("requires_wav"):
                     _casc_filter["is_wav"] = True
-                if _compatible_area_ids is not None:
-                    _casc_filter["service_area_id"] = {"$in": _compatible_area_ids}
+                if _area_ids is not None:
+                    _casc_filter.update(build_driver_area_filter(_area_ids, allow_unassigned=_allow_unassigned_area))
                 _casc_pool = await _deps.db_supabase.get_rows(
                     "drivers",
                     _casc_filter,
@@ -669,7 +666,13 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                         )
                         _casc_pool = []  # fail closed; non-subscriber cascade would bypass the gate
                 drivers_with_distance = _deps.filter_and_rank_drivers(
-                    ride, _casc_pool, algorithm, min_rating, search_radius
+                    ride,
+                    _casc_pool,
+                    algorithm,
+                    min_rating,
+                    search_radius,
+                    allowed_area_ids=_area_ids,
+                    allow_unassigned_area=_allow_unassigned_area,
                 )
                 if drivers_with_distance:
                     logger.info(

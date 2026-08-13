@@ -65,9 +65,23 @@ async def test_cascade_fires_when_no_exact_type_drivers(mock_supabase_client):
         "parent_service_area_id": None,
     }
 
-    # get_rows call 1: SUV drivers (initial pool, empty — no exact match)
-    # get_rows call 2: cascade XL drivers
-    get_rows_mock = AsyncMock(side_effect=[[], [xl_driver]])
+    # Keyed on the requested vehicle_type_id rather than call ORDER: dispatch
+    # also reads `service_areas` (the cross-service-area scope) and other tables
+    # on this path, and a positional side_effect list silently mis-assigns its
+    # values the moment any query is added or removed — the SUV pool then
+    # receives the XL row, the pool is non-empty, and cascade never fires while
+    # the test reports a cascade failure. Match on intent instead.
+    def _rows_for(table, filters=None, **kwargs):
+        if table == "drivers":
+            vt = (filters or {}).get("vehicle_type_id")
+            if isinstance(vt, dict) and xl_id in (vt.get("$in") or []):
+                return [xl_driver]  # cascade pool
+            return []  # no exact-type (SUV) drivers
+        if table == "service_areas":
+            return [{"id": service_area["id"], "parent_service_area_id": None}]
+        return []
+
+    get_rows_mock = AsyncMock(side_effect=_rows_for)
     find_one_mock = AsyncMock(return_value=service_area)
 
     try:
@@ -112,11 +126,21 @@ async def test_cascade_fires_when_no_exact_type_drivers(mock_supabase_client):
     ):
         await match_driver_to_ride("ride-1", ride=ride)
 
-    # The second get_rows call should target the XL vehicle type via $in
-    assert get_rows_mock.call_count >= 2, "Expected at least two get_rows calls (exact + cascade)"
-    cascade_call_args = get_rows_mock.call_args_list[1]
-    filter_arg = cascade_call_args[0][1] if cascade_call_args[0] else cascade_call_args[1].get("filter", {})
-    assert xl_id in str(filter_arg), f"Cascade call must target XL type; got filter: {filter_arg}"
+    # A `drivers` query must have targeted the XL upgrade type via $in. Found by
+    # inspecting the calls rather than indexing a fixed position, so an added
+    # query elsewhere on the dispatch path cannot turn this into a false failure.
+    driver_filters = [
+        call.args[1]
+        for call in get_rows_mock.call_args_list
+        if call.args and call.args[0] == "drivers" and len(call.args) > 1 and isinstance(call.args[1], dict)
+    ]
+    assert driver_filters, "Expected at least one drivers query"
+    cascade_filters = [
+        f
+        for f in driver_filters
+        if xl_id in ((f.get("vehicle_type_id") if isinstance(f.get("vehicle_type_id"), dict) else {}).get("$in") or [])
+    ]
+    assert cascade_filters, f"Cascade must query the XL type; drivers filters seen: {driver_filters}"
 
 
 @pytest.mark.anyio

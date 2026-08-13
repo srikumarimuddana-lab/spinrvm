@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -34,29 +34,112 @@ import {
     Download,
     Activity,
     TrendingUp,
+    FileText,
+    Building2,
+    AlertTriangle,
+    Bot,
+    Server,
+    ChevronRight,
+    ChevronDown,
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
-import { getAuditLogs, getAuditLogTopActors } from "@/lib/api";
+import { getAuditLogs, getAuditLogTopActors, getAuditLogFacets } from "@/lib/api";
 import { useRequireModule } from "@/hooks/useRequireModule";
 
+/** Entity icons are matched on a normalised key so both the singular and
+ *  plural spellings writers actually use ("driver"/"drivers",
+ *  "ride"/"rides") land on the same icon. */
 const ENTITY_ICONS: Record<string, any> = {
     driver: Car,
+    driver_document: FileText,
     user: User,
     ride: Car,
     promotion: Ticket,
     service_area: MapPin,
     staff: User,
+    admin_staff: User,
     setting: Settings,
-    subscription: CreditCard,
+    subscription_plan: CreditCard,
+    wallet: CreditCard,
+    corporate_account: Building2,
+    safety_incident: AlertTriangle,
+    zoho_desk_ticket: Ticket,
+    zoho_desk_config: Settings,
+    venue: MapPin,
+    ai_console: Bot,
+    system: Server,
 };
 
-const ACTION_CONFIG: Record<string, { label: string; color: string }> = {
-    created: { label: "Created", color: "bg-emerald-500/15 text-emerald-600" },
-    updated: { label: "Updated", color: "bg-blue-500/15 text-blue-600" },
-    deleted: { label: "Deleted", color: "bg-red-500/15 text-red-600" },
-    login: { label: "Login", color: "bg-purple-500/15 text-purple-600" },
-    status_change: { label: "Status Change", color: "bg-amber-500/15 text-amber-600" },
-};
+export function entityIcon(entityType?: string) {
+    if (!entityType) return Shield;
+    const key = entityType.replace(/s$/, "");
+    return ENTITY_ICONS[entityType] || ENTITY_ICONS[key] || Shield;
+}
+
+/** Colour is derived from the *shape* of the action string rather than a
+ *  whitelist. Writers emit specific verbs ("driver_approve", "otp_sent",
+ *  "zoho_desk_config_updated"), so the previous fixed map of five generic
+ *  actions matched nothing and every badge rendered the same grey. */
+const ACTION_CLASSES: Array<{ test: RegExp; color: string }> = [
+    // Security-relevant first — these must never be visually buried.
+    { test: /(reveal|pii|sin_reveal|breach|lockout|reuse_detected|escalat|ban|suspend)/, color: "bg-red-500/15 text-red-600" },
+    { test: /(delete|deleted|reject|declin|cancel|revoke)/, color: "bg-rose-500/15 text-rose-600" },
+    { test: /(login|logout|otp|mfa|auth|token)/, color: "bg-purple-500/15 text-purple-600" },
+    { test: /(creat|approv|reactivat|enabled|import|generat)/, color: "bg-emerald-500/15 text-emerald-600" },
+    { test: /(updat|chang|override|set|sync|recompute|requeu)/, color: "bg-blue-500/15 text-blue-600" },
+    { test: /(view|read|export|download|search|suggest)/, color: "bg-amber-500/15 text-amber-600" },
+];
+
+export function actionColor(action?: string) {
+    if (!action) return "bg-zinc-500/15 text-zinc-600";
+    const a = action.toLowerCase();
+    return ACTION_CLASSES.find((c) => c.test.test(a))?.color || "bg-zinc-500/15 text-zinc-600";
+}
+
+/** "zoho_desk_config_updated" -> "Zoho desk config updated" */
+export function humanizeAction(action?: string) {
+    if (!action) return "—";
+    const s = action.replace(/_/g, " ").trim();
+    return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** `details` is stored as a JSON string. Pretty-print it when it parses so an
+ *  investigation can read fields_changed etc. without copying it into a
+ *  JSON formatter; fall back to the raw text when it isn't JSON. */
+export function formatDetails(details: unknown): string {
+    if (details == null || details === "") return "—";
+    if (typeof details === "object") return JSON.stringify(details, null, 2);
+    const raw = String(details);
+    try {
+        return JSON.stringify(JSON.parse(raw), null, 2);
+    } catch {
+        return raw;
+    }
+}
+
+/** One-line gist for the collapsed row: the most investigation-relevant key
+ *  if the details blob is JSON, else the raw string. */
+export function detailsSummary(details: unknown): string {
+    if (details == null || details === "") return "—";
+    let obj: any = details;
+    if (typeof details === "string") {
+        try {
+            obj = JSON.parse(details);
+        } catch {
+            return details;
+        }
+    }
+    if (obj && typeof obj === "object") {
+        for (const key of ["fields_changed", "updated_fields", "changed_fields", "fields", "note", "reason"]) {
+            const v = obj[key];
+            if (Array.isArray(v) && v.length) return `${key}: ${v.join(", ")}`;
+            if (typeof v === "string" && v) return `${key}: ${v}`;
+        }
+        const keys = Object.keys(obj).filter((k) => k !== "actor_id" && k !== "actor_role");
+        if (keys.length) return keys.join(", ");
+    }
+    return String(details);
+}
 
 const PAGE_SIZE = 50;
 
@@ -67,10 +150,47 @@ export default function AuditLogsPage() {
     const [search, setSearch] = useState("");
     const [actionFilter, setActionFilter] = useState("all");
     const [entityFilter, setEntityFilter] = useState("all");
+    const [startDate, setStartDate] = useState("");
+    const [endDate, setEndDate] = useState("");
     const [page, setPage] = useState(0);
     const [hasNextPage, setHasNextPage] = useState(false);
+    const [expanded, setExpanded] = useState<Record<string, boolean>>({});
     const reqIdRef = useRef(0);
     const { sorted, sort, toggle } = useTableSort(logs);
+
+    // Filter options come from the data. The previous hardcoded lists
+    // ("created"/"updated"/… and "driver"/"promotion"/…) matched almost
+    // nothing that writers actually emit, and an unmatched filter returns an
+    // empty result rather than an error — so the filters silently blanked
+    // the table instead of narrowing it.
+    const [facets, setFacets] = useState<{
+        actions: Array<{ value: string; count: number }>;
+        entity_types: Array<{ value: string; count: number }>;
+        rows_scanned_capped: boolean;
+    }>({ actions: [], entity_types: [], rows_scanned_capped: false });
+
+    useEffect(() => {
+        let cancelled = false;
+        getAuditLogFacets({ days: 90 })
+            .then((res) => {
+                if (cancelled) return;
+                setFacets({
+                    actions: res.actions ?? [],
+                    entity_types: res.entity_types ?? [],
+                    rows_scanned_capped: !!res.rows_scanned_capped,
+                });
+            })
+            .catch(() => {
+                if (!cancelled) setFacets({ actions: [], entity_types: [], rows_scanned_capped: false });
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    /** A date input gives a bare day; widen it to cover the whole local day. */
+    const toIsoStart = (d: string) => (d ? new Date(`${d}T00:00:00`).toISOString() : undefined);
+    const toIsoEnd = (d: string) => (d ? new Date(`${d}T23:59:59.999`).toISOString() : undefined);
 
     // Corporate + admin portal review, round 2: "no 'who touched the most'
     // rollup views — every threat hunt needs raw SQL."
@@ -106,6 +226,8 @@ export default function AuditLogsPage() {
                 action: actionFilter !== "all" ? actionFilter : undefined,
                 entity_type: entityFilter !== "all" ? entityFilter : undefined,
                 search: search.trim() || undefined,
+                start: toIsoStart(startDate),
+                end: toIsoEnd(endDate),
             });
             if (reqId !== reqIdRef.current) return;
             const arr = Array.isArray(data) ? data : [];
@@ -128,7 +250,7 @@ export default function AuditLogsPage() {
         }, 300);
         return () => clearTimeout(t);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [search, actionFilter, entityFilter]);
+    }, [search, actionFilter, entityFilter, startDate, endDate]);
 
     // Re-fetch when page changes.
     useEffect(() => {
@@ -137,15 +259,23 @@ export default function AuditLogsPage() {
     }, [page]);
 
     const handleExport = () => {
-        const headers = ["Time", "User", "Action", "Entity Type", "Entity ID", "Details"];
-        const escapeCSV = (val: string) => `"${String(val || "").replace(/"/g, '""')}"`;
+        // actor_id / actor_role / request_id are what an investigation
+        // actually joins on — exporting without them meant re-querying the DB.
+        const headers = [
+            "Time", "User", "Actor ID", "Actor Role", "Action",
+            "Entity Type", "Entity ID", "Request ID", "Details",
+        ];
+        const escapeCSV = (val: string) => `"${String(val ?? "").replace(/"/g, '""')}"`;
         const rows = logs.map((log) => [
             formatDate(log.created_at),
             escapeCSV(log.user_email || ""),
+            escapeCSV(log.actor_id || ""),
+            escapeCSV(log.actor_role || ""),
             log.action,
             log.entity_type,
             log.entity_id,
-            escapeCSV(log.details || ""),
+            escapeCSV(log.request_id || ""),
+            escapeCSV(typeof log.details === "string" ? log.details : JSON.stringify(log.details ?? "")),
         ]);
         const csv = [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
         const blob = new Blob([csv], { type: "text/csv" });
@@ -194,35 +324,51 @@ export default function AuditLogsPage() {
                     />
                 </div>
                 <Select value={actionFilter} onValueChange={setActionFilter}>
-                    <SelectTrigger className="w-44" aria-label="Filter by action">
+                    <SelectTrigger className="w-56" aria-label="Filter by action">
                         <SelectValue placeholder="Filter by action" />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent className="max-h-80">
                         <SelectItem value="all">All Actions</SelectItem>
-                        <SelectItem value="created">Created</SelectItem>
-                        <SelectItem value="updated">Updated</SelectItem>
-                        <SelectItem value="deleted">Deleted</SelectItem>
-                        <SelectItem value="login">Login</SelectItem>
-                        <SelectItem value="status_change">Status Change</SelectItem>
+                        {facets.actions.map((a) => (
+                            <SelectItem key={a.value} value={a.value}>
+                                {humanizeAction(a.value)} ({a.count})
+                            </SelectItem>
+                        ))}
                     </SelectContent>
                 </Select>
                 <Select value={entityFilter} onValueChange={setEntityFilter}>
-                    <SelectTrigger className="w-44" aria-label="Filter by entity">
+                    <SelectTrigger className="w-56" aria-label="Filter by entity">
                         <SelectValue placeholder="Filter by entity" />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent className="max-h-80">
                         <SelectItem value="all">All Entities</SelectItem>
-                        <SelectItem value="driver">Driver</SelectItem>
-                        <SelectItem value="user">User</SelectItem>
-                        <SelectItem value="ride">Ride</SelectItem>
-                        <SelectItem value="promotion">Promotion</SelectItem>
-                        <SelectItem value="service_area">Service Area</SelectItem>
-                        <SelectItem value="staff">Staff</SelectItem>
-                        <SelectItem value="setting">Setting</SelectItem>
-                        <SelectItem value="subscription">Subscription</SelectItem>
+                        {facets.entity_types.map((e) => (
+                            <SelectItem key={e.value} value={e.value}>
+                                {humanizeAction(e.value)} ({e.count})
+                            </SelectItem>
+                        ))}
                     </SelectContent>
                 </Select>
-                {(search || actionFilter !== "all" || entityFilter !== "all") && (
+                <div className="flex items-center gap-2">
+                    <Input
+                        type="date"
+                        aria-label="From date"
+                        className="w-40"
+                        value={startDate}
+                        max={endDate || undefined}
+                        onChange={(e) => setStartDate(e.target.value)}
+                    />
+                    <span className="text-muted-foreground text-sm">to</span>
+                    <Input
+                        type="date"
+                        aria-label="To date"
+                        className="w-40"
+                        value={endDate}
+                        min={startDate || undefined}
+                        onChange={(e) => setEndDate(e.target.value)}
+                    />
+                </div>
+                {(search || actionFilter !== "all" || entityFilter !== "all" || startDate || endDate) && (
                     <Button
                         variant="ghost"
                         size="sm"
@@ -230,6 +376,8 @@ export default function AuditLogsPage() {
                             setSearch("");
                             setActionFilter("all");
                             setEntityFilter("all");
+                            setStartDate("");
+                            setEndDate("");
                         }}
                     >
                         Clear filters
@@ -292,8 +440,8 @@ export default function AuditLogsPage() {
                             <Shield className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" />
                             <h3 className="text-lg font-semibold">No audit logs found</h3>
                             <p className="text-muted-foreground mt-1">
-                                {search || actionFilter !== "all" || entityFilter !== "all"
-                                    ? "Try adjusting your filters."
+                                {search || actionFilter !== "all" || entityFilter !== "all" || startDate || endDate
+                                    ? "Try adjusting your filters or widening the date range."
                                     : "Admin actions will be recorded here."}
                             </p>
                         </div>
@@ -311,34 +459,105 @@ export default function AuditLogsPage() {
                                 </TableHeader>
                                 <TableBody>
                                     {sorted.map((log) => {
-                                        const Icon = ENTITY_ICONS[log.entity_type] || Shield;
-                                        const actionCfg = ACTION_CONFIG[log.action];
+                                        const Icon = entityIcon(log.entity_type);
+                                        const isOpen = !!expanded[log.id];
                                         return (
-                                            <TableRow key={log.id}>
-                                                <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                                                    {formatDate(log.created_at)}
-                                                </TableCell>
-                                                <TableCell className="font-medium text-sm">
-                                                    {log.user_email || "System"}
-                                                </TableCell>
-                                                <TableCell>
-                                                    <Badge className={actionCfg?.color || "bg-zinc-500/15 text-zinc-600"}>
-                                                        {actionCfg?.label || log.action}
-                                                    </Badge>
-                                                </TableCell>
-                                                <TableCell>
-                                                    <div className="flex items-center gap-2">
-                                                        <Icon className="h-4 w-4 text-muted-foreground" />
-                                                        <span className="text-sm capitalize">{log.entity_type?.replace("_", " ")}</span>
-                                                        <span className="text-xs text-muted-foreground font-mono">
-                                                            {log.entity_id?.slice(0, 8)}...
+                                            <Fragment key={log.id}>
+                                                <TableRow
+                                                    className="cursor-pointer"
+                                                    onClick={() =>
+                                                        setExpanded((p) => ({ ...p, [log.id]: !p[log.id] }))
+                                                    }
+                                                >
+                                                    <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+                                                        <span className="flex items-center gap-1.5">
+                                                            <button
+                                                                type="button"
+                                                                aria-label={isOpen ? "Collapse details" : "Expand details"}
+                                                                aria-expanded={isOpen}
+                                                                className="text-muted-foreground"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    setExpanded((p) => ({ ...p, [log.id]: !p[log.id] }));
+                                                                }}
+                                                            >
+                                                                {isOpen ? (
+                                                                    <ChevronDown className="h-4 w-4" />
+                                                                ) : (
+                                                                    <ChevronRight className="h-4 w-4" />
+                                                                )}
+                                                            </button>
+                                                            {formatDate(log.created_at)}
                                                         </span>
-                                                    </div>
-                                                </TableCell>
-                                                <TableCell className="text-sm text-muted-foreground max-w-xs truncate">
-                                                    {log.details || "—"}
-                                                </TableCell>
-                                            </TableRow>
+                                                    </TableCell>
+                                                    <TableCell className="font-medium text-sm">
+                                                        {log.user_email || log.actor_id || "System"}
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <Badge className={actionColor(log.action)}>
+                                                            {humanizeAction(log.action)}
+                                                        </Badge>
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <div className="flex items-center gap-2">
+                                                            <Icon className="h-4 w-4 text-muted-foreground" />
+                                                            <span className="text-sm">
+                                                                {humanizeAction(log.entity_type)}
+                                                            </span>
+                                                            {log.entity_id && (
+                                                                <span className="text-xs text-muted-foreground font-mono">
+                                                                    {log.entity_id.slice(0, 8)}
+                                                                    {log.entity_id.length > 8 ? "…" : ""}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    </TableCell>
+                                                    <TableCell className="text-sm text-muted-foreground max-w-xs truncate">
+                                                        {detailsSummary(log.details)}
+                                                    </TableCell>
+                                                </TableRow>
+                                                {isOpen && (
+                                                    <TableRow className="bg-muted/30 hover:bg-muted/30">
+                                                        <TableCell colSpan={5} className="p-4">
+                                                            <div className="grid gap-4 sm:grid-cols-3">
+                                                                <div className="space-y-1">
+                                                                    <p className="text-xs font-medium text-muted-foreground">Actor</p>
+                                                                    <p className="font-mono text-xs break-all">
+                                                                        {log.actor_id || "—"}
+                                                                    </p>
+                                                                    {log.actor_role && (
+                                                                        <Badge variant="secondary" className="text-xs">
+                                                                            {log.actor_role}
+                                                                        </Badge>
+                                                                    )}
+                                                                </div>
+                                                                <div className="space-y-1">
+                                                                    <p className="text-xs font-medium text-muted-foreground">Entity ID</p>
+                                                                    <p className="font-mono text-xs break-all">
+                                                                        {log.entity_id || "—"}
+                                                                    </p>
+                                                                </div>
+                                                                <div className="space-y-1">
+                                                                    {/* The join key to backend logs and Sentry events —
+                                                                        see utils/audit_logger.py on why it's stored. */}
+                                                                    <p className="text-xs font-medium text-muted-foreground">
+                                                                        Request ID
+                                                                    </p>
+                                                                    <p className="font-mono text-xs break-all">
+                                                                        {log.request_id || "— (background job)"}
+                                                                    </p>
+                                                                </div>
+                                                            </div>
+                                                            <div className="mt-4 space-y-1">
+                                                                <p className="text-xs font-medium text-muted-foreground">Details</p>
+                                                                <pre className="overflow-x-auto rounded-md border bg-background p-3 text-xs">
+                                                                    {formatDetails(log.details)}
+                                                                </pre>
+                                                            </div>
+                                                        </TableCell>
+                                                    </TableRow>
+                                                )}
+                                            </Fragment>
                                         );
                                     })}
                                 </TableBody>

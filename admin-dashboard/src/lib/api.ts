@@ -388,6 +388,7 @@ export {
     updateSubscriptionTaxConfig,
     getAuditLogs,
     getAuditLogTopActors,
+    getAuditLogFacets,
     getQuests,
     createQuest,
     updateQuest,

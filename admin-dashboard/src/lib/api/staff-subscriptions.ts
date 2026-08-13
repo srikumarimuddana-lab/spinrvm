@@ -112,6 +112,10 @@ export const getAuditLogs = (opts: {
     action?: string;
     entity_type?: string;
     search?: string;
+    /** ISO-8601 inclusive lower bound on created_at. */
+    start?: string;
+    /** ISO-8601 inclusive upper bound on created_at. */
+    end?: string;
 } = {}) => {
     const sp = new URLSearchParams();
     sp.set("limit", String(opts.limit ?? 50));
@@ -119,7 +123,27 @@ export const getAuditLogs = (opts: {
     if (opts.action) sp.set("action", opts.action);
     if (opts.entity_type) sp.set("entity_type", opts.entity_type);
     if (opts.search) sp.set("search", opts.search);
+    if (opts.start) sp.set("start", opts.start);
+    if (opts.end) sp.set("end", opts.end);
     return request<any[]>(`/api/admin/audit-logs?${sp.toString()}`);
+};
+
+/** Distinct action / entity_type values actually present in audit_logs.
+ *  The filter dropdowns are built from this rather than a hand-written list —
+ *  the old hardcoded options ("created", "updated", "driver", "promotion", …)
+ *  matched almost nothing, and an unmatched filter returns an empty list
+ *  rather than erroring, so the filters silently hid the whole table. */
+export const getAuditLogFacets = (opts: { days?: number } = {}) => {
+    const sp = new URLSearchParams();
+    sp.set("days", String(opts.days ?? 90));
+    return request<{
+        days: number;
+        window_start: string;
+        rows_scanned: number;
+        rows_scanned_capped: boolean;
+        actions: Array<{ value: string; count: number }>;
+        entity_types: Array<{ value: string; count: number }>;
+    }>(`/api/admin/audit-logs/facets?${sp.toString()}`);
 };
 
 // Corporate + admin portal review, round 2: "no 'who touched the most'

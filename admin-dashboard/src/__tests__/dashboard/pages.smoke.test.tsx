@@ -112,7 +112,7 @@ vi.mock("lucide-react", () => {
     PackageSearch: Icon, Pause: Icon, PauseCircle: Icon, Pencil: Icon,
     Phone: Icon, Plane: Icon, PlayCircle: Icon, Plus: Icon, Radar: Icon,
     Radio: Icon, RefreshCw: Icon, Save: Icon, ScrollText: Icon, Search: Icon,
-    Send: Icon, Settings: Icon, Shield: Icon, ShieldAlert: Icon,
+    Send: Icon, Server: Icon, Settings: Icon, Shield: Icon, ShieldAlert: Icon,
     ShieldCheck: Icon, ShieldOff: Icon, SlidersHorizontal: Icon, Star: Icon,
     Tag: Icon, Target: Icon, ToggleLeft: Icon, ToggleRight: Icon, Trash2: Icon,
     TrendingDown: Icon, TrendingUp: Icon,

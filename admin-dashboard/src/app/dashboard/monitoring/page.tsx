@@ -80,6 +80,8 @@ export default function MonitoringPage() {
   const [cancelReason, setCancelReason] = useState("Cancelled by admin");
   const [pendingCancelId, setPendingCancelId] = useState<string | null>(null);
   const [demandData, setDemandData] = useState<AreaDemandSupply[]>([]);
+  const [demandError, setDemandError] = useState<string | null>(null);
+  const [demandFetchedAt, setDemandFetchedAt] = useState<Date | null>(null);
 
   // ── Auth token for WebSocket ────────────────────────────────────────
   const token = useAuthStore((s) => s.token);
@@ -425,8 +427,10 @@ export default function MonitoringPage() {
   // Poll demand/supply data when overlay is on (matches surge engine tick: 2 min)
   useEffect(() => {
     if (!filters.showDemand) return;
+    let cancelled = false;
     const fetchDemand = () => {
       getSurgeStatus().then((res: any) => {
+        if (cancelled) return;
         const areas: AreaDemandSupply[] = (res.areas || res || []).map((a: any) => ({
           area_id: a.area_id,
           name: a.name,
@@ -435,14 +439,29 @@ export default function MonitoringPage() {
           ratio: a.ratio ?? 0,
           multiplier: a.multiplier ?? 1,
           surge_active: a.surge_active ?? false,
+          surge_enabled: a.surge_enabled ?? true,
           source: a.source ?? "auto",
         }));
         setDemandData(areas);
-      }).catch(() => {});
+        setDemandError(null);
+        setDemandFetchedAt(new Date());
+      }).catch((err) => {
+        if (cancelled) return;
+        // Never swallow this. Without a signal the map keeps painting the last
+        // good colours indefinitely, and an operator reads a stale "balanced"
+        // market as live — or pulls incentives from an area that is actually
+        // starved because the surge engine stopped reporting.
+        console.error("demand status poll failed", err);
+        setDemandError(
+          err?.status === 403
+            ? "No Service Areas module access — demand overlay unavailable."
+            : "Demand data failed to refresh."
+        );
+      });
     };
     fetchDemand();
     const interval = setInterval(fetchDemand, 120_000);
-    return () => clearInterval(interval);
+    return () => { cancelled = true; clearInterval(interval); };
   }, [filters.showDemand]);
 
   // Re-apply filters when they change
@@ -558,6 +577,21 @@ export default function MonitoringPage() {
           <span className="font-medium">Live data paused</span>
           <span className="text-yellow-700 dark:text-yellow-400">
             — map and ride list may be stale ({wsStatus === "connecting" ? "reconnecting…" : wsError || "connection lost"})
+          </span>
+        </div>
+      )}
+
+      {/* Demand overlay staleness — a separate feed from the WebSocket above,
+          so it needs its own banner: the colours on the map can be minutes old
+          while the ride list is perfectly live. */}
+      {filters.showDemand && demandError && (
+        <div role="alert" className="flex items-center gap-2 border-b border-destructive/30 bg-destructive/5 px-4 py-2 text-sm text-destructive">
+          <span className="font-medium">Demand overlay stale</span>
+          <span>
+            — {demandError}
+            {demandFetchedAt
+              ? ` Showing data from ${demandFetchedAt.toLocaleTimeString()}.`
+              : " No demand data has loaded yet."}
           </span>
         </div>
       )}

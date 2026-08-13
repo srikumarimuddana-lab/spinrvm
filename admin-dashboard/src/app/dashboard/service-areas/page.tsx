@@ -2135,10 +2135,19 @@ function SurgeHistoryChart({ areaId, areaName }: { areaId: string; areaName: str
   const [data, setData] = useState<any[]>([]);
   const [hours, setHours] = useState(24);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [truncated, setTruncated] = useState(false);
 
   useEffect(() => {
+    // `cancelled` guards two real races: expanding area B while A's request is
+    // in flight (B's chart would render A's data under B's name), and switching
+    // 48h -> 6h where the slower 48h response lands last and overwrites the
+    // newer view while the selector still reads 6h.
+    let cancelled = false;
     setLoading(true);
+    setError(null);
     getSurgeHistory(areaId, hours).then((res: any) => {
+      if (cancelled) return;
       const rows = (res.history || []).map((r: any) => ({
         time: new Date(r.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         fullTime: new Date(r.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
@@ -2148,8 +2157,26 @@ function SurgeHistoryChart({ areaId, areaName }: { areaId: string; areaName: str
         source: r.source,
       }));
       setData(rows);
+      // The backend caps the response at 500 rows and the engine appends one
+      // row per area every 2 minutes, so a 24h/48h/7d selection silently shows
+      // only the newest ~16.7 hours. Say so rather than mislabelling the axis.
+      setTruncated(rows.length >= 500);
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch((e: any) => {
+      if (cancelled) return;
+      // Distinct from "no surge recorded": an operator investigating a rider
+      // complaint must be able to tell "surge never fired" from "the chart is
+      // broken right now".
+      console.error("surge history fetch failed", e);
+      setData([]);
+      setError(
+        e?.status === 403
+          ? "No Analytics module access — surge history unavailable."
+          : "Couldn't load surge history."
+      );
+      setLoading(false);
+    });
+    return () => { cancelled = true; };
   }, [areaId, hours]);
 
   const surgeTooltipStyle = {
@@ -2167,6 +2194,7 @@ function SurgeHistoryChart({ areaId, areaName }: { areaId: string; areaName: str
           <p className="text-sm text-muted-foreground">Multiplier over time for {areaName}. Auto-captured every 2 minutes by the surge engine.</p>
         </div>
         <select
+          aria-label={`Surge history time range for ${areaName}`}
           className="border rounded-lg px-3 py-1.5 text-sm"
           value={hours}
           onChange={e => setHours(Number(e.target.value))}
@@ -2179,14 +2207,43 @@ function SurgeHistoryChart({ areaId, areaName }: { areaId: string; areaName: str
         </select>
       </div>
 
+      {truncated && (
+        <p className="mb-2 text-xs text-amber-700 dark:text-amber-400">
+          Showing the most recent 500 readings — the selected range is longer than
+          the server returns in one response, so earlier readings are not charted.
+        </p>
+      )}
+
       {loading ? (
         <div className="h-64 flex items-center justify-center text-muted-foreground">Loading chart…</div>
+      ) : error ? (
+        <div role="alert" className="h-40 flex flex-col items-center justify-center gap-2 rounded-xl border border-destructive/30 bg-destructive/5">
+          <p className="text-sm text-destructive">{error}</p>
+          <button
+            onClick={() => setHours(h => h)}
+            className="text-xs underline text-muted-foreground hover:text-foreground"
+          >
+            Retry
+          </button>
+        </div>
       ) : data.length === 0 ? (
         <div className="h-40 flex items-center justify-center text-muted-foreground bg-muted rounded-xl">
           <p>No surge data recorded for this period.</p>
         </div>
       ) : (
-        <div className="h-72">
+        // Recharts renders to SVG with no text alternative; without a label the
+        // whole trend is invisible to assistive tech. The summary below carries
+        // the same numbers, so describe the shape here.
+        <div
+          className="h-72"
+          role="img"
+          aria-label={
+            `Surge multiplier for ${areaName} over the last ${hours} hours: ` +
+            `peak ${Math.max(...data.map(d => d.multiplier)).toFixed(1)} times, ` +
+            `average ${(data.reduce((s, d) => s + d.multiplier, 0) / data.length).toFixed(2)} times, ` +
+            `${data.length} readings.`
+          }
+        >
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={data}>
               <defs>

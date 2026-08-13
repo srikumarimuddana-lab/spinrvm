@@ -718,3 +718,143 @@ def test_airport_trips_503_on_db_failure(admin_client):
     with patch("backend.db_supabase.get_rows", AsyncMock(side_effect=RuntimeError("db down"))):
         resp = admin_client.get("/api/admin/compliance/airport-trips")
     assert resp.status_code == 503
+
+
+# ── service-area scope (page-level Service Area multi-select) ───────────────
+
+
+def _capturing_get_rows(captured):
+    def side(table, filters=None, **kw):
+        captured.setdefault(table, []).append(filters)
+        if table == "rides":
+            return [_RIDE_ROW]
+        if table == "drivers":
+            return [_DRIVER_ROW]
+        return []
+
+    return AsyncMock(side_effect=side)
+
+
+@pytest.mark.parametrize(
+    "path,filtered_table",
+    [
+        ("gst-pst-remittance", "rides"),
+        ("airport-trips", "rides"),
+        ("driver-roster", "drivers"),
+    ],
+)
+def test_service_area_ids_query_param_reaches_the_source_query(admin_client, path, filtered_table):
+    captured = {}
+    with (
+        patch("backend.db_supabase.get_rows", _capturing_get_rows(captured)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+    ):
+        resp = admin_client.get(f"/api/admin/compliance/{path}?service_area_ids=a2,a1")
+    assert resp.status_code == 200
+    # Sorted+deduped by _parse_service_area_ids before it reaches the query.
+    assert captured[filtered_table][0]["service_area_id"] == {"$in": ["a1", "a2"]}
+
+
+def test_service_area_ids_is_recorded_on_the_audit_row(admin_client):
+    """compliance_export_events is the record of what an admin actually
+    pulled — an area-scoped export that logs like an unscoped one would
+    misrepresent the export in a later privacy/regulatory audit."""
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")) as log,
+    ):
+        resp = admin_client.get("/api/admin/compliance/gst-pst-remittance?service_area_ids=a1,a2")
+    assert resp.status_code == 200
+    assert log.call_args[0][1]["params"]["service_area_ids"] == ["a1", "a2"]
+
+
+def test_unscoped_export_records_null_service_areas_rather_than_omitting_the_key(admin_client):
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")) as log,
+    ):
+        resp = admin_client.get("/api/admin/compliance/gst-pst-remittance")
+    assert resp.status_code == 200
+    assert log.call_args[0][1]["params"]["service_area_ids"] is None
+
+
+def test_report_subtitle_states_the_area_scope(admin_client):
+    """A filtered regulatory export that does not say it is filtered reads
+    as a complete one once it has left the dashboard."""
+    from backend.utils import report_branding as rb
+
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+        patch("backend.routes.admin.compliance.report_branding.new_branded_pdf", wraps=rb.new_branded_pdf) as new_pdf,
+    ):
+        resp = admin_client.get("/api/admin/compliance/gst-pst-remittance?service_area_ids=a1")
+    assert resp.status_code == 200
+    subtitle = new_pdf.call_args.args[1] if len(new_pdf.call_args.args) > 1 else new_pdf.call_args.kwargs["subtitle"]
+    assert "Service areas:" in subtitle
+
+
+def test_unscoped_report_subtitle_says_all_service_areas(admin_client):
+    from backend.utils import report_branding as rb
+
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=_get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+        patch("backend.routes.admin.compliance.report_branding.new_branded_pdf", wraps=rb.new_branded_pdf) as new_pdf,
+    ):
+        resp = admin_client.get("/api/admin/compliance/gst-pst-remittance")
+    assert resp.status_code == 200
+    subtitle = new_pdf.call_args.args[1] if len(new_pdf.call_args.args) > 1 else new_pdf.call_args.kwargs["subtitle"]
+    assert "All service areas" in subtitle
+
+
+def test_insurance_billing_scopes_by_driver_home_area_and_labels_it_as_such(admin_client):
+    """SGI must not read this as "trips that happened in Regina" — the
+    rows are scoped by the driver's home area, so the document says so."""
+    from backend.utils import report_branding as rb
+
+    captured = {}
+
+    def side(table, filters=None, **kw):
+        captured.setdefault(table, []).append(filters)
+        if table == "drivers" and "service_area_id" in (filters or {}):
+            return [_DRIVER_ROW]
+        if table == "drivers":
+            return [_DRIVER_ROW]
+        if table == "driver_period_distances":
+            return [
+                {
+                    "driver_id": "d1",
+                    "ride_id": "r1",
+                    "period": 2,
+                    "distance_km": 2.0,
+                    "started_at": "2026-07-05T10:00:00Z",
+                }
+            ]
+        return []
+
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+        patch("backend.routes.admin.compliance.report_branding.new_branded_pdf", wraps=rb.new_branded_pdf) as new_pdf,
+    ):
+        resp = admin_client.get("/api/admin/compliance/insurance-billing-sgi?service_area_ids=a1")
+    assert resp.status_code == 200
+    assert captured["driver_period_distances"][0]["driver_id"] == {"$in": ["d1"]}
+    subtitle = new_pdf.call_args.args[1] if len(new_pdf.call_args.args) > 1 else new_pdf.call_args.kwargs["subtitle"]
+    assert any("by driver's home area" in line for line in subtitle)
+
+
+def test_t4a_filer_handoff_ignores_service_area_ids(admin_client):
+    """T4A is deliberately unscoped: a Part XX.1 / T4A return is per-driver
+    and Canada-wide, so an area-scoped slice is never a valid filing. A
+    stray param must not silently narrow the export."""
+    captured = {}
+    with (
+        patch("backend.db_supabase.get_rows", _capturing_get_rows(captured)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")) as log,
+    ):
+        resp = admin_client.get("/api/admin/compliance/t4a-filer-handoff?year=2025&service_area_ids=a1")
+    assert resp.status_code == 200
+    assert all("service_area_id" not in (f or {}) for f in captured.get("rides", []))
+    assert "service_area_ids" not in log.call_args[0][1]["params"]

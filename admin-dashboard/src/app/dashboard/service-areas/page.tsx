@@ -9,8 +9,9 @@ import {
     AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { getServiceAreas, createServiceArea, updateServiceArea, deleteServiceArea, getSubscriptionPlans, createSubscriptionPlan, updateSubscriptionPlan, deleteSubscriptionPlan, getDriverSubscriptions, getAreaFees, createAreaFee, updateAreaFee, deleteAreaFee, getVehicleTypes, getIncentives, createIncentive, toggleIncentive, deleteIncentive } from "@/lib/api";
-import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, FileText, Clock, ShieldCheck, ShieldAlert, CheckCircle, Image, Plane, Radar, Gift, ArrowRightLeft } from "lucide-react";
+import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, FileText, Clock, ShieldCheck, ShieldAlert, CheckCircle, Image, Plane, Radar, Gift, ArrowRightLeft, Flame } from "lucide-react";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import { getSettings, updateSettings } from "@/lib/api/settings-ai";
 
 const GeofenceMap = lazy(() => import("@/components/geofence-map"));
 
@@ -364,6 +365,7 @@ export default function ServiceAreasPage() {
                         { key: 'incentives', label: 'Incentives', icon: Gift },
                         { key: 'subregions', label: 'Airport Zones', icon: Plane },
                         { key: 'cascade', label: 'Dispatch Cascade', icon: ArrowRightLeft },
+                        { key: 'heatmap', label: 'Heatmap Config', icon: Flame },
                       ].map(tab => (
                         <button key={tab.key} onClick={() => setEditTab(tab.key)}
                           className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold rounded-t-lg transition ${editTab === tab.key ? 'bg-card text-primary border-t-2 border-primary' : 'text-muted-foreground hover:text-foreground'}`}>
@@ -555,6 +557,11 @@ export default function ServiceAreasPage() {
                             } catch (e) { crudToast.error("save cascade", e); }
                           }}
                         />
+                      )}
+
+                      {/* Heatmap Config Tab (global app_settings, not per-area) */}
+                      {editTab === 'heatmap' && (
+                        <HeatmapConfigTab onSuccess={() => crudToast.updated("Heatmap config")} onError={(e) => crudToast.error("save heatmap config", e)} />
                       )}
                     </div>
                   </div>
@@ -2109,6 +2116,163 @@ function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; are
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Heatmap Config Tab (global app_settings — AD-05) ───
+
+const HEATMAP_DEFAULTS = {
+  driver_heatmap_v2_enabled: false,
+  heatmap_internal_driver_ids: [] as string[],
+  heatmap_k_floor: 3,
+  heatmap_cell_lat_deg: 0.004,
+  heatmap_cell_lng_deg: 0.006,
+  heatmap_decay_half_life_days: 3,
+  heatmap_refresh_seconds: 90,
+};
+
+function HeatmapConfigTab({ onSuccess, onError }: { onSuccess: () => void; onError: (e: unknown) => void }) {
+  const [form, setForm] = useState(HEATMAP_DEFAULTS);
+  const [driverIdsText, setDriverIdsText] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    getSettings().then((s: any) => {
+      const next = { ...HEATMAP_DEFAULTS };
+      if (s.driver_heatmap_v2_enabled !== undefined) next.driver_heatmap_v2_enabled = !!s.driver_heatmap_v2_enabled;
+      if (s.heatmap_k_floor !== undefined) next.heatmap_k_floor = Number(s.heatmap_k_floor);
+      if (s.heatmap_cell_lat_deg !== undefined) next.heatmap_cell_lat_deg = Number(s.heatmap_cell_lat_deg);
+      if (s.heatmap_cell_lng_deg !== undefined) next.heatmap_cell_lng_deg = Number(s.heatmap_cell_lng_deg);
+      if (s.heatmap_decay_half_life_days !== undefined) next.heatmap_decay_half_life_days = Number(s.heatmap_decay_half_life_days);
+      if (s.heatmap_refresh_seconds !== undefined) next.heatmap_refresh_seconds = Number(s.heatmap_refresh_seconds);
+      const ids = Array.isArray(s.heatmap_internal_driver_ids) ? s.heatmap_internal_driver_ids : [];
+      next.heatmap_internal_driver_ids = ids;
+      setForm(next);
+      setDriverIdsText(ids.join("\n"));
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, []);
+
+  const set = <K extends keyof typeof HEATMAP_DEFAULTS>(key: K, val: (typeof HEATMAP_DEFAULTS)[K]) => {
+    setForm(prev => ({ ...prev, [key]: val }));
+    setDirty(true);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const ids = driverIdsText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+      await updateSettings({
+        driver_heatmap_v2_enabled: form.driver_heatmap_v2_enabled,
+        heatmap_internal_driver_ids: ids,
+        heatmap_k_floor: form.heatmap_k_floor,
+        heatmap_cell_lat_deg: form.heatmap_cell_lat_deg,
+        heatmap_cell_lng_deg: form.heatmap_cell_lng_deg,
+        heatmap_decay_half_life_days: form.heatmap_decay_half_life_days,
+        heatmap_refresh_seconds: form.heatmap_refresh_seconds,
+      });
+      setForm(prev => ({ ...prev, heatmap_internal_driver_ids: ids }));
+      setDirty(false);
+      onSuccess();
+    } catch (e) {
+      onError(e);
+    }
+    setSaving(false);
+  };
+
+  if (loading) return <div className="py-10 text-center text-muted-foreground">Loading heatmap config…</div>;
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h4 className="font-bold text-foreground text-base">Heatmap Configuration</h4>
+        <p className="text-sm text-muted-foreground mt-0.5">
+          Global settings for the driver demand heatmap. Changes apply to <span className="font-semibold">all service areas</span>.
+        </p>
+      </div>
+
+      {/* v2 enabled toggle */}
+      <div className="flex items-center justify-between p-4 rounded-xl border bg-card">
+        <div>
+          <p className="text-sm font-semibold text-foreground">Heatmap v2 Enabled</p>
+          <p className="text-xs text-muted-foreground mt-0.5">When off, drivers see the legacy v1 heatmap (simple points). When on, drivers get cell-based demand layers, forecast, and hotspot chips.</p>
+        </div>
+        <button onClick={() => { set('driver_heatmap_v2_enabled', !form.driver_heatmap_v2_enabled); }}>
+          {form.driver_heatmap_v2_enabled
+            ? <ToggleRight className="h-7 w-7 text-green-500" />
+            : <ToggleLeft className="h-7 w-7 text-muted-foreground" />}
+        </button>
+      </div>
+
+      {/* Numeric config */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <HeatmapNumericField label="Privacy floor (k-anonymity)" description="Minimum ride count per cell before it appears on the heatmap. Higher = more private, fewer visible cells."
+          value={form.heatmap_k_floor} min={1} max={50} step={1}
+          onChange={v => set('heatmap_k_floor', v)} />
+        <HeatmapNumericField label="Cell latitude (degrees)" description="Height of each grid cell. Default 0.004° ≈ 445m."
+          value={form.heatmap_cell_lat_deg} min={0.001} max={0.05} step={0.001}
+          onChange={v => set('heatmap_cell_lat_deg', v)} />
+        <HeatmapNumericField label="Cell longitude (degrees)" description="Width of each grid cell. Default 0.006° ≈ 430m at 52°N."
+          value={form.heatmap_cell_lng_deg} min={0.001} max={0.05} step={0.001}
+          onChange={v => set('heatmap_cell_lng_deg', v)} />
+        <HeatmapNumericField label="Decay half-life (days)" description="Ride weighting decay. Rides from this many days ago count as half."
+          value={form.heatmap_decay_half_life_days} min={0.5} max={30} step={0.5}
+          onChange={v => set('heatmap_decay_half_life_days', v)} />
+        <HeatmapNumericField label="Refresh interval (seconds)" description="How often the driver app re-fetches heatmap data."
+          value={form.heatmap_refresh_seconds} min={30} max={600} step={10}
+          onChange={v => set('heatmap_refresh_seconds', v)} />
+      </div>
+
+      {/* Internal driver IDs */}
+      <div className="p-4 rounded-xl border bg-card">
+        <label className="block text-sm font-semibold text-foreground mb-1">Internal Driver IDs (allowlist)</label>
+        <p className="text-xs text-muted-foreground mb-2">Only these driver IDs see the v2 heatmap when v2 is enabled. Leave empty to show v2 to all drivers. One ID per line or comma-separated.</p>
+        <textarea
+          className="w-full border rounded-lg px-3 py-2 text-sm font-mono"
+          rows={4}
+          value={driverIdsText}
+          onChange={e => { setDriverIdsText(e.target.value); setDirty(true); }}
+          placeholder="e.g. abc-123-def&#10;ghi-456-jkl"
+        />
+        {driverIdsText.trim() && (
+          <p className="text-xs text-muted-foreground mt-1">
+            {driverIdsText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean).length} driver ID(s) in allowlist
+          </p>
+        )}
+      </div>
+
+      {/* Save button */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={handleSave}
+          disabled={!dirty || saving}
+          className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition ${dirty ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'bg-muted text-muted-foreground cursor-not-allowed'}`}
+        >
+          {saving ? 'Saving…' : dirty ? 'Save Heatmap Config' : 'Saved'}
+        </button>
+        {!dirty && !saving && <span className="text-xs text-green-600 flex items-center gap-1"><CheckCircle className="h-3.5 w-3.5" /> Up to date</span>}
+      </div>
+    </div>
+  );
+}
+
+function HeatmapNumericField({ label, description, value, min, max, step, onChange }: {
+  label: string; description: string; value: number; min: number; max: number; step: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div className="p-3 rounded-lg border bg-card">
+      <label className="block text-sm font-semibold text-foreground mb-0.5">{label}</label>
+      <p className="text-xs text-muted-foreground mb-2">{description}</p>
+      <input
+        type="number" min={min} max={max} step={step}
+        value={value}
+        onChange={e => onChange(parseFloat(e.target.value) || min)}
+        className="w-full border rounded-lg px-3 py-2 text-sm"
+      />
     </div>
   );
 }

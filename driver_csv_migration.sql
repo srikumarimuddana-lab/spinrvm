@@ -258,7 +258,7 @@ VALUES
 
 -- STEP 3: Match imported drivers to existing drivers by phone number
 UPDATE driver_csv_import di
-SET matched_driver_id = u.id,
+SET matched_driver_id = u.id::uuid,
     migration_status = 'matched'
 FROM users u
 INNER JOIN drivers d ON d.user_id = u.id
@@ -267,7 +267,7 @@ WHERE u.phone = di.phone
 
 -- STEP 3b: Try matching by email for any still-unmatched
 UPDATE driver_csv_import di
-SET matched_driver_id = u.id,
+SET matched_driver_id = u.id::uuid,
     migration_status = 'matched'
 FROM users u
 INNER JOIN drivers d ON d.user_id = u.id

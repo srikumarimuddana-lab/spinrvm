@@ -64,6 +64,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
   const list = vi.fn().mockResolvedValue([]);
   // Shape-specific overrides for APIs whose callers destructure the response.
   const overrides: Record<string, unknown> = {
+    // Own instance (not the shared `list` fn) so a test can assert on this
+    // endpoint specifically rather than on every get* call in the barrel.
+    getSurgeStatus: vi.fn().mockResolvedValue([]),
     getRides: vi.fn().mockResolvedValue({ rides: [], total_count: 0 }),
     getDrivers: vi.fn().mockResolvedValue({ drivers: [], total_count: 0 }),
     getKybReverificationDue: vi.fn().mockResolvedValue({ threshold_months: 12, count: 0, companies: [] }),
@@ -538,10 +541,23 @@ describe("Dashboard page — /dashboard/heatmap", () => {
     await expect(renderPage(Page)).resolves.not.toThrow();
   });
 
-  it("shows unmet demand section heading", async () => {
+  it("shows the live demand section heading", async () => {
+    // Renamed from "Unmet Demand": demand_count includes rides that already
+    // have a driver, so the old label overstated stranded riders.
     const { default: Page } = await import("@/app/dashboard/heatmap/page");
     await act(async () => { render(<Page />); });
-    expect(screen.getByText("Unmet Demand")).toBeTruthy();
+    expect(screen.getByText("Live Demand Pressure")).toBeTruthy();
+  });
+
+  it("does not poll for demand until live updates are switched on", async () => {
+    // The poll previously ran from mount for every open tab, forever, hitting
+    // two of the most expensive admin endpoints whether or not anyone looked.
+    const api = await import("@/lib/api");
+    const spy = vi.mocked(api.getSurgeStatus);
+    spy.mockClear();
+    const { default: Page } = await import("@/app/dashboard/heatmap/page");
+    await act(async () => { render(<Page />); });
+    expect(spy).not.toHaveBeenCalled();
   });
 });
 

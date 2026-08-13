@@ -6,13 +6,13 @@
  * Code under test: rider-app/lib/notifyError.ts
  */
 
+import { notifyError } from '../lib/notifyError';
+import { showToast } from '../store/toastStore';
+
 jest.mock('../store/toastStore', () => ({
   __esModule: true,
   showToast: jest.fn(),
 }));
-
-import { notifyError } from '../lib/notifyError';
-import { showToast } from '../store/toastStore';
 
 const showToastMock = showToast as jest.Mock;
 

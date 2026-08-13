@@ -16,6 +16,7 @@ try:
     from ..db_supabase import increment_promo_uses
     from ..dependencies import get_admin_user, get_current_user
     from ..models.ride_status import RideStatus
+    from ..settings_loader import get_app_settings
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.pii import geohash as _geohash
     from ..utils.rate_limiter import promo_available_limit, promo_validate_limit
@@ -24,6 +25,7 @@ except ImportError:
     from db_supabase import increment_promo_uses
     from dependencies import get_admin_user, get_current_user
     from models.ride_status import RideStatus
+    from settings_loader import get_app_settings
     from utils.datetime_utils import parse_iso_utc
     from utils.pii import geohash as _geohash
     from utils.rate_limiter import promo_available_limit, promo_validate_limit
@@ -115,6 +117,22 @@ async def _validate_promo_for_user(
     so the rider pays $0.
     """
     code = code.strip().upper()
+
+    # Kill switch (ACTION_ITEMS.md E5): pauses promo redemption for an
+    # incident (e.g. an abuse exploit). Covers both callers of this shared
+    # validator -- rider self-service (POST /promo/apply) and the admin
+    # apply-on-behalf-of-rider path. Fail-open on a settings-read error, same
+    # convention as every other kill switch -- a lookup hiccup must never
+    # itself block redemption.
+    try:
+        settings = await get_app_settings()
+        if not settings.get("promo_redemption_enabled", True):
+            raise HTTPException(status_code=503, detail="Promo redemption is temporarily disabled")
+    except HTTPException:
+        raise
+    except Exception as settings_err:
+        logger.warning(f"promo: app_settings lookup failed ({settings_err}), proceeding as enabled")
+
     now = datetime.now(timezone.utc)
     promo = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("promotions", {"code": code}, limit=1))
 

@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import ExitStack, contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -924,6 +924,29 @@ class TestUpdateMyDriverAutoCreateAndReview:
         assert result.get("status") != "needs_review"
 
 
+@contextmanager
+def _heatmap_ctx(settings=None):
+    """Combined context manager for heatmap tests — redis miss + configurable settings."""
+    with ExitStack() as stack:
+        stack.enter_context(_patch_both("utils.redis_client.redis_get", AsyncMock(return_value=None)))
+        stack.enter_context(_patch_both("utils.redis_client.redis_set", AsyncMock()))
+        stack.enter_context(_patch_both("settings_loader.get_app_settings", AsyncMock(return_value=settings or {})))
+        stack.enter_context(_patch_both("utils.metrics.inc", lambda *a, **k: None))
+        stack.enter_context(_patch_both("utils.metrics.observe", lambda *a, **k: None))
+        yield
+
+
+def _make_rides(coords, created_at=None):
+    """Build ride dicts with coords + timestamps for heatmap tests."""
+    from datetime import datetime, timezone
+
+    if created_at is None:
+        created_at = datetime.now(timezone.utc).isoformat()
+    return [
+        {"pickup_lat": lat, "pickup_lng": lng, "created_at": created_at, "status": "completed"} for lat, lng in coords
+    ]
+
+
 class TestGetDemandHeatmap:
     async def test_disabled_area_returns_empty(self):
         from backend.routes.drivers import profile as profile_mod
@@ -946,13 +969,347 @@ class TestGetDemandHeatmap:
 
         assert result["enabled"] is False
 
-    async def test_enabled_area_returns_pickup_points(self):
+    async def test_enabled_area_returns_aggregated_cells(self):
+        """≥k rides in the same cell → one centroid point with decayed weight."""
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+        rides = _make_rides(
+            [(52.132, -106.664), (52.133, -106.665), (52.1325, -106.6645)],
+        )
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                return [{"show_demand_heatmap": True}]
+            if table == "rides":
+                return rides
+            return []
+
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx(),
+        ):
+            result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        assert result["enabled"] is True
+        assert result["total_rides"] == 3
+        assert len(result["points"]) >= 1
+        assert "refresh_seconds" in result
+        assert "generated_at" in result
+        for pt in result["points"]:
+            assert len(pt) == 3
+            assert pt[2] > 0
+
+    async def test_per_area_config_changes_the_query_window(self):
+        """A per-area override must actually reach the rides query.
+
+        The aggregation windows were hardcoded for one mid-size market; a
+        low-volume region needs a longer window to clear the same k-anonymity
+        floor a busy one clears in a day. Asserting on the cutoff the query
+        receives is what pins that the override is wired through, rather than
+        resolved into a variable nobody reads.
+        """
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+        captured: dict = {}
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                # 60-day live window instead of the 7-day default.
+                return [{"show_demand_heatmap": True, "heatmap_config": {"live_window_days": 21}}]
+            if table == "rides":
+                captured.setdefault("created_at", filters.get("created_at"))
+                return []
+            return []
+
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx({}),
+        ):
+            await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        cutoff = datetime.fromisoformat(captured["created_at"]["$gte"])
+        age_days = (datetime.now(timezone.utc) - cutoff).total_seconds() / 86400
+        assert 20.5 < age_days < 21.5, f"expected a ~21-day window, got {age_days:.1f} days"
+
+    async def test_per_area_k_floor_overrides_the_global(self):
+        """Area override beats the global for the privacy floor."""
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+        # Three rides in one cell: passes a k_floor of 3, suppressed at 5.
+        rides = _make_rides([(52.132, -106.664)] * 3)
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                return [{"show_demand_heatmap": True, "heatmap_config": {"k_floor": 5}}]
+            if table == "rides":
+                return rides
+            return []
+
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx({"heatmap_k_floor": 3}),  # global would have allowed it
+        ):
+            result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        assert result["points"] == [], "area's stricter k_floor must win over the global"
+
+    async def test_per_area_refresh_seconds_is_served_to_the_driver(self):
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                return [{"show_demand_heatmap": True, "heatmap_config": {"refresh_seconds": 240}}]
+            return []
+
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx({"heatmap_refresh_seconds": 90}),
+        ):
+            result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        assert result["refresh_seconds"] == 240
+
+    async def test_hostile_per_area_config_is_clamped_not_fatal(self):
+        """service_areas is writable out-of-band; the read site must defend itself."""
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+        hostile = {
+            "k_floor": 0,  # would disable the privacy floor
+            "refresh_seconds": 1,  # would make the fleet poll every second
+            "cell_lat_deg": 0,  # would ZeroDivisionError in the cell-key math
+            "live_window_days": "abc",
+        }
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                return [{"show_demand_heatmap": True, "heatmap_config": hostile}]
+            if table == "rides":
+                return _make_rides([(52.132, -106.664)] * 3)
+            return []
+
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx({}),
+        ):
+            result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        assert result["enabled"] is True  # no crash from the zero cell size
+        assert result["refresh_seconds"] >= 30
+
+    async def test_cache_key_differs_between_areas_with_different_config(self):
+        """A cached payload is only valid for the config that built it.
+
+        Without the config in the key, retuning an area (or tightening its
+        k-anonymity floor) would keep serving cells built under the old
+        settings until the TTL lapsed.
+        """
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+        seen_keys = []
+
+        def make_rows(cfg):
+            def fake_get_rows(table, filters, **kw):
+                if table == "drivers":
+                    return [driver]
+                if table == "service_areas":
+                    return [{"show_demand_heatmap": True, "heatmap_config": cfg}]
+                return []
+
+            return fake_get_rows
+
+        async def spy_get(key):
+            seen_keys.append(key)
+            return None
+
+        for cfg in ({"k_floor": 3}, {"k_floor": 9}):
+            with ExitStack() as stack:
+                stack.enter_context(
+                    patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=make_rows(cfg)))
+                )
+                stack.enter_context(_patch_both("utils.redis_client.redis_get", spy_get))
+                stack.enter_context(_patch_both("utils.redis_client.redis_set", AsyncMock()))
+                stack.enter_context(_patch_both("settings_loader.get_app_settings", AsyncMock(return_value={})))
+                stack.enter_context(_patch_both("utils.metrics.inc", lambda *a, **k: None))
+                stack.enter_context(_patch_both("utils.metrics.observe", lambda *a, **k: None))
+                await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        assert len(seen_keys) == 2
+        assert seen_keys[0] != seen_keys[1], "config change must not reuse a stale cache entry"
+
+    async def test_global_kill_switch_disables_heatmap_fleet_wide(self):
+        """driver_heatmap_enabled=False wins over the per-area toggle."""
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                # per-area toggle explicitly ON — the global switch must still win
+                return [{"show_demand_heatmap": True}]
+            if table == "rides":
+                raise AssertionError("kill switch must short-circuit before any rides query")
+            return []
+
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx({"driver_heatmap_enabled": False}),
+        ):
+            result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        assert result == {"enabled": False, "points": [], "total_rides": 0}
+
+    async def test_missing_kill_switch_key_defaults_enabled(self):
+        """Absent driver_heatmap_enabled preserves pre-migration behaviour."""
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+        rides = _make_rides([(52.132, -106.664)] * 3)
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                return [{"show_demand_heatmap": True}]
+            if table == "rides":
+                return rides
+            return []
+
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx({}),  # no heatmap keys at all
+        ):
+            result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        assert result["enabled"] is True
+
+    async def test_out_of_range_config_is_clamped_not_fatal(self):
+        """Garbage/hostile settings values clamp to safe bounds instead of 500ing.
+
+        The settings row is writable out-of-band (direct DB edit bypasses the
+        admin API's validation), so the read site must defend itself. A
+        refresh_seconds of 1 would otherwise turn every online driver into a
+        1-second poller; a k_floor of 0 would disable the privacy floor; a
+        cell size of 0 would raise ZeroDivisionError on every request.
+        """
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+        rides = _make_rides([(52.132, -106.664)] * 3)
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                return [{"show_demand_heatmap": True}]
+            if table == "rides":
+                return rides
+            return []
+
+        hostile = {
+            "heatmap_refresh_seconds": 1,
+            "heatmap_k_floor": 0,
+            "heatmap_cell_lat_deg": 0,
+            "heatmap_cell_lng_deg": -5,
+            "heatmap_decay_half_life_days": "not-a-number",
+        }
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx(hostile),
+        ):
+            result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        assert result["refresh_seconds"] >= 30, "poll interval must be floored"
+        assert result["enabled"] is True  # no crash from the 0 cell size
+
+    async def test_cache_read_failure_degrades_to_rebuild(self):
+        """A Redis outage must degrade to a cache miss, never a 500.
+
+        redis_get re-raises when REDIS_URL is set, so an unguarded read turns
+        a Redis blip into a hard-down heatmap for every polling driver while
+        the database is perfectly healthy.
+        """
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+        rides = _make_rides([(52.132, -106.664)] * 3)
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                return [{"show_demand_heatmap": True}]
+            if table == "rides":
+                return rides
+            return []
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows))
+            )
+            stack.enter_context(
+                _patch_both("utils.redis_client.redis_get", AsyncMock(side_effect=ConnectionError("redis down")))
+            )
+            stack.enter_context(_patch_both("utils.redis_client.redis_set", AsyncMock()))
+            stack.enter_context(_patch_both("settings_loader.get_app_settings", AsyncMock(return_value={})))
+            stack.enter_context(_patch_both("utils.metrics.inc", lambda *a, **k: None))
+            stack.enter_context(_patch_both("utils.metrics.observe", lambda *a, **k: None))
+            result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        assert result["enabled"] is True
+        assert len(result["points"]) >= 1
+
+    async def test_k_floor_suppresses_sparse_cells(self):
+        """Cells with < k rides are suppressed entirely (privacy floor)."""
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+        rides = _make_rides([(52.132, -106.664)])
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                return [{"show_demand_heatmap": True}]
+            if table == "rides":
+                return rides
+            return []
+
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx(),
+        ):
+            result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        assert result["enabled"] is True
+        assert result["total_rides"] == 1
+        assert result["points"] == []
+
+    async def test_missing_coords_skipped(self):
         from backend.routes.drivers import profile as profile_mod
 
         driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
         rides = [
-            {"pickup_lat": 50.1, "pickup_lng": -104.1},
-            {"pickup_lat": None, "pickup_lng": -104.2},  # missing coord skipped
+            {"pickup_lat": None, "pickup_lng": -106.0, "created_at": "2026-08-13T12:00:00Z", "status": "completed"},
+            {"pickup_lat": 52.0, "pickup_lng": None, "created_at": "2026-08-13T12:00:00Z", "status": "completed"},
         ]
 
         def fake_get_rows(table, filters, **kw):
@@ -964,12 +1321,473 @@ class TestGetDemandHeatmap:
                 return rides
             return []
 
-        with patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)):
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx(),
+        ):
+            result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        assert result["total_rides"] == 0
+        assert result["points"] == []
+
+    async def test_recency_decay_weights_recent_higher(self):
+        """Recent rides should have higher weight than older rides."""
+        from datetime import datetime, timezone
+
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+        now = datetime.now(timezone.utc)
+        coord = (52.132, -106.664)
+        rides = [
+            {"pickup_lat": coord[0], "pickup_lng": coord[1], "created_at": now.isoformat(), "status": "completed"},
+            {
+                "pickup_lat": coord[0] + 0.001,
+                "pickup_lng": coord[1] + 0.001,
+                "created_at": now.isoformat(),
+                "status": "completed",
+            },
+            {
+                "pickup_lat": coord[0] + 0.002,
+                "pickup_lng": coord[1] + 0.002,
+                "created_at": now.isoformat(),
+                "status": "completed",
+            },
+        ]
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                return [{"show_demand_heatmap": True}]
+            if table == "rides":
+                return rides
+            return []
+
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx(),
+        ):
+            result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        if result["points"]:
+            for pt in result["points"]:
+                assert pt[2] > 0.9
+
+    async def test_cache_hit_returns_cached(self):
+        """When Redis has a cached result, return it without querying rides."""
+        import json
+
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+        cached_data = {
+            "enabled": True,
+            "points": [[52.0, -106.0, 2.5]],
+            "total_rides": 5,
+            "refresh_seconds": 90,
+            "generated_at": "2026-08-13T12:00:00Z",
+        }
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                return [{"show_demand_heatmap": True}]
+            return []
+
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _patch_both("utils.redis_client.redis_get", AsyncMock(return_value=json.dumps(cached_data))),
+            _patch_both("utils.metrics.inc", lambda *a, **k: None),
+        ):
+            result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        assert result == cached_data
+
+    async def test_empty_area_returns_no_points(self):
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                return [{"show_demand_heatmap": True}]
+            if table == "rides":
+                return []
+            return []
+
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx(),
+        ):
             result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
 
         assert result["enabled"] is True
-        assert result["points"] == [[50.1, -104.1, 1]]
-        assert result["total_rides"] == 2
+        assert result["points"] == []
+        assert result["total_rides"] == 0
+
+
+class TestGetDemandHeatmapV2:
+    """Tests for the v2 heatmap payload (HM-10): live + baseline + scheduled components."""
+
+    def _v2_settings(self, **overrides):
+        base = {"driver_heatmap_v2_enabled": True}
+        base.update(overrides)
+        return base
+
+    def _service_area(self, **overrides):
+        # surge_enabled defaults True here so the existing surge-mirror tests
+        # exercise the pass-through path; the gate itself is covered by
+        # test_v2_surge_suppressed_when_surge_disabled below.
+        base = {
+            "show_demand_heatmap": True,
+            "surge_enabled": True,
+            "surge_multiplier": 1.0,
+            "surge_active": False,
+        }
+        base.update(overrides)
+        return base
+
+    async def test_v2_enabled_returns_cells_and_surge(self):
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+        coord = (52.132, -106.664)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        rides = _make_rides([coord, (coord[0] + 0.001, coord[1] + 0.001), (coord[0] + 0.002, coord[1] + 0.002)])
+        for r in rides:
+            r["status"] = "searching"
+
+        call_count = 0
+
+        def fake_get_rows(table, filters, **kw):
+            nonlocal call_count
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                return [self._service_area(surge_multiplier=1.5, surge_active=True)]
+            if table == "rides":
+                call_count += 1
+                return rides
+            return []
+
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx(self._v2_settings()),
+        ):
+            result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        assert result["enabled"] is True
+        assert "cells" in result
+        assert "surge" in result
+        assert result["surge"]["multiplier"] == 1.5
+        assert result["surge"]["active"] is True
+        for cell in result["cells"]:
+            assert "live" in cell
+            assert "baseline" in cell
+            assert "scheduled" in cell
+            assert "lat" in cell
+            assert "lng" in cell
+
+    async def test_v2_allowlist_grants_access(self):
+        """Driver in heatmap_internal_driver_ids gets v2 even when global flag is off."""
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+        rides = _make_rides([(52.132, -106.664)] * 3)
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                return [self._service_area()]
+            if table == "rides":
+                return rides
+            return []
+
+        settings = {
+            "driver_heatmap_v2_enabled": False,
+            "heatmap_internal_driver_ids": ["u1"],
+        }
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx(settings),
+        ):
+            result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        assert "cells" in result
+
+    async def test_v2_disabled_no_cells(self):
+        """Without v2 flag, response has no cells or surge fields."""
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+        rides = _make_rides([(52.132, -106.664)] * 3)
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                return [self._service_area()]
+            if table == "rides":
+                return rides
+            return []
+
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx({"driver_heatmap_v2_enabled": False}),
+        ):
+            result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        assert "cells" not in result
+        assert "surge" not in result
+
+    async def test_v2_k_floor_per_component(self):
+        """Components below k-floor are zeroed but cell survives if any component passes.
+
+        All three live rides share one coordinate so the live component clears
+        k_floor (3) on its own — that is the component under test. The single
+        old ride is the below-floor baseline that must be zeroed out.
+        (Before the baseline floor was fixed to test raw counts, this fixture's
+        rides straddled two cells and the cell only survived because an
+        unfloored single-ride baseline let it through — i.e. the test passed
+        via the very hole it was meant to guard.)
+        """
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+        now = datetime.now(timezone.utc)
+        coord = (52.132, -106.664)
+        live_rides = [
+            {"pickup_lat": coord[0], "pickup_lng": coord[1], "created_at": now.isoformat(), "status": "searching"}
+            for _ in range(3)
+        ]
+        # Exactly ONE historical ride in the current hour-of-week at the same
+        # coords: a real baseline candidate that sits below k_floor (3) and so
+        # must be zeroed rather than reported.
+        baseline_below_floor = [
+            {
+                "pickup_lat": coord[0],
+                "pickup_lng": coord[1],
+                "created_at": (now - timedelta(days=7)).isoformat(),
+                "status": "completed",
+            },
+        ]
+
+        call_idx = 0
+
+        def fake_get_rows(table, filters, **kw):
+            nonlocal call_idx
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                return [self._service_area()]
+            if table == "rides":
+                call_idx += 1
+                if call_idx == 1:
+                    return live_rides + baseline_below_floor  # 7-day aggregate
+                if call_idx == 2:
+                    return live_rides  # 10-min live
+                if call_idx == 3:
+                    return baseline_below_floor  # 28-day baseline (1 ride < k_floor)
+                return []  # scheduled
+            return []
+
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx(self._v2_settings()),
+        ):
+            result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        assert "cells" in result
+        assert len(result["cells"]) == 1
+        cell = result["cells"][0]
+        assert cell["live"] == 3, "live cleared k_floor and must report its real count"
+        assert cell["baseline"] == 0, "single-ride baseline is below k_floor and must be zeroed"
+        assert cell["scheduled"] == 0
+
+    async def test_v2_baseline_below_k_floor_is_suppressed(self):
+        """A single-ride baseline cell must NOT survive (PIPEDA k-anonymity).
+
+        Regression test: the baseline floor was previously applied to the
+        *normalized* score (``bl_val > 0``), which a lone ride still clears —
+        so one rider's recurring weekly pickup (e.g. their home) leaked as a
+        cell with its centroid. The floor must test the raw count.
+        """
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+        now = datetime.now(timezone.utc)
+        lonely = (52.500, -106.900)  # far from any other cell
+        # Exactly ONE historical ride at this hour-of-week — below k_floor of 3.
+        baseline_rides = [
+            {"pickup_lat": lonely[0], "pickup_lng": lonely[1], "created_at": (now - timedelta(days=7)).isoformat()}
+        ]
+
+        call_idx = 0
+
+        def fake_get_rows(table, filters, **kw):
+            nonlocal call_idx
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                return [self._service_area()]
+            if table == "rides":
+                call_idx += 1
+                if call_idx == 3:  # 28-day baseline query
+                    return baseline_rides
+                return []
+            return []
+
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx(self._v2_settings()),
+        ):
+            result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        # The lonely cell must be absent entirely — not merely zero-valued.
+        assert result.get("cells") == [], f"single-ride baseline cell leaked: {result.get('cells')}"
+
+    async def test_v2_surge_suppressed_when_surge_disabled(self):
+        """A stale surge multiplier must not surface when surge_enabled is off.
+
+        Otherwise drivers chase surge earnings riders are never charged.
+        """
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+        rides = _make_rides([(52.132, -106.664)] * 3)
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                # stale multiplier/active left over from when surge was on
+                return [self._service_area(surge_enabled=False, surge_multiplier=2.5, surge_active=True)]
+            if table == "rides":
+                return rides
+            return []
+
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx(self._v2_settings()),
+        ):
+            result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        assert result["surge"] == {"multiplier": 1.0, "active": False}
+
+    async def test_v2_surge_mirror_from_service_area(self):
+        """Surge data mirrors the service_area fields."""
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+        rides = _make_rides([(52.132, -106.664)] * 3)
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                return [self._service_area(surge_multiplier=2.0, surge_active=True)]
+            if table == "rides":
+                return rides
+            return []
+
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx(self._v2_settings()),
+        ):
+            result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        assert result["surge"] == {"multiplier": 2.0, "active": True}
+
+    async def test_v2_includes_forecast_when_available(self):
+        """v2 response includes a 6-hour forecast array (HM-23)."""
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+        rides = _make_rides([(52.132, -106.664)] * 3)
+
+        mock_forecast = [
+            {
+                "hour": 14,
+                "day_name": "Thu",
+                "predicted_rides": 5.0,
+                "data_basis": "historical_average",
+                "is_peak": False,
+                "timestamp": "2026-08-13T14:00:00+00:00",
+            },
+            {
+                "hour": 15,
+                "day_name": "Thu",
+                "predicted_rides": 8.0,
+                "data_basis": "historical_average",
+                "is_peak": True,
+                "timestamp": "2026-08-13T15:00:00+00:00",
+            },
+            {
+                "hour": 16,
+                "day_name": "Thu",
+                "predicted_rides": 10.0,
+                "data_basis": "historical_average",
+                "is_peak": True,
+                "timestamp": "2026-08-13T16:00:00+00:00",
+            },
+        ]
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                return [self._service_area()]
+            if table == "rides":
+                return rides
+            return []
+
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx(self._v2_settings()),
+            patch("backend.utils.demand_forecast.forecast_demand", AsyncMock(return_value=mock_forecast)),
+        ):
+            result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        assert "forecast" in result
+        assert len(result["forecast"]) == 3
+        for entry in result["forecast"]:
+            assert "hour" in entry
+            assert "day_name" in entry
+            assert "demand" in entry
+            assert 0 <= entry["demand"] <= 1.0
+            assert "is_peak" in entry
+
+    async def test_v2_forecast_gracefully_degrades(self):
+        """If forecast_demand raises, v2 response still works without forecast."""
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+        rides = _make_rides([(52.132, -106.664)] * 3)
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                return [self._service_area()]
+            if table == "rides":
+                return rides
+            return []
+
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx(self._v2_settings()),
+            patch("backend.utils.demand_forecast.forecast_demand", AsyncMock(side_effect=Exception("DB error"))),
+        ):
+            result = await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        assert result["enabled"] is True
+        assert "cells" in result
+        assert "forecast" not in result
 
 
 class TestDestinationMode404s:

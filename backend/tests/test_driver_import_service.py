@@ -261,6 +261,63 @@ def test_missing_required_column_errors(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# A28 P2 (ACTION_ITEMS.md): driver-import validity gaps — format validation
+# ---------------------------------------------------------------------------
+
+
+def test_malformed_phone_errors(monkeypatch):
+    _install_fake(monkeypatch)
+    plan = svc.build_plan([_driver_row(phone="12345")], [], None, SERVICE_AREA, "batch1")
+    assert any(e.field == "phone" for e in plan.errors)
+    assert not plan.drivers_to_insert
+
+
+def test_malformed_email_errors(monkeypatch):
+    _install_fake(monkeypatch)
+    plan = svc.build_plan([_driver_row(email="not-an-email")], [], None, SERVICE_AREA, "batch1")
+    assert any(e.field == "email" for e in plan.errors)
+    assert not plan.drivers_to_insert
+
+
+def test_blank_email_is_not_a_format_error(monkeypatch):
+    # Email is optional — an absent value must not be treated as malformed.
+    _install_fake(monkeypatch)
+    plan = svc.build_plan([_driver_row(email="")], [], None, SERVICE_AREA, "batch1")
+    assert not any(e.field == "email" for e in plan.errors)
+
+
+def test_malformed_vin_errors_on_new_driver(monkeypatch):
+    _install_fake(monkeypatch)
+    plan = svc.build_plan([_driver_row(vin="TOO-SHORT")], [], None, SERVICE_AREA, "batch1")
+    assert any(e.field == "vin" for e in plan.errors)
+    assert not plan.drivers_to_insert
+
+
+def test_valid_vin_is_normalized_on_new_driver(monkeypatch):
+    _install_fake(monkeypatch)
+    plan = svc.build_plan([_driver_row(vin="2t1burhe0jc123456")], [], None, SERVICE_AREA, "batch1")
+    assert not plan.errors
+    assert plan.drivers_to_insert[0]["_plain_vehicle_vin"] == "2T1BURHE0JC123456"
+
+
+def test_malformed_vin_errors_on_resume_update(monkeypatch):
+    existing_driver = {
+        "id": "drv-1",
+        "phone": "+13065551234",
+        "legacy_import_metadata": {"source": IMPORT_SOURCE, "old_driver_id": "OLD-1"},
+        "vehicle_make": "Toyota",
+        "vehicle_model": "Corolla",
+        "license_plate": "ABC123",
+        "vehicle_year": 2020,
+        "vehicle_vin": None,
+    }
+    _install_fake(monkeypatch, drivers=[existing_driver])
+    plan = svc.build_plan([_driver_row(vin="INVALID-VIN")], [], None, SERVICE_AREA, "batch1")
+    assert any(e.field == "vin" for e in plan.errors)
+    assert not plan.drivers_to_update
+
+
+# ---------------------------------------------------------------------------
 # storage_signed_url — response-shape handling
 # ---------------------------------------------------------------------------
 

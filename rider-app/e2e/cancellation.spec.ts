@@ -29,13 +29,11 @@ test.describe('rider-app: cancellation flow', () => {
     const errors: string[] = [];
     page.on('pageerror', (err) => errors.push(err.message));
 
-    let cancelCalled = false;
     await seedAuthedSession(page);
     await mockBackend(page, { activeRide: BASE_SEARCHING_RIDE });
 
     // Intercept the cancel endpoint and return success
     await page.route('**/api/v1/rides/*/cancel', async (route) => {
-      cancelCalled = true;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',

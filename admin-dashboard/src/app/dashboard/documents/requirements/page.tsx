@@ -160,7 +160,7 @@ function ReqModal({ open, req, onClose, onSave }: ReqModalProps) {
                             <Label>Required</Label>
                         </div>
                     </div>
-                    {error && <p className="text-sm text-red-500">{error}</p>}
+                    {error && <p className="text-sm text-destructive">{error}</p>}
                 </div>
                 <DialogFooter>
                     <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>

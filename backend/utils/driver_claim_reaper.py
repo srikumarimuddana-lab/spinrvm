@@ -4,7 +4,12 @@ Dispatch claims a driver (is_available=false via claim_driver_atomic) and only
 then inserts the ride_offers row + schedules the offer-timeout task. A crash or
 restart in that window leaves the driver is_available=false with no offer and no
 timeout handler — silently dropped from dispatch. The stuck-ride sweeper
-recovers the ride, not the driver flag.
+(`utils/stuck_ride_sweeper.py`) recovers the ride ONLY when it is in
+`searching` (its atomic claim filters `.eq("status", "searching")`) — it does
+not recover the driver flag, and it does nothing at all for a ride already
+past `searching` (e.g. `driver_assigned`/`in_progress`). A stuck `in_progress`
+ride has no automated recovery today; `utils/stale_in_progress_ride_alerter.py`
+alerts (never mutates) on that gap.
 
 This loop releases such orphans: a driver that is online, unavailable, was
 claimed more than RECLAIM_THRESHOLD_SECONDS ago, and has NEITHER a pending offer
@@ -147,8 +152,26 @@ async def driver_claim_reaper_loop() -> None:
         f"Driver claim reaper started (interval={REAP_INTERVAL_SECONDS}s, threshold={RECLAIM_THRESHOLD_SECONDS}s)"
     )
     while True:
-        lock_ttl = int(REAP_INTERVAL_SECONDS * 2)
-        if not await redis_set_nx("spinr:driver:claim_reaper:lock", _pod_id(), lock_ttl):
+        # TTL must be SHORTER than the minimum possible sleep below (interval *
+        # 0.9, worst-case jitter), or the pod that ran the last tick wakes to
+        # find its OWN key still alive, fails SET NX, and sleeps another full
+        # interval — halving the documented cadence. `interval * 2` doesn't
+        # (2x > 0.9x). Matches ledger_projection.py's `_LOCK_TTL_SECONDS`
+        # formula (ACTION_ITEMS B21): 0.05 headroom under the 0.9 floor.
+        lock_ttl = int(REAP_INTERVAL_SECONDS * 0.85)
+        try:
+            got_lock = await redis_set_nx("spinr:driver:claim_reaper:lock", _pod_id(), lock_ttl)
+        except Exception as lock_err:
+            # redis_set_nx now raises on a real (Redis-configured-but-
+            # unavailable) error instead of silently falling back per-replica
+            # (2026-08-11 P1 fix). This lock is a throttle only — the atomic
+            # DB claim inside _reap_tick is the real correctness guard — so
+            # proceed with the tick rather than skip it; every replica
+            # running redundant idempotent work during a Redis blip is safe,
+            # silently going dark every tick until Redis recovers is not.
+            logger.error(f"driver_claim_reaper: leader lock unavailable ({lock_err}), proceeding without it")
+            got_lock = True
+        if not got_lock:
             _record_heartbeat(_LOOP_NAME)
             await asyncio.sleep(REAP_INTERVAL_SECONDS)
             continue

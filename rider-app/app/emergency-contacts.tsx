@@ -50,7 +50,7 @@ export default function EmergencyContactsScreen() {
     title: string;
     message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+    buttons?: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
   const fetchContacts = useCallback(async () => {
@@ -65,6 +65,10 @@ export default function EmergencyContactsScreen() {
   }, []);
 
   useEffect(() => {
+    // fetchContacts is a useCallback with a stable ([]) dep array, so this
+    // fires once on mount; the state it sets (contacts/loading) isn't in
+    // this effect's own deps, so it can't retrigger itself.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchContacts();
   }, [fetchContacts]);
 

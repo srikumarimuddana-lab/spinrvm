@@ -8,6 +8,10 @@
  *   - Rider-sent message preserved as sender='rider'
  */
 
+import { Vibration } from 'react-native';
+import { useDriverStore } from '../../store/driverStore';
+import type { ChatMessage } from '../../store/driverStore';
+
 jest.mock('react-native', () => ({
   Platform: { OS: 'android' },
   AppState: { addEventListener: jest.fn(() => ({ remove: jest.fn() })) },
@@ -52,10 +56,6 @@ jest.mock('../../utils/tripLocationRecorder', () => ({
 jest.mock('../../utils/tripLocationTransport', () => ({
   apiLocationBatchTransport: jest.fn(),
 }));
-
-import { Vibration } from 'react-native';
-import { useDriverStore } from '../../store/driverStore';
-import type { ChatMessage } from '../../store/driverStore';
 
 // ---------------------------------------------------------------------------
 // Helpers

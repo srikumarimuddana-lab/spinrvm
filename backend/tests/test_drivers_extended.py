@@ -30,6 +30,20 @@ RIDE_ID = "ride_drv_ext"
 RIDER_ID = "rider_drv_ext"
 
 
+class _FakeRequest:
+    """Minimal stand-in for fastapi.Request — only `.json()` is used by
+    decline_ride/cancel_ride to read an optional body reason."""
+
+    def __init__(self, body=None, raise_on_json=False):
+        self._body = body
+        self._raise = raise_on_json
+
+    async def json(self):
+        if self._raise:
+            raise ValueError("no body")
+        return self._body
+
+
 def _driver(**extra):
     return {
         "id": DRIVER_ID,
@@ -227,7 +241,11 @@ class TestGetDriverBalance:
             if table == "drivers":
                 return [_driver()]
             if table == "rides":
-                return rides
+                # Discriminate by status so the new cancelled-rides fetch
+                # (for cancellation-fee income) doesn't alias onto the same
+                # completed-rides list.
+                status = (filters or {}).get("status")
+                return rides if status == "completed" else []
             if table == "payouts":
                 return payouts
             return []
@@ -257,7 +275,8 @@ class TestGetDriverBalance:
             if table == "drivers":
                 return [_driver()]
             if table == "rides":
-                return rides
+                status = (filters or {}).get("status")
+                return rides if status == "completed" else []
             if table == "payouts":
                 return payouts
             return []
@@ -269,6 +288,128 @@ class TestGetDriverBalance:
         assert result["payable_balance"] == "55.00"
         assert result["pending_payouts"] == "5.00"
         assert result["total_paid_out"] == "40.00"  # 30 + 10 sent (not pending)
+
+    def test_balance_includes_incentives_cancel_fees_and_tax(self):
+        """ACTION_ITEMS.md A28, '/balance vs /earnings composition can
+        diverge' — decided 2026-08-12: payable_balance must include the
+        same components /earnings and driver statements already do:
+        per-ride incentive claims, cancellation fees earned, and
+        pass-through tax — not just fare components + bonuses."""
+        from backend.routes import drivers as drv
+
+        rides = [{"id": "ride-1", "base_fare": 10.0, "tax_amount": 0.6}]
+        cancelled = [{"cancellation_fee_driver": 5.0}]
+        payouts = []
+
+        def get_rows_mock(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                status = (filters or {}).get("status")
+                if status == "completed":
+                    return rides
+                if status == "cancelled":
+                    return cancelled
+                return []
+            if table == "payouts":
+                return payouts
+            return []
+
+        class _FakeIncentiveQuery:
+            def select(self, *_a, **_k):
+                return self
+
+            def in_(self, *_a, **_k):
+                return self
+
+            def execute(self):
+                class _R:
+                    data = [{"bonus_amount": 3.0}]
+
+                return _R()
+
+        class _FakeSupabase:
+            def table(self, name):
+                assert name == "ride_incentive_claims"
+                return _FakeIncentiveQuery()
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)),
+            patch("backend.routes.drivers._deps.db_supabase.supabase", _FakeSupabase()),
+        ):
+            result = asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
+
+        # 10.00 (base_fare) + 0.60 (tax) + 3.00 (incentive) + 5.00 (cancel fee) = 18.60
+        assert result["total_earnings"] == "18.60"
+        assert result["total_incentives"] == "3.00"
+        assert result["total_cancel_fees"] == "5.00"
+        assert result["total_tax"] == "0.60"
+        assert result["payable_balance"] == "18.60"
+
+    def test_balance_uses_driver_earnings_column_not_raw_fare_recompute(self):
+        """Axis-1 half of the A28 fix: /balance must trust the canonical
+        driver_earnings column (via _ride_income), matching /earnings and
+        driver statements, instead of always recomputing from fare
+        components — so a manual correction to driver_earnings isn't
+        silently ignored on the balance screen."""
+        from backend.routes import drivers as drv
+
+        # driver_earnings (12.00) deliberately disagrees with the raw fare
+        # components (base_fare 10.00 + tip 1.00 = 11.00) to prove the
+        # column wins.
+        rides = [{"id": "ride-1", "base_fare": 10.0, "tip_amount": 1.0, "driver_earnings": 12.0}]
+
+        def get_rows_mock(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                status = (filters or {}).get("status")
+                return rides if status == "completed" else []
+            if table == "payouts":
+                return []
+            return []
+
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
+            result = asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
+
+        assert result["total_earnings"] == "12.00"
+
+    def test_balance_reconciliation_identity_holds_with_new_components(self):
+        """The driver-app payout screen displays total_earnings alongside a
+        breakdown of payable_balance + pending_payouts + total_paid_out and
+        relies on them summing back to total_earnings exactly. Must still
+        hold once incentives/cancel-fees/tax are folded in."""
+        from backend.routes import drivers as drv
+
+        rides = [{"id": "ride-1", "base_fare": 20.0, "tax_amount": 1.0}]
+        cancelled = [{"cancellation_fee_driver": 2.0}]
+        payouts = [
+            {"amount": 5.0, "status": "completed"},
+            {"amount": 3.0, "status": "pending"},
+        ]
+
+        def get_rows_mock(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                status = (filters or {}).get("status")
+                if status == "completed":
+                    return rides
+                if status == "cancelled":
+                    return cancelled
+                return []
+            if table == "payouts":
+                return payouts
+            return []
+
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
+            result = asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
+
+        total = Decimal(result["total_earnings"])
+        available = Decimal(result["payable_balance"])
+        pending = Decimal(result["pending_payouts"])
+        paid_out = Decimal(result["total_paid_out"])
+        assert available + pending + paid_out == total
 
     def test_balance_excludes_stripe_synced_legacy_payouts(self):
         """payout_type='stripe_sync' rows are legacy-app payout history synced
@@ -282,14 +423,14 @@ class TestGetDriverBalance:
         payouts = [
             {"amount": 30.0, "status": "completed", "payout_type": "standard"},  # deduct
             {"amount": 500.0, "status": "completed", "payout_type": "stripe_sync"},  # history only
-            {"amount": 20.0, "status": "completed", "payout_type": "legacy_import"},  # deduct (paired rides)
         ]
 
         def get_rows_mock(table, filters=None, **kw):
             if table == "drivers":
                 return [_driver()]
             if table == "rides":
-                return rides
+                status = (filters or {}).get("status")
+                return rides if status == "completed" else []
             if table == "payouts":
                 return payouts
             return []
@@ -297,9 +438,59 @@ class TestGetDriverBalance:
         with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
             result = asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
 
-        # 100 - 30 - 20 = 50; the $500 synced legacy payout never deducts.
-        assert result["payable_balance"] == "50.00"
-        assert result["total_paid_out"] == "50.00"
+        # 100 - 30 = 70; the $500 synced legacy payout never deducts.
+        assert result["payable_balance"] == "70.00"
+        assert result["total_paid_out"] == "30.00"
+
+    def test_balance_drops_legacy_import_rides_and_their_offset_together(self):
+        """Previous-app rides are history, not Spinr income (utils/legacy_rides).
+        The ride query filters them server-side and the paired 'legacy_import'
+        offset payout is dropped in Python — BOTH halves, or the balance moves.
+
+        The importer wrote the offset to exactly cancel the imported earnings,
+        so removing the pair must leave payable_balance identical while
+        total_earnings/total_paid_out stop reporting previous-app money.
+        """
+        from backend.routes import drivers as drv
+
+        legacy_ride = {"base_fare": 400.0, "legacy_import_metadata": {"source": "legacy_mongo_booking_import"}}
+        new_ride = {"base_fare": 100.0}
+
+        def get_rows_mock(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                if (filters or {}).get("status") == "cancelled":
+                    return []
+                # Honour the server-side exclusion the route now sends, so this
+                # asserts the real filter is applied rather than assuming it.
+                # A26 (docs/audit/2026-08-11-driver-rider-migration-audit.md):
+                # EXCLUDE_LEGACY_RIDES compiles to {"$eq": {}}, not a bare
+                # `None` — a bare `None` would compile to real SQL `IS NULL`,
+                # which can never match `legacy_import_metadata` (NOT NULL
+                # DEFAULT '{}'::jsonb) and would zero out every row, not just
+                # legacy ones.
+                rows = [new_ride, legacy_ride]
+                if (filters or {}).get("legacy_import_metadata") == {"$eq": {}}:
+                    rows = [r for r in rows if not r.get("legacy_import_metadata")]
+                return rows
+            if table == "payouts":
+                return [
+                    {"amount": 30.0, "status": "completed", "payout_type": "standard"},
+                    # Offset for the $400 legacy ride — must NOT deduct now that
+                    # the ride it cancels is gone.
+                    {"amount": 400.0, "status": "completed", "payout_type": "legacy_import"},
+                ]
+            return []
+
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
+            result = asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
+
+        # Previous-app money is invisible on both sides: 100 earned - 30 paid.
+        assert result["total_earnings"] == "100.00"
+        assert result["total_paid_out"] == "30.00"
+        # Unchanged from the pre-exclusion behaviour ((100+400) - (30+400) = 70).
+        assert result["payable_balance"] == "70.00"
 
     def test_db_error_raises_503_not_zeroed_balance(self):
         # Regression: a DB error fetching rides/payouts must surface as 503, not
@@ -317,6 +508,47 @@ class TestGetDriverBalance:
             return []
 
         with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
+        assert exc.value.status_code == 503
+
+    def test_incentive_claims_lookup_failure_raises_503_not_zeroed_balance(self):
+        """spinr-money-auditor finding: total_incentives now feeds
+        payable_balance (bounds the Stripe payout Transfer) — a swallowed
+        ride_incentive_claims failure must surface as 503, not silently
+        under-report what a driver can withdraw as $0 incentives."""
+        from fastapi import HTTPException
+
+        from backend.routes import drivers as drv
+
+        rides = [{"id": "ride-1", "base_fare": 10.0}]
+
+        def get_rows_mock(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                status = (filters or {}).get("status")
+                return rides if status == "completed" else []
+            return []
+
+        class _FailingIncentiveQuery:
+            def select(self, *_a, **_k):
+                return self
+
+            def in_(self, *_a, **_k):
+                return self
+
+            def execute(self):
+                raise RuntimeError("ride_incentive_claims lookup down")
+
+        class _FakeSupabase:
+            def table(self, name):
+                return _FailingIncentiveQuery()
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)),
+            patch("backend.routes.drivers._deps.db_supabase.supabase", _FakeSupabase()),
+        ):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
         assert exc.value.status_code == 503
@@ -999,6 +1231,75 @@ class TestCancelRide:
 
         assert result == {"success": True}
 
+    def test_cancel_with_service_animal_reason_writes_safety_audit_event(self):
+        """Gap #13 (post-accept side): CancelReasonSheet.tsx now has a
+        'Service animal — could not accommodate' preset. Confirm the
+        existing free-text cancellation_reason path still works AND a
+        dedicated audit_logs row is written for trust & safety, carrying
+        only IDs — no rider/driver PII."""
+        from backend.routes import drivers as drv
+
+        ride = _ride("driver_accepted")
+        cancelled = _ride("cancelled")
+        insert_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(side_effect=[ride, cancelled])),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value={"id": RIDE_ID})),
+            patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.insert_one", insert_mock),
+        ):
+            result = asyncio.run(
+                drv.cancel_ride(
+                    ride_id=RIDE_ID,
+                    reason="Service animal — could not accommodate",
+                    current_user={"id": USER_ID},
+                )
+            )
+
+        assert result == {"success": True}
+        insert_mock.assert_awaited_once()
+        table_name = insert_mock.call_args.args[0]
+        row = insert_mock.call_args.args[1]
+        assert table_name == "audit_logs"
+        assert row["action"] == "ride_cancel_service_animal_refusal"
+        assert row["entity_id"] == RIDE_ID
+        assert row["details"] == {"driver_id": DRIVER_ID}
+        assert not any(k in row for k in ("rider_name", "phone", "email", "address"))
+
+    def test_cancel_with_ordinary_reason_does_not_write_safety_audit_event(self):
+        """Regression guard: an everyday cancel reason (no 'service animal'
+        substring) must not trigger the new safety audit_logs insert —
+        only the pre-existing cancellation_reason column write."""
+        from backend.routes import drivers as drv
+
+        ride = _ride("driver_accepted")
+        cancelled = _ride("cancelled")
+        insert_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(side_effect=[ride, cancelled])),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value={"id": RIDE_ID})),
+            patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.insert_one", insert_mock),
+        ):
+            result = asyncio.run(drv.cancel_ride(ride_id=RIDE_ID, reason="Rider no-show", current_user={"id": USER_ID}))
+
+        assert result == {"success": True}
+        insert_mock.assert_not_awaited()
+
     def test_rejects_cancel_of_in_progress_ride(self):
         from backend.routes import drivers as drv
         from backend.utils.error_handling import RideStateError
@@ -1040,7 +1341,9 @@ class TestDeclineRide:
         with (
             patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
             patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.drivers._deps.db_supabase.run_sync", AsyncMock(side_effect=Exception("no offer row"))),
+            patch(
+                "backend.routes.drivers._deps.db_supabase.run_sync", AsyncMock(side_effect=Exception("no offer row"))
+            ),
             patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()),
             patch("backend.repositories.driver_repo.update_acceptance_rate", AsyncMock()),
             patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
@@ -1073,6 +1376,109 @@ class TestDeclineRide:
             result = asyncio.run(drv.decline_ride(ride_id=RIDE_ID, current_user={"id": USER_ID}))
 
         assert result == {"success": True}
+
+    def test_decline_with_no_request_stays_backward_compatible(self):
+        """A caller that never passes `request` (e.g. this direct-call test
+        style, or any legacy client) must not error — `request` defaults to
+        None and `reason` stays None, exactly the pre-existing behaviour."""
+        from backend.routes import drivers as drv
+
+        ride = _ride("driver_assigned", driver_id=DRIVER_ID)
+        insert_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch(
+                "backend.routes.drivers._deps.db_supabase.run_sync", AsyncMock(side_effect=Exception("no offer row"))
+            ),
+            patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.repositories.driver_repo.update_acceptance_rate", AsyncMock()),
+            patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers._deps.reset_miss_streak", AsyncMock()),
+            patch("backend.routes.drivers._deps.db.insert_one", insert_mock),
+        ):
+            result = asyncio.run(drv.decline_ride(ride_id=RIDE_ID, current_user={"id": USER_ID}))
+
+        assert result == {"success": True}
+        audit_details = insert_mock.call_args.args[1]["details"]
+        assert audit_details["reason"] is None
+
+    def test_decline_with_service_animal_reason_is_captured_in_audit_log(self):
+        """Gap #13: a pre-accept decline had no reason at all, so trust &
+        safety had no way to detect a driver refusing a service animal. The
+        offer card's long-press flag now posts reason='service_animal' —
+        confirm it lands in the audit_logs details, and that the details
+        blob carries only IDs (driver_id) and the reason code, never PII."""
+        from backend.routes import drivers as drv
+
+        ride = _ride("driver_assigned", driver_id=DRIVER_ID)
+        insert_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch(
+                "backend.routes.drivers._deps.db_supabase.run_sync", AsyncMock(side_effect=Exception("no offer row"))
+            ),
+            patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.repositories.driver_repo.update_acceptance_rate", AsyncMock()),
+            patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers._deps.reset_miss_streak", AsyncMock()),
+            patch("backend.routes.drivers._deps.db.insert_one", insert_mock),
+        ):
+            result = asyncio.run(
+                drv.decline_ride(
+                    ride_id=RIDE_ID,
+                    request=_FakeRequest({"reason": "service_animal"}),
+                    current_user={"id": USER_ID},
+                )
+            )
+
+        assert result == {"success": True}
+        insert_mock.assert_awaited_once()
+        table_name = insert_mock.call_args.args[0]
+        row = insert_mock.call_args.args[1]
+        assert table_name == "audit_logs"
+        assert row["action"] == "ride_declined"
+        assert row["entity_id"] == RIDE_ID
+        assert row["details"] == {"driver_id": DRIVER_ID, "reason": "service_animal"}
+        # PIPEDA: no rider/driver names, phone numbers, emails, or exact
+        # addresses anywhere in the audit row — only IDs and the reason code.
+        assert "rider_id" not in row["details"]
+        assert not any(k in row for k in ("rider_name", "phone", "email", "address"))
+
+    def test_decline_ignores_malformed_body(self):
+        """A body that fails to parse as JSON (e.g. no body at all, which
+        Starlette's request.json() raises on) must not crash the decline —
+        it degrades to the same reason=None path as no body sent."""
+        from backend.routes import drivers as drv
+
+        ride = _ride("driver_assigned", driver_id=DRIVER_ID)
+        insert_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch(
+                "backend.routes.drivers._deps.db_supabase.run_sync", AsyncMock(side_effect=Exception("no offer row"))
+            ),
+            patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.repositories.driver_repo.update_acceptance_rate", AsyncMock()),
+            patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers._deps.reset_miss_streak", AsyncMock()),
+            patch("backend.routes.drivers._deps.db.insert_one", insert_mock),
+        ):
+            result = asyncio.run(
+                drv.decline_ride(
+                    ride_id=RIDE_ID,
+                    request=_FakeRequest(raise_on_json=True),
+                    current_user={"id": USER_ID},
+                )
+            )
+
+        assert result == {"success": True}
+        assert insert_mock.call_args.args[1]["details"]["reason"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -1386,7 +1792,11 @@ class TestStripeOnboarding:
         with (
             patch(
                 "backend.routes.drivers._deps.db_supabase.get_rows",
-                AsyncMock(return_value=[_driver(stripe_account_id="acct_123")]),
+                # Onboarding is hard-gated on a SIN on file. The legacy flag
+                # (SIN already held by Stripe) satisfies the gate while keeping
+                # prefill_sin_to_stripe on its no-op path, so this test needs
+                # no stripe.Account.retrieve mock.
+                AsyncMock(return_value=[_driver(stripe_account_id="acct_123", stripe_id_number_provided=True)]),
             ),
             patch(
                 "backend.routes.drivers._deps.db_supabase.get_user_by_id",
@@ -1459,7 +1869,9 @@ class TestStripeEmbeddedOnboarding:
         with (
             patch(
                 "backend.routes.drivers._deps.db_supabase.get_rows",
-                AsyncMock(return_value=[_driver(stripe_account_id="acct_123")]),
+                # Legacy SIN-at-Stripe flag: passes the onboarding SIN gate
+                # without engaging prefill (no Account.retrieve mock needed).
+                AsyncMock(return_value=[_driver(stripe_account_id="acct_123", stripe_id_number_provided=True)]),
             ),
             patch(
                 "backend.routes.drivers._deps.db_supabase.get_user_by_id",
@@ -1486,7 +1898,8 @@ class TestStripeEmbeddedOnboarding:
         with (
             patch(
                 "backend.routes.drivers._deps.db_supabase.get_rows",
-                AsyncMock(return_value=[_driver()]),
+                # SIN gate precedes the secret check, so satisfy it here.
+                AsyncMock(return_value=[_driver(stripe_id_number_provided=True)]),
             ),
             patch(
                 "backend.routes.drivers._deps.db_supabase.get_user_by_id",
@@ -1720,7 +2133,9 @@ class TestDriverReferral:
 
         terms = {"rides": 10, "referrer": Decimal("10.00"), "referee": Decimal("0")}
         with (
-            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=self._get_rows_side_effect())),
+            patch(
+                "backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=self._get_rows_side_effect())
+            ),
             patch("backend.routes.drivers._deps.db_supabase.count_documents", AsyncMock(return_value=3)),
             patch("backend.routes.drivers._deps.resolve_referral_terms", AsyncMock(return_value=terms)),
             patch("backend.routes.drivers._deps.paid_referral_earnings", AsyncMock(return_value=None)),
@@ -1738,7 +2153,9 @@ class TestDriverReferral:
 
         terms = {"rides": 10, "referrer": Decimal("10.00"), "referee": Decimal("0")}
         with (
-            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=self._get_rows_side_effect())),
+            patch(
+                "backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=self._get_rows_side_effect())
+            ),
             patch("backend.routes.drivers._deps.db_supabase.count_documents", AsyncMock(return_value=12)),
             patch("backend.routes.drivers._deps.resolve_referral_terms", AsyncMock(return_value=terms)),
         ):

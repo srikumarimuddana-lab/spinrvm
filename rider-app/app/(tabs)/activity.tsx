@@ -19,7 +19,6 @@ import { useRideStore } from '../../store/rideStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import api from '@shared/api/client';
-import { useAuthStore } from '@shared/store/authStore';
 import { useTranslation } from '../../i18n';
 import type { FareBreakdownLine } from '../../store/walletStore';
 
@@ -41,6 +40,11 @@ interface RideHistory {
   corporate_account_id?: string | null;
   scheduled_time?: string;
   fare_breakdown?: FareBreakdownLine[];
+  // Non-empty only for rides carried over from the previous app during the
+  // one-time legacy migration (backend/services/booking_import_service.py).
+  // Presence, not contents, is all this screen needs — see A30 Finding 4,
+  // docs/audit/2026-08-13-migrated-data-visibility-audit.md.
+  legacy_import_metadata?: Record<string, unknown> | null;
 }
 
 type FilterType = 'all' | 'personal' | 'business';
@@ -56,10 +60,14 @@ interface RiderStats {
 }
 
 const PAGE_LIMIT = 20;
+// Module-level so it's a stable reference for the useCallback/useEffect deps
+// below (was a per-render `const` inside the component, which is why the
+// exhaustive-deps rule flagged it as "missing" even though its value never
+// changes — moving it out fixes the lint without altering behavior).
+const ACTIVITY_TTL_MS = 30 * 1000;
 
 export default function ActivityScreen() {
   const router = useRouter();
-  const { token } = useAuthStore();
   const { scheduledRides, fetchScheduledRides } = useRideStore();
   const [rides, setRides] = useState<RideHistory[]>([]);
   const [vehicleTypes, setVehicleTypes] = useState<Record<string, string>>({});
@@ -123,7 +131,7 @@ export default function ActivityScreen() {
         typesMap[t.id] = t.name;
       });
       setVehicleTypes(typesMap);
-    } catch (error) {
+    } catch {
       setFetchError('Could not load rides. Pull to refresh.');
     } finally {
       setLoading(false);
@@ -148,7 +156,6 @@ export default function ActivityScreen() {
 
   const lastFetchedAt = useRef<number>(0);
   const lastStatsFetchedAt = useRef<number>(0);
-  const ACTIVITY_TTL_MS = 30 * 1000;
 
   const refreshStats = useCallback((p: Period, force = false) => {
     const now = Date.now();
@@ -206,26 +213,31 @@ export default function ActivityScreen() {
     }
   };
 
-  const getStatusText = (status: string) => {
+  // Wrapped in useCallback (instead of a plain function re-created every
+  // render) so renderItem below can safely list these as dependencies:
+  // useTranslation()'s `t` is a fresh closure each render, so without this,
+  // adding `getStatusText` to renderItem's deps as-is would have made
+  // renderItem re-create on every render too.
+  const getStatusText = useCallback((status: string) => {
     switch (status) {
       case 'completed': return t('activity.completed');
       case 'cancelled': return t('activity.cancelled');
       default: return t('activity.completed');
     }
-  };
+  }, [t]);
 
   const getRideIcon = (status: string) => {
     if (status === 'cancelled') return 'close-circle-outline';
     return 'checkmark-circle';
   };
 
-  const getVehicleType = (id: string) => {
+  const getVehicleType = useCallback((id: string) => {
     return vehicleTypes[id] || 'Standard';
-  };
+  }, [vehicleTypes]);
 
-  const handleRidePress = (ride: RideHistory) => {
+  const handleRidePress = useCallback((ride: RideHistory) => {
     router.push({ pathname: '/ride-details', params: { rideId: ride.id } } as any);
-  };
+  }, [router]);
 
   const filteredRides = useMemo(() => rides.filter(ride => {
     if (filter === 'all') return true;
@@ -334,7 +346,7 @@ export default function ActivityScreen() {
         </View>
       </TouchableOpacity>
     );
-  }, [styles, colors, vehicleTypes]);
+  }, [styles, colors, getStatusText, getVehicleType, handleRidePress]);
 
   const ListFooter = loadingMore ? (
     <View style={styles.listFooter}>

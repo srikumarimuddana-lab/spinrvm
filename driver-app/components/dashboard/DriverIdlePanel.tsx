@@ -11,7 +11,12 @@ import { useAuthStore } from '@shared/store/authStore';
 import { useLanguageStore } from '../../store/languageStore';
 
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+// Guarded native-module require — must stay runtime require(), not a
+// static import, so it only executes when notifications are usable (not
+// Expo Go/web); a static import would throw at module load in those
+// environments where the native module isn't linked.
 const Notifications: typeof import('expo-notifications') | null =
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   (!isExpoGo && Platform.OS !== 'web') ? require('expo-notifications') : null;
 
 interface IdlePanelProps {
@@ -43,6 +48,13 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
     ? [driver.vehicle_color, driver.vehicle_make, driver.vehicle_model].filter(Boolean).join(' ')
     : '';
 
+  // react-hooks/refs ("Cannot access refs during render"): standard
+  // Animated.Value driver idiom — mutated only via Animated.timing()/
+  // .stopAnimation()/.setValue() inside the effect below, read only in the
+  // JSX transform binding further down. Verified safe — grepped this file
+  // for `.current =`: zero matches, goAnim is never reassigned after
+  // creation.
+  // eslint-disable-next-line react-hooks/refs
   const goAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
@@ -64,6 +76,15 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
     return () => {
       try { goAnim.stopAnimation(); } catch {}
     };
+    // goAnim is intentionally excluded: it's the same verified-safe stable
+    // useRef(...).current animation-driver idiom noted above (never
+    // reassigned after creation). Adding a ref-derived value to a
+    // dependency array is itself a render-time ref read under
+    // react-hooks/refs (confirmed in otp.tsx's dotAnims — same fix applied
+    // here). goAnim's identity never changes across this component's
+    // lifetime, so excluding it changes nothing about when this effect
+    // fires.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canGoOnline, isOnline]);
 
   // Welcome / Onboarding Notification Check — fires once when documents are

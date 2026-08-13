@@ -129,9 +129,9 @@ EMAIL_STATUSES = frozenset({"active", "rejected", "suspended", "banned"})
 # What the driver should actually DO next. This is the reason the email exists
 # rather than being a copy of the push: a notification tray has no room for it.
 _EMAIL_NEXT_STEPS: dict[str, str] = {
-    "active": "Open the Spinr driver app, tap Go Online, and you'll start receiving ride offers.",
+    "active": "Open the {app_name} driver app, tap Go Online, and you'll start receiving ride offers.",
     "rejected": (
-        "Open the Spinr driver app to review your documents and submit them again. "
+        "Open the {app_name} driver app to review your documents and submit them again. "
         "If you think this decision is wrong, contact {support}."
     ),
     "suspended": (
@@ -220,9 +220,10 @@ _VERIFICATION_COPY: dict[bool, tuple[str, str]] = {
 }
 
 _VERIFICATION_NEXT_STEPS: dict[bool, str] = {
-    True: "Open the Spinr driver app, tap Go Online, and you'll start receiving ride offers.",
+    True: "Open the {app_name} driver app, tap Go Online, and you'll start receiving ride offers.",
     False: (
-        "Open the Spinr driver app to check your documents. Contact {support} if you're not sure what needs updating."
+        "Open the {app_name} driver app to check your documents. "
+        "Contact {support} if you're not sure what needs updating."
     ),
 }
 
@@ -322,7 +323,10 @@ async def _send_status_email(
                 # A literal replace, not str.format: these paragraphs carry the
                 # admin-written suspension/rejection reason, and a reason
                 # containing a brace would make format() raise.
-                paragraphs=[p.replace("{support}", company.support_email) for p in payload["paragraphs"]],
+                paragraphs=[
+                    p.replace("{support}", company.support_email).replace("{app_name}", company.app_name)
+                    for p in payload["paragraphs"]
+                ],
                 company=company,
             ),
             email_type=payload["email_type"],

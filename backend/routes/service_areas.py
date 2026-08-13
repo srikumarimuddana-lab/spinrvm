@@ -81,3 +81,31 @@ async def get_service_areas():
         limit=200,
     )
     return [_project_public(r) for r in (rows or [])]
+
+
+_AIRPORT_FIELDS = ("id", "name", "is_airport", "airport_fee", "polygon")
+
+
+def _project_airport(r: dict) -> dict:
+    out = {k: r[k] for k in _AIRPORT_FIELDS if k in r}
+    out["polygon"] = get_service_area_polygon(r)
+    return out
+
+
+@api_router.get("/service-areas/{area_id}/airport-zones")
+async def get_airport_zones(area_id: str):
+    """Return active airport sub-zones for a parent service area.
+
+    Used by the driver idle map to overlay airport zone polygons (HM-21).
+    """
+    rows = await db_supabase.get_rows(
+        "service_areas",
+        {
+            "parent_service_area_id": area_id,
+            "is_airport": True,
+            "is_active": True,
+        },
+        order="name",
+        limit=20,
+    )
+    return [_project_airport(r) for r in (rows or [])]

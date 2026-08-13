@@ -21,14 +21,16 @@ audited with ids + period only (no PII in audit rows, per CLAUDE.md).
 
 import logging
 from datetime import date, datetime, timezone
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
+    from ...services import statement_totals_backfill as backfill_svc
     from ...features import send_email
     from ...utils.audit_logger import log_admin_action
     from ...utils.driver_statement import PERIOD_TYPES, build_custom_statement, build_statement
@@ -41,6 +43,7 @@ except ImportError:
     import db_supabase  # type: ignore
     from dependencies import get_admin_user  # noqa: F401
     from features import send_email  # type: ignore
+    from services import statement_totals_backfill as backfill_svc  # type: ignore
     from utils.audit_logger import log_admin_action  # noqa: F401
     from utils.driver_statement import (  # type: ignore
         PERIOD_TYPES,
@@ -244,3 +247,100 @@ async def email_driver_statement_admin(
         },
     )
     return {"sent": True, "period_label": statement["period_label"]}
+
+
+class RecomputeTotalsRequest(BaseModel):
+    """Scope for the stored-totals recompute. Empty body = every statement."""
+
+    model_config = {"extra": "forbid"}
+
+    # Omit for the whole fleet; pass ids to rehearse on a few drivers first.
+    driver_ids: Optional[List[str]] = Field(None, max_length=500)
+    # Only statements whose period_start is on/after this date (YYYY-MM-DD).
+    since: Optional[str] = None
+    # Bounded so one request cannot run unboundedly long; the response says
+    # whether more rows remain rather than truncating silently.
+    limit: int = Field(backfill_svc.DEFAULT_LIMIT, ge=1, le=backfill_svc.MAX_LIMIT)
+    # Dry run by DEFAULT: this rewrites stored money on a driver-facing audit
+    # surface, so writing must be asked for explicitly.
+    apply: bool = False
+
+
+@router.post("/drivers/statements/recompute-totals")
+async def admin_recompute_statement_totals(
+    body: RecomputeTotalsRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """Rewrite stored ``driver_statements.totals`` for the selected statements.
+
+    The statements LIST renders ``totals``, a JSON column frozen when the job
+    ran — so rows produced under the dropped-upper-bound filter bug keep their
+    wrong figures even though everything computed live is already correct.
+    This recomputes them through the same builder the PDF/email path uses.
+
+    ``apply=false`` (the default) returns the full diff and writes nothing —
+    that is what the dashboard previews before asking to confirm.
+
+    super_admin only: it rewrites stored money figures on a driver-facing
+    audit surface, the same bar as the other bulk money tools.
+    """
+    if (admin.get("role") or "").lower() != "super_admin":
+        raise HTTPException(status_code=403, detail="Recomputing statement totals requires super_admin")
+
+    result = await backfill_svc.recompute_statement_totals(
+        driver_ids=body.driver_ids,
+        since=body.since,
+        limit=body.limit,
+        apply=body.apply,
+    )
+
+    await log_admin_action(
+        admin,
+        "driver_statement_totals_recompute",
+        "drivers",
+        (body.driver_ids[0] if body.driver_ids and len(body.driver_ids) == 1 else "*"),
+        {
+            "applied": result.applied,
+            "scanned": result.scanned,
+            "corrected": result.corrected,
+            "unchanged": result.unchanged,
+            "skipped": len(result.skipped),
+            "failed": len(result.failed),
+            "delta_earnings": round(result.delta_earnings, 2),
+            "delta_payouts": round(result.delta_payouts, 2),
+        },
+    )
+
+    # A write run that could not persist some rows must not read as success.
+    if result.applied and result.failed:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"{result.corrected - len(result.failed)} statement(s) corrected, "
+                f"{len(result.failed)} could not be written. Re-run — it is safe to repeat."
+            ),
+        )
+
+    return {
+        "applied": result.applied,
+        "scanned": result.scanned,
+        "corrected": result.corrected,
+        "unchanged": result.unchanged,
+        "has_more": result.has_more,
+        "delta_earnings": round(result.delta_earnings, 2),
+        "delta_payouts": round(result.delta_payouts, 2),
+        "skipped": result.skipped,
+        "failed": result.failed,
+        # Capped for the response body; the full set is applied regardless.
+        "changes": [
+            {
+                "statement_id": c.statement_id,
+                "driver_id": c.driver_id,
+                "period_type": c.period_type,
+                "period_start": c.period_start,
+                "before": c.before,
+                "after": c.after,
+            }
+            for c in result.changes[:200]
+        ],
+    }

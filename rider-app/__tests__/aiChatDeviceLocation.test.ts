@@ -9,6 +9,9 @@
  * between messages.
  */
 
+import * as Location from 'expo-location';
+import { deviceLocation } from '../store/aiChatStore';
+
 jest.mock('@react-native-async-storage/async-storage', () => ({
   __esModule: true,
   default: { getItem: jest.fn(), setItem: jest.fn(), removeItem: jest.fn() },
@@ -22,9 +25,6 @@ jest.mock('expo-location', () => ({
   getCurrentPositionAsync: jest.fn(),
   getLastKnownPositionAsync: jest.fn(),
 }));
-
-import * as Location from 'expo-location';
-import { deviceLocation } from '../store/aiChatStore';
 
 const mockLocation = Location as jest.Mocked<typeof Location>;
 

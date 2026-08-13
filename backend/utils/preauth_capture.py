@@ -178,7 +178,17 @@ async def preauth_capture_loop() -> None:
         # latency) even after the +10% sleep jitter; the atomic DB claim is the
         # real double-capture guard if a second replica ever races in.
         lock_ttl = int(CAPTURE_INTERVAL_SECONDS * 2)
-        if not await redis_set_nx("spinr:preauth:capture:lock", _pod_id(), lock_ttl):
+        try:
+            got_lock = await redis_set_nx("spinr:preauth:capture:lock", _pod_id(), lock_ttl)
+        except Exception as lock_err:
+            # redis_set_nx now raises on a real (Redis-configured-but-
+            # unavailable) error instead of silently falling back per-replica
+            # (2026-08-11 P1 fix). This lock is a throttle only — the atomic
+            # DB claim is the real double-capture guard — so proceed with the
+            # tick rather than skip it.
+            logger.error(f"preauth_capture: leader lock unavailable ({lock_err}), proceeding without it")
+            got_lock = True
+        if not got_lock:
             _record_heartbeat(_LOOP_NAME)
             await asyncio.sleep(CAPTURE_INTERVAL_SECONDS)
             continue

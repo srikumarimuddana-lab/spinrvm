@@ -4,6 +4,10 @@
  */
 import { act } from '@testing-library/react-native';
 
+import { useDriverStore } from '../driverStore';
+import api from '@shared/api/client';
+import { tripLocationRecorder } from '../../utils/tripLocationRecorder';
+
 // Mock SpinrConfig before importing the store (imported at module level in driverStore)
 jest.mock('@shared/config/spinr.config', () => ({
   __esModule: true,
@@ -49,10 +53,6 @@ jest.mock('../../utils/tripLocationRecorder', () => ({
 jest.mock('../../utils/tripLocationTransport', () => ({
   apiLocationBatchTransport: jest.fn(),
 }));
-
-import { useDriverStore } from '../driverStore';
-import api from '@shared/api/client';
-import { tripLocationRecorder } from '../../utils/tripLocationRecorder';
 
 const mockApi = api as jest.Mocked<typeof api>;
 const mockTripLocationRecorder = tripLocationRecorder as jest.Mocked<typeof tripLocationRecorder>;
@@ -296,6 +296,35 @@ describe('driverStore — ride state machine', () => {
     // declineRide swallows the error and still resets state
     expect(useDriverStore.getState().rideState).toBe('idle');
     expect(useDriverStore.getState().incomingRide).toBeNull();
+  });
+
+  // Gap #13: a pre-accept decline previously had no way to carry a reason
+  // at all, so trust & safety had no way to detect a driver refusing a
+  // service animal. declineRide now accepts an optional reason.
+  test('declineRide posts an optional reason (e.g. service_animal) in the body', async () => {
+    useDriverStore.setState({ rideState: 'ride_offered', incomingRide: makeMockRide() });
+
+    mockApi.post.mockResolvedValueOnce({ data: {}, status: 200 } as any);
+
+    await act(async () => {
+      await useDriverStore.getState().declineRide('ride-123', 'service_animal');
+    });
+
+    const state = useDriverStore.getState();
+    expect(state.rideState).toBe('idle');
+    expect(mockApi.post).toHaveBeenCalledWith('/drivers/rides/ride-123/decline', { reason: 'service_animal' });
+  });
+
+  test('declineRide with an empty/whitespace-only reason falls back to the no-body request', async () => {
+    useDriverStore.setState({ rideState: 'ride_offered', incomingRide: makeMockRide() });
+
+    mockApi.post.mockResolvedValueOnce({ data: {}, status: 200 } as any);
+
+    await act(async () => {
+      await useDriverStore.getState().declineRide('ride-123', '   ');
+    });
+
+    expect(mockApi.post).toHaveBeenCalledWith('/drivers/rides/ride-123/decline');
   });
 
   test('arriveAtPickup rejects when driver is >100m from pickup', async () => {

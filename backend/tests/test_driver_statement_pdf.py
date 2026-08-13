@@ -80,3 +80,41 @@ def test_monthly_title_variant():
     monthly = {**_FIXTURE, "period_type": "monthly", "period_label": "June 2026", "payouts": []}
     pdf = generate_driver_statement_pdf(monthly)
     assert pdf.startswith(b"%PDF")
+
+
+_PREV_APP_FIXTURE = {
+    **_FIXTURE,
+    "payouts": [
+        {"date": "2026-06-07", "label": "Previous app payout", "type": "stripe_sync", "amount": "20.77", "fee": "0.00", "net": "20.77", "status": "completed"},
+        {"date": "2026-06-15", "label": "Standard payout", "type": "standard", "amount": "12.00", "fee": "0.00", "net": "12.00", "status": "completed"},
+    ],
+    "payouts_total": "32.77",
+    "payouts_spinr_total": "12.00",
+    "payouts_previous_app_total": "20.77",
+}
+
+
+def test_previous_app_rows_render_while_visible():
+    text = _pdf_text(generate_driver_statement_pdf({**_PREV_APP_FIXTURE, "previous_app_visible": True}))
+    assert "Previous app payout" in text
+    assert "previous Spinr app" in text  # the headline note
+    assert "32.77" in text  # gross total
+
+
+def test_previous_app_rows_dropped_after_sunset():
+    """After the transition cutoff (utils/legacy_rides) the driver-facing PDF
+    shows Spinr money only — no previous-app rows, notes, or subtotals — and
+    every paid-out figure becomes the Spinr-only total so the table still
+    reconciles."""
+    text = _pdf_text(generate_driver_statement_pdf({**_PREV_APP_FIXTURE, "previous_app_visible": False}))
+    assert "Previous app payout" not in text
+    assert "previous Spinr app" not in text
+    assert "20.77" not in text
+    assert "12.00" in text
+    assert "32.77" not in text  # the gross must not appear anywhere
+
+
+def test_missing_visibility_flag_defaults_to_visible():
+    """A statement dict built before the flag existed keeps its rendering."""
+    text = _pdf_text(generate_driver_statement_pdf(_PREV_APP_FIXTURE))
+    assert "Previous app payout" in text

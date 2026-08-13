@@ -128,6 +128,78 @@ def _extract_unverified_user_id(request: Request) -> str | None:
     return str(uid) if uid is not None else None
 
 
+def _metric_path_label(request: Request) -> str:
+    """Bounded path label for metrics — the route TEMPLATE, not the live URL.
+
+    ``request.url.path`` embeds ride and user UUIDs, so labelling a counter with
+    it creates one permanent label set per entity. ``utils/metrics.py`` has no
+    eviction, so that map only grows — fastest during exactly the burst these
+    metrics exist to diagnose — and the capacity watchdog now scans it once a
+    minute per replica. It also makes the counter useless for triage: thousands
+    of one-hit rows instead of a rate per endpoint.
+
+    Starlette stores the matched route on the request scope, whose ``path`` is
+    the template (``/rides/{ride_id}/cancel``), giving one label per endpoint.
+
+    Falls back to a literal ``"unmatched"`` rather than the raw path when no
+    route matched (404s, and some middleware-level rejections) — an unmatched
+    request is attacker-controlled input, and echoing it into a label is the
+    same unbounded-cardinality problem with a hostile author.
+
+    Defensive by design: this runs inside the 429 exception handler, so raising
+    here would turn a rate-limit response into a 500. Any unexpected request
+    shape degrades to the fallback label instead of propagating.
+    """
+    try:
+        route = request.scope.get("route")
+        template = getattr(route, "path", None)
+        if isinstance(template, str) and template:
+            return template
+    except (AttributeError, TypeError) as exc:
+        # Narrow on purpose: only a missing/odd `scope` can land here. Debug
+        # rather than warning — this is a label-quality degradation on a request
+        # that is already being rejected, not a failure worth paging on. It is
+        # logged rather than swallowed so an unexpected request shape is
+        # discoverable instead of silently becoming "unmatched" forever.
+        logger.debug(f"rate-limit metric label fell back to 'unmatched': {exc}")
+    return "unmatched"
+
+
+def get_user_or_ip_key(request: Request) -> str:
+    """Key rate limiting by authenticated user, falling back to IP.
+
+    Mobile carriers put hundreds of subscribers behind one carrier-grade NAT
+    egress IP. Under IP keying every rider on a given carrier in a given city
+    shares ONE bucket, so a burst of legitimate users 429s itself: 5 bookings
+    per minute across an entire carrier, and — worse — an SOS that can be
+    refused because unrelated strangers on the same egress IP happened to tap
+    ride actions. That is a correctness bug on a safety surface, not a tuning
+    nit.
+
+    Keying on the user makes the limit mean what its name says: N per minute
+    *per user*. It is also strictly harder to evade than IP keying, which an
+    abuser defeats for free by rotating through a proxy pool.
+
+    Safety of the unverified decode: see `_extract_unverified_user_id`. On
+    these routes `Depends(get_current_user)` resolves BEFORE the limiter-wrapped
+    handler body, so a forged token 401s regardless — the worst a bad token can
+    do is land in a throwaway bucket for a request that then fails auth.
+
+    Anonymous requests (no bearer token) keep IP keying, which is the only
+    identity available for them.
+
+    Kill switch: set ``RATE_LIMIT_USER_KEYING=off`` to revert to pure IP keying
+    without a code deploy (``fly secrets set`` rolls machines with the new
+    value). See docs/runbooks/capacity-scaling.md §3.
+    """
+    if os.environ.get("RATE_LIMIT_USER_KEYING", "on").strip().lower() in ("off", "0", "false", "no"):
+        return f"ip:{get_real_client_ip(request)}"
+    user_id = _extract_unverified_user_id(request)
+    if user_id:
+        return f"user:{user_id}"
+    return f"ip:{get_real_client_ip(request)}"
+
+
 def get_ai_chat_key(request: Request) -> str:
     """Key AI-chat rate limiting by user, not IP (ACTION_ITEMS.md AI1).
 
@@ -274,17 +346,22 @@ otp_rate_limit = default_limiter.limit("3/minute")
 # Login endpoints - moderately restrictive
 login_rate_limit = default_limiter.limit("5/minute")
 
-# General API endpoints - more permissive
-api_rate_limit = default_limiter.limit("30/minute")
+# General API endpoints - more permissive. Keyed per user (get_user_or_ip_key),
+# not per IP: carrier-grade NAT put a whole carrier's riders in one bucket.
+# The limit is unchanged because 30/minute is generous *per user* — and the
+# limiter scope includes the URL path, so each route gets its own bucket.
+api_rate_limit = default_limiter.limit("30/minute", key_func=get_user_or_ip_key)
 
 # Ride creation - prevent spam ride requests (max 5 per minute per user)
-ride_request_limit = default_limiter.limit("5/minute")
+ride_request_limit = default_limiter.limit("5/minute", key_func=get_user_or_ip_key)
 
 # Ride cancellation - max 10 per hour per user (prevents cancellation farming)
-cancel_ride_limit = default_limiter.limit("10/hour")
+cancel_ride_limit = default_limiter.limit("10/hour", key_func=get_user_or_ip_key)
 
-# Ride read endpoints — generous ceiling covers 3 s polling without churn
-ride_read_limit = default_limiter.limit("120/minute")
+# Ride read endpoints — generous ceiling covers 3 s polling without churn.
+# Per-user keyed: under IP keying a carrier NAT's riders shared this bucket, so
+# ~6 simultaneously-polling riders on one carrier exhausted it between them.
+ride_read_limit = default_limiter.limit("120/minute", key_func=get_user_or_ip_key)
 
 # Corporate guest bookings: each one fires 2-3 customer SMS, so this is an
 # SMS-cost/abuse bound as much as a booking bound. 30/hour comfortably covers
@@ -300,14 +377,18 @@ promo_available_limit = default_limiter.limit("20/minute")
 # Promo brute-force guard - max 10 per minute
 promo_validate_limit = default_limiter.limit("10/minute")
 
-# Location updates - allow frequent updates for drivers
-location_update_limit = default_limiter.limit("60/minute")
+# Location updates - allow frequent updates for drivers. Applied to
+# POST /drivers/location-batch (routes/drivers/location.py). This limiter was
+# defined but decorated NOTHING until 2026-08-07, leaving the driver GPS
+# ingestion path entirely unlimited. Per-user keyed so one runaway device
+# cannot spend the budget of other drivers behind the same carrier NAT.
+location_update_limit = default_limiter.limit("60/minute", key_func=get_user_or_ip_key)
 
 # Payment actions (tip, process-payment) — sensitive financial ops, tight limit
-payment_action_limit = default_limiter.limit("5/minute")
+payment_action_limit = default_limiter.limit("5/minute", key_func=get_user_or_ip_key)
 
 # Ride rating — once per completed ride, extra friction prevents spam
-ride_rating_limit = default_limiter.limit("5/hour")
+ride_rating_limit = default_limiter.limit("5/hour", key_func=get_user_or_ip_key)
 
 # Data export (DSAR) — each call fans out 6 DB reads, builds a ZIP, uploads to
 # Storage, and sends an email. Tight cap prevents storage fill / SES exhaustion.
@@ -393,10 +474,16 @@ admin_statement_download_limit = default_limiter.limit("60/hour")
 ai_chat_limit = default_limiter.limit("10/minute", key_func=get_ai_chat_key)
 
 # In-ride messaging — generous but bounded to prevent SMS relay abuse
-ride_message_limit = default_limiter.limit("30/minute")
+ride_message_limit = default_limiter.limit("30/minute", key_func=get_user_or_ip_key)
 
-# Ride state transitions (start, complete, emergency) — ride lifecycle ops
-ride_action_limit = default_limiter.limit("20/minute")
+# Ride state transitions (start, complete, emergency) — ride lifecycle ops.
+# Per-user keyed, and this one is a safety fix as much as a capacity one: it
+# guards POST /rides/{id}/emergency (routes/rides/safety.py:38), so under IP
+# keying an SOS could be refused because unrelated strangers behind the same
+# carrier NAT had spent the bucket on ordinary ride actions. Note the SOS route
+# uses get_current_user_allow_expired; _extract_unverified_user_id ignores
+# expiry too, so an expired-but-valid token still keys to its real user.
+ride_action_limit = default_limiter.limit("20/minute", key_func=get_user_or_ip_key)
 
 # Document uploads - restrictive to prevent abuse
 document_upload_limit = default_limiter.limit("5/minute")
@@ -433,6 +520,52 @@ admin_ai_suggest_limit = default_limiter.limit("20/minute")
 # rider-facing 10/minute cap is appropriate given the lower risk profile
 # (ACTION_ITEMS.md AI12).
 admin_ai_console_limit = default_limiter.limit("20/minute")
+
+# Rider self-serve email verification — request side (N14, ACTION_ITEMS.md).
+# Per-user keyed like the other authenticated self-serve endpoints above: an
+# IP-keyed limit would let a carrier-NAT'd crowd starve each other's requests,
+# and would do nothing to stop one signed-in rider from hammering send. Loose
+# enough for a legitimate retry after a typo'd inbox check, tight enough to
+# bound email-provider spend under `POST /users/verify-email/request`. The
+# per-destination-email send cap (`_enforce_otp_send_cap`, reused from
+# routes/auth.py's corporate email-OTP flow) is the second, tighter layer —
+# this is the outer one.
+rider_email_verify_request_limit = default_limiter.limit("3/hour", key_func=get_user_or_ip_key)
+
+# Admin SIN reveal/update (ACTION_ITEMS.md D8) — both are super_admin-gated and
+# audit-logged before this limiter ever runs, so this is defense-in-depth, not
+# closing an active exploit: a compromised or scripted super_admin session
+# should still not be able to walk every driver's SIN unbounded, or churn a
+# driver's SIN repeatedly without the friction of hitting a wall. 10/hour is
+# D8's own suggested figure — generous for the legitimate case (T4A season
+# support tickets run in the single digits per admin per day) while bounding
+# a runaway/compromised session to a two-digit number of SINs per hour rather
+# than an unbounded loop. Keyed per-admin (get_user_or_ip_key), not per-IP —
+# every other admin_* limiter in this file defaults to IP keying, but SIN
+# reveal/update is scoped to *an admin's* exposure, and IP keying would let
+# multiple super_admins sharing one office/VPN egress IP silently share (and
+# exhaust) one bucket, or would under-count a single admin who rotates IPs.
+# admin JWTs carry a `user_id` claim (routes/admin/auth.py
+# `_mint_admin_access_token`), so the existing get_user_or_ip_key key
+# function keys correctly here with no new key function needed.
+admin_sin_reveal_limit = default_limiter.limit("10/hour", key_func=get_user_or_ip_key)
+admin_sin_update_limit = default_limiter.limit("10/hour", key_func=get_user_or_ip_key)
+
+# Admin tax-ID bulk import (ACTION_ITEMS.md D8) — SIN-touching bulk operation,
+# same super_admin + audit posture as reveal/update-sin above. /validate is a
+# read-only dry-run (parse + report, no writes); /commit writes up to
+# MAX_ROWS (500) SINs/GST BNs per call, so commit gets the tighter limit —
+# same validate/commit asymmetry as data_transfer_import_*_limit,
+# booking_import_*_limit, and driver_import_commit_limit above. Looser than
+# the single-driver reveal/update limit (10/hour) because one call here is a
+# deliberate one-time bulk migration op covering many drivers at once, not a
+# per-driver action — the per-call MAX_ROWS cap already bounds blast radius
+# per call, so the per-hour call cap only needs to guard against unbounded
+# scripted looping, not single-driver granularity. Keyed per-admin like the
+# SIN limiters above, for the same reason (this endpoint decrypts/writes
+# SINs, not general admin CRUD where IP keying is the existing convention).
+tax_id_import_validate_limit = default_limiter.limit("30/hour", key_func=get_user_or_ip_key)
+tax_id_import_commit_limit = default_limiter.limit("10/hour", key_func=get_user_or_ip_key)
 
 
 # ============================================================================
@@ -510,7 +643,7 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) 
         f"Limit: {limit_amount} | "
         f"Retry-After: {retry_after}s"
     )
-    _metric_inc("spinr_rate_limit_violation_total", {"path": request.url.path})
+    _metric_inc("spinr_rate_limit_violation_total", {"path": _metric_path_label(request)})
 
     return JSONResponse(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,

@@ -15,7 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRideStore } from '../store/rideStore';
 import type { ChatMessage } from '../store/rideStore';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -41,7 +41,7 @@ export default function ChatDriverScreen() {
   // warm cache that hasn't been loaded into the store yet.
   const cacheReadDoneRef = useRef(false);
 
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const CHAT_STORAGE_KEY = rideId ? `spinr_chat_rider_${rideId}` : null;
@@ -76,7 +76,10 @@ export default function ChatDriverScreen() {
         console.log('[Chat] Failed to load history:', e);
       }
     })();
-  }, [rideId]);
+    // CHAT_STORAGE_KEY is a pure derivation of rideId (already a dep) so
+    // adding it doesn't change when this fires; router (expo-router's
+    // singleton) and setChatMessages (zustand action) are stable references.
+  }, [rideId, CHAT_STORAGE_KEY, router, setChatMessages]);
 
   // Persist to AsyncStorage whenever the store updates. Filter to only this
   // ride's messages to prevent cross-ride contamination when rideId changes.
@@ -122,6 +125,10 @@ export default function ChatDriverScreen() {
     setSending(true);
     setMessage('');
 
+    // Not a render-time call: sendMessage only runs from the send-button's
+    // onPress, never during render, so Date.now()/Math.random() here can't
+    // produce the re-render inconsistency react-hooks/purity guards against.
+    // eslint-disable-next-line react-hooks/purity
     const optimisticId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     addChatMessage({
       id: optimisticId,
@@ -146,8 +153,7 @@ export default function ChatDriverScreen() {
       const current = useRideStore.getState().chatMessages;
       setChatMessages(current.filter(m => m.id !== optimisticId));
       setMessage(trimmed);
-      const detail = e?.response?.data?.detail || e?.message || 'Could not send message. Check your connection.';
-      showToast('Send Failed', detail, 'danger');
+      showToast('Send Failed', getApiErrorMessage(e, 'Could not send message. Check your connection.'), 'danger');
     } finally {
       setSending(false);
     }

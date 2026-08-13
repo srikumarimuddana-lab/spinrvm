@@ -411,6 +411,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to import Stripe reconciliation loop: {e}")
 
+    # Double-entry leg projection — derives financial_event_entries rows from
+    # financial_events headers (oldest first, via the missing-legs RPC,
+    # migration 287). No-op until ledger_double_entry_enabled is on. Replay-safe
+    # via the UNIQUE(event_id, account, side) constraint + whole-batch insert;
+    # the Redis lock is only a throttle.
+    try:
+        from utils.ledger_projection import ledger_projection_loop
+
+        _spawn("ledger_projection (15min)", ledger_projection_loop)
+    except Exception as e:
+        logger.opt(exception=True).error(f"Failed to import ledger projection loop: {e}")
+
     # Distance reconciliation — daily 04:00 UTC, one replica via Redis leader
     # lock. Compares each completed ride's quoted vs measured distance; opens a
     # per-ride integrity event on outliers and logs at ERROR (→ Sentry) on a
@@ -465,6 +477,18 @@ async def lifespan(app: FastAPI):
         _spawn("stuck_ride_sweeper (60s)", stuck_ride_sweeper_loop)
     except Exception as e:
         logger.opt(exception=True).error(f"Failed to import stuck ride sweeper: {e}")
+
+    # Stale in_progress ride alerter (P2 task #16) — the sweeper above only
+    # covers 'searching'; an in_progress ride abandoned by a force-killed
+    # driver app has no automated recovery, so this loop alerts (Sentry +
+    # error log, domain=dispatch) rather than mutating ride/driver state.
+    # Gated by app_settings.stale_in_progress_ride_alert_enabled (default on).
+    try:
+        from utils.stale_in_progress_ride_alerter import stale_in_progress_ride_alert_loop
+
+        _spawn("stale_in_progress_ride_alerter (5min)", stale_in_progress_ride_alert_loop)
+    except Exception as e:
+        logger.opt(exception=True).error(f"Failed to import stale in_progress ride alerter: {e}")
 
     # Orphaned card-hold reconciler — releases booking-time authorizations left open
     # on rides that are cancelled and will never be billed. Two populations: the
@@ -523,6 +547,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.opt(exception=True).error(f"Failed to import Zoho Desk sync loop: {e}")
 
+    # Capacity watchdog — samples DB thread-pool saturation, DB call
+    # rejections, and rate-limit violation rate every 60 s and alerts via
+    # ALERT_WEBHOOK_URL. Read-only (no DB/Redis writes), so it is replay-safe
+    # on every replica by construction; per-replica alerting is intentional
+    # because pool saturation is a per-process condition.
+    # See docs/runbooks/capacity-scaling.md.
+    try:
+        from utils.capacity_watchdog import capacity_watchdog_loop
+
+        _spawn("capacity_watchdog (60s)", capacity_watchdog_loop)
+    except Exception as e:
+        logger.opt(exception=True).error(f"Failed to import capacity watchdog loop: {e}")
+
     # Loop watchdog — scans heartbeats every 5 minutes and posts a
     # Slack-compatible alert when any loop has gone stale.  No-op when
     # ALERT_WEBHOOK_URL is unset.
@@ -541,11 +578,14 @@ async def lifespan(app: FastAPI):
             "retention_purge (24h)",
             "data_export_purge (1h)",
             "stripe_reconcile (24h)",
+            "ledger_projection (15min)",
             "t4a_annual_job (yearly Feb 28)",
             "driver_statements (30min)",
             "stuck_ride_sweeper (60s)",
+            "stale_in_progress_ride_alerter (5min)",
             "offer_expiry_reaper (10s)",
             "push_retry (30s)",
+            "capacity_watchdog (60s)",
         ]
     )
 

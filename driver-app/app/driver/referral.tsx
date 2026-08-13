@@ -56,10 +56,9 @@ export default function ReferralScreen() {
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState(false);
 
-    useEffect(() => {
-        fetchReferralInfo();
-    }, []);
-
+    // Declared before the `useEffect` below (react-hooks/immutability /
+    // React Compiler flags referencing a function before its source-order
+    // declaration) — same expression, same effect timing, no behavior change.
     const fetchReferralInfo = async () => {
         setIsLoading(true);
         setError(false);
@@ -89,6 +88,13 @@ export default function ReferralScreen() {
             setIsLoading(false);
         }
     };
+
+    useEffect(() => {
+        // Mount-only fetch; fetchReferralInfo sets state after its own await,
+        // not synchronously at the top of the effect. Empty deps, runs once.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        fetchReferralInfo();
+    }, []);
 
     const copyToClipboard = async () => {
         if (referralInfo?.referral_code) {

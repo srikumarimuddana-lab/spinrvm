@@ -447,7 +447,7 @@ export default function CompanyBookRidePage() {
                         </span>
                     </label>
 
-                    {error && <p className="rounded bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+                    {error && <p className="rounded bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
 
                     <Button className="w-full" disabled={!canSubmit} onClick={handleSubmit}>
                         {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

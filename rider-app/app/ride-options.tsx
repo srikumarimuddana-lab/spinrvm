@@ -5,13 +5,12 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  ScrollView,
   ActivityIndicator,
   useWindowDimensions,
   Platform,
-  Modal,
   Animated,
   Keyboard,
+  BackHandler,
 } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import BottomSheet, { BottomSheetScrollView, BottomSheetBackdrop, BottomSheetTextInput } from '@gorhom/bottom-sheet';
@@ -20,7 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from 'expo-router/react-navigation';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { Marker, Circle, Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { RouteLine } from '@shared/components/RouteLine';
 import { RoutePins } from '@shared/components/RoutePins';
@@ -38,12 +37,29 @@ import SchedulePicker from '../components/SchedulePicker';
 import SkeletonBox from '../components/SkeletonBox';
 import { useResponsive } from '@shared/utils/responsive';
 import api, { getApiErrorMessage } from '@shared/api/client';
-import Analytics from '@shared/analytics';
+import { Analytics } from '@shared/analytics';
 import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
+import { useAnimatedValue } from '../hooks/useAnimatedValue';
 import { promoDiscountForEstimate, grandTotalOf } from '../utils/promoDiscount';
 import { selectDefaultCardId } from '../utils/selectDefaultCard';
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+
+// Deterministic per-driver fallback heading (0-359deg) for markers whose
+// backend record has no real `heading` yet. A pure function of the driver's
+// own id, so it's stable across re-renders (same driver -> same fallback
+// rotation) instead of the previous `Math.random() * 360`, which produced a
+// FRESH random rotation on every render — visibly jittering the car icon's
+// orientation on any re-render (e.g. every driver-location poll), not just
+// varying it once. No real heading data is lost either way; this only
+// changes what stand-in value is shown until the backend reports a real one.
+function fallbackHeading(driverId: string): number {
+  let hash = 0;
+  for (let i = 0; i < driverId.length; i++) {
+    hash = (hash * 31 + driverId.charCodeAt(i)) >>> 0;
+  }
+  return hash % 360;
+}
 
 interface SavedCard {
   id: string;
@@ -88,7 +104,44 @@ function RideOptionsScreenContent() {
   const [selectedPayment, setSelectedPayment] = useState('card');
   const [savedCards, setSavedCards] = useState<SavedCard[]>([]);
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
-  const [showPaymentSheet, setShowPaymentSheet] = useState(false);
+  // Payment selector is a real @gorhom/bottom-sheet instance (same library as
+  // the vehicle sheet and the promo sheet below), NOT an RN <Modal>. The Modal
+  // stacked over the vehicle sheet rendered fine but was touch-dead on iOS New
+  // Arch (TestFlight 2.0.0 (16)) — rows and the old footer button drew but
+  // presses never arrived, so tapping a payment method couldn't dismiss it.
+  // Sibling sheets from this library are the one overlay pattern proven to
+  // receive touches on this screen.
+  const paymentSheetRef = useRef<BottomSheet>(null);
+  const [paymentSheetOpen, setPaymentSheetOpen] = useState(false);
+  const paymentMaxSheetHeight = SCREEN_HEIGHT * 0.8;
+  const openPaymentSheet = useCallback(() => {
+    paymentSheetRef.current?.expand();
+  }, []);
+  const closePaymentSheet = useCallback(() => {
+    paymentSheetRef.current?.close();
+  }, []);
+  const handlePaymentSheetChange = useCallback((index: number) => {
+    setPaymentSheetOpen(index >= 0);
+  }, []);
+  // The Modal used to intercept Android hardware back via onRequestClose;
+  // keep that exit — back closes the sheet instead of popping the screen.
+  useEffect(() => {
+    if (!paymentSheetOpen) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      paymentSheetRef.current?.close();
+      return true;
+    });
+    return () => sub.remove();
+  }, [paymentSheetOpen]);
+  const renderPaymentBackdrop = useCallback((props: any) => (
+    <BottomSheetBackdrop
+      {...props}
+      appearsOnIndex={0}
+      disappearsOnIndex={-1}
+      pressBehavior="close"
+      opacity={0.4}
+    />
+  ), []);
   const [isBooking, setIsBooking] = useState(false);
 
   // ── Work / corporate state ──
@@ -117,7 +170,17 @@ function RideOptionsScreenContent() {
   const [routeCoordinates, setRouteCoordinates] = useState<any[]>([]);
   const [mapReady, setMapReady] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
-  const [tempDate, setTempDate] = useState(new Date(Date.now() + 30 * 60000));
+  // Bounds for the schedule picker, refreshed to "now" at the moment the
+  // sheet opens (in the onPress handler below) rather than recomputed with
+  // `Date.now()` on every render — the latter is what react-hooks/purity
+  // flags (an impure call reachable from render), and computing it in the
+  // handler is strictly more correct anyway: it reflects "now" as of when
+  // the rider actually opens the picker, not whatever render happened to
+  // run last.
+  const [scheduleBounds, setScheduleBounds] = useState(() => ({
+    min: new Date(Date.now() + 15 * 60000),
+    max: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+  }));
   const [promoInput, setPromoInput] = useState('');
   const [promoError, setPromoError] = useState('');
   // Promo sheet is a real @gorhom/bottom-sheet instance (same lib as the main
@@ -177,18 +240,18 @@ function RideOptionsScreenContent() {
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean; title: string; message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+    buttons?: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
   const mapRef = useRef<MapView>(null);
   const sheetRef = useRef<BottomSheet>(null);
   const snapPoints = useMemo(() => ['40%', '68%'], []);
-  const fareChevronAnim = useRef(new Animated.Value(0)).current;
+  const fareChevronAnim = useAnimatedValue(0);
   const { scheduleReminder } = useScheduledRideReminder();
 
   // Service area boundary polygons — fetched once per mount and shown as a
   // translucent zone overlay on the map so riders can see the coverage area.
-  const [serviceAreaPolygons, setServiceAreaPolygons] = useState<Array<Array<{ latitude: number; longitude: number }>>>([]);
+  const [serviceAreaPolygons, setServiceAreaPolygons] = useState<{ latitude: number; longitude: number }[][]>([]);
   useEffect(() => {
     api.get('/service-areas').then((res: any) => {
       const areas: any[] = res.data || [];
@@ -231,24 +294,34 @@ function RideOptionsScreenContent() {
 
   // ── Effects ──
 
-  const handleFetchEstimates = async () => {
+  // Wrapped in useCallback (deps: [fetchEstimates], a stable zustand
+  // action) so the effect below can list it as a dep without recreating it
+  // — and thus refiring the effect — on every render.
+  const handleFetchEstimates = useCallback(async () => {
     setFetchError(null);
     try { await fetchEstimates(); } catch { setFetchError('Could not load fares. Tap to retry.'); }
-  };
+  }, [fetchEstimates]);
 
   useEffect(() => {
     if (pickup && dropoff) {
       console.log('Platform:', Platform.OS, '| Fetching estimates & nearby drivers');
+      // Deps are [pickup, dropoff]; neither is set by these calls (they set
+      // fetchError/estimates/nearbyDrivers instead), so no loop.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       void Promise.all([handleFetchEstimates(), fetchNearbyDrivers()]);
       const driversInterval = setInterval(() => fetchNearbyDrivers(), 10000);
       const estimatesInterval = setInterval(() => void handleFetchEstimates(), 15000);
       return () => { clearInterval(driversInterval); clearInterval(estimatesInterval); };
     }
-  }, [pickup, dropoff]);
+    // fetchNearbyDrivers is a zustand action (stable); handleFetchEstimates
+    // is now a useCallback keyed on the also-stable fetchEstimates — neither
+    // addition changes when this fires (still keyed on pickup/dropoff).
+  }, [pickup, dropoff, handleFetchEstimates, fetchNearbyDrivers]);
 
   useEffect(() => {
     if (workModeEnabled && activeCompanyId) fetchPolicy();
-  }, [workModeEnabled, activeCompanyId]);
+    // fetchPolicy is a zustand selector for a store action (stable).
+  }, [workModeEnabled, activeCompanyId, fetchPolicy]);
 
   useEffect(() => {
     if (estimates.length > 0) {
@@ -257,10 +330,19 @@ function RideOptionsScreenContent() {
       const ridePortion = parseFloat(est.base_fare || '0') + parseFloat(est.distance_fare || '0') + parseFloat(est.time_fare || '0');
       fetchAvailablePromos(grandTotal, ridePortion);
     }
-  }, [estimates]);
+    // selectedIndex/fetchAvailablePromos are read here too; fetchAvailablePromos
+    // is a stable zustand action. selectedIndex is added deliberately: the
+    // promo lookup uses whichever estimate is currently selected, so if the
+    // rider changes vehicle type (selectedIndex) without a new estimates
+    // array arriving, the promo fetch should recompute for the newly
+    // selected fare instead of staying pinned to the previous selection.
+  }, [estimates, selectedIndex, fetchAvailablePromos]);
 
   useEffect(() => {
     if (!estimates || estimates.length === 0) return;
+    // Deps are [estimates, isLoading]; selectedIndex isn't a dep, so the
+    // out-of-bounds guard/reset below can't retrigger this effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedIndex(prev => (prev >= estimates.length ? 0 : prev));
     if (!selectedVehicle) {
       const firstAvailableIndex = estimates.findIndex(e => e.available);
@@ -272,7 +354,15 @@ function RideOptionsScreenContent() {
         selectVehicle(estimates[0].vehicle_type);
       }
     }
-  }, [estimates, isLoading]);
+    // selectVehicle is a zustand action (stable). selectedVehicle is added
+    // deliberately: the auto-select block is already guarded by
+    // `if (!selectedVehicle)`, so once a vehicle is selected (by the rider
+    // tapping a card, or by this effect itself) any further re-run of this
+    // effect is a no-op past that guard — the top setSelectedIndex clamp is
+    // idempotent too. No new re-run risk, and it makes the effect correctly
+    // react if selectedVehicle is ever cleared elsewhere (e.g. resetting
+    // the booking flow) while estimates/isLoading stay the same.
+  }, [estimates, isLoading, selectVehicle, selectedVehicle]);
 
   useEffect(() => {
     if (mapRef.current && mapReady && pickup && dropoff) {
@@ -291,13 +381,21 @@ function RideOptionsScreenContent() {
         }, 300);
       }
     }
-  }, [pickup, dropoff, nearbyDrivers, routeCoordinates, mapReady]);
+    // mapBottomInset is a primitive derived from SCREEN_HEIGHT (safe to
+    // add). stops is real store state (an array of ride stops, not a
+    // stable action) — adding it closes a real gap: previously the map
+    // only refit when pickup/dropoff/nearbyDrivers/routeCoordinates/
+    // mapReady changed, so adding or removing a stop mid-flow wouldn't
+    // refit the map to include the new marker until one of those other
+    // deps happened to change too.
+  }, [pickup, dropoff, nearbyDrivers, routeCoordinates, mapReady, mapBottomInset, stops]);
 
   // Work profiles + wallet: load once on mount.
   useEffect(() => {
     fetchWorkProfiles();
     fetchWallet();
-  }, []);
+    // Both are zustand store actions (stable references).
+  }, [fetchWorkProfiles, fetchWallet]);
 
   // Load saved cards on mount AND every time this screen regains focus.
   // The rider adds a card on /manage-cards (reached via router.push) and
@@ -315,7 +413,7 @@ function RideOptionsScreenContent() {
       // default), so a new customer's first card is auto-selected.
       setSelectedCardId((prev) => selectDefaultCardId(prev, cards));
     }).catch((e) => {
-      console.warn('[RideOptions] Failed to load saved cards:', e?.message ?? e);
+      console.warn('[RideOptions] Failed to load saved cards:', e);
     });
   }, []);
 
@@ -323,10 +421,23 @@ function RideOptionsScreenContent() {
 
   useEffect(() => {
     if (workModeEnabled && corporateAccounts.length > 0) {
+      // Keeps the corporate toggle in sync when work mode is enabled
+      // elsewhere; neither useCorporate nor selectedCorporateId is a dep of
+      // this effect (workModeEnabled/corporateAccounts.length are), so no
+      // loop.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setUseCorporate(true);
       setSelectedCorporateId(prev => prev ?? activeCompanyId ?? corporateAccounts[0]?.id ?? null);
     }
-  }, [workModeEnabled, corporateAccounts.length]);
+    // corporateAccounts is a useMemo'd array (stable unless workProfiles
+    // changes) — safe to depend on directly here, unlike the equivalent
+    // effect in payment-confirm.tsx where the same-named array is a plain
+    // unmemoized literal (narrowed there instead; see that file's commit).
+    // activeCompanyId is real reactive store state: closes the same gap
+    // fixed in payment-confirm.tsx — a later activeCompanyId update can now
+    // re-trigger this effect to fill in selectedCorporateId if it was still
+    // null when workModeEnabled/corporateAccounts first became true.
+  }, [workModeEnabled, corporateAccounts, activeCompanyId]);
 
   // Populate route coordinates from the server-provided polyline (returned
   // with the estimate response). Falls back to MapViewDirections on-device
@@ -334,6 +445,9 @@ function RideOptionsScreenContent() {
   useEffect(() => {
     if (routePolyline && routePolyline.length >= 2) {
       const coords = routePolyline.map(([lat, lng]: [number, number]) => ({ latitude: lat, longitude: lng }));
+      // routeCoordinates isn't a dep of this effect (only routePolyline
+      // is), so syncing it here can't retrigger this effect.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setRouteCoordinates(coords);
     } else {
       // The store clears routePolyline whenever a waypoint changes (e.g. the
@@ -394,13 +508,16 @@ function RideOptionsScreenContent() {
           : 'Please select a card to pay for this ride.',
         variant: 'warning',
         buttons: [
-          { text: 'Add / select card', onPress: () => setShowPaymentSheet(true) },
+          { text: 'Add / select card', onPress: () => openPaymentSheet() },
           { text: 'Cancel', style: 'cancel' },
         ],
       });
       return;
     }
     if (scheduledTime) {
+      // Not a render-time call: handleBookRide only runs from the Book
+      // button's onPress, never during render.
+      // eslint-disable-next-line react-hooks/purity
       const minTime = new Date(Date.now() + 15 * 60000);
       if (scheduledTime < minTime) {
         showToast('Invalid Time', 'Scheduled time must be at least 15 minutes from now.', 'warning');
@@ -476,6 +593,11 @@ function RideOptionsScreenContent() {
         router.replace({ pathname: '/driver-arriving', params: { rideId: ride.id } } as any);
       }
     } catch (error: any) {
+      // Not user-facing: `error.message` here only drives the 409-detection
+      // control-flow branch below (routing to the rider's already-active
+      // ride instead of retrying booking). The actual user-visible message a
+      // few lines down already goes through getApiErrorMessage().
+      // eslint-disable-next-line no-restricted-syntax
       const is409 = error?.response?.status === 409 || error?.message?.includes('already active');
       if (is409) {
         const active = await useRideStore.getState().fetchActiveRide();
@@ -521,7 +643,6 @@ function RideOptionsScreenContent() {
       setConfirmSheet({ visible: true, title: 'Invalid Time', message: 'Scheduled time must be at least 15 minutes from now.', variant: 'warning' });
       return;
     }
-    setTempDate(date);
     setScheduledTime(date);
   };
 
@@ -591,7 +712,7 @@ function RideOptionsScreenContent() {
               strokeWidth={0}
               strokeColor="transparent"
               onReady={onReadyDirections}
-              onError={(err: any) => console.warn('[RideOptions] Directions API error:', err?.message ?? err)}
+              onError={(err: any) => console.warn('[RideOptions] Directions API error:', err)}
               // NO optimizeWaypoints: the backend prices + dispatches `stops` in
               // the rider-entered order, so Directions must keep that order.
               // Optimising would let onReady persist a reordered polyline as
@@ -623,7 +744,7 @@ function RideOptionsScreenContent() {
             return (
               <CarMarker key={driver.id} identifier={driver.id}
                 coordinate={{ latitude: driver.lat, longitude: driver.lng }}
-                heading={(driver as any).heading ?? Math.random() * 360}
+                heading={(driver as any).heading ?? fallbackHeading(driver.id)}
                 imageUri={vt?.marker_image_url}
                 variant={resolveMarkerVariant(
                   vt?.marker_variant ?? driver.marker_variant,
@@ -895,7 +1016,7 @@ function RideOptionsScreenContent() {
           {!isLoading && !allUnavailable && estimates.length > 0 && selectedEstimate && (
             <View style={[styles.fixedFooter, { paddingBottom: Math.max(insets.bottom, 12) + 4 }]}>
               {/* Payment method row */}
-              <TouchableOpacity style={styles.actionRow} onPress={() => setShowPaymentSheet(true)} activeOpacity={0.7}>
+              <TouchableOpacity style={styles.actionRow} onPress={() => openPaymentSheet()} activeOpacity={0.7}>
                 <View style={styles.actionRowIcon}>
                   <Ionicons name={paymentIcon} size={18} color={colors.primary} />
                 </View>
@@ -909,7 +1030,17 @@ function RideOptionsScreenContent() {
               {/* Schedule row */}
               <TouchableOpacity
                 style={styles.actionRow}
-                onPress={() => scheduledTime ? setScheduledTime(null) : setShowScheduleModal(true)}
+                onPress={() => {
+                  if (scheduledTime) {
+                    setScheduledTime(null);
+                    return;
+                  }
+                  setScheduleBounds({
+                    min: new Date(Date.now() + 15 * 60000),
+                    max: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+                  });
+                  setShowScheduleModal(true);
+                }}
                 activeOpacity={0.7}
               >
                 <View style={styles.actionRowIcon}>
@@ -964,112 +1095,122 @@ function RideOptionsScreenContent() {
         </BottomSheetScrollView>
       </BottomSheet>
 
-      {/* ═══ Payment method modal ═══ */}
-      <Modal visible={showPaymentSheet} animationType="slide" transparent onRequestClose={() => setShowPaymentSheet(false)}>
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowPaymentSheet(false)}>
-          <TouchableOpacity activeOpacity={1} style={styles.paymentModal}>
-            <View style={styles.paymentModalHandle} />
-            <Text style={styles.paymentModalTitle}>Payment method</Text>
+      {/* ═══ Payment method sheet ═══ */}
+      {/* A @gorhom/bottom-sheet sibling like the promo sheet below — replaces
+          the RN <Modal> that stacked over the vehicle sheet and was touch-dead
+          on iOS New Arch (TestFlight 2.0.0 (16)): rows rendered but presses
+          never arrived, so tapping a payment method couldn't dismiss it. Rows
+          commit their selection and dismiss in the same press; backdrop tap,
+          swipe-down, and Android hardware back are the other exits. */}
+      <BottomSheet
+        ref={paymentSheetRef}
+        index={-1}
+        enableDynamicSizing
+        maxDynamicContentSize={paymentMaxSheetHeight}
+        enablePanDownToClose
+        backdropComponent={renderPaymentBackdrop}
+        backgroundStyle={styles.sheetBackground}
+        handleIndicatorStyle={styles.sheetIndicator}
+        onChange={handlePaymentSheetChange}
+      >
+        <BottomSheetScrollView
+          contentContainerStyle={styles.paymentSheetContent}
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={styles.paymentModalTitle}>Payment method</Text>
 
-            <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 400 }}>
-              {/* Saved cards */}
-              {savedCards.map((card) => {
-                const isSelected = selectedPayment === 'card' && selectedCardId === card.id && !useCorporate;
+          {/* Saved cards */}
+          {savedCards.map((card) => {
+            const isSelected = selectedPayment === 'card' && selectedCardId === card.id && !useCorporate;
+            return (
+              <TouchableOpacity key={card.id}
+                style={[styles.paymentOption, isSelected && styles.paymentOptionSelected]}
+                onPress={() => { setSelectedPayment('card'); setSelectedCardId(card.id); setUseCorporate(false); closePaymentSheet(); }}>
+                <View style={styles.paymentOptionIcon}>
+                  <Ionicons name="card" size={22} color={isSelected ? colors.primary : colors.textDim} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.paymentOptionName}>{card.brand.charAt(0).toUpperCase() + card.brand.slice(1)}</Text>
+                  <Text style={styles.paymentOptionDetail}>•••• {card.last4}  {card.exp_month}/{String(card.exp_year).slice(-2)}</Text>
+                </View>
+                {isSelected && (
+                  <View style={styles.paymentCheck}>
+                    <Ionicons name="checkmark" size={16} color="#FFF" />
+                  </View>
+                )}
+              </TouchableOpacity>
+            );
+          })}
+
+          {savedCards.length === 0 && (
+            <TouchableOpacity
+              style={styles.paymentOption}
+              onPress={() => { setSelectedPayment('card'); setUseCorporate(false); closePaymentSheet(); router.push('/manage-cards' as any); }}>
+              <View style={styles.paymentOptionIcon}>
+                <Ionicons name="card" size={22} color={colors.textDim} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.paymentOptionName}>Credit Card</Text>
+                <Text style={styles.paymentOptionDetail}>Tap to add a card</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+            </TouchableOpacity>
+          )}
+
+          {/* Wallet */}
+          <TouchableOpacity
+            style={[styles.paymentOption, selectedPayment === 'wallet' && !useCorporate && styles.paymentOptionSelected]}
+            onPress={() => { setSelectedPayment('wallet'); setUseCorporate(false); closePaymentSheet(); }}>
+            <View style={styles.paymentOptionIcon}>
+              <Ionicons name="wallet" size={22} color={selectedPayment === 'wallet' && !useCorporate ? colors.primary : colors.textDim} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.paymentOptionName}>Spinr Wallet</Text>
+              <Text style={styles.paymentOptionDetail}>Balance: ${parseFloat(wallet?.balance ?? '0').toFixed(2)}</Text>
+            </View>
+            {selectedPayment === 'wallet' && !useCorporate && (
+              <View style={styles.paymentCheck}><Ionicons name="checkmark" size={16} color="#FFF" /></View>
+            )}
+          </TouchableOpacity>
+
+          {/* Corporate billing */}
+          {corporateAccounts.length > 0 && (
+            <>
+              <View style={styles.paymentDivider}>
+                <View style={styles.paymentDividerLine} />
+                <Text style={styles.paymentDividerText}>Corporate</Text>
+                <View style={styles.paymentDividerLine} />
+              </View>
+              {corporateAccounts.map((acct) => {
+                const isSelected = useCorporate && selectedCorporateId === acct.id;
                 return (
-                  <TouchableOpacity key={card.id}
+                  <TouchableOpacity key={acct.id}
                     style={[styles.paymentOption, isSelected && styles.paymentOptionSelected]}
-                    onPress={() => { setSelectedPayment('card'); setSelectedCardId(card.id); setUseCorporate(false); }}>
+                    onPress={() => { setUseCorporate(true); setSelectedCorporateId(acct.id); closePaymentSheet(); }}>
                     <View style={styles.paymentOptionIcon}>
-                      <Ionicons name="card" size={22} color={isSelected ? colors.primary : colors.textDim} />
+                      <Ionicons name="business" size={22} color={isSelected ? colors.primary : colors.textDim} />
                     </View>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.paymentOptionName}>{card.brand.charAt(0).toUpperCase() + card.brand.slice(1)}</Text>
-                      <Text style={styles.paymentOptionDetail}>•••• {card.last4}  {card.exp_month}/{String(card.exp_year).slice(-2)}</Text>
+                      <Text style={styles.paymentOptionName}>{acct.company_name}</Text>
+                      <Text style={styles.paymentOptionDetail}>Company account</Text>
                     </View>
                     {isSelected && (
-                      <View style={styles.paymentCheck}>
-                        <Ionicons name="checkmark" size={16} color="#FFF" />
-                      </View>
+                      <View style={styles.paymentCheck}><Ionicons name="checkmark" size={16} color="#FFF" /></View>
                     )}
                   </TouchableOpacity>
                 );
               })}
+            </>
+          )}
 
-              {savedCards.length === 0 && (
-                <TouchableOpacity
-                  style={styles.paymentOption}
-                  onPress={() => { setSelectedPayment('card'); setUseCorporate(false); setShowPaymentSheet(false); router.push('/manage-cards' as any); }}>
-                  <View style={styles.paymentOptionIcon}>
-                    <Ionicons name="card" size={22} color={colors.textDim} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.paymentOptionName}>Credit Card</Text>
-                    <Text style={styles.paymentOptionDetail}>Tap to add a card</Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
-                </TouchableOpacity>
-              )}
-
-              {/* Wallet */}
-              <TouchableOpacity
-                style={[styles.paymentOption, selectedPayment === 'wallet' && !useCorporate && styles.paymentOptionSelected]}
-                onPress={() => { setSelectedPayment('wallet'); setUseCorporate(false); }}>
-                <View style={styles.paymentOptionIcon}>
-                  <Ionicons name="wallet" size={22} color={selectedPayment === 'wallet' && !useCorporate ? colors.primary : colors.textDim} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.paymentOptionName}>Spinr Wallet</Text>
-                  <Text style={styles.paymentOptionDetail}>Balance: ${parseFloat(wallet?.balance ?? '0').toFixed(2)}</Text>
-                </View>
-                {selectedPayment === 'wallet' && !useCorporate && (
-                  <View style={styles.paymentCheck}><Ionicons name="checkmark" size={16} color="#FFF" /></View>
-                )}
-              </TouchableOpacity>
-
-              {/* Corporate billing */}
-              {corporateAccounts.length > 0 && (
-                <>
-                  <View style={styles.paymentDivider}>
-                    <View style={styles.paymentDividerLine} />
-                    <Text style={styles.paymentDividerText}>Corporate</Text>
-                    <View style={styles.paymentDividerLine} />
-                  </View>
-                  {corporateAccounts.map((acct) => {
-                    const isSelected = useCorporate && selectedCorporateId === acct.id;
-                    return (
-                      <TouchableOpacity key={acct.id}
-                        style={[styles.paymentOption, isSelected && styles.paymentOptionSelected]}
-                        onPress={() => { setUseCorporate(true); setSelectedCorporateId(acct.id); }}>
-                        <View style={styles.paymentOptionIcon}>
-                          <Ionicons name="business" size={22} color={isSelected ? colors.primary : colors.textDim} />
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.paymentOptionName}>{acct.company_name}</Text>
-                          <Text style={styles.paymentOptionDetail}>Company account</Text>
-                        </View>
-                        {isSelected && (
-                          <View style={styles.paymentCheck}><Ionicons name="checkmark" size={16} color="#FFF" /></View>
-                        )}
-                      </TouchableOpacity>
-                    );
-                  })}
-                </>
-              )}
-
-              {/* Add payment */}
-              <TouchableOpacity style={styles.addPaymentRow}
-                onPress={() => { setShowPaymentSheet(false); router.push('/manage-cards' as any); }}>
-                <Ionicons name="add-circle-outline" size={20} color={colors.primary} />
-                <Text style={styles.addPaymentText}>Add payment method</Text>
-              </TouchableOpacity>
-            </ScrollView>
-
-            <TouchableOpacity style={styles.paymentDoneBtn} onPress={() => setShowPaymentSheet(false)}>
-              <Text style={styles.paymentDoneBtnText}>Done</Text>
-            </TouchableOpacity>
+          {/* Add payment */}
+          <TouchableOpacity style={styles.addPaymentRow}
+            onPress={() => { closePaymentSheet(); router.push('/manage-cards' as any); }}>
+            <Ionicons name="add-circle-outline" size={20} color={colors.primary} />
+            <Text style={styles.addPaymentText}>Add payment method</Text>
           </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
+        </BottomSheetScrollView>
+      </BottomSheet>
 
       {/* ═══ Promo selection sheet ═══ */}
       <BottomSheet
@@ -1219,8 +1360,8 @@ function RideOptionsScreenContent() {
         visible={showScheduleModal}
         onClose={() => setShowScheduleModal(false)}
         onConfirm={handleScheduleConfirm}
-        minDate={new Date(Date.now() + 15 * 60000)}
-        maxDate={new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)}
+        minDate={scheduleBounds.min}
+        maxDate={scheduleBounds.max}
       />
 
       <ConfirmSheet
@@ -1246,13 +1387,13 @@ function AnimatedVehicleCard({
   estimate: any; index: number; isSelected: boolean; isAvailable: boolean;
   onPress: (i: number) => void; styles: any; colors: any; appliedPromo: any;
 }) {
-  const scaleAnim = useRef(new Animated.Value(isSelected ? 1 : 0)).current;
+  const scaleAnim = useAnimatedValue(isSelected ? 1 : 0);
   // Car-image emphasis. Driven by a native SCALE transform (below) inside a
   // fixed-size container, so it rides the native driver like scaleAnim — the
   // old version animated width/height (useNativeDriver:false), which ran on the
   // JS thread AND changed the row height, reflowing the whole list on every
   // selection switch (the "shaking").
-  const imageSizeAnim = useRef(new Animated.Value(isSelected ? 1 : 0)).current;
+  const imageSizeAnim = useAnimatedValue(isSelected ? 1 : 0);
 
   useEffect(() => {
     Animated.spring(scaleAnim, {
@@ -1263,7 +1404,8 @@ function AnimatedVehicleCard({
       toValue: isSelected ? 1 : 0,
       tension: 120, friction: 14, useNativeDriver: true,
     }).start();
-  }, [isSelected]);
+    // Both are stable Animated.Value instances (useAnimatedValue, created once).
+  }, [isSelected, scaleAnim, imageSizeAnim]);
 
   const scale = scaleAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.03] });
   // Car art keeps the original sizes — selected is the full 150×98 hero,
@@ -1880,27 +2022,11 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       color: '#FFFFFF',
     },
 
-    // ── Payment modal ──
-    modalOverlay: {
-      flex: 1,
-      justifyContent: 'flex-end',
-      backgroundColor: 'rgba(0,0,0,0.4)',
-    },
-    paymentModal: {
-      backgroundColor: colors.surface,
-      borderTopLeftRadius: 24,
-      borderTopRightRadius: 24,
+    // ── Payment sheet ──
+    paymentSheetContent: {
       paddingHorizontal: 20,
       paddingBottom: Math.max(insets.bottom, 16) + 8,
-      paddingTop: 12,
-    },
-    paymentModalHandle: {
-      width: 40,
-      height: 4,
-      borderRadius: 2,
-      backgroundColor: colors.border,
-      alignSelf: 'center',
-      marginBottom: 16,
+      paddingTop: 4,
     },
     paymentModalTitle: {
       fontSize: sf(18),
@@ -1978,19 +2104,6 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       fontFamily: 'PlusJakartaSans_600SemiBold',
       color: colors.primary,
     },
-    paymentDoneBtn: {
-      marginTop: 8,
-      paddingVertical: 14,
-      borderRadius: 24,
-      backgroundColor: colors.primary,
-      alignItems: 'center',
-    },
-    paymentDoneBtnText: {
-      fontSize: sf(16),
-      fontFamily: 'PlusJakartaSans_600SemiBold',
-      color: '#FFFFFF',
-    },
-
     // ── Promo sheet ──
     promoSheetContent: {
       paddingHorizontal: 20,

@@ -47,6 +47,12 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
   const showBanner = bannerLevel !== 'none';
   const bannerIsRed = bannerLevel === 'no_internet' || bannerLevel === 'disconnected';
 
+  // react-hooks/refs ("Cannot access refs during render"): standard
+  // Animated.Value driver idiom — mutated only via Animated.timing() inside
+  // the effect below, read only in the JSX height binding further down.
+  // Verified safe — grepped this file for `.current =`: zero matches,
+  // bannerHeight is never reassigned after creation.
+  // eslint-disable-next-line react-hooks/refs
   const bannerHeight = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     Animated.timing(bannerHeight, {
@@ -54,6 +60,12 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
       duration: 200,
       useNativeDriver: false,
     }).start();
+    // bannerHeight intentionally excluded — same verified-safe stable
+    // useRef(...).current animation-driver idiom noted above; adding a
+    // ref-derived value to a dependency array is itself a render-time ref
+    // read under react-hooks/refs (confirmed in otp.tsx's dotAnims). Its
+    // identity never changes, so excluding it changes nothing about firing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showBanner]);
 
   const bannerText = bannerLevel === 'no_internet'

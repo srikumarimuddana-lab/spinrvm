@@ -13,11 +13,13 @@ try:
     from ...db_supabase import run_sync
     from ...dependencies import get_admin_user
     from ...settings_loader import get_app_settings
+    from ...utils.stripe_mode import is_missing_on_key
 except ImportError:
     import db_supabase
     from db_supabase import run_sync
     from dependencies import get_admin_user
     from settings_loader import get_app_settings
+    from utils.stripe_mode import is_missing_on_key
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +165,24 @@ async def _list_user_cards(user: Dict[str, Any]) -> tuple[Optional[List[Dict[str
             ],
             None,
         )
-    except Exception:
+    except Exception as e:
+        if is_missing_on_key(e, customer_id):
+            # Not a Stripe outage: this customer does not exist on the running
+            # key — the signature of a test→live key rotation over rows minted
+            # under the old mode. Say so precisely, because "Could not load
+            # cards" sends the operator hunting for an outage that isn't there.
+            # The rider's own cards screen repairs this on next open
+            # (routes/payments.py::with_customer_repair).
+            logger.warning(
+                "admin: rider's Stripe customer is not on the current key",
+                extra={"domain": "admin", "user_id": user.get("id")},
+            )
+            return None, (
+                "This rider's Stripe customer does not exist on the current API key "
+                "(likely a test→live key change). It is replaced automatically the next "
+                "time they open the payment screen; any cards saved before the change "
+                "cannot be recovered and must be re-added."
+            )
         logger.error(
             "admin: failed to list cards from Stripe",
             exc_info=True,
@@ -175,8 +194,11 @@ async def _list_user_cards(user: Dict[str, Any]) -> tuple[Optional[List[Dict[str
 # Columns the admin detail view renders for a rider's recent rides. Explicitly
 # EXCLUDES raw GPS (pickup_lat/lng, dropoff_lat/lng) and any route polyline —
 # PIPEDA forbids raw coordinates leaving the data store; the UI only shows the
-# address text, status, fare and date.
-_DETAIL_RIDE_COLUMNS = "id,status,pickup_address,dropoff_address,total_fare,created_at"
+# address text, status, fare and date. `legacy_import_metadata` is included
+# so the panel can flag a row as imported from the previous app (JSONB import
+# provenance only — batch/source/timestamps — never PII, see
+# docs/audit/2026-08-13-migrated-data-visibility-audit.md Finding 4).
+_DETAIL_RIDE_COLUMNS = "id,status,pickup_address,dropoff_address,total_fare,created_at,legacy_import_metadata"
 
 
 @router.get("/users/{user_id}")
@@ -299,7 +321,9 @@ async def admin_update_user_status(user_id: str, status_data: UserStatusRequest,
                 title, body = "Account suspended", reason or "Your account has been suspended. Contact support."
             else:
                 title, body = "Account reactivated", "Your account is active again. Welcome back!"
-            await send_push_notification(user_id, title, body, data={"type": "account_status", "status": new_status})
+            await send_push_notification(
+                user_id, title, body, data={"type": "account_status", "status": new_status}, target_app="rider"
+            )
         except Exception:
             logger.warning("account status push failed", exc_info=True, extra={"domain": "admin", "user_id": user_id})
 

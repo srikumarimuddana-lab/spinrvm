@@ -342,3 +342,178 @@ class TestLogComplianceExport:
         with patch("backend.routes.admin.compliance.db_supabase.insert_one", AsyncMock(side_effect=insert_one_side)):
             # Must not raise.
             asyncio.run(compliance._log_compliance_export({"id": "admin1"}, "gst_pst_remittance", {}, 0))
+
+
+class TestParseServiceAreaIds:
+    """The Compliance page's Service Area multi-select arrives as a
+    comma-separated string; None means "every area", which must stay
+    byte-identical to the pre-filter behaviour of every report."""
+
+    @pytest.mark.parametrize("raw", [None, "", "   ", ",", " , , "])
+    def test_blank_means_no_filter(self, raw):
+        assert compliance._parse_service_area_ids(raw) is None
+
+    def test_strips_whitespace_and_drops_empties(self):
+        assert compliance._parse_service_area_ids(" a , ,b ") == ["a", "b"]
+
+    def test_dedupes_and_sorts(self):
+        """Order-independence is load-bearing, not cosmetic: this list is
+        part of the dual-approval gate's params key, so {b,a} must match an
+        approval already granted for {a,b} rather than demanding a second
+        one for the same export."""
+        assert compliance._parse_service_area_ids("b,a,b") == ["a", "b"]
+
+
+class TestServiceAreaScopeLabel:
+    def test_unfiltered_states_all_areas_rather_than_staying_silent(self):
+        assert asyncio.run(compliance._service_area_scope_label(None)) == "All service areas"
+
+    def test_resolves_names_in_requested_order(self):
+        async def get_rows_side(table, filters=None, **kw):
+            assert table == "service_areas"
+            return [{"id": "a2", "name": "Regina"}, {"id": "a1", "name": "Saskatoon"}]
+
+        with _patch_get_rows(get_rows_side):
+            label = asyncio.run(compliance._service_area_scope_label(["a1", "a2"]))
+
+        assert label == "Service areas: Saskatoon, Regina"
+
+    def test_falls_back_to_ids_when_name_lookup_fails(self):
+        """The rows are already correctly filtered by id at this point, so a
+        failed *name* lookup must not fail the export — but the scope still
+        has to appear on the document rather than silently vanishing."""
+
+        async def get_rows_side(table, filters=None, **kw):
+            raise RuntimeError("db unavailable")
+
+        with _patch_get_rows(get_rows_side):
+            label = asyncio.run(compliance._service_area_scope_label(["a1", "a2"]))
+
+        assert label == "Service areas: a1, a2"
+
+
+class TestServiceAreaFiltering:
+    """Every report except T4A accepts a service-area scope. Ride-based
+    reports filter the ride's own area; driver-based reports filter the
+    driver's home area (the convention migrations 164/165/194 use)."""
+
+    def test_gst_pst_filters_rides_by_the_rides_own_area(self):
+        captured = {}
+
+        async def get_rows_side(table, filters=None, **kw):
+            captured[table] = filters
+            return []
+
+        with _patch_get_rows(get_rows_side):
+            asyncio.run(compliance._gst_pst_rows(_START, _END, ["a1", "a2"]))
+
+        assert captured["rides"]["service_area_id"] == {"$in": ["a1", "a2"]}
+
+    def test_gst_pst_omits_the_filter_entirely_when_unscoped(self):
+        """Not "filter by every id" — the key must be absent, so an
+        unfiltered export issues exactly the query it issued before this
+        feature existed."""
+        captured = {}
+
+        async def get_rows_side(table, filters=None, **kw):
+            captured[table] = filters
+            return []
+
+        with _patch_get_rows(get_rows_side):
+            asyncio.run(compliance._gst_pst_rows(_START, _END))
+
+        assert "service_area_id" not in captured["rides"]
+
+    def test_airport_trips_filters_rides_by_the_rides_own_area(self):
+        captured = {}
+
+        async def get_rows_side(table, filters=None, **kw):
+            captured[table] = filters
+            return []
+
+        with _patch_get_rows(get_rows_side):
+            asyncio.run(compliance._airport_trips_rows(_START, _END, ["a1"]))
+
+        assert captured["rides"]["service_area_id"] == {"$in": ["a1"]}
+
+    def test_driver_roster_filters_drivers_by_home_area(self):
+        captured = {}
+
+        async def get_rows_side(table, filters=None, **kw):
+            captured[table] = filters
+            return []
+
+        with _patch_get_rows(get_rows_side):
+            asyncio.run(compliance._driver_roster_rows(None, service_area_ids=["a1"]))
+
+        assert captured["drivers"]["service_area_id"] == {"$in": ["a1"]}
+
+    def test_insurance_billing_scopes_distances_to_drivers_in_those_areas(self):
+        """driver_period_distances has no service area of its own, so the
+        driver ids are resolved first and passed as $in — PostgREST cannot
+        filter a child table by an embedded parent."""
+        captured = {}
+
+        async def get_rows_side(table, filters=None, **kw):
+            captured.setdefault(table, []).append(filters)
+            if table == "drivers" and "service_area_id" in (filters or {}):
+                return [{"id": "d1"}, {"id": "d2"}]
+            if table == "driver_period_distances":
+                return []
+            return []
+
+        with _patch_get_rows(get_rows_side):
+            asyncio.run(compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.11"), ["a1"]))
+
+        assert captured["drivers"][0]["service_area_id"] == {"$in": ["a1"]}
+        assert captured["driver_period_distances"][0]["driver_id"] == {"$in": ["d1", "d2"]}
+
+    def test_insurance_billing_returns_empty_when_no_driver_is_in_the_selected_areas(self):
+        """The load-bearing guard: an empty `$in` list would widen back to
+        every driver, so falling through here would bill the insurer for
+        the very areas the admin excluded. Must return empty AND must never
+        reach the distances query at all."""
+        tables_queried = []
+
+        async def get_rows_side(table, filters=None, **kw):
+            tables_queried.append(table)
+            return []  # no drivers in the selected areas
+
+        with _patch_get_rows(get_rows_side):
+            rows, total_km, truncated, groups = asyncio.run(
+                compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.11"), ["a-empty"])
+            )
+
+        assert rows == []
+        assert total_km == Decimal("0")
+        assert groups == []
+        assert "driver_period_distances" not in tables_queried
+
+    def test_insurance_billing_unscoped_does_not_resolve_drivers_by_area(self):
+        captured = {}
+
+        async def get_rows_side(table, filters=None, **kw):
+            captured.setdefault(table, []).append(filters)
+            return []
+
+        with _patch_get_rows(get_rows_side):
+            asyncio.run(compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.11")))
+
+        assert "driver_id" not in captured["driver_period_distances"][0]
+
+    def test_area_driver_scope_truncation_propagates_to_the_report(self):
+        """Hitting the driver cap means the driver set is short, so the
+        billing total under-reports. That must surface as the report's own
+        truncation marker, not be silently absorbed."""
+
+        async def get_rows_side(table, filters=None, **kw):
+            if table == "drivers" and "service_area_id" in (filters or {}):
+                return [{"id": f"d{i}"} for i in range(compliance._ROW_LIMIT)]
+            return []
+
+        with _patch_get_rows(get_rows_side):
+            _rows, _km, truncated, _groups = asyncio.run(
+                compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.11"), ["a1"])
+            )
+
+        assert truncated is True

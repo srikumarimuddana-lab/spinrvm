@@ -139,6 +139,28 @@ class TestAdminCancelRideExtra:
         assert resp.status_code == 200
         assert freed == {"driver_id": "drv-1", "available": True}
 
+    def test_cancel_notifies_driver_and_rider_with_correct_target_app(self, client, as_super_admin):
+        """ACTION_ITEMS.md N10 (admin bucket): the driver-facing and rider-facing
+        cancellation pushes must each carry the right target_app, not fall
+        through to the legacy fcm_token column."""
+        cancelled_ride = {**_RIDE_WITH_DRIVER, "status": "cancelled"}
+        push_mock = AsyncMock()
+        with (
+            patch("db_supabase.get_ride", AsyncMock(side_effect=[_RIDE_WITH_DRIVER, cancelled_ride])),
+            patch("db_supabase.update_ride", AsyncMock(return_value=None)),
+            patch("db_supabase.set_driver_available", AsyncMock()),
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=_DRIVER)),
+            patch("socket_manager.manager.send_personal_message", AsyncMock()),
+            patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
+            patch("socket_manager.manager.broadcast_to_admins", AsyncMock()),
+            patch("routes.admin.rides.send_push_notification", push_mock),
+        ):
+            resp = client.post("/api/admin/rides/ride-2/cancel", json={"reason": "no drivers"})
+        assert resp.status_code == 200
+        calls_by_recipient = {c.args[0]: c.kwargs.get("target_app") for c in push_mock.await_args_list}
+        assert calls_by_recipient[_DRIVER["user_id"]] == "driver"
+        assert calls_by_recipient[_RIDE_WITH_DRIVER["rider_id"]] == "rider"
+
     def test_cancel_silent_no_op_surfaces_500(self, client, as_super_admin):
         """If the status update doesn't actually persist, this must surface loudly (500), not
         silently report success — a broken admin cancel would otherwise strand riders/drivers
@@ -291,6 +313,7 @@ class TestAdminCreateRide:
 
     def test_create_ride_with_driver_status_driver_assigned_and_dispatches(self, client, as_super_admin):
         body = {**_CREATE_BODY, "driver_id": "drv-1"}
+        push_mock = AsyncMock()
         with (
             patch("db_supabase.insert_one", AsyncMock(return_value=None)),
             patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-1")),
@@ -303,12 +326,17 @@ class TestAdminCreateRide:
             patch("routes.admin.rides.get_app_settings", AsyncMock(return_value={"ride_offer_timeout_seconds": 15})),
             patch("socket_manager.manager.send_personal_message", AsyncMock()),
             patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
-            patch("features.send_push_notification", AsyncMock(), create=True),
+            patch("routes.admin.rides.send_push_notification", push_mock),
             patch("routes.rides._offer_timeout_handler", AsyncMock(), create=True),
         ):
             resp = client.post("/api/admin/rides/create", json=body)
         assert resp.status_code == 200
         assert resp.json()["status"] == "driver_assigned"
+        # ACTION_ITEMS.md N10 (admin bucket): the new-ride-assignment dispatch
+        # push must target the driver app, not the legacy fcm_token column.
+        push_mock.assert_awaited_once()
+        assert push_mock.await_args.args[0] == _DRIVER["user_id"]
+        assert push_mock.await_args.kwargs.get("target_app") == "driver"
 
     def test_create_ride_insert_failure_returns_500(self, client, as_super_admin):
         with patch("db_supabase.insert_one", AsyncMock(side_effect=RuntimeError("db down"))):
@@ -332,12 +360,81 @@ class TestAdminCreateRide:
             patch("db_supabase.insert_one", AsyncMock(return_value=None)) as mock_insert,
             patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-1")),
             patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
+            # N15/R33: admin_create_ride now also sends a promo-applied push
+            # when promo_application_id is set — mock it out here so
+            # mock_insert.call_args (the ride insert) isn't shadowed by the
+            # unrelated notification-inbox insert send_push_notification
+            # performs internally. The push itself is covered separately by
+            # test_create_ride_with_promo_notifies_rider below.
+            patch("routes.admin.rides.send_push_notification", AsyncMock(return_value=True)),
         ):
             resp = client.post("/api/admin/rides/create", json=body)
         assert resp.status_code == 200
         inserted_doc = mock_insert.call_args[0][1]
         assert inserted_doc["promo_code"] == "SAVE5"
         assert Decimal(str(inserted_doc["discount_amount"])) == Decimal("5.00")
+
+    def test_create_ride_with_promo_notifies_rider(self, client, as_super_admin):
+        """N15/R33 (ACTION_ITEMS.md): admin-applied promos previously had zero
+        notification call — the rider must be told their promo was redeemed."""
+        body = {**_CREATE_BODY, "promo_code": "SAVE5", "subtotal_fare": "20.00"}
+        admin_promo_result = {
+            "application_id": "app-1",
+            "code": "SAVE5",
+            "discount_amount": "5.00",
+        }
+        push = AsyncMock(return_value=True)
+        with (
+            patch("routes.promotions.apply_promo_for_admin", AsyncMock(return_value=admin_promo_result), create=True),
+            patch("db_supabase.insert_one", AsyncMock(return_value=None)),
+            patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-1")),
+            patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
+            patch("routes.admin.rides.send_push_notification", push),
+        ):
+            resp = client.post("/api/admin/rides/create", json=body)
+        assert resp.status_code == 200
+
+        push.assert_awaited_once()
+        args, kwargs = push.await_args
+        assert args[0] == "usr-1"
+        assert kwargs["data"]["type"] == "promo_applied"
+        assert kwargs["data"]["promo_code"] == "SAVE5"
+        assert kwargs["data"]["discount_amount"] == "5.00"
+        assert kwargs["target_app"] == "rider"
+
+    def test_create_ride_without_promo_does_not_notify(self, client, as_super_admin):
+        push = AsyncMock(return_value=True)
+        with (
+            patch("db_supabase.insert_one", AsyncMock(return_value=None)),
+            patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-1")),
+            patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
+            patch("routes.admin.rides.send_push_notification", push),
+        ):
+            resp = client.post("/api/admin/rides/create", json=_CREATE_BODY)
+        assert resp.status_code == 200
+        push.assert_not_awaited()
+
+    def test_create_ride_promo_push_failure_does_not_break_response(self, client, as_super_admin):
+        """The ride + promo redemption already committed above the push call —
+        a delivery failure must never surface as a failed ride-creation request."""
+        body = {**_CREATE_BODY, "promo_code": "SAVE5", "subtotal_fare": "20.00"}
+        admin_promo_result = {
+            "application_id": "app-1",
+            "code": "SAVE5",
+            "discount_amount": "5.00",
+        }
+        push = AsyncMock(side_effect=RuntimeError("fcm down"))
+        with (
+            patch("routes.promotions.apply_promo_for_admin", AsyncMock(return_value=admin_promo_result), create=True),
+            patch("db_supabase.insert_one", AsyncMock(return_value=None)) as mock_insert,
+            patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-1")),
+            patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
+            patch("routes.admin.rides.send_push_notification", push),
+        ):
+            resp = client.post("/api/admin/rides/create", json=body)
+        assert resp.status_code == 200
+        inserted_doc = mock_insert.call_args[0][1]
+        assert inserted_doc["promo_code"] == "SAVE5"
 
 
 # ---------------------------------------------------------------------------

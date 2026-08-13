@@ -55,7 +55,7 @@ export default function CompanyPortalLandingPage() {
 
             {loading && <p className="text-sm text-muted-foreground">Loading…</p>}
             {error && (
-                <p className="rounded bg-red-50 p-3 text-sm text-red-700">{error}</p>
+                <p className="rounded bg-destructive/10 p-3 text-sm text-destructive">{error}</p>
             )}
 
             <div className="space-y-3">
@@ -68,8 +68,8 @@ export default function CompanyPortalLandingPage() {
                         <Card className="transition-colors hover:bg-muted/40">
                             <CardContent className="flex items-center justify-between gap-4 p-4">
                                 <div className="flex items-center gap-3">
-                                    <div className="rounded-md bg-emerald-50 p-2">
-                                        <Building2 className="h-5 w-5 text-emerald-600" />
+                                    <div className="rounded-md bg-emerald-50 dark:bg-emerald-900/20 p-2">
+                                        <Building2 className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
                                     </div>
                                     <div>
                                         <div className="font-medium">{p.company.name}</div>

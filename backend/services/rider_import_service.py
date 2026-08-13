@@ -104,6 +104,31 @@ def _select_in(table: str, columns: str, column: str, values: list[str], chunk: 
     return out
 
 
+# Matched-user statuses the importer must never auto-update PII for (P0-C,
+# docs/audit/2026-08-11-driver-rider-migration-audit.md). A pending_deletion
+# account keeps `phone` live for reactivation but has had email/first_name/
+# last_name NULLed by migration 296's 30-day PIPEDA scrub — exactly the
+# falsy state build_plan's existing "repopulate if falsy" logic would
+# otherwise treat as safe to fill back in. Real reactivation
+# (POST /auth/reactivate) is OTP-gated and audit-logged; a bulk CSV import
+# has neither, so it must never silently perform the equivalent of a
+# reactivation as a side effect of updating a phone-number match.
+_PII_PROTECTED_STATUSES = {"pending_deletion", "deleted"}
+
+# P0-A (docs/audit/2026-08-11-driver-rider-migration-audit.md): every other
+# importer (driver_import_service.py, booking_import_service.py,
+# stripe_mapping_import_service.py) stamps `legacy_import_metadata` on the
+# rows it touches, so an admin can answer "which rows did import batch X
+# create/modify" and PIPEDA access/export requests can say what was
+# imported and when. The rider CSV importer never did. Stored under a
+# `rider_csv_import` sub-key (not the whole column) because
+# `users.legacy_import_metadata` is shared with stripe_mapping_import_service,
+# which merges its own `stripe_migration` sub-key onto the same row — a
+# rider matched by both importers must keep both, not have one clobber the
+# other.
+IMPORT_SOURCE = "legacy_rider_csv_import"
+
+
 def _prefetch_existing(
     phones: list[str], emails: list[str]
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
@@ -117,7 +142,10 @@ def _prefetch_existing(
 
     if phones:
         for u in _select_in(
-            "users", "id,phone,email,first_name,last_name,is_rider,is_driver,stripe_customer_id", "phone", phones
+            "users",
+            "id,phone,email,first_name,last_name,is_rider,is_driver,stripe_customer_id,status,legacy_import_metadata",
+            "phone",
+            phones,
         ):
             key = u.get("phone")
             if key and key not in users_by_phone:
@@ -129,7 +157,10 @@ def _prefetch_existing(
 
     if emails:
         for u in _select_in(
-            "users", "id,phone,email,first_name,last_name,is_rider,is_driver,stripe_customer_id", "email", emails
+            "users",
+            "id,phone,email,first_name,last_name,is_rider,is_driver,stripe_customer_id,status,legacy_import_metadata",
+            "email",
+            emails,
         ):
             key = (u.get("email") or "").strip().lower()
             if key and key not in users_by_email:
@@ -149,6 +180,7 @@ def _split_name(full_name: str) -> tuple[str, str]:
 
 def build_plan(rows: list[dict[str, str]], batch: str) -> RiderImportPlan:
     plan = RiderImportPlan()
+    now_iso = datetime.now(timezone.utc).isoformat()
 
     if not rows:
         plan.errors.append(ImportReportItem(0, "csv", "CSV is empty"))
@@ -217,6 +249,22 @@ def build_plan(rows: list[dict[str, str]], batch: str) -> RiderImportPlan:
                 "has_driver_profile": existing_driver is not None,
             }
 
+            existing_status = existing_user.get("status")
+            if existing_status in _PII_PROTECTED_STATUSES:
+                # P0-C: never auto-repopulate PII on an account mid-deletion —
+                # see _PII_PROTECTED_STATUSES' comment. Flagged for manual
+                # review, not silently dropped or auto-fixed.
+                plan.duplicates.append({**dup_info, "match_type": "protected_skip"})
+                plan.warnings.append(
+                    ImportReportItem(
+                        idx,
+                        "phone",
+                        f"SKIPPED — matched account status is '{existing_status}'; no fields were modified. "
+                        "Requires manual review before this row can be imported.",
+                    )
+                )
+                continue
+
             if existing_driver:
                 plan.duplicates.append({**dup_info, "match_type": "driver"})
                 plan.warnings.append(
@@ -243,6 +291,15 @@ def build_plan(rows: list[dict[str, str]], batch: str) -> RiderImportPlan:
                 update_fields["is_rider"] = True
 
             if len(update_fields) > 1:
+                # P0-A: stamp provenance on every row this batch actually
+                # modifies — merge onto whatever metadata already exists
+                # (e.g. a prior stripe_migration import) rather than
+                # overwriting the whole column.
+                existing_meta = existing_user.get("legacy_import_metadata") or {}
+                update_fields["legacy_import_metadata"] = {
+                    **existing_meta,
+                    "rider_csv_import": {"batch": batch, "source": IMPORT_SOURCE, "imported_at": now_iso},
+                }
                 plan.users_to_update.append(update_fields)
 
             continue
@@ -267,6 +324,9 @@ def build_plan(rows: list[dict[str, str]], batch: str) -> RiderImportPlan:
             user_row["stripe_customer_id"] = customer_id
         if gender:
             user_row["gender"] = gender
+        user_row["legacy_import_metadata"] = {
+            "rider_csv_import": {"batch": batch, "source": IMPORT_SOURCE, "imported_at": now_iso}
+        }
 
         plan.users_to_create.append(user_row)
 

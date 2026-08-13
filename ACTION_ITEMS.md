@@ -3160,6 +3160,37 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   production (only 2 low-ride-count sample accounts were spot-checked
   live, both well under every cap these fixes address).
 
+### A31. `GET /drivers/earnings` zeroed trip-count/distance/duration stats for drivers whose period rides are all legacy-imported (2026-08-13)
+- **Source:** live user report against a real migrated driver's Activity
+  screen ("All Time" showed `Total Earned $0.00` / `0 Total Trips` /
+  `0.0 KM Driven` / `0h Online Time` directly above a rendered list of 17
+  real completed rides).
+- **Root cause:** `get_driver_earnings` (`backend/routes/drivers/earnings.py`)
+  summed `total_rides`/`total_distance_km`/`total_duration_minutes` from the
+  same `EXCLUDE_LEGACY_RIDES`-filtered rides list used for money totals.
+  Those three fields aren't money — `utils/legacy_rides.py`'s own docstring
+  says the exclusion "only governs money math" and imported rides "remain
+  fully visible in ride history" — so a driver with zero non-legacy
+  completed rides in the period got zeroed activity stats alongside the
+  (correctly) zeroed earnings.
+- [x] **Status:** DONE (2026-08-13). Added a second, unfiltered
+  "all completed rides in period" query; the three activity fields now
+  source from it. `average_per_ride` still divides by the money-rides count
+  (now explicit, not reused from `total_rides`) so it isn't diluted by
+  $0-earning legacy trips. 2 new regression tests
+  (`test_earnings_coverage.py::TestGetDriverEarningsLegacyActivityStats`).
+  Full Change Impact Log at
+  `docs/change-log/2026-08-13-driver-earnings-legacy-activity-stats.md`.
+- **Follow-up (not yet done):** `GET /drivers/balance`
+  (`get_driver_balance`, same file) has the identical `total_rides =
+  len(rides)` pattern on its own legacy-excluded query — same latent bug,
+  left unfixed here because its `total_rides` response field has no
+  frontend consumer today (`DriverBalance` TS type in
+  `driver-app/store/driverStore.ts` doesn't include it). Fix opportunistically
+  if/when a frontend surface starts reading `/balance`'s `total_rides`, or
+  proactively for consistency — low priority since no one currently sees
+  the wrong number.
+
 ## P1 — Fix before launch (code)
 
 ### B0. Migration runner shreds any migration whose text contains "CONCURRENTLY"

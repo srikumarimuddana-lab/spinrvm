@@ -324,6 +324,28 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
 
         rides = await db_supabase.get_rows("rides", filters, limit=10000)
 
+        # total_rides/total_distance_km/total_duration_minutes are trip-ACTIVITY
+        # stats, not money — utils/legacy_rides's docstring is explicit that
+        # EXCLUDE_LEGACY_RIDES "only governs money math" and imported rides
+        # "remain fully visible in ride history". Reusing the money-filtered
+        # `rides` list for these three fields broke that: a driver whose
+        # completed rides in the period are ALL legacy-imported (e.g. the
+        # "All Time" period for anyone who migrated before their first Spinr
+        # trip) got total_rides=0/total_distance_km=0/total_duration_minutes=0
+        # despite having real ride history, because `rides` was empty. The ride
+        # list itself (fetchRideHistory) was never filtered this way, so the
+        # driver-app Activity screen showed "17 rides" below a "0 Total Trips"
+        # stat tile referencing the exact same rides. Money totals correctly
+        # stay legacy-excluded (Finding 3) — only these three switch to the
+        # unfiltered count.
+        _activity_filters: Dict[str, Any] = {
+            "driver_id": driver["id"],
+            "status": RideStatus.COMPLETED,
+        }
+        if use_date_filter and start_date:
+            _activity_filters["ride_completed_at"] = {"$gte": start_date.isoformat()}
+        all_completed_rides = await db_supabase.get_rows("rides", _activity_filters, limit=10000)
+
         # Fetch incentive claims for these rides
         _ride_ids = [r["id"] for r in rides if r.get("id")]
         _incentive_total = Decimal("0")
@@ -360,9 +382,9 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
             "total_incentives": float(_incentive_total),
             "total_cancel_fees": float(_cancel_fees_total),
             "total_tax": float(_total_tax),
-            "total_rides": len(rides),
-            "total_distance_km": sum(r.get("distance_km", 0) or 0 for r in rides),
-            "total_duration_minutes": sum(r.get("duration_minutes", 0) or 0 for r in rides),
+            "total_rides": len(all_completed_rides),
+            "total_distance_km": sum(r.get("distance_km", 0) or 0 for r in all_completed_rides),
+            "total_duration_minutes": sum(r.get("duration_minutes", 0) or 0 for r in all_completed_rides),
         }
     except Exception as e:
         # Don't mask a DB failure as an all-zero earnings summary — surface 503
@@ -402,9 +424,14 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
         "total_rides": stats.get("total_rides", 0),
         "total_distance_km": stats.get("total_distance_km", 0),
         "total_duration_minutes": stats.get("total_duration_minutes", 0),
-        "average_per_ride": (
-            _money_str(_total_with_extras / stats.get("total_rides", 1)) if stats.get("total_rides", 0) > 0 else "0.00"
-        ),
+        # Deliberately divided by the MONEY-rides count (`rides`, legacy
+        # excluded), not the `total_rides` above (all completed rides) — an
+        # average of $0-earning legacy trips diluted into this figure would
+        # understate what a driver actually earns per Spinr trip. A driver
+        # whose only completed rides this period are legacy shows $0.00 here,
+        # consistent with total_earnings, rather than a misleadingly precise
+        # "average" over trips that paid nothing in this app.
+        "average_per_ride": (_money_str(_total_with_extras / len(rides)) if len(rides) > 0 else "0.00"),
     }
 
 

@@ -10,9 +10,13 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import type { HeatmapLayer } from '../../hooks/useDemandHeatmap';
+import type { HeatmapLayer, HeatmapStatus } from '../../hooks/useDemandHeatmap';
+import { useLanguageStore } from '../../store/languageStore';
 
-type HeatmapStatus = 'loading' | 'empty' | 'stale' | 'ready' | 'error';
+// Status type is imported from the hook rather than redeclared. The local
+// copy had drifted (no 'disabled'/'idle'), which forced the call site to
+// launder the value through a ternary and would have silently mistyped any
+// future state.
 
 interface DemandLegendProps {
   status: HeatmapStatus;
@@ -22,11 +26,13 @@ interface DemandLegendProps {
   onLayerChange?: (layer: HeatmapLayer) => void;
 }
 
-const LAYER_OPTIONS: { key: HeatmapLayer; label: string }[] = [
-  { key: 'blend', label: 'All' },
-  { key: 'live', label: 'Now' },
-  { key: 'baseline', label: 'Usual' },
-  { key: 'scheduled', label: 'Soon' },
+const LAYER_OPTIONS: { key: HeatmapLayer; labelKey: string }[] = [
+  // i18n keys, not literals — resolved via t() at render so the segmented
+  // control translates with the rest of the app.
+  { key: 'blend', labelKey: 'heatmap.layer.all' },
+  { key: 'live', labelKey: 'heatmap.layer.now' },
+  { key: 'baseline', labelKey: 'heatmap.layer.usual' },
+  { key: 'scheduled', labelKey: 'heatmap.layer.soon' },
 ];
 
 export const DemandLegend: React.FC<DemandLegendProps> = ({
@@ -37,6 +43,7 @@ export const DemandLegend: React.FC<DemandLegendProps> = ({
   onLayerChange,
 }) => {
   const { colors } = useTheme();
+  const { t } = useLanguageStore();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [infoOpen, setInfoOpen] = useState(false);
 
@@ -58,7 +65,7 @@ export const DemandLegend: React.FC<DemandLegendProps> = ({
     return (
       <View style={styles.pill}>
         <Ionicons name="map-outline" size={14} color={colors.textDim} />
-        <Text style={styles.statusText}>No busy areas right now</Text>
+        <Text style={styles.statusText}>{t('heatmap.empty')}</Text>
       </View>
     );
   }
@@ -67,7 +74,7 @@ export const DemandLegend: React.FC<DemandLegendProps> = ({
     return (
       <View style={styles.pill}>
         <Ionicons name="cloud-offline-outline" size={14} color={colors.textDim} />
-        <Text style={styles.statusText}>Demand info unavailable</Text>
+        <Text style={styles.statusText}>{t('heatmap.unavailable')}</Text>
       </View>
     );
   }
@@ -76,13 +83,13 @@ export const DemandLegend: React.FC<DemandLegendProps> = ({
     <>
       <View style={styles.container}>
         <View style={styles.pill}>
-          <Text style={styles.label}>Quiet</Text>
+          <Text style={styles.label}>{t('heatmap.legend.quiet')}</Text>
           <View style={styles.rampRow}>
             {colors.heatmapRamp.map((color, i) => (
               <View key={i} style={[styles.swatch, { backgroundColor: color }]} />
             ))}
           </View>
-          <Text style={styles.label}>Busy</Text>
+          <Text style={styles.label}>{t('heatmap.legend.busy')}</Text>
           {status === 'stale' && (
             <Ionicons name="time-outline" size={12} color={colors.warning} style={{ marginLeft: 4 }} />
           )}
@@ -103,7 +110,7 @@ export const DemandLegend: React.FC<DemandLegendProps> = ({
                   activeOpacity={0.7}
                 >
                   <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
-                    {opt.label}
+                    {t(opt.labelKey)}
                   </Text>
                 </TouchableOpacity>
               );
@@ -115,17 +122,17 @@ export const DemandLegend: React.FC<DemandLegendProps> = ({
       <Modal visible={infoOpen} transparent animationType="fade" onRequestClose={() => setInfoOpen(false)}>
         <Pressable style={styles.overlay} onPress={() => setInfoOpen(false)}>
           <View style={styles.sheet}>
-            <Text style={styles.sheetTitle}>Demand in your area</Text>
+            <Text style={styles.sheetTitle}>{t('heatmap.info.title')}</Text>
             <Text style={styles.sheetBody}>
-              Based on recent rider activity in your area. Where you drive is always your choice.
+              {t('heatmap.info.body')}
             </Text>
             {isV2 && (
               <Text style={styles.sheetBody}>
-                Use the filter to see what's busy now, what's usually busy at this hour, or where riders have scheduled pickups soon.
+                {t('heatmap.info.layers')}
               </Text>
             )}
             <TouchableOpacity style={styles.sheetClose} onPress={() => setInfoOpen(false)}>
-              <Text style={styles.sheetCloseText}>Got it</Text>
+              <Text style={styles.sheetCloseText}>{t('heatmap.gotIt')}</Text>
             </TouchableOpacity>
           </View>
         </Pressable>

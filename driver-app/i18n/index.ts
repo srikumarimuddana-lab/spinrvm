@@ -58,7 +58,14 @@ export function getNestedValue(obj: Translations, path: string): string {
 }
 
 export function translate(language: Language, key: string): string {
-    return getNestedValue(translations[language], key);
+    const value = getNestedValue(translations[language], key);
+    // Fall back to English before surfacing the raw key. A missing entry in a
+    // non-English locale used to render the literal dotted path to the driver
+    // (e.g. "heatmap.airport.zone"), which is worse than showing English.
+    if (value === key && language !== 'en') {
+        return getNestedValue(translations.en, key);
+    }
+    return value;
 }
 
 // Convenience for non-component callsites (alert helpers, error pipelines)

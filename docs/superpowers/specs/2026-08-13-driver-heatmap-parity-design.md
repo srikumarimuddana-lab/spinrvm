@@ -47,7 +47,7 @@ Additive fields on the same endpoint, gated by `app_settings.driver_heatmap_v2_e
 ### 1.4 Caching & cost (HM-06)
 
 - Redis: `spinr:heatmap:{area_id}:{v1|v2}` TTL 60 s; build on miss. In-memory fallback dict is fine per `utils/redis_client.py` conventions (worst case: per-replica rebuilds).
-- Query cost at Sask scale: one indexed `rides` read per build (7-day window, one area, `columns="pickup_lat,pickup_lng,status,created_at"`), one 10-min read for live, one scheduled read. **Verify an index serves `(service_area_id, created_at)`** — if absent, migration `307_rides_area_created_idx.sql` adds it (next free number is 307; index-with-query-pattern rule from `backend/migrations/CLAUDE.md`).
+- Query cost at Sask scale: one indexed `rides` read per build (7-day window, one area, `columns="pickup_lat,pickup_lng,status,created_at"`), one 10-min read for live, one scheduled read. **Verify an index serves `(service_area_id, created_at)`** — if absent, migration `310_rides_area_created_idx.sql` adds it (index-with-query-pattern rule from `backend/migrations/CLAUDE.md`).
 - **No new table, no new background loop for P0/P1.** With 18 loops already running on every replica, on-demand + cache is strictly simpler and replay-safe by construction. If build cost ever matters, the escape hatch is an hourly rollup table + loop registered per `core/lifespan.py` conventions (`_spawn`, `_WATCHDOG_LOOP_NAMES`, `record_heartbeat`, Redis leader lock) — that's a Phase-2+ decision, not this one.
 
 ### 1.5 Flags & config (HM-13)

@@ -197,6 +197,35 @@ describe('ActivityView', () => {
     expect(getByText('Load more rides')).toBeTruthy();
   });
 
+  it('badges a legacy-imported ride and explains why it is excluded from earnings (A30)', async () => {
+    mockStore = makeStore({
+      rideHistory: [
+        makeRide({
+          id: 'ride-legacy',
+          pickup_address: 'Old App Pickup',
+          legacy_import_metadata: { batch: '20260726', source: 'legacy_mongo_booking_import' },
+        }),
+      ],
+    });
+    mockUseDriverStore.mockReturnValue(mockStore);
+
+    const { getByText } = render(<ActivityView />);
+
+    await waitFor(() => expect(getByText('Old App Pickup')).toBeTruthy());
+    expect(getByText('Imported from your previous account')).toBeTruthy();
+    expect(
+      getByText('1 ride from your previous account is shown below but not counted here — it was already paid out.')
+    ).toBeTruthy();
+  });
+
+  it('does not show the legacy badge or explainer for a normal ride', async () => {
+    const { getByText, queryByText } = render(<ActivityView />);
+
+    await waitFor(() => expect(getByText('123 Main St')).toBeTruthy());
+    expect(queryByText('Imported from your previous account')).toBeNull();
+    expect(queryByText(/from your previous account/)).toBeNull();
+  });
+
   it('refetches only earnings on a period change (list re-filters client-side)', async () => {
     const { getByText } = render(<ActivityView />);
 

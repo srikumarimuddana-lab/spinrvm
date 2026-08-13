@@ -22,7 +22,16 @@ export default function RidesPage() {
     const [areas, setAreas] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState(false);
-    const [search, setSearch] = useState("");
+    // Lazy initializer (not a useEffect) so the very first `loadRides` call
+    // on mount already includes a deep-linked ?search=<term> -- e.g. "view
+    // all rides" from a rider detail panel whose "Recent rides" list is
+    // capped at 10 (A30 Finding 2,
+    // docs/audit/2026-08-13-migrated-data-visibility-audit.md). A useEffect
+    // here would run after the mount-effect below has already fired with
+    // the stale empty-string search.
+    const [search, setSearch] = useState(() =>
+        typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("search") || ""
+    );
     const [statusFilter, setStatusFilter] = useState("all");
     const [areaFilter, setAreaFilter] = useState("all");
     const [dateFrom, setDateFrom] = useState("");
@@ -39,6 +48,9 @@ export default function RidesPage() {
     // mount from window.location rather than useSearchParams() — the latter
     // requires a <Suspense> boundary (which this route lacks) and fails
     // `next build`. Mount-only also avoids re-opening the modal after close.
+    // (?search=<term> is handled by the `search` state's lazy initializer
+    // above, not here — it needs to be in place before the mount-effect
+    // below fires its first `loadRides` call.)
     useEffect(() => {
         if (typeof window === "undefined") return;
         const id = new URLSearchParams(window.location.search).get("id");

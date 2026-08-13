@@ -3064,6 +3064,102 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     value for high-volume tax-config churn, which this isn't yet. Revisit
     if tax-rate changes become more frequent.
 
+### A30. Migrated-data visibility audit (2026-08-13) — Finding 0 resolved live, 3 findings remain open
+- **Source:** `docs/audit/2026-08-13-migrated-data-visibility-audit.md`
+  (follow-up to A25-A28, this time auditing whether legacy-imported data
+  actually *renders* on rider/driver/admin screens, not just whether the
+  underlying money math is correct).
+- **Finding 0 — was the legacy ride importer ever actually committed to
+  production?**
+  - [x] **Status:** CLOSED (2026-08-13), live-verified via Supabase MCP
+    against `soavhtdhefowwvforzwb`. **Yes** — 224 legacy rides exist in
+    `rides` (`legacy_import_metadata->>'source' = 'legacy_mongo_booking_import'`),
+    all `status='completed'`, matching the documented CSV-scope count
+    exactly. The 2026-07-29 change-log's "not run against live Supabase"
+    note was stale/undocumented, not an accurate description of current
+    production state — the commit did happen, no follow-up doc ever
+    recorded it. Two sample rides spot-checked end-to-end (rider/driver
+    accounts active, offsetting `legacy_import` payout rows present and
+    correctly amounted) — the visibility mechanism works correctly for
+    matched records.
+  - **Follow-up (not yet done):** backfill a short change-log note
+    recording when/how the real production commit happened, since nothing
+    in the repo currently documents it.
+- **Finding 1 — real phone-match rate.**
+  - [x] **Status:** measured (2026-08-13, live query). **100% of legacy
+    rides have a matched rider** (0/224 NULL), **94.2% have a matched
+    driver** (211/224, 13 NULL affecting 4 distinct riders — those riders
+    see the ride, just without driver details). Downgraded from the
+    original audit's P1 ("needs a live query to size") — this is a good
+    real-world result, not an open risk. No action needed unless the 4
+    affected riders specifically report an issue.
+- **Finding 2 — two admin-dashboard detail panels (rider "Recent rides",
+  10-row cap; driver "Rides" tab, 50-row cap, no pagination params sent)
+  silently drop older imported rides with no "more exists" signal.**
+  - [x] **Status:** DONE (2026-08-13). `routes/admin/drivers.py`'s
+    `admin_get_driver_rides` now returns an accurate `total_count` via
+    `count_documents()` alongside the existing fetch-capped `total`
+    (additive field, both callers of the endpoint unaffected).
+    `getDriverRides()` now requests the backend's own max (500) instead of
+    its 50-row default. The rider "Recent rides" panel
+    (`routes/admin/users.py`) already returned an accurate `total_rides`;
+    both panels now show a "Showing N of Total — view all" note (rider
+    panel) / "Showing the 500 most recent of N total rides" note (driver
+    tab) only when the cap is actually hit, so the common case (every
+    account checked live during this audit has well under 500 rides)
+    renders no new UI. The rider panel's "view all" link deep-links
+    `/dashboard/rides?search=<term>`, which needed the rides list page's
+    `search` state to read from the URL on its very first render (a lazy
+    `useState` initializer, not a second effect — the existing mount
+    effect would otherwise fire its first fetch before a separate
+    effect's `setSearch` took hold).
+- **Finding 3 — driver-app earnings totals correctly exclude legacy-ride
+  dollars (by design, avoids double-counting old-app payouts) with no
+  on-screen explanation for the resulting trip-count-vs-earnings mismatch.**
+  - [x] **Status:** DONE (2026-08-13). `ActivityView.tsx` now shows a
+    one-line note above the earnings breakdown ("N ride(s) from your
+    previous account are shown below but not counted here — those were
+    already paid out") whenever the currently period/status-filtered
+    trip list contains at least one legacy-imported ride. Computed
+    client-side from data already in memory (`rideHistory`, which
+    `/drivers/rides/history` already returns in full) — no new fetch, no
+    backend change.
+- **Finding 4 — no screen in rider-app, driver-app, or admin-dashboard
+  visually marks a ride as "imported from the previous app" (one admin
+  driver-summary stat card excepted).**
+  - [x] **Status:** DONE (2026-08-13). Added a small "Imported" (rider-app:
+    "Imported from your previous account") badge to a ride card/row
+    wherever `legacy_import_metadata` is a non-empty object: rider-app
+    Activity tab, driver-app trip history, admin main rides list, admin
+    rider-detail "Recent rides" panel, admin driver-detail "Rides" tab.
+    The rider-detail panel needed one backend change first — its column
+    allowlist (`_DETAIL_RIDE_COLUMNS`, `routes/admin/users.py`) excluded
+    `legacy_import_metadata` — everywhere else already returned the full
+    row (`select("*")` is the `get_rows()` default). All other surfaces
+    are frontend-only.
+- **Verification across all three (2026-08-13):** backend — 2 tests
+  (`test_admin_extended.py`: `count_documents` patched on the existing
+  driver-rides test, new test pins `total` vs `total_count` divergence
+  beyond the fetch cap). driver-app — 2 new tests in
+  `ActivityView.test.tsx` (badge + explainer present for a legacy ride,
+  both absent for a normal ride); full file 8/8 pass. rider-app/driver-app
+  — `tsc --noEmit` clean on both. admin-dashboard — `tsc --noEmit` clean
+  and a real `npm run build` (not just dev server, per CLAUDE.md) run
+  twice, once after each of the two admin-dashboard commits, both clean.
+  No test infra exists for any of the touched admin-dashboard page-level
+  components (`rides/page.tsx`, `ride-list.tsx`, `users/page.tsx`,
+  `drivers/page.tsx`) — consistent with the rest of this codebase's
+  page.tsx files, not a gap introduced here.
+- **What was NOT verified:** none of this was checked against the actual
+  rendered screens (no screenshot/visual tooling in this repo, flagged
+  generally elsewhere in this file); the rider-panel's `?search=` deep
+  link was verified by reading the resulting fetch's options object, not
+  by loading the admin dashboard and clicking through it end to end;
+  whether any of the 4 riders or higher-ride-count accounts identified in
+  Finding 1/2's live query actually see the new UI correctly in
+  production (only 2 low-ride-count sample accounts were spot-checked
+  live, both well under every cap these fixes address).
+
 ## P1 — Fix before launch (code)
 
 ### B0. Migration runner shreds any migration whose text contains "CONCURRENTLY"

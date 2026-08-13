@@ -40,6 +40,11 @@ interface RideHistory {
   corporate_account_id?: string | null;
   scheduled_time?: string;
   fare_breakdown?: FareBreakdownLine[];
+  // Non-empty only for rides carried over from the previous app during the
+  // one-time legacy migration (backend/services/booking_import_service.py).
+  // Presence, not contents, is all this screen needs — see A30 Finding 4,
+  // docs/audit/2026-08-13-migrated-data-visibility-audit.md.
+  legacy_import_metadata?: Record<string, unknown> | null;
 }
 
 type FilterType = 'all' | 'personal' | 'business';
@@ -317,6 +322,11 @@ export default function ActivityScreen() {
             <Text style={styles.rideBookingId} numberOfLines={1}>
               {ride.ride_code || ride.id.slice(0, 8).toUpperCase()}
             </Text>
+          )}
+          {!!ride.legacy_import_metadata && Object.keys(ride.legacy_import_metadata).length > 0 && (
+            <View style={styles.legacyBadge}>
+              <Text style={styles.legacyBadgeText}>Imported from your previous account</Text>
+            </View>
           )}
         </View>
 
@@ -677,6 +687,13 @@ function createStyles(colors: ThemeColors, isCompactFilterLayout: boolean) { ret
   rideBookingId: {
     fontSize: 11, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.textDim,
     letterSpacing: 0.5, marginTop: 4,
+  },
+  legacyBadge: {
+    alignSelf: 'flex-start', backgroundColor: colors.border,
+    borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2, marginTop: 4,
+  },
+  legacyBadgeText: {
+    fontSize: 10, fontFamily: 'PlusJakartaSans_500Medium', color: colors.textDim,
   },
   rideFareContainer: { alignItems: 'flex-end' },
   rideFare: { fontSize: 17, fontFamily: 'PlusJakartaSans_700Bold', color: colors.primary, marginBottom: 4 },

@@ -34,13 +34,11 @@ try:
     from ...utils.legacy_rides import (
         EXCLUDE_LEGACY_RIDES,
         drop_legacy_offset_payouts,
-        previous_app_history_visible,
     )
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
     from utils.legacy_rides import (  # type: ignore
         EXCLUDE_LEGACY_RIDES,
         drop_legacy_offset_payouts,
-        previous_app_history_visible,
     )
 
 router = APIRouter()
@@ -196,22 +194,31 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
             detail="Earnings temporarily unavailable",
         ) from e
 
-    # Money the PREVIOUS app paid this driver (stripe_sync mirrors of real
-    # Stripe Transfers). Excluded from the balance math above by design; the
-    # app shows it as its own labeled figure so a migrated driver can see
-    # their history is intact without it inflating current earnings.
-    # Transition messaging with a sunset: after the cutoff in
-    # utils/legacy_rides this reports 0.00 and the app note self-hides.
-    previous_app_paid = Decimal("0")
-    if previous_app_history_visible():
-        previous_app_paid = sum(
-            (
-                _d(p.get("amount") or 0)
-                for p in payout_rows
-                if p.get("payout_type") == "stripe_sync" and str(p.get("status") or "").lower() not in _not_money_out
-            ),
-            Decimal("0"),
-        )
+    # Money the PREVIOUS Spinr app paid this driver (stripe_sync mirrors of
+    # real Stripe Transfers). Excluded from payable_balance math above by
+    # design — it's already in the driver's bank account, counting it there
+    # would let a driver withdraw it twice. The app reports it as its own
+    # labeled figure ("Previously Paid") so a driver's lifetime total is
+    # honest and blended, not hidden.
+    #
+    # Business decision 2026-08-13 (docs/change-log/2026-08-13-blended-
+    # lifetime-earnings.md): this used to sunset — after
+    # utils.legacy_rides.PREVIOUS_APP_VISIBLE_UNTIL (2026-08-31) it would
+    # report 0.00 and the note would self-hide. Reversed: previous-app money
+    # is now a PERMANENT part of a driver's earnings picture, not time-
+    # limited transition messaging. Making a driver's own lifetime earnings
+    # figure shrink on a date is the same trust problem A31 fixed for trip
+    # counts — this closes the same gap for the dollar figure.
+    # previous_app_history_visible() still exists (utils/legacy_rides) and
+    # is still correct; it's just no longer called here.
+    previous_app_paid = sum(
+        (
+            _d(p.get("amount") or 0)
+            for p in payout_rows
+            if p.get("payout_type") == "stripe_sync" and str(p.get("status") or "").lower() not in _not_money_out
+        ),
+        Decimal("0"),
+    )
 
     return {
         # total_earnings = ride income + tax + incentives + cancel fees +

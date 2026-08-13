@@ -1,14 +1,19 @@
-"""The Aug 31, 2026 sunset for driver-facing previous-app payout history.
+"""Previous-app money is now a PERMANENT part of driver-facing surfaces.
 
-The "Previous app" presentation is transition messaging: after the cutoff,
-driver-facing surfaces (payout history, statement PDFs/emails, the balance
-note) stop showing previous-app money. The sunset is PRESENTATION ONLY —
-admin surfaces, T4A/tax exports, and stored statement totals keep the full
-picture forever, so nothing here touches those paths.
+Business decision 2026-08-13 (docs/change-log/2026-08-13-blended-lifetime-
+earnings.md): the Aug 31, 2026 sunset for driver-facing previous-app payout
+history (payout history, statement PDFs/emails, the balance note) has been
+reversed. Hiding a driver's own previous-app money on a date made their
+lifetime earnings figure look like it shrank — the same trust problem A31
+fixed for trip/distance/duration counts. `previous_app_history_visible()`
+and `PREVIOUS_APP_VISIBLE_UNTIL` (utils/legacy_rides) are unchanged and
+still correct as a pure date helper; the three driver-facing call sites
+(`get_driver_balance`, `get_payout_history`, `build_statement`) simply no
+longer call it.
 
-Every test pins the switch through the injectable/patchable helper rather
-than the real clock, so this suite does not start failing (or silently stop
-covering the pre-cutoff branch) on Sept 1, 2026.
+This file used to pin the pre/post-cutoff branches for those three call
+sites; it now pins that previous-app money is ALWAYS present regardless of
+date, so a regression that re-adds the sunset gate fails these tests.
 """
 
 from __future__ import annotations
@@ -22,10 +27,12 @@ from backend.utils.legacy_rides import PREVIOUS_APP_VISIBLE_UNTIL, previous_app_
 DRIVER_USER = {"id": "usr-1"}
 
 
-class TestCutoffHelper:
+class TestCutoffHelperStillCorrect:
+    """The pure date helper itself is untouched — kept correct in case it's
+    ever needed again — even though nothing calls it anymore."""
+
     def test_visible_through_the_cutoff_day_inclusive(self):
         assert previous_app_history_visible(today=date(2026, 8, 30)) is True
-        # "until august 31" inclusive — the section survives the whole day.
         assert previous_app_history_visible(today=PREVIOUS_APP_VISIBLE_UNTIL) is True
 
     def test_hidden_from_the_day_after(self):
@@ -33,12 +40,11 @@ class TestCutoffHelper:
         assert previous_app_history_visible(today=date(2027, 1, 1)) is False
 
 
-class TestPayoutHistorySunset:
-    """GET /drivers/payouts filters stripe_sync rows SERVER-side after the
-    cutoff, so pagination stays honest and the app section retires itself
-    without an app release."""
+class TestPayoutHistoryAlwaysIncludesPreviousApp:
+    """GET /drivers/payouts must never filter stripe_sync rows out, on any
+    date — regression guard for the reversed sunset."""
 
-    def _run(self, visible: bool):
+    def _run(self):
         from backend.routes import drivers as drv
 
         captured = {}
@@ -49,29 +55,21 @@ class TestPayoutHistorySunset:
             captured["filters"] = filters
             return []
 
-        with (
-            patch("backend.routes.drivers.payouts.previous_app_history_visible", return_value=visible),
-            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
-        ):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)):
             asyncio.run(drv.get_payout_history(limit=20, offset=0, current_user=DRIVER_USER))
         return captured["filters"]
 
-    def test_before_cutoff_serves_everything(self):
-        filters = self._run(visible=True)
+    def test_no_date_based_filter_is_applied(self):
+        filters = self._run()
         assert "$or" not in filters
-
-    def test_after_cutoff_filters_previous_app_rows(self):
-        filters = self._run(visible=False)
-        # NULL-safe exclusion: a bare $ne would hide pre-backfill rows whose
-        # payout_type is NULL (SQL NULL != 'x' is NULL, PostgREST drops them).
-        assert filters["$or"] == [{"payout_type": {"$ne": "stripe_sync"}}, {"payout_type": None}]
+        assert filters == {"driver_id": "drv-1"}
 
 
-class TestBalanceNoteSunset:
-    """previous_app_paid_total reports 0.00 after the cutoff so the app's
-    balance-card note self-hides."""
+class TestBalanceAlwaysReportsPreviousAppMoney:
+    """previous_app_paid_total must reflect the real amount unconditionally
+    — no sunset zeroing."""
 
-    def _balance(self, visible: bool):
+    def _balance(self):
         from backend.routes import drivers as drv
 
         def rows(table, filters=None, **kw):
@@ -81,25 +79,20 @@ class TestBalanceNoteSunset:
                 return [{"amount": 200.0, "status": "completed", "payout_type": "stripe_sync"}]
             return []
 
-        with (
-            patch("backend.routes.drivers.earnings.previous_app_history_visible", return_value=visible),
-            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=rows)),
-        ):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=rows)):
             return asyncio.run(drv.get_driver_balance(current_user=DRIVER_USER))
 
-    def test_before_cutoff_reports_the_amount(self):
-        assert self._balance(visible=True)["previous_app_paid_total"] == "200.00"
-
-    def test_after_cutoff_reports_zero(self):
-        assert self._balance(visible=False)["previous_app_paid_total"] == "0.00"
+    def test_reports_the_amount(self):
+        assert self._balance()["previous_app_paid_total"] == "200.00"
 
 
-class TestStatementFlagSunset:
-    """build_statement stamps previous_app_visible for the PDF renderer; the
-    DATA (rows, split totals) stays complete either way — admin stored totals
-    and the recompute must keep the full picture forever."""
+class TestStatementFlagAlwaysTrue:
+    """build_statement always stamps previous_app_visible=True; the PDF
+    renderer (utils/driver_statement_pdf.py) already branches correctly on
+    this flag, so always-True is enough to keep previous-app rows/notes
+    rendering permanently — no PDF-renderer change needed."""
 
-    def _statement(self, visible: bool):
+    def _statement(self):
         from backend.utils import driver_statement as stmt
 
         payouts = [
@@ -109,19 +102,11 @@ class TestStatementFlagSunset:
         async def _get_rows(table, filters=None, **kw):
             return list(payouts) if table == "payouts" else []
 
-        with (
-            patch.object(stmt, "previous_app_history_visible", return_value=visible),
-            patch.object(stmt, "db_supabase") as db,
-        ):
+        with patch.object(stmt, "db_supabase") as db:
             db.get_rows = AsyncMock(side_effect=_get_rows)
             return asyncio.run(stmt.build_statement({"id": "d1"}, "monthly", date(2026, 6, 1)))
 
-    def test_flag_follows_the_cutoff_but_data_stays_complete(self):
-        before = self._statement(visible=True)
-        after = self._statement(visible=False)
-        assert before["previous_app_visible"] is True
-        assert after["previous_app_visible"] is False
-        # The numbers themselves never change — only the PDF's rendering does.
-        for key in ("payouts_total", "payouts_previous_app_total", "payouts"):
-            assert before[key] == after[key]
-        assert after["payouts_previous_app_total"] == "20.77"
+    def test_flag_is_always_true(self):
+        result = self._statement()
+        assert result["previous_app_visible"] is True
+        assert result["payouts_previous_app_total"] == "20.77"

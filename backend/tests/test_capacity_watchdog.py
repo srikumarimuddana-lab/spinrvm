@@ -527,7 +527,8 @@ async def test_alert_email_never_touches_the_database(monkeypatch):
 
     async def _fake_ses(settings, **kwargs):
         sent.update(kwargs)
-        return "ses-message-id"
+        # _try_ses returns (message_id, error_detail) — see email_provider.py.
+        return "ses-message-id", None
 
     monkeypatch.setattr(ep, "_try_ses", _fake_ses)
     _patch_recipients(monkeypatch, ["ops@spinr.ca"])

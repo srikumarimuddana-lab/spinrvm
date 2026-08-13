@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { View, Text, StyleSheet, Platform, Linking, TouchableOpacity, ActivityIndicator, AppState, Modal } from 'react-native';
-import MapView, { Polygon, Heatmap, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { Ionicons } from '@expo/vector-icons';
 import { RouteLine } from '@shared/components/RouteLine';
@@ -16,7 +16,10 @@ import {
   ActiveRidePanel,
   TripCompletedPanel,
   MapControls,
+  DemandLegend,
+  HeatmapCells,
 } from '../../../components/dashboard';
+import { useDemandHeatmap } from '../../../hooks/useDemandHeatmap';
 import { RideOfferPanel } from '../../../components/panels/RideOfferPanel';
 import { useDriverDashboard } from '../../../hooks/useDriverDashboard';
 import { CarMarker, resolveMarkerVariant, type CarMarkerVariant } from '../../../components/CarMarker';
@@ -274,39 +277,9 @@ function DriverDashboard() {
     return () => clearInterval(interval);
   }, [rideState]);
 
-  // Demand heatmap — controlled by admin per service area
-  const [heatmapPoints, setHeatmapPoints] = useState<{ latitude: number; longitude: number; weight: number }[]>([]);
-
-  // Fetch heatmap data when idle (backend returns empty if admin disabled it)
-  useEffect(() => {
-    if (rideState !== 'idle') {
-      // Clear stale heatmap points on leaving idle. Doesn't feed back into
-      // rideState, so this can't loop.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setHeatmapPoints([]);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await api.get<{ enabled: boolean; points?: number[][] }>('/drivers/demand-heatmap');
-        if (cancelled) return;
-        if (!res.data.enabled) {
-          setHeatmapPoints([]);
-          return;
-        }
-        const pts = (res.data.points || []).map((p: number[]) => ({
-          latitude: p[0],
-          longitude: p[1],
-          weight: p[2] || 1,
-        }));
-        setHeatmapPoints(pts);
-      } catch (e) {
-        console.log('Heatmap fetch error:', e);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [rideState]);
+  // Demand heatmap — aggregated cells with auto-refresh (HM-03/04/05)
+  const { cells: heatmapCells, status: heatmapStatus, visible: heatmapVisible } =
+    useDemandHeatmap(rideState, isOnline);
 
   const [countdown, setCountdownState] = useState(countdownSeconds);
 
@@ -767,21 +740,19 @@ function DriverDashboard() {
           );
         })()}
 
-        {/* Demand heatmap overlay — admin-controlled per service area */}
-        {heatmapPoints.length > 0 && Platform.OS !== 'web' && (
-          <Heatmap
-            points={heatmapPoints}
-            radius={35}
-            opacity={0.65}
-            gradient={{
-              colors: ['#00D4AA', '#FFD700', '#FF6B35', '#FF2D2D'],
-              startPoints: [0.1, 0.4, 0.65, 0.9],
-              colorMapSize: 256,
-            }}
-          />
+        {/* Demand heatmap — cross-platform cell polygons (HM-05) */}
+        {heatmapCells.length > 0 && Platform.OS !== 'web' && (
+          <HeatmapCells cells={heatmapCells} region={null} />
         )}
       </MapView>
       </View>
+
+      {/* Demand legend pill — above the top bar */}
+      {rideState === 'idle' && heatmapVisible && (
+        <View style={{ position: 'absolute', top: insets.top + 4, alignSelf: 'center', zIndex: 60 }}>
+          <DemandLegend status={heatmapStatus === 'disabled' ? 'ready' : heatmapStatus} visible={heatmapVisible} />
+        </View>
+      )}
 
       {/* Top Bar */}
       <DriverTopBar driverData={driverData ?? undefined} user={user ?? undefined} isOnline={isOnline} connectionState={connectionState} surgeMultiplier={surgeMultiplier} wsLatency={wsLatency} earnings={earnings} unreadNotifCount={unreadNotifCount} />

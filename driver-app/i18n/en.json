@@ -505,5 +505,18 @@
             "rate_limited": "You're going a bit fast. Please slow down and try again in a moment.",
             "database": "We're having trouble reaching our systems. Please try again."
         }
+    },
+    "heatmap": {
+        "legend": {
+            "quiet": "Quiet",
+            "busy": "Busy"
+        },
+        "info": {
+            "title": "Demand in your area",
+            "body": "Based on recent rider activity in your area. Where you drive is always your choice."
+        },
+        "stale": "Demand info may be outdated",
+        "empty": "No busy areas right now",
+        "unavailable": "Demand info unavailable"
     }
 }

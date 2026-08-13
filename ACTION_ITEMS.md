@@ -7021,6 +7021,60 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   YAML or application-code defect. No `.github/workflows/*.yml` change is
   implicated.
 
+### C22. `scripts/migrate.py`'s tracking table doesn't match what's actually live on the production Supabase project — the runner may never have successfully recorded a migration against it
+- [ ] **Status:** open — found 2026-08-13 while investigating why the
+  corporate-portal OTP email send has been failing since it shipped (see
+  `docs/change-log/2026-08-13-corporate-otp-error-detail-and-ses-investigation.md`).
+- **What's wrong:** two migration files define incompatible schemas for the
+  same table name:
+  - `backend/migrations/00_schema_migrations_table.sql` — `version TEXT
+    PRIMARY KEY, applied_at`
+  - `backend/migrations/24_schema_migrations.sql` — `filename TEXT PRIMARY
+    KEY, checksum TEXT NOT NULL, applied_at, applied_by`, plus `ENABLE ROW
+    LEVEL SECURITY`
+
+  Both use `CREATE TABLE IF NOT EXISTS`, so whichever ran first on a given
+  database wins the shape. **Verified live** (Supabase project
+  `soavhtdhefowwvforzwb`, `information_schema.columns` for
+  `public.schema_migrations`): the actual columns are `filename`,
+  `checksum`, `applied_at`, `applied_by` — migration `24`'s shape, **not**
+  `00`'s. `backend/scripts/migrate.py`'s `get_applied_versions()` (`SELECT
+  version FROM schema_migrations`) and `apply_migration()` (`INSERT INTO
+  schema_migrations (version) VALUES (%s) ...`) both hard-require a
+  `version` column that does not exist on this project.
+- **Why it matters:** `get_applied_versions()` catches its own query
+  failure and falls back to treating nothing as applied (logged as a
+  warning, not fatal) — so the runner doesn't crash outright, but it also
+  cannot correctly determine what's already been applied, and its own
+  bookkeeping `INSERT` (uncaught) would fail the first time it tries to
+  record anything. This is very likely why `110_settings_resend_email.sql`
+  (adds `resend_api_key`/`resend_from_email` to `settings`) never actually
+  applied to this project — those columns are confirmed **missing** from
+  the live `settings` table (verified via direct query), despite the
+  migration file existing in-repo since well before this session. Other
+  migrations between `24_` and the present may be similarly missing; not
+  audited beyond `110` and the one new migration in this session
+  (`307_email_send_log_error_detail.sql`, which was applied by hand via
+  direct SQL specifically because `migrate.py` cannot be trusted against
+  this project right now).
+- **Not fixed in this session** — reconciling which of ~300 migration
+  files have actually landed on production vs. only exist in-repo is a
+  substantial, higher-stakes audit (each gap is a potential runtime bug
+  waiting to be hit, like this one), not a quick fix, and touching the
+  `schema_migrations` table itself on a live project is exactly the kind
+  of action that needs a deliberate plan, not a same-session patch.
+- **Acceptance:** (1) decide which shape `schema_migrations` should
+  canonically have (migration `24`'s is richer — checksum + RLS — and is
+  what's actually live, so likely make `migrate.py` match `24`, not the
+  reverse); (2) fix `get_applied_versions()`/`apply_migration()` in
+  `backend/scripts/migrate.py` to use the real column names; (3) once the
+  runner can talk to the table, do a dry-run (`--dry-run`) against
+  production to get the full list of migrations it believes are
+  unapplied, and manually audit at least the highest-risk ones (anything
+  touching money/auth/RLS) before actually applying — don't blind-apply
+  ~280 migrations' worth of accumulated drift in one shot.
+- **Files:** `backend/scripts/migrate.py`, `backend/migrations/00_schema_migrations_table.sql`, `backend/migrations/24_schema_migrations.sql`.
+
 ### C13. `tsc --noEmit` false-positives across all three frontend surfaces (pre-existing, not caused by any recent PR)
 - [ ] **Status:** open — found 2026-08-03 while verifying PR #3382 (full-suite
   pass at that time: backend pytest 8742 passed/0 failed, rider-app jest

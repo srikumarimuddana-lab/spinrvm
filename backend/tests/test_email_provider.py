@@ -404,6 +404,37 @@ async def test_failed_send_logged_as_failed():
     row = inserts[0][1]
     assert row["provider"] == "none"
     assert row["status"] == "failed"
+    assert row["error_detail"] is None  # unconfigured, not a provider error
+
+
+@pytest.mark.anyio
+async def test_failed_send_persists_ses_error_detail():
+    """A configured-but-failing SES send (with no Resend fallback configured)
+    must persist the actual provider error to email_send_log, not just
+    provider='none'/status='failed' with no diagnosable detail.
+
+    This is the real production shape found while investigating the
+    corporate-portal OTP send: every attempt since it shipped logged
+    provider='none'/status='failed' with nothing else to go on, requiring
+    live app-log/Sentry access neither this session nor on-call always has
+    to find the actual SES rejection reason.
+    """
+    factory, _ = _boto3_mock(send_side_effect=RuntimeError("MessageRejected: identity not verified"))
+    inserts: list = []
+    with (
+        patch("settings_loader.get_app_settings", _settings(**_SES_SETTINGS)),  # SES only, no Resend
+        patch("boto3.client", factory),
+        patch("db_supabase.find_one", AsyncMock(return_value=None)),
+        patch("db_supabase.insert_one", AsyncMock(side_effect=lambda t, d: inserts.append((t, d)))),
+    ):
+        ok = await send_transactional_email(to="r@example.com", subject="x", text="hi")
+
+    assert ok is False
+    row = inserts[0][1]
+    assert row["provider"] == "none"
+    assert row["status"] == "failed"
+    assert row["error_detail"] is not None
+    assert "MessageRejected" in row["error_detail"]
 
 
 @pytest.mark.anyio

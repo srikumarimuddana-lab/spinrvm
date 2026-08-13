@@ -8,11 +8,28 @@ export type HeatmapCell = {
   weight: number;
 };
 
+export type V2Cell = {
+  lat: number;
+  lng: number;
+  live: number;
+  baseline: number;
+  scheduled: number;
+};
+
+export type HeatmapSurge = {
+  multiplier: number;
+  active: boolean;
+};
+
+export type HeatmapLayer = 'blend' | 'live' | 'baseline' | 'scheduled';
+
 export type HeatmapStatus = 'loading' | 'ready' | 'empty' | 'stale' | 'error' | 'disabled';
 
 type HeatmapResponse = {
   enabled: boolean;
   points?: number[][];
+  cells?: V2Cell[];
+  surge?: HeatmapSurge;
   total_rides?: number;
   refresh_seconds?: number;
   generated_at?: string;
@@ -22,8 +39,25 @@ const DEFAULT_REFRESH_SECONDS = 90;
 const STALE_THRESHOLD_MS = 5 * 60 * 1000;
 const MAX_CONSECUTIVE_ERRORS = 3;
 
+function v2CellsToWeighted(v2: V2Cell[], layer: HeatmapLayer): HeatmapCell[] {
+  return v2
+    .map((c) => {
+      let w: number;
+      if (layer === 'live') w = c.live;
+      else if (layer === 'baseline') w = c.baseline;
+      else if (layer === 'scheduled') w = c.scheduled;
+      else w = Math.max(c.live, c.baseline, c.scheduled);
+      return { lat: c.lat, lng: c.lng, weight: w };
+    })
+    .filter((c) => c.weight > 0);
+}
+
 export function useDemandHeatmap(rideState: string, isOnline: boolean) {
   const [cells, setCells] = useState<HeatmapCell[]>([]);
+  const [v2Cells, setV2Cells] = useState<V2Cell[]>([]);
+  const [surge, setSurge] = useState<HeatmapSurge | null>(null);
+  const [layer, setLayer] = useState<HeatmapLayer>('blend');
+  const [isV2, setIsV2] = useState(false);
   const [status, setStatus] = useState<HeatmapStatus>('loading');
   const [refreshSeconds, setRefreshSeconds] = useState(DEFAULT_REFRESH_SECONDS);
   const lastFetchRef = useRef<number>(0);
@@ -43,16 +77,34 @@ export function useDemandHeatmap(rideState: string, isOnline: boolean) {
       const data = res.data;
       if (!data.enabled) {
         setCells([]);
+        setV2Cells([]);
+        setSurge(null);
+        setIsV2(false);
         setStatus('disabled');
         return;
       }
-      const pts = (data.points || []).map((p: number[]) => ({
-        lat: p[0],
-        lng: p[1],
-        weight: p[2] || 1,
-      }));
-      setCells(pts);
-      setStatus(pts.length > 0 ? 'ready' : 'empty');
+
+      if (data.cells && data.cells.length > 0) {
+        setV2Cells(data.cells);
+        setIsV2(true);
+        setSurge(data.surge || null);
+        // apply current layer filter
+        const weighted = v2CellsToWeighted(data.cells, layer);
+        setCells(weighted);
+        setStatus(weighted.length > 0 ? 'ready' : 'empty');
+      } else {
+        const pts = (data.points || []).map((p: number[]) => ({
+          lat: p[0],
+          lng: p[1],
+          weight: p[2] || 1,
+        }));
+        setCells(pts);
+        setV2Cells([]);
+        setIsV2(false);
+        setSurge(data.surge || null);
+        setStatus(pts.length > 0 ? 'ready' : 'empty');
+      }
+
       if (data.refresh_seconds) setRefreshSeconds(data.refresh_seconds);
       lastFetchRef.current = Date.now();
       errorCountRef.current = 0;
@@ -62,13 +114,22 @@ export function useDemandHeatmap(rideState: string, isOnline: boolean) {
         setStatus('error');
       }
     }
-  }, []);
+  }, [layer]);
+
+  // Re-derive cells from v2 data when layer changes (no re-fetch needed)
+  useEffect(() => {
+    if (!isV2 || v2Cells.length === 0) return;
+    const weighted = v2CellsToWeighted(v2Cells, layer);
+    setCells(weighted);
+    setStatus(weighted.length > 0 ? 'ready' : 'empty');
+  }, [layer, isV2, v2Cells]);
 
   useEffect(() => {
     const shouldPoll = rideState === 'idle' && isOnline;
     if (!shouldPoll) {
       clearTimer();
       setCells([]);
+      setV2Cells([]);
       setStatus('loading');
       return;
     }
@@ -111,5 +172,13 @@ export function useDemandHeatmap(rideState: string, isOnline: boolean) {
     return () => sub.remove();
   }, [rideState, isOnline, fetchHeatmap]);
 
-  return { cells, status, visible: status !== 'disabled' };
+  return {
+    cells,
+    status,
+    visible: status !== 'disabled',
+    surge,
+    isV2,
+    layer,
+    setLayer,
+  };
 }

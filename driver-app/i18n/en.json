@@ -511,9 +511,16 @@
             "quiet": "Quiet",
             "busy": "Busy"
         },
+        "layer": {
+            "all": "All",
+            "now": "Now",
+            "usual": "Usual",
+            "soon": "Soon"
+        },
         "info": {
             "title": "Demand in your area",
-            "body": "Based on recent rider activity in your area. Where you drive is always your choice."
+            "body": "Based on recent rider activity in your area. Where you drive is always your choice.",
+            "layers": "Use the filter to see what's busy now, what's usually busy at this hour, or where riders have scheduled pickups soon."
         },
         "stale": "Demand info may be outdated",
         "empty": "No busy areas right now",

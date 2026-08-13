@@ -10,17 +10,31 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import type { HeatmapLayer } from '../../hooks/useDemandHeatmap';
 
 type HeatmapStatus = 'loading' | 'empty' | 'stale' | 'ready' | 'error';
 
 interface DemandLegendProps {
   status: HeatmapStatus;
   visible: boolean;
+  isV2?: boolean;
+  layer?: HeatmapLayer;
+  onLayerChange?: (layer: HeatmapLayer) => void;
 }
+
+const LAYER_OPTIONS: { key: HeatmapLayer; label: string }[] = [
+  { key: 'blend', label: 'All' },
+  { key: 'live', label: 'Now' },
+  { key: 'baseline', label: 'Usual' },
+  { key: 'scheduled', label: 'Soon' },
+];
 
 export const DemandLegend: React.FC<DemandLegendProps> = ({
   status,
   visible,
+  isV2 = false,
+  layer = 'blend',
+  onLayerChange,
 }) => {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -60,20 +74,42 @@ export const DemandLegend: React.FC<DemandLegendProps> = ({
 
   return (
     <>
-      <View style={styles.pill}>
-        <Text style={styles.label}>Quiet</Text>
-        <View style={styles.rampRow}>
-          {colors.heatmapRamp.map((color, i) => (
-            <View key={i} style={[styles.swatch, { backgroundColor: color }]} />
-          ))}
+      <View style={styles.container}>
+        <View style={styles.pill}>
+          <Text style={styles.label}>Quiet</Text>
+          <View style={styles.rampRow}>
+            {colors.heatmapRamp.map((color, i) => (
+              <View key={i} style={[styles.swatch, { backgroundColor: color }]} />
+            ))}
+          </View>
+          <Text style={styles.label}>Busy</Text>
+          {status === 'stale' && (
+            <Ionicons name="time-outline" size={12} color={colors.warning} style={{ marginLeft: 4 }} />
+          )}
+          <TouchableOpacity onPress={() => setInfoOpen(true)} hitSlop={8} style={{ marginLeft: 6 }}>
+            <Ionicons name="information-circle-outline" size={16} color={colors.textDim} />
+          </TouchableOpacity>
         </View>
-        <Text style={styles.label}>Busy</Text>
-        {status === 'stale' && (
-          <Ionicons name="time-outline" size={12} color={colors.warning} style={{ marginLeft: 4 }} />
+
+        {isV2 && onLayerChange && (
+          <View style={styles.segmentRow}>
+            {LAYER_OPTIONS.map((opt) => {
+              const active = layer === opt.key;
+              return (
+                <TouchableOpacity
+                  key={opt.key}
+                  style={[styles.segment, active && styles.segmentActive]}
+                  onPress={() => onLayerChange(opt.key)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
+                    {opt.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         )}
-        <TouchableOpacity onPress={() => setInfoOpen(true)} hitSlop={8} style={{ marginLeft: 6 }}>
-          <Ionicons name="information-circle-outline" size={16} color={colors.textDim} />
-        </TouchableOpacity>
       </View>
 
       <Modal visible={infoOpen} transparent animationType="fade" onRequestClose={() => setInfoOpen(false)}>
@@ -83,6 +119,11 @@ export const DemandLegend: React.FC<DemandLegendProps> = ({
             <Text style={styles.sheetBody}>
               Based on recent rider activity in your area. Where you drive is always your choice.
             </Text>
+            {isV2 && (
+              <Text style={styles.sheetBody}>
+                Use the filter to see what's busy now, what's usually busy at this hour, or where riders have scheduled pickups soon.
+              </Text>
+            )}
             <TouchableOpacity style={styles.sheetClose} onPress={() => setInfoOpen(false)}>
               <Text style={styles.sheetCloseText}>Got it</Text>
             </TouchableOpacity>
@@ -95,6 +136,10 @@ export const DemandLegend: React.FC<DemandLegendProps> = ({
 
 const createStyles = (colors: ThemeColors) =>
   StyleSheet.create({
+    container: {
+      alignItems: 'center',
+      gap: 4,
+    },
     pill: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -132,6 +177,35 @@ const createStyles = (colors: ThemeColors) =>
       fontSize: 12,
       color: colors.textDim,
       fontWeight: '500',
+    },
+    segmentRow: {
+      flexDirection: 'row',
+      backgroundColor: colors.surface,
+      borderRadius: 14,
+      padding: 2,
+      gap: 2,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: 0.08,
+      shadowRadius: 2,
+      elevation: 1,
+    },
+    segment: {
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+      borderRadius: 12,
+    },
+    segmentActive: {
+      backgroundColor: colors.primary,
+    },
+    segmentText: {
+      fontSize: 11,
+      fontWeight: '500',
+      color: colors.textDim,
+    },
+    segmentTextActive: {
+      color: '#FFFFFF',
+      fontWeight: '600',
     },
     overlay: {
       flex: 1,

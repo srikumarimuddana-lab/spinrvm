@@ -56,6 +56,40 @@ def _make_driver(driver_id, vehicle_type_id="vt-std", lat=52.14, lng=-106.68):
     }
 
 
+def _rows_by_table(*, drivers=None, subscriptions=None, areas=None, cascade_drivers=None):
+    """Build a ``get_rows`` side_effect keyed on TABLE, not call order.
+
+    The dispatch path reads several tables (``drivers``, ``service_areas`` for the
+    cross-service-area scope, ``driver_subscriptions``, ``subscription_plans`` …)
+    and the sequence shifts whenever a filter is added. A positional
+    ``side_effect=[...]`` list silently mis-assigns its values when that happens —
+    the driver pool receives a subscription payload, or an intended exception
+    fires on the wrong query — so these fakes match on intent instead.
+
+    Any value may be an Exception instance, raised for that table.
+    ``cascade_drivers``, when given, answers the second ``drivers`` query (the
+    vehicle-cascade pool); the first gets ``drivers``.
+    """
+    areas = [{"id": "area-1", "parent_service_area_id": None}] if areas is None else areas
+    seen_drivers = {"n": 0}
+
+    async def _side_effect(table, filters=None, **kwargs):
+        if table == "drivers":
+            seen_drivers["n"] += 1
+            value = cascade_drivers if (cascade_drivers is not None and seen_drivers["n"] > 1) else drivers
+        elif table == "service_areas":
+            value = areas
+        elif table == "driver_subscriptions":
+            value = subscriptions
+        else:
+            value = []
+        if isinstance(value, BaseException):
+            raise value
+        return [] if value is None else value
+
+    return _side_effect
+
+
 # ── match_driver_to_ride outer recovery shell ───────────────────────────
 
 
@@ -274,10 +308,10 @@ async def test_quota_filter_drops_exhausted_drivers():
     ):
         mock_db.find_one = AsyncMock(return_value={"id": "area-1", "subscription_required": False})
         mock_db.get_rows = AsyncMock(
-            side_effect=[
-                [driver],  # initial candidate pool
-                [{"driver_id": "drv-1", "started_at": "2020-01-01", "rides_per_day": 5}],  # active subs
-            ]
+            side_effect=_rows_by_table(
+                drivers=[driver],
+                subscriptions=[{"driver_id": "drv-1", "started_at": "2020-01-01", "rides_per_day": 5}],
+            )
         )
 
         from backend.routes.rides.matching import _match_driver_to_ride_attempt
@@ -331,10 +365,14 @@ async def test_cascade_requires_wav_and_parent_map_and_presence_reachable():
     ):
         mock_db.find_one = AsyncMock(side_effect=[child_area, parent_area])
         mock_db.get_rows = AsyncMock(
-            side_effect=[
-                [],  # initial (empty) SUV pool
-                [xl_driver],  # cascade XL pool
-            ]
+            side_effect=_rows_by_table(
+                drivers=[],  # initial (empty) SUV pool
+                cascade_drivers=[xl_driver],
+                areas=[
+                    {"id": "area-1", "parent_service_area_id": "area-parent"},
+                    {"id": "area-parent", "parent_service_area_id": None},
+                ],
+            )
         )
         mock_db.claim_driver_atomic = AsyncMock(return_value=False)
 
@@ -343,8 +381,15 @@ async def test_cascade_requires_wav_and_parent_map_and_presence_reachable():
         result = await _match_driver_to_ride_attempt("ride-1", ride=ride)
 
     # Cascade pool built with is_wav filter from the parent's inherited map.
-    cascade_call = mock_db.get_rows.call_args_list[1]
-    assert cascade_call.args[1].get("is_wav") is True
+    # Located by intent, not call index: the dispatch path also reads
+    # service_areas, so a fixed position silently points at the wrong query.
+    driver_calls = [
+        c
+        for c in mock_db.get_rows.call_args_list
+        if c.args and c.args[0] == "drivers" and len(c.args) > 1 and isinstance(c.args[1], dict)
+    ]
+    assert len(driver_calls) >= 2, f"expected an initial and a cascade drivers query, got {driver_calls}"
+    assert driver_calls[1].args[1].get("is_wav") is True
     assert result is None
     mock_retry.assert_called_once()
 

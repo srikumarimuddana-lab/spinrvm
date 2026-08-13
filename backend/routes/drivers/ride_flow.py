@@ -180,6 +180,70 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
                 detail="Could not verify subscription for this area. Please try again.",
             ) from None
 
+    # Cross-service-area gate — last-resort backstop for the dispatch filter in
+    # routes/rides/matching.py. Driver approval is per service area (municipal
+    # licensing, SGI ride-share endorsement, regulator-filed background check),
+    # so an out-of-area driver must not be able to complete an accept even if an
+    # offer reached them: a stale offer row from before the driver's area was
+    # changed, a dispatch that ran while the area guard was flagged off, or a
+    # driver hitting this endpoint with a ride_id they learned another way.
+    #
+    # Fails CLOSED (503) like the subscription gate directly above: this is the
+    # final gate, so a DB error must not silently authorise an out-of-area
+    # accept. Dispatch fails *safe* rather than closed (it narrows to the ride's
+    # own area) because stranding every ride is worse there — here, one driver
+    # retrying an accept is the correct cost.
+    if ride.get("service_area_id"):
+        try:
+            try:
+                from ...utils.service_area_scope import driver_area_allowed, resolve_dispatch_area_scope
+            except ImportError:  # pragma: no cover - dual-import pattern
+                from utils.service_area_scope import (  # type: ignore
+                    driver_area_allowed,
+                    resolve_dispatch_area_scope,
+                )
+            try:
+                from ...settings_loader import get_app_settings as _get_settings
+            except ImportError:  # pragma: no cover - dual-import pattern
+                from settings_loader import get_app_settings as _get_settings  # type: ignore
+
+            _accept_area_ids, _accept_allow_unassigned = await resolve_dispatch_area_scope(
+                db_supabase, ride["service_area_id"], await _get_settings()
+            )
+            if not driver_area_allowed(
+                driver.get("service_area_id"),
+                _accept_area_ids,
+                allow_unassigned=_accept_allow_unassigned,
+            ):
+                logger.warning(
+                    "accept_ride: driver=%s (area=%s) blocked from ride=%s in area=%s — out of service area",
+                    driver["id"],
+                    driver.get("service_area_id"),
+                    ride_id,
+                    ride["service_area_id"],
+                )
+                raise SpinrException(
+                    message=(
+                        "This ride is outside your approved service area. "
+                        "Contact support if you have been approved to drive here."
+                    ),
+                    error_code=ErrorCode.VALIDATION_ERROR,
+                    status_code=403,
+                )
+        except SpinrException:
+            raise
+        except Exception:
+            logger.error(
+                "accept_ride: service-area check failed for driver=%s ride=%s",
+                driver["id"],
+                ride_id,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Could not verify your service area for this ride. Please try again.",
+            ) from None
+
     # Daily ride-allowance gate — independent of area. Whenever the accepting
     # driver holds a finite Spinr Pass that's used up for the local calendar
     # day, block the accept (403) until it resets at midnight. No-op for

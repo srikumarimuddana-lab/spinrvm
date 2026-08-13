@@ -18,7 +18,7 @@ push / asyncio.create_task machinery in the tests.
 import logging
 import math
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,11 @@ try:
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.driver_presence import present_driver_ids
     from ..utils.metrics import inc as _metric_inc
+    from ..utils.service_area_scope import (
+        build_driver_area_filter,
+        driver_area_allowed,
+        resolve_dispatch_area_scope,
+    )
     from ..utils.spinr_pass import exhausted_driver_ids
 except ImportError:  # pragma: no cover - allow direct module imports in tests
     from geo_utils import calculate_distance
@@ -37,6 +42,11 @@ except ImportError:  # pragma: no cover - allow direct module imports in tests
     from utils.datetime_utils import parse_iso_utc  # type: ignore
     from utils.driver_presence import present_driver_ids
     from utils.metrics import inc as _metric_inc  # type: ignore
+    from utils.service_area_scope import (  # type: ignore
+        build_driver_area_filter,
+        driver_area_allowed,
+        resolve_dispatch_area_scope,
+    )
     from utils.spinr_pass import exhausted_driver_ids  # type: ignore
 
 
@@ -173,6 +183,9 @@ def filter_and_rank_drivers(
     algorithm: str,
     min_rating: float,
     search_radius_km: float,
+    *,
+    allowed_area_ids: Optional[Set[str]] = None,
+    allow_unassigned_area: bool = True,
 ) -> List[Tuple[Dict[str, Any], float]]:
     """
     Pure function: filter a candidate pool and attach per-driver distance.
@@ -180,7 +193,16 @@ def filter_and_rank_drivers(
     Returns a list of ``(driver, distance_km)`` tuples for drivers that:
       - Have a user_id and lat/lng (``_is_dispatchable_driver``)
       - Pass the rating floor when the algorithm requires it
+      - Are approved for the ride's service area (when ``allowed_area_ids`` is
+        given — see ``utils/service_area_scope``)
       - Are within ``search_radius_km`` of the ride pickup
+
+    ``allowed_area_ids=None`` (the default) disables the area check, keeping
+    every existing caller and test byte-compatible. The dispatch paths pass the
+    resolved set so the guard is enforced here as well as in SQL: the SQL
+    predicate keeps the candidate fetch small, this one ensures a pool sourced
+    any other way (a future RPC, a cached list, a hand-built fixture) is still
+    gated. ``is_wav`` is double-checked the same way for the same reason.
 
     No side effects. Safe to call from tests with hand-built dicts.
     """
@@ -199,6 +221,9 @@ def filter_and_rank_drivers(
         if not _is_dispatchable_driver(d):
             continue
         if needs_rating and float(d.get("rating") or 5.0) < min_rating:
+            continue
+        # Driver approval is per service area — proximity is not authorisation.
+        if not driver_area_allowed(d.get("service_area_id"), allowed_area_ids, allow_unassigned=allow_unassigned_area):
             continue
         # Saskatchewan Transportation Act s.22: when the rider requests a WAV,
         # only match drivers whose vehicle has an approved wheelchair lift/ramp.
@@ -313,8 +338,16 @@ class DispatchService:
             use_eta = bool(global_eta) if global_eta is not None else True
         return algorithm, min_rating, search_radius_km, max_offers, use_eta
 
-    async def find_candidate_drivers(self, ride: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Online + available + verified + *present* drivers for this ride.
+    async def find_candidate_drivers(
+        self,
+        ride: Dict[str, Any],
+        *,
+        app_settings: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Online + available + verified + *present* + area-approved drivers.
+
+        ``app_settings`` may be passed by a caller that already loaded it (the
+        area-guard flags are read from it); omitted, it is fetched here.
 
         is_verified + status='active' gate unverified / suspended / needs_review
         drivers out of dispatch even if their is_online flag got left on (e.g.
@@ -350,36 +383,27 @@ class DispatchService:
         }
         if ride.get("requires_wav"):
             driver_filter["is_wav"] = True
-        # Cross-service-area ride guard: restrict candidates to drivers whose
-        # approved service area is compatible with the ride's pickup area.
+        # Cross-service-area ride guard: restrict candidates to drivers approved
+        # for the ride's area. Shares utils/service_area_scope with the live
+        # dispatch path so the two cannot drift.
+        # Settings are resolved lazily — a ride with no service_area_id has
+        # nothing to scope against, and an eager fetch here would add a settings
+        # round-trip to every dispatch attempt.
+        _area_ids: Optional[Set[str]] = None
+        _allow_unassigned = True
         if ride.get("service_area_id"):
-            _compat: set = {ride["service_area_id"]}
-            try:
-                _sa = await self.db.find_one("service_areas", {"id": ride["service_area_id"]})
-                if _sa and _sa.get("parent_service_area_id"):
-                    _compat.add(_sa["parent_service_area_id"])
-                _children = await self.db.get_rows(
-                    "service_areas",
-                    {"parent_service_area_id": ride["service_area_id"], "is_active": True},
-                    columns="id",
-                    limit=50,
-                )
-                for _c in _children or []:
-                    _compat.add(_c["id"])
-            except Exception:
-                logger.error(
-                    "Service-area guard lookup failed for area=%s — failing open",
-                    ride["service_area_id"],
-                    exc_info=True,
-                )
-                _compat = None  # type: ignore[assignment]
-            if _compat is not None:
-                driver_filter["service_area_id"] = {"$in": list(_compat)}
-                logger.info(
-                    "Service-area guard: ride area=%s, compatible driver areas=%s",
-                    ride["service_area_id"],
-                    list(_compat),
-                )
+            _scope_settings = app_settings if app_settings is not None else await get_app_settings()
+            _area_ids, _allow_unassigned = await resolve_dispatch_area_scope(
+                self.db, ride["service_area_id"], _scope_settings
+            )
+        if _area_ids is not None:
+            driver_filter.update(build_driver_area_filter(_area_ids, allow_unassigned=_allow_unassigned))
+            logger.info(
+                "Service-area guard: ride area=%s → %d compatible driver area(s), unassigned_allowed=%s",
+                ride.get("service_area_id"),
+                len(_area_ids),
+                _allow_unassigned,
+            )
         rows = await self.db.get_rows(
             "drivers",
             driver_filter,

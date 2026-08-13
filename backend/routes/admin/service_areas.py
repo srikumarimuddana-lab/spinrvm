@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 try:
     from ... import db_supabase
@@ -219,6 +219,11 @@ class ServiceAreaUpdateRequest(BaseModel):
     max_simultaneous_offers: Optional[int] = Field(default=None, ge=1, le=10)
     use_eta_ranking: Optional[bool] = None
     show_demand_heatmap: Optional[bool] = None
+    # Sparse per-area heatmap tuning overrides. Validated key-by-key below
+    # (unknown keys rejected, every value range-checked) rather than accepted
+    # as free-form JSON: this blob reaches a driver-facing endpoint and one of
+    # its keys is a k-anonymity privacy control.
+    heatmap_config: Optional[Dict[str, Any]] = None
     vehicle_pricing: Optional[List[Dict[str, Any]]] = None
     province: Optional[str] = None
     regulatory_authority: Optional[str] = None
@@ -248,6 +253,52 @@ class ServiceAreaUpdateRequest(BaseModel):
     driver_referral_terms: Optional[str] = Field(default=None, max_length=2000)
     # Dispatch cascade rules (migration 185): [{from: uuid, to: [uuid, ...]}]
     vehicle_cascade_map: Optional[List[Any]] = None
+
+    @field_validator("heatmap_config")
+    @classmethod
+    def _validate_heatmap_config(cls, v: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Reject unknown keys and out-of-range values in the override blob.
+
+        Deliberately strict rather than store-and-clamp-later. This object
+        reaches a driver-facing endpoint, and one of its keys (``k_floor``) is
+        a PIPEDA k-anonymity control — an operator who types 0 must get a 422
+        that says so, not a silent snap to 1 that looks like it saved what
+        they asked for. The read site still clamps independently, because a
+        direct SQL edit never passes through here.
+
+        Bounds come from HEATMAP_SPEC, so adding a knob there needs no edit
+        here and the two can't drift.
+        """
+        if v is None:
+            return None
+        try:
+            from ...utils.heatmap_config import HEATMAP_SPEC
+        except ImportError:
+            from utils.heatmap_config import HEATMAP_SPEC  # type: ignore
+
+        unknown = sorted(set(v) - set(HEATMAP_SPEC))
+        if unknown:
+            raise ValueError(
+                f"unknown heatmap config key(s): {', '.join(unknown)}. "
+                f"Valid keys: {', '.join(sorted(HEATMAP_SPEC))}"
+            )
+
+        cleaned: Dict[str, Any] = {}
+        for key, raw in v.items():
+            spec = HEATMAP_SPEC[key]
+            # None means "clear this override and go back to inheriting".
+            if raw is None:
+                continue
+            try:
+                num = int(raw) if spec.kind == "int" else float(raw)
+            except (TypeError, ValueError):
+                raise ValueError(f"{key} must be a number, got {raw!r}")
+            if num != num:  # NaN
+                raise ValueError(f"{key} must be a number, got NaN")
+            if not (spec.lo <= num <= spec.hi):
+                raise ValueError(f"{key} must be between {spec.lo} and {spec.hi}, got {num}")
+            cleaned[key] = num
+        return cleaned
 
 
 class SurgePricingRequest(BaseModel):
@@ -305,6 +356,66 @@ async def admin_get_service_areas():
     for p in parents:
         p["sub_regions"] = parent_map.get(p["id"], [])
     return parents
+
+
+@router.get("/service-areas/{area_id}/heatmap-config", dependencies=[Depends(get_admin_user)])
+async def admin_get_area_heatmap_config(area_id: str):
+    """Effective heatmap tuning for one area, plus where each value came from.
+
+    One call returns everything the admin form needs — the resolved values,
+    which keys this area explicitly overrides, the globals it would fall back
+    to, and the permitted range per key. Bounds are served from HEATMAP_SPEC
+    rather than duplicated in the frontend so the two cannot drift; a knob
+    added on the backend shows up in the form with correct limits.
+
+    The overrides/effective split matters: "inherits 3" and "explicitly set to
+    3" look identical in the resolved output but behave differently the moment
+    the global changes, and only the form can show that distinction.
+    """
+    try:
+        from ...utils.heatmap_config import HEATMAP_SPEC, describe_overrides, resolve_heatmap_config
+        from ...settings_loader import get_app_settings
+    except ImportError:
+        from settings_loader import get_app_settings  # type: ignore
+        from utils.heatmap_config import (  # type: ignore
+            HEATMAP_SPEC,
+            describe_overrides,
+            resolve_heatmap_config,
+        )
+
+    area = await db_supabase.find_one("service_areas", {"id": area_id})
+    if not area:
+        raise HTTPException(status_code=404, detail="Service area not found")
+
+    try:
+        app_settings = await get_app_settings() or {}
+    except Exception as e:
+        # Surface it: silently reporting defaults as "the global value" would
+        # mislead an operator about what drivers are actually being served.
+        logger.error("heatmap-config: failed to read app_settings: %s", e, exc_info=True)
+        raise HTTPException(status_code=503, detail="Could not read global settings")
+
+    # What each key would resolve to with this area's overrides removed.
+    inherited = resolve_heatmap_config(None, app_settings)
+
+    return {
+        "area_id": area_id,
+        "area_name": area.get("name", ""),
+        "effective": resolve_heatmap_config(area, app_settings),
+        "overrides": describe_overrides(area),
+        "inherited": inherited,
+        "spec": {
+            name: {
+                "kind": spec.kind,
+                "min": spec.lo,
+                "max": spec.hi,
+                "default": spec.default,
+                # None = per-area/default only, no global equivalent.
+                "global_key": spec.global_key,
+            }
+            for name, spec in HEATMAP_SPEC.items()
+        },
+    }
 
 
 @router.get("/airport-zones/diagnostic", dependencies=[Depends(get_admin_user)])
@@ -616,6 +727,7 @@ async def admin_update_service_area(
         "max_simultaneous_offers",
         "use_eta_ranking",
         "show_demand_heatmap",
+        "heatmap_config",
         "vehicle_pricing",
         "max_pickup_radius_km",
         "insurance_fee_percent",

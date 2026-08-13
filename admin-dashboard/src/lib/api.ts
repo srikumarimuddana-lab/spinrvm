@@ -223,6 +223,7 @@ export {
     deleteVenue,
     createServiceArea,
     updateServiceArea,
+    getAreaHeatmapConfig,
     deleteServiceArea,
     getIncentives,
     createIncentive,
@@ -252,6 +253,8 @@ export type {
     Venue,
     VenueUpsert,
     ExportApprovalRequest,
+    AreaHeatmapConfig,
+    AreaHeatmapConfigSpec,
 } from "./api/pricing";
 export {
     adminValidateDriverImport,

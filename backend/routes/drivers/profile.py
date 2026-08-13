@@ -385,6 +385,10 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
     except ImportError:
         from utils.metrics import inc as _metric_inc  # type: ignore
         from utils.metrics import observe as _metric_observe
+    try:
+        from ...utils.heatmap_config import config_fingerprint, resolve_heatmap_config  # type: ignore
+    except ImportError:
+        from utils.heatmap_config import config_fingerprint, resolve_heatmap_config  # type: ignore
 
     app_settings = {}
     try:
@@ -413,8 +417,18 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
     v2_allowlist = app_settings.get("heatmap_internal_driver_ids") or []
     v2_enabled = v2_global or (current_user["id"] in v2_allowlist)
 
+    # Resolve tuning: per-area override → global settings → code default,
+    # clamped at the end regardless of source. Both upstream sources are
+    # ordinary DB rows and therefore writable out-of-band, so the clamp is the
+    # read site's own defence, not a restatement of the write side's.
+    hm_cfg = resolve_heatmap_config(service_area, app_settings)
+
     cache_version = "v2" if v2_enabled else "v1"
-    cache_key = f"spinr:heatmap:{area_id}:{cache_version}"
+    # The config fingerprint is part of the key: a cached payload is only valid
+    # for the config that built it. Without it, retuning an area (or tightening
+    # its k-anonymity floor) would keep serving cells built under the old
+    # settings until the TTL lapsed.
+    cache_key = f"spinr:heatmap:{area_id}:{cache_version}:{config_fingerprint(hm_cfg)}"
     # Cache failure must degrade to a cache miss, never to a 500. redis_get
     # re-raises when REDIS_URL is set, so an unguarded read turns a Redis blip
     # into a hard-down heatmap for every polling driver while the DB is healthy.
@@ -434,24 +448,19 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
 
     _build_start = _time.monotonic()
 
-    # Clamp every admin-tunable knob at point of use. The settings row is
-    # writable out-of-band (direct DB edit), so schema-level bounds on the
-    # admin PUT are not sufficient on their own: a null/garbage/zero value
-    # reaching these lines would otherwise 500 every driver poll, disable the
-    # k-anonymity floor, or divide by zero in the cell-key math.
-    k_floor = _clamp_int(app_settings.get("heatmap_k_floor"), 1, 50, 3)
-    cell_lat = _clamp_float(app_settings.get("heatmap_cell_lat_deg"), 0.0005, 0.05, 0.004)
-    cell_lng = _clamp_float(app_settings.get("heatmap_cell_lng_deg"), 0.0005, 0.05, 0.006)
-    decay_half_life = _clamp_float(app_settings.get("heatmap_decay_half_life_days"), 0.5, 30.0, 3.0)
-    refresh_seconds = _clamp_int(app_settings.get("heatmap_refresh_seconds"), 30, 600, 90)
+    k_floor = hm_cfg["k_floor"]
+    cell_lat = hm_cfg["cell_lat_deg"]
+    cell_lng = hm_cfg["cell_lng_deg"]
+    decay_half_life = hm_cfg["decay_half_life_days"]
+    refresh_seconds = hm_cfg["refresh_seconds"]
 
     now = datetime.now(timezone.utc)
-    cutoff_7d = (now - timedelta(days=7)).isoformat()
+    cutoff_live = (now - timedelta(days=hm_cfg["live_window_days"])).isoformat()
 
     # ── v1 aggregate (always built) ──────────────────────────────────────
     rides = await db_supabase.get_rows(
         "rides",
-        {"created_at": {"$gte": cutoff_7d}, "service_area_id": area_id},
+        {"created_at": {"$gte": cutoff_live}, "service_area_id": area_id},
         order="created_at",
         desc=True,
         limit=5_000,
@@ -495,14 +504,14 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
     v2_surge = None
     if v2_enabled:
         _ACTIVE = {"searching", "driver_assigned", "driver_accepted", "driver_arrived", "in_progress"}
-        cutoff_10m = (now - timedelta(minutes=10)).isoformat()
-        cutoff_28d = (now - timedelta(days=28)).isoformat()
-        cutoff_2h = (now + timedelta(hours=2)).isoformat()
+        cutoff_now = (now - timedelta(minutes=hm_cfg["now_window_minutes"])).isoformat()
+        cutoff_baseline = (now - timedelta(days=hm_cfg["baseline_window_days"])).isoformat()
+        cutoff_scheduled = (now + timedelta(hours=hm_cfg["scheduled_lookahead_hours"])).isoformat()
 
         # live: rides in active statuses requested in last 10 min
         live_rides = await db_supabase.get_rows(
             "rides",
-            {"created_at": {"$gte": cutoff_10m}, "service_area_id": area_id},
+            {"created_at": {"$gte": cutoff_now}, "service_area_id": area_id},
             limit=5_000,
             columns="pickup_lat,pickup_lng,status",
         )
@@ -523,7 +532,7 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
 
         baseline_rides = await db_supabase.get_rows(
             "rides",
-            {"created_at": {"$gte": cutoff_28d}, "service_area_id": area_id},
+            {"created_at": {"$gte": cutoff_baseline}, "service_area_id": area_id},
             limit=5_000,
             columns="pickup_lat,pickup_lng,created_at",
         )
@@ -567,7 +576,7 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
             {
                 "status": "scheduled",
                 "service_area_id": area_id,
-                "scheduled_pickup_time": {"$gte": now.isoformat(), "$lte": cutoff_2h},
+                "scheduled_pickup_time": {"$gte": now.isoformat(), "$lte": cutoff_scheduled},
             },
             limit=5_000,
             columns="pickup_lat,pickup_lng",
@@ -632,7 +641,11 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
             except ImportError:
                 from utils.demand_forecast import forecast_demand as _forecast_demand  # type: ignore
 
-            raw_fc = await _forecast_demand(area_id=area_id, hours_ahead=6, lookback_days=28)
+            raw_fc = await _forecast_demand(
+                area_id=area_id,
+                hours_ahead=hm_cfg["forecast_hours_ahead"],
+                lookback_days=hm_cfg["forecast_lookback_days"],
+            )
             if raw_fc:
                 max_pred = max((f["predicted_rides"] for f in raw_fc), default=1) or 1
                 v2_forecast = [

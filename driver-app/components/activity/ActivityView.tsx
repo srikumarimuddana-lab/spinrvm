@@ -38,6 +38,7 @@ export default function ActivityView() {
     earningsByPeriod,
     rideHistory,
     historyTotal,
+    driverBalance,
     fetchEarnings,
     fetchRideHistory,
     fetchDriverBalance,
@@ -112,7 +113,7 @@ export default function ActivityView() {
     }, [loadData])
   );
 
-  const totalEarnings = parseMoney(shownEarnings?.total_earnings);
+  const spinrEarnings = parseMoney(shownEarnings?.total_earnings);
   const totalTips = parseMoney(shownEarnings?.total_tips);
   const totalIncentives = parseMoney(shownEarnings?.total_incentives);
   // Quest + referral rewards (driver_bonuses) — distinct from per-ride incentives.
@@ -120,7 +121,21 @@ export default function ActivityView() {
   // Referral-only slice, shown as its own line; the remainder is quest bonuses.
   const totalReferralBonuses = parseMoney(shownEarnings?.total_referral_bonuses);
   const totalTax = parseMoney(shownEarnings?.total_tax);
-  const fareEarnings = Math.max(totalEarnings - totalTips - totalIncentives - totalBonuses - totalTax, 0);
+  const fareEarnings = Math.max(spinrEarnings - totalTips - totalIncentives - totalBonuses - totalTax, 0);
+  // Money paid out by the previous Spinr app (real Stripe transfers, synced
+  // from history) — lifetime figure, no reliable per-period split, so it's
+  // only blended into "All Time". Business decision 2026-08-13: a driver's
+  // total shows their full history with Spinr, old app and new app combined,
+  // rather than a number that quietly excludes real money they were paid.
+  const previousAppPaid = period === 'all' ? parseMoney(driverBalance?.previous_app_paid_total) : 0;
+  const totalEarnings = spinrEarnings + previousAppPaid;
+  const totalRides = Number(shownEarnings?.total_rides ?? 0);
+  const totalDistanceKm = parseMoney(shownEarnings?.total_distance_km);
+  // Simple, honest averages — whatever's in the total above, divided by trip
+  // count for the same window. Not a separate "lifetime vs current" metric:
+  // one total, one trip count, one average.
+  const avgPerTrip = totalRides > 0 ? totalEarnings / totalRides : 0;
+  const avgDistancePerTrip = totalRides > 0 ? totalDistanceKm / totalRides : 0;
   const periodRideTotal = period === 'all' ? historyTotal : Number(shownEarnings?.total_rides ?? 0);
   const hasMoreHistory = rideHistory.length < historyTotal;
 
@@ -164,18 +179,6 @@ export default function ActivityView() {
       ? true
       : (statusFilter === 'all' && periodRideTotal > filteredRides.length) || filteredRides.length >= PAGE_SIZE);
 
-  // A30 Finding 3 (docs/audit/2026-08-13-migrated-data-visibility-audit.md):
-  // /drivers/earnings deliberately excludes legacy-imported rides' dollars
-  // (they were already paid out in the previous app; EXCLUDE_LEGACY_RIDES,
-  // backend/utils/legacy_rides.py) but the trip list below does include
-  // them, so a driver counting rows against the earnings total sees a
-  // mismatch with no explanation. Count how many of the currently-visible
-  // rides are legacy so the header above can say why.
-  const legacyRideCountInView = useMemo(
-    () => filteredRides.filter((r: any) => r.legacy_import_metadata && Object.keys(r.legacy_import_metadata).length > 0).length,
-    [filteredRides]
-  );
-
   // #6: render one ride card. Extracted from the inline map so the list can be
   // virtualized by FlatList. Wrapped in the 16px horizontal inset that the old
   // `ridesSection` View used to provide (rideCard has no inset of its own).
@@ -214,12 +217,6 @@ export default function ActivityView() {
               </Text>
             </View>
           </View>
-
-          {ride.legacy_import_metadata && Object.keys(ride.legacy_import_metadata).length > 0 && (
-            <View style={styles.legacyBadge}>
-              <Text style={styles.legacyBadgeText}>Imported from your previous account</Text>
-            </View>
-          )}
 
           {/* Route: pickup → dropoff */}
           <View style={styles.routeContainer}>
@@ -343,19 +340,15 @@ export default function ActivityView() {
               <Text style={styles.totalLabel}>Total Earned</Text>
               <Text style={styles.totalValue}>${toMoney(totalEarnings)}</Text>
             </View>
-            {legacyRideCountInView > 0 && (
-              <Text style={styles.legacyExplainer}>
-                {legacyRideCountInView === 1
-                  ? '1 ride from your previous account is shown below but not counted here — it was already paid out.'
-                  : `${legacyRideCountInView} rides from your previous account are shown below but not counted here — those were already paid out.`}
-              </Text>
-            )}
             {/* Vertical list (icon + label on the left, amount right-aligned).
                 A single row of five columns cramped the dollar values into
                 ~65px each, so amounts like $254.62 wrapped mid-number and the
                 columns fell out of alignment. A full-width row per category
                 gives every amount room to render on one line and stay uniform
-                regardless of how large it is or how narrow the screen. */}
+                regardless of how large it is or how narrow the screen.
+                Every row here sums to the Total Earned figure above —
+                including Previously Paid, so the total never excludes real
+                money without saying where it went. */}
             <View style={styles.breakdownList}>
               <View style={styles.breakdownRow}>
                 <Ionicons name="cash-outline" size={18} color="#ef4444" style={styles.breakdownIcon} />
@@ -384,6 +377,18 @@ export default function ActivityView() {
                 <Text style={styles.label}>Tax</Text>
                 <Text style={[styles.value, { color: '#6b7280' }]} numberOfLines={1}>${toMoney(totalTax)}</Text>
               </View>
+              {previousAppPaid > 0 && (
+                <View style={[styles.breakdownRow, styles.breakdownRowBorder]}>
+                  <Ionicons name="time-outline" size={18} color="#0ea5e9" style={styles.breakdownIcon} />
+                  {/* Real money, already in the driver's bank account — a
+                      line item, not a footnote, so the total above is fully
+                      accounted for without needing "legacy"/"imported"
+                      jargon. Amount and payout dates are verifiable in the
+                      Payout screen's payout history. */}
+                  <Text style={styles.label}>Previously Paid</Text>
+                  <Text style={[styles.value, { color: '#0ea5e9' }]} numberOfLines={1}>${toMoney(previousAppPaid)}</Text>
+                </View>
+              )}
             </View>
           </View>
 
@@ -394,7 +399,7 @@ export default function ActivityView() {
                 <FontAwesome5 name="car" size={16} color="#ef4444" />
               </View>
               <View>
-                <Text style={styles.statValue}>{shownEarnings?.total_rides || 0}</Text>
+                <Text style={styles.statValue}>{totalRides}</Text>
                 <Text style={styles.statLabel}>Total Trips</Text>
               </View>
             </View>
@@ -403,7 +408,7 @@ export default function ActivityView() {
                 <MaterialCommunityIcons name="road-variant" size={18} color="#f59e0b" />
               </View>
               <View>
-                <Text style={styles.statValue}>{parseMoney(shownEarnings?.total_distance_km).toFixed(1)}</Text>
+                <Text style={styles.statValue}>{totalDistanceKm.toFixed(1)}</Text>
                 <Text style={styles.statLabel}>KM Driven</Text>
               </View>
             </View>
@@ -423,8 +428,17 @@ export default function ActivityView() {
                 <Ionicons name="trending-up" size={18} color="#38bdf8" />
               </View>
               <View>
-                <Text style={styles.statValue}>${toMoney(shownEarnings?.average_per_ride)}</Text>
+                <Text style={styles.statValue}>${toMoney(avgPerTrip)}</Text>
                 <Text style={styles.statLabel}>Avg per Trip</Text>
+              </View>
+            </View>
+            <View style={styles.statCard}>
+              <View style={[styles.iconWrap, { backgroundColor: 'rgba(139,92,246,0.1)' }]}>
+                <MaterialCommunityIcons name="map-marker-distance" size={18} color="#8b5cf6" />
+              </View>
+              <View>
+                <Text style={styles.statValue}>{avgDistancePerTrip.toFixed(1)} km</Text>
+                <Text style={styles.statLabel}>Avg Distance/Trip</Text>
               </View>
             </View>
           </View>
@@ -744,24 +758,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 16,
-  },
-  legacyBadge: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#f3f4f6',
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    marginBottom: 12,
-  },
-  legacyBadgeText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#6b7280',
-  },
-  legacyExplainer: {
-    fontSize: 12,
-    color: '#6b7280',
-    marginTop: 6,
   },
   statusBadge: {
     flexDirection: 'row',

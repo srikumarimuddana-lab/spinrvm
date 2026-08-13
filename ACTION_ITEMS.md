@@ -3190,6 +3190,87 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   if/when a frontend surface starts reading `/balance`'s `total_rides`, or
   proactively for consistency — low priority since no one currently sees
   the wrong number.
+- **Superseded by A32:** the note above about `average_per_ride` staying
+  divided by the money-rides count "so it isn't diluted by $0-earning
+  legacy trips" described the state as of this entry's date. A32
+  (2026-08-13, same day) reversed that specific call: Avg per Trip is now
+  a deliberately blended `total_earnings / total_rides`, per an explicit
+  product decision that trip-count and dollar figures should use the same
+  denominator everywhere. See A32.
+
+### A32. Blended lifetime earnings — previous-app money is now permanent and unbadged on driver/rider surfaces (2026-08-13)
+- **Source:** direct product decision, same conversation as A31. A31 fixed
+  trip/distance/duration stats reading zero for all-legacy periods; the
+  user asked the natural follow-on question — if a driver's total money
+  earned and average per trip still exclude real, already-paid previous-app
+  money, and read a technical "legacy"/"imported" framing, is that the
+  smartest way to present it? Decision: no. Blend it into one honest
+  number, drop all "legacy"/"imported" language from rider/driver-facing
+  UI, keep the distinction in the backend and admin portal only.
+- **Reverses two prior decisions, both explicitly superseded here:**
+  - **A30 Finding 3/4** (2026-08-13, earlier same day) shipped a "N rides
+    from your previous account are shown below but not counted here"
+    explainer and an "Imported"/"Imported from your previous account"
+    ride-card badge on rider-app, driver-app, and admin-dashboard. Now
+    **removed from rider-app and driver-app** (no more badge, no more
+    explainer — money is blended, so the explainer's premise is false).
+    **Kept on admin-dashboard** — Spinr staff need the distinction for
+    support/audit; that surface was never customer-facing.
+  - **The `PREVIOUS_APP_VISIBLE_UNTIL` sunset** (`utils/legacy_rides.py`,
+    2026-08-31, introduced 2026-08-12/13 as deliberate transition
+    messaging with an end date) is **retired** for all three call sites
+    that used it (`get_driver_balance`, `get_payout_history`,
+    `build_statement`). Hiding a driver's own previous-app money on a
+    calendar date would make their lifetime total look like it shrank —
+    the same trust problem A31 fixed for trip counts, now closed for the
+    dollar figure too. The helper function itself is untouched (still
+    correct, just unused by these three call sites).
+- [x] **Status:** DONE (2026-08-13).
+  - **Backend:** `get_driver_balance`/`get_payout_history`/`build_statement`
+    no longer gate on `previous_app_history_visible()` — previous-app
+    money and payout rows are always included. No new fields; existing
+    `previous_app_paid_total` (`/drivers/balance`) is now unconditional.
+  - **driver-app Activity screen:** "All Time" Total Earned blends Spinr
+    earnings + `previous_app_paid_total` (not blended for Today/Week/Month
+    — no reliable per-period split for old-app transfer dates). New
+    "Previously Paid" breakdown row makes the blend a visible, additive
+    line item (every row sums to the total) rather than a footnote. Avg
+    per Trip is now a simple `total_earnings / total_rides` over the same
+    blended total and the already-all-inclusive trip count (A31). New "Avg
+    Distance/Trip" stat tile. Removed the ride-card badge and the "not
+    counted here" explainer.
+  - **driver-app Payout screen:** "Total Earnings" breakdown item now
+    blends the same way, so the figure matches the Activity screen instead
+    of showing two different "Total Earnings" numbers on two screens.
+    "Previously Paid" added as a 4th breakdown item (additive — only
+    rendered when non-zero, so a driver with none sees the original
+    3-item row unchanged). `AVAILABLE BALANCE` (the real withdrawable
+    figure) is untouched — blending only ever happens in *display*
+    totals, never in `payable_balance` math.
+  - **driver-app Payout History screen:** "Previous app" section's copy no
+    longer promises an Aug 31, 2026 cutoff or says the money "isn't part
+    of your Spinr earnings" (both now false).
+  - **rider-app Activity tab:** badge removed. No total/average change —
+    riders don't have an earnings-exclusion figure to blend.
+  - Full Change Impact Log:
+    `docs/change-log/2026-08-13-blended-lifetime-earnings.md`.
+- **Verification:** backend — `test_previous_app_sunset.py` rewritten to
+  pin "always visible" instead of the two-branch cutoff (5/5 pass); full
+  affected-file run (`test_previous_app_sunset.py`,
+  `test_earnings_coverage.py`, `test_drivers_extended.py`,
+  `test_payouts_coverage.py`, `test_driver_statement.py`,
+  `test_driver_statement_pdf.py`) — 193/193 pass. driver-app —
+  `ActivityView.test.tsx` updated (badge-removal + blended-total/average
+  regression tests), 9/9 pass; `tsc --noEmit` clean. rider-app — `tsc
+  --noEmit` clean (no test infra for `activity.tsx`, consistent with the
+  rest of this app's screen-level files).
+- **What was NOT verified:** not exercised against real Supabase or a real
+  migrated driver account — reasoned from the code and unit-mocked tests
+  only. No screenshot/visual verification (standing gap, no
+  visual-regression tooling in this repo). `payout.tsx`/`payout-history.tsx`
+  have no existing test file to extend (consistent with the rest of this
+  app's screen-level files, not a gap introduced here) — verified by
+  `tsc --noEmit` and manual code review only.
 
 ## P1 — Fix before launch (code)
 

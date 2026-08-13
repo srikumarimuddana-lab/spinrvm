@@ -323,11 +323,6 @@ export default function ActivityScreen() {
               {ride.ride_code || ride.id.slice(0, 8).toUpperCase()}
             </Text>
           )}
-          {!!ride.legacy_import_metadata && Object.keys(ride.legacy_import_metadata).length > 0 && (
-            <View style={styles.legacyBadge}>
-              <Text style={styles.legacyBadgeText}>Imported from your previous account</Text>
-            </View>
-          )}
         </View>
 
         <View style={styles.rideFareContainer}>
@@ -687,13 +682,6 @@ function createStyles(colors: ThemeColors, isCompactFilterLayout: boolean) { ret
   rideBookingId: {
     fontSize: 11, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.textDim,
     letterSpacing: 0.5, marginTop: 4,
-  },
-  legacyBadge: {
-    alignSelf: 'flex-start', backgroundColor: colors.border,
-    borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2, marginTop: 4,
-  },
-  legacyBadgeText: {
-    fontSize: 10, fontFamily: 'PlusJakartaSans_500Medium', color: colors.textDim,
   },
   rideFareContainer: { alignItems: 'flex-end' },
   rideFare: { fontSize: 17, fontFamily: 'PlusJakartaSans_700Bold', color: colors.primary, marginBottom: 4 },

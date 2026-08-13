@@ -35,14 +35,12 @@ from zoneinfo import ZoneInfo
 
 try:
     from .. import db_supabase
-    from .legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts, previous_app_history_visible
+    from .legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts
 except ImportError:  # pragma: no cover
     import db_supabase  # type: ignore
-
     from utils.legacy_rides import (  # type: ignore
         EXCLUDE_LEGACY_RIDES,
         drop_legacy_offset_payouts,
-        previous_app_history_visible,
     )
 
 logger = logging.getLogger(__name__)
@@ -337,12 +335,17 @@ async def _build(
         "payouts_total": _money(payouts_total),
         "payouts_spinr_total": _money(payouts_spinr),
         "payouts_previous_app_total": _money(payouts_previous_app),
-        # Sunset flag for DRIVER-facing renders only (PDF/email): after the
-        # cutoff in utils/legacy_rides the PDF drops previous-app rows and
-        # notes. The DATA above stays complete regardless — admin stored
-        # totals, the statements list, and the totals recompute must keep
-        # the full picture forever.
-        "previous_app_visible": previous_app_history_visible(),
+        # Business decision 2026-08-13 (docs/change-log/2026-08-13-blended-
+        # lifetime-earnings.md): previous-app payouts are now a PERMANENT
+        # part of every driver-facing surface, statements included — no more
+        # sunset. This used to read utils.legacy_rides.
+        # previous_app_history_visible() (PREVIOUS_APP_VISIBLE_UNTIL,
+        # 2026-08-31); that helper is unchanged and still correct, it's just
+        # no longer called here. Key name kept as `previous_app_visible`
+        # (always True now) rather than removed — utils/driver_statement_pdf.py
+        # branches on it, and always-True is a strict subset of what it
+        # already handles correctly.
+        "previous_app_visible": True,
         # True when the ONLY money in the period is previous-app transfers:
         # the PDF renders an explainer instead of leaving "$0.00 earned"
         # sitting unexplained beside a real paid-out figure.

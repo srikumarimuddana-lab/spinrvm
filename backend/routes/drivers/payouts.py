@@ -37,11 +37,9 @@ from ._shared import (  # noqa: F401
 
 try:
     from ...services import stripe_kyc_sync as _kyc
-    from ...utils.legacy_rides import previous_app_history_visible
     from ...utils.stripe_mode import is_missing_on_key, key_mode, object_mode
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
     from services import stripe_kyc_sync as _kyc  # type: ignore
-    from utils.legacy_rides import previous_app_history_visible  # type: ignore
     from utils.stripe_mode import is_missing_on_key, key_mode, object_mode  # type: ignore
 
 router = APIRouter()
@@ -1262,15 +1260,15 @@ async def get_payout_history(
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
     filters: dict = {"driver_id": driver["id"]}
-    # Previous-app transfers (stripe_sync) are transition history with a
-    # sunset (utils/legacy_rides): after the cutoff the driver's history
-    # shows Spinr payouts only. Filtered SERVER-side so pagination stays
-    # honest — dropping rows after a limit/offset fetch would shrink pages
-    # unpredictably. The $or keeps NULL payout_type rows visible: SQL
-    # `payout_type != 'stripe_sync'` is NULL for NULL, and PostgREST neq
-    # would silently hide any pre-backfill row.
-    if not previous_app_history_visible():
-        filters["$or"] = [{"payout_type": {"$ne": "stripe_sync"}}, {"payout_type": None}]
+    # Business decision 2026-08-13 (docs/change-log/2026-08-13-blended-
+    # lifetime-earnings.md): previous-app transfers (payout_type=
+    # 'stripe_sync') stay in a driver's payout history PERMANENTLY — no more
+    # time-limited "transition messaging." Hiding real payout rows after a
+    # date would make the driver's own history look like it lost entries,
+    # which is the same trust problem A31 fixed for trip counts. This used
+    # to filter on utils.legacy_rides.previous_app_history_visible()
+    # (PREVIOUS_APP_VISIBLE_UNTIL, 2026-08-31) — that helper still exists
+    # and is still correct, it's just no longer called here.
     payouts = await db_supabase.get_rows(
         "payouts",
         filters,

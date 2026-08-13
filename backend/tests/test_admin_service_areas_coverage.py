@@ -37,6 +37,7 @@ from backend.routes.admin.service_areas import (
     admin_delete_area_fee,
     admin_delete_service_area,
     admin_get_area_fees,
+    admin_get_area_heatmap_config,
     admin_get_area_tax,
     admin_get_service_areas,
     admin_get_surge_status,
@@ -251,6 +252,76 @@ class TestUpdateServiceAreaGuards:
         assert "surge_override_above_cap" in actions
 
     @pytest.mark.anyio
+    async def test_manual_surge_change_appends_a_history_row(self):
+        """A manual surge override must land in surge_pricing.
+
+        Regression test: this is the only UI path that sets a manual
+        multiplier, and it wrote no history at all. Because the surge engine
+        skips areas with surge_source='manual', *no rows existed* for the
+        whole duration of an override — so the admin Surge History chart
+        flatlined at the last automatic value and its "contains manual
+        overrides" marker could never fire, for exactly the periods that
+        carry regulatory weight.
+        """
+        insert_one = AsyncMock()
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=AsyncMock(),
+                find_one=AsyncMock(return_value={"id": "area-1", "surge_source": "manual"}),
+                insert_one=insert_one,
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            req = ServiceAreaUpdateRequest(surge_multiplier=2.0, surge_active=True)
+            await admin_update_service_area("area-1", req, admin=_ADMIN)
+
+        assert insert_one.await_count == 1, "manual surge change wrote no history row"
+        table, doc = insert_one.await_args.args
+        assert table == "surge_pricing"
+        assert doc["service_area_id"] == "area-1"
+        assert doc["multiplier"] == 2.0
+        assert doc["source"] == "manual"
+
+    @pytest.mark.anyio
+    async def test_non_surge_update_writes_no_history_row(self):
+        """Renaming an area must not pollute the surge history."""
+        insert_one = AsyncMock()
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=AsyncMock(),
+                find_one=AsyncMock(return_value={"id": "area-1"}),
+                insert_one=insert_one,
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            await admin_update_service_area("area-1", ServiceAreaUpdateRequest(name="Saskatoon North"), admin=_ADMIN)
+
+        assert insert_one.await_count == 0
+
+    @pytest.mark.anyio
+    async def test_history_write_failure_does_not_fail_the_surge_change(self):
+        """Losing an audit row must not block the operator's actual change."""
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=AsyncMock(),
+                find_one=AsyncMock(return_value={"id": "area-1"}),
+                insert_one=AsyncMock(side_effect=RuntimeError("surge_pricing unavailable")),
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            result = await admin_update_service_area(
+                "area-1", ServiceAreaUpdateRequest(surge_multiplier=1.5), admin=_ADMIN
+            )
+
+        assert result == {"message": "Service area updated"}
+
+    @pytest.mark.anyio
     async def test_surge_above_cap_allowed_when_disabling_surge(self):
         """An above-cap multiplier being turned OFF (surge_enabled=False)
         should not require justification."""
@@ -463,13 +534,24 @@ class TestUpdateSurgePricing:
         insert_one.assert_awaited_once()
 
     @pytest.mark.anyio
-    async def test_deactivate_surge_resets_multiplier_and_updates_existing_row(self):
+    async def test_deactivate_surge_resets_multiplier_and_appends_history(self):
+        """Deactivating surge writes the service_areas row and APPENDS history.
+
+        This previously read surge_pricing for an existing row and, when it
+        found one, called update_one with a filter matching every row for the
+        area while the payload carried a freshly-generated `id`. That both
+        destroyed the audit trail and would raise a unique violation (-> 500)
+        as soon as the surge engine had appended more than one row — i.e.
+        within ~4 minutes of surge being enabled. surge_pricing is append-only.
+        """
         update_one = AsyncMock()
+        insert_one = AsyncMock()
         with (
             patch.multiple(
                 "backend.routes.admin.service_areas.db_supabase",
                 update_one=update_one,
-                insert_one=AsyncMock(),
+                insert_one=insert_one,
+                find_one=AsyncMock(return_value={"id": "area-1"}),
                 get_rows=AsyncMock(return_value=[{"id": "surge-1"}]),
             ),
             patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
@@ -478,9 +560,15 @@ class TestUpdateSurgePricing:
             req = SurgePricingRequest(multiplier=1.0, is_active=False)
             await admin_update_surge_pricing("area-1", req, admin=_ADMIN)
 
-        # Second update_one call updates the existing surge_pricing row.
-        surge_call = update_one.await_args_list[1]
-        assert surge_call.args[0] == "surge_pricing"
+        # The only update_one is the authoritative service_areas write.
+        assert [c.args[0] for c in update_one.await_args_list] == ["service_areas"]
+        # History is appended, never rewritten.
+        insert_one.assert_awaited_once()
+        table, doc = insert_one.await_args.args
+        assert table == "surge_pricing"
+        assert doc["source"] == "manual"
+        assert doc["is_active"] is False
+        assert "id" not in doc, "let the DB generate the PK; a client-set id is what collided"
 
 
 # ── admin_get_surge_status ────────────────────────────────────────────────
@@ -724,3 +812,131 @@ class TestVehiclePricing:
 
         assert result["vehicle_types"] == []
         assert result["fare_configs"] == []
+
+
+# ── Per-area heatmap config (migration 312) ───────────────────────────────
+
+
+class TestPerAreaHeatmapConfig:
+    """Per-area overrides for the driver-heatmap tuning knobs.
+
+    Validation here is deliberately strict rather than store-and-clamp-later:
+    this blob reaches a driver-facing endpoint and one of its keys is a PIPEDA
+    k-anonymity control, so an operator who types 0 must get a 422 saying so —
+    not a silent snap to 1 that looks like it saved what they asked for. The
+    read site clamps independently for the paths that never come through here
+    (direct SQL, migrations, bulk scripts).
+    """
+
+    def test_valid_overrides_are_accepted(self):
+        req = ServiceAreaUpdateRequest(heatmap_config={"k_floor": 5, "baseline_window_days": 56})
+        assert req.heatmap_config == {"k_floor": 5, "baseline_window_days": 56}
+
+    def test_empty_object_clears_all_overrides(self):
+        """An area must be able to go back to inheriting everything."""
+        assert ServiceAreaUpdateRequest(heatmap_config={}).heatmap_config == {}
+
+    def test_null_value_drops_that_single_override(self):
+        req = ServiceAreaUpdateRequest(heatmap_config={"k_floor": 5, "refresh_seconds": None})
+        assert req.heatmap_config == {"k_floor": 5}
+
+    def test_unknown_key_is_rejected_with_a_useful_message(self):
+        with pytest.raises(pydantic.ValidationError) as exc:
+            ServiceAreaUpdateRequest(heatmap_config={"kfloor": 5})
+        assert "unknown heatmap config key" in str(exc.value)
+
+    @pytest.mark.parametrize(
+        "key,value",
+        [
+            ("k_floor", 0),  # would disable the k-anonymity floor
+            ("k_floor", 51),
+            ("refresh_seconds", 1),  # would make the fleet poll every second
+            ("refresh_seconds", 601),
+            ("cell_lat_deg", 0),  # ZeroDivisionError in the cell-key math
+            ("live_window_days", 0),
+            ("baseline_window_days", 1),
+            ("forecast_hours_ahead", 100),
+        ],
+    )
+    def test_out_of_range_value_is_rejected(self, key, value):
+        with pytest.raises(pydantic.ValidationError):
+            ServiceAreaUpdateRequest(heatmap_config={key: value})
+
+    def test_non_numeric_value_is_rejected(self):
+        with pytest.raises(pydantic.ValidationError):
+            ServiceAreaUpdateRequest(heatmap_config={"k_floor": "abc"})
+
+    def test_untouched_config_is_omitted_from_the_update(self):
+        """exclude_none keeps a partial save from clearing an area's overrides."""
+        assert "heatmap_config" not in ServiceAreaUpdateRequest().model_dump(exclude_none=True)
+
+    @pytest.mark.anyio
+    async def test_config_is_persisted_on_update(self):
+        update_one = AsyncMock()
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=update_one,
+                find_one=AsyncMock(return_value={"id": "area-1"}),
+                insert_one=AsyncMock(),
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            req = ServiceAreaUpdateRequest(heatmap_config={"k_floor": 9})
+            await admin_update_service_area("area-1", req, admin=_ADMIN)
+
+        payload = update_one.await_args.args[2]
+        assert payload["heatmap_config"] == {"k_floor": 9}, "override must reach the DB write"
+
+    @pytest.mark.anyio
+    async def test_endpoint_reports_effective_overrides_and_inherited(self):
+        area = {"id": "area-1", "name": "Saskatoon", "heatmap_config": {"k_floor": 9}}
+        with (
+            patch(
+                "backend.routes.admin.service_areas.db_supabase.find_one",
+                AsyncMock(return_value=area),
+            ),
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(return_value={"heatmap_k_floor": 4, "heatmap_refresh_seconds": 200}),
+            ),
+        ):
+            result = await admin_get_area_heatmap_config("area-1")
+
+        assert result["effective"]["k_floor"] == 9, "area override wins"
+        assert result["effective"]["refresh_seconds"] == 200, "unset key still inherits the global"
+        # The overrides/inherited split is what lets the form show "inherits 4"
+        # separately from "explicitly set to 4" — they diverge when the global moves.
+        assert result["overrides"] == {"k_floor": 9}
+        assert result["inherited"]["k_floor"] == 4
+        # Bounds are served, not duplicated in the frontend, so they can't drift.
+        assert result["spec"]["k_floor"]["min"] == 1
+        assert result["spec"]["k_floor"]["max"] == 50
+
+    @pytest.mark.anyio
+    async def test_endpoint_404s_for_a_missing_area(self):
+        with patch(
+            "backend.routes.admin.service_areas.db_supabase.find_one",
+            AsyncMock(return_value=None),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await admin_get_area_heatmap_config("nope")
+        assert exc.value.status_code == 404
+
+    @pytest.mark.anyio
+    async def test_endpoint_503s_rather_than_reporting_defaults_as_globals(self):
+        """A settings read failure must not be dressed up as real config."""
+        with (
+            patch(
+                "backend.routes.admin.service_areas.db_supabase.find_one",
+                AsyncMock(return_value={"id": "area-1", "name": "X"}),
+            ),
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(side_effect=RuntimeError("settings table down")),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await admin_get_area_heatmap_config("area-1")
+        assert exc.value.status_code == 503

@@ -8,9 +8,14 @@ import {
     AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
     AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { getServiceAreas, createServiceArea, updateServiceArea, deleteServiceArea, getSubscriptionPlans, createSubscriptionPlan, updateSubscriptionPlan, deleteSubscriptionPlan, getDriverSubscriptions, getAreaFees, createAreaFee, updateAreaFee, deleteAreaFee, getVehicleTypes, getIncentives, createIncentive, toggleIncentive, deleteIncentive } from "@/lib/api";
-import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, FileText, Clock, ShieldCheck, ShieldAlert, CheckCircle, Image, Plane, Radar, Gift, ArrowRightLeft } from "lucide-react";
+import { getServiceAreas, createServiceArea, updateServiceArea, getAreaHeatmapConfig, deleteServiceArea, getSubscriptionPlans, createSubscriptionPlan, updateSubscriptionPlan, deleteSubscriptionPlan, getDriverSubscriptions, getAreaFees, createAreaFee, updateAreaFee, deleteAreaFee, getVehicleTypes, getIncentives, createIncentive, toggleIncentive, deleteIncentive } from "@/lib/api";
+import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, FileText, Clock, ShieldCheck, ShieldAlert, CheckCircle, Image, Plane, Radar, Gift, ArrowRightLeft, Flame } from "lucide-react";
+import type { AreaHeatmapConfig } from "@/lib/api";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import { Switch } from "@/components/ui/switch";
+import { getSettings, updateSettings } from "@/lib/api/settings-ai";
+import { getSurgeHistory } from "@/lib/api/analytics-payouts";
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 
 const GeofenceMap = lazy(() => import("@/components/geofence-map"));
 
@@ -364,6 +369,10 @@ export default function ServiceAreasPage() {
                         { key: 'incentives', label: 'Incentives', icon: Gift },
                         { key: 'subregions', label: 'Airport Zones', icon: Plane },
                         { key: 'cascade', label: 'Dispatch Cascade', icon: ArrowRightLeft },
+                        // Labelled "(All Areas)" at the tab itself, not only inside the
+                        // panel: the scope warning has to reach the operator before they
+                        // decide this is a per-area screen.
+                        { key: 'heatmap', label: 'Driver Heatmap (All Areas)', icon: Flame },
                       ].map(tab => (
                         <button key={tab.key} onClick={() => setEditTab(tab.key)}
                           className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold rounded-t-lg transition ${editTab === tab.key ? 'bg-card text-primary border-t-2 border-primary' : 'text-muted-foreground hover:text-foreground'}`}>
@@ -375,13 +384,16 @@ export default function ServiceAreasPage() {
                     <div className="p-5">
                       {/* General Tab */}
                       {editTab === 'general' && (
-                        <GeneralTabForm area={area} onSave={async (updates) => {
-                          try {
-                            await updateServiceArea(area.id, updates);
-                            setAreas(prev => prev.map(a => a.id === area.id ? { ...a, ...updates } : a));
-                            crudToast.updated("Service area");
-                          } catch (e) { crudToast.error("save service area", e); }
-                        }} onDelete={() => handleDelete(area.id, area.name)} />
+                        <>
+                          <GeneralTabForm area={area} onSave={async (updates) => {
+                            try {
+                              await updateServiceArea(area.id, updates);
+                              setAreas(prev => prev.map(a => a.id === area.id ? { ...a, ...updates } : a));
+                              crudToast.updated("Service area");
+                            } catch (e) { crudToast.error("save service area", e); }
+                          }} onDelete={() => handleDelete(area.id, area.name)} />
+                          <SurgeHistoryChart areaId={area.id} areaName={area.name} />
+                        </>
                       )}
 
                       {/* Vehicle Pricing Tab */}
@@ -555,6 +567,19 @@ export default function ServiceAreasPage() {
                             } catch (e) { crudToast.error("save cascade", e); }
                           }}
                         />
+                      )}
+
+                      {/* Heatmap Config Tab (global app_settings, not per-area) */}
+                      {editTab === 'heatmap' && (
+                        <>
+                          <AreaHeatmapOverrides
+                            areaId={area.id}
+                            areaName={area.name}
+                            onSuccess={() => crudToast.updated(`${area.name} heatmap tuning`)}
+                            onError={(e) => crudToast.error("save area heatmap tuning", e)}
+                          />
+                          <HeatmapConfigTab onSuccess={() => crudToast.updated("Heatmap config")} onError={(e) => crudToast.error("save heatmap config", e)} />
+                        </>
                       )}
                     </div>
                   </div>
@@ -2109,6 +2134,622 @@ function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; are
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Surge History Chart (AD-02) ───
+
+function SurgeHistoryChart({ areaId, areaName }: { areaId: string; areaName: string }) {
+  const [data, setData] = useState<any[]>([]);
+  const [hours, setHours] = useState(24);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [truncated, setTruncated] = useState(false);
+
+  useEffect(() => {
+    // `cancelled` guards two real races: expanding area B while A's request is
+    // in flight (B's chart would render A's data under B's name), and switching
+    // 48h -> 6h where the slower 48h response lands last and overwrites the
+    // newer view while the selector still reads 6h.
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    getSurgeHistory(areaId, hours).then((res: any) => {
+      if (cancelled) return;
+      const rows = (res.history || []).map((r: any) => ({
+        time: new Date(r.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        fullTime: new Date(r.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+        multiplier: r.multiplier,
+        demand: r.demand_count,
+        supply: r.supply_count,
+        source: r.source,
+      }));
+      setData(rows);
+      // The backend caps the response at 500 rows and the engine appends one
+      // row per area every 2 minutes, so a 24h/48h/7d selection silently shows
+      // only the newest ~16.7 hours. Say so rather than mislabelling the axis.
+      setTruncated(rows.length >= 500);
+      setLoading(false);
+    }).catch((e: any) => {
+      if (cancelled) return;
+      // Distinct from "no surge recorded": an operator investigating a rider
+      // complaint must be able to tell "surge never fired" from "the chart is
+      // broken right now".
+      console.error("surge history fetch failed", e);
+      setData([]);
+      setError(
+        e?.status === 403
+          ? "No Analytics module access — surge history unavailable."
+          : "Couldn't load surge history."
+      );
+      setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [areaId, hours]);
+
+  const surgeTooltipStyle = {
+    fontSize: 12, borderRadius: 10,
+    border: '1px solid hsl(var(--border))',
+    background: 'hsl(var(--card))',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+  };
+
+  return (
+    <div className="mt-6 pt-6 border-t">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h4 className="font-bold text-foreground">Surge History</h4>
+          <p className="text-sm text-muted-foreground">Multiplier over time for {areaName}. Auto-captured every 2 minutes by the surge engine.</p>
+        </div>
+        <select
+          aria-label={`Surge history time range for ${areaName}`}
+          className="border rounded-lg px-3 py-1.5 text-sm"
+          value={hours}
+          onChange={e => setHours(Number(e.target.value))}
+        >
+          <option value={6}>Last 6 hours</option>
+          <option value={12}>Last 12 hours</option>
+          <option value={24}>Last 24 hours</option>
+          <option value={48}>Last 48 hours</option>
+          <option value={168}>Last 7 days</option>
+        </select>
+      </div>
+
+      {truncated && (
+        <p className="mb-2 text-xs text-amber-700 dark:text-amber-400">
+          Showing the most recent 500 readings — the selected range is longer than
+          the server returns in one response, so earlier readings are not charted.
+        </p>
+      )}
+
+      {loading ? (
+        <div className="h-64 flex items-center justify-center text-muted-foreground">Loading chart…</div>
+      ) : error ? (
+        <div role="alert" className="h-40 flex flex-col items-center justify-center gap-2 rounded-xl border border-destructive/30 bg-destructive/5">
+          <p className="text-sm text-destructive">{error}</p>
+          <button
+            onClick={() => setHours(h => h)}
+            className="text-xs underline text-muted-foreground hover:text-foreground"
+          >
+            Retry
+          </button>
+        </div>
+      ) : data.length === 0 ? (
+        <div className="h-40 flex items-center justify-center text-muted-foreground bg-muted rounded-xl">
+          <p>No surge data recorded for this period.</p>
+        </div>
+      ) : (
+        // Recharts renders to SVG with no text alternative; without a label the
+        // whole trend is invisible to assistive tech. The summary below carries
+        // the same numbers, so describe the shape here.
+        <div
+          className="h-72"
+          role="img"
+          aria-label={
+            `Surge multiplier for ${areaName} over the last ${hours} hours: ` +
+            `peak ${Math.max(...data.map(d => d.multiplier)).toFixed(1)} times, ` +
+            `average ${(data.reduce((s, d) => s + d.multiplier, 0) / data.length).toFixed(2)} times, ` +
+            `${data.length} readings.`
+          }
+        >
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={data}>
+              <defs>
+                <linearGradient id={`surgeGrad-${areaId}`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#F97316" stopOpacity={0.3} />
+                  <stop offset="95%" stopColor="#F97316" stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis
+                dataKey={hours <= 24 ? "time" : "fullTime"}
+                fontSize={11}
+                interval="preserveStartEnd"
+                angle={hours > 24 ? -30 : 0}
+                textAnchor={hours > 24 ? "end" : "middle"}
+                height={hours > 24 ? 60 : 30}
+              />
+              <YAxis fontSize={11} domain={[0.8, 'auto']} tickFormatter={v => `${v}×`} />
+              <Tooltip
+                contentStyle={surgeTooltipStyle}
+                formatter={(value, name) => {
+                  if (name === 'Multiplier') return [`${value}×`, name];
+                  return [String(value), name];
+                }}
+                labelFormatter={(label) => label}
+              />
+              <ReferenceLine y={1.0} stroke="#94a3b8" strokeDasharray="4 4" label={{ value: '1.0× (normal)', position: 'insideTopLeft', fontSize: 10, fill: '#94a3b8' }} />
+              <ReferenceLine y={2.5} stroke="#ef4444" strokeDasharray="4 4" label={{ value: '2.5× (cap)', position: 'insideTopLeft', fontSize: 10, fill: '#ef4444' }} />
+              <Area type="monotone" dataKey="multiplier" stroke="#F97316" strokeWidth={2}
+                fill={`url(#surgeGrad-${areaId})`} name="Multiplier" dot={false} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {data.length > 0 && (
+        <div className="flex gap-4 mt-2 text-xs text-muted-foreground">
+          <span>Peak: <span className="font-semibold text-foreground">{Math.max(...data.map(d => d.multiplier)).toFixed(1)}×</span></span>
+          <span>Avg: <span className="font-semibold text-foreground">{(data.reduce((s, d) => s + d.multiplier, 0) / data.length).toFixed(2)}×</span></span>
+          <span>Points: {data.length}</span>
+          {data.some(d => d.source === 'manual') && (
+            <span className="text-amber-600 font-semibold">Contains manual overrides</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Heatmap Config Tab (global app_settings — AD-05) ───
+
+// Human labels for the per-area tuning keys. The bounds themselves are served
+// by the backend (from HEATMAP_SPEC), so adding a knob there surfaces it here
+// automatically with correct limits — only the prose lives in the frontend.
+const HEATMAP_KEY_LABELS: Record<string, { label: string; help: string }> = {
+  k_floor: {
+    label: "Privacy floor (k-anonymity)",
+    help: "Minimum rides in a cell before it may appear. A low-volume area may need a longer baseline window instead of a lower floor — never trade privacy for coverage.",
+  },
+  cell_lat_deg: { label: "Cell height (degrees)", help: "0.004° ≈ 445 m. Smaller cells show finer detail but need more rides to clear the privacy floor." },
+  cell_lng_deg: { label: "Cell width (degrees)", help: "0.006° ≈ 430 m at 52°N." },
+  decay_half_life_days: { label: "Decay half-life (days)", help: "Rides this old count half as much, so 'busy now' outranks 'was busy last week'." },
+  refresh_seconds: { label: "Refresh interval (seconds)", help: "How often each driver's app re-fetches. Applies to every online driver in this area." },
+  live_window_days: { label: "Live window (days)", help: "Lookback for the decayed demand cloud." },
+  now_window_minutes: { label: "'Busy now' window (minutes)", help: "How recent a ride must be to count as demand right now." },
+  baseline_window_days: { label: "'Usually busy' window (days)", help: "History used for the same-hour-of-week baseline. Quieter areas benefit from a longer window." },
+  scheduled_lookahead_hours: { label: "Scheduled lookahead (hours)", help: "How far ahead booked pickups count as demand." },
+  forecast_hours_ahead: { label: "Forecast horizon (hours)", help: "How far ahead the driver forecast strip projects." },
+  forecast_lookback_days: { label: "Forecast history (days)", help: "History the forecast is built from." },
+};
+
+/** Per-area overrides for the heatmap tuning knobs.
+ *
+ * Sits above the global panel in the same tab so the relationship is visible:
+ * anything not overridden here follows the platform value shown below. Each
+ * row is explicitly "inherits X" or "overridden", because those look identical
+ * once saved but diverge the moment the global changes. */
+export function AreaHeatmapOverrides({
+  areaId,
+  areaName,
+  onSuccess,
+  onError,
+}: {
+  areaId: string;
+  areaName: string;
+  onSuccess: () => void;
+  onError: (e: unknown) => void;
+}) {
+  const [cfg, setCfg] = useState<AreaHeatmapConfig | null>(null);
+  const [draft, setDraft] = useState<Record<string, number | undefined>>({});
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setLoadError(null);
+    getAreaHeatmapConfig(areaId)
+      .then((res) => {
+        if (cancelled) return;
+        setCfg(res);
+        setDraft({ ...res.overrides });
+        setDirty(false);
+        setLoading(false);
+      })
+      .catch((e: any) => {
+        if (cancelled) return;
+        // Same reasoning as the global panel: never fall through to an
+        // editable form showing defaults, or a save would overwrite real
+        // per-area tuning with values the operator never actually saw.
+        console.error("area heatmap config load failed", e);
+        setLoadError(
+          e?.status === 403
+            ? "You don't have the Service Areas module, so per-area tuning can't be loaded."
+            : "Couldn't load this area's tuning. Refresh to retry — editing is disabled to avoid overwriting it."
+        );
+        setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [areaId]);
+
+  const setKey = (key: string, value: number | undefined) => {
+    setDraft((prev) => {
+      const next = { ...prev };
+      if (value === undefined) delete next[key];
+      else next[key] = value;
+      return next;
+    });
+    setDirty(true);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      // Sends the full override set (not a patch): an omitted key means
+      // "inherit", which is exactly how clearing one is expressed.
+      await updateServiceArea(areaId, { heatmap_config: draft });
+      const fresh = await getAreaHeatmapConfig(areaId);
+      setCfg(fresh);
+      setDraft({ ...fresh.overrides });
+      setDirty(false);
+      onSuccess();
+    } catch (e) {
+      onError(e);
+    }
+    setSaving(false);
+  };
+
+  if (loading) return <div className="py-6 text-center text-muted-foreground">Loading {areaName} tuning…</div>;
+
+  if (loadError) {
+    return (
+      <div role="alert" className="rounded-xl border border-destructive/40 bg-destructive/5 p-4">
+        <p className="text-sm font-semibold text-destructive">Per-area tuning unavailable</p>
+        <p className="mt-1 text-sm text-muted-foreground">{loadError}</p>
+      </div>
+    );
+  }
+  if (!cfg) return null;
+
+  const overriddenCount = Object.keys(draft).length;
+
+  return (
+    <div className="space-y-4 pb-6 mb-6 border-b">
+      <div>
+        <h4 className="font-bold text-foreground text-base">{areaName} — Heatmap Tuning</h4>
+        <p className="text-sm text-muted-foreground mt-0.5">
+          Applies to <span className="font-semibold">{areaName} only</span>. Anything left on
+          &ldquo;inherit&rdquo; follows the platform settings below.{" "}
+          {overriddenCount > 0
+            ? `${overriddenCount} value${overriddenCount === 1 ? "" : "s"} overridden.`
+            : "No overrides — this area follows the platform settings."}
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+        {Object.entries(cfg.spec).map(([key, spec]) => {
+          const meta = HEATMAP_KEY_LABELS[key] ?? { label: key, help: "" };
+          const isOverridden = key in draft;
+          const inherited = cfg.inherited[key];
+          const inputId = `area-hm-${areaId}-${key}`;
+          return (
+            <div key={key} className="p-3 rounded-lg border bg-card">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <label htmlFor={inputId} className="block text-sm font-semibold text-foreground">
+                    {meta.label}
+                  </label>
+                  <p id={`${inputId}-help`} className="text-xs text-muted-foreground mt-0.5">{meta.help}</p>
+                </div>
+                <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={isOverridden}
+                    onChange={(e) => setKey(key, e.target.checked ? (inherited ?? spec.default) : undefined)}
+                    aria-label={`Override ${meta.label} for ${areaName}`}
+                  />
+                  Override
+                </label>
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <input
+                  id={inputId}
+                  aria-describedby={`${inputId}-help`}
+                  type="number"
+                  min={spec.min}
+                  max={spec.max}
+                  step={spec.kind === "int" ? 1 : 0.001}
+                  disabled={!isOverridden}
+                  value={isOverridden ? draft[key] : (inherited ?? spec.default)}
+                  onChange={(e) => {
+                    const parsed = parseFloat(e.target.value);
+                    if (Number.isNaN(parsed)) return;
+                    // Clamp on the way out: HTML min/max don't constrain typed
+                    // values, and the backend rejects out-of-range with a 422.
+                    setKey(key, Math.min(spec.max, Math.max(spec.min, parsed)));
+                  }}
+                  className="w-32 border rounded-lg px-3 py-1.5 text-sm disabled:opacity-60 disabled:bg-muted"
+                />
+                <span className="text-xs text-muted-foreground">
+                  {isOverridden
+                    ? `platform: ${inherited ?? spec.default}`
+                    : `inherits ${inherited ?? spec.default}`}
+                  <span className="ml-1 opacity-70">({spec.min}–{spec.max})</span>
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="flex items-center gap-3">
+        <button
+          onClick={handleSave}
+          disabled={!dirty || saving}
+          className={`px-5 py-2 rounded-xl text-sm font-semibold transition ${dirty ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'bg-muted text-muted-foreground cursor-not-allowed'}`}
+        >
+          {saving ? 'Saving…' : dirty ? `Save ${areaName} tuning` : 'Saved'}
+        </button>
+        {dirty && (
+          <button
+            onClick={() => { setDraft({ ...cfg.overrides }); setDirty(false); }}
+            className="text-xs underline text-muted-foreground hover:text-foreground"
+          >
+            Discard changes
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const HEATMAP_DEFAULTS = {
+  // Master switch defaults ON so an unconfigured row behaves exactly as before
+  // the setting existed; the per-area toggle still governs.
+  driver_heatmap_enabled: true,
+  driver_heatmap_v2_enabled: false,
+  heatmap_internal_driver_ids: [] as string[],
+  heatmap_k_floor: 3,
+  heatmap_cell_lat_deg: 0.004,
+  heatmap_cell_lng_deg: 0.006,
+  heatmap_decay_half_life_days: 3,
+  heatmap_refresh_seconds: 90,
+};
+
+function HeatmapConfigTab({ onSuccess, onError }: { onSuccess: () => void; onError: (e: unknown) => void }) {
+  const [form, setForm] = useState(HEATMAP_DEFAULTS);
+  const [driverIdsText, setDriverIdsText] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    getSettings().then((s: any) => {
+      const next = { ...HEATMAP_DEFAULTS };
+      if (s.driver_heatmap_v2_enabled !== undefined) next.driver_heatmap_v2_enabled = !!s.driver_heatmap_v2_enabled;
+      if (s.driver_heatmap_enabled !== undefined) next.driver_heatmap_enabled = Boolean(s.driver_heatmap_enabled);
+      if (s.heatmap_k_floor !== undefined) next.heatmap_k_floor = Number(s.heatmap_k_floor);
+      if (s.heatmap_cell_lat_deg !== undefined) next.heatmap_cell_lat_deg = Number(s.heatmap_cell_lat_deg);
+      if (s.heatmap_cell_lng_deg !== undefined) next.heatmap_cell_lng_deg = Number(s.heatmap_cell_lng_deg);
+      if (s.heatmap_decay_half_life_days !== undefined) next.heatmap_decay_half_life_days = Number(s.heatmap_decay_half_life_days);
+      if (s.heatmap_refresh_seconds !== undefined) next.heatmap_refresh_seconds = Number(s.heatmap_refresh_seconds);
+      const ids = Array.isArray(s.heatmap_internal_driver_ids) ? s.heatmap_internal_driver_ids : [];
+      next.heatmap_internal_driver_ids = ids;
+      setForm(next);
+      setDriverIdsText(ids.join("\n"));
+      setLoadError(null);
+      setLoading(false);
+    }).catch((e: any) => {
+      // Do NOT fall through to an editable form pre-filled with defaults. It is
+      // visually identical to a successful load, so an operator who edits one
+      // field and saves would silently overwrite the real k-anonymity floor and
+      // dark-launch allowlist with hardcoded defaults.
+      console.error("heatmap config load failed", e);
+      setLoadError(
+        e?.status === 403
+          ? "You don't have the Settings module, so heatmap config can't be loaded or changed here."
+          : "Couldn't load the current heatmap config. Refresh to retry — editing is disabled to avoid overwriting live settings with defaults."
+      );
+      setLoading(false);
+    });
+  }, []);
+
+  const set = <K extends keyof typeof HEATMAP_DEFAULTS>(key: K, val: (typeof HEATMAP_DEFAULTS)[K]) => {
+    setForm(prev => ({ ...prev, [key]: val }));
+    setDirty(true);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      // Split on any whitespace as well as commas: a space-separated paste
+      // previously survived as one junk token that matched no driver, silently.
+      const ids = driverIdsText.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+      await updateSettings({
+        driver_heatmap_enabled: form.driver_heatmap_enabled,
+        driver_heatmap_v2_enabled: form.driver_heatmap_v2_enabled,
+        heatmap_internal_driver_ids: ids,
+        heatmap_k_floor: form.heatmap_k_floor,
+        heatmap_cell_lat_deg: form.heatmap_cell_lat_deg,
+        heatmap_cell_lng_deg: form.heatmap_cell_lng_deg,
+        heatmap_decay_half_life_days: form.heatmap_decay_half_life_days,
+        heatmap_refresh_seconds: form.heatmap_refresh_seconds,
+      });
+      setForm(prev => ({ ...prev, heatmap_internal_driver_ids: ids }));
+      setDirty(false);
+      onSuccess();
+    } catch (e) {
+      onError(e);
+    }
+    setSaving(false);
+  };
+
+  if (loading) return <div className="py-10 text-center text-muted-foreground">Loading heatmap config…</div>;
+
+  if (loadError) {
+    return (
+      <div role="alert" className="rounded-xl border border-destructive/40 bg-destructive/5 p-4">
+        <p className="text-sm font-semibold text-destructive">Heatmap config unavailable</p>
+        <p className="mt-1 text-sm text-muted-foreground">{loadError}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h4 className="font-bold text-foreground text-base">Driver App Heatmap — Platform Settings</h4>
+        {/* This panel sits inside one service area's card but every control here
+            is PLATFORM-WIDE, and it governs what the DRIVER APP shows — not this
+            dashboard's own Heat Map page. Both facts have to be unmissable:
+            an operator who reads this as "tuning Saskatoon's display" can change
+            what every driver in every region sees in one click. */}
+        <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 px-3 py-2">
+          <p className="text-sm text-amber-900 dark:text-amber-200">
+            <span className="font-semibold">Applies to all service areas and all drivers.</span>{" "}
+            These settings control the demand heatmap inside the <span className="font-semibold">driver app</span>,
+            not the Heat Map page in this dashboard. They are not per-area.
+          </p>
+        </div>
+      </div>
+
+      {/* Global kill switch */}
+      <div className="flex items-center justify-between p-4 rounded-xl border bg-card">
+        <div className="pr-4">
+          <label htmlFor="heatmap-master-enabled" className="text-sm font-semibold text-foreground">
+            Driver Heatmap Enabled
+          </label>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Master switch. Turning this off hides the heatmap for every driver in every
+            region within one refresh, regardless of each area&apos;s own toggle. Use this to
+            take the feature down without editing areas one by one.
+          </p>
+        </div>
+        <Switch
+          id="heatmap-master-enabled"
+          checked={form.driver_heatmap_enabled}
+          onCheckedChange={(v: boolean) => set('driver_heatmap_enabled', v)}
+        />
+      </div>
+
+      {/* v2 enabled toggle */}
+      <div className="flex items-center justify-between p-4 rounded-xl border bg-card">
+        <div className="pr-4">
+          <label htmlFor="heatmap-v2-enabled" className="text-sm font-semibold text-foreground">
+            Heatmap v2 Enabled
+          </label>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            When off, drivers see the legacy v1 heatmap (simple points). When on, drivers get
+            cell-based demand layers, forecast, and hotspot chips.
+          </p>
+        </div>
+        <Switch
+          id="heatmap-v2-enabled"
+          checked={form.driver_heatmap_v2_enabled}
+          onCheckedChange={(v: boolean) => set('driver_heatmap_v2_enabled', v)}
+        />
+      </div>
+
+      {/* Numeric config */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <HeatmapNumericField id="heatmap-k-floor" label="Privacy floor (k-anonymity)" description="Minimum ride count per cell before it appears on the heatmap. Higher = more private, fewer visible cells."
+          value={form.heatmap_k_floor} min={1} max={50} step={1} disabled={!!loadError}
+          onChange={v => set('heatmap_k_floor', v)} />
+        <HeatmapNumericField id="heatmap-cell-lat" label="Cell latitude (degrees)" description="Height of each grid cell. Default 0.004° ≈ 445m."
+          value={form.heatmap_cell_lat_deg} min={0.0005} max={0.05} step={0.001} disabled={!!loadError}
+          onChange={v => set('heatmap_cell_lat_deg', v)} />
+        <HeatmapNumericField id="heatmap-cell-lng" label="Cell longitude (degrees)" description="Width of each grid cell. Default 0.006° ≈ 430m at 52°N."
+          value={form.heatmap_cell_lng_deg} min={0.0005} max={0.05} step={0.001} disabled={!!loadError}
+          onChange={v => set('heatmap_cell_lng_deg', v)} />
+        <HeatmapNumericField id="heatmap-decay" label="Decay half-life (days)" description="Ride weighting decay. Rides from this many days ago count as half."
+          value={form.heatmap_decay_half_life_days} min={0.5} max={30} step={0.5} disabled={!!loadError}
+          onChange={v => set('heatmap_decay_half_life_days', v)} />
+        <HeatmapNumericField id="heatmap-refresh" label="Refresh interval (seconds)" description="How often the driver app re-fetches heatmap data. Applies to every online driver."
+          value={form.heatmap_refresh_seconds} min={30} max={600} step={10} disabled={!!loadError}
+          onChange={v => set('heatmap_refresh_seconds', v)} />
+      </div>
+
+      {/* Internal driver IDs */}
+      <div className="p-4 rounded-xl border bg-card">
+        <label htmlFor="heatmap-driver-allowlist" className="block text-sm font-semibold text-foreground mb-1">
+          Dark-launch allowlist (driver user IDs)
+        </label>
+        {/* Backend semantics (routes/drivers/profile.py):
+              v2_enabled = v2_global OR (user_id in allowlist)
+            i.e. this list GRANTS early access while the global flag is off; it
+            does NOT restrict who sees v2 once the flag is on. The previous copy
+            said the opposite, so an operator flipping the flag believing this
+            list limited the blast radius would in fact release v2 to everyone. */}
+        <p className="text-xs text-muted-foreground mb-2">
+          These drivers see v2 <span className="font-semibold">even while the switch above is off</span> —
+          use it to test with staff before release. It does not limit anyone once v2 is on:
+          with v2 enabled, every driver sees it regardless of this list.
+          One ID per line or comma-separated. Use the <span className="font-semibold">user</span> ID
+          (users.id), not the driver record ID.
+        </p>
+        <textarea
+          id="heatmap-driver-allowlist"
+          className="w-full border rounded-lg px-3 py-2 text-sm font-mono"
+          rows={4}
+          value={driverIdsText}
+          onChange={e => { setDriverIdsText(e.target.value); setDirty(true); }}
+          placeholder="e.g. abc-123-def&#10;ghi-456-jkl"
+        />
+        {driverIdsText.trim() && (
+          <p className="text-xs text-muted-foreground mt-1">
+            {driverIdsText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean).length} driver ID(s) in allowlist
+          </p>
+        )}
+      </div>
+
+      {/* Save button */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={handleSave}
+          disabled={!dirty || saving}
+          className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition ${dirty ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'bg-muted text-muted-foreground cursor-not-allowed'}`}
+        >
+          {saving ? 'Saving…' : dirty ? 'Save Heatmap Config' : 'Saved'}
+        </button>
+        {!dirty && !saving && <span className="text-xs text-green-600 flex items-center gap-1"><CheckCircle className="h-3.5 w-3.5" /> Up to date</span>}
+      </div>
+    </div>
+  );
+}
+
+function HeatmapNumericField({ id, label, description, value, min, max, step, disabled, onChange }: {
+  id: string; label: string; description: string; value: number; min: number; max: number; step: number;
+  disabled?: boolean; onChange: (v: number) => void;
+}) {
+  const describedBy = `${id}-desc`;
+  return (
+    <div className="p-3 rounded-lg border bg-card">
+      {/* htmlFor/id is load-bearing, not decoration: without it a screen reader
+          announces five adjacent "spin button"s with no way to tell which
+          setting is which. */}
+      <label htmlFor={id} className="block text-sm font-semibold text-foreground mb-0.5">{label}</label>
+      <p id={describedBy} className="text-xs text-muted-foreground mb-2">{description}</p>
+      <input
+        id={id}
+        aria-describedby={describedBy}
+        type="number" min={min} max={max} step={step}
+        value={value}
+        disabled={disabled}
+        // Clamp on the way out. HTML min/max do not constrain typed values, and
+        // these feed a driver-fleet poll interval and a privacy floor — a typed
+        // 9 instead of 90 would be a self-inflicted load spike.
+        onChange={e => {
+          const parsed = parseFloat(e.target.value);
+          if (Number.isNaN(parsed)) return;
+          onChange(Math.min(max, Math.max(min, parsed)));
+        }}
+        className="w-full border rounded-lg px-3 py-2 text-sm disabled:opacity-60"
+      />
     </div>
   );
 }

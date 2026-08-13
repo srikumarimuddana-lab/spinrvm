@@ -51,6 +51,7 @@ export function MonitoringToolbar({
             {/* Live counters */}
             <div className="flex items-center gap-2 text-sm">
                 <button
+                    aria-pressed={filters.showOnline}
                     onClick={() => onFilterChange({ showOnline: !filters.showOnline })}
                     className={`flex items-center gap-1 rounded px-2 py-1 transition-colors ${
                         filters.showOnline
@@ -66,6 +67,7 @@ export function MonitoringToolbar({
                     {counts.onRide} On Ride
                 </div>
                 <button
+                    aria-pressed={filters.showOffline}
                     onClick={() => onFilterChange({ showOffline: !filters.showOffline })}
                     className={`flex items-center gap-1 rounded px-2 py-1 transition-colors ${
                         filters.showOffline
@@ -77,6 +79,7 @@ export function MonitoringToolbar({
                     {counts.offline} Offline
                 </button>
                 <button
+                    aria-pressed={filters.showRides}
                     onClick={() => onFilterChange({ showRides: !filters.showRides })}
                     className={`flex items-center gap-1 rounded px-2 py-1 transition-colors ${
                         filters.showRides
@@ -84,7 +87,18 @@ export function MonitoringToolbar({
                             : "text-muted-foreground hover:bg-muted"
                     }`}
                 >
-                    🚗 {counts.activeRides} Rides
+                    <span aria-hidden="true">🚗</span> {counts.activeRides} Rides
+                </button>
+                <button
+                    aria-pressed={filters.showDemand}
+                    onClick={() => onFilterChange({ showDemand: !filters.showDemand })}
+                    className={`flex items-center gap-1 rounded px-2 py-1 transition-colors ${
+                        filters.showDemand
+                            ? "bg-orange-500/10 text-orange-600 ring-1 ring-orange-500/30"
+                            : "text-muted-foreground hover:bg-muted"
+                    }`}
+                >
+                    <span aria-hidden="true">🔥</span> Demand
                 </button>
             </div>
 

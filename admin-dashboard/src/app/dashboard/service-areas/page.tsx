@@ -12,6 +12,8 @@ import { getServiceAreas, createServiceArea, updateServiceArea, deleteServiceAre
 import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, FileText, Clock, ShieldCheck, ShieldAlert, CheckCircle, Image, Plane, Radar, Gift, ArrowRightLeft, Flame } from "lucide-react";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { getSettings, updateSettings } from "@/lib/api/settings-ai";
+import { getSurgeHistory } from "@/lib/api/analytics-payouts";
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 
 const GeofenceMap = lazy(() => import("@/components/geofence-map"));
 
@@ -377,13 +379,16 @@ export default function ServiceAreasPage() {
                     <div className="p-5">
                       {/* General Tab */}
                       {editTab === 'general' && (
-                        <GeneralTabForm area={area} onSave={async (updates) => {
-                          try {
-                            await updateServiceArea(area.id, updates);
-                            setAreas(prev => prev.map(a => a.id === area.id ? { ...a, ...updates } : a));
-                            crudToast.updated("Service area");
-                          } catch (e) { crudToast.error("save service area", e); }
-                        }} onDelete={() => handleDelete(area.id, area.name)} />
+                        <>
+                          <GeneralTabForm area={area} onSave={async (updates) => {
+                            try {
+                              await updateServiceArea(area.id, updates);
+                              setAreas(prev => prev.map(a => a.id === area.id ? { ...a, ...updates } : a));
+                              crudToast.updated("Service area");
+                            } catch (e) { crudToast.error("save service area", e); }
+                          }} onDelete={() => handleDelete(area.id, area.name)} />
+                          <SurgeHistoryChart areaId={area.id} areaName={area.name} />
+                        </>
                       )}
 
                       {/* Vehicle Pricing Tab */}
@@ -2114,6 +2119,113 @@ function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; are
               </div>
             );
           })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Surge History Chart (AD-02) ───
+
+function SurgeHistoryChart({ areaId, areaName }: { areaId: string; areaName: string }) {
+  const [data, setData] = useState<any[]>([]);
+  const [hours, setHours] = useState(24);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    getSurgeHistory(areaId, hours).then((res: any) => {
+      const rows = (res.history || []).map((r: any) => ({
+        time: new Date(r.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        fullTime: new Date(r.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+        multiplier: r.multiplier,
+        demand: r.demand_count,
+        supply: r.supply_count,
+        source: r.source,
+      }));
+      setData(rows);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, [areaId, hours]);
+
+  const surgeTooltipStyle = {
+    fontSize: 12, borderRadius: 10,
+    border: '1px solid hsl(var(--border))',
+    background: 'hsl(var(--card))',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+  };
+
+  return (
+    <div className="mt-6 pt-6 border-t">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h4 className="font-bold text-foreground">Surge History</h4>
+          <p className="text-sm text-muted-foreground">Multiplier over time for {areaName}. Auto-captured every 2 minutes by the surge engine.</p>
+        </div>
+        <select
+          className="border rounded-lg px-3 py-1.5 text-sm"
+          value={hours}
+          onChange={e => setHours(Number(e.target.value))}
+        >
+          <option value={6}>Last 6 hours</option>
+          <option value={12}>Last 12 hours</option>
+          <option value={24}>Last 24 hours</option>
+          <option value={48}>Last 48 hours</option>
+          <option value={168}>Last 7 days</option>
+        </select>
+      </div>
+
+      {loading ? (
+        <div className="h-64 flex items-center justify-center text-muted-foreground">Loading chart…</div>
+      ) : data.length === 0 ? (
+        <div className="h-40 flex items-center justify-center text-muted-foreground bg-muted rounded-xl">
+          <p>No surge data recorded for this period.</p>
+        </div>
+      ) : (
+        <div className="h-72">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={data}>
+              <defs>
+                <linearGradient id={`surgeGrad-${areaId}`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#F97316" stopOpacity={0.3} />
+                  <stop offset="95%" stopColor="#F97316" stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis
+                dataKey={hours <= 24 ? "time" : "fullTime"}
+                fontSize={11}
+                interval="preserveStartEnd"
+                angle={hours > 24 ? -30 : 0}
+                textAnchor={hours > 24 ? "end" : "middle"}
+                height={hours > 24 ? 60 : 30}
+              />
+              <YAxis fontSize={11} domain={[0.8, 'auto']} tickFormatter={v => `${v}×`} />
+              <Tooltip
+                contentStyle={surgeTooltipStyle}
+                formatter={(value, name) => {
+                  if (name === 'Multiplier') return [`${value}×`, name];
+                  return [String(value), name];
+                }}
+                labelFormatter={(label) => label}
+              />
+              <ReferenceLine y={1.0} stroke="#94a3b8" strokeDasharray="4 4" label={{ value: '1.0× (normal)', position: 'insideTopLeft', fontSize: 10, fill: '#94a3b8' }} />
+              <ReferenceLine y={2.5} stroke="#ef4444" strokeDasharray="4 4" label={{ value: '2.5× (cap)', position: 'insideTopLeft', fontSize: 10, fill: '#ef4444' }} />
+              <Area type="monotone" dataKey="multiplier" stroke="#F97316" strokeWidth={2}
+                fill={`url(#surgeGrad-${areaId})`} name="Multiplier" dot={false} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {data.length > 0 && (
+        <div className="flex gap-4 mt-2 text-xs text-muted-foreground">
+          <span>Peak: <span className="font-semibold text-foreground">{Math.max(...data.map(d => d.multiplier)).toFixed(1)}×</span></span>
+          <span>Avg: <span className="font-semibold text-foreground">{(data.reduce((s, d) => s + d.multiplier, 0) / data.length).toFixed(2)}×</span></span>
+          <span>Points: {data.length}</span>
+          {data.some(d => d.source === 'manual') && (
+            <span className="text-amber-600 font-semibold">Contains manual overrides</span>
+          )}
         </div>
       )}
     </div>

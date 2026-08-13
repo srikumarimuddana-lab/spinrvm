@@ -153,6 +153,64 @@ class ZohoConfigUpdate(BaseModel):
     refresh_token: Optional[str] = None
 
 
+# Zoho mints both the OAuth client id and the refresh token with a fixed
+# "1000." prefix (see the values in the Zoho API console). The client secret
+# has no prefix but is always a long opaque string.
+_ZOHO_CREDENTIAL_PREFIX = "1000."
+_MIN_CLIENT_SECRET_LEN = 32
+
+
+def _validate_credentials(fields: Dict[str, Any]) -> None:
+    """Reject values that cannot be Zoho OAuth credentials.
+
+    A browser password manager sees the adjacent "Client ID" (text) and
+    "Client Secret" (password) inputs as a login form and happily autofills
+    the admin's own email + password into them. Without this guard that save
+    silently overwrites working credentials with junk, and the integration
+    only fails later at the token-refresh step with an opaque
+    ``general_error`` from Zoho. Fail loudly at the write instead.
+    """
+    for key in ("client_id", "client_secret", "refresh_token"):
+        value = fields.get(key)
+        if value is None:
+            continue
+        label = key.replace("_", " ").title()
+        if any(c.isspace() for c in value):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{label} contains whitespace — paste the value from the Zoho API console.",
+            )
+        if "@" in value:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{label} looks like an email address, not a Zoho credential. "
+                    "This is usually a browser autofill — clear the field and paste "
+                    "the value from the Zoho API console."
+                ),
+            )
+
+    for key in ("client_id", "refresh_token"):
+        value = fields.get(key)
+        if value is not None and not value.startswith(_ZOHO_CREDENTIAL_PREFIX):
+            label = key.replace("_", " ").title()
+            raise HTTPException(
+                status_code=400,
+                detail=f"{label} must start with '{_ZOHO_CREDENTIAL_PREFIX}' — copy it from the Zoho API console.",
+            )
+
+    secret = fields.get("client_secret")
+    if secret is not None and len(secret) < _MIN_CLIENT_SECRET_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Client Secret is too short to be a Zoho secret (expected at least "
+                f"{_MIN_CLIENT_SECRET_LEN} characters). Check for a browser autofill "
+                "and paste the value from the Zoho API console."
+            ),
+        )
+
+
 async def _config_status(cfg: Dict[str, Any]) -> Dict[str, Any]:
     """Presence-only view of the config — never leaks secret values."""
 
@@ -213,10 +271,19 @@ async def update_config(payload: ZohoConfigUpdate, admin: dict = Depends(require
             fields.pop(secret)
     if "data_center" in fields:
         fields["data_center"] = (fields["data_center"] or "ca").strip().lower()
+    _validate_credentials(fields)
 
     fields["updated_at"] = datetime.now(timezone.utc).isoformat()
-    # Changing any credential invalidates the cached access token.
-    if {"client_id", "client_secret", "refresh_token", "data_center"} & set(fields):
+    # Changing any credential invalidates the cached access token. Compare
+    # against the stored values rather than merely checking which keys were
+    # sent — the admin UI posts the whole form (data_center included) on every
+    # save, so a presence check would discard a perfectly good cached token on
+    # an unrelated edit and force a needless refresh round-trip to Zoho.
+    current = await db_supabase.find_one(_CONFIG_TABLE, {"id": _CONFIG_ID}) or {}
+    if any(
+        key in fields and fields[key] != current.get(key)
+        for key in ("client_id", "client_secret", "refresh_token", "data_center")
+    ):
         fields["access_token"] = None
         fields["access_token_expires_at"] = None
 

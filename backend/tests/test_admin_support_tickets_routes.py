@@ -98,18 +98,94 @@ def test_update_config_drops_empty_secret_strings(client, _set_admin, monkeypatc
     assert fields["org_id"] == "org1"
 
 
+_VALID_CLIENT_ID = "1000.ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"
+_VALID_CLIENT_SECRET = "0123456789abcdef0123456789abcdef01234567"
+_VALID_REFRESH_TOKEN = "1000.0123456789abcdef0123456789abcdef.0123456789abcdef0123456789abcdef"
+
+
 def test_update_config_credential_change_clears_cached_token(client, _set_admin, monkeypatch):
     update_one = AsyncMock()
     monkeypatch.setattr(m.db_supabase, "update_one", update_one)
     monkeypatch.setattr(m.db_supabase, "find_one", AsyncMock(return_value={}))
     resp = client.put(
         "/api/admin/support-tickets/config",
-        json={"client_id": "new-id"},
+        json={"client_id": _VALID_CLIENT_ID},
     )
     assert resp.status_code == 200
     fields = update_one.call_args.args[2]
     assert fields["access_token"] is None
     assert fields["access_token_expires_at"] is None
+
+
+def test_update_config_unchanged_data_center_keeps_cached_token(client, _set_admin, monkeypatch):
+    """The admin UI posts the whole form on every save, so an unrelated edit
+    (e.g. toggling the email signature) must not discard a working token."""
+    update_one = AsyncMock()
+    monkeypatch.setattr(m.db_supabase, "update_one", update_one)
+    monkeypatch.setattr(
+        m.db_supabase,
+        "find_one",
+        AsyncMock(return_value={"data_center": "com", "client_id": _VALID_CLIENT_ID}),
+    )
+    resp = client.put(
+        "/api/admin/support-tickets/config",
+        json={"data_center": "com", "helpdesk_signature_enabled": True},
+    )
+    assert resp.status_code == 200
+    fields = update_one.call_args.args[2]
+    assert "access_token" not in fields
+    assert "access_token_expires_at" not in fields
+    assert fields["helpdesk_signature_enabled"] is True
+
+
+def test_update_config_data_center_change_clears_cached_token(client, _set_admin, monkeypatch):
+    update_one = AsyncMock()
+    monkeypatch.setattr(m.db_supabase, "update_one", update_one)
+    monkeypatch.setattr(m.db_supabase, "find_one", AsyncMock(return_value={"data_center": "com"}))
+    resp = client.put("/api/admin/support-tickets/config", json={"data_center": "ca"})
+    assert resp.status_code == 200
+    assert update_one.call_args.args[2]["access_token"] is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        # The exact production failure: a password manager autofilled the
+        # admin's email + password into Client ID / Client Secret.
+        {"client_id": "support@spinr.ca"},
+        {"client_secret": "MyDashboardPassw0rd!"},
+        {"refresh_token": "not-a-zoho-token"},
+        {"client_id": "1000.ABC DEF"},
+        {"client_secret": "short"},
+        {"refresh_token": "someone@example.com"},
+    ],
+)
+def test_update_config_rejects_non_zoho_credentials(client, _set_admin, monkeypatch, payload):
+    update_one = AsyncMock()
+    monkeypatch.setattr(m.db_supabase, "update_one", update_one)
+    monkeypatch.setattr(m.db_supabase, "find_one", AsyncMock(return_value={}))
+    resp = client.put("/api/admin/support-tickets/config", json=payload)
+    assert resp.status_code == 400
+    # A rejected save must never touch the stored credentials.
+    update_one.assert_not_awaited()
+
+
+def test_update_config_accepts_well_formed_credentials(client, _set_admin, monkeypatch):
+    update_one = AsyncMock()
+    monkeypatch.setattr(m.db_supabase, "update_one", update_one)
+    monkeypatch.setattr(m.db_supabase, "find_one", AsyncMock(return_value={}))
+    resp = client.put(
+        "/api/admin/support-tickets/config",
+        json={
+            "client_id": _VALID_CLIENT_ID,
+            "client_secret": _VALID_CLIENT_SECRET,
+            "refresh_token": _VALID_REFRESH_TOKEN,
+        },
+    )
+    assert resp.status_code == 200
+    fields = update_one.call_args.args[2]
+    assert fields["client_id"] == _VALID_CLIENT_ID
+    assert fields["refresh_token"] == _VALID_REFRESH_TOKEN
 
 
 def test_trigger_sync_success(client, _set_admin, monkeypatch):

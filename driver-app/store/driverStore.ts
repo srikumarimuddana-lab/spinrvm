@@ -1,5 +1,10 @@
 import { create } from 'zustand';
 import api, { getApiErrorMessage } from '@shared/api/client';
+// Keep the default import: many test files jest.mock(
+// '@shared/config/spinr.config', () => ({ default: {...} })) without a
+// matching named 'SpinrConfig' export, so switching to a named import
+// breaks those mocks (confirmed in rider-app's utils/aiChat.ts).
+// eslint-disable-next-line import/no-named-as-default
 import SpinrConfig from '@shared/config/spinr.config';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { recordNonFatal } from '../utils/crashlytics';
@@ -147,7 +152,7 @@ export interface ActiveRide {
     // incentive_type is always present — both backend endpoints default it to
     // "per_ride" (routes/rides.py, routes/drivers.py), matching IncomingRide
     // and RideOfferPanel's IncentiveItem.
-    incentives?: Array<{ name: string; bonus_amount: number; incentive_type: string }>;
+    incentives?: { name: string; bonus_amount: number; incentive_type: string }[];
     total_bonus?: number;
     // Matches the backend payload (routes/rides.py / routes/drivers.py) and what
     // RideOfferPanel reads. The previous {progress, reward} shape was stale and
@@ -260,6 +265,9 @@ export interface DriverBalance {
     payable_balance: string; // MoneyString — renamed from available_balance (NOT wallet.balance)
     pending_payouts: string; // MoneyString
     total_paid_out: string; // MoneyString
+    /** MoneyString — payments made by the previous Spinr app (synced from
+     *  Stripe). History only: not part of total_earnings or the balance. */
+    previous_app_paid_total?: string;
     has_bank_account: boolean;
 }
 
@@ -346,7 +354,7 @@ interface IncomingRide {
     countdown_seconds?: number;
     offer_expires_at?: string;
     surge_multiplier?: number;
-    incentives?: Array<{ name: string; bonus_amount: number; incentive_type: string }>;
+    incentives?: { name: string; bonus_amount: number; incentive_type: string }[];
     total_bonus?: number;
     quest_hint?: {
         title: string;
@@ -356,8 +364,8 @@ interface IncomingRide {
         reward_amount: number;
     } | null;
     payment_method?: string;
-    planned_route_polyline?: Array<[number, number]> | null;
-    service_area_polygon?: Array<{ lat: number; lng: number }> | null;
+    planned_route_polyline?: [number, number][] | null;
+    service_area_polygon?: { lat: number; lng: number }[] | null;
 }
 
 interface DriverState {
@@ -422,7 +430,7 @@ interface DriverState {
     setCountdown: (seconds: number) => void;
     applyDriverConfig: (config: { ride_offer_timeout_seconds?: number; pickup_radius_meters?: number }) => void;
     acceptRide: (rideId: string) => Promise<void>;
-    declineRide: (rideId: string) => Promise<void>;
+    declineRide: (rideId: string, reason?: string) => Promise<void>;
     arriveAtPickup: (rideId: string, driverLat?: number, driverLng?: number) => Promise<{ success: boolean; distance?: number; error?: string }>;
     verifyOTP: (rideId: string, otp: string) => Promise<boolean>;
     startRide: (rideId: string) => Promise<void>;
@@ -623,9 +631,19 @@ export const useDriverStore = create<DriverState>((set, get) => ({
         }
     },
 
-    declineRide: async (rideId: string) => {
+    declineRide: async (rideId: string, reason?: string) => {
         try {
-            await api.post(`/drivers/rides/${rideId}/decline`);
+            // Optional reason (e.g. 'service_animal', reported via the
+            // offer card's long-press flag). Omit the body entirely when
+            // there's no reason — mirrors cancelRide below — so the default
+            // fast decline (single tap, auto-decline-on-timeout) keeps
+            // posting exactly the same request it always has.
+            const trimmed = reason?.trim();
+            if (trimmed) {
+                await api.post(`/drivers/rides/${rideId}/decline`, { reason: trimmed });
+            } else {
+                await api.post(`/drivers/rides/${rideId}/decline`);
+            }
         } catch {
             // Decline failure is non-critical — reset state regardless
         }

@@ -139,8 +139,16 @@ def test_retry_atomic_claim_winner_fires_driver_push():
     async def _capture_push(*args, **kwargs):
         push_calls.append((args, kwargs))
 
+    async def fake_get_rows(table, *args, **kwargs):
+        if table == "drivers":
+            # N3 (ACTION_ITEMS.md): rides.driver_id is a drivers.id, not a
+            # users.id — resolved via a batched "drivers" lookup before the
+            # push fires.
+            return [{"id": "driver_1", "user_id": "driver_1_user"}]
+        return [ride]
+
     with (
-        patch("utils.payment_retry.db.get_rows", AsyncMock(return_value=[ride])),
+        patch("utils.payment_retry.db.get_rows", AsyncMock(side_effect=fake_get_rows)),
         patch("utils.payment_retry.get_app_settings", AsyncMock(return_value=_settings_with_secret())),
         patch("utils.payment_retry.send_push_notification", _capture_push),
         patch("utils.payment_retry.db.update_one", AsyncMock(return_value={"id": "ride_1"})),
@@ -152,8 +160,8 @@ def test_retry_atomic_claim_winner_fires_driver_push():
         asyncio.run(retry_failed_payments())
 
     assert len(push_calls) == 1
-    # First positional arg is the user_id (driver_id in this branch)
-    assert push_calls[0][0][0] == "driver_1"
+    # First positional arg is the resolved users.id, not rides.driver_id.
+    assert push_calls[0][0][0] == "driver_1_user"
 
 
 def test_retry_atomic_claim_filters_on_prior_count():
@@ -230,8 +238,16 @@ def test_stuck_payout_winner_notifies_driver_once():
     async def _capture_push(*args, **kwargs):
         push_calls.append((args, kwargs))
 
+    async def fake_get_rows(table, *args, **kwargs):
+        if table == "drivers":
+            # N3 (ACTION_ITEMS.md): payouts.driver_id is a drivers.id, not a
+            # users.id — resolved via a batched "drivers" lookup before the
+            # push fires.
+            return [{"id": "driver_1", "user_id": "driver_1_user"}]
+        return [payout]
+
     with (
-        patch("utils.payment_retry.db.get_rows", AsyncMock(return_value=[payout])),
+        patch("utils.payment_retry.db.get_rows", AsyncMock(side_effect=fake_get_rows)),
         patch("utils.payment_retry.send_push_notification", _capture_push),
         patch("utils.payment_retry.db.update_one", AsyncMock(return_value={"id": "payout_1"})),
     ):
@@ -240,7 +256,8 @@ def test_stuck_payout_winner_notifies_driver_once():
         asyncio.run(retry_stuck_payouts())
 
     assert len(push_calls) == 1
-    assert push_calls[0][0][0] == "driver_1"
+    # First positional arg is the resolved users.id, not payouts.driver_id.
+    assert push_calls[0][0][0] == "driver_1_user"
 
 
 def test_stuck_payout_claim_filters_on_status_pending():
@@ -399,3 +416,105 @@ def test_autotopup_key_changes_per_wallet():
 
     assert len(captured_keys) == 2
     assert captured_keys[0] != captured_keys[1]
+
+
+# ── ledger_projection.project_pending_legs ────────────────────────────
+
+
+def test_projection_duplicate_batch_insert_is_treated_as_written():
+    """Two replicas projecting the same event concurrently: the loser's
+    whole-batch insert_many hits UNIQUE(event_id, account, side) with
+    23505 — which must count as SUCCESS (legs are present), with no
+    LEGS_LOST escalation. This is the projection's actual replay-safety
+    mechanism; the Redis lock is only a throttle."""
+    from services import ledger_service as ls
+
+    legs = ls.build_charge_legs(2000, 1500, 220)
+
+    async def dup_insert(_table, _rows):
+        raise RuntimeError('duplicate key value violates unique constraint "financial_event_entries_uniq" (23505)')
+
+    with (
+        patch.object(ls.db_supabase, "insert_many", side_effect=dup_insert),
+        patch.object(ls, "escalate") as escalate,
+    ):
+        ok = asyncio.run(ls.write_legs("evt_dup", legs, ride_id="ride_1", event_type="stripe_charge", check_flag=False))
+
+    assert ok is True, "a concurrent duplicate projection must read as already-written"
+    escalate.assert_not_called()
+
+
+def test_projection_loop_heartbeats_even_when_lock_skipped():
+    """Follower replicas must still look alive to the loop watchdog:
+    heartbeat fires on the lock-not-acquired path and the tick is skipped
+    (the lock is a throttle — skipping is fine, dying silently is not)."""
+    from utils import ledger_projection as lp
+
+    beats: list[str] = []
+
+    async def _no_sleep(_secs):
+        raise asyncio.CancelledError  # exit after one iteration
+
+    with (
+        patch.object(lp, "redis_set_nx", AsyncMock(return_value=False)),
+        patch.object(lp, "project_pending_legs", AsyncMock()) as tick,
+        patch.object(lp, "_record_heartbeat", side_effect=beats.append),
+        patch.object(lp.asyncio, "sleep", side_effect=_no_sleep),
+    ):
+        try:
+            asyncio.run(lp.ledger_projection_loop())
+        except asyncio.CancelledError:
+            pass
+
+    tick.assert_not_awaited()
+    assert beats == ["ledger_projection (15min)"], "heartbeat must fire on the lock-skip path"
+
+
+def test_projection_loop_reacquires_its_own_lock_on_the_next_wake():
+    """REGRESSION: the throttle lock must expire before the pod's next wake.
+
+    With TTL = 1.5x interval against a 1x interval sleep, the pod that ran the
+    last tick woke to find its OWN key still alive, failed SET NX, and slept
+    another full interval — so a loop documented (and registered) as
+    "15min" actually ticked every ~30 minutes, halving backfill throughput.
+
+    Simulated against a virtual clock with real SET NX EX semantics, and with
+    the jitter pinned to its most adverse value (the SHORTEST sleep), which is
+    the case the TTL has to survive.
+    """
+    from utils import ledger_projection as lp
+
+    clock = {"t": 0.0}
+    expiries: dict[str, float] = {}
+    wakes = {"n": 0}
+
+    async def fake_set_nx(key, _value, ttl):
+        exp = expiries.get(key)
+        if exp is not None and exp > clock["t"]:
+            return False
+        expiries[key] = clock["t"] + ttl
+        return True
+
+    async def fake_sleep(secs):
+        clock["t"] += secs
+        wakes["n"] += 1
+        if wakes["n"] >= 2:
+            raise asyncio.CancelledError
+
+    with (
+        patch.object(lp, "redis_set_nx", side_effect=fake_set_nx),
+        patch.object(lp, "project_pending_legs", AsyncMock()) as tick,
+        patch.object(lp, "_record_heartbeat"),
+        patch.object(lp.asyncio, "sleep", side_effect=fake_sleep),
+        # uniform(-delta, +delta) -> -delta: the shortest sleep the loop can take.
+        patch.object(lp.random, "uniform", side_effect=lambda lo, _hi: lo),
+    ):
+        try:
+            asyncio.run(lp.ledger_projection_loop())
+        except asyncio.CancelledError:
+            pass
+
+    assert tick.await_count == 2, (
+        "the single replica must tick once per interval; a TTL longer than the "
+        "minimum sleep makes it skip its own next wake and halves the cadence"
+    )

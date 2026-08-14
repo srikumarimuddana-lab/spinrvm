@@ -30,8 +30,6 @@ export default function PromotionsScreen() {
   const [loading, setLoading] = useState(true);
   const [code, setCode] = useState('');
   const [applying, setApplying] = useState(false);
-  useEffect(() => { loadPromos(); }, []);
-
   const loadPromos = async () => {
     setLoading(true);
     try {
@@ -40,6 +38,11 @@ export default function PromotionsScreen() {
     } catch {}
     finally { setLoading(false); }
   };
+
+  // Mount-only load; deps are empty so the state loadPromos sets can't
+  // retrigger this effect.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { loadPromos(); }, []);
 
   const handleApply = async () => {
     const c = code.trim().toUpperCase();

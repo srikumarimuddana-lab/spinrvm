@@ -1,7 +1,7 @@
-const mockRequest = jest.fn();
-
 import { PermissionsAndroid, Platform } from 'react-native';
 import { requestAndroidNotificationPermission } from '../../../shared/services/firebase';
+
+const mockRequest = jest.fn();
 
 describe('Android notification permission', () => {
   beforeEach(() => {

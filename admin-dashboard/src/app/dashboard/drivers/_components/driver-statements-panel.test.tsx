@@ -33,11 +33,20 @@ vi.mock('@/components/ui/label', () => ({
 }));
 // Factory is hoisted above the file body — define the stub inline, not as a
 // top-level const (vi.mock cannot close over one).
+//
+// The panel itself only imports Download/Mail/FileText/RefreshCw, but it
+// renders the real (unstubbed) shared <Select> for the page-size picker,
+// and select.tsx imports CheckIcon/ChevronDownIcon/ChevronUpIcon directly
+// from lucide-react — those need to be here too, or vitest's mock throws
+// on the first missing export the moment SelectTrigger renders.
 vi.mock('lucide-react', () => ({
   Download: () => <span />,
   Mail: () => <span />,
   FileText: () => <span />,
   RefreshCw: () => <span />,
+  CheckIcon: () => <span />,
+  ChevronDownIcon: () => <span />,
+  ChevronUpIcon: () => <span />,
 }));
 
 import { DriverStatementsPanel } from './driver-statements-panel';

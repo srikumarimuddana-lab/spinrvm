@@ -11,6 +11,9 @@
 
 // Keep the real getApiErrorMessage (the behavior under test) while stubbing
 // the network methods the stores call.
+import api from '@shared/api/client';
+import { useWalletStore } from '../store/walletStore';
+
 jest.mock('@shared/api/client', () => {
   const actual = jest.requireActual('@shared/api/client');
   return {
@@ -30,9 +33,6 @@ jest.mock('../utils/crashlytics', () => ({
   __esModule: true,
   recordNonFatal: jest.fn(),
 }));
-
-import api from '@shared/api/client';
-import { useWalletStore } from '../store/walletStore';
 
 const mockedGet = api.get as jest.Mock;
 const mockedPost = api.post as jest.Mock;

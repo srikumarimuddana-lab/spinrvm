@@ -7,6 +7,8 @@
 // backend, or specific events that don't carry one) always apply — behaviour
 // identical to before V3.
 
+import { useRideStore } from '../rideStore';
+
 jest.mock('@shared/api/client', () => ({
   __esModule: true,
   default: { post: jest.fn(), get: jest.fn(), put: jest.fn(), patch: jest.fn(), delete: jest.fn() },
@@ -20,8 +22,6 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
   getItem: jest.fn(() => Promise.resolve(null)),
   removeItem: jest.fn(() => Promise.resolve()),
 }));
-
-import { useRideStore } from '../rideStore';
 
 const apply = (rideId: string, status: string, version?: number) =>
   useRideStore.getState().applyRideStatusFromWS(
@@ -38,12 +38,12 @@ describe('rideStore — monotonic ride event ordering (V3)', () => {
       // Reset the version tracker between tests.
       _lastEventRideId: null,
       _lastEventVersion: -1,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
     } as any);
   });
 
   const seedRide = (status = 'driver_assigned') =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     useRideStore.setState({ currentRide: { id: 'ride_1', status } as any });
 
   it('applies the first versioned event for a ride', () => {
@@ -82,7 +82,7 @@ describe('rideStore — monotonic ride event ordering (V3)', () => {
     apply('ride_1', 'in_progress', 9);
     // A new ride starts its own version sequence — a low version here must NOT
     // be dropped as stale against the previous ride's high version.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     useRideStore.setState({ currentRide: { id: 'ride_2', status: 'driver_assigned' } as any });
     apply('ride_2', 'driver_accepted', 1);
     expect(useRideStore.getState().currentRide?.status).toBe('driver_accepted');

@@ -55,7 +55,7 @@ jobs:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       FLY_APP: spinr-backend-yyz
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Verify FLY_API_TOKEN is set
         run: |
@@ -109,9 +109,14 @@ jobs:
         working-directory: backend
         run: flyctl deploy --remote-only --config fly.toml
 
-      - name: Scale to 2 machines in yyz
+      # 8 machines is the burst POOL, not the running count. fly.toml sets
+      # min_machines_running=2 with auto_stop_machines="suspend", so Fly
+      # suspends the 6 idle machines and its proxy resumes them when running
+      # machines exceed soft_limit (750 connections). Suspended machines bill
+      # for rootfs storage only. See docs/runbooks/capacity-scaling.md.
+      - name: Scale to 8 machines in yyz (2 warm + 6 suspended burst pool)
         if: ${{ inputs.deploy }}
-        run: flyctl scale count 2 --region yyz -a "${FLY_APP}" --yes
+        run: flyctl scale count 8 --region yyz -a "${FLY_APP}" --yes
 
       - name: Smoke-test /health
         if: ${{ inputs.deploy }}

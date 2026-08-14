@@ -292,7 +292,7 @@ function PlanModal({ open, plan, onClose, onSave }: PlanModalProps) {
                             </p>
                         </div>
                     </div>
-                    {error && <p className="text-sm text-red-500">{error}</p>}
+                    {error && <p className="text-sm text-destructive">{error}</p>}
                 </div>
                 <DialogFooter>
                     <Button variant="outline" onClick={onClose} disabled={saving}>
@@ -448,7 +448,7 @@ function TaxConfigModal({ open, area, onClose, onSave }: TaxConfigModalProps) {
                         SK: GST 5% + PST 6%. AB: GST 5%, PST 0%. ON: HST 13% (set HST, zero GST+PST).
                         Changes apply to the next checkout in this service area.
                     </p>
-                    {error && <p className="text-sm text-red-500">{error}</p>}
+                    {error && <p className="text-sm text-destructive">{error}</p>}
                 </div>
                 <DialogFooter>
                     <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>

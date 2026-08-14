@@ -403,12 +403,39 @@ async def mark_all_read(current_user: dict = Depends(get_current_user)):
     return {"success": True}
 
 
+async def _global_throttle_info() -> Dict[str, Any]:
+    """Read-only quiet-hours/cap info for a future settings screen.
+
+    Deliberately NOT per-user: notification_throttling_enabled and its
+    quiet-hours/cap values are global admin-controlled settings (migration
+    304, editable only via PUT /admin/settings), not columns on this user's
+    notification_preferences row. There is no per-user override yet — see
+    migration 304's own comment for why that's a deliberate V1 scope
+    decision, not an oversight. This just lets a rider/driver-facing
+    settings screen display "Quiet hours: 10 PM-7 AM" (when throttling is
+    on) without implying the user can change it from here.
+    """
+    try:
+        from ..settings_loader import get_app_settings
+    except ImportError:  # pragma: no cover
+        from settings_loader import get_app_settings  # type: ignore
+    settings = await get_app_settings()
+    return {
+        "notification_throttling_enabled": bool(settings.get("notification_throttling_enabled")),
+        "notification_quiet_hours_start": settings.get("notification_quiet_hours_start") or "22:00",
+        "notification_quiet_hours_end": settings.get("notification_quiet_hours_end") or "07:00",
+        "notification_daily_cap": int(settings.get("notification_daily_cap") or 0),
+    }
+
+
 @api_router.get("/preferences")
 async def get_preferences(current_user: dict = Depends(get_current_user)):
-    """Get user's notification preferences."""
+    """Get user's notification preferences, plus read-only global
+    throttling info (see _global_throttle_info)."""
     prefs = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("notification_preferences", {"user_id": current_user["id"]}, limit=1)
     )
+    throttle_info = await _global_throttle_info()
     if not prefs:
         # Return defaults
         return {
@@ -419,8 +446,9 @@ async def get_preferences(current_user: dict = Depends(get_current_user)):
             "promotions": True,
             "safety_alerts": True,
             "earnings_summary": True,
+            **throttle_info,
         }
-    return prefs
+    return {**prefs, **throttle_info}
 
 
 @api_router.put("/preferences")

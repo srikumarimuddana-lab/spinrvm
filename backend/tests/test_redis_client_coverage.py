@@ -331,18 +331,26 @@ async def test_set_nx_real_client_returns_false_when_not_acquired(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_set_nx_falls_back_to_local_on_redis_error(monkeypatch):
-    """Unlike the other primitives, set_nx swallows a Redis error (logged as
-    a warning) and falls through to the local-lock path — this is a
-    belt-and-braces election, not the sole safety net, per its docstring."""
+async def test_set_nx_raises_when_configured_but_erroring(monkeypatch):
+    """2026-08-11 P1 fix: redis_set_nx used to be the one primitive that
+    swallowed a Redis error (logged as a warning) and silently fell through
+    to the per-replica local-lock path -- during a real production Redis
+    blip, every replica's call independently "won" its own local lock, so
+    a leader-election/dedupe guarantee silently became "every replica
+    proceeds independently" with no louder signal than a warning log. Now
+    matches every other primitive in this module (redis_get/set/incr/
+    expire/delete): raises on a real Redis-configured-but-unavailable
+    error. Callers now decide explicitly how to degrade (see
+    utils/scheduled_rides.py's leader lock or routes/rides/payments.py's
+    wallet re-drive lock for two different, deliberate call-site choices)."""
     from backend.utils import redis_client as rc
 
     _fake_redis_env(monkeypatch)
     fake = MagicMock()
     fake.set = AsyncMock(side_effect=ConnectionError("redis down"))
     _patch_get_redis(monkeypatch, fake)
-    result = await rc.redis_set_nx("lock:job", "replica-1", ttl=30)
-    assert result is True  # acquired via the local fallback despite the Redis error
+    with pytest.raises(ConnectionError):
+        await rc.redis_set_nx("lock:job", "replica-1", ttl=30)
 
 
 # ── redis_incr / redis_incrby ────────────────────────────────────────────────

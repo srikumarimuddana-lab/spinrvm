@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import {
   Animated,
   PanResponder,
@@ -9,6 +9,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useToastStore, type ToastVariant } from '../store/toastStore';
+import { useAnimatedValue, useStableRef } from '../hooks/useAnimatedValue';
 
 const VARIANT_CONFIG: Record<ToastVariant, { bg: string; icon: string }> = {
   info: { bg: '#1a73e8', icon: 'information-circle' },
@@ -24,11 +25,29 @@ export default function Toast() {
   const current = useToastStore((s) => s.current);
   const dismiss = useToastStore((s) => s.dismiss);
 
-  const translateY = useRef(new Animated.Value(-120)).current;
-  const opacity = useRef(new Animated.Value(0)).current;
+  const translateY = useAnimatedValue(-120);
+  const opacity = useAnimatedValue(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const panResponder = useRef(
+  // Wrapped in useCallback so it has one stable identity for the whole
+  // component's lifetime — translateY/opacity are stable Animated.Values,
+  // dismiss is a stable zustand action, and timer is a ref (exempt from
+  // dep tracking). This matches what the panResponder comment below already
+  // assumed about `hide` being effectively stable; now it's actually so.
+  const hide = useCallback(() => {
+    if (timer.current) clearTimeout(timer.current);
+    Animated.parallel([
+      Animated.timing(translateY, { toValue: -120, duration: 200, useNativeDriver: true }),
+      Animated.timing(opacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+    ]).start(() => dismiss());
+  }, [translateY, opacity, dismiss]);
+
+  // Stable gesture responder — created once, never reassigned. Handlers
+  // close over `translateY` (a stable Animated.Value) and `hide` (a stable
+  // function reference for this component), so the closure stays valid for
+  // the component's lifetime. Declared after `hide` so nothing here reads
+  // it before its declaration.
+  const panResponder = useStableRef(() =>
     PanResponder.create({
       onMoveShouldSetPanResponder: (_, g) => g.dy < -5,
       onPanResponderMove: (_, g) => {
@@ -45,40 +64,40 @@ export default function Toast() {
         }
       },
     }),
-  ).current;
-
-  const hide = () => {
-    if (timer.current) clearTimeout(timer.current);
-    Animated.parallel([
-      Animated.timing(translateY, { toValue: -120, duration: 200, useNativeDriver: true }),
-      Animated.timing(opacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-    ]).start(() => dismiss());
-  };
+  );
 
   // Enter animation — runs only when a NEW toast appears (id changes). A
   // deduped repeat keeps the same id, so the banner does not slide back off
   // and in again (the flicker).
   useEffect(() => {
-    if (!current) return;
+    // Narrowed from `if (!current) return;` to current?.id, which is
+    // already this effect's dep — current isn't read for any other field
+    // here, so no need for the whole object.
+    if (current?.id == null) return;
     translateY.setValue(-120);
     opacity.setValue(0);
     Animated.parallel([
       Animated.spring(translateY, { toValue: 0, friction: 8, useNativeDriver: true }),
       Animated.timing(opacity, { toValue: 1, duration: 200, useNativeDriver: true }),
     ]).start();
-  }, [current?.id]);
+    // translateY/opacity are stable Animated.Values.
+  }, [current?.id, translateY, opacity]);
 
   // Auto-dismiss timer — (re)armed for a new toast OR when a deduped repeat
   // extends it (shownAt bumps). Kept separate from the enter animation so
   // refreshing the timer never restarts the slide-in.
   useEffect(() => {
-    if (!current) return;
-    const duration = current.duration ?? DEFAULT_DURATION;
+    // Narrowed from `if (!current) return;` to current?.id, matching this
+    // effect's existing dep — current.duration is also read here, so it's
+    // added below rather than depending on the whole object.
+    if (current?.id == null) return;
+    const duration = current?.duration ?? DEFAULT_DURATION;
     timer.current = setTimeout(hide, duration);
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [current?.id, current?.shownAt]);
+    // hide is now a stable useCallback (see above).
+  }, [current?.id, current?.shownAt, current?.duration, hide]);
 
   if (!current) return null;
 

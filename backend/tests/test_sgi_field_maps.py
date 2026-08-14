@@ -7,11 +7,22 @@ the driver actually stopped driving, and a removal is routinely filed days
 or weeks after the fact.
 """
 
-from datetime import datetime, timezone
+import pytest
 
 from backend.services.data_transfer import sgi_field_maps as maps
 
-_TODAY = datetime.now(timezone.utc).date().isoformat()
+# Pinned, NOT datetime.now(): snapshotting the real date at import time made
+# these tests fail whenever the suite straddled UTC midnight — the module
+# constant said yesterday while _today_iso() inside the mapper said today.
+# Observed on a 2026-08-08 run that crossed into 08-09. The mapper's own clock
+# is stubbed below so "today" means one thing for the whole test.
+_TODAY = "2026-03-04"
+
+
+@pytest.fixture(autouse=True)
+def _frozen_today(monkeypatch):
+    monkeypatch.setattr(maps, "_today_iso", lambda: _TODAY)
+
 
 _DRIVER = {
     "name": "Jane Driver",

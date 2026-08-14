@@ -1,4 +1,6 @@
 // Mock dependencies before importing store
+import { useRideStore } from '../rideStore';
+
 jest.mock('@shared/api/client', () => ({
   __esModule: true,
   default: { post: jest.fn(), get: jest.fn(), put: jest.fn(), patch: jest.fn(), delete: jest.fn() },
@@ -12,8 +14,6 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
   getItem: jest.fn(() => Promise.resolve(null)),
   removeItem: jest.fn(() => Promise.resolve()),
 }));
-
-import { useRideStore } from '../rideStore';
 
 describe('rideStore — WebSocket-driven updates', () => {
   beforeEach(() => {
@@ -29,7 +29,7 @@ describe('rideStore — WebSocket-driven updates', () => {
   describe('updateDriverLocation', () => {
     it('should update currentDriver lat/lng', () => {
       useRideStore.setState({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         currentDriver: { id: 'driver_1', name: 'Jane', rating: 4.9, lat: 50.0, lng: -104.0 } as any,
       });
 
@@ -52,7 +52,7 @@ describe('rideStore — WebSocket-driven updates', () => {
 
     it('should handle null speed and heading', () => {
       useRideStore.setState({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         currentDriver: { id: 'driver_1', lat: 50, lng: -104 } as any,
       });
 

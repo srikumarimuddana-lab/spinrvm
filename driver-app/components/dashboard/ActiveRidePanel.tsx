@@ -121,6 +121,13 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
 
   // PIN entry feedback state — spinner while verifying, shake + error on a
   // wrong code. Reset whenever the ride phase or ride id changes.
+  // react-hooks/refs ("Cannot access refs during render"): standard
+  // Animated.Value driver idiom (Animated mutates it imperatively outside
+  // the render cycle via .timing() below and in the OTP shake sequence).
+  // Verified safe — grepped this file for `.current =`: no reassignment of
+  // shakeAnim anywhere, so a discarded/replayed render always reads the
+  // same instance.
+  // eslint-disable-next-line react-hooks/refs
   const shakeAnim = useRef(new Animated.Value(0)).current;
   const [verifying, setVerifying] = useState(false);
   const [pinError, setPinError] = useState(false);
@@ -131,12 +138,18 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   // fully-open (0) down to the collapsed peek, where only the grab area
   // stays visible above the home indicator. Composed with the parent's
   // slideUpAnim entry animation via Animated.add (both native-driven).
+  // react-hooks/refs: same verified-safe Animated.Value driver idiom as
+  // shakeAnim above — mutated only via Animated.spring()/.setValue() in the
+  // PanResponder gesture handlers below, never reassigned via `.current =`.
+  // eslint-disable-next-line react-hooks/refs
   const dragY = useRef(new Animated.Value(0)).current;
   const dragOffsetRef = useRef(0);
   const sheetHeightRef = useRef(0);
   const grabHeightRef = useRef(0);
   const insetsBottomRef = useRef(insets.bottom);
-  insetsBottomRef.current = insets.bottom;
+  useEffect(() => {
+    insetsBottomRef.current = insets.bottom;
+  }, [insets.bottom]);
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   const collapsedOffsetRef = useRef(() =>
@@ -154,9 +167,17 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
     }).start();
   };
   const snapToRef = useRef(snapTo);
-  snapToRef.current = snapTo;
+  useEffect(() => {
+    snapToRef.current = snapTo;
+  });
 
+  // react-hooks/refs: PanResponder.create(...) is created once (useRef's
+  // initializer only runs on first render) and its `.panHandlers` are read
+  // in JSX below — the textbook "stable gesture handler ref" case. Verified
+  // safe — grepped this file for `.current =`: panResponder is never
+  // reassigned after creation.
   const panResponder = useRef(
+    // eslint-disable-next-line react-hooks/refs
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: (_e, g) =>
@@ -189,8 +210,10 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   // Hydrate the driver's saved navigation-app choice once so the
   // navigate buttons launch the right app even on a cold start.
   useEffect(() => {
+    // loadNavApp is a stable navStore action; adding it doesn't change
+    // this mount-only effect's firing.
     loadNavApp();
-  }, []);
+  }, [loadNavApp]);
 
   // Phase changes always re-open the sheet — the PIN keypad or the new
   // action buttons must never appear while the sheet is collapsed.
@@ -200,7 +223,10 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
 
   // Reset distance when ride phase OR ride id changes — prevents stale
   // accumulation carrying over to a different ride if the panel is recycled.
+  // Local display-only accumulator (not the fare-settlement distance, which
+  // is computed server-side) — doesn't feed back into rideState/ride.id.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLiveDistanceKm(0);
     setHasLiveData(false);
     lastLocRef.current = null;
@@ -234,6 +260,8 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
 
   useEffect(() => {
     if (rideState === 'arrived_at_pickup') {
+      // Local wait-timer display, doesn't feed back into rideState.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setWaitSeconds(0);
       const id = setInterval(() => setWaitSeconds(s => s + 1), 1000);
       waitTimerRef.current = id;
@@ -359,7 +387,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
 
   const showConfirm = (
     title: string, message: string,
-    buttons: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>,
+    buttons: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[],
   ) => {
     showAlert(title, message, buttons);
   };
@@ -422,6 +450,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
         {/* ── Grab area: drag handle + status header. Stays visible as the
             collapsed peek; owns the pan gesture. ─────────────── */}
         <View
+          // eslint-disable-next-line react-hooks/refs -- stable PanResponder gesture handler ref, see note above declaration
           {...panResponder.panHandlers}
           onLayout={e => { grabHeightRef.current = e.nativeEvent.layout.height; }}
           accessibilityRole="button"

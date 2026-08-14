@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useState, useMemo, useRef } from 'react';
+import React, { useCallback, useContext, useEffect, useState, useMemo, useRef } from 'react';
 import { TrackBaseUrlContext } from './_layout';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
@@ -37,7 +37,9 @@ import { FreeCancelTimer } from '../components/FreeCancelTimer';
 import { useResponsive } from '@shared/utils/responsive';
 import BottomSheet, { BottomSheetScrollView } from '../components/SafeBottomSheet';
 import { useAppResumeKey } from '../hooks/useAppResumeKey';
+import { useTranslation } from '../i18n';
 import { getRideMapCoords } from '../utils/rideMapCoords';
+import { useAnimatedValue } from '../hooks/useAnimatedValue';
 
 function DriverArrivingScreenContent() {
   const { height: SCREEN_HEIGHT } = useWindowDimensions();
@@ -53,11 +55,11 @@ function DriverArrivingScreenContent() {
   const trackBaseUrl = useContext(TrackBaseUrlContext);
   const {
     currentRide, currentDriver, fetchRide, triggerEmergency,
-    isLoading, error, driverEtaSeconds, cancelRide, clearRide,
-    wsConnected,
+    driverEtaSeconds, cancelRide, clearRide,
     activeRideRouteCoords, activeDriverRouteCoords,
-    setActiveRideRouteCoords, setActiveDriverRouteCoords, setLastEtaMin,
+    setActiveRideRouteCoords, setActiveDriverRouteCoords,
   } = useRideStore();
+  const { t } = useTranslation();
   const mapRef = useRef<MapView>(null);
   const bottomSheetRef = useRef<any>(null);
   const snapPoints = useMemo(() => ['40%', '65%'], []);
@@ -65,7 +67,7 @@ function DriverArrivingScreenContent() {
 
   const [mapEtaMinutes, setMapEtaMinutes] = useState<number | null>(null);
   const [countdownSeconds, setCountdownSeconds] = useState<number | null>(null);
-  const [serviceAreaPolygons, setServiceAreaPolygons] = useState<Array<Array<{ latitude: number; longitude: number }>>>([]);
+  const [serviceAreaPolygons, setServiceAreaPolygons] = useState<{ latitude: number; longitude: number }[][]>([]);
   useEffect(() => {
     api.get('/service-areas').then((res: any) => {
       const areas: any[] = res.data || [];
@@ -95,22 +97,48 @@ function DriverArrivingScreenContent() {
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean; title: string; message?: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+    buttons?: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', variant: 'info' });
   const [reasonVisible, setReasonVisible] = useState(false);
 
   // Searching animation
-  const pulseAnim = useRef(new Animated.Value(0)).current;
+  const pulseAnim = useAnimatedValue(0);
   useEffect(() => {
-    if (!currentRide || currentRide.status === RideStatus.SEARCHING || currentRide.status === RideStatus.DRIVER_ASSIGNED) {
+    // Rewritten from `!currentRide || currentRide.status === ...` to read
+    // only `currentRide?.status` so this narrows to a single field instead
+    // of needing the whole `currentRide` object as a dep (which updates on
+    // every ride poll and would restart the pulse loop far more often than
+    // intended). status == null covers the "no ride yet" case the same way
+    // `!currentRide` did.
+    const status = currentRide?.status;
+    if (status == null || status === RideStatus.SEARCHING || status === RideStatus.DRIVER_ASSIGNED) {
       Animated.loop(
         Animated.timing(pulseAnim, { toValue: 1, duration: 1800, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
       ).start();
     }
-  }, [currentRide?.status]);
+    // pulseAnim is a stable Animated.Value (useAnimatedValue, created once
+    // via useRef and never reassigned) — adding it doesn't change firing.
+  }, [currentRide?.status, pulseAnim]);
 
   const rideCoords = useMemo(() => getRideMapCoords(currentRide), [currentRide]);
   const cancellationFee = (currentRide as any)?.cancellation_fee ?? 3.0;
+  // Stable onExpire for <FreeCancelTimer> below (was an inline arrow
+  // function, recreated every render of this frequently-re-rendering
+  // screen — driver GPS polling/WS updates — which would have made
+  // FreeCancelTimer's internal countdown effect see a "new" onExpire and
+  // tear down/recreate its setInterval on almost every render).
+  const handleFreeCancelExpire = useCallback(() => {
+    showToast(
+      'Free cancel window closed',
+      `A $${cancellationFee.toFixed(2)} fee now applies if you cancel.`,
+      'warning',
+    );
+  }, [cancellationFee]);
+  // Hoisted out of handleCancel so it can be a plain primitive in that
+  // callback's useCallback deps below, instead of re-deriving from
+  // `(currentRide as any)?.grand_total` inline (which the linter flags as
+  // "a complex expression" when used directly in a dep array).
+  const fare = parseFloat((currentRide as any)?.grand_total || currentRide?.total_fare || '0');
 
   // Capture the driver's position the first time valid coords arrive.
   // Latches on first non-null GPS so MapViewDirections only fetches once per
@@ -129,19 +157,29 @@ function DriverArrivingScreenContent() {
       setActiveDriverRouteCoords(null);
     }
     prevDriverIdRef.current = newId;
-  }, [currentDriver?.id]);
+    // setActiveDriverRouteCoords is a zustand store action (stable reference).
+  }, [currentDriver?.id, setActiveDriverRouteCoords]);
   useEffect(() => {
     if (
       driverOriginSnapshot === null &&
       currentDriver?.lat != null &&
       currentDriver?.lng != null
     ) {
+      // Guarded by driverOriginSnapshot === null above. Now that
+      // driverOriginSnapshot IS listed as a dep, setting it here causes one
+      // extra invocation of this effect right after — on that run the guard
+      // is false (driverOriginSnapshot is no longer null), so it's a no-op.
+      // Still fires the real snapshot capture exactly once per driver
+      // (reset to null on reassignment by the effect above) — same
+      // behavior as before, just an honest dep array instead of a rule
+      // suppression.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setDriverOriginSnapshot({
         latitude: currentDriver.lat,
         longitude: currentDriver.lng,
       });
     }
-  }, [currentDriver?.lat, currentDriver?.lng]);
+  }, [currentDriver?.lat, currentDriver?.lng, driverOriginSnapshot]);
 
   // Stable pickup→dropoff refs — ride endpoints never change mid-ride.
   const rideRouteOrigin = useMemo(
@@ -164,6 +202,9 @@ function DriverArrivingScreenContent() {
 
   // ── ETA logic ──
   useEffect(() => {
+    // Resets the countdown whenever the backend sends a fresh ETA;
+    // countdownSeconds itself isn't a dep, so no loop.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (driverEtaSeconds !== null) setCountdownSeconds(driverEtaSeconds);
   }, [driverEtaSeconds]);
 
@@ -195,26 +236,43 @@ function DriverArrivingScreenContent() {
       if (rideId && !cancelInitiatedRef.current) fetchRide(rideId);
     }, 5000);
     return () => clearInterval(interval);
-  }, [rideId]);
+    // fetchRide is a zustand store action (stable reference).
+  }, [rideId, fetchRide]);
 
   // ── Status-based navigation ──
   useEffect(() => {
-    if (!currentRide || currentRide.id !== rideId) return;
-    if (currentRide.status === RideStatus.DRIVER_ARRIVED) {
+    // Rewritten to read only currentRide?.id/status (both now listed below)
+    // instead of the whole currentRide object via an unnarrowed `!currentRide`
+    // check — this object updates on every ride poll and would re-run this
+    // navigation effect far more often than the status/id transitions it
+    // actually cares about.
+    if (currentRide?.id !== rideId) return;
+    const status = currentRide?.status;
+    if (status === RideStatus.DRIVER_ARRIVED) {
       router.replace({ pathname: '/driver-arrived', params: { rideId } });
-    } else if (currentRide.status === RideStatus.IN_PROGRESS) {
+    } else if (status === RideStatus.IN_PROGRESS) {
       router.replace({ pathname: '/ride-in-progress', params: { rideId } });
-    } else if (currentRide.status === 'completed') {
+    } else if (status === 'completed') {
       router.replace({ pathname: '/ride-completed', params: { rideId } });
-    } else if (currentRide.status === 'cancelled') {
+    } else if (status === 'cancelled') {
       clearRide();
       router.replace('/(tabs)' as any);
     }
-  }, [currentRide?.status]);
+    // clearRide is a zustand action (stable); router is expo-router's stable
+    // singleton; rideId is the route param. Adding currentRide?.id closes a
+    // real gap: previously this effect only re-checked on status changes, so
+    // if the ride id changed (re-assignment) without status also changing in
+    // the same tick, the id/rideId mismatch guard could momentarily use a
+    // stale comparison.
+  }, [currentRide?.status, currentRide?.id, rideId, router, clearRide]);
 
   // ── Map fitting ──
   useEffect(() => {
-    if (currentRide && rideCoords && mapRef.current) {
+    // rideCoords is derived from currentRide via getRideMapCoords(), which
+    // returns null whenever currentRide is null/falsy — so checking
+    // rideCoords already implies currentRide exists; no need to also guard
+    // on (or depend on) currentRide itself.
+    if (rideCoords?.pickupLat != null && rideCoords?.pickupLng != null && mapRef.current) {
       if (currentDriver?.lat != null && currentDriver?.lng != null) {
         mapRef.current.fitToCoordinates(
           [
@@ -225,10 +283,14 @@ function DriverArrivingScreenContent() {
         );
       }
     }
-  }, [currentDriver?.lat, currentDriver?.lng, currentRide?.id, rideCoords?.pickupLat, rideCoords?.pickupLng]);
+    // SCREEN_HEIGHT is a primitive from useWindowDimensions() — adding it
+    // means the map correctly refits on an orientation change too (a real,
+    // if minor, improvement — previously a rotation wouldn't have re-fit the
+    // bottom edge padding until some other dep also changed).
+  }, [currentDriver?.lat, currentDriver?.lng, rideCoords?.pickupLat, rideCoords?.pickupLng, SCREEN_HEIGHT]);
 
   // ── Cancel handler (fixed: errors are caught, user stays on page) ──
-  const performCancel = async (reason?: string) => {
+  const performCancel = useCallback(async (reason?: string) => {
     cancelInitiatedRef.current = true;
     setIsCancelling(true);
     try {
@@ -240,11 +302,10 @@ function DriverArrivingScreenContent() {
       setIsCancelling(false);
       showToast('Cancel Failed', getApiErrorMessage(err, 'Could not cancel the ride. Please try again.'), 'danger');
     }
-  };
+  }, [cancelRide, clearRide, router]);
 
-  const handleCancel = () => {
+  const handleCancel = useCallback(() => {
     const status = currentRide?.status;
-    const fare = parseFloat((currentRide as any)?.grand_total || currentRide?.total_fare || '0');
 
     // A driver is involved → collect a reason first; plain search cancels skip it.
     const doCancel = () => setReasonVisible(true);
@@ -290,12 +351,21 @@ function DriverArrivingScreenContent() {
         ],
       });
     }
-  };
+    // fare/cancellationFee are plain numbers derived from currentRide at
+    // component scope (already used the same way elsewhere in this file);
+    // setConfirmSheet is a setState setter (stable); performCancel is now a
+    // useCallback below with its own correct deps.
+  }, [currentRide?.status, fare, cancellationFee, performCancel]);
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => { handleCancel(); return true; });
     return () => sub.remove();
-  }, [currentRide?.status]);
+    // handleCancel is now a useCallback (see above) with its own correct
+    // deps, so depending on it here keeps the back-button handler's dialog
+    // text (fare/cancellationFee) fresh instead of the previous
+    // [currentRide?.status]-only tracking, which could miss a fare/fee
+    // change that didn't happen to coincide with a status change.
+  }, [handleCancel]);
 
   // ── Handlers ──
   // No call handler: rider↔driver contact is chat-only — phone numbers are
@@ -426,7 +496,7 @@ function DriverArrivingScreenContent() {
           </View>
         )}
 
-        {!isSearching && <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} />}
+        {!isSearching && <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} t={t} />}
       </View>
 
       {/* ═══ Bottom sheet ═══ */}
@@ -587,11 +657,7 @@ function DriverArrivingScreenContent() {
                   rideStatus={currentRide?.status}
                   freeCancelWindowSeconds={freeCancelWindowSeconds}
                   cancellationFee={cancellationFee}
-                  onExpire={() => showToast(
-                    'Free cancel window closed',
-                    `A $${cancellationFee.toFixed(2)} fee now applies if you cancel.`,
-                    'warning',
-                  )}
+                  onExpire={handleFreeCancelExpire}
                 />
               )}
 

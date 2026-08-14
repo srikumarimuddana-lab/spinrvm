@@ -214,6 +214,49 @@ async def test_no_op_when_stripe_secret_missing():
     m_list.assert_not_awaited()
 
 
+# ── E5 kill switch: corporate_billing_enabled ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_no_op_when_corporate_billing_disabled():
+    with (
+        patch(
+            "utils.corporate_autotopup.get_app_settings",
+            AsyncMock(return_value={"stripe_secret_key": "sk_test", "corporate_billing_enabled": False}),
+        ),
+        patch(
+            "utils.corporate_autotopup.list_wallets_needing_autotopup",
+            AsyncMock(),
+        ) as m_list,
+    ):
+        from utils.corporate_autotopup import run_autotopup_tick
+
+        await run_autotopup_tick()
+
+    m_list.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_proceeds_when_corporate_billing_key_missing():
+    """A settings dict with no corporate_billing_enabled key (legacy row)
+    must still proceed -- the flag defaults to enabled."""
+    with (
+        patch(
+            "utils.corporate_autotopup.get_app_settings",
+            AsyncMock(return_value={"stripe_secret_key": "sk_test"}),
+        ),
+        patch(
+            "utils.corporate_autotopup.list_wallets_needing_autotopup",
+            AsyncMock(return_value=[]),
+        ) as m_list,
+    ):
+        from utils.corporate_autotopup import run_autotopup_tick
+
+        await run_autotopup_tick()
+
+    m_list.assert_awaited_once()
+
+
 @pytest.mark.asyncio
 async def test_loop_logs_exc_info_on_tick_failure():
     """Corporate + admin portal review, gap #43: corporate_autotopup_loop's

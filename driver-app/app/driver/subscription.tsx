@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  ActivityIndicator, Platform, Alert,
+  ActivityIndicator, Alert,
 } from 'react-native';
 import * as ExpoLinking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
@@ -21,16 +21,6 @@ interface Plan {
   rides_per_day: number;
   description: string;
   features: string[];
-}
-
-interface Subscription {
-  id: string;
-  plan_name: string;
-  price: number;
-  rides_per_day: number;
-  status: string;
-  started_at: string;
-  expires_at: string;
 }
 
 interface Payment {
@@ -64,17 +54,9 @@ export default function SubscriptionScreen() {
   const insets = useSafeAreaInsets();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
-  useEffect(() => { loadData(); }, []);
-
-  // The Stripe-checkout deep-link return (spinr-driver://subscription/success)
-  // is owned by the dedicated app/subscription/success.tsx landing screen,
-  // which verifies the session and routes back here with fresh data. The
-  // in-app-browser happy path is handled inline in doSubscribe() via
-  // WebBrowser.openAuthSessionAsync. A `Linking` listener here would be a third,
-  // overlapping path that double-verified and double-toasted on the Android
-  // Custom-Tab case where the OS dispatches the deep link to the app, so it was
-  // removed.
-
+  // Declared before the `useEffect` below (react-hooks/immutability /
+  // React Compiler flags referencing a function before its source-order
+  // declaration) — same expression, same effect timing, no behavior change.
   const loadData = async () => {
     setLoading(true);
     try {
@@ -104,6 +86,22 @@ export default function SubscriptionScreen() {
     } catch (e) { console.log('Sub load error:', e); }
     finally { setLoading(false); }
   };
+
+  useEffect(() => {
+    // Mount-only fetch; loadData sets state after its own await, not
+    // synchronously at the top of the effect. Empty deps, runs once.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadData();
+  }, []);
+
+  // The Stripe-checkout deep-link return (spinr-driver://subscription/success)
+  // is owned by the dedicated app/subscription/success.tsx landing screen,
+  // which verifies the session and routes back here with fresh data. The
+  // in-app-browser happy path is handled inline in doSubscribe() via
+  // WebBrowser.openAuthSessionAsync. A `Linking` listener here would be a third,
+  // overlapping path that double-verified and double-toasted on the Android
+  // Custom-Tab case where the OS dispatches the deep link to the app, so it was
+  // removed.
 
   const loadMorePayments = async () => {
     if (paymentsLoadingMore || paymentsOffset >= paymentsTotal) return;
@@ -437,7 +435,7 @@ export default function SubscriptionScreen() {
         {plans.length === 0 && freeMode && (
           <View style={styles.freeCard}>
             <Text style={styles.freeEmoji}>🎉</Text>
-            <Text style={styles.freeTitle}>It's Free Right Now!</Text>
+            <Text style={styles.freeTitle}>It&apos;s Free Right Now!</Text>
             <Text style={styles.freeMessage}>{freeMessage}</Text>
             <View style={styles.freeBadge}>
               <Ionicons name="checkmark-circle" size={16} color="#10B981" />

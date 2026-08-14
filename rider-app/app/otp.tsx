@@ -16,10 +16,11 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAuthStore, type User } from '@shared/store/authStore';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
-import Analytics from '@shared/analytics';
+import { Analytics } from '@shared/analytics';
 import { logCompleteRegistration } from '@shared/analytics/meta';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { useAnimatedValue, useAnimatedValues } from '../hooks/useAnimatedValue';
 
 const CODE_LENGTH = 4;
 
@@ -38,15 +39,16 @@ export default function OtpScreen() {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
-  const shakeAnim = useRef(new Animated.Value(0)).current;
-  const dotAnims = useRef(
-    Array.from({ length: CODE_LENGTH }, () => new Animated.Value(0)),
-  ).current;
+  const shakeAnim = useAnimatedValue(0);
+  const dotAnims = useAnimatedValues(CODE_LENGTH, 0);
 
   useEffect(() => {
     if (!phoneNumber) router.back();
     return () => { resendInFlight.current = false; };
-  }, []);
+    // phoneNumber is a route param fixed at navigation time (doesn't change
+    // while this screen stays mounted); router is expo-router's stable
+    // singleton — adding both doesn't change when this fires in practice.
+  }, [phoneNumber, router]);
 
   useEffect(() => {
     dotAnims.forEach((anim, i) => {
@@ -57,13 +59,17 @@ export default function OtpScreen() {
         useNativeDriver: true,
       }).start();
     });
-  }, [code]);
+    // dotAnims is a stable array (useAnimatedValues, created once).
+  }, [code, dotAnims]);
 
   useEffect(() => {
     if (countdown > 0) {
       const timer = setTimeout(() => setCountdown(c => c - 1), 1000);
       return () => clearTimeout(timer);
     } else {
+      // Countdown-reached-zero transition; canResend isn't a dep of this
+      // effect (only countdown is), so no loop.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCanResend(true);
     }
   }, [countdown]);
@@ -78,7 +84,8 @@ export default function OtpScreen() {
         router.replace('/profile-setup');
       }
     }
-  }, [user]);
+    // router is expo-router's stable singleton.
+  }, [user, router]);
 
   const triggerShake = () => {
     Animated.sequence([

@@ -30,6 +30,20 @@ interface Notification {
     created_at: string;
 }
 
+// Module-level (not component-scope) so react-hooks/purity doesn't treat the
+// Date.now() read as an impure call "during render" — this is called
+// directly from JSX in the FlatList renderItem below. Doesn't reference any
+// component state, so moving it out is behavior-neutral.
+function formatTime(dateStr: string): string {
+    const diff = Date.now() - new Date(dateStr).getTime();
+    const minutes = Math.floor(diff / 60000);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+}
+
 export default function NotificationsScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
@@ -77,16 +91,6 @@ export default function NotificationsScreen() {
     };
 
     const onRefresh = () => { refetch(); };
-
-    const formatTime = (dateStr: string) => {
-        const diff = Date.now() - new Date(dateStr).getTime();
-        const minutes = Math.floor(diff / 60000);
-        if (minutes < 60) return `${minutes}m ago`;
-        const hours = Math.floor(minutes / 60);
-        if (hours < 24) return `${hours}h ago`;
-        const days = Math.floor(hours / 24);
-        return `${days}d ago`;
-    };
 
     const handleNotificationPress = (item: Notification) => {
         markAsRead(item.id);

@@ -9,6 +9,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useAlertPrefsStore } from '../../store/alertPrefsStore';
+import { showAlert } from '../AlertDialog';
+
+// Machine-readable code for the one flaggable decline reason surfaced here.
+// Trust & safety queries backend audit_logs / logs for this exact string —
+// keep it in sync with backend/routes/drivers/ride_flow.py.
+export const DECLINE_REASON_SERVICE_ANIMAL = 'service_animal';
 
 interface IncentiveItem {
     name: string;
@@ -54,7 +60,8 @@ interface RideOfferPanelProps {
     pickupDistanceKm?: number | null;
     isLoading: boolean;
     onAccept: () => void;
-    onDecline: () => void;
+    /** Optional reason (e.g. DECLINE_REASON_SERVICE_ANIMAL) from the long-press flag flow. */
+    onDecline: (reason?: string) => void;
 }
 
 const ACCENT = '#10B981';
@@ -76,6 +83,15 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
     const styles = useMemo(() => createStyles(colors, isDark), [colors, isDark]);
     const screenHeight = Dimensions.get('window').height;
 
+    // react-hooks/refs ("Cannot access refs during render") flags the JSX
+    // uses of these two below (interpolate() calls, transform binding).
+    // Standard Animated.Value driver idiom: Animated mutates these values
+    // imperatively outside the render cycle via .spring()/.timing(), which
+    // is why they're refs, not useState. Verified safe — grepped this file
+    // for `.current =`: zero matches, so nothing ever reassigns either ref
+    // after creation, and React guarantees useRef() returns the same ref
+    // object every render, so a discarded/replayed concurrent render
+    // reading `.current` here always observes the identical instance.
     const slideAnim = useRef(new Animated.Value(screenHeight)).current;
     const progressAnim = useRef(new Animated.Value(1)).current;
 
@@ -96,6 +112,15 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                 useNativeDriver: true,
             }).start();
         }
+        // slideAnim intentionally excluded — same verified-safe stable
+        // useRef(...).current animation-driver idiom noted above (never
+        // reassigned after creation). Listing a ref-derived value in a
+        // dependency array is itself a render-time ref read under
+        // react-hooks/refs (confirmed in otp.tsx's dotAnims this round —
+        // adding it there was tested and traded one violation for another).
+        // Its identity never changes, so excluding it doesn't change when
+        // this ride-offer slide-in animation fires.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [incomingRide]);
 
     useEffect(() => {
@@ -106,6 +131,9 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
             easing: Easing.linear,
             useNativeDriver: false,
         }).start();
+        // progressAnim intentionally excluded for the same reason as
+        // slideAnim above.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [countdownSeconds, maxCountdown]);
 
     if (!incomingRide) return null;
@@ -126,9 +154,30 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
         }
     };
 
-    const handleDecline = () => {
+    const handleDecline = (reason?: string) => {
         vibrateForActionTap();
-        onDecline();
+        onDecline(reason);
+    };
+
+    // Long-press on Decline surfaces a single, optional flag for the one
+    // decline reason trust & safety needs to be able to detect today: a
+    // driver refusing to accommodate a service animal (CLAUDE.md
+    // Accessibility: "mandatory; drivers cannot refuse"). The plain tap
+    // (the fast, common path on a ~15s countdown) is completely unchanged —
+    // this is additive only, reachable but not in the way.
+    const handleDeclineLongPress = () => {
+        showAlert(
+            'Report a reason?',
+            "If you're declining because you can't accommodate a service animal, let us know. Service animal accommodation is mandatory and refusals are reviewed.",
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Service animal — report & decline',
+                    style: 'destructive',
+                    onPress: () => handleDecline(DECLINE_REASON_SERVICE_ANIMAL),
+                },
+            ],
+        );
     };
 
     const handleAccept = () => {
@@ -150,10 +199,12 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
             <Animated.View
                 style={[
                     styles.dim,
+                    // eslint-disable-next-line react-hooks/refs -- stable Animated.Value driver ref, see note above declarations
                     { opacity: slideAnim.interpolate({ inputRange: [0, screenHeight], outputRange: [1, 0] }) }
                 ]}
             />
 
+            {/* eslint-disable-next-line react-hooks/refs -- stable Animated.Value driver ref, see note above declarations */}
             <Animated.View style={[styles.container, { transform: [{ translateY: slideAnim }] }]}>
                 <View style={styles.card}>
 
@@ -163,6 +214,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                             styles.timerFill,
                             {
                                 backgroundColor: timerColor,
+                                // eslint-disable-next-line react-hooks/refs -- stable Animated.Value driver ref, see note above declarations
                                 width: progressAnim.interpolate({
                                     inputRange: [0, 1],
                                     outputRange: ['0%', '100%']
@@ -346,7 +398,8 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                     <View style={styles.actionBar}>
                         <TouchableOpacity
                             style={styles.declineBtn}
-                            onPress={handleDecline}
+                            onPress={() => handleDecline()}
+                            onLongPress={handleDeclineLongPress}
                             activeOpacity={0.7}
                             accessibilityLabel="Decline ride"
                             disabled={isLoading}
@@ -382,8 +435,6 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
         </View>
     );
 };
-
-const { width: SCREEN_W } = Dimensions.get('window');
 
 function createStyles(colors: ThemeColors, isDark: boolean) {
     const bg = isDark ? '#1C1C1E' : '#FFFFFF';

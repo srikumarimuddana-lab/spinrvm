@@ -216,6 +216,17 @@ class Settings(BaseSettings):
     # loop goes stale.  Leave unset in development; required in production.
     ALERT_WEBHOOK_URL: Optional[str] = None
 
+    # Operational alerting — ops inbox for capacity/saturation alerts, sent via
+    # the same SES/Resend path as receipts (utils/email_provider). Comma-separated
+    # for multiple recipients. Independent of ALERT_WEBHOOK_URL: set either, both,
+    # or neither. Both channels are attempted for every alert, so a dead Slack
+    # workspace does not cost you the page.
+    #
+    # Prefer a distribution list / shared inbox over one person's address — a
+    # single recipient that hard-bounces gets added to the email suppression
+    # list, after which capacity alerts are silently dropped.
+    ALERT_EMAIL_TO: Optional[str] = None
+
     # Corporate ops inbox — notified on self-serve company signups (new KYB
     # queue entries). Optional: when unset the signup still succeeds and the
     # staff KYB queue remains the source of truth; only the courtesy email is

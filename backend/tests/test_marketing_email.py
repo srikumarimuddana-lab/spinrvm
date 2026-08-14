@@ -87,3 +87,44 @@ async def test_null_settings_never_render_none():
     assert "None" not in html
     # Falls back to the default sender name "Spinr".
     assert "Spinr" in html
+
+
+async def test_throttling_flag_off_ignores_should_throttle():
+    """notification_throttling_enabled False (default) — should_throttle is
+    never even consulted; matches the ships-dark contract."""
+    settings = dict(_SETTINGS, notification_throttling_enabled=False)
+    with (
+        patch("services.marketing_consent.is_eligible", AsyncMock(return_value=True)),
+        patch("settings_loader.get_app_settings", AsyncMock(return_value=settings)),
+        patch("utils.notification_throttle.should_throttle", AsyncMock(return_value=True)),
+        patch("utils.marketing_email.send_transactional_email", AsyncMock(return_value=True)) as send,
+    ):
+        ok = await me.send_marketing_email(to="a@b.com", user_id=_USER, subject="Deal", html="<p>Hi</p>", log_id="r")
+    assert ok is True
+    send.assert_awaited_once()
+
+
+async def test_throttling_flag_on_and_throttled_suppresses():
+    settings = dict(_SETTINGS, notification_throttling_enabled=True)
+    with (
+        patch("services.marketing_consent.is_eligible", AsyncMock(return_value=True)),
+        patch("settings_loader.get_app_settings", AsyncMock(return_value=settings)),
+        patch("utils.notification_throttle.should_throttle", AsyncMock(return_value=True)),
+        patch("utils.marketing_email.send_transactional_email", AsyncMock(return_value=True)) as send,
+    ):
+        ok = await me.send_marketing_email(to="a@b.com", user_id=_USER, subject="Deal", html="<p>Hi</p>", log_id="r")
+    assert ok is False
+    send.assert_not_called()
+
+
+async def test_throttling_flag_on_and_not_throttled_sends():
+    settings = dict(_SETTINGS, notification_throttling_enabled=True)
+    with (
+        patch("services.marketing_consent.is_eligible", AsyncMock(return_value=True)),
+        patch("settings_loader.get_app_settings", AsyncMock(return_value=settings)),
+        patch("utils.notification_throttle.should_throttle", AsyncMock(return_value=False)),
+        patch("utils.marketing_email.send_transactional_email", AsyncMock(return_value=True)) as send,
+    ):
+        ok = await me.send_marketing_email(to="a@b.com", user_id=_USER, subject="Deal", html="<p>Hi</p>", log_id="r")
+    assert ok is True
+    send.assert_awaited_once()

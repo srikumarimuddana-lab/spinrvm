@@ -69,10 +69,39 @@ export default function WorkProfileScreen() {
     }
   }, [activeCompanyId, fetchProfiles, fetchBalance]);
 
+  // TODO(C20): exhaustive-deps flags `loadAll` as missing here. It is NOT
+  // safe to just add: loadAll is a useCallback keyed on
+  // [activeCompanyId, fetchProfiles, fetchBalance], so its identity changes
+  // on every company switch — adding it would make this "mount-only" effect
+  // ALSO re-run loadAll() (fetchProfiles + fetchBalance + rides) on every
+  // activeCompanyId change, stacking a THIRD fetch of the same
+  // `/rider/work-profile/:id/rides` endpoint on top of the two that already
+  // race in the effect below (see its own TODO(C20), flagged in round 3 —
+  // docs/change-log/2026-08-12-c20-lint-tier3-rider-app.md). Whether this
+  // mount effect should even keep running independently of that one is
+  // exactly the open question round 3 already punted to a human; deciding
+  // this finding one way or the other means guessing at that same
+  // unresolved design intent. Left unsuppressed and unfixed, not guessed.
   useEffect(() => {
+    // Mount-only load; deps are empty so the state loadAll sets can't
+    // retrigger this effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadAll();
   }, []);
 
+  // TODO(C20): this effect re-fetches balance + the same rides list that
+  // loadAll() above already fetches whenever activeCompanyId is set on
+  // mount — the two run concurrently on first render (loadAll's fetch and
+  // this effect's fetch to the same `/rider/work-profile/:id/rides`
+  // endpoint), so whichever response resolves last silently wins. Not a
+  // render loop (ridesLoading/rides aren't deps here), but it is a
+  // redundant-fetch / minor race that looks unintentional rather than a
+  // deliberate "load once, then re-load on company switch" split — the
+  // duplication should probably be removed by having the mount effect only
+  // call loadAll() and let *this* effect handle both company-switch AND
+  // initial load, but confirming that's safe needs someone who knows why
+  // both paths were written. Left unfixed — flagged in the C20 round 3
+  // report as needing a human decision (rider-app/app/work-profile.tsx:76-85).
   useEffect(() => {
     if (activeCompanyId) {
       fetchBalance();
@@ -82,7 +111,10 @@ export default function WorkProfileScreen() {
         .catch(() => setRides([]))
         .finally(() => setRidesLoading(false));
     }
-  }, [activeCompanyId]);
+    // fetchBalance is a zustand action (stable reference) — this addition
+    // doesn't touch the redundant-fetch question flagged above; it only
+    // makes this effect's own dep array honest.
+  }, [activeCompanyId, fetchBalance]);
 
   const onRefresh = async () => {
     setRefreshing(true);

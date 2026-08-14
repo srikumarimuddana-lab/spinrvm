@@ -1,6 +1,10 @@
 import React from 'react';
-import { render } from '@testing-library/react-native';
-import { RideOfferPanel } from '../../components/panels/RideOfferPanel';
+import { render, fireEvent } from '@testing-library/react-native';
+import { RideOfferPanel, DECLINE_REASON_SERVICE_ANIMAL } from '../../components/panels/RideOfferPanel';
+
+jest.mock('../../components/AlertDialog', () => ({
+  showAlert: jest.fn(),
+}));
 
 jest.mock('@shared/config/spinr.config', () => ({
   __esModule: true,
@@ -114,6 +118,62 @@ describe('RideOfferPanel', () => {
     expect(toJSON()).toBeNull();
   });
 
+  // Gap #13: a pre-accept decline had no reason at all, so trust & safety
+  // had no way to detect a driver refusing a service animal. A long-press
+  // on Decline now offers a single, optional flag for that reason. The
+  // plain tap (the fast, common decline path) must stay exactly as before.
+  describe('decline reason flag (service animal refusal, gap #13)', () => {
+    const { showAlert } = require('../../components/AlertDialog');
+    const mockShowAlert = showAlert as jest.Mock;
+
+    beforeEach(() => {
+      mockShowAlert.mockClear();
+    });
+
+    it('a plain tap on Decline calls onDecline with no reason', () => {
+      const onDecline = jest.fn();
+      const { getByText } = render(<RideOfferPanel {...defaultProps} onDecline={onDecline} />);
+      fireEvent.press(getByText('Decline'));
+      expect(onDecline).toHaveBeenCalledWith(undefined);
+      expect(mockShowAlert).not.toHaveBeenCalled();
+    });
+
+    it('long-pressing Decline opens a reason prompt mentioning service animals', () => {
+      const { getByText } = render(<RideOfferPanel {...defaultProps} />);
+      fireEvent(getByText('Decline'), 'longPress');
+      expect(mockShowAlert).toHaveBeenCalledTimes(1);
+      const [title, message] = mockShowAlert.mock.calls[0];
+      expect(title).toMatch(/reason/i);
+      expect(message.toLowerCase()).toContain('service animal');
+    });
+
+    it('choosing the service-animal option decline+reports with the shared reason code', () => {
+      const onDecline = jest.fn();
+      const { getByText } = render(<RideOfferPanel {...defaultProps} onDecline={onDecline} />);
+      fireEvent(getByText('Decline'), 'longPress');
+
+      const buttons = mockShowAlert.mock.calls[0][2];
+      const serviceAnimalButton = buttons.find((b: any) => /service animal/i.test(b.text));
+      expect(serviceAnimalButton).toBeTruthy();
+      serviceAnimalButton.onPress();
+
+      expect(onDecline).toHaveBeenCalledWith(DECLINE_REASON_SERVICE_ANIMAL);
+    });
+
+    it('choosing Cancel in the reason prompt does not decline', () => {
+      const onDecline = jest.fn();
+      const { getByText } = render(<RideOfferPanel {...defaultProps} onDecline={onDecline} />);
+      fireEvent(getByText('Decline'), 'longPress');
+
+      const buttons = mockShowAlert.mock.calls[0][2];
+      const cancelButton = buttons.find((b: any) => b.style === 'cancel');
+      expect(cancelButton).toBeTruthy();
+      cancelButton.onPress?.();
+
+      expect(onDecline).not.toHaveBeenCalled();
+    });
+  });
+
   it('shows the Quiet ride badge when the rider requested a quiet ride', () => {
     const { getByText } = render(
       <RideOfferPanel {...defaultProps} incomingRide={{ ...mockRide, quiet_mode: true }} />,
@@ -126,6 +186,43 @@ describe('RideOfferPanel', () => {
       <RideOfferPanel {...defaultProps} incomingRide={{ ...mockRide, quiet_mode: false }} />,
     );
     expect(queryByText('Quiet ride')).toBeNull();
+  });
+
+  describe('isLoading (double-tap guard on accept/decline)', () => {
+    it('fires onAccept and onDecline when not loading', () => {
+      const onAccept = jest.fn();
+      const onDecline = jest.fn();
+      const { getByLabelText } = render(
+        <RideOfferPanel {...defaultProps} isLoading={false} onAccept={onAccept} onDecline={onDecline} />,
+      );
+      fireEvent.press(getByLabelText('Accept ride'));
+      fireEvent.press(getByLabelText('Decline ride'));
+      expect(onAccept).toHaveBeenCalledTimes(1);
+      expect(onDecline).toHaveBeenCalledTimes(1);
+    });
+
+    it('disables both Accept and Decline while an accept/decline call is in flight', () => {
+      const onAccept = jest.fn();
+      const onDecline = jest.fn();
+      const { getByLabelText } = render(
+        <RideOfferPanel {...defaultProps} isLoading={true} onAccept={onAccept} onDecline={onDecline} />,
+      );
+      // A double-tap while the store's accept/decline request is still
+      // in flight must not fire a second request — this is what wiring the
+      // real store `isLoading` (instead of a hardcoded `false`) protects.
+      fireEvent.press(getByLabelText('Accept ride'));
+      fireEvent.press(getByLabelText('Decline ride'));
+      expect(onAccept).not.toHaveBeenCalled();
+      expect(onDecline).not.toHaveBeenCalled();
+    });
+
+    it('shows a spinner instead of the Accept label while loading', () => {
+      const { queryByText, UNSAFE_root } = render(
+        <RideOfferPanel {...defaultProps} isLoading={true} />,
+      );
+      expect(queryByText('Accept')).toBeNull();
+      expect(UNSAFE_root.findAllByType(require('react-native').ActivityIndicator).length).toBeGreaterThan(0);
+    });
   });
 
   describe('vibration preference (Settings → Sound & Haptics)', () => {

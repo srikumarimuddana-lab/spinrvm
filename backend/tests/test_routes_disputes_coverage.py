@@ -127,6 +127,26 @@ async def test_create_dispute_notification_failure_does_not_fail_request():
     assert result["dispute"]["status"] == "open"
 
 
+async def test_create_dispute_notification_targets_rider_app():
+    """N10 batch 2: the created-dispute push must pass target_app="rider"
+    (fcm_token_rider) rather than falling through to the legacy fcm_token
+    column — the dispute filer is always a rider account."""
+    push = AsyncMock()
+    with _MultiPatch(
+        _patch_disputes(
+            **{
+                "backend.routes.disputes.db_supabase.get_ride": AsyncMock(return_value=dict(RIDE_ROW)),
+                "backend.routes.disputes.db_supabase.get_rows": AsyncMock(return_value=[]),
+                "backend.routes.disputes.send_push_notification": push,
+            }
+        )
+    ):
+        req = CreateDisputeRequest(ride_id="ride_1", reason="overcharged", description="too high")
+        await create_dispute(req=req, current_user=dict(RIDER))
+    push.assert_awaited_once()
+    assert push.await_args.kwargs["target_app"] == "rider"
+
+
 # ──────────────────────────── admin_get_disputes ────────────────────────────
 
 
@@ -361,9 +381,10 @@ async def test_resolve_notification_wording_bug_pinned():
     req = ResolveDisputeRequest(resolution="approved", refund_amount=Decimal("10.00"))
     captured = {}
 
-    async def fake_push(user_id, title, body, data=None):
+    async def fake_push(user_id, title, body, data=None, **kwargs):
         captured["title"] = title
         captured["body"] = body
+        captured["target_app"] = kwargs.get("target_app")
 
     def fake_refund_create(**kwargs):
         refund = MagicMock()
@@ -381,6 +402,7 @@ async def test_resolve_notification_wording_bug_pinned():
 
     assert result["success"] is True
     assert captured["body"] == "Your dispute has been approved. A refund of $10.00 has been issued."
+    assert captured["target_app"] == "rider"
 
 
 async def test_resolve_notification_wording_rejected():
@@ -390,7 +412,7 @@ async def test_resolve_notification_wording_rejected():
     req = ResolveDisputeRequest(resolution="rejected")
     captured = {}
 
-    async def fake_push(user_id, title, body, data=None):
+    async def fake_push(user_id, title, body, data=None, **kwargs):
         captured["body"] = body
 
     result = await _resolve(

@@ -16,6 +16,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { useAuthStore } from '@shared/store/authStore';
+// Keep the default import: many test files jest.mock(
+// '@shared/config/spinr.config', () => ({ default: {...} })) without a
+// matching named 'SpinrConfig' export, so switching to a named import
+// breaks those mocks (confirmed via utils/__tests__/aiChat.test.ts when
+// the same change was tried there).
+// eslint-disable-next-line import/no-named-as-default
 import SpinrConfig from '@shared/config/spinr.config';
 import { uploadFile } from '@shared/api/upload';
 import { showToast } from '../store/toastStore';
@@ -47,7 +53,7 @@ interface DocState {
 export default function BecomeDriverScreen() {
   const router = useRouter();
   const { registerDriver, isLoading, user } = useAuthStore();
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const [currentStep, setCurrentStep] = useState(0);
@@ -78,24 +84,6 @@ export default function BecomeDriverScreen() {
   const [loadingTypes, setLoadingTypes] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState<string | null>(null); // reqId_side
 
-  useEffect(() => {
-    fetchVehicleTypes();
-    fetchRequirements();
-    Linking.canOpenURL(DRIVER_APP_SCHEME).then(setDriverAppInstalled).catch(() => setDriverAppInstalled(false));
-  }, []);
-
-  const openDriverApp = async () => {
-    const phone = user?.phone || '';
-    const deepLink = `${DRIVER_APP_SCHEME}onboard?phone=${encodeURIComponent(phone)}`;
-    const canOpen = await Linking.canOpenURL(deepLink);
-    if (canOpen) {
-      await Linking.openURL(deepLink);
-    } else {
-      const storeUrl = Platform.OS === 'ios' ? DRIVER_APP_STORE_IOS : DRIVER_APP_STORE_ANDROID;
-      await Linking.openURL(storeUrl);
-    }
-  };
-
   const fetchVehicleTypes = async () => {
     setLoadingTypes(true);
     try {
@@ -118,6 +106,27 @@ export default function BecomeDriverScreen() {
       }
     } catch (e) {
       console.log('Error fetching requirements:', e);
+    }
+  };
+
+  useEffect(() => {
+    // Mount-only data load; deps are empty so the setLoadingTypes/loading
+    // state these functions set on entry can't retrigger this effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchVehicleTypes();
+    fetchRequirements();
+    Linking.canOpenURL(DRIVER_APP_SCHEME).then(setDriverAppInstalled).catch(() => setDriverAppInstalled(false));
+  }, []);
+
+  const openDriverApp = async () => {
+    const phone = user?.phone || '';
+    const deepLink = `${DRIVER_APP_SCHEME}onboard?phone=${encodeURIComponent(phone)}`;
+    const canOpen = await Linking.canOpenURL(deepLink);
+    if (canOpen) {
+      await Linking.openURL(deepLink);
+    } else {
+      const storeUrl = Platform.OS === 'ios' ? DRIVER_APP_STORE_IOS : DRIVER_APP_STORE_ANDROID;
+      await Linking.openURL(storeUrl);
     }
   };
 

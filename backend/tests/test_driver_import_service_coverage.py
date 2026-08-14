@@ -640,6 +640,47 @@ def test_build_plan_document_unparseable_expiry_errors(tmp_path: Path, monkeypat
     assert any(e.field == "expiry_date" for e in plan.errors)
 
 
+def test_build_plan_document_expired_but_approved_errors(tmp_path: Path, monkeypatch):
+    # A28 P2 (ACTION_ITEMS.md): a document row must not import with
+    # status="approved" and an already-past expiry_date.
+    _install(monkeypatch)
+    doc_file = tmp_path / "x.pdf"
+    doc_file.write_bytes(b"x")
+    doc_rows = [
+        {
+            "old_driver_id": "OLD-1",
+            "requirement_key": "drivers_license",
+            "file_path": "x.pdf",
+            "status": "approved",
+            "expiry_date": "2020-01-01",
+        }
+    ]
+    plan = svc.build_plan([_driver_row()], doc_rows, tmp_path, SERVICE_AREA, "batch1")
+    assert any(e.field == "expiry_date" and "already expired" in e.message for e in plan.errors)
+    assert not plan.docs_to_insert
+
+
+def test_build_plan_document_expired_but_pending_is_allowed(tmp_path: Path, monkeypatch):
+    # Same past expiry date, but status="pending" — not yet approved, so no
+    # error; the pending->approved transition later goes through the normal
+    # admin document-review flow, which re-checks expiry itself.
+    _install(monkeypatch)
+    doc_file = tmp_path / "x.pdf"
+    doc_file.write_bytes(b"x")
+    doc_rows = [
+        {
+            "old_driver_id": "OLD-1",
+            "requirement_key": "drivers_license",
+            "file_path": "x.pdf",
+            "status": "pending",
+            "expiry_date": "2020-01-01",
+        }
+    ]
+    plan = svc.build_plan([_driver_row()], doc_rows, tmp_path, SERVICE_AREA, "batch1")
+    assert not plan.errors
+    assert len(plan.docs_to_insert) == 1
+
+
 def test_build_plan_document_resumed_driver_skips_existing_doc(tmp_path: Path, monkeypatch):
     existing_driver = {
         "id": "drv-1",

@@ -9,6 +9,8 @@
  * mirroring the pattern in driverStore.test.ts.
  */
 
+import api from '@shared/api/client';
+
 jest.mock('@shared/api/client', () => ({
   __esModule: true,
   default: {
@@ -19,8 +21,6 @@ jest.mock('@shared/api/client', () => ({
     delete: jest.fn(),
   },
 }));
-
-import api from '@shared/api/client';
 
 const mockApi = api as jest.Mocked<typeof api>;
 

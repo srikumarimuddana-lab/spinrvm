@@ -53,11 +53,17 @@ export function usePlacesAutocomplete(
     const seqRef = useRef(0);
     const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+    const searchInput = input.trim();
+    const tooShort = searchInput.length < MIN_QUERY_LEN;
+
     useEffect(() => {
-        const searchInput = input.trim();
-        if (searchInput.length < MIN_QUERY_LEN) {
-            setPredictions([]);
-            setLoading(false);
+        // Below the minimum length there's nothing to fetch. Rather than
+        // setState-ing predictions/loading back to empty here (a direct
+        // synchronous state write in the effect body — react-hooks/set-state-in-effect),
+        // leave the state alone; the return value below derives the
+        // empty/idle view whenever tooShort, so no extra render is needed
+        // and any stale predictions/loading are masked without being cleared.
+        if (tooShort) {
             return;
         }
         const mySeq = ++seqRef.current;
@@ -94,5 +100,11 @@ export function usePlacesAutocomplete(
         setSessionToken(newSessionToken());
     }, []);
 
-    return { predictions, loading, clear, rotateSessionToken, sessionToken };
+    return {
+        predictions: tooShort ? [] : predictions,
+        loading: tooShort ? false : loading,
+        clear,
+        rotateSessionToken,
+        sessionToken,
+    };
 }

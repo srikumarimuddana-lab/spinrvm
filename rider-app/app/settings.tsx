@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, FlatList,
+  View, Text, StyleSheet, TouchableOpacity, Pressable, ScrollView, Modal,
 } from 'react-native';
 import CustomToggle from '../components/CustomToggle';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -11,7 +11,7 @@ import { showToast } from '../store/toastStore';
 import { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import i18n, { useTranslation, useLanguageStore, LANGUAGES, type Language } from '../i18n';
+import { useTranslation, useLanguageStore, LANGUAGES, type Language } from '../i18n';
 import {
   useNotificationPreferences,
   useUpdateNotificationPreferences,
@@ -25,7 +25,7 @@ import {
 export default function SettingsScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
-  const { colors, isDark, colorScheme, setTheme } = useTheme();
+  const { colors, isDark, setTheme } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { language, setLanguage } = useLanguageStore();
   const { t } = useTranslation();
@@ -49,6 +49,10 @@ export default function SettingsScreen() {
   useEffect(() => {
     const prefs: any = notificationPrefs;
     if (prefs == null) return;
+    // Syncs local toggle state from the fetched preference; none of
+    // pushEnabled/emailEnabled/smsEnabled is a dep of this effect (only
+    // notificationPrefs is), so no loop.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (prefs.push_enabled != null) setPushEnabled(Boolean(prefs.push_enabled));
     if (prefs.email_enabled != null) setEmailEnabled(Boolean(prefs.email_enabled));
     if (prefs.sms_enabled != null) setSmsEnabled(Boolean(prefs.sms_enabled));
@@ -191,8 +195,15 @@ export default function SettingsScreen() {
       </ScrollView>
       {/* Language Picker Modal */}
       <Modal visible={showLangModal} animationType="slide" transparent onRequestClose={() => setShowLangModal(false)}>
-        <TouchableOpacity style={styles.langOverlay} activeOpacity={1} onPress={() => setShowLangModal(false)}>
-          <TouchableOpacity activeOpacity={1} style={styles.langSheet}>
+        {/* Backdrop is an absolute-fill SIBLING under the sheet — same
+            restructure as ride-options.tsx's payment modal: language rows
+            nested inside two TouchableOpacity wrappers can lose their presses
+            on the New Architecture (here they aren't even in a ScrollView, so
+            nothing rescues them). The driver app's language modal already
+            uses this sibling-backdrop shape. */}
+        <View style={styles.langOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowLangModal(false)} />
+          <View style={styles.langSheet}>
             <View style={styles.langHandle} />
             <Text style={styles.langTitle}>Select Language</Text>
             {LANGUAGES.map((lang) => (
@@ -211,8 +222,8 @@ export default function SettingsScreen() {
                 )}
               </TouchableOpacity>
             ))}
-          </TouchableOpacity>
-        </TouchableOpacity>
+          </View>
+        </View>
       </Modal>
 
     </SafeAreaView>

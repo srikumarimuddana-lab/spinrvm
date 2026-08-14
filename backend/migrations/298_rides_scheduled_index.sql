@@ -1,0 +1,88 @@
+-- 298_rides_scheduled_index.sql
+-- Create idx_rides_scheduled as a TRACKED migration.
+--
+-- Background:
+--   utils/scheduled_rides.py's check_scheduled_rides() runs this exact query
+--   every ~45-66s, on every replica:
+--     WHERE is_scheduled = TRUE AND status = 'scheduled'
+--     ORDER BY scheduled_time LIMIT 100
+--   Both this file's own comment (line ~592-595 in scheduled_rides.py) and
+--   migration 276's header assert this is served by an index named
+--   idx_rides_scheduled (is_scheduled, status) — migration 276 explicitly
+--   declined to compose its own new scheduled_time index with it "because
+--   idx_rides_scheduled already narrows the row set efficiently."
+--
+--   That index was never created by any file in this directory. It only
+--   exists in backend/supabase_schema.sql (line ~220) — a standalone
+--   "run this in the Supabase SQL Editor" bootstrap file that sits entirely
+--   outside backend/scripts/migrate.py's ordered-filename migration chain
+--   backend/migrations/CLAUDE.md names as the source of truth. Any
+--   environment provisioned purely through the tracked migration runner is
+--   therefore missing this index — the dispatcher's core per-tick query has
+--   been doing a full scan of `rides` (unbounded by time, since
+--   `is_scheduled`/`status='scheduled'` rows persist until dispatch and
+--   `is_scheduled` is never cleared) on every tick, every replica, on any
+--   such environment. Migration 114 (the original scheduled-dispatch flags
+--   migration) also assumed this index already existed and explicitly
+--   declined to add a supporting index of its own on that assumption.
+--
+--   Found by a fresh spinr-dispatch-reviewer audit of scheduled rides (P1
+--   finding #3).
+--
+-- Index choice — IMPROVED shape, not a verbatim copy of supabase_schema.sql:
+--   supabase_schema.sql defines idx_rides_scheduled as a plain (non-partial)
+--   composite btree on (is_scheduled, status), and migration 276 declined to
+--   compose scheduled_time into it, reasoning "status changes on every
+--   dispatch, and a predicate index tied to a mutable column needs constant
+--   re-evaluation." That reasoning is correct for 276's OWN index (a plain
+--   btree on scheduled_time alone, with no status key) but does not
+--   transfer here: status IS already a key column of this composite, so
+--   every status transition already forces an index-entry relocation
+--   (delete the old (is_scheduled, old_status) entry, insert the new one)
+--   regardless of whether the index is partial. A partial predicate
+--   `WHERE is_scheduled AND status = 'scheduled'` adds no extra maintenance
+--   cost beyond what the composite already pays, while self-pruning: every
+--   ride that ever passed through 'scheduled' (dispatched, completed,
+--   cancelled — years of history, since is_scheduled is never cleared)
+--   would otherwise permanently occupy a slot in a non-partial version.
+--   Going further, this migration makes it a COVERING partial index on
+--   (scheduled_time) alone with that same WHERE clause — the query only
+--   ever needs the WHERE predicate plus ORDER BY scheduled_time LIMIT 100,
+--   so this single index serves the whole query as an index-only,
+--   already-sorted scan, without needing to combine with migration 276's
+--   separate idx_rides_scheduled_time index for this particular query.
+--   (Caught during spinr-migration-reviewer review of this file; adopted
+--   here since the index is only now becoming a tracked, permanent
+--   definition — not worth perpetuating a copy-pasted justification that
+--   doesn't actually apply to this shape.)
+--
+--   backend/supabase_schema.sql's definition is updated in the same commit
+--   to match, so a fresh bootstrap and a fresh migrate.py run produce an
+--   identical index. Known limitation: an environment that already ran the
+--   OLD supabase_schema.sql bootstrap has an index of the same NAME but the
+--   OLD (non-partial) shape — CREATE INDEX ... IF NOT EXISTS matches by
+--   name, not definition, so this migration is a no-op there and such an
+--   environment simply doesn't get the extra optimization. That is a
+--   strict no-regression outcome (same as before this migration existed),
+--   not a new risk; reconciling it requires a manual DROP + recreate on
+--   that specific environment, tracked as a follow-up if/when one is found
+--   to actually be running the old bootstrap path in production.
+--
+-- CONCURRENTLY: the migration runner detects CONCURRENTLY and applies this
+-- file in autocommit mode, so the build never blocks live dispatch/booking
+-- traffic against `rides`.
+--
+-- Forward-compatible: additive index only, safe against in-flight traffic.
+--
+-- Rollback:
+--   DROP INDEX CONCURRENTLY IF EXISTS idx_rides_scheduled;
+--   (Safe to drop at any time — this is a read-path performance index, not
+--   a correctness dependency; check_scheduled_rides() would simply fall
+--   back to the full-scan behavior this migration fixes.)
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rides_scheduled
+    ON public.rides (scheduled_time)
+    WHERE is_scheduled = TRUE AND status = 'scheduled';
+
+COMMENT ON INDEX idx_rides_scheduled IS
+  'Scheduled-ride dispatcher candidate query (utils/scheduled_rides.py check_scheduled_rides): WHERE is_scheduled=TRUE AND status=''scheduled'' ORDER BY scheduled_time LIMIT 100. Partial + covering: self-prunes as rides dispatch, serves the whole query as an index-only sorted scan.';

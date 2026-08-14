@@ -31,10 +31,10 @@ _UNBRANDED_BY_DESIGN = {
         "duplicate or bury that footer. Its deliberately-separate copy of the "
         "address assembly is N16 in ACTION_ITEMS.md."
     ),
-    "utils/receipt_email.py": (
-        "Dead code with divergent hardcoded tax rates; no production callers. "
-        "Scheduled for deletion as N8 rather than retrofit."
-    ),
+    # utils/receipt_email.py was here (dead code, divergent hardcoded tax
+    # rates, no production callers) until it was deleted by N8
+    # (ACTION_ITEMS.md) — no exemption needed for a file that no longer
+    # exists.
     # utils/email_provider.py is deliberately absent: it *defines*
     # send_transactional_email rather than awaiting one, so the detector below
     # never sees it and an entry here would be a dead exemption.

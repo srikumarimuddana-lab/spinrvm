@@ -24,6 +24,7 @@ LOOP_THRESHOLDS: Dict[str, float] = {
     "subscription_expiry (6h)": 6 * 3600 * 2,  # 12 h
     "surge_engine (2min)": 2 * 60 * 4,  # 8 min
     "scheduled_dispatcher (60s)": 60 * 4,  # 4 min
+    "capacity_watchdog (60s)": 60 * 4,  # 4 min
     "payment_retry (5min)": 5 * 60 * 4,  # 20 min
     "document_expiry (12h)": 12 * 3600 * 2,  # 24 h
     "corporate_autotopup (10min)": 10 * 60 * 4,  # 40 min

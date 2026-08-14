@@ -21,7 +21,7 @@ import { useAuthStore } from '@shared/store/authStore';
 import { useLanguageStore } from '../../store/languageStore';
 import { useNavStore } from '../../store/navStore';
 import { useAlertPrefsStore } from '../../store/alertPrefsStore';
-import { languages, Language } from '../../i18n';
+import { languages } from '../../i18n';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import {
     useNotificationPreferences,
@@ -56,7 +56,9 @@ export default function SettingsScreen() {
         loadLanguage();
         loadNavApp();
         loadAlertPrefs();
-    }, []);
+        // All three are stable store actions; adding them doesn't change
+        // this mount-only effect's firing.
+    }, [loadLanguage, loadNavApp, loadAlertPrefs]);
 
     // Preference states (local)
     const [pushNotifications, setPushNotifications] = useState(true);
@@ -107,15 +109,26 @@ export default function SettingsScreen() {
     const driverMe = driverMeRaw as { is_wav?: boolean | null } | undefined;
     const updateDriverMe = useUpdateDriverMe();
     const [isWav, setIsWav] = useState(false);
+    // Extracted so the effect's dep array below is a single statically
+    // checkable primitive instead of an inline `driverMe?.is_wav` expression
+    // (the "complex expression" the linter flagged) — same value, same
+    // re-run trigger (primitive equality on this boolean/null), no behavior
+    // change.
+    const driverMeIsWav = driverMe?.is_wav;
     useEffect(() => {
-        const driverMeData = driverMe as { is_wav?: boolean | null } | null;
-        if (driverMeData?.is_wav != null) setIsWav(Boolean(driverMeData.is_wav));
-    }, [(driverMe as any)?.is_wav]);
+        // Sync local WAV toggle from the cached/refetched driver row. Local
+        // edits aren't fed back into driverMe, so this can't loop.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        if (driverMeIsWav != null) setIsWav(Boolean(driverMeIsWav));
+    }, [driverMeIsWav]);
     useEffect(() => {
         // Server can return null when the row hasn't been created yet;
-        // keep the defaults set above in that case.
+        // keep the defaults set above in that case. Sync local notification
+        // toggles from the cached/refetched prefs response — local edits
+        // aren't fed back into prefsResponse, so this can't loop.
         const prefs: any = prefsResponse;
         if (prefs == null) return;
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         if (prefs.push_enabled != null) setPushNotifications(Boolean(prefs.push_enabled));
         if (prefs.ride_updates != null) setRideAlerts(Boolean(prefs.ride_updates));
         if (prefs.earnings_summary != null) setEarningsSummary(Boolean(prefs.earnings_summary));

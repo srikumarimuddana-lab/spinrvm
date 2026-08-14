@@ -1,6 +1,8 @@
 // driverStore imports tripLocationRecorder, which imports expo-location —
 // mocked to avoid pulling in the real native module (crashes Jest's Expo
 // Winter-runtime polyfill outside a real device/simulator context).
+import { useDriverStore } from '../../store/driverStore';
+
 jest.mock('../../utils/tripLocationRecorder', () => ({
   tripLocationRecorder: {
     startRide: jest.fn(),
@@ -14,8 +16,6 @@ jest.mock('../../utils/tripLocationRecorder', () => ({
 jest.mock('../../utils/tripLocationTransport', () => ({
   apiLocationBatchTransport: jest.fn(),
 }));
-
-import { useDriverStore } from '../../store/driverStore';
 
 // V4 (issue #11): the driver must drop stale / out-of-order ride_status_changed
 // events by comparing the server-authoritative monotonic `version`

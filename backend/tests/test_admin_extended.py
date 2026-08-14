@@ -1202,10 +1202,33 @@ class TestAdminGetDriverRides:
 
         rides = [_ride("completed")]
 
-        with patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(return_value=rides)):
+        with (
+            patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(return_value=rides)),
+            patch("backend.routes.admin.drivers.db_supabase.count_documents", AsyncMock(return_value=1)),
+        ):
             result = asyncio.run(admin_drivers.admin_get_driver_rides(driver_id=DRIVER_ID, limit=50, offset=0))
 
         assert "rides" in result
+
+    def test_total_count_reflects_true_count_beyond_fetch_cap(self):
+        """Finding 2 (docs/audit/2026-08-13-migrated-data-visibility-audit.md):
+        `total` is bounded by fetch_size and was the only count the response
+        carried, so a driver with more rides than the page size looked
+        identical to one with exactly that many. `total_count` must reflect
+        the real row count via count_documents(), independent of fetch_size.
+        """
+        from backend.routes.admin import drivers as admin_drivers
+
+        rides = [_ride("completed") for _ in range(5)]
+
+        with (
+            patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(return_value=rides)),
+            patch("backend.routes.admin.drivers.db_supabase.count_documents", AsyncMock(return_value=900)),
+        ):
+            result = asyncio.run(admin_drivers.admin_get_driver_rides(driver_id=DRIVER_ID, limit=5, offset=0))
+
+        assert result["total"] == 5
+        assert result["total_count"] == 900
 
 
 class TestAdminGetDriverLocationTrail:

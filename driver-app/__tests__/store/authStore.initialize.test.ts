@@ -17,6 +17,12 @@
  * driver-app's `@shared/*` → `__mocks__/@shared/*` module-name mapper.
  */
 
+import apiClient, {
+  setInMemoryToken,
+  setRefreshCallback,
+} from '../../../shared/api/client';
+import { useAuthStore } from '../../../shared/store/authStore';
+
 jest.mock('react-native', () => ({
   Platform: { OS: 'android' },
 }));
@@ -82,12 +88,6 @@ jest.mock('../../../shared/api/client', () => ({
   setSuppressRefreshSignOut: jest.fn(),
   getAuthHeader: jest.fn(() => Promise.resolve(null)),
 }));
-
-import apiClient, {
-  setInMemoryToken,
-  setRefreshCallback,
-} from '../../../shared/api/client';
-import { useAuthStore } from '../../../shared/store/authStore';
 
 const mockGet = apiClient.get as jest.Mock;
 const mockPost = apiClient.post as jest.Mock;

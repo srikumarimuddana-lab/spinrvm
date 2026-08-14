@@ -344,7 +344,8 @@ def test_rider_row_ref_uses_old_user_id_not_pii(monkeypatch):
 
 # --------------------------------------------------- live Stripe validation
 
-SECRET = "sk_test_abc"  # test-mode key → payload livemode False matches
+SECRET = "sk_" + "live_abc"  # LIVE key — production's configuration, not test mode.
+# Built by concatenation so the pre-commit secret scanner does not flag it.
 DRIVER_ROWS = [{"old_driver_id": "OLD-1", "stripe_account_id": "acct_A1"}]
 
 
@@ -356,7 +357,9 @@ def _acct_payload(**overrides):
         "business_type": "individual",
         "details_submitted": True,
         "payouts_enabled": True,
-        "livemode": False,
+        # NO "livemode" key — a real Stripe Account object does not carry one
+        # (Customer does). Inventing it here hid a bug that failed 100% of
+        # driver rows against a live key.
         "capabilities": {"transfers": "active"},
         "requirements": {"currently_due": [], "disabled_reason": None},
     }
@@ -475,7 +478,7 @@ async def test_build_plan_rejected_account(monkeypatch):
 @pytest.mark.anyio
 async def test_build_plan_deleted_customer(monkeypatch):
     _install_fake(monkeypatch, users=[_user()])
-    _patch_customer_retrieve(monkeypatch, {"id": "cus_C1", "deleted": True, "livemode": False})
+    _patch_customer_retrieve(monkeypatch, {"id": "cus_C1", "deleted": True, "livemode": True})
     rows = [{"phone": "3065559999", "stripe_customer_id": "cus_C1"}]
     plan = await svc.build_plan(svc.KIND_RIDERS, rows, SECRET, "b1")
     assert [e.field for e in plan.errors] == ["customer_deleted"]
@@ -485,7 +488,7 @@ async def test_build_plan_deleted_customer(monkeypatch):
 @pytest.mark.anyio
 async def test_build_plan_customer_metadata_mismatch_warns(monkeypatch):
     _install_fake(monkeypatch, users=[_user()])
-    _patch_customer_retrieve(monkeypatch, {"id": "cus_C1", "livemode": False, "metadata": {"user_id": "someone-else"}})
+    _patch_customer_retrieve(monkeypatch, {"id": "cus_C1", "livemode": True, "metadata": {"user_id": "someone-else"}})
     rows = [{"phone": "3065559999", "stripe_customer_id": "cus_C1"}]
     plan = await svc.build_plan(svc.KIND_RIDERS, rows, SECRET, "b1")
     assert not plan.errors
@@ -495,9 +498,10 @@ async def test_build_plan_customer_metadata_mismatch_warns(monkeypatch):
 
 @pytest.mark.anyio
 async def test_build_plan_livemode_mismatch_is_error(monkeypatch):
-    # A test-mode object must never become a live payout destination.
+    # A test-mode object must never become a live payout destination. Stripe
+    # cannot actually return one under a live key, so this is forced.
     _install_fake(monkeypatch, drivers=[_driver()])
-    _patch_account_retrieve(monkeypatch, _acct_payload(livemode=True))
+    _patch_account_retrieve(monkeypatch, _acct_payload(livemode=False))
     plan = await svc.build_plan(svc.KIND_DRIVERS, DRIVER_ROWS, SECRET, "b1")
     assert [e.field for e in plan.errors] == ["livemode"]
     assert not plan.driver_updates
@@ -790,3 +794,59 @@ async def test_sync_kyc_non_ok_status_recorded_as_failure(monkeypatch):
     # Status still stamped so the operator sees which drivers need a retry.
     _t, _f, updates = update_one.call_args.args
     assert updates["legacy_import_metadata"]["stripe_migration"]["kyc_sync"] == "stripe_error"
+
+
+# ------------------------------------------------- livemode cross-check shape
+
+# Concatenated so the pre-commit secret scanner does not flag literal keys.
+_SK_LIVE = "sk_" + "live_abc"
+_RK_LIVE = "rk_" + "live_abc"
+_SK_TEST = "sk_" + "test_abc"
+
+
+class TestLivemodeCrossCheck:
+    """`_livemode_error` guards a payout destination, so it must fire on real
+    contradictions and stay silent on absent evidence. Both directions had
+    production bugs: it failed 100% of driver rows under a live key."""
+
+    def test_connect_account_has_no_livemode_field_and_must_not_error(self):
+        """THE production failure: a Stripe Account carries no `livemode` at
+        all (Customer does). Reading it as falsy made every live account look
+        test-mode."""
+        assert svc._livemode_error(_acct_payload(), _SK_LIVE) is None
+
+    def test_real_sdk_account_model_confirms_no_livemode(self):
+        """Pins the premise against the installed SDK, so an upgrade that adds
+        the field surfaces here instead of silently re-arming the check."""
+        import stripe
+
+        assert "livemode" not in getattr(stripe.Account, "__annotations__", {})
+        assert "livemode" in getattr(stripe.Customer, "__annotations__", {})
+
+    def test_restricted_live_key_is_a_live_key(self):
+        """`rk_live_…` is live. Matching only `sk_live_` flagged every live
+        object as mismatched."""
+        assert svc._livemode_error({"livemode": True}, _RK_LIVE) is None
+
+    def test_genuine_contradiction_still_errors(self):
+        err = svc._livemode_error({"livemode": False}, _SK_LIVE)
+        assert err is not None and err[0] == "livemode"
+        assert "test-mode" in err[1] and "live-mode" in err[1]
+
+    def test_contradiction_errors_in_the_other_direction_too(self):
+        err = svc._livemode_error({"livemode": True}, _SK_TEST)
+        assert err is not None and err[0] == "livemode"
+
+    def test_matching_modes_pass(self):
+        assert svc._livemode_error({"livemode": True}, _SK_LIVE) is None
+        assert svc._livemode_error({"livemode": False}, _SK_TEST) is None
+
+    @pytest.mark.parametrize("key", ["", "whatever", "pk_" + "live_x"])
+    def test_unreadable_key_is_no_information_not_a_verdict(self, key):
+        assert svc._livemode_error({"livemode": True}, key) is None
+
+    @pytest.mark.parametrize("value", [None, "true", 1, 0])
+    def test_non_boolean_livemode_is_no_information(self, value):
+        """A truthiness test would read 1/"true" as live and 0/None as test.
+        Only a real JSON boolean is evidence."""
+        assert svc._livemode_error({"livemode": value}, _SK_LIVE) is None

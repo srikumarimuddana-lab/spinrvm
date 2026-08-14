@@ -59,3 +59,44 @@ async def test_returns_false_on_provider_failure():
     ):
         ok = await ms.send_marketing_sms(to="+13065551234", user_id=_USER, message="Deal!")
     assert ok is False
+
+
+async def test_throttling_flag_off_ignores_should_throttle():
+    """notification_throttling_enabled False (default) — should_throttle is
+    never even consulted; matches the ships-dark contract."""
+    settings = dict(_SETTINGS, notification_throttling_enabled=False)
+    with (
+        patch("services.marketing_consent.is_eligible", AsyncMock(return_value=True)),
+        patch("settings_loader.get_app_settings", AsyncMock(return_value=settings)),
+        patch("utils.notification_throttle.should_throttle", AsyncMock(return_value=True)),
+        patch("utils.marketing_sms.send_sms", AsyncMock(return_value={"success": True})) as send,
+    ):
+        ok = await ms.send_marketing_sms(to="+13065551234", user_id=_USER, message="Deal!", log_id="rider")
+    assert ok is True
+    send.assert_called_once()
+
+
+async def test_throttling_flag_on_and_throttled_suppresses():
+    settings = dict(_SETTINGS, notification_throttling_enabled=True)
+    with (
+        patch("services.marketing_consent.is_eligible", AsyncMock(return_value=True)),
+        patch("settings_loader.get_app_settings", AsyncMock(return_value=settings)),
+        patch("utils.notification_throttle.should_throttle", AsyncMock(return_value=True)),
+        patch("utils.marketing_sms.send_sms", AsyncMock(return_value={"success": True})) as send,
+    ):
+        ok = await ms.send_marketing_sms(to="+13065551234", user_id=_USER, message="Deal!", log_id="rider")
+    assert ok is False
+    send.assert_not_called()
+
+
+async def test_throttling_flag_on_and_not_throttled_sends():
+    settings = dict(_SETTINGS, notification_throttling_enabled=True)
+    with (
+        patch("services.marketing_consent.is_eligible", AsyncMock(return_value=True)),
+        patch("settings_loader.get_app_settings", AsyncMock(return_value=settings)),
+        patch("utils.notification_throttle.should_throttle", AsyncMock(return_value=False)),
+        patch("utils.marketing_sms.send_sms", AsyncMock(return_value={"success": True})) as send,
+    ):
+        ok = await ms.send_marketing_sms(to="+13065551234", user_id=_USER, message="Deal!", log_id="rider")
+    assert ok is True
+    send.assert_called_once()

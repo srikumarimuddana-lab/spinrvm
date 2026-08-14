@@ -2,7 +2,8 @@
 
 All deltas (top-ups, ride debits, adjustments, refunds) go through this
 service. It wraps the Postgres function `corporate_wallet_apply_delta`
-which enforces row-level locking, idempotency on stripe_payment_intent_id,
+which enforces row-level locking, idempotency on stripe_payment_intent_id
+(top-ups) or ride_id (internal ride-settlement debits — migration 297),
 and optional soft-negative-floor enforcement.
 """
 
@@ -94,8 +95,15 @@ async def apply_adjustment(
     notes: str,
     actor_user_id: str,
     floor: Optional[_Numeric] = None,
+    ride_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Signed adjustment to the master wallet (support/refund). Notes required."""
+    """Signed adjustment to the master wallet (support/refund). Notes required.
+
+    ``ride_id``, when passed, enables the RPC's ride-scoped idempotency
+    (migration 297) — a retried settle_corporate call for the same ride is a
+    no-op instead of a second debit. Omit for ad-hoc admin adjustments that
+    aren't tied to a specific ride.
+    """
     delta = Decimal(str(amount))
     if delta == 0:
         raise ValueError("adjustment amount cannot be zero")
@@ -104,6 +112,7 @@ async def apply_adjustment(
         scope="master",
         type_="adjustment",
         delta=delta,
+        ride_id=ride_id,
         actor_user_id=actor_user_id,
         notes=notes,
         floor=Decimal(str(floor)) if floor is not None else None,

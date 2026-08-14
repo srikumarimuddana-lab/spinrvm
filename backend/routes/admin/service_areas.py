@@ -208,6 +208,7 @@ class ServiceAreaUpdateRequest(BaseModel):
     pst_rate: Optional[float] = Field(default=None, ge=0, le=100)
     hst_enabled: Optional[bool] = None
     hst_rate: Optional[float] = Field(default=None, ge=0, le=100)
+    tax_justification: Optional[str] = None
     required_documents: Optional[Any] = None
     spinr_pass_enabled: Optional[bool] = None
     subscription_plan_ids: Optional[List[str]] = None
@@ -281,6 +282,7 @@ class AreaTaxRequest(BaseModel):
     pst_rate: Optional[float] = None
     hst_enabled: Optional[bool] = None
     hst_rate: Optional[float] = None
+    tax_justification: Optional[str] = None
 
 
 # ---------- Service areas (table: service_areas) ----------
@@ -552,6 +554,36 @@ async def admin_update_service_area(
                 area_id,
                 {"surge_multiplier": sm, "justification": justification},
             )
+
+    # A29 (ACTION_ITEMS.md): a tax-rate change carries real regulatory/
+    # financial weight (every rider's charge, CRA/SK remittance obligations)
+    # — require the same written-justification discipline as an above-cap
+    # surge override, on this endpoint specifically because it's the one the
+    # admin-dashboard's service-areas page actually calls (`handleFieldUpdate`
+    # → `updateServiceArea` → this PUT) to edit GST/PST/HST. The two
+    # dedicated `/areas/{id}/tax` endpoints (`features.py`'s `pricing_router`,
+    # this file's own `admin_update_area_tax`) are unreachable from any
+    # frontend today — confirmed via grep, no `.tsx` caller for either — so
+    # fixing only this endpoint addresses the actual live risk; those two are
+    # separately hardened below for completeness/consistency, not because
+    # they carry live traffic.
+    _TAX_FIELDS = ("gst_enabled", "gst_rate", "pst_enabled", "pst_rate", "hst_enabled", "hst_rate")
+    _tax_fields_touched = [f for f in _TAX_FIELDS if getattr(area, f) is not None]
+    if _tax_fields_touched:
+        tax_justification = (area.tax_justification or "").strip()
+        if not tax_justification:
+            raise HTTPException(
+                status_code=400,
+                detail="Changing GST/PST/HST configuration requires a written justification "
+                "(regulatory + financial risk).",
+            )
+        await log_admin_action(
+            admin,
+            "tax_config_updated",
+            "service_areas",
+            area_id,
+            {"updated_fields": _tax_fields_touched, "justification": tax_justification},
+        )
 
     update_payload: Dict[str, Any] = {}
     for field in [
@@ -839,12 +871,15 @@ async def admin_get_area_tax(area_id: str):
 
 
 @router.put("/areas/{area_id}/tax")
-async def admin_update_area_tax(area_id: str, tax: AreaTaxRequest):
-    """Update tax configuration for a service area."""
-    updates = tax.model_dump(exclude_none=True)
-    if updates:
-        await db_supabase.update_one("service_areas", {"id": area_id}, updates)
-    area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
+async def admin_update_area_tax(area_id: str, tax: AreaTaxRequest, admin: dict = Depends(get_admin_user)):
+    """Update tax configuration for a service area.
+
+    A29 (ACTION_ITEMS.md): not currently reachable from any frontend (no
+    `.tsx` caller for this path today — the admin-dashboard's own tax editor
+    goes through `PUT /service-areas/{area_id}`, see the justification
+    requirement there) but hardened here too for consistency and in case
+    this dedicated endpoint gets wired up later.
+    """
     _TAX_FIELDS = [
         "gst_enabled",
         "gst_rate",
@@ -853,6 +888,35 @@ async def admin_update_area_tax(area_id: str, tax: AreaTaxRequest):
         "hst_enabled",
         "hst_rate",
     ]
+    # A29 follow-up: a nonexistent area_id previously fell through to an
+    # unhandled AttributeError (500) at the final `area.get(...)` below —
+    # worse, an update against a nonexistent area would still have gone
+    # through db_supabase.update_one (a silent no-op match-zero-rows) and
+    # log_admin_action (an audit entry claiming a change to an area that
+    # doesn't exist) before that crash. Checked up front so a bad area_id
+    # 404s cleanly with no write and no audit entry.
+    area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
+    if not area:
+        raise HTTPException(status_code=404, detail="Service area not found")
+
+    updates = tax.model_dump(exclude_none=True, exclude={"tax_justification"})
+    if updates:
+        justification = (tax.tax_justification or "").strip()
+        if not justification:
+            raise HTTPException(
+                status_code=400,
+                detail="Changing GST/PST/HST configuration requires a written justification "
+                "(regulatory + financial risk).",
+            )
+        await db_supabase.update_one("service_areas", {"id": area_id}, updates)
+        await log_admin_action(
+            admin,
+            "tax_config_updated",
+            "service_areas",
+            area_id,
+            {"updated_fields": [k for k in updates if k in _TAX_FIELDS], "justification": justification},
+        )
+        area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
     return {k: area.get(k) for k in _TAX_FIELDS}
 
 

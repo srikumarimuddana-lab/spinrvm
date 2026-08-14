@@ -217,7 +217,12 @@ CREATE TABLE IF NOT EXISTS rides (
 CREATE INDEX IF NOT EXISTS idx_rides_rider    ON rides (rider_id);
 CREATE INDEX IF NOT EXISTS idx_rides_driver   ON rides (driver_id);
 CREATE INDEX IF NOT EXISTS idx_rides_status   ON rides (status);
-CREATE INDEX IF NOT EXISTS idx_rides_scheduled ON rides (is_scheduled, status);
+-- Partial + covering: serves check_scheduled_rides()'s
+-- WHERE is_scheduled AND status='scheduled' ORDER BY scheduled_time LIMIT 100
+-- as an index-only sorted scan, and self-prunes as rides dispatch (kept in
+-- sync with backend/migrations/298_rides_scheduled_index.sql).
+CREATE INDEX IF NOT EXISTS idx_rides_scheduled ON rides (scheduled_time)
+    WHERE is_scheduled = TRUE AND status = 'scheduled';
 
 -- ============================================================
 -- 8. SAVED_ADDRESSES

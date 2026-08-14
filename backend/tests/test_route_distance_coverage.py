@@ -517,7 +517,16 @@ async def test_compute_route_via_google_survives_a_cache_write_failure():
 
 @pytest.mark.asyncio
 async def test_snap_to_road_returns_none_without_any_provider_configured():
-    with patch.object(rd, "get_app_settings", AsyncMock(return_value={})), patch.object(rd.settings, "OSRM_URL", ""):
+    # _live_osrm_url() falls back to the public OSRM_FALLBACK_URL demo router
+    # (core/config.py) when neither app_settings nor OSRM_URL is set — that
+    # fallback must be cleared too, or this test silently makes a real network
+    # call to router.project-osrm.org and asserts against live data instead of
+    # exercising the "no provider configured" path its name promises.
+    with (
+        patch.object(rd, "get_app_settings", AsyncMock(return_value={})),
+        patch.object(rd.settings, "OSRM_URL", ""),
+        patch.object(rd.settings, "OSRM_FALLBACK_URL", ""),
+    ):
         result = await rd.snap_to_road(50.45, -104.62)
     assert result is None
 

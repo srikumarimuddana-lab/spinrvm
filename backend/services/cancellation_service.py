@@ -208,6 +208,7 @@ async def pay_driver_cancellation_fee(
             title="Cancellation fee earned",
             body=f"${fee_dec:.2f} cancellation fee added to your earnings.",
             data={"type": "cancellation_fee_paid", "ride_id": ride_id},
+            target_app="driver",
         )
         return True
     except Exception as fee_err:

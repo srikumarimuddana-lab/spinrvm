@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useState, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList, TextInput,
   ActivityIndicator, KeyboardAvoidingView,
@@ -58,18 +58,24 @@ export default function SavedPlacesScreen() {
     title: string;
     message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+    buttons?: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const loadData = async () => {
+  // fetchSavedAddresses is a zustand action (stable), so loadData wrapped in
+  // useCallback is also stable — depending on it below doesn't change when
+  // the mount effect fires.
+  const loadData = useCallback(async () => {
     setLoading(true);
     await fetchSavedAddresses();
     setLoading(false);
-  };
+  }, [fetchSavedAddresses]);
+
+  useEffect(() => {
+    // Mount-only load; deps are empty so the state loadData sets can't
+    // retrigger this effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadData();
+  }, [loadData]);
 
   const searchPlaces = (query: string) => {
     setSearchText(query);

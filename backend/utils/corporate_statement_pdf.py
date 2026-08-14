@@ -17,12 +17,71 @@ before; this is a formatted read of numbers already computed elsewhere.
 
 from __future__ import annotations
 
+import logging
+from decimal import Decimal, InvalidOperation
+
+logger = logging.getLogger(__name__)
+
 # Line items rendered before the table is capped — total below always
 # covers every line item regardless of the cap (never let the numbers on
 # a document a company may file for its own books look like they don't
 # add up).
 _MAX_LINE_ITEM_ROWS = 40
 _MAX_MEMBER_ROWS = 20
+
+
+def _log_combined_tax_fallback(company: dict, statement: dict, tax_total_str: str, tax_by_type: dict) -> None:
+    """A29 (ACTION_ITEMS.md): loudly flag the combined "Tax (GST/PST)" fallback.
+
+    `_aggregate_rows` (routes/corporate_company.py) buckets tax by type from
+    each ride's `tax_breakdown`; `tax_by_type` landing here empty means that
+    breakdown was missing for every ride in the period even though rides
+    exist. When `tax_total` is genuinely zero (no rides, or no tax collected)
+    the combined line is harmless — it says "$0.00" either way, so we skip
+    the alert to avoid paging on a no-op. When `tax_total` is nonzero we
+    cannot tell whether it was GST-only, PST-only, or both, so collapsing it
+    into one line risks violating the separate-line-items rule
+    (regulatory-sk.md) — surface it loudly instead of shipping it silently.
+
+    Never raises: telemetry must not block a corporate admin's PDF download.
+    """
+    try:
+        tax_total = Decimal(str(tax_total_str))
+    except (InvalidOperation, TypeError, ValueError):
+        # Unparseable amount is itself suspicious — treat as "assume nonzero"
+        # so we alert rather than silently skip.
+        tax_total = Decimal("1")
+    if tax_total == 0:
+        return
+
+    company_id = company.get("id") or company.get("company_id") or "unknown"
+    month = statement.get("month") or "unknown"
+    logger.error(
+        "corporate_statement_pdf: combined GST/PST fallback line used with "
+        "nonzero tax_total (tax_by_type empty/missing) company_id=%s month=%s "
+        "tax_total=%s tax_by_type=%r",
+        company_id,
+        month,
+        tax_total_str,
+        tax_by_type,
+    )
+    try:
+        import sentry_sdk  # type: ignore
+
+        sentry_sdk.capture_message(
+            "corporate_statement_pdf_gst_pst_fallback",
+            level="error",
+            tags={"domain": "corporate", "surface": "backend"},
+            contexts={
+                "corporate_statement": {
+                    "company_id": str(company_id),
+                    "month": str(month),
+                    "tax_total": tax_total_str,
+                }
+            },
+        )
+    except Exception as sentry_err:  # pragma: no cover - telemetry must never break statement generation
+        logger.debug("corporate_statement_pdf: Sentry capture unavailable for GST/PST fallback: %s", sentry_err)
 
 
 def generate_corporate_statement_pdf(company: dict, statement: dict) -> bytes:
@@ -95,7 +154,9 @@ def generate_corporate_statement_pdf(company: dict, statement: dict) -> bytes:
         for label, amount in tax_by_type.items():
             line_item(pdf_safe(str(label)), str(amount))
     else:
-        line_item("Tax (GST/PST)", money("tax_total"))
+        tax_total_str = money("tax_total")
+        _log_combined_tax_fallback(company, statement, tax_total_str, tax_by_type)
+        line_item("Tax (GST/PST)", tax_total_str)
     pdf.ln(1)
     pdf.set_draw_color(*rule)
     pdf.line(15, pdf.get_y(), 15 + W, pdf.get_y())

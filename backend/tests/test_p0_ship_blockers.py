@@ -194,8 +194,10 @@ class TestNoDriversAvailableTimeout:
 
         push_calls = []
 
-        async def _capture_push(user_id, title, body, data=None):
-            push_calls.append({"user_id": user_id, "title": title, "body": body, "data": data})
+        async def _capture_push(user_id, title, body, data=None, priority="normal", target_app=None):
+            push_calls.append(
+                {"user_id": user_id, "title": title, "body": body, "data": data, "target_app": target_app}
+            )
 
         with (
             patch("backend.routes.rides._deps.asyncio.sleep", AsyncMock()),  # fast-forward
@@ -219,6 +221,8 @@ class TestNoDriversAvailableTimeout:
         # FCM data payloads are stringified (FCM data values must be
         # strings), so booleans arrive as "true"/"false", not Python bools.
         assert push_calls[0]["data"].get("is_auto") == "true"
+        # N10 regression: fails if target_app reverts to the omitted default.
+        assert push_calls[0]["target_app"] == "rider"
 
     async def test_timeout_is_a_noop_if_driver_already_matched(self):
         """If a driver was matched/accepted before the timer fired, the

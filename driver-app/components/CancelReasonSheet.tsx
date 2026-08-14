@@ -8,12 +8,19 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
 // Default driver-facing cancellation reasons (last = free-text only).
+//
+// 'Service animal — could not accommodate' is matched (case-insensitive
+// substring) by backend/routes/drivers/ride_cancel.py to flag the refusal
+// for trust & safety — service animal accommodation is mandatory (CLAUDE.md
+// Accessibility). Keep the wording containing "service animal" if you edit
+// this string, or update the backend matcher in the same change.
 export const DRIVER_CANCEL_REASONS = [
   'Rider no-show',
   "Can't reach rider",
   'Unsafe or wrong pickup',
   'Vehicle issue',
   'Pickup too far',
+  'Service animal — could not accommodate',
   'Other',
 ];
 
@@ -43,7 +50,10 @@ export default function CancelReasonSheet({
   const [isPending, setIsPending] = useState(false);
 
   useEffect(() => {
+    // Reset the form fields whenever the sheet re-opens. Doesn't feed back
+    // into `visible`, so this can't loop.
     if (visible) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelected(null);
       setNote('');
     }

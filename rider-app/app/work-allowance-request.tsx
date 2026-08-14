@@ -32,10 +32,10 @@ export default function WorkAllowanceRequestScreen() {
   const [submitting, setSubmitting] = useState(false);
   useEffect(() => {
     fetchRequests();
-  }, [activeCompanyId]);
+    // fetchRequests is a zustand action (stable reference).
+  }, [activeCompanyId, fetchRequests]);
 
   const pendingRequest = requests.find(r => r.status === 'pending');
-  const lastApproved = requests.find(r => r.status === 'approved' || r.status === 'auto_approved');
 
   const parsedAmount = parseFloat(amount);
   const isValid = !isNaN(parsedAmount) && parsedAmount > 0 && reason.trim().length >= 5;

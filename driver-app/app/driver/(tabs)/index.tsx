@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { View, Text, StyleSheet, Platform, Linking, Animated, TouchableOpacity, ActivityIndicator, AppState, Modal } from 'react-native';
+import { View, Text, StyleSheet, Platform, Linking, TouchableOpacity, ActivityIndicator, AppState, Modal } from 'react-native';
 import MapView, { Polygon, Heatmap, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { Ionicons } from '@expo/vector-icons';
@@ -21,6 +21,10 @@ import { RideOfferPanel } from '../../../components/panels/RideOfferPanel';
 import { useDriverDashboard } from '../../../hooks/useDriverDashboard';
 import { CarMarker, resolveMarkerVariant, type CarMarkerVariant } from '../../../components/CarMarker';
 import { SOSButton } from '@shared/components/SOSButton';
+import { SafetyShield } from '@shared/components/SafetyShield';
+import { SafetyOverlay } from '@shared/components/SafetyOverlay';
+import { useDriverSafetyTrigger } from '../../../hooks/useDriverSafetyTrigger';
+import { useDriverDiscreetSosFlag } from '../../../hooks/useDriverDiscreetSosFlag';
 import { useLanguageStore } from '../../../store/languageStore';
 import { showToast } from '../../../hooks/useToast';
 import api, { isAppCheckTokenReady } from '@shared/api/client';
@@ -82,11 +86,28 @@ function DriverDashboard() {
     clearError,
     earnings,
     rateRider,
+    isLoading,
+    error,
   } = useDriverStore();
+
+  // Declared here (before first use in the `useEffect` below) rather than
+  // further down with the other derived ride fields — react-hooks/immutability
+  // (React Compiler) flags referencing a value before its declaration in
+  // source order. `activeRide`/`incomingRide` are already available above,
+  // so this is a pure source-order reshuffle: same expression, same effect
+  // timing, no behavior change.
+  const ride = activeRide?.ride || incomingRide;
 
   const isCancellingRide = useDriverStore((s) => s.isCancellingRide);
   const [completionConfirmationVisible, setCompletionConfirmationVisible] = useState(false);
   const [completionConfirmationRideId, setCompletionConfirmationRideId] = useState<string | null>(null);
+
+  // Driver SOS discreet-hold-shield rollout (ACTION_ITEMS.md B16). Flag
+  // defaults false -> the SOSButton branch below is byte-for-byte today's
+  // shipped behavior except for the swallowed-error bug fix noted there.
+  const discreetSosEnabled = useDriverDiscreetSosFlag();
+  const { trigger: safetyTrigger } = useDriverSafetyTrigger();
+  const [safetyOverlayOpen, setSafetyOverlayOpen] = useState(false);
 
   const requestRideCompletion = async (confirmation?: OffRouteConfirmation) => {
     const rideId = confirmation ? completionConfirmationRideId : activeRide?.ride.id;
@@ -160,10 +181,10 @@ function DriverDashboard() {
     let cancelled = false;
     const fetchSurge = async () => {
       try {
-        const res = await api.get<Array<{ id: string; surge_multiplier?: number; surge_active?: boolean }>>('/service-areas');
+        const res = await api.get<{ id: string; surge_multiplier?: number; surge_active?: boolean }[]>('/service-areas');
         if (cancelled) return;
         const areaId = driverData?.service_area_id;
-        const areas: Array<{ id: string; surge_multiplier?: number; surge_active?: boolean }> = res.data || [];
+        const areas: { id: string; surge_multiplier?: number; surge_active?: boolean }[] = res.data || [];
         const myArea = areaId ? areas.find((a) => a.id === areaId) : areas[0];
         if (myArea?.surge_active && typeof myArea.surge_multiplier === 'number') {
           setSurgeMultiplier(myArea.surge_multiplier);
@@ -259,6 +280,9 @@ function DriverDashboard() {
   // Fetch heatmap data when idle (backend returns empty if admin disabled it)
   useEffect(() => {
     if (rideState !== 'idle') {
+      // Clear stale heatmap points on leaving idle. Doesn't feed back into
+      // rideState, so this can't loop.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setHeatmapPoints([]);
       return;
     }
@@ -296,7 +320,10 @@ function DriverDashboard() {
   useEffect(() => {
     if (rideState !== 'ride_offered') return;
     // Re-seed local state from the store so we always start from the
-    // configured countdown when a fresh offer arrives.
+    // configured countdown when a fresh offer arrives. Deps are [rideState]
+    // only (see the exhaustive-deps suppression below) — this doesn't
+    // re-fire on countdownSeconds changes, so it can't loop.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setCountdownState(countdownSeconds);
     const interval = setInterval(() => {
       setCountdownState((prev) => {
@@ -313,6 +340,37 @@ function DriverDashboard() {
     // don't re-run on every tick.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rideState]);
+
+  // Resync the offer countdown against wall-clock time when the app returns
+  // to the foreground. The interval above only decrements while JS is
+  // running — RN suspends timers while backgrounded, so after a background
+  // stretch the interval resumes ticking down from wherever it was paused
+  // instead of where the offer actually is, and the driver can see a stale
+  // (too-high) number for a beat after returning. The server remains
+  // authoritative here (the `ride_offer_expired` WS event and the 409 on a
+  // stale accept both already resolve correctly) — this only corrects the
+  // *displayed* countdown so a driver doesn't visually think they have more
+  // time left on the offer than they do.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next !== 'active') return;
+      const { rideState: curRideState, incomingRide: curIncomingRide } = useDriverStore.getState();
+      if (curRideState !== 'ride_offered' || !curIncomingRide?.offer_expires_at) return;
+      const remaining = Math.max(
+        0,
+        Math.floor((new Date(curIncomingRide.offer_expires_at).getTime() - Date.now()) / 1000),
+      );
+      setCountdownState(remaining);
+      // Only push the terminal 0 back to the store, mirroring the interval's
+      // own convention above (it likewise leaves the store's countdownSeconds
+      // alone on intermediate ticks and only syncs at zero, which is what
+      // drives the store's own auto-decline-on-expiry side effect).
+      if (remaining <= 0) {
+        setCountdown(0);
+      }
+    });
+    return () => sub.remove();
+  }, [setCountdown]);
 
   // Clear route + ETA when ride state changes (new phase = new route).
   // Stable boolean: true when the store already holds a saved polyline for the
@@ -340,6 +398,10 @@ function DriverDashboard() {
   // stays framed on the pickup/dropoff bounding box from the previous ride
   // and the driver marker ends up off-screen.
   useEffect(() => {
+    // Reset route/ETA display state on every ride-phase transition (new
+    // phase = new route). Deps are [rideState, _hasRidePolyline] below;
+    // none of these setters feed back into either dep, so this can't loop.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDirectionsFailed(false);
     setRouteEtaMinutes(null);
     setRouteDistanceKm(null);
@@ -438,7 +500,7 @@ function DriverDashboard() {
       cancelled = true;
       clearInterval(id);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [activeRide?.ride?.id, rideState]);
 
   // When the app comes back to the foreground, arm a one-shot re-center
@@ -468,23 +530,27 @@ function DriverDashboard() {
       },
       400
     );
-  }, [location, rideState]);
+    // mapRef is a stable useRef object from useDriverDashboard() — adding it
+    // doesn't change when this effect fires.
+  }, [location, rideState, mapRef]);
 
-  // Error handling
+  // Error handling. `error` is destructured from the top-level useDriverStore()
+  // call above (full-store subscription, not a selector), so this component
+  // already re-renders on every store mutation including `error` — reading it
+  // as a plain variable here instead of an inline useDriverStore.getState()
+  // call in the deps array is a pure refactor, not a new subscription.
   useEffect(() => {
-    const { error } = useDriverStore.getState();
     if (error) {
       showToast('error', 'Something Went Wrong', error || 'Please try again.');
       clearError();
     }
-  }, [useDriverStore.getState().error]);
+  }, [error, clearError]);
 
   // Ride pickup/dropoff markers. Memoised so the countdown ticking
   // every second during `ride_offered` doesn't rebuild the marker
   // elements (new `coordinate` object refs each render forced
   // react-native-maps to re-animate the markers, producing visible
   // flicker on the map).
-  const ride = activeRide?.ride || incomingRide;
   const pickupLat = ride?.pickup_lat;
   const pickupLng = ride?.pickup_lng;
   const dropoffLat = ride?.dropoff_lat;
@@ -502,139 +568,6 @@ function DriverDashboard() {
     () => (dropoffLat && dropoffLng ? { latitude: dropoffLat, longitude: dropoffLng } : null),
     [dropoffLat, dropoffLng],
   );
-
-  // Ride Offer Panel
-  const renderRideOfferPanel = () => {
-    if (!incomingRide) return null;
-    // Timer-bar progress tracks remaining countdown as a fraction of the
-    // configured max. Previously this was `/ 15` hardcoded, so bumping
-    // ride_offer_timeout_seconds in backend settings would have left
-    // the visual bar stuck past 100%.
-    const maxCountdown = configuredCountdownSeconds || 15;
-    const progress = Math.max(0, Math.min(1, countdown / maxCountdown));
-    const fare = parseFloat(incomingRide.fare || '0').toFixed(2);
-
-    // Haversine distance from driver → pickup so the offer shows how far
-    // the driver has to travel to start the trip (not just the trip
-    // distance, which is pickup → dropoff).
-    let pickupDistanceKm: number | null = null;
-    if (
-      location?.coords?.latitude != null &&
-      location?.coords?.longitude != null &&
-      incomingRide.pickup_lat != null &&
-      incomingRide.pickup_lng != null
-    ) {
-      const R = 6371; // km
-      const toRad = (d: number) => (d * Math.PI) / 180;
-      const dLat = toRad(incomingRide.pickup_lat - location.coords.latitude);
-      const dLng = toRad(incomingRide.pickup_lng - location.coords.longitude);
-      const a =
-        Math.sin(dLat / 2) ** 2 +
-        Math.cos(toRad(location.coords.latitude)) *
-          Math.cos(toRad(incomingRide.pickup_lat)) *
-          Math.sin(dLng / 2) ** 2;
-      pickupDistanceKm = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    }
-
-    return (
-      <View style={styles.rideOfferOverlay}>
-        <View style={styles.rideOfferContent}>
-          {/* Countdown timer bar at top */}
-          <View style={styles.timerBarContainer}>
-            <View style={[styles.timerBar, { width: `${progress * 100}%` }]} />
-          </View>
-
-          {/* Header: Countdown + Title */}
-          <View style={styles.offerHeader}>
-            <View style={styles.countdownCircle}>
-              <Text style={styles.countdownText}>{countdown}</Text>
-            </View>
-            <View style={{ flex: 1, marginLeft: 14 }}>
-              <Text style={styles.rideOfferTitle}>{t('rideOffer.newRideRequest')}</Text>
-              <View style={styles.rideTypeBadge}>
-                <Ionicons name="car-sport" size={12} color={colors.primary} />
-                <Text style={styles.rideTypeText}>{t('rideOffer.standardRide')}</Text>
-              </View>
-            </View>
-            <View style={styles.fareContainer}>
-              <Text style={styles.fareLabel}>{t('rideOffer.fare')}</Text>
-              <Text style={styles.fareAmount}>${fare}</Text>
-            </View>
-          </View>
-
-          {/* Route: Pickup & Dropoff */}
-          <View style={styles.routeContainer}>
-            <View style={styles.routeIconColumn}>
-              <View style={[styles.routeDot, { backgroundColor: colors.primary }]} />
-              <View style={styles.routeLine} />
-              <View style={[styles.routeDot, { backgroundColor: '#FF4757' }]} />
-            </View>
-            <View style={styles.routeDetails}>
-              <View style={styles.routeRow}>
-                <Text style={styles.routeLabel}>{t('rideOffer.pickup')}</Text>
-                <Text style={styles.routeAddress} numberOfLines={1}>
-                  {incomingRide.pickup_address || t('rideOffer.pickupLocation')}
-                </Text>
-              </View>
-              <View style={styles.routeDivider} />
-              <View style={styles.routeRow}>
-                <Text style={styles.routeLabel}>{t('rideOffer.dropoff')}</Text>
-                <Text style={styles.routeAddress} numberOfLines={1}>
-                  {incomingRide.dropoff_address || t('rideOffer.dropoffLocation')}
-                </Text>
-              </View>
-            </View>
-          </View>
-
-          {/* Trip info badges */}
-          <View style={styles.tripInfoRow}>
-            {pickupDistanceKm != null && (
-              <View style={styles.tripInfoBadge}>
-                <Ionicons name="walk-outline" size={14} color={colors.primary} />
-                <Text style={styles.tripInfoText}>
-                  {pickupDistanceKm < 1
-                    ? `${Math.round(pickupDistanceKm * 1000)} m to pickup`
-                    : `${pickupDistanceKm.toFixed(1)} km to pickup`}
-                </Text>
-              </View>
-            )}
-            {incomingRide.rider_name && (
-              <View style={styles.tripInfoBadge}>
-                <Ionicons name="person-outline" size={14} color={colors.primary} />
-                <Text style={styles.tripInfoText}>{incomingRide.rider_name}</Text>
-                {incomingRide.rider_rating && (
-                  <>
-                    <Ionicons name="star" size={12} color="#FFD700" />
-                    <Text style={styles.tripInfoText}>{incomingRide.rider_rating.toFixed(1)}</Text>
-                  </>
-                )}
-              </View>
-            )}
-          </View>
-
-          {/* Accept / Decline buttons */}
-          <View style={styles.offerActions}>
-            <TouchableOpacity
-              style={styles.declineBtn}
-              onPress={() => declineRide(incomingRide.ride_id)}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="close-circle" size={24} color="#FF4757" />
-              <Text style={styles.declineText}>{t('rideOffer.decline')}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.acceptBtn}
-              onPress={() => acceptRide(incomingRide.ride_id)}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="checkmark-circle" size={24} color="#fff" />
-              <Text style={styles.acceptText}>{t('rideOffer.acceptRide')}</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    );
-  };
 
   if (!location?.coords) {
     // Permission denied or the GPS fix failed: an infinite spinner here gave
@@ -819,7 +752,7 @@ function DriverDashboard() {
 
         {/* Service area boundary polygon */}
         {(() => {
-          const rawPoly: Array<{ lat: number; lng: number }> | null | undefined =
+          const rawPoly: { lat: number; lng: number }[] | null | undefined =
             rideState === 'ride_offered'
               ? (incomingRide as any)?.service_area_polygon
               : (activeRide as any)?.service_area_polygon;
@@ -853,16 +786,45 @@ function DriverDashboard() {
       {/* Top Bar */}
       <DriverTopBar driverData={driverData ?? undefined} user={user ?? undefined} isOnline={isOnline} connectionState={connectionState} surgeMultiplier={surgeMultiplier} wsLatency={wsLatency} earnings={earnings} unreadNotifCount={unreadNotifCount} />
 
-      {/* SOS Button — visible during active ride */}
+      {/* SOS / Safety — visible during active ride. Flag-gated (ACTION_ITEMS.md
+          B16): discreetSosEnabled off (default) renders the unmodified
+          SOSButton path (plus the swallowed-error bug fix below); on, renders
+          the new discreet-hold shield + Safety overlay pair instead. */}
       {(rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && activeRide?.ride?.id && (
-        <View style={{ position: 'absolute', top: insets.top + 56, right: 16, zIndex: 50 }}>
-          <SOSButton
-            rideId={activeRide.ride.id}
-            onTrigger={async (rideId, lat, lng) => {
-              try { await api.post(`/rides/${rideId}/emergency`, { latitude: lat, longitude: lng }); } catch (err) { console.error('[index]', err); }
-            }}
-          />
-        </View>
+        discreetSosEnabled ? (
+          <>
+            <View style={{ position: 'absolute', top: insets.top + 56, right: 16, zIndex: 50 }}>
+              <SafetyShield
+                rideId={activeRide.ride.id}
+                onTrigger={safetyTrigger}
+                onOpenOverlay={() => setSafetyOverlayOpen(true)}
+              />
+            </View>
+            <SafetyOverlay
+              visible={safetyOverlayOpen}
+              onClose={() => setSafetyOverlayOpen(false)}
+              rideId={activeRide.ride.id}
+              onTrigger={safetyTrigger}
+            />
+          </>
+        ) : (
+          <View style={{ position: 'absolute', top: insets.top + 56, right: 16, zIndex: 50 }}>
+            <SOSButton
+              rideId={activeRide.ride.id}
+              onTrigger={async (rideId, lat, lng) => {
+                // Bug fix (B16): rethrow instead of swallowing. Previously
+                // this try/catch+console.error meant SOSButton's own
+                // retry/FAILED state could never activate for drivers even
+                // on a real backend failure -- a genuine 503 always looked
+                // like silent success after one attempt. Pure improvement,
+                // no plausible regression on the happy path: the only
+                // behavior change flag-off drivers see.
+                await api.post(`/rides/${rideId}/emergency`, { latitude: lat, longitude: lng });
+              }}
+              t={t}
+            />
+          </View>
+        )
       )}
 
       {/* Map Controls */}
@@ -898,9 +860,9 @@ function DriverDashboard() {
                 })()
               : null
           }
-          isLoading={false}
+          isLoading={isLoading}
           onAccept={() => acceptRide(incomingRide.ride_id)}
-          onDecline={() => declineRide(incomingRide.ride_id)}
+          onDecline={(reason) => declineRide(incomingRide.ride_id, reason)}
         />
       )}
       {(rideState === 'navigating_to_pickup' ||

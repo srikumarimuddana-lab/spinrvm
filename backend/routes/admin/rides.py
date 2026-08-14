@@ -3496,3 +3496,162 @@ async def admin_close_payout_period(
         "total_amount": total_amount,
         "audit_log_id": audit_id,
     }
+
+
+# ── Imported ride snapshot regeneration ──────────────────────────────────
+
+
+class RegenerateSnapshotsRequest(BaseModel):
+    force: bool = False
+    limit: int = Field(50, ge=1, le=500)
+
+
+@router.post("/rides/regenerate-imported-snapshots")
+async def admin_regenerate_imported_snapshots(
+    body: RegenerateSnapshotsRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """Regenerate route snapshot images for imported rides.
+
+    Uses the production Google Static Maps pipeline to render PNGs
+    with actual map tiles behind the OSRM route polyline.
+
+    Restricted to super_admin.
+    """
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="role_required:super_admin")
+
+    import asyncio
+    import hashlib
+
+    try:
+        from ...utils.route_snapshot import render_ride_snapshot, render_ride_snapshot_google
+    except ImportError:
+        from utils.route_snapshot import render_ride_snapshot, render_ride_snapshot_google  # type: ignore
+
+    try:
+        from ...supabase_client import supabase as sb
+    except ImportError:
+        from supabase_client import supabase as sb  # type: ignore
+
+    try:
+        from ...core.config import settings as cfg
+    except ImportError:
+        from core.config import settings as cfg  # type: ignore
+
+    app_settings = await get_app_settings() or {}
+    gmap_key = (app_settings.get("google_maps_api_key") or "").strip()
+    base_url = (cfg.SUPABASE_URL or "").rstrip("/")
+    if not base_url:
+        raise HTTPException(status_code=500, detail="SUPABASE_URL not configured")
+
+    filters: Dict[str, Any] = {"legacy_import_metadata": {"$ne": None}}
+    if not body.force:
+        filters["route_snapshot_url"] = None
+
+    rides = await db.get_rows(
+        "rides",
+        filters,
+        columns="id,pickup_lat,pickup_lng,dropoff_lat,dropoff_lng,planned_route_polyline",
+        limit=body.limit,
+    )
+    if not rides:
+        return {"total": 0, "success": 0, "failed": 0, "message": "No rides to process"}
+
+    loop = asyncio.get_event_loop()
+    success = 0
+    failed = 0
+    errors: list[dict] = []
+
+    for ride in rides:
+        ride_id = ride["id"]
+        pickup_lat = ride.get("pickup_lat")
+        pickup_lng = ride.get("pickup_lng")
+        dropoff_lat = ride.get("dropoff_lat")
+        dropoff_lng = ride.get("dropoff_lng")
+
+        if not all(isinstance(v, (int, float)) for v in [pickup_lat, pickup_lng, dropoff_lat, dropoff_lng]):
+            failed += 1
+            errors.append({"ride_id": ride_id, "error": "missing coordinates"})
+            continue
+
+        polyline = ride.get("planned_route_polyline")
+        route_polyline = None
+        if isinstance(polyline, list):
+            route_polyline = [[p.get("lat"), p.get("lng")] for p in polyline if isinstance(p, dict)]
+
+        png_bytes = None
+        if gmap_key:
+            try:
+                png_bytes = await render_ride_snapshot_google(
+                    api_key=gmap_key,
+                    pickup_lat=float(pickup_lat),
+                    pickup_lng=float(pickup_lng),
+                    dropoff_lat=float(dropoff_lat),
+                    dropoff_lng=float(dropoff_lng),
+                    route_polyline=route_polyline,
+                )
+            except Exception as exc:
+                logger.error("Google render failed for ride %s: %s", ride_id, exc)
+
+        if not png_bytes:
+            try:
+                png_bytes = await loop.run_in_executor(
+                    None,
+                    lambda: render_ride_snapshot(
+                        pickup_lat=float(pickup_lat),
+                        pickup_lng=float(pickup_lng),
+                        dropoff_lat=float(dropoff_lat),
+                        dropoff_lng=float(dropoff_lng),
+                        route_polyline=route_polyline,
+                    ),
+                )
+            except Exception as exc:
+                logger.error("OSM render failed for ride %s: %s", ride_id, exc)
+
+        if not png_bytes:
+            failed += 1
+            errors.append({"ride_id": ride_id, "error": "render returned None"})
+            continue
+
+        storage_path = f"ride_{ride_id}.png"
+        try:
+            await loop.run_in_executor(
+                None,
+                lambda: sb.storage.from_("ride-snapshots").upload(
+                    path=storage_path,
+                    file=png_bytes,
+                    file_options={"content-type": "image/png", "upsert": "true", "cache-control": "31536000"},
+                ),
+            )
+        except Exception as exc:
+            failed += 1
+            errors.append({"ride_id": ride_id, "error": f"upload: {exc}"})
+            continue
+
+        digest = hashlib.sha256(png_bytes).hexdigest()[:12]
+        url = f"{base_url}/storage/v1/object/public/ride-snapshots/{storage_path}?v={digest}"
+        try:
+            await db.update_one("rides", {"id": ride_id}, {"route_snapshot_url": url})
+        except Exception as exc:
+            failed += 1
+            errors.append({"ride_id": ride_id, "error": f"db update: {exc}"})
+            continue
+
+        success += 1
+        await asyncio.sleep(0.3)
+
+    logger.info(
+        "Imported ride snapshot regeneration by admin %s: %d ok, %d failed of %d",
+        admin.get("id"),
+        success,
+        failed,
+        len(rides),
+    )
+    return {
+        "total": len(rides),
+        "success": success,
+        "failed": failed,
+        "renderer": "google" if gmap_key else "osm",
+        "errors": errors[:20],
+    }

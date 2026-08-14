@@ -33,6 +33,25 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Postgres "relation does not exist" — i.e. migration 314 has not been applied
+# to this environment yet. Worth naming explicitly: the generic "temporarily
+# unavailable" message reads as a transient blip an operator should wait out,
+# when in fact nothing will work until someone runs the migration.
+_UNDEFINED_TABLE = "42P01"
+
+
+def _db_unavailable(what: str, table: str, exc: Exception) -> HTTPException:
+    """503 that says WHICH failure this is, per CLAUDE.md's rule that DB
+    errors surface loudly enough to fix rather than being masked."""
+    detail = f"{what} temporarily unavailable"
+    text = f"{exc} {getattr(exc, 'details', '')}"
+    if _UNDEFINED_TABLE in text or f'relation "{table}" does not exist' in text:
+        detail = (
+            f"{what} unavailable: the '{table}' table does not exist in this environment. "
+            "Apply migration 314 (backend/scripts/migrate.py), then reload."
+        )
+    return HTTPException(status_code=503, detail=detail)
+
 
 @router.get("/auto-payouts/batches")
 async def list_auto_payout_batches(
@@ -59,7 +78,8 @@ async def list_auto_payout_batches(
         rows = await db_supabase.get_rows("auto_payout_batches", filters, limit=limit, order="created_at", desc=True)
     except Exception as e:
         logger.error(f"Failed to list auto-payout batches: {e}", exc_info=True)
-        raise HTTPException(status_code=503, detail="Auto-payout batches temporarily unavailable") from e
+        raise _db_unavailable("Auto-payout batches", "auto_payout_batches", e) from e
+    # An empty table is a valid state, not an error: no batch has run yet.
     return {"batches": rows, "count": len(rows)}
 
 
@@ -94,7 +114,7 @@ async def list_blocked_drivers(
         rows = await find_blocked_drivers(limit, service_area_id=service_area_id)
     except Exception as e:
         logger.error(f"Failed to list blocked drivers: {e}", exc_info=True)
-        raise HTTPException(status_code=503, detail="Blocked-driver preflight temporarily unavailable") from e
+        raise _db_unavailable("Blocked-driver preflight", "drivers", e) from e
 
     by_reason: dict[str, int] = {}
     for r in rows:

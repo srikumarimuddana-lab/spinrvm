@@ -42,6 +42,7 @@ import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
 import { useAnimatedValue } from '../hooks/useAnimatedValue';
 import { promoDiscountForEstimate, grandTotalOf } from '../utils/promoDiscount';
 import { selectDefaultCardId } from '../utils/selectDefaultCard';
+import { shouldApplyWorkModeDefault } from '../utils/workModeDefault';
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
@@ -160,6 +161,10 @@ function RideOptionsScreenContent() {
     [workProfiles],
   );
   const [useCorporate, setUseCorporate] = useState(workModeEnabled);
+  // True once the rider picks a payment source by hand. A ref, not state: it
+  // must not itself trigger a render, and the work-mode sync effect reads it
+  // without needing to depend on it.
+  const riderChosePaymentRef = useRef(false);
   const [selectedCorporateId, setSelectedCorporateId] = useState<string | null>(
     workModeEnabled ? (activeCompanyId ?? null) : null,
   );
@@ -420,7 +425,25 @@ function RideOptionsScreenContent() {
   useFocusEffect(loadSavedCards);
 
   useEffect(() => {
-    if (workModeEnabled && corporateAccounts.length > 0) {
+    // `riderChosePaymentRef` is the guard: once the rider has picked a payment
+    // source by hand, this effect must never move it back.
+    //
+    // Without it, work mode re-asserts corporate billing on any later re-run —
+    // and this effect re-runs when activeCompanyId or the corporateAccounts
+    // memo changes, which a late fetchWorkProfiles() resolution does. Sequence:
+    // rider opens the payment sheet, deliberately taps their personal card, the
+    // profile fetch lands a moment later, the selection silently flips back, and
+    // the COMPANY is billed for a personal trip. Neither the rider nor the
+    // company is told. That is a wrong charge, not a cosmetic glitch.
+    //
+    // Defaulting to corporate for a work-mode rider who hasn't chosen yet is
+    // still correct — that is the point of work mode — so the guard only
+    // suppresses the override, never the initial default.
+    if (shouldApplyWorkModeDefault({
+      workModeEnabled,
+      hasCorporateAccounts: corporateAccounts.length > 0,
+      riderChosePayment: riderChosePaymentRef.current,
+    })) {
       // Keeps the corporate toggle in sync when work mode is enabled
       // elsewhere; neither useCorporate nor selectedCorporateId is a dep of
       // this effect (workModeEnabled/corporateAccounts.length are), so no
@@ -1125,7 +1148,7 @@ function RideOptionsScreenContent() {
             return (
               <TouchableOpacity key={card.id}
                 style={[styles.paymentOption, isSelected && styles.paymentOptionSelected]}
-                onPress={() => { setSelectedPayment('card'); setSelectedCardId(card.id); setUseCorporate(false); closePaymentSheet(); }}>
+                onPress={() => { riderChosePaymentRef.current = true; setSelectedPayment('card'); setSelectedCardId(card.id); setUseCorporate(false); closePaymentSheet(); }}>
                 <View style={styles.paymentOptionIcon}>
                   <Ionicons name="card" size={22} color={isSelected ? colors.primary : colors.textDim} />
                 </View>
@@ -1145,7 +1168,7 @@ function RideOptionsScreenContent() {
           {savedCards.length === 0 && (
             <TouchableOpacity
               style={styles.paymentOption}
-              onPress={() => { setSelectedPayment('card'); setUseCorporate(false); closePaymentSheet(); router.push('/manage-cards' as any); }}>
+              onPress={() => { riderChosePaymentRef.current = true; setSelectedPayment('card'); setUseCorporate(false); closePaymentSheet(); router.push('/manage-cards' as any); }}>
               <View style={styles.paymentOptionIcon}>
                 <Ionicons name="card" size={22} color={colors.textDim} />
               </View>
@@ -1160,7 +1183,7 @@ function RideOptionsScreenContent() {
           {/* Wallet */}
           <TouchableOpacity
             style={[styles.paymentOption, selectedPayment === 'wallet' && !useCorporate && styles.paymentOptionSelected]}
-            onPress={() => { setSelectedPayment('wallet'); setUseCorporate(false); closePaymentSheet(); }}>
+            onPress={() => { riderChosePaymentRef.current = true; setSelectedPayment('wallet'); setUseCorporate(false); closePaymentSheet(); }}>
             <View style={styles.paymentOptionIcon}>
               <Ionicons name="wallet" size={22} color={selectedPayment === 'wallet' && !useCorporate ? colors.primary : colors.textDim} />
             </View>
@@ -1186,7 +1209,7 @@ function RideOptionsScreenContent() {
                 return (
                   <TouchableOpacity key={acct.id}
                     style={[styles.paymentOption, isSelected && styles.paymentOptionSelected]}
-                    onPress={() => { setUseCorporate(true); setSelectedCorporateId(acct.id); closePaymentSheet(); }}>
+                    onPress={() => { riderChosePaymentRef.current = true; setUseCorporate(true); setSelectedCorporateId(acct.id); closePaymentSheet(); }}>
                     <View style={styles.paymentOptionIcon}>
                       <Ionicons name="business" size={22} color={isSelected ? colors.primary : colors.textDim} />
                     </View>

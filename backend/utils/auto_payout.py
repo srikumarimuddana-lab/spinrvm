@@ -188,6 +188,38 @@ def _age_minutes(ts: str | None, now: datetime) -> float:
     return (now - parsed).total_seconds() / 60.0
 
 
+# Actionable "why you weren't paid" copy, keyed by skip reason. Every message
+# names the amount waiting and the one thing to fix, so a blocked driver can
+# self-serve instead of opening a support ticket.
+#
+# 'suspended' is deliberately absent: suspension is a support conversation
+# owned by ops, not a payout nudge — those drivers still appear in the ops
+# views below, they just don't get an automated push.
+_SKIP_NOTIFICATIONS: dict[str, tuple[str, str]] = {
+    "no_stripe_account": (
+        "Connect your payout account",
+        "{amount} is waiting to be paid out. Open Payouts to link your bank through Stripe.",
+    ),
+    "stripe_payouts_disabled": (
+        "Finish verifying your payout account",
+        "{amount} is waiting to be paid out. Stripe still needs a few details — open Payouts to finish verification.",
+    ),
+    "missing_gst": (
+        "Add your GST/HST number",
+        "{amount} is waiting to be paid out. Rideshare drivers must register with the CRA — "
+        "add your Business Number in Payouts.",
+    ),
+    "missing_sin": (
+        "Add your SIN",
+        "{amount} is waiting to be paid out. Your SIN is needed for your T4A — add it in Payouts.",
+    ),
+}
+
+# Bound on driver ids recorded per reason in the batch row. Ops needs a
+# work-list, not an unbounded blob; find_blocked_drivers() is the full view.
+_MAX_SKIP_IDS_PER_REASON = 100
+
+
 def _eligibility_skip_reason(driver: dict) -> str | None:
     """CRA + destination-account gates, mirroring the driver-initiated paths.
 
@@ -222,6 +254,76 @@ async def _notify_driver(driver: dict, title: str, body: str, data: dict | None 
         await send_push_notification(user_id, title, body, data or {})
     except Exception:
         logger.warning("[AUTO-PAYOUT] push notification failed for driver %s", driver.get("id"))
+
+
+async def _handle_skipped_driver(driver: dict, reason: str, skipped_drivers: dict[str, list[str]]) -> None:
+    """Record — and where actionable, notify — a driver the batch cannot pay.
+
+    Only drivers with money actually waiting (>= the $10 threshold) are
+    recorded or notified. A driver who never drove has nothing blocked, and
+    telling them a payout was held would be both noise and untrue.
+    """
+    driver_id = driver.get("id")
+    try:
+        balance = await _compute_payable_balance(driver_id)
+    except Exception:
+        logger.exception("[AUTO-PAYOUT] balance check failed for skipped driver %s", driver_id)
+        return
+    if balance < MIN_PAYOUT_AMOUNT:
+        return
+
+    ids = skipped_drivers.setdefault(reason, [])
+    if len(ids) < _MAX_SKIP_IDS_PER_REASON:
+        ids.append(driver_id)
+    logger.warning("[AUTO-PAYOUT] driver %s blocked (%s) with $%s waiting", driver_id, reason, balance)
+
+    copy = _SKIP_NOTIFICATIONS.get(reason)
+    if not copy:
+        return
+    title, body = copy
+    await _notify_driver(
+        driver,
+        title,
+        body.format(amount=f"${balance}"),
+        {"type": "auto_payout_blocked", "reason": reason},
+    )
+
+
+async def find_blocked_drivers(limit: int = 50) -> list[dict]:
+    """Drivers with money waiting that the batch cannot pay RIGHT NOW.
+
+    Live preflight for ops — same gates the Sunday run uses, so blockers can
+    be chased before the run rather than read out of last week's summary.
+    Balance is computed only for drivers that fail a gate, so the cost scales
+    with the blocked set, not the fleet.
+
+    Returns driver_id / reason / pending_amount only — never names, phones,
+    or bank details (PIPEDA rules in CLAUDE.md).
+    """
+    out: list[dict] = []
+    offset = 0
+    while len(out) < limit:
+        page = await db_supabase.get_rows("drivers", {}, limit=_PAGE_SIZE, offset=offset, order="id")
+        if not page:
+            break
+        for d in page:
+            reason = _eligibility_skip_reason(d)
+            if not reason:
+                continue
+            try:
+                balance = await _compute_payable_balance(d["id"])
+            except Exception:
+                logger.exception("[AUTO-PAYOUT] preflight balance failed for driver %s", d.get("id"))
+                continue
+            if balance < MIN_PAYOUT_AMOUNT:
+                continue
+            out.append({"driver_id": d["id"], "reason": reason, "pending_amount": str(balance)})
+            if len(out) >= limit:
+                break
+        if len(page) < _PAGE_SIZE:
+            break
+        offset += _PAGE_SIZE
+    return out
 
 
 async def _compute_payable_balance(driver_id: str) -> Decimal:
@@ -571,6 +673,8 @@ async def run_weekly_auto_payout() -> dict:
     drivers_paid = 0
     drivers_failed = 0
     skipped: dict[str, int] = {}
+    # reason -> driver ids that actually had money waiting (ops work-list)
+    skipped_drivers: dict[str, list[str]] = {}
     total_amount = Decimal("0")
     errors: list[str] = []
 
@@ -580,6 +684,7 @@ async def run_weekly_auto_payout() -> dict:
         skip_reason = _eligibility_skip_reason(driver)
         if skip_reason:
             skipped[skip_reason] = skipped.get(skip_reason, 0) + 1
+            await _handle_skipped_driver(driver, skip_reason, skipped_drivers)
             continue
 
         try:
@@ -709,6 +814,9 @@ async def run_weekly_auto_payout() -> dict:
                 "drivers_failed": drivers_failed,
                 "total_amount": total_amount,  # Decimal — serialized downstream
                 "error_summary": "; ".join(errors[:50]) if errors else None,
+                # counts = everyone skipped; drivers_with_balance = the ones
+                # with money actually held up, i.e. the ops follow-up list.
+                "skipped_summary": ({"counts": skipped, "drivers_with_balance": skipped_drivers} if skipped else None),
             },
         )
     except Exception:
@@ -734,6 +842,7 @@ async def run_weekly_auto_payout() -> dict:
         "drivers_paid": drivers_paid,
         "drivers_failed": drivers_failed,
         "skipped": skipped,
+        "skipped_drivers": skipped_drivers,
         "errors": errors[:10],
         "total_amount": str(total_amount),
         "resumed": resumed,

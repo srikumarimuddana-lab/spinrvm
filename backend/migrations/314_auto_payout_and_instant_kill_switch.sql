@@ -48,6 +48,11 @@ CREATE TABLE IF NOT EXISTS auto_payout_batches (
     drivers_failed    INT NOT NULL DEFAULT 0,
     total_amount      NUMERIC(12, 2) NOT NULL DEFAULT 0,
     error_summary     TEXT,             -- NULL on success; aggregated errors on partial failure
+    -- Why drivers were skipped, and which ones had money waiting:
+    --   {"counts": {"missing_gst": 4, ...},
+    --    "drivers_with_balance": {"missing_gst": ["<driver_id>", ...]}}
+    -- Driver IDs only — never names/phones/bank details (PIPEDA).
+    skipped_summary   JSONB,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

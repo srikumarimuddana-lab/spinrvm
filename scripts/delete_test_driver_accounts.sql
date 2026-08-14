@@ -959,10 +959,10 @@ BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'disputes') THEN
         IF p_dry_run THEN
             SELECT COUNT(*) INTO v_count FROM disputes
-            WHERE reporter_id::text = ANY(v_user_ids) OR ride_id::text = ANY(v_ride_ids);
+            WHERE user_id::text = ANY(v_user_ids) OR ride_id::text = ANY(v_ride_ids);
         ELSE
             DELETE FROM disputes
-            WHERE reporter_id::text = ANY(v_user_ids) OR ride_id::text = ANY(v_ride_ids);
+            WHERE user_id::text = ANY(v_user_ids) OR ride_id::text = ANY(v_ride_ids);
             GET DIAGNOSTICS v_count = ROW_COUNT;
         END IF;
         RAISE NOTICE '  disputes: %', v_count;

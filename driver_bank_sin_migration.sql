@@ -313,15 +313,16 @@ WHERE d.user_id = bi.matched_user_id
   AND bi.date_of_birth IS NOT NULL
   AND d.date_of_birth IS NULL;  -- NULL-only fill
 
--- 6c: Update GST/HST business number
+-- 6c: Update GST/HST business number (canonical column is gst_bn, NOT gst_hst_number)
 UPDATE drivers d
-SET gst_hst_number = bi.gst_bn
+SET gst_bn = bi.gst_bn,
+    gst_registered = TRUE
 FROM driver_bank_import bi
 WHERE d.user_id = bi.matched_user_id
   AND bi.migration_status = 'matched'
   AND bi.gst_bn IS NOT NULL
   AND bi.gst_bn != ''
-  AND d.gst_hst_number IS NULL;  -- NULL-only fill
+  AND d.gst_bn IS NULL;  -- NULL-only fill
 
 -- 6d: Update Stripe Connect account ID
 UPDATE drivers d
@@ -343,7 +344,7 @@ SELECT migration_status, COUNT(*) FROM driver_bank_import GROUP BY migration_sta
 
 SELECT d.user_id, bi.first_name, bi.last_name, bi.phone,
        d.sin_last4, d.sin_collected_at, d.date_of_birth,
-       d.gst_hst_number, d.stripe_account_id
+       d.gst_bn, d.stripe_account_id
 FROM drivers d
 JOIN driver_bank_import bi ON d.user_id = bi.matched_user_id
 WHERE bi.migration_status = 'updated'

@@ -3522,12 +3522,21 @@ async def admin_regenerate_imported_snapshots(
         raise HTTPException(status_code=403, detail="role_required:super_admin")
 
     import asyncio
+    import functools
     import hashlib
 
     try:
-        from ...utils.route_snapshot import render_ride_snapshot, render_ride_snapshot_google
+        from ...utils.route_snapshot import (
+            normalize_polyline_points,
+            render_ride_snapshot,
+            render_ride_snapshot_google,
+        )
     except ImportError:
-        from utils.route_snapshot import render_ride_snapshot, render_ride_snapshot_google  # type: ignore
+        from utils.route_snapshot import (  # type: ignore
+            normalize_polyline_points,
+            render_ride_snapshot,
+            render_ride_snapshot_google,
+        )
 
     try:
         from ...supabase_client import supabase as sb
@@ -3575,10 +3584,7 @@ async def admin_regenerate_imported_snapshots(
             errors.append({"ride_id": ride_id, "error": "missing coordinates"})
             continue
 
-        polyline = ride.get("planned_route_polyline")
-        route_polyline = None
-        if isinstance(polyline, list):
-            route_polyline = [[p.get("lat"), p.get("lng")] for p in polyline if isinstance(p, dict)]
+        route_polyline = normalize_polyline_points(ride.get("planned_route_polyline"))
 
         png_bytes = None
         if gmap_key:
@@ -3598,7 +3604,8 @@ async def admin_regenerate_imported_snapshots(
             try:
                 png_bytes = await loop.run_in_executor(
                     None,
-                    lambda: render_ride_snapshot(
+                    functools.partial(
+                        render_ride_snapshot,
                         pickup_lat=float(pickup_lat),
                         pickup_lng=float(pickup_lng),
                         dropoff_lat=float(dropoff_lat),
@@ -3618,7 +3625,8 @@ async def admin_regenerate_imported_snapshots(
         try:
             await loop.run_in_executor(
                 None,
-                lambda: sb.storage.from_("ride-snapshots").upload(
+                functools.partial(
+                    sb.storage.from_("ride-snapshots").upload,
                     path=storage_path,
                     file=png_bytes,
                     file_options={"content-type": "image/png", "upsert": "true", "cache-control": "31536000"},

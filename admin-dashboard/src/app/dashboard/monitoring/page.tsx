@@ -483,8 +483,24 @@ export default function MonitoringPage() {
       });
     };
     fetchDemand();
-    const interval = setInterval(fetchDemand, 120_000);
-    return () => { cancelled = true; clearInterval(interval); };
+
+    // Jittered, matching the heatmap page's demand poll. A fixed interval puts
+    // every tab that enabled the overlay at the same moment — a shift handover,
+    // or an incident everyone opens at once — onto the same instant, and each
+    // poll hits the surge-status endpoint. ±10% spreads them without changing
+    // the effective cadence.
+    let timer: ReturnType<typeof setTimeout>;
+    const scheduleNext = () => {
+      const delay = 120_000 * (1 + (Math.random() * 0.2 - 0.1));
+      timer = setTimeout(() => {
+        if (cancelled) return;
+        fetchDemand();
+        scheduleNext();
+      }, delay);
+    };
+    scheduleNext();
+
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [filters.showDemand]);
 
   // Re-apply filters when they change

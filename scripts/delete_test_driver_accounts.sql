@@ -187,10 +187,10 @@ BEGIN
     -- ride_messages
     IF p_dry_run THEN
         SELECT COUNT(*) INTO v_count FROM ride_messages
-        WHERE ride_id::text = ANY(v_ride_ids) OR sender_id::text = ANY(v_user_ids);
+        WHERE ride_id::text = ANY(v_ride_ids);
     ELSE
         DELETE FROM ride_messages
-        WHERE ride_id::text = ANY(v_ride_ids) OR sender_id::text = ANY(v_user_ids);
+        WHERE ride_id::text = ANY(v_ride_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  ride_messages: %', v_count;

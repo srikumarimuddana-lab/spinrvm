@@ -15,6 +15,7 @@ import { useRequireModule } from "@/hooks/useRequireModule";
 import { Switch } from "@/components/ui/switch";
 import { getSettings, updateSettings } from "@/lib/api/settings-ai";
 import { getSurgeHistory } from "@/lib/api/analytics-payouts";
+import { TUNING_PLAYBOOK, tuningWarnings, warningsFor } from "@/lib/heatmap-tuning-guidance";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 
 const GeofenceMap = lazy(() => import("@/components/geofence-map"));
@@ -2416,6 +2417,9 @@ export function AreaHeatmapOverrides({
   if (!cfg) return null;
 
   const overriddenCount = Object.keys(draft).length;
+  // Evaluated against the draft, so a risky value is flagged while it's being
+  // typed rather than discovered after it reaches every driver in the area.
+  const warnings = tuningWarnings(draft, cfg.inherited);
 
   return (
     <div className="space-y-4 pb-6 mb-6 border-b">
@@ -2429,6 +2433,29 @@ export function AreaHeatmapOverrides({
             : "No overrides — this area follows the platform settings."}
         </p>
       </div>
+
+      <details className="rounded-lg border bg-muted/30">
+        <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-foreground">
+          What should I change? — tuning playbook
+        </summary>
+        <div className="border-t px-3 py-2">
+          <p className="text-xs text-muted-foreground">
+            Start from the symptom, not the knob. Every change here is a trade — there is no
+            setting that improves the map for free.
+          </p>
+          <dl className="mt-2 space-y-2.5">
+            {TUNING_PLAYBOOK.map((entry) => (
+              <div key={entry.symptom}>
+                <dt className="text-xs font-semibold text-foreground">{entry.symptom}</dt>
+                <dd className="text-xs text-muted-foreground">
+                  {entry.action}{" "}
+                  <span className="italic">Trade-off: {entry.tradeoff}</span>
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      </details>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
         {Object.entries(cfg.spec).map(([key, spec]) => {
@@ -2481,6 +2508,22 @@ export function AreaHeatmapOverrides({
                   <span className="ml-1 opacity-70">({spec.min}–{spec.max})</span>
                 </span>
               </div>
+              {warningsFor(key, warnings).map((w) => (
+                <p
+                  key={`${key}-${w.severity}`}
+                  // role=alert only for the ones that carry a real cost — an
+                  // informational note firing a screen-reader interruption on
+                  // every keystroke would be worse than silence.
+                  role={w.severity === "warning" ? "alert" : undefined}
+                  className={`mt-2 rounded-md border px-2 py-1.5 text-xs ${
+                    w.severity === "warning"
+                      ? "border-destructive/40 bg-destructive/5 text-destructive"
+                      : "border-amber-500/40 bg-amber-500/5 text-amber-700 dark:text-amber-400"
+                  }`}
+                >
+                  {w.message}
+                </p>
+              ))}
             </div>
           );
         })}
@@ -2501,6 +2544,12 @@ export function AreaHeatmapOverrides({
           >
             Discard changes
           </button>
+        )}
+        {dirty && warnings.some((w) => w.severity === "warning") && (
+          <span className="text-xs text-destructive">
+            Saving applies to every driver in {areaName} on their next refresh — check the
+            flagged values above.
+          </span>
         )}
       </div>
     </div>

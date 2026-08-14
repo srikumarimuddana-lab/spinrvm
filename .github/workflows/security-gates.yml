@@ -264,17 +264,30 @@ jobs:
             exit "$rc"
           fi
 
-          # Findings themselves are not yet blocking. This is deliberate and
-          # temporary: the first real run of the Spinr ruleset produced 74
-          # findings dominated by rule defects, not code defects — e.g.
-          # spinr-no-float-in-money flags fare_service._f(), the Decimal->float
-          # helper CLAUDE.md *mandates* at the response boundary, and
-          # spinr-jwt-role-must-reread fires on any `user.get('role')`. Blocking
-          # on those would force removing the prescribed pattern.
+          # Findings are not yet blocking. Still deliberate, but the reason
+          # has narrowed since this was written — do not read the original
+          # note as current state:
           #
-          # Tracked as its own task: tune the four over-broad rules, then delete
-          # this block so findings fail the job. Findings are uploaded to the
-          # GitHub Security tab below either way, so they are visible now.
+          #   spinr-no-float-in-money (SR-03) HAS been tuned. It now excludes
+          #   the _f()/_fd() helper bodies and float() over an already-rounded
+          #   Decimal, i.e. the response-boundary conversion CLAUDE.md
+          #   mandates. Its allowlist was also audited (2026-08-13): two of the
+          #   six paths did not exist, so it silently covered four files. It
+          #   now covers ten verified-clean money modules.
+          #
+          #   spinr-jwt-role-must-reread and the other two over-broad rules
+          #   have NOT been re-checked and are the remaining blockers.
+          #
+          # To finish this: run semgrep locally against the current ruleset,
+          # confirm SR-03 reports zero findings (it should — every allowlisted
+          # path was checked by hand), then either delete this block or add a
+          # second, SR-03-scoped invocation that fails the job while the other
+          # rules stay advisory. That verification could not be done in the
+          # session that corrected the allowlist because semgrep is not
+          # installed in that environment, and turning a gate red on an
+          # unverified assumption is worse than leaving it advisory.
+          #
+          # Findings are uploaded to the GitHub Security tab below either way.
           if [ "$rc" -eq 1 ]; then
             echo "::warning::semgrep reported findings — visible in the Security tab (not yet merge-blocking; rule tuning pending)"
           fi

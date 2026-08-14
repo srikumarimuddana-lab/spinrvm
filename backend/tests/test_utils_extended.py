@@ -197,7 +197,9 @@ class TestGetSurgeStatus:
         areas = [{"id": "area_1", "name": "City", "surge_multiplier": 1.5, "surge_active": True, "is_active": True}]
 
         with patch("backend.utils.surge_engine.db.get_rows", AsyncMock(return_value=areas)):
-            result = asyncio.run(get_surge_status())
+            # Bypass the status cache — it is process-wide under the in-memory
+            # Redis fallback, so a cached read here would be another test's data.
+            result = asyncio.run(get_surge_status(use_cache=False))
 
         assert isinstance(result, list)
 

@@ -16,6 +16,8 @@ import { Switch } from "@/components/ui/switch";
 import { getSettings, updateSettings } from "@/lib/api/settings-ai";
 import { getSurgeHistory } from "@/lib/api/analytics-payouts";
 import { TUNING_PLAYBOOK, tuningWarnings, warningsFor } from "@/lib/heatmap-tuning-guidance";
+import { parseAllowlistIds } from "@/lib/allowlist-ids";
+import { useUnsavedChangesWarning } from "@/hooks/useUnsavedChangesWarning";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 
 const GeofenceMap = lazy(() => import("@/components/geofence-map"));
@@ -2264,7 +2266,11 @@ function SurgeHistoryChart({ areaId, areaName }: { areaId: string; areaName: str
               </defs>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis
-                dataKey={hours <= 24 ? "time" : "fullTime"}
+                // < 24, not <= 24: a full 24-hour window spans two dates, so a
+                // bare clock label repeats ("14:30" appears for both yesterday
+                // and today) and the chart reads as if it doubled back on
+                // itself. Anything at or above a day carries the date.
+                dataKey={hours < 24 ? "time" : "fullTime"}
                 fontSize={11}
                 interval="preserveStartEnd"
                 angle={hours > 24 ? -30 : 0}
@@ -2348,6 +2354,10 @@ export function AreaHeatmapOverrides({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+
+  // Narrower blast radius than the global tab (one area), but the same silent
+  // loss on a stray reload.
+  useUnsavedChangesWarning(dirty);
 
   useEffect(() => {
     let cancelled = false;
@@ -2577,6 +2587,11 @@ function HeatmapConfigTab({ onSuccess, onError }: { onSuccess: () => void; onErr
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
+  // This is the one tab whose values apply to every service area and reach
+  // every online driver on their next refresh, so losing an edit to a stray
+  // reload is worth a prompt. Covers browser-level exits only — see the hook.
+  useUnsavedChangesWarning(dirty);
+
   useEffect(() => {
     getSettings().then((s: any) => {
       const next = { ...HEATMAP_DEFAULTS };
@@ -2616,9 +2631,10 @@ function HeatmapConfigTab({ onSuccess, onError }: { onSuccess: () => void; onErr
   const handleSave = async () => {
     setSaving(true);
     try {
-      // Split on any whitespace as well as commas: a space-separated paste
-      // previously survived as one junk token that matched no driver, silently.
-      const ids = driverIdsText.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+      // One parser, shared with the count shown below the field. They used to
+      // split differently, so a space-separated paste displayed as 1 ID and
+      // saved as several.
+      const { ids } = parseAllowlistIds(driverIdsText);
       await updateSettings({
         driver_heatmap_enabled: form.driver_heatmap_enabled,
         driver_heatmap_v2_enabled: form.driver_heatmap_v2_enabled,
@@ -2749,11 +2765,26 @@ function HeatmapConfigTab({ onSuccess, onError }: { onSuccess: () => void; onErr
           onChange={e => { setDriverIdsText(e.target.value); setDirty(true); }}
           placeholder="e.g. abc-123-def&#10;ghi-456-jkl"
         />
-        {driverIdsText.trim() && (
-          <p className="text-xs text-muted-foreground mt-1">
-            {driverIdsText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean).length} driver ID(s) in allowlist
-          </p>
-        )}
+        {driverIdsText.trim() && (() => {
+          const { ids, invalid } = parseAllowlistIds(driverIdsText);
+          return (
+            <>
+              <p className="text-xs text-muted-foreground mt-1">
+                {ids.length} driver ID(s) in allowlist
+              </p>
+              {invalid.length > 0 && (
+                // Surfaced, not dropped: the allowlist decides who gets v2
+                // during a dark launch, so an entry that matches nothing makes
+                // the rollout look like it did nothing.
+                <p role="alert" className="text-xs text-amber-700 dark:text-amber-400 mt-1">
+                  {invalid.length} entr{invalid.length === 1 ? "y does" : "ies do"} not look like a
+                  user ID and will match no driver: {invalid.slice(0, 3).join(", ")}
+                  {invalid.length > 3 ? "…" : ""}
+                </p>
+              )}
+            </>
+          );
+        })()}
       </div>
 
       {/* Save button */}

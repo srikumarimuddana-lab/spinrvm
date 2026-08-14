@@ -292,6 +292,8 @@ function DriverDashboard() {
     setLayer: setHeatmapLayer,
     forecast: heatmapForecast,
     hotspots: heatmapHotspots,
+    cellLatDeg: heatmapCellLat,
+    cellLngDeg: heatmapCellLng,
   } = useDemandHeatmap(rideState, isOnline);
 
   // Airport sub-zones — rendered as blue dashed polygons on idle map (HM-21)
@@ -777,7 +779,12 @@ function DriverDashboard() {
 
         {/* Demand heatmap — cross-platform cell polygons (HM-05) */}
         {heatmapCells.length > 0 && Platform.OS !== 'web' && (
-          <HeatmapCells cells={heatmapCells} region={null} />
+          <HeatmapCells
+            cells={heatmapCells}
+            region={null}
+            cellLatDeg={heatmapCellLat}
+            cellLngDeg={heatmapCellLng}
+          />
         )}
 
         {/* Airport sub-zone polygons — blue dashed outlines (HM-21) */}

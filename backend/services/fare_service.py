@@ -291,6 +291,14 @@ def build_fare_breakdown_lines(
     if fb.surge_multiplier > Decimal("1"):
         lines.append(
             {
+                # Label text, not money: this float() formats the multiplier for
+                # display, no arithmetic is done on it, and the amount below
+                # comes from `surge_delta`, which is Decimal throughout.
+                # Deliberately NOT switched to the Decimal's own repr —
+                # Decimal("1.50") renders "1.50" where float renders "1.5", so
+                # that swap would silently change rider-visible receipt copy in
+                # order to satisfy a lint rule.
+                # nosemgrep: spinr-no-float-in-money
                 "label": f"Surge ({float(fb.surge_multiplier)}×)",
                 "amount": _f(surge_delta),
                 "type": "modifier",
@@ -298,9 +306,17 @@ def build_fare_breakdown_lines(
         )
 
     for fee in area_fees or []:
-        val = fee.get("calculated_value", 0)
-        if float(val) > 0:
-            lines.append({"label": fee.get("name", "Fee"), "amount": float(val), "type": "fee"})
+        # Route through Decimal like every other money value here. This was the
+        # one line item built with raw float(), which put it out of step with
+        # the same fee's treatment in the total (`_d(af["calculated_value"])`
+        # below) and in the PDF and email receipts (both `_d(...)`). `_d` is
+        # Decimal(str(v)) and `_f` converts back at the response boundary, so
+        # the emitted amount is byte-identical to before — this fixes the type
+        # discipline, not the number, and keeps any future arithmetic on this
+        # value safe by construction.
+        fee_amount = _d(fee.get("calculated_value", 0))
+        if fee_amount > 0:
+            lines.append({"label": fee.get("name", "Fee"), "amount": _f(fee_amount), "type": "fee"})
 
     if tax_breakdown:
         for tax_name, info in tax_breakdown.items():

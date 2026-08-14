@@ -21,7 +21,9 @@ The original payout design exposed `POST /drivers/payouts` for ad-hoc manual cas
 
 ## 3. Fix / remediation
 
-Spinr now runs a weekly auto-payout batch every Sunday (UTC): every driver with a Stripe Connect account and `payable_balance >= $10` receives a `stripe.Transfer`; sub-$10 balances carry forward to the next week. Standard manual cashout is removed (`POST /drivers/payouts` returns 410; UI removed). Instant payouts (1.5% fee) remain, now gated by a per-service-area kill switch (`service_areas.instant_payout_enabled`, admin-toggleable). A new `auto_payout_batches` table records each weekly run. An `app_settings.auto_payout_enabled=false` ops flag disables the batch without redeploy.
+Spinr now runs a weekly auto-payout batch every **Sunday from 06:00 America/Regina** (gating on UTC would have fired Saturday evening local and cut off Saturday-night earnings): every eligible driver with `payable_balance` in **[$10, $5,000]** receives a `stripe.Transfer`; sub-$10 balances carry forward, over-cap balances are skipped to manual review (anomaly circuit-breaker). Eligibility mirrors the driver-initiated paths' CRA gates (GST BN + SIN on file) plus destination-account health (`stripe_payouts_enabled`, not suspended). Standard manual cashout is removed (`POST /drivers/payouts` returns 410; UI removed). Instant payouts (1.5% fee) remain, gated by a per-service-area kill switch (`service_areas.instant_payout_enabled`, admin-toggleable).
+
+Failure handling (post-review hardening): Stripe errors are classified — definitive rejections mark the payout `failed` (money never left; retried fresh next week); retryable errors (`balance_insufficient`, rate limit) and ambiguous outcomes (connection error/timeout — the transfer may have succeeded) leave the row `reserved` so the balance keeps the money earmarked. An hourly stale-`reserved` sweep replays ambiguous rows under the **same** Stripe idempotency key inside the 24h window (returning the original transfer if it succeeded — no double-pay), retries retryable rows under a fresh key, and escalates anything unresolvable to `needs_manual_reconcile`. Transfer amounts are **pinned on the payout row**, never recomputed on retry. Batches crashed mid-run (`running` >45 min) are claimed and resumed; mixed outcomes mark the batch `partial`. Drivers get a push notification on payout sent/failed. `GET /api/admin/auto-payouts/batches` lists the batch ledger; `app_settings.auto_payout_enabled=false` disables everything without redeploy.
 
 ## 4. Risk & impact on existing functionality
 
@@ -49,9 +51,12 @@ Spinr now runs a weekly auto-payout batch every Sunday (UTC): every driver with 
 | `backend/routes/drivers/payouts.py` | `POST /payouts` → 410 (legacy handler preserved off-route); `_require_instant_payout_enabled` gate | Remove manual cashout; kill switch |
 | `backend/routes/admin/service_areas.py` | `instant_payout_enabled` in update model + payload | Ops toggle |
 | `backend/routes/drivers/earnings.py` | `instant_payout_available` in `GET /drivers/balance` | Client can hide instant option |
-| `driver-app/app/driver/payout.tsx` | Removed cashout UI; Sunday schedule; new copy | Match new model |
+| `driver-app/app/driver/payout.tsx` | Removed cashout UI + orphaned styles; Sunday schedule; bank-arrival copy | Match new model |
 | `driver-app/store/driverStore.ts` | Removed `requestPayout` action | Dead code (endpoint 410s) |
-| `backend/tests/test_auto_payout.py` | 15 tests | Coverage |
+| `backend/routes/admin/stripe_payout_sync.py` | `GET /auto-payouts/batches` listing | Ops visibility for the batch ledger |
+| `backend/routes/drivers/__init__.py` | Export `_request_payout_legacy` | Retargeted legacy tests (rollback path stays covered) |
+| `.github/labeler.yml` | `utils/auto_payout.py` in `area:money` | Future PRs touching only this file get the label |
+| `backend/tests/test_auto_payout.py` | 39 tests (review-fleet paths: taxonomy, resume, sweep, gates, parity) | Coverage |
 
 ## 7. Before / after
 

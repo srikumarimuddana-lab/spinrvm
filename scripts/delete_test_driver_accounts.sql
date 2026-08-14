@@ -272,15 +272,19 @@ BEGIN
     RAISE NOTICE '  ride_incentive_claims: %', v_count;
     v_total_deleted := v_total_deleted + v_count;
 
-    -- corporate_rides
-    IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM corporate_rides WHERE ride_id::text = ANY(v_ride_ids);
+    -- corporate_rides (may not exist in every environment)
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'corporate_rides') THEN
+        IF p_dry_run THEN
+            SELECT COUNT(*) INTO v_count FROM corporate_rides WHERE ride_id::text = ANY(v_ride_ids);
+        ELSE
+            DELETE FROM corporate_rides WHERE ride_id::text = ANY(v_ride_ids);
+            GET DIAGNOSTICS v_count = ROW_COUNT;
+        END IF;
+        RAISE NOTICE '  corporate_rides: %', v_count;
+        v_total_deleted := v_total_deleted + v_count;
     ELSE
-        DELETE FROM corporate_rides WHERE ride_id::text = ANY(v_ride_ids);
-        GET DIAGNOSTICS v_count = ROW_COUNT;
+        RAISE NOTICE '  corporate_rides: TABLE DOES NOT EXIST — skipped';
     END IF;
-    RAISE NOTICE '  corporate_rides: %', v_count;
-    v_total_deleted := v_total_deleted + v_count;
 
     -- stripe_disputes (FK → rides)
     IF p_dry_run THEN

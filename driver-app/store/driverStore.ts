@@ -452,7 +452,6 @@ interface DriverState {
     setBankAccount: (account: BankAccount) => Promise<boolean>;
     deleteBankAccount: () => Promise<boolean>;
     fetchDriverBalance: () => Promise<void>;
-    requestPayout: (amount: number) => Promise<{ success: boolean; error?: string }>;
     fetchPayoutHistory: (limit?: number, offset?: number) => Promise<void>;
 
     // T4A Tax Documents
@@ -1210,22 +1209,6 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             set({ driverBalance: res.data });
         } catch (err) {
             throw err;
-        }
-    },
-
-    requestPayout: async (amount: number): Promise<{ success: boolean; error?: string }> => {
-        set({ isLoading: true, error: null });
-        try {
-            await api.post('/drivers/payouts', { amount });
-            await get().fetchDriverBalance();
-            await get().fetchPayoutHistory();
-            return { success: true };
-        } catch (err: unknown) {
-            const error = getApiErrorMessage(err, 'Failed to request payout');
-            set({ error });
-            return { success: false, error };
-        } finally {
-            set({ isLoading: false });
         }
     },
 

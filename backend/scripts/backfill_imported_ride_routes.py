@@ -112,7 +112,7 @@ async def main(dry_run: bool = False) -> None:
     rides = await db_supabase.get_rows(
         "rides",
         {"legacy_import_metadata": {"$ne": "{}"}},
-        columns="id,pickup_lat,pickup_lng,destination_lat,destination_lng,distance_km,planned_route_polyline",
+        columns="id,pickup_lat,pickup_lng,dropoff_lat,dropoff_lng,distance_km,planned_route_polyline",
         limit=500,
     )
     if not rides:
@@ -127,8 +127,8 @@ async def main(dry_run: bool = False) -> None:
     for r in rides:
         plat = r.get("pickup_lat")
         plng = r.get("pickup_lng")
-        dlat = r.get("destination_lat")
-        dlng = r.get("destination_lng")
+        dlat = r.get("dropoff_lat")
+        dlng = r.get("dropoff_lng")
         if not all(isinstance(v, (int, float)) for v in [plat, plng, dlat, dlng]):
             continue
         key = f"{plat:.4f},{plng:.4f},{dlat:.4f},{dlng:.4f}"

@@ -8,6 +8,7 @@ import {
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency, formatDate, statusColor } from "@/lib/utils";
 import ReferralsPanel from "@/components/referrals-panel";
+import AutoPayoutsPanel from "@/components/auto-payouts-panel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,7 +16,7 @@ import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
-import { Download, Car, CreditCard, Users, TrendingUp, TrendingDown, DollarSign, UserPlus, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle, Percent, Receipt, UserCheck, XCircle, Ticket, Zap, Landmark, Undo2, Filter, Hourglass, Activity, Gift, Search, Radar, Flag } from "lucide-react";
+import { Download, Car, CreditCard, Users, TrendingUp, TrendingDown, DollarSign, UserPlus, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle, Percent, Receipt, UserCheck, XCircle, Ticket, Zap, Landmark, Undo2, Filter, Hourglass, Activity, Gift, Search, Radar, Flag, CalendarClock } from "lucide-react";
 import { getPayouts, getPayoutStats, getPayoutsOverview, retryPayout, bulkRetryPayouts, closePayoutPeriod, type PayoutsOverview } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
@@ -37,7 +38,7 @@ const tooltipStyle = {
 
 export default function EarningsPage() {
     const { allowed } = useRequireModule("earnings");
-    const [tab, setTab] = useState<"rides" | "spinr-pass" | "payouts" | "referrals">("rides");
+    const [tab, setTab] = useState<"rides" | "spinr-pass" | "payouts" | "auto-payouts" | "referrals">("rides");
 
     // The Referrals tab calls /api/admin/referrals/leaderboard, which is gated by
     // the `drivers` module on the backend. Only show it to admins who actually
@@ -75,6 +76,10 @@ export default function EarningsPage() {
                     className={`flex items-center gap-1.5 px-5 py-2 rounded-lg text-sm font-semibold transition ${tab === "payouts" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"}`}>
                     <Wallet className="h-4 w-4" /> Payouts
                 </button>
+                <button onClick={() => setTab("auto-payouts")}
+                    className={`flex items-center gap-1.5 px-5 py-2 rounded-lg text-sm font-semibold transition ${tab === "auto-payouts" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"}`}>
+                    <CalendarClock className="h-4 w-4" /> Weekly Payouts
+                </button>
                 {canSeeReferrals && (
                     <button onClick={() => setTab("referrals")}
                         className={`flex items-center gap-1.5 px-5 py-2 rounded-lg text-sm font-semibold transition ${tab === "referrals" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"}`}>
@@ -86,6 +91,9 @@ export default function EarningsPage() {
             {tab === "rides" && <RideEarningsTab />}
             {tab === "spinr-pass" && <SpinrPassRevenueTab />}
             {tab === "payouts" && <PayoutsTab />}
+            {/* Spinr-controlled Sunday batch: run history + who is blocked
+                right now. Same `earnings` module gate as this page. */}
+            {tab === "auto-payouts" && <div className="pt-1"><AutoPayoutsPanel /></div>}
             {tab === "referrals" && canSeeReferrals && (
                 <div className="pt-1">
                     {/* Full referral program, inlined here (no link-out) so the

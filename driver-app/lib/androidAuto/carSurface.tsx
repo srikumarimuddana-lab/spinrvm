@@ -24,7 +24,8 @@ import React, { useMemo } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useDriverStore } from '../../store/driverStore';
 import { useAuthStore } from '@shared/store/authStore';
-import { useDemandHeatmap, type HeatmapCell } from '../../hooks/useDemandHeatmap';
+import { useDemandHeatmapView } from '../../hooks/demandHeatmapShared';
+import type { HeatmapCell } from '../../hooks/useDemandHeatmap';
 import { selectCarRoute } from './carRoute';
 import { buildTripCard, type OfferLike } from './carCard';
 import { CarTripCard } from './CarTripCard';
@@ -39,21 +40,23 @@ import { useCarLocation } from './useCarLocation';
 // last-known location loads, so the idle map never opens on null-island (0,0).
 const FALLBACK_CENTER = { latitude: 52.1332, longitude: -106.67 };
 
-// Heatmap cell geometry (same as HeatmapCells.tsx)
-const CELL_LAT = 0.004;
-const CELL_LNG = 0.006;
+// Heatmap cell geometry. Fallbacks only — the server sends the grid size it
+// actually bucketed with, because cell size is tunable per service area. Same
+// defaults as HeatmapCells.tsx, used when talking to a backend that omits them.
+const DEFAULT_CELL_LAT = 0.004;
+const DEFAULT_CELL_LNG = 0.006;
 const CAR_MAX_POLYGONS = 80;
 // Dark-theme ramp (car surface is always dark)
 const CAR_RAMP = ['#4E211E', '#7F2D26', '#B2382E', '#FF453A', '#FF8A80'];
 
-function cellCorners(lat: number, lng: number) {
-  const bLat = Math.floor(lat / CELL_LAT) * CELL_LAT;
-  const bLng = Math.floor(lng / CELL_LNG) * CELL_LNG;
+function cellCorners(lat: number, lng: number, cellLat: number, cellLng: number) {
+  const bLat = Math.floor(lat / cellLat) * cellLat;
+  const bLng = Math.floor(lng / cellLng) * cellLng;
   return [
     { latitude: bLat, longitude: bLng },
-    { latitude: bLat + CELL_LAT, longitude: bLng },
-    { latitude: bLat + CELL_LAT, longitude: bLng + CELL_LNG },
-    { latitude: bLat, longitude: bLng + CELL_LNG },
+    { latitude: bLat + cellLat, longitude: bLng },
+    { latitude: bLat + cellLat, longitude: bLng + cellLng },
+    { latitude: bLat, longitude: bLng + cellLng },
   ];
 }
 
@@ -78,14 +81,30 @@ export function CarMapSurface(): React.ReactElement | null {
   const here = useCarLocation();
   const route = selectCarRoute(rideState, activeRide);
   const card = buildTripCard(rideState, activeRide, incomingRide as OfferLike | null);
-  const isOnline = !!useAuthStore((s) => s.driver?.is_online);
-  const { cells: heatmapCells } = useDemandHeatmap(rideState, isOnline);
+  // Read-only view of the phone's poller — NOT a second useDemandHeatmap().
+  //
+  // Two independent instances meant two timers (double the requests, battery
+  // and data whenever a driver plugged in) and, worse, two different answers to
+  // "am I online?": this surface read authStore.driver.is_online while the
+  // phone dashboard used useDriverDashboard's own state. A driver taken offline
+  // by dispatch stopped seeing demand on the phone and kept seeing it here.
+  //
+  // `status` is consumed too: with no active publisher, or once the data has
+  // gone stale, the car renders nothing rather than a frozen map the driver has
+  // no way to tell is frozen.
+  const { cells: heatmapCells, status: heatmapStatus, cellLatDeg, cellLngDeg } = useDemandHeatmapView();
 
   const carHeatCells = useMemo(() => {
-    if (!heatmapCells.length || rideState !== 'idle') return [];
-    const sorted = [...heatmapCells].sort((a, b) => b.weight - a.weight);
-    return sorted.slice(0, CAR_MAX_POLYGONS);
-  }, [heatmapCells, rideState]);
+    const usable = heatmapStatus === 'ready' || heatmapStatus === 'empty';
+    if (!usable || !heatmapCells.length || rideState !== 'idle') return [];
+    return [...heatmapCells]
+      .filter((c) => Number.isFinite(c.lat) && Number.isFinite(c.lng) && Number.isFinite(c.weight))
+      .sort((a, b) => b.weight - a.weight)
+      .slice(0, CAR_MAX_POLYGONS);
+  }, [heatmapCells, heatmapStatus, rideState]);
+
+  const carCellLat = typeof cellLatDeg === 'number' && cellLatDeg > 0 ? cellLatDeg : DEFAULT_CELL_LAT;
+  const carCellLng = typeof cellLngDeg === 'number' && cellLngDeg > 0 ? cellLngDeg : DEFAULT_CELL_LNG;
 
   const carHeatMax = useMemo(
     () => carHeatCells.reduce((m, c) => Math.max(m, c.weight), 0),
@@ -161,7 +180,7 @@ export function CarMapSurface(): React.ReactElement | null {
           return (
             <MapsPolygon
               key={`ch-${i}-${c.lat}-${c.lng}`}
-              coordinates={cellCorners(c.lat, c.lng)}
+              coordinates={cellCorners(c.lat, c.lng, carCellLat, carCellLng)}
               fillColor={rc.fill}
               strokeColor={rc.stroke}
               strokeWidth={rc.sw}

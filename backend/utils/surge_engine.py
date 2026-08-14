@@ -12,7 +12,7 @@ import os
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
@@ -30,13 +30,13 @@ try:
     from settings_loader import get_app_settings
     from utils.driver_presence import present_driver_ids
     from utils.metrics import inc as _metric_inc
-    from utils.redis_client import redis_get, redis_set, redis_set_nx
+    from utils.redis_client import redis_delete, redis_get, redis_set, redis_set_nx
 except ImportError:
     from ..db import db
     from ..geo_utils import get_service_area_polygon, point_in_polygon
     from .driver_presence import present_driver_ids
     from .metrics import inc as _metric_inc
-    from .redis_client import redis_get, redis_set, redis_set_nx
+    from .redis_client import redis_delete, redis_get, redis_set, redis_set_nx
 
 # Per-area supply/demand fetch cap. Surge = demand/supply, a regulated rider-
 # facing price; if a fetch hits this cap the count is TRUNCATED and the
@@ -140,8 +140,56 @@ async def _count_supply_spatial(poly: List[Dict[str, float]]) -> int:
     return len(driver_ids)
 
 
-async def _count_supply_in_area(area: Dict[str, Any]) -> int:
-    """Count online+available drivers within a service area polygon."""
+async def _fetch_dispatchable_drivers(context: str = "supply") -> List[Dict[str, Any]]:
+    """Fetch + presence-filter the platform's dispatchable drivers, once.
+
+    The driver set is platform-wide, not per-area — the area filter is the
+    polygon test applied afterwards. Extracted so a caller scoring several
+    areas in one pass can fetch once instead of once per area (see
+    :func:`get_surge_status`), while single-area callers keep their existing
+    behaviour by simply not passing a pre-fetched list.
+    """
+    drivers = await db.get_rows(
+        "drivers",
+        {"is_online": True, "is_available": True},
+        limit=_SURGE_FETCH_CAP,
+        columns="id,user_id,lat,lng",
+    )
+    if len(drivers) >= _SURGE_FETCH_CAP:
+        _metric_inc("spinr_surge_fetch_cap_hit_total", {"kind": context})
+        logger.error(
+            f"Surge: supply fetch hit the {_SURGE_FETCH_CAP}-row cap ({context}) — "
+            f"supply is TRUNCATED and the surge multiplier may be OVER-stated (a regulated price). "
+            f"Move to a server-side spatial count (PostGIS ST_Covers + GIST index, D1)."
+        )
+
+    # Presence filter: ghost-online drivers (app force-killed, phone dead)
+    # shouldn't count as "supply" or we'd compute a lower surge than the
+    # real market needs. Safe-fallback: if presence lookup fails, trust
+    # the DB rows — worst case surge is slightly under-pricing for one
+    # tick, never over-pricing based on a Redis outage.
+    try:
+        driver_ids = [d["id"] for d in drivers if d.get("id")]
+        present = await present_driver_ids(driver_ids) if driver_ids else set()
+        if present:
+            drivers = [d for d in drivers if d["id"] in present]
+    except Exception as exc:
+        logger.warning(f"Surge: presence filter failed, using DB state: {exc}")
+
+    return drivers
+
+
+async def _count_supply_in_area(
+    area: Dict[str, Any],
+    prefetched_drivers: Optional[List[Dict[str, Any]]] = None,
+) -> int:
+    """Count online+available drivers within a service area polygon.
+
+    ``prefetched_drivers`` lets a multi-area caller supply the already
+    fetched-and-presence-filtered driver set. Omitting it preserves the
+    original per-call fetch exactly, so the live surge-recalculation loop is
+    unchanged by this parameter existing.
+    """
     poly = get_service_area_polygon(area)
     if not poly:
         return 0
@@ -150,6 +198,10 @@ async def _count_supply_in_area(area: Dict[str, Any]) -> int:
     # fully fallback-safe — on any error (flag off, migration 170 not applied,
     # extension missing, RPC issue) we fall through to the Python scan below, so
     # surge never breaks.
+    #
+    # Checked before the prefetched list is used: the spatial path is strictly
+    # better (no row cap) and a caller that pre-fetched simply wasted one query,
+    # which is preferable to silently downgrading accuracy to reuse a batch.
     if _SURGE_SPATIAL_COUNT:
         try:
             return await _count_supply_spatial(poly)
@@ -159,32 +211,7 @@ async def _count_supply_in_area(area: Dict[str, Any]) -> int:
             )
 
     try:
-        drivers = await db.get_rows(
-            "drivers",
-            {"is_online": True, "is_available": True},
-            limit=_SURGE_FETCH_CAP,
-            columns="id,user_id,lat,lng",
-        )
-        if len(drivers) >= _SURGE_FETCH_CAP:
-            _metric_inc("spinr_surge_fetch_cap_hit_total", {"kind": "supply"})
-            logger.error(
-                f"Surge: supply fetch hit the {_SURGE_FETCH_CAP}-row cap for area {area.get('id')} — "
-                f"supply is TRUNCATED and the surge multiplier may be OVER-stated (a regulated price). "
-                f"Move to a server-side spatial count (PostGIS ST_Covers + GIST index, D1)."
-            )
-
-        # Presence filter: ghost-online drivers (app force-killed, phone dead)
-        # shouldn't count as "supply" or we'd compute a lower surge than the
-        # real market needs. Safe-fallback: if presence lookup fails, trust
-        # the DB rows — worst case surge is slightly under-pricing for one
-        # tick, never over-pricing based on a Redis outage.
-        try:
-            driver_ids = [d["id"] for d in drivers if d.get("id")]
-            present = await present_driver_ids(driver_ids) if driver_ids else set()
-            if present:
-                drivers = [d for d in drivers if d["id"] in present]
-        except Exception as exc:
-            logger.warning(f"Surge: presence filter failed, using DB state: {exc}")
+        drivers = prefetched_drivers if prefetched_drivers is not None else await _fetch_dispatchable_drivers()
 
         count = 0
         for d in drivers:
@@ -234,6 +261,7 @@ async def recalculate_all_surges() -> List[Dict[str, Any]]:
     (Supabase egress).
     """
     results = []
+    changed_any = False
 
     # Kill switch (ACTION_ITEMS.md E5): pauses the automatic recompute cycle
     # for an incident. Independent of the per-area surge_source/surge_enabled
@@ -279,6 +307,7 @@ async def recalculate_all_surges() -> List[Dict[str, Any]]:
 
             # Only update DB if multiplier changed
             if new_multiplier != old_multiplier:
+                changed_any = True
                 await db.update_one(
                     "service_areas",
                     {"id": area["id"]},
@@ -315,6 +344,11 @@ async def recalculate_all_surges() -> List[Dict[str, Any]]:
         except Exception as e:
             logger.opt(exception=True).error(f"Surge: failed to update area {area.get('id')}: {e}")
 
+    # A multiplier the engine just moved should show on the ops dashboard on the
+    # next refresh, not up to 30s later behind a cache the engine didn't know about.
+    if changed_any:
+        await invalidate_surge_status_cache()
+
     return results
 
 
@@ -322,6 +356,23 @@ _SURGE_STATUS_CACHE_KEY = "spinr:surge:status:all"
 # Well inside the engine's own 120s recalculation cadence, so a cached read is
 # never more stale than the underlying numbers already are.
 _SURGE_STATUS_CACHE_TTL = 30
+
+
+async def invalidate_surge_status_cache() -> None:
+    """Drop the cached surge status.
+
+    Called by every path that changes surge state so an operator never sees
+    their own override reflected 30 seconds late — a stale read on the screen
+    an admin uses to confirm a regulated price took effect would read as "the
+    toggle didn't work" and invite a second, duplicate change.
+
+    Best-effort: failing to clear a 30-second cache must not fail the surge
+    write itself, which has already been persisted by the time we get here.
+    """
+    try:
+        await redis_delete(_SURGE_STATUS_CACHE_KEY)
+    except Exception as exc:
+        logger.warning(f"Surge status: cache invalidation failed (stale for <={_SURGE_STATUS_CACHE_TTL}s): {exc}")
 
 
 async def get_surge_status(*, use_cache: bool = True) -> List[Dict[str, Any]]:
@@ -348,6 +399,21 @@ async def get_surge_status(*, use_cache: bool = True) -> List[Dict[str, Any]]:
 
     areas = await db.get_rows("service_areas", {"is_active": True}, limit=100)
 
+    # Fetch the dispatchable-driver set ONCE for the whole sweep instead of
+    # once per area. The set is platform-wide — only the polygon test that
+    # follows is per-area — so the previous per-area call re-ran the identical
+    # unscoped query N times against `drivers`, the same table dispatch and the
+    # driver-location write path use. Skipped entirely when the spatial count
+    # is enabled, since that path never reads this list.
+    prefetched = None
+    if not _SURGE_SPATIAL_COUNT:
+        try:
+            prefetched = await _fetch_dispatchable_drivers(context="status")
+        except Exception as exc:
+            # Fall back to per-area fetching rather than reporting zero supply,
+            # which would read as a fleet-wide outage on the ops dashboard.
+            logger.warning(f"Surge status: batched driver fetch failed, falling back per-area: {exc}")
+
     statuses = []
     for area in areas:
         if area.get("parent_service_area_id"):
@@ -355,7 +421,7 @@ async def get_surge_status(*, use_cache: bool = True) -> List[Dict[str, Any]]:
 
         # Calculate live demand/supply for each area
         demand = await _count_demand_in_area(area["id"])
-        supply = await _count_supply_in_area(area)
+        supply = await _count_supply_in_area(area, prefetched_drivers=prefetched)
         ratio = round(demand / max(supply, 1), 2)
 
         # Per-area surge master toggle. Report the EFFECTIVE surge the fare

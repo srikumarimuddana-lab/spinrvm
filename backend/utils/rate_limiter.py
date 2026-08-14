@@ -363,6 +363,16 @@ cancel_ride_limit = default_limiter.limit("10/hour", key_func=get_user_or_ip_key
 # ~6 simultaneously-polling riders on one carrier exhausted it between them.
 ride_read_limit = default_limiter.limit("120/minute", key_func=get_user_or_ip_key)
 
+# Driver demand-heatmap reads. The app polls on the server-supplied interval,
+# which is clamped to a 30 s floor — i.e. at most 2/minute in normal operation,
+# so 20/minute is ~10x headroom and only bites a runaway client (a retry loop,
+# or a build that ignores the interval). Cheap requests are usually cache hits,
+# but "usually cached" is not a ceiling: a stolen driver token or a stuck
+# client could still drive uncached rebuilds against `rides`. Per-user keyed so
+# one bad device cannot exhaust the budget for other drivers behind the same
+# carrier NAT.
+heatmap_read_limit = default_limiter.limit("20/minute", key_func=get_user_or_ip_key)
+
 # Corporate guest bookings: each one fires 2-3 customer SMS, so this is an
 # SMS-cost/abuse bound as much as a booking bound. 30/hour comfortably covers
 # a busy showroom desk. (The /company + /api/company double-mount tracks

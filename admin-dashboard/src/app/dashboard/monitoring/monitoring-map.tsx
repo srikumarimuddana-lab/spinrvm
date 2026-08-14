@@ -165,15 +165,20 @@ const DEFAULT_AREA_OPACITY = 0.08;
  * missing from the response (airport sub-zones, which get_surge_status skips,
  * or a brand-new area) is NOT the same as an oversupplied one — it gets the
  * neutral no-data treatment rather than being painted "Oversupply" purple,
- * which previously made a surge-engine outage look like a healthy market. */
-function areaFillColor(areaId: string, demandData: AreaDemandSupply[] | undefined, showDemand: boolean): string {
+ * which previously made a surge-engine outage look like a healthy market.
+ *
+ * Exported for tests: this is AD-01's own wiring (the per-area lookup, the
+ * overlay gate and the missing-area fallback), and it is the part the shared
+ * band module cannot cover. Rendering MonitoringMap needs maplibre-gl, which
+ * is why the smoke suite stubs this file — leaving this logic at 0%. */
+export function areaFillColor(areaId: string, demandData: AreaDemandSupply[] | undefined, showDemand: boolean): string {
     if (!showDemand || !demandData) return DEFAULT_AREA_FILL;
     const d = demandData.find(a => a.area_id === areaId);
     if (!d) return NO_DATA_COLOR;
     return demandFillColor(d.demand_count, d.supply_count, d.ratio);
 }
 
-function areaFillOpacity(areaId: string, demandData: AreaDemandSupply[] | undefined, showDemand: boolean): number {
+export function areaFillOpacity(areaId: string, demandData: AreaDemandSupply[] | undefined, showDemand: boolean): number {
     if (!showDemand || !demandData) return DEFAULT_AREA_OPACITY;
     const d = demandData.find(a => a.area_id === areaId);
     if (!d) return DEFAULT_AREA_OPACITY;

@@ -35,8 +35,7 @@ _SUPER_ADMIN = {
         "settings",
         "corporate_accounts",
         "documents",
-        "heatmap",
-        "staff",
+            "staff",
     ],
 }
 

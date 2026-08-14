@@ -72,12 +72,20 @@ rules:
       - pattern-not: float($X.quantize(...))
       - pattern-not: float(Decimal(...).quantize(...))
     paths:
-      # Every path here is verified to exist and to be free of findings under
-      # the pattern-nots above, so this rule can be made merge-blocking without
-      # first turning CI red. Two entries were previously dead — "fare_split.py"
-      # has no Python module anywhere (the feature is a Postgres RPC), and the
-      # corporate wallet service is named corporate_wallet_service.py — so the
-      # allowlist silently covered four files, not six.
+      # Every path here exists and reports zero findings — verified by actually
+      # running semgrep (2026-08-14), which is why this rule is now merge-
+      # blocking (see the "Money-safety gate" step in security-gates.yml).
+      #
+      # Worth recording how that went, because the lesson is the point: an
+      # earlier pass declared this same list clean on a careful file-by-file
+      # read. The tool then found three findings in services/fare_service.py
+      # that the read had missed. A code review is not a substitute for running
+      # the rule — re-run it before adding a path here.
+      #
+      # Two entries were also previously dead: "fare_split.py" has no Python
+      # module anywhere (the feature is a Postgres RPC), and the corporate
+      # wallet service is named corporate_wallet_service.py — so the allowlist
+      # silently covered four files while reading as if it covered six.
       include:
         - "backend/routes/fares.py"
         - "backend/routes/payments.py"

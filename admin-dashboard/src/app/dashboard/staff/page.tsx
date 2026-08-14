@@ -21,6 +21,27 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 
+// Must stay in step with AVAILABLE_MODULES in backend/routes/admin/staff.py.
+// The create/update handlers filter submitted modules against that list, so a
+// key offered here but absent there is a checkbox that ticks, saves, returns
+// 200 — and grants nothing. Three had drifted into exactly that state and were
+// removed on 2026-08-14:
+//
+//   heatmap           gated no backend route at all (only the sidebar link)
+//   bulk_operations   deliberately removed backend-side; the Data Transfer
+//                     surface is now require_super_admin, so offering it here
+//                     implied a full-fidelity PII export could be delegated
+//   compliance        the OPPOSITE drift — require_module("compliance") is a
+//                     real, enforced gate (routes/admin/__init__.py) that is
+//                     NOT in AVAILABLE_MODULES, so nobody can hold it and the
+//                     router is super_admin-only by omission. Removed from the
+//                     picker because it cannot currently be granted; making it
+//                     grantable is a product decision about who may reach tax
+//                     and compliance reporting, not a cleanup. Tracked as a
+//                     follow-up rather than decided here.
+//
+// A test in backend/tests/test_admin_module_list_parity.py now compares the two
+// lists so this cannot drift again silently.
 const ALL_MODULES = [
   { key: "dashboard", label: "Dashboard" },
   { key: "users", label: "Users" },
@@ -38,17 +59,14 @@ const ALL_MODULES = [
   { key: "settings", label: "Settings" },
   { key: "corporate_accounts", label: "Corporate Accounts" },
   { key: "documents", label: "Documents" },
-  { key: "heatmap", label: "Heat Map" },
   { key: "staff", label: "Staff Management" },
   { key: "audit", label: "Audit Logs" },
   { key: "support_tickets", label: "Help Desk (Zoho)" },
-  { key: "compliance", label: "Compliance & Tax Reporting" },
-  { key: "bulk_operations", label: "Data Transfer" },
 ];
 
 const ROLE_PRESETS: Record<string, string[]> = {
   super_admin: ALL_MODULES.map((m) => m.key),
-  operations: ["dashboard", "rides", "drivers", "surge", "service_areas", "vehicle_types", "heatmap"],
+  operations: ["dashboard", "rides", "drivers", "surge", "service_areas", "vehicle_types"],
   support: ["dashboard", "support", "support_tickets", "disputes", "notifications", "users"],
   finance: ["dashboard", "earnings", "promotions", "corporate_accounts", "pricing", "audit"],
 };

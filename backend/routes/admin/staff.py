@@ -62,11 +62,27 @@ AVAILABLE_MODULES = [
     "settings",
     "corporate_accounts",
     "documents",
-    "heatmap",
     "staff",  # Only super_admin can access this
     "audit",
     "support_tickets",
 ]
+
+# NOTE — "heatmap" was removed from this list (and from ALL_MODULES in
+# routes/admin/auth.py) deliberately. It gated nothing on the backend: the
+# admin Heat Map page's data comes from /rides/heatmap-data (rides),
+# /surge/status (service_areas), /analytics/demand-forecast (dashboard) and
+# /settings/heatmap (settings), each already gated by its own router's
+# require_module(). The string's only effect was showing or hiding the sidebar
+# link, so granting it implied a protection it did not provide and denying it
+# implied a restriction it did not enforce — an admin holding "heatmap" alone
+# still saw the link and then a page whose every request 403'd. The sidebar now
+# gates that entry on "rides", the module behind the map itself. Same reasoning
+# as the "bulk_operations" removal documented in routes/admin/__init__.py.
+#
+# Existing admin_staff rows may still carry "heatmap" in their modules array.
+# That is inert (nothing reads it) and self-cleaning: the create/update paths
+# below filter submitted modules against AVAILABLE_MODULES, so the next edit
+# drops it. No migration needed.
 
 ROLE_PRESETS = {
     "super_admin": AVAILABLE_MODULES,
@@ -77,7 +93,6 @@ ROLE_PRESETS = {
         "surge",
         "service_areas",
         "vehicle_types",
-        "heatmap",
     ],
     "support": ["dashboard", "support", "support_tickets", "disputes", "notifications", "users"],
     "finance": ["dashboard", "earnings", "promotions", "corporate_accounts", "pricing", "audit"],

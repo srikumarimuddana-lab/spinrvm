@@ -3271,6 +3271,60 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   have no existing test file to extend (consistent with the rest of this
   app's screen-level files, not a gap introduced here) — verified by
   `tsc --noEmit` and manual code review only.
+- **Follow-up, found live the same day (A33):** A32's blend added
+  `driverBalance.previous_app_paid_total` (a Stripe-payout-ledger sum) on
+  top of Spinr-only earnings. A real migrated driver testing the shipped
+  fix still saw `Total Earned $0.00` / `Fare $0.00` / `Avg per Trip $0.00`
+  under a correctly-populated `Total Trips` / `KM Driven` / `Online Time` —
+  because that driver has real legacy RIDES but an incomplete previous-app
+  payout backfill, so the ledger-derived figure was 0. See A33.
+
+### A33. `get_driver_earnings`'s money math still legacy-excluded — A32's payout-ledger blend under-covered (2026-08-13, same day as A32)
+- **Source:** live user report against the just-shipped A32 fix (see A32's
+  follow-up note above) — the same migrated driver still saw all-zero
+  dollar figures.
+- **Root cause:** A32 blended `driverBalance.previous_app_paid_total`
+  (sum of `payouts` rows with `payout_type='stripe_sync'` — a record of
+  Stripe *transfers*) into the Activity screen's Total Earned. That figure
+  depends on the previous-app payout-history backfill having a row for
+  every driver's legacy earnings. `get_driver_earnings` itself still
+  filtered its OWN money query with `EXCLUDE_LEGACY_RIDES`
+  (`utils/legacy_rides.py`) — the same pattern A31 had already fixed for
+  `total_rides`/`total_distance_km`/`total_duration_minutes`, left
+  unfixed for money because A30 Finding 3 deliberately excluded legacy
+  money by design at the time. A32 then tried to patch that exclusion back
+  in from a different, less-complete source (the payout ledger) instead of
+  removing it at the actual source (the ride query).
+- [x] **Status:** DONE (2026-08-13). `get_driver_earnings` now sources
+  BOTH activity stats and money (Fare/Tips/Bonus/Referral/Tax/Total
+  Earned/Avg per Trip) from a single unfiltered ride query — the same
+  `all_completed_rides` list A31 already introduced for activity stats,
+  reused instead of duplicated. Each ride carries its own real
+  `ride_completed_at`, so this stays correctly sliced per calendar period
+  (no precision fabricated to make it work) and doesn't depend on the
+  payout-ledger backfill's completeness. New `elapsed_days` field
+  (fixed for today/week/month, measured from the earliest ride for "all")
+  backs three new driver-app stat tiles: Avg Trips/Day, Avg KM/Day, and
+  Online Time split into Total + Avg/Day (all requested directly by the
+  user alongside this fix).
+  - `driver-app` `ActivityView.tsx`: reads the now-blended
+    `total_earnings`/`average_per_ride` directly; removed the
+    client-side `previous_app_paid_total` addition (would now
+    double-count) and the "Previously Paid" breakdown row it fed (now
+    redundant — Fare/Tips/Bonus/Tax already include legacy money).
+  - `get_driver_balance`/`payable_balance` (the Payout screen's
+    withdrawable-balance math): **untouched** — still legacy-excluded by
+    design, since that money was already paid out by the old app and must
+    never be double-countable as withdrawable. This fix only ever affects
+    the `/drivers/earnings` DISPLAY endpoint.
+  - 2 tests in `TestGetDriverEarningsLegacyActivityStats` rewritten for
+    the new blended-money behavior (full file: 42/42 pass); affected-file
+    backend run 193/193 pass. `ActivityView.test.tsx` updated for the
+    backend-driven blend and new tiles, 8/8 pass. `tsc --noEmit` clean.
+  - Full Change Impact Log:
+    `docs/change-log/2026-08-13-blended-earnings-money-inclusion-fix.md`.
+- **What was NOT verified:** same boundary as A32 — not exercised against
+  real Supabase or a real migrated driver account, no visual verification.
 
 ## P1 — Fix before launch (code)
 

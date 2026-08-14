@@ -411,9 +411,16 @@ export {
     getPayoutStats,
     closePayoutPeriod,
     getPayoutsOverview,
+    getAutoPayoutBatches,
+    getBlockedPayoutDrivers,
     resolveDispute,
 } from "./api/analytics-payouts";
-export type { PayoutsOverview, ClosePayoutPeriodResponse } from "./api/analytics-payouts";
+export type {
+    PayoutsOverview,
+    ClosePayoutPeriodResponse,
+    AutoPayoutBatch,
+    BlockedDriver,
+} from "./api/analytics-payouts";
 export {
     getActiveRides,
     getMonitoringDrivers,

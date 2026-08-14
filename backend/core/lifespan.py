@@ -560,6 +560,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.opt(exception=True).error(f"Failed to import capacity watchdog loop: {e}")
 
+    # Auto-payout — runs hourly, fires the weekly batch on Sundays only.
+    # Scans eligible drivers (payable_balance >= $10, Stripe Connect set),
+    # creates a stripe.Transfer per driver, records payout rows with
+    # payout_type='auto'. Replay-safe via Redis leader lock + week_key
+    # unique index on auto_payout_batches + per-driver idempotency keys.
+    try:
+        from utils.auto_payout import auto_payout_loop
+
+        _spawn("auto_payout (1h, Sundays)", auto_payout_loop)
+    except Exception as e:
+        logger.opt(exception=True).error(f"Failed to import auto payout loop: {e}")
+
     # Loop watchdog — scans heartbeats every 5 minutes and posts a
     # Slack-compatible alert when any loop has gone stale.  No-op when
     # ALERT_WEBHOOK_URL is unset.
@@ -586,6 +598,7 @@ async def lifespan(app: FastAPI):
             "offer_expiry_reaper (10s)",
             "push_retry (30s)",
             "capacity_watchdog (60s)",
+            "auto_payout (1h, Sundays)",
         ]
     )
 

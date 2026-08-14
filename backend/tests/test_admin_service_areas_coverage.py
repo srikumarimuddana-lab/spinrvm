@@ -595,6 +595,56 @@ class TestGetSurgeStatus:
         assert exc_info.value.status_code == 503
 
 
+# ── surge-status cache invalidation ───────────────────────────────────────
+
+
+class TestSurgeStatusCacheInvalidation:
+    """`GET /surge/status` is cached for 30s. Any write that changes surge state
+    must drop it, or the operator who just flipped surge sees the OLD multiplier
+    on the screen whose whole job is confirming a regulated price took effect —
+    and reasonably concludes the toggle failed."""
+
+    @pytest.mark.anyio
+    async def test_surge_toggle_invalidates_the_status_cache(self):
+        invalidate = AsyncMock()
+        with (
+            patch("backend.routes.admin.service_areas.db_supabase.update_one", AsyncMock()),
+            patch("backend.routes.admin.service_areas._record_manual_surge_history", AsyncMock()),
+            patch("backend.utils.surge_engine.invalidate_surge_status_cache", invalidate),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            await admin_update_surge_pricing("area-1", SurgePricingRequest(multiplier=1.75, is_active=True), _ADMIN)
+        invalidate.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_area_update_touching_surge_invalidates(self):
+        invalidate = AsyncMock()
+        with (
+            patch("backend.routes.admin.service_areas.db_supabase.update_one", AsyncMock()),
+            patch("backend.routes.admin.service_areas._record_manual_surge_history", AsyncMock()),
+            patch("backend.utils.surge_engine.invalidate_surge_status_cache", invalidate),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            await admin_update_service_area("area-1", ServiceAreaUpdateRequest(surge_enabled=False), _ADMIN)
+        invalidate.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_unrelated_area_update_does_not_invalidate(self):
+        """A name edit must not blow away a cache it cannot have affected."""
+        invalidate = AsyncMock()
+        with (
+            patch("backend.routes.admin.service_areas.db_supabase.update_one", AsyncMock()),
+            patch("backend.routes.admin.service_areas._record_manual_surge_history", AsyncMock()),
+            patch("backend.utils.surge_engine.invalidate_surge_status_cache", invalidate),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            await admin_update_service_area("area-1", ServiceAreaUpdateRequest(name="Regina"), _ADMIN)
+        invalidate.assert_not_awaited()
+
+
 # ── area fees CRUD ────────────────────────────────────────────────────────
 
 

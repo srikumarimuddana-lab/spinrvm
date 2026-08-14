@@ -11,7 +11,9 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Loader2, RefreshCw, Users, Car, Building2, AlertTriangle, TrendingUp, TrendingDown } from "lucide-react";
+import { Loader2, RefreshCw, Users, Car, Building2, AlertTriangle, TrendingUp, TrendingDown, MapPin } from "lucide-react";
+import Link from "next/link";
+import { useAuthStore } from "@/store/authStore";
 import {
     DEMAND_BANDS,
     bandForRatio,
@@ -55,6 +57,15 @@ const DATE_RANGE_PRESETS = [
 ];
 
 export default function HeatMapPage() {
+    // The Live Monitoring page is gated by the `rides` module while this page
+    // is gated by `heatmap` — different grants. Linking there unconditionally
+    // would send a heatmap-only admin to /403, which reads as a broken link
+    // rather than a permission they don't have. Mirrors sidebar.tsx: super_admin
+    // bypasses, every other role (including "admin") needs the module.
+    const authUser = useAuthStore((s) => s.user);
+    const canOpenMonitoring =
+        authUser?.role === "super_admin" || (authUser?.modules ?? []).includes("rides");
+
     const [loading, setLoading] = useState(true);
     const [heatMapData, setHeatMapData] = useState<HeatMapData | null>(null);
     const [settings, setSettings] = useState<HeatMapSettings | null>(null);
@@ -694,6 +705,21 @@ export default function HeatMapPage() {
                                                     </div>
                                                 </div>
                                             </div>
+                                        )}
+                                        {/* A ratio tells an operator an area is
+                                            under pressure but not where in it, or
+                                            which drivers are idle nearby — the two
+                                            things any response needs. Deep-links
+                                            with the area preselected and the demand
+                                            overlay already on. */}
+                                        {canOpenMonitoring && (
+                                            <Link
+                                                href={`/dashboard/monitoring?area=${encodeURIComponent(area.area_id)}&demand=1`}
+                                                className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
+                                            >
+                                                <MapPin className="h-3.5 w-3.5" aria-hidden="true" />
+                                                View {area.name} on the live map
+                                            </Link>
                                         )}
                                     </CardContent>
                                 </Card>

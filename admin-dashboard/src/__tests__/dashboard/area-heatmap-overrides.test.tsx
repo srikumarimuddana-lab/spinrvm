@@ -197,3 +197,53 @@ describe("saving", () => {
     await waitFor(() => expect(getAreaHeatmapConfig).toHaveBeenCalledTimes(2));
   });
 });
+
+describe("tuning guidance", () => {
+  it("offers a symptom-first playbook rather than only ranges", async () => {
+    // Eleven numeric knobs with min/max and nothing else leaves an operator
+    // guessing which one their actual complaint maps to.
+    await mountForm();
+    expect(screen.getByText(/What should I change/i)).toBeTruthy();
+    expect(screen.getByText(/mostly empty map/i)).toBeTruthy();
+  });
+
+  it("warns inline when the privacy floor is dragged below the platform value", async () => {
+    // The k-floor starts overridden at 9 (above the platform 3), so nothing
+    // should be flagged until it is actually lowered past it.
+    await mountForm();
+    expect(screen.queryByText(/Privacy floor lowered/i)).toBeNull();
+
+    await act(async () => {
+      fireEvent.change(screen.getByRole("spinbutton", { name: /Privacy floor/i }), { target: { value: "1" } });
+    });
+
+    expect(screen.getByText(/Privacy floor lowered/i)).toBeTruthy();
+    // And the save button grows a reminder of who the change reaches.
+    expect(screen.getByText(/every driver in Saskatoon/i)).toBeTruthy();
+  });
+
+  it("quantifies the cost of a shorter refresh interval", async () => {
+    await mountForm();
+    await act(async () => { fireEvent.click(screen.getByRole("checkbox", { name: /Override Refresh interval/i })); });
+    await act(async () => {
+      fireEvent.change(screen.getByRole("spinbutton", { name: /Refresh interval/i }), { target: { value: "30" } });
+    });
+
+    // 90s -> 30s. "Uses more battery" isn't actionable; "3.0×" is.
+    expect(screen.getByText(/3\.0×/)).toBeTruthy();
+  });
+
+  it("does not warn about a change in the safe direction", async () => {
+    await mountForm();
+    await act(async () => { fireEvent.click(screen.getByRole("checkbox", { name: /Override Refresh interval/i })); });
+    await act(async () => {
+      fireEvent.change(screen.getByRole("spinbutton", { name: /Refresh interval/i }), { target: { value: "180" } });
+    });
+
+    // A form that warns about everything trains operators to dismiss it.
+    // Matched on the warning's own wording — the playbook mentions online
+    // drivers too, and a looser pattern would hit that instead.
+    expect(screen.queryByText(/will re-fetch every/i)).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});

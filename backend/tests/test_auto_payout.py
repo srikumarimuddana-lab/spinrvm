@@ -554,6 +554,124 @@ class TestRunWeeklyAutoPayout:
         assert any("inflight_conflict" in e for e in result["errors"])
 
 
+# ── Blocked-driver notification + ops work-list ────────────────────────
+
+
+class TestBlockedDriverVisibility:
+    @pytest.mark.anyio
+    async def test_blocked_driver_with_balance_is_notified_and_recorded(self):
+        from backend.utils.auto_payout import run_weekly_auto_payout
+
+        tables = {
+            "drivers": [_driver(gst_bn=None)],
+            "rides_completed": [_ride(driver_earnings="120.00", tax_amount="0.00")],
+        }
+        notify = AsyncMock()
+        with _apply(
+            [
+                *_run_patches(tables),
+                patch("backend.utils.auto_payout._notify_driver", notify),
+            ]
+        ):
+            result = await run_weekly_auto_payout()
+
+        assert result["skipped"]["missing_gst"] == 1
+        assert result["skipped_drivers"]["missing_gst"] == [DRIVER_ID]
+        notify.assert_awaited_once()
+        _, title, body, data = notify.await_args.args
+        assert "GST" in title
+        assert "$120.00" in body  # tells them how much is being held
+        assert data["type"] == "auto_payout_blocked"
+        assert data["reason"] == "missing_gst"
+
+    @pytest.mark.anyio
+    async def test_blocked_driver_without_balance_is_not_notified(self):
+        """A driver who never drove has nothing held up — telling them a
+        payout was blocked would be noise, and untrue."""
+        from backend.utils.auto_payout import run_weekly_auto_payout
+
+        tables = {"drivers": [_driver(gst_bn=None)], "rides_completed": []}
+        notify = AsyncMock()
+        with _apply(
+            [
+                *_run_patches(tables),
+                patch("backend.utils.auto_payout._notify_driver", notify),
+            ]
+        ):
+            result = await run_weekly_auto_payout()
+
+        assert result["skipped"]["missing_gst"] == 1  # still counted
+        assert result["skipped_drivers"] == {}  # but not on the ops work-list
+        notify.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_suspended_driver_recorded_but_not_pushed(self):
+        """Suspension is a support conversation, not an automated nudge."""
+        from backend.utils.auto_payout import run_weekly_auto_payout
+
+        tables = {
+            "drivers": [_driver(is_suspended=True)],
+            "rides_completed": [_ride(driver_earnings="120.00", tax_amount="0.00")],
+        }
+        notify = AsyncMock()
+        with _apply(
+            [
+                *_run_patches(tables),
+                patch("backend.utils.auto_payout._notify_driver", notify),
+            ]
+        ):
+            result = await run_weekly_auto_payout()
+
+        assert result["skipped_drivers"]["suspended"] == [DRIVER_ID]
+        notify.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_skipped_summary_persisted_on_batch_row(self):
+        from backend.utils.auto_payout import run_weekly_auto_payout
+
+        tables = {
+            "drivers": [_driver(gst_bn=None)],
+            "rides_completed": [_ride(driver_earnings="120.00", tax_amount="0.00")],
+        }
+        updates = []
+
+        async def track_update(table, filters, doc):
+            updates.append((table, filters, doc))
+            return [{"id": filters.get("id")}]
+
+        with _apply(
+            [
+                *_run_patches(tables, update=AsyncMock(side_effect=track_update)),
+                patch("backend.utils.auto_payout._notify_driver", new_callable=AsyncMock),
+            ]
+        ):
+            await run_weekly_auto_payout()
+
+        batch_update = next(u for u in updates if u[0] == "auto_payout_batches" and "skipped_summary" in u[2])
+        summary = batch_update[2]["skipped_summary"]
+        assert summary["counts"]["missing_gst"] == 1
+        assert summary["drivers_with_balance"]["missing_gst"] == [DRIVER_ID]
+
+    @pytest.mark.anyio
+    async def test_find_blocked_drivers_reports_reason_and_amount(self):
+        from backend.utils.auto_payout import find_blocked_drivers
+
+        tables = {
+            "drivers": [_driver(stripe_payouts_enabled=False), _driver(id="ok_driver", user_id="u2")],
+            "rides_completed": [_ride(driver_earnings="75.00", tax_amount="0.00")],
+        }
+        with (
+            patch("backend.utils.auto_payout.db_supabase.get_rows", side_effect=_mock_db(tables)),
+            patch("backend.utils.auto_payout.db_supabase.supabase", _sb_claims()),
+        ):
+            blocked = await find_blocked_drivers(limit=50)
+
+        assert len(blocked) == 1
+        assert blocked[0]["driver_id"] == DRIVER_ID
+        assert blocked[0]["reason"] == "stripe_payouts_disabled"
+        assert blocked[0]["pending_amount"] == "75.00"
+
+
 # ── Stale-reserved sweep ───────────────────────────────────────────────
 
 

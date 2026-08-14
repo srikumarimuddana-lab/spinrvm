@@ -186,3 +186,37 @@ async def list_auto_payout_batches(
         logger.error(f"Failed to list auto-payout batches: {e}", exc_info=True)
         raise HTTPException(status_code=503, detail="Auto-payout batches temporarily unavailable") from e
     return {"batches": rows, "count": len(rows)}
+
+
+@router.get("/auto-payouts/blocked-drivers")
+async def list_blocked_drivers(
+    limit: int = 50,
+    admin: dict = Depends(get_admin_user),
+):
+    """Drivers with money waiting that the weekly batch cannot pay right now.
+
+    Live preflight, not a replay of last week: it evaluates the same
+    eligibility gates the Sunday run uses (Stripe account present + payouts
+    enabled, not suspended, CRA GST BN + SIN on file), so ops can chase
+    blockers before the run. Each row carries the reason and the amount
+    being held.
+
+    Diagnostic endpoint — it computes a balance per blocked driver, so
+    keep `limit` modest. Returns driver_id only, never PII.
+    """
+    limit = max(1, min(int(limit or 50), 200))
+    try:
+        from ...utils.auto_payout import find_blocked_drivers
+    except ImportError:
+        from utils.auto_payout import find_blocked_drivers  # type: ignore
+
+    try:
+        rows = await find_blocked_drivers(limit)
+    except Exception as e:
+        logger.error(f"Failed to list blocked drivers: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="Blocked-driver preflight temporarily unavailable") from e
+
+    by_reason: dict[str, int] = {}
+    for r in rows:
+        by_reason[r["reason"]] = by_reason.get(r["reason"], 0) + 1
+    return {"blocked": rows, "count": len(rows), "by_reason": by_reason}

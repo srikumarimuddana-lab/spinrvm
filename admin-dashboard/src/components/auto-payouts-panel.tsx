@@ -25,8 +25,9 @@ import {
 } from "@/components/ui/select";
 import {
     AlertTriangle, CalendarClock, CheckCircle, ChevronDown, ChevronRight,
-    Filter, RefreshCw, UserX, Wallet, XCircle,
+    Download, Filter, RefreshCw, UserX, Wallet, XCircle,
 } from "lucide-react";
+import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import {
     getAutoPayoutBatches, getBlockedPayoutDrivers, getServiceAreas,
@@ -127,7 +128,16 @@ export default function AutoPayoutsPanel() {
             setBlocked(d.blocked ?? []);
             setByReason(d.by_reason ?? {});
         } catch (e: unknown) {
-            setError(e instanceof Error ? e.message : "Could not load auto-payout data.");
+            const msg = e instanceof Error ? e.message : "";
+            // During rollout the two failure modes are specific and fixable,
+            // and both look like a generic outage otherwise: the backend
+            // hasn't been redeployed with these routes (404), or the
+            // migration hasn't been applied (503 naming the table).
+            setError(
+                /404|not found/i.test(msg)
+                    ? "This view needs a backend deploy — the weekly-payout endpoints aren't live on this environment yet."
+                    : msg || "Could not load auto-payout data.",
+            );
         } finally {
             setLoading(false);
         }
@@ -169,6 +179,83 @@ export default function AutoPayoutsPanel() {
     const focusRun = visibleBatches[0];
     const focusSlice = focusRun ? runSlice(focusRun) : null;
     const scopeLabel = areaId === "all" ? "all service areas" : areaName(areaId);
+
+    /**
+     * Exports carry driver_id only — never names, phones, or bank details
+     * (PIPEDA). Filenames encode the active filters so a file sitting in
+     * someone's Downloads folder still says what it is.
+     */
+    const filterSuffix = `${weekKey === "all" ? "all-weeks" : weekKey}_${
+        areaId === "all" ? "all-areas" : areaName(areaId).replace(/\s+/g, "-").toLowerCase()
+    }`;
+
+    const exportBlocked = useCallback(() => {
+        exportToCsv(`blocked-drivers_${filterSuffix}.csv`, blocked, [
+            { key: "driver_id", label: "Driver ID" },
+            {
+                label: "Service area",
+                value: (r) => (r.service_area_id ? areaName(String(r.service_area_id)) : ""),
+            },
+            { label: "Reason", value: (r) => reasonLabel(String(r.reason)) },
+            { key: "reason", label: "Reason code" },
+            { key: "pending_amount", label: "Amount held (CAD)" },
+        ]);
+    }, [blocked, areaName, filterSuffix]);
+
+    const exportRuns = useCallback(() => {
+        // One row per week per service area when a breakdown exists, so the
+        // file is pivot-ready; a single row otherwise. Runs predating
+        // per-area tracking leave the numeric columns blank rather than 0,
+        // which would read as "this market earned nothing".
+        const rows: Record<string, unknown>[] = [];
+        for (const b of visibleBatches) {
+            const dates = weekRangeLabel(b.week_key);
+            const areas = b.area_summary ?? {};
+            const scoped =
+                areaId === "all"
+                    ? Object.entries(areas)
+                    : Object.entries(areas).filter(([id]) => id === areaId);
+            if (scoped.length === 0) {
+                const fleetWide = areaId === "all";
+                rows.push({
+                    week: b.week_key,
+                    dates,
+                    service_area: fleetWide ? "All areas" : areaName(areaId),
+                    status: b.status,
+                    paid: fleetWide ? b.drivers_paid : "",
+                    failed: fleetWide ? b.drivers_failed : "",
+                    amount: fleetWide ? b.total_amount : "",
+                    finished: b.completed_at ?? "",
+                    errors: b.error_summary ?? "",
+                });
+                continue;
+            }
+            for (const [id, a] of scoped) {
+                rows.push({
+                    week: b.week_key,
+                    dates,
+                    service_area: areaName(id),
+                    status: b.status,
+                    paid: a.paid,
+                    failed: a.failed,
+                    amount: a.amount,
+                    finished: b.completed_at ?? "",
+                    errors: b.error_summary ?? "",
+                });
+            }
+        }
+        exportToCsv(`weekly-payout-runs_${filterSuffix}.csv`, rows, [
+            { key: "week", label: "Week" },
+            { key: "dates", label: "Dates" },
+            { key: "service_area", label: "Service area" },
+            { key: "status", label: "Status" },
+            { key: "paid", label: "Drivers paid" },
+            { key: "failed", label: "Drivers failed" },
+            { key: "amount", label: "Amount sent (CAD)" },
+            { key: "finished", label: "Finished at" },
+            { key: "errors", label: "Errors" },
+        ]);
+    }, [visibleBatches, areaId, areaName, filterSuffix]);
 
     if (loading) {
         return (
@@ -300,9 +387,16 @@ export default function AutoPayoutsPanel() {
             {/* Blocked drivers — the actionable list, so it comes first */}
             <Card>
                 <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                        <UserX className="h-5 w-5" /> Blocked drivers
-                    </CardTitle>
+                    <div className="flex items-start justify-between gap-4">
+                        <CardTitle className="flex items-center gap-2">
+                            <UserX className="h-5 w-5" /> Blocked drivers
+                        </CardTitle>
+                        {blocked.length > 0 && (
+                            <Button variant="outline" size="sm" onClick={exportBlocked}>
+                                <Download className="h-4 w-4 mr-2" /> Export CSV
+                            </Button>
+                        )}
+                    </div>
                     <p className="text-sm text-muted-foreground">
                         Drivers in <span className="font-medium text-foreground">{scopeLabel}</span> with
                         $10 or more waiting that the batch cannot pay right now. Each was sent a
@@ -370,9 +464,16 @@ export default function AutoPayoutsPanel() {
             {/* Weekly batch history */}
             <Card>
                 <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                        <CalendarClock className="h-5 w-5" /> Weekly run history
-                    </CardTitle>
+                    <div className="flex items-start justify-between gap-4">
+                        <CardTitle className="flex items-center gap-2">
+                            <CalendarClock className="h-5 w-5" /> Weekly run history
+                        </CardTitle>
+                        {visibleBatches.length > 0 && (
+                            <Button variant="outline" size="sm" onClick={exportRuns}>
+                                <Download className="h-4 w-4 mr-2" /> Export CSV
+                            </Button>
+                        )}
+                    </div>
                     <p className="text-sm text-muted-foreground">
                         One row per week, newest first. Expand a row to see why drivers were skipped.
                     </p>

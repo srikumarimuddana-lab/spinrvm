@@ -37,7 +37,10 @@ COMMENT ON COLUMN service_areas.instant_payout_enabled IS
 CREATE TABLE IF NOT EXISTS auto_payout_batches (
     id          TEXT PRIMARY KEY,
     week_key    TEXT NOT NULL,           -- e.g. "2026-W33" (ISO week)
-    status      TEXT NOT NULL DEFAULT 'running',  -- running | completed | failed
+    status      TEXT NOT NULL DEFAULT 'running',  -- running | completed | partial | failed
+                                         -- partial: some drivers paid, some failed/deferred —
+                                         -- resumable by later Sunday ticks; reserved rows are
+                                         -- retried by the hourly stale-reserved sweep
     started_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     completed_at TIMESTAMPTZ,
     drivers_eligible  INT NOT NULL DEFAULT 0,
@@ -56,7 +59,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_auto_payout_batches_week_key
 CREATE INDEX IF NOT EXISTS idx_auto_payout_batches_created
     ON auto_payout_batches (created_at DESC);
 
--- ── 3. RLS ──────────────────────────────────────────────────────────────
+-- ── 3. Auto-payout retry bookkeeping on payouts ─────────────────────────
+-- Attempt counter for the auto-payout retry taxonomy: retryable Stripe
+-- failures (balance_insufficient, rate limit) re-attempt under a NEW
+-- idempotency key (Stripe replays cached 4xx responses on key reuse), and
+-- the key suffix is derived from this counter. Additive, constant default —
+-- metadata-only on Postgres >= 11.
+ALTER TABLE payouts
+    ADD COLUMN IF NOT EXISTS auto_retry_count INT NOT NULL DEFAULT 0;
+
+-- ── 4. RLS ──────────────────────────────────────────────────────────────
 -- Backend-only ops/financial table (aggregate payout totals + error
 -- summaries carrying driver IDs). Same pattern as migration 262
 -- (data_transfer_export_jobs): explicit per-action service_role policies;

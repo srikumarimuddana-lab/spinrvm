@@ -268,6 +268,7 @@ export {
     adminUpdateDriverStripeAccount,
     adminValidateRiderImport,
     adminCommitRiderImport,
+    adminRegenerateImportedSnapshots,
 } from "./api/imports";
 export type {
     DriverImportReportItem,
@@ -293,6 +294,7 @@ export type {
     RiderImportDuplicate,
     RiderImportReport,
     RiderImportCommitResult,
+    SnapshotRegenerateResult,
 } from "./api/imports";
 export {
     getCloudMessages,

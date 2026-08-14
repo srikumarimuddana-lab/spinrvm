@@ -401,6 +401,29 @@ export default function MonitoringPage() {
     setFilters((f) => ({ ...f, vehicleTypeId: null }));
   }, [availableVehicleTypes, filters.vehicleTypeId]);
 
+  // Deep-link support: the heatmap page's demand cards link here as
+  // ?area=<id>&demand=1, so "Regina is at 2.1 demand:supply" leads straight to
+  // *where in Regina* and *which drivers are idle there* — otherwise the
+  // operator has to re-find the area in a dropdown and re-enable the overlay,
+  // and the two screens read as unrelated.
+  //
+  // Read once on mount from window.location rather than useSearchParams(): the
+  // latter needs a <Suspense> boundary this route lacks and fails `next build`
+  // (same reasoning as the rides page). Mount-only so a later manual change to
+  // the dropdown isn't stomped on the next render.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const areaId = params.get("area");
+    const wantDemand = params.get("demand") === "1";
+    if (!areaId && !wantDemand) return;
+    setFilters((f) => ({
+      ...f,
+      ...(areaId ? { serviceAreaId: areaId } : {}),
+      ...(wantDemand ? { showDemand: true } : {}),
+    }));
+  }, []);
+
   // When the operator picks a different service area (Saskatoon → Regina,
   // etc.), fly the map to that area so they actually see the city they
   // just selected. serviceAreas is a dep so the fit re-runs once the

@@ -63,6 +63,47 @@ Stripe's dispute form has named evidence slots. This is what fills each one for 
 | `uncategorized_file` | Anything below that strengthens the case: the **rating and comment the rider left after the trip**, prior completed-ride history, prior dispute record | `rides.rider_rating`, `disputes` table |
 | `duplicate_charge_id` / `duplicate_charge_explanation` | Only for `duplicate` reason — the other PaymentIntent id and why the two are distinct rides | `rides` filtered on `rider_id` + date |
 
+### Standing documents — prepare once, attach to every dispute
+
+These are not per-ride. Build them **now**, before the first dispute, and keep
+them in a shared folder so nobody is writing policy prose against a deadline.
+
+| Document | Content | Stripe field |
+|---|---|---|
+| Product description | "On-demand point-to-point passenger transportation (ride-hailing) in Saskatoon, Saskatchewan. Fare is quoted in-app and accepted by the rider before booking; the card is charged on trip completion." | `product_description` |
+| Refund policy PDF | The published policy, exported from spinr.ca/terms with the retrieval date visible | `refund_policy` |
+| Cancellation policy PDF | Cancellation-fee rules and when they apply | `cancellation_policy` |
+| Fare-disclosure screenshots | Rider-app screens showing (a) the quoted fare before "Confirm", (b) surge disclosed pre-booking, (c) the cancellation-fee warning. Re-capture whenever those screens change | `cancellation_policy_disclosure`, `refund_policy_disclosure` |
+| Terms & Conditions PDF | Current published T&Cs | `uncategorized_file` |
+| Company identification | Legal name, address, support email, the descriptor that appears on the cardholder's statement | Cover letter |
+
+**Check the statement descriptor first.** A large share of "I don't recognize
+this charge" disputes are caused by a descriptor the cardholder cannot connect
+to the app they used. Confirm in Stripe → Settings → Public details that it
+reads recognizably as Spinr.
+
+### Visa Compelling Evidence 3.0 — the strongest path for `fraudulent`
+
+For Visa `fraudulent` disputes, Stripe supports **CE3.0**: if you can show two
+or more *prior undisputed* transactions from the same cardholder, the dispute
+can be reassigned to the issuer before it becomes a chargeback.
+
+Requirements: the prior transactions must be **120–390 days** before the
+disputed one, undisputed, and share at least **two** matching data points with
+it (IP address, device ID, account ID, shipping address).
+
+What Spinr can supply:
+
+- **Account ID** — `rides.rider_id` is stable across every trip. Always matches.
+- **IP address** — `refresh_tokens.ip` per session (see §3d).
+- **Device ID** — `users.fcm_token_rider` is stable per install; usable as a
+  weak device identifier.
+- **Prior charge ids** — `select payment_intent_id, ride_completed_at from rides where rider_id = '<id>' and status = 'completed' and payment_status = 'paid' order by ride_completed_at;`
+
+**Caveat while Spinr is new:** the 120-day floor means CE3.0 is unavailable for
+any rider whose account is younger than four months. Expect it to be unusable
+for most of the current rider base and increasingly valuable through 2027.
+
 ### Beyond the receipt — the five that actually win rides disputes
 
 If you only have time for five attachments, use these:
@@ -201,6 +242,8 @@ Log the disclosure: note in the Zoho ticket what was submitted, to whom, and on 
 - **No Stripe evidence submission from our side.** `backend/routes/webhooks.py` records disputes but never calls `stripe.Dispute.modify(...)`. Submission is manual in the Stripe Dashboard.
 - **No dispute-deadline alerting.** `stripe_disputes` stores no `evidence_due_by` and nothing warns as it approaches. Watch the Stripe Dashboard, or add the column.
 - **The admin Disputes page is the in-app dispute queue, not the chargeback queue.** `admin-dashboard/src/app/dashboard/disputes` reads the `disputes` table (rider-raised refund requests). Stripe chargebacks live in `stripe_disputes` and currently have **no admin UI at all** — they are visible only via SQL or the Stripe Dashboard.
+- **No terms-acceptance record per rider.** Nothing stamps "this rider accepted T&Cs version X at time Y" at signup — `consent_version` exists only for marketing preferences (`backend/services/marketing_consent.py`). So `refund_policy_disclosure` and `cancellation_policy_disclosure` can only be answered with "the policy is published and shown in-app," never with a timestamped per-user acceptance. Worth adding a `terms_version` / `terms_accepted_at` on `users` — cheap, additive, and it materially strengthens every dispute.
+- **No explicit phone-verification timestamp.** Phone is verified by construction (login *is* OTP), but there is no `phone_verified_at` column to cite. `users.email_verified` / `email_verified_at` do exist (migration 252).
 - **GPS retention is 3 years** (pickup/dropoff trace, per the retention policy); trip records are 7. Any dispute lands far inside both windows, so this is not a practical constraint — but a re-opened dispute on a 3-year-old ride would have the receipt and timeline without the breadcrumbs.
 
 ---

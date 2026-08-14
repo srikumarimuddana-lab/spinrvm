@@ -37,19 +37,26 @@ router = APIRouter()
 @router.get("/auto-payouts/batches")
 async def list_auto_payout_batches(
     limit: int = 20,
+    week_key: str | None = None,
     admin: dict = Depends(get_admin_user),
 ):
     """Weekly auto-payout batch ledger (``auto_payout_batches``), newest first.
 
     Each row carries the run's status (running / completed / partial /
     failed), driver counts, total transferred, the aggregated error
-    summary, and ``skipped_summary`` — counts by reason plus the driver
-    ids that had money waiting. Uses the ``idx_auto_payout_batches_created``
-    index from migration 314.
+    summary, ``skipped_summary`` (counts by reason plus the driver ids
+    that had money waiting), and ``area_summary`` (per-service-area
+    slice). Uses the ``idx_auto_payout_batches_created`` index from
+    migration 314.
+
+    ``week_key`` ("2026-W33") returns just that week — a direct lookup
+    for a run older than the page's default window, hitting the unique
+    ``week_key`` index instead of paging back through history.
     """
     limit = max(1, min(int(limit or 20), 100))
+    filters: dict = {"week_key": week_key} if week_key else {}
     try:
-        rows = await db_supabase.get_rows("auto_payout_batches", {}, limit=limit, order="created_at", desc=True)
+        rows = await db_supabase.get_rows("auto_payout_batches", filters, limit=limit, order="created_at", desc=True)
     except Exception as e:
         logger.error(f"Failed to list auto-payout batches: {e}", exc_info=True)
         raise HTTPException(status_code=503, detail="Auto-payout batches temporarily unavailable") from e

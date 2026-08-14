@@ -9,7 +9,7 @@
 
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
 const getAutoPayoutBatches = vi.fn();
 const getBlockedPayoutDrivers = vi.fn();
@@ -24,11 +24,23 @@ vi.mock('@/lib/api', () => ({
 // Radix Select renders through a portal and needs pointer APIs jsdom lacks;
 // stub it as a native <select> so the area filter stays testable.
 vi.mock('@/components/ui/select', () => ({
-  Select: ({ value, onValueChange, children }: React.PropsWithChildren<{ value: string; onValueChange: (v: string) => void }>) => (
-    <select aria-label="Filter by service area" value={value} onChange={(e) => onValueChange(e.target.value)}>
-      {children}
-    </select>
-  ),
+  Select: ({ value, onValueChange, children }: React.PropsWithChildren<{ value: string; onValueChange: (v: string) => void }>) => {
+    // The real component puts aria-label on SelectTrigger. Lift it onto the
+    // native <select> so each picker stays addressable by its own label —
+    // hardcoding one label here made every select look like the same one.
+    let label: string | undefined;
+    React.Children.forEach(children, (child) => {
+      if (React.isValidElement(child)) {
+        const l = (child.props as { 'aria-label'?: string })['aria-label'];
+        if (l) label = l;
+      }
+    });
+    return (
+      <select aria-label={label} value={value} onChange={(e) => onValueChange(e.target.value)}>
+        {children}
+      </select>
+    );
+  },
   SelectTrigger: ({ children }: React.PropsWithChildren) => <>{children}</>,
   SelectValue: () => null,
   SelectContent: ({ children }: React.PropsWithChildren) => <>{children}</>,
@@ -61,6 +73,20 @@ vi.mock('lucide-react', () => ({
 }));
 
 import AutoPayoutsPanel from './auto-payouts-panel';
+
+const OLDER_BATCH = {
+  id: 'auto-batch-2026-W32',
+  week_key: '2026-W32',
+  status: 'completed' as const,
+  drivers_eligible: 9,
+  drivers_paid: 9,
+  drivers_failed: 0,
+  total_amount: 1120.0,
+  error_summary: null,
+  completed_at: '2026-08-09T12:20:00Z',
+  skipped_summary: null,
+  area_summary: { sa_regina: { paid: 9, failed: 0, skipped: 0, amount: '1120.00' } },
+};
 
 const BATCH = {
   id: 'auto-batch-2026-W33',
@@ -97,7 +123,7 @@ const AREAS = [
 beforeEach(() => {
   vi.clearAllMocks();
   getServiceAreas.mockResolvedValue(AREAS);
-  getAutoPayoutBatches.mockResolvedValue({ batches: [BATCH], count: 1 });
+  getAutoPayoutBatches.mockResolvedValue({ batches: [BATCH, OLDER_BATCH], count: 2 });
   getBlockedPayoutDrivers.mockResolvedValue({
     blocked: [BLOCKED],
     count: 1,
@@ -130,8 +156,16 @@ describe('AutoPayoutsPanel', () => {
   it('renders a partial week distinctly from a clean one', async () => {
     render(<AutoPayoutsPanel />);
     await waitFor(() => expect(screen.getAllByText('2026-W33').length).toBeGreaterThan(0));
-    expect(screen.getAllByText('Partial').length).toBeGreaterThan(0);
-    expect(screen.queryByText('Completed')).not.toBeInTheDocument();
+
+    // Per-row, so a partial run can never be read as a clean one: W33 had
+    // failures, W32 did not.
+    const rowFor = (week: string) => {
+      const cells = screen.getAllByText(week);
+      return cells[cells.length - 1].closest('tr') as HTMLElement;
+    };
+    expect(within(rowFor('2026-W33')).getByText('Partial')).toBeInTheDocument();
+    expect(within(rowFor('2026-W33')).queryByText('Completed')).not.toBeInTheDocument();
+    expect(within(rowFor('2026-W32')).getByText('Completed')).toBeInTheDocument();
   });
 
   it('expands a run to show skip reasons and errors', async () => {
@@ -226,6 +260,43 @@ describe('AutoPayoutsPanel', () => {
     await waitFor(() => expect(screen.getByText(/by service area/i)).toBeInTheDocument());
     expect(screen.getByText('$980.50')).toBeInTheDocument();
     expect(screen.getByText('$470.00')).toBeInTheDocument();
+  });
+
+  it('labels each week with its calendar span, not just the ISO number', async () => {
+    render(<AutoPayoutsPanel />);
+    // 2026-W33 is Mon Aug 10 → Sun Aug 16 (the Sunday it pays out on).
+    await waitFor(() => expect(screen.getAllByText('Aug 10–16').length).toBeGreaterThan(0));
+    expect(screen.getAllByText('Aug 3–9').length).toBeGreaterThan(0);
+  });
+
+  it('pins the whole panel to a chosen week', async () => {
+    render(<AutoPayoutsPanel />);
+    await waitFor(() => expect(screen.getAllByText('2026-W33').length).toBeGreaterThan(0));
+    // Both runs listed by default.
+    expect(screen.getAllByText('2026-W32').length).toBeGreaterThan(0);
+
+    fireEvent.change(screen.getByLabelText(/filter by week/i), {
+      target: { value: '2026-W32' },
+    });
+
+    // History narrows to that week, and the tiles follow it rather than
+    // continuing to describe the newest run.
+    await waitFor(() => expect(screen.getAllByText('$1,120.00').length).toBeGreaterThan(0));
+    expect(screen.getByText(/selected week/i)).toBeInTheDocument();
+    expect(screen.queryByText('$1,450.50')).not.toBeInTheDocument();
+  });
+
+  it('explains an empty result for a week with no run', async () => {
+    getAutoPayoutBatches.mockResolvedValue({ batches: [BATCH], count: 1 });
+    render(<AutoPayoutsPanel />);
+    await waitFor(() => expect(screen.getAllByText('2026-W33').length).toBeGreaterThan(0));
+
+    // A week present in the list, then removed from the data by a refetch,
+    // must not render as "no runs ever recorded".
+    getAutoPayoutBatches.mockResolvedValue({ batches: [], count: 0 });
+    fireEvent.click(screen.getByText(/refresh/i));
+
+    await waitFor(() => expect(screen.getByText(/no runs recorded yet/i)).toBeInTheDocument());
   });
 
   it('surfaces a load failure with a retry that refetches', async () => {

@@ -53,6 +53,43 @@ const REASON_LABELS: Record<string, string> = {
 
 const reasonLabel = (r: string) => REASON_LABELS[r] ?? r;
 
+/**
+ * Calendar span of an ISO week key like "2026-W33".
+ *
+ * ISO weeks run Monday→Sunday and week 1 is the one containing Jan 4, so a
+ * week can start in the previous calendar year ("2026-W01" begins Dec 29,
+ * 2025). All arithmetic is in UTC to keep the boundaries stable regardless
+ * of where the operator is sitting.
+ *
+ * The batch runs on the LAST day of its week — the Sunday that closes it.
+ */
+function isoWeekRange(weekKey: string): { start: Date; end: Date } | null {
+    const m = /^(\d{4})-W(\d{2})$/.exec(weekKey);
+    if (!m) return null;
+    const [year, week] = [Number(m[1]), Number(m[2])];
+    const jan4 = new Date(Date.UTC(year, 0, 4));
+    const jan4Dow = jan4.getUTCDay() || 7; // Sunday is 0 in JS, 7 in ISO
+    const week1Monday = new Date(jan4);
+    week1Monday.setUTCDate(jan4.getUTCDate() - (jan4Dow - 1));
+    const start = new Date(week1Monday);
+    start.setUTCDate(week1Monday.getUTCDate() + (week - 1) * 7);
+    const end = new Date(start);
+    end.setUTCDate(start.getUTCDate() + 6);
+    return { start, end };
+}
+
+/** "Aug 10–16" (or "Aug 31 – Sep 6" when the week straddles two months). */
+function weekRangeLabel(weekKey: string): string {
+    const r = isoWeekRange(weekKey);
+    if (!r) return "";
+    const day = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: "UTC", day: "numeric" });
+    const monthDay = (d: Date) =>
+        d.toLocaleDateString("en-CA", { timeZone: "UTC", month: "short", day: "numeric" });
+    return r.start.getUTCMonth() === r.end.getUTCMonth()
+        ? `${monthDay(r.start)}–${day(r.end)}`
+        : `${monthDay(r.start)} – ${monthDay(r.end)}`;
+}
+
 function StatusBadge({ status }: { status: string }) {
     const cfg = STATUS_CONFIG[status] ?? { label: status, cls: "bg-zinc-500/15 text-zinc-600" };
     return <Badge className={cfg.cls}>{cfg.label}</Badge>;
@@ -64,6 +101,9 @@ export default function AutoPayoutsPanel() {
     const [byReason, setByReason] = useState<Record<string, number>>({});
     const [serviceAreas, setServiceAreas] = useState<Array<{ id: string; name?: string }>>([]);
     const [areaId, setAreaId] = useState("all");
+    const [weekKey, setWeekKey] = useState("all");
+    // 20 weeks by default; "Show more" widens to a full year of history.
+    const [weekLimit, setWeekLimit] = useState(20);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
     const [expanded, setExpanded] = useState<string | null>(null);
@@ -80,7 +120,7 @@ export default function AutoPayoutsPanel() {
         setError("");
         try {
             const [b, d] = await Promise.all([
-                getAutoPayoutBatches(20),
+                getAutoPayoutBatches(weekLimit),
                 getBlockedPayoutDrivers(50, areaId !== "all" ? areaId : undefined),
             ]);
             setBatches(b.batches ?? []);
@@ -91,7 +131,7 @@ export default function AutoPayoutsPanel() {
         } finally {
             setLoading(false);
         }
-    }, [areaId]);
+    }, [areaId, weekLimit]);
 
     useEffect(() => { load(); }, [load]);
 
@@ -123,8 +163,11 @@ export default function AutoPayoutsPanel() {
     );
 
     const heldTotal = blocked.reduce((sum, d) => sum + parseFloat(d.pending_amount || "0"), 0);
-    const lastRun = batches[0];
-    const lastRunSlice = lastRun ? runSlice(lastRun) : null;
+    // "All weeks" keeps the newest run in the tiles; picking a week pins them
+    // to it, so the tiles and the table always describe the same run.
+    const visibleBatches = weekKey === "all" ? batches : batches.filter((b) => b.week_key === weekKey);
+    const focusRun = visibleBatches[0];
+    const focusSlice = focusRun ? runSlice(focusRun) : null;
     const scopeLabel = areaId === "all" ? "all service areas" : areaName(areaId);
 
     if (loading) {
@@ -164,6 +207,21 @@ export default function AutoPayoutsPanel() {
                 <div className="flex items-center gap-2 shrink-0">
                     {/* Scopes every figure below to one market. The batch always
                         runs fleet-wide — this filters reporting, not payments. */}
+                    {/* Week picker. Lists the runs actually loaded, each with
+                        its calendar span — "2026-W33" alone is unreadable. */}
+                    <Select value={weekKey} onValueChange={setWeekKey}>
+                        <SelectTrigger className="h-9 text-xs w-[210px]" aria-label="Filter by week">
+                            <SelectValue placeholder="All weeks" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all" className="text-xs">All weeks</SelectItem>
+                            {batches.map((b) => (
+                                <SelectItem key={b.id} value={b.week_key} className="text-xs">
+                                    {b.week_key} · {weekRangeLabel(b.week_key)}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
                     <Filter className="h-3.5 w-3.5 text-muted-foreground" />
                     <Select value={areaId} onValueChange={setAreaId}>
                         <SelectTrigger className="h-9 text-xs w-[190px]" aria-label="Filter by service area">
@@ -189,27 +247,32 @@ export default function AutoPayoutsPanel() {
                 <Card>
                     <CardContent className="pt-6">
                         <div className="flex items-center gap-2 text-muted-foreground text-sm">
-                            <CalendarClock className="h-4 w-4" /> Last run
+                            <CalendarClock className="h-4 w-4" /> {weekKey === "all" ? "Last run" : "Selected week"}
                         </div>
                         <div className="mt-2 flex items-center gap-2">
-                            <span className="text-2xl font-bold">{lastRun?.week_key ?? "—"}</span>
-                            {lastRun && <StatusBadge status={lastRun.status} />}
+                            <span className="text-2xl font-bold">{focusRun?.week_key ?? "—"}</span>
+                            {focusRun && <StatusBadge status={focusRun.status} />}
                         </div>
+                        {focusRun && (
+                            <p className="text-xs text-muted-foreground mt-1">
+                                {weekRangeLabel(focusRun.week_key)} · paid out {formatDate(focusRun.completed_at)}
+                            </p>
+                        )}
                     </CardContent>
                 </Card>
                 <Card>
                     <CardContent className="pt-6">
                         <div className="flex items-center gap-2 text-muted-foreground text-sm">
-                            <CheckCircle className="h-4 w-4" /> Paid last run
+                            <CheckCircle className="h-4 w-4" /> {weekKey === "all" ? "Paid last run" : "Paid that week"}
                         </div>
                         <div className="mt-2 text-2xl font-bold">
-                            {!lastRun ? "—" : lastRunSlice ? formatCurrency(lastRunSlice.amount) : "Not recorded"}
+                            {!focusRun ? "—" : focusSlice ? formatCurrency(focusSlice.amount) : "Not recorded"}
                         </div>
                         <p className="text-xs text-muted-foreground mt-1">
-                            {!lastRun
+                            {!focusRun
                                 ? "No runs yet"
-                                : lastRunSlice
-                                    ? `${lastRunSlice.paid} driver${lastRunSlice.paid === 1 ? "" : "s"} · ${scopeLabel}`
+                                : focusSlice
+                                    ? `${focusSlice.paid} driver${focusSlice.paid === 1 ? "" : "s"} · ${scopeLabel}`
                                     : "This run predates per-area tracking"}
                         </p>
                     </CardContent>
@@ -311,15 +374,17 @@ export default function AutoPayoutsPanel() {
                         <CalendarClock className="h-5 w-5" /> Weekly run history
                     </CardTitle>
                     <p className="text-sm text-muted-foreground">
-                        One row per week. Expand a row to see why drivers were skipped.
+                        One row per week, newest first. Expand a row to see why drivers were skipped.
                     </p>
                 </CardHeader>
                 <CardContent>
-                    {batches.length === 0 ? (
+                    {visibleBatches.length === 0 ? (
                         <div className="py-10 text-center text-muted-foreground">
                             <CalendarClock className="h-8 w-8 mx-auto mb-2 opacity-50" />
                             <p className="text-sm">
-                                No runs recorded yet. The first batch appears here after its Sunday run.
+                                {batches.length === 0
+                                    ? "No runs recorded yet. The first batch appears here after its Sunday run."
+                                    : `No run recorded for ${weekKey}.`}
                             </p>
                         </div>
                     ) : (
@@ -340,7 +405,7 @@ export default function AutoPayoutsPanel() {
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {batches.map((b) => {
+                                    {visibleBatches.map((b) => {
                                         const counts = b.skipped_summary?.counts ?? {};
                                         const withBalance = b.skipped_summary?.drivers_with_balance ?? {};
                                         const areas = b.area_summary ?? {};
@@ -362,7 +427,13 @@ export default function AutoPayoutsPanel() {
                                                             ? <ChevronDown className="h-4 w-4 text-muted-foreground" />
                                                             : <ChevronRight className="h-4 w-4 text-muted-foreground" />)}
                                                     </TableCell>
-                                                    <TableCell className="font-semibold">{b.week_key}</TableCell>
+                                                    <TableCell className="font-semibold">
+                                                        {b.week_key}
+                                                        {/* ISO week numbers are opaque; ops thinks in dates. */}
+                                                        <div className="text-xs font-normal text-muted-foreground">
+                                                            {weekRangeLabel(b.week_key)}
+                                                        </div>
+                                                    </TableCell>
                                                     <TableCell><StatusBadge status={b.status} /></TableCell>
                                                     <TableCell className="text-right">{slice ? slice.paid : "—"}</TableCell>
                                                     <TableCell className="text-right">
@@ -456,6 +527,16 @@ export default function AutoPayoutsPanel() {
                                     })}
                                 </TableBody>
                             </Table>
+                        </div>
+                    )}
+
+                    {/* Only offered when the fetch actually filled the window —
+                        otherwise there is nothing older to load. */}
+                    {weekKey === "all" && weekLimit === 20 && batches.length >= 20 && (
+                        <div className="pt-4 text-center">
+                            <Button variant="outline" size="sm" onClick={() => setWeekLimit(52)}>
+                                Show up to a year of weeks
+                            </Button>
                         </div>
                     )}
                 </CardContent>

@@ -166,8 +166,14 @@ export interface BlockedDriver {
     service_area_id?: string | null;
 }
 
-export const getAutoPayoutBatches = (limit = 20) =>
-    request<{ batches: AutoPayoutBatch[]; count: number }>(`/api/admin/auto-payouts/batches?limit=${limit}`);
+export const getAutoPayoutBatches = (limit = 20, weekKey?: string) => {
+    const sp = new URLSearchParams({ limit: String(limit) });
+    // Direct lookup for a run older than the default window.
+    if (weekKey) sp.set("week_key", weekKey);
+    return request<{ batches: AutoPayoutBatch[]; count: number }>(
+        `/api/admin/auto-payouts/batches?${sp.toString()}`,
+    );
+};
 
 export const getBlockedPayoutDrivers = (limit = 50, serviceAreaId?: string) => {
     const sp = new URLSearchParams({ limit: String(limit) });

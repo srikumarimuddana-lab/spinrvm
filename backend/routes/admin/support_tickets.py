@@ -59,13 +59,18 @@ def _err(e: ZohoDeskError) -> HTTPException:
 import html as _html
 
 
-def _render_helpdesk_signature(company: CompanyDetails, tagline: str = "") -> str:
+def _render_helpdesk_signature(
+    company: CompanyDetails,
+    tagline: str = "",
+    header: str = "",
+) -> str:
     """Build a branded email signature from company settings.
 
     Uses the same identity source as transactional emails
     (``load_company_details``). All values are HTML-escaped.
     """
     esc = _html.escape
+    team_name = header.strip() if header.strip() else f"{company.name} Support"
     tagline_html = ""
     if tagline.strip():
         tagline_html = f'<p style="margin:0 0 6px;font-size:12px;color:#6B7280;">{esc(tagline.strip())}</p>'
@@ -98,7 +103,7 @@ def _render_helpdesk_signature(company: CompanyDetails, tagline: str = "") -> st
         f"</td>"
         f'<td style="vertical-align:top;">'
         f'<p style="margin:0 0 2px;font-size:14px;font-weight:700;color:#1A1A1A;">'
-        f"{esc(company.name)} Support</p>"
+        f"{esc(team_name)}</p>"
         f"{tagline_html}"
         f'<p style="margin:0;font-size:12px;">{links_html}</p>'
         f'<p style="margin:8px 0 0;font-size:10px;color:#6B7280;opacity:0.7;">'
@@ -147,6 +152,7 @@ class ZohoConfigUpdate(BaseModel):
     default_department_id: Optional[str] = None
     default_from_email: Optional[str] = None
     helpdesk_signature_enabled: Optional[bool] = None
+    helpdesk_signature_header: Optional[str] = None
     helpdesk_email_signature: Optional[str] = None
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
@@ -160,12 +166,13 @@ async def _config_status(cfg: Dict[str, Any]) -> Dict[str, Any]:
         return bool((cfg.get(key) or "").strip())
 
     sig_enabled = bool(cfg.get("helpdesk_signature_enabled"))
+    sig_header = cfg.get("helpdesk_signature_header") or ""
     sig_tagline = cfg.get("helpdesk_email_signature") or ""
     sig_preview = ""
     if sig_enabled:
         try:
             company = await load_company_details()
-            sig_preview = _render_helpdesk_signature(company, sig_tagline)
+            sig_preview = _render_helpdesk_signature(company, sig_tagline, sig_header)
         except Exception:
             logger.warning("Could not render signature preview", exc_info=True)
 
@@ -177,6 +184,7 @@ async def _config_status(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "default_department_id": cfg.get("default_department_id") or "",
         "default_from_email": cfg.get("default_from_email") or "",
         "helpdesk_signature_enabled": sig_enabled,
+        "helpdesk_signature_header": sig_header,
         "helpdesk_email_signature": sig_tagline,
         "helpdesk_signature_preview": sig_preview,
         "has_client_id": _has("client_id"),
@@ -624,8 +632,9 @@ async def reply_ticket(
     content = payload.content
     if cfg.get("helpdesk_signature_enabled") and payload.channel.upper() == "EMAIL":
         company = await load_company_details()
+        header = (cfg.get("helpdesk_signature_header") or "").strip()
         tagline = (cfg.get("helpdesk_email_signature") or "").strip()
-        sig_html = _render_helpdesk_signature(company, tagline)
+        sig_html = _render_helpdesk_signature(company, tagline, header)
         content = f'{content}<br><br><div style="margin-top:16px;border-top:1px solid #e5e7eb;padding-top:12px;">{sig_html}</div>'
     try:
         result = await zoho.send_reply(

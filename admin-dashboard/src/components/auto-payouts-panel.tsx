@@ -128,7 +128,16 @@ export default function AutoPayoutsPanel() {
             setBlocked(d.blocked ?? []);
             setByReason(d.by_reason ?? {});
         } catch (e: unknown) {
-            setError(e instanceof Error ? e.message : "Could not load auto-payout data.");
+            const msg = e instanceof Error ? e.message : "";
+            // During rollout the two failure modes are specific and fixable,
+            // and both look like a generic outage otherwise: the backend
+            // hasn't been redeployed with these routes (404), or the
+            // migration hasn't been applied (503 naming the table).
+            setError(
+                /404|not found/i.test(msg)
+                    ? "This view needs a backend deploy — the weekly-payout endpoints aren't live on this environment yet."
+                    : msg || "Could not load auto-payout data.",
+            );
         } finally {
             setLoading(false);
         }

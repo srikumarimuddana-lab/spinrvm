@@ -827,6 +827,51 @@ class TestBatchWindow:
         assert _is_batch_window(datetime(2026, 8, 17, 12, 0, tzinfo=tz)) is False  # Monday
 
 
+# ── Admin read-only views ──────────────────────────────────────────────
+
+
+class TestAdminAutoPayoutViews:
+    @pytest.mark.anyio
+    async def test_empty_ledger_is_200_not_an_error(self):
+        """No batch has run yet is a valid state, not a failure — the page
+        must be able to render "no runs yet"."""
+        from backend.routes.admin.auto_payouts import list_auto_payout_batches
+
+        with patch("backend.routes.admin.auto_payouts.db_supabase.get_rows", AsyncMock(return_value=[])):
+            result = await list_auto_payout_batches(limit=20, admin={"id": "admin_1"})
+        assert result == {"batches": [], "count": 0}
+
+    @pytest.mark.anyio
+    async def test_missing_table_names_the_pending_migration(self):
+        """A 503 saying "temporarily unavailable" sends ops off retrying; the
+        real fix is applying migration 314, so the message must say so."""
+        from backend.routes.admin.auto_payouts import list_auto_payout_batches
+
+        err = Exception('{"code":"42P01","message":"relation \\"auto_payout_batches\\" does not exist"}')
+        with patch("backend.routes.admin.auto_payouts.db_supabase.get_rows", AsyncMock(side_effect=err)):
+            with pytest.raises(HTTPException) as exc_info:
+                await list_auto_payout_batches(limit=20, admin={"id": "admin_1"})
+
+        assert exc_info.value.status_code == 503  # never a bare 500
+        assert "migration 314" in exc_info.value.detail
+        assert "auto_payout_batches" in exc_info.value.detail
+
+    @pytest.mark.anyio
+    async def test_generic_db_failure_stays_generic(self):
+        """A real outage must not be mislabelled as a pending migration."""
+        from backend.routes.admin.auto_payouts import list_auto_payout_batches
+
+        with patch(
+            "backend.routes.admin.auto_payouts.db_supabase.get_rows",
+            AsyncMock(side_effect=Exception("connection reset by peer")),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await list_auto_payout_batches(limit=20, admin={"id": "admin_1"})
+
+        assert exc_info.value.status_code == 503
+        assert "migration" not in exc_info.value.detail
+
+
 # ── Instant payout kill switch ─────────────────────────────────────────
 
 

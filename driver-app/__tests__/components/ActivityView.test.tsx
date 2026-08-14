@@ -68,13 +68,12 @@ const makeStore = (overrides = {}) => ({
     total_distance_km: 5.2,
     total_duration_minutes: 18,
     average_per_ride: 12,
+    elapsed_days: 1,
   },
   rideHistory: [makeRide()],
   historyTotal: 1,
-  driverBalance: { previous_app_paid_total: '0.00' },
   fetchEarnings: jest.fn().mockResolvedValue(undefined),
   fetchRideHistory: jest.fn().mockResolvedValue(undefined),
-  fetchDriverBalance: jest.fn().mockResolvedValue(undefined),
   ...overrides,
 });
 
@@ -223,44 +222,44 @@ describe('ActivityView', () => {
     expect(queryByText(/imported/i)).toBeNull();
   });
 
-  it('blends previous-app money into the All Time total and average as a Previously Paid line item', async () => {
+  // Business decision 2026-08-13 (A32/A33, docs/change-log/2026-08-13-
+  // blended-lifetime-earnings.md): the blend moved from the frontend
+  // (Spinr total + a separate previous_app_paid_total figure) to the
+  // backend (/drivers/earnings sums every completed ride, legacy included,
+  // per period). The component now just displays whatever total_earnings
+  // and total_rides it's given — no more client-side "Previously Paid" math.
+  it('renders the blended total/average/per-day stats /drivers/earnings now returns', async () => {
     mockStore = makeStore({
       earnings: {
-        total_earnings: 100,
+        total_earnings: 150,
         total_tips: 0,
         total_incentives: 0,
         total_tax: 0,
         total_rides: 5,
         total_distance_km: 25,
-        total_duration_minutes: 60,
-        average_per_ride: 20,
+        total_duration_minutes: 600,
+        average_per_ride: 30,
+        elapsed_days: 10,
       },
-      driverBalance: { previous_app_paid_total: '50.00' },
     });
     mockUseDriverStore.mockReturnValue(mockStore);
 
-    const { getByText } = render(<ActivityView />);
+    const { getByText, getAllByText } = render(<ActivityView />);
     await waitFor(() => expect(getByText('123 Main St')).toBeTruthy());
 
-    fireEvent.press(getByText('All Time'));
-    await waitFor(() => expect(mockStore.fetchEarnings).toHaveBeenLastCalledWith('all'));
-
-    // Total Earned blends Spinr earnings ($100) + previous-app money ($50).
-    await waitFor(() => expect(getByText('$150.00')).toBeTruthy());
-    expect(getByText('Previously Paid')).toBeTruthy();
-    // Avg per Trip = blended total / total trips = 150 / 5.
+    // Total Earned is whatever the backend returns — no client-side add-on.
+    // (Fare shows the same $150.00 here since tips/incentives/bonus/tax are
+    // all 0 in this fixture, so both the hero total and the Fare row match.)
+    await waitFor(() => expect(getAllByText('$150.00').length).toBeGreaterThan(0));
+    // Avg per Trip = total_earnings / total_rides = 150 / 5.
     expect(getByText('$30.00')).toBeTruthy();
-  });
-
-  it('does not blend previous-app money outside the All Time period (no reliable per-period split)', async () => {
-    mockStore = makeStore({ driverBalance: { previous_app_paid_total: '50.00' } });
-    mockUseDriverStore.mockReturnValue(mockStore);
-
-    const { getByText, queryByText } = render(<ActivityView />);
-
-    // Default period is 'today'.
-    await waitFor(() => expect(getByText('123 Main St')).toBeTruthy());
-    expect(queryByText('Previously Paid')).toBeNull();
+    // Avg Trips/Day = total_rides / elapsed_days = 5 / 10.
+    expect(getByText('0.5')).toBeTruthy();
+    // Avg KM/Day = total_distance_km / elapsed_days = 25 / 10.
+    expect(getByText('2.5 km')).toBeTruthy();
+    // Total/Avg Online Time = total_duration_minutes (600 = 10h) and per-day (60min = 1h).
+    expect(getByText('10h')).toBeTruthy();
+    expect(getByText('1h')).toBeTruthy();
   });
 
   it('refetches only earnings on a period change (list re-filters client-side)', async () => {

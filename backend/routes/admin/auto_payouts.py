@@ -59,6 +59,7 @@ async def list_auto_payout_batches(
 @router.get("/auto-payouts/blocked-drivers")
 async def list_blocked_drivers(
     limit: int = 50,
+    service_area_id: str | None = None,
     admin: dict = Depends(get_admin_user),
 ):
     """Drivers with money waiting that the weekly batch cannot pay right now.
@@ -68,6 +69,10 @@ async def list_blocked_drivers(
     payouts enabled, not suspended, CRA GST BN + SIN on file), so blockers
     can be chased before the batch. Each row carries the reason and the
     amount being held.
+
+    ``service_area_id`` scopes the list to one market. That filters the
+    VIEW only — the batch always runs fleet-wide; segregation here is a
+    reporting concern, not a payment one.
 
     Diagnostic endpoint — it computes a payable balance per blocked
     driver, so keep ``limit`` modest.
@@ -79,7 +84,7 @@ async def list_blocked_drivers(
         from utils.auto_payout import find_blocked_drivers  # type: ignore
 
     try:
-        rows = await find_blocked_drivers(limit)
+        rows = await find_blocked_drivers(limit, service_area_id=service_area_id)
     except Exception as e:
         logger.error(f"Failed to list blocked drivers: {e}", exc_info=True)
         raise HTTPException(status_code=503, detail="Blocked-driver preflight temporarily unavailable") from e

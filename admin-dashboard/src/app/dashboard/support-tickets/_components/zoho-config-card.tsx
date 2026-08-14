@@ -49,6 +49,7 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
     const [departmentId, setDepartmentId] = useState("");
     const [fromEmail, setFromEmail] = useState("");
     const [signatureEnabled, setSignatureEnabled] = useState(false);
+    const [signatureHeader, setSignatureHeader] = useState("");
     const [signature, setSignature] = useState("");
     const [signaturePreview, setSignaturePreview] = useState("");
     const [clientId, setClientId] = useState("");
@@ -66,6 +67,7 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
             setDepartmentId(s.default_department_id || "");
             setFromEmail(s.default_from_email || "");
             setSignatureEnabled(!!s.helpdesk_signature_enabled);
+            setSignatureHeader(s.helpdesk_signature_header || "");
             setSignature(s.helpdesk_email_signature || "");
             setSignaturePreview(s.helpdesk_signature_preview || "");
         } catch {
@@ -91,6 +93,7 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
                 default_department_id: departmentId,
                 default_from_email: fromEmail,
                 helpdesk_signature_enabled: signatureEnabled,
+                helpdesk_signature_header: signatureHeader,
                 helpdesk_email_signature: signature,
             };
             // Only send secrets the admin actually typed.
@@ -211,6 +214,18 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
                     </div>
                     {signatureEnabled && (
                         <>
+                            <div className="space-y-1">
+                                <Label htmlFor="zoho-sig-header">Team name</Label>
+                                <Input
+                                    id="zoho-sig-header"
+                                    value={signatureHeader}
+                                    onChange={(e) => setSignatureHeader(e.target.value)}
+                                    placeholder="Spinr Support"
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    Bold header line in the signature. Leave blank to use your company name.
+                                </p>
+                            </div>
                             <div className="space-y-1">
                                 <Label htmlFor="zoho-sig-tagline">Tagline (optional)</Label>
                                 <Input

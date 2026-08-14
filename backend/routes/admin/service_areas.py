@@ -253,6 +253,7 @@ class ServiceAreaUpdateRequest(BaseModel):
     driver_referral_terms: Optional[str] = Field(default=None, max_length=2000)
     # Dispatch cascade rules (migration 185): [{from: uuid, to: [uuid, ...]}]
     vehicle_cascade_map: Optional[List[Any]] = None
+    instant_payout_enabled: Optional[bool] = None
 
     @field_validator("heatmap_config")
     @classmethod
@@ -279,8 +280,7 @@ class ServiceAreaUpdateRequest(BaseModel):
         unknown = sorted(set(v) - set(HEATMAP_SPEC))
         if unknown:
             raise ValueError(
-                f"unknown heatmap config key(s): {', '.join(unknown)}. "
-                f"Valid keys: {', '.join(sorted(HEATMAP_SPEC))}"
+                f"unknown heatmap config key(s): {', '.join(unknown)}. Valid keys: {', '.join(sorted(HEATMAP_SPEC))}"
             )
 
         cleaned: Dict[str, Any] = {}
@@ -373,8 +373,8 @@ async def admin_get_area_heatmap_config(area_id: str):
     the global changes, and only the form can show that distinction.
     """
     try:
-        from ...utils.heatmap_config import HEATMAP_SPEC, describe_overrides, resolve_heatmap_config
         from ...settings_loader import get_app_settings
+        from ...utils.heatmap_config import HEATMAP_SPEC, describe_overrides, resolve_heatmap_config
     except ImportError:
         from settings_loader import get_app_settings  # type: ignore
         from utils.heatmap_config import (  # type: ignore
@@ -748,6 +748,7 @@ async def admin_update_service_area(
         "rider_referral_terms",
         "driver_referral_terms",
         "vehicle_cascade_map",
+        "instant_payout_enabled",
     ]:
         val = getattr(area, field)
         if val is not None:
@@ -804,9 +805,7 @@ async def admin_update_service_area(
     return {"message": "Service area updated"}
 
 
-async def _record_manual_surge_history(
-    area_id: str, update_payload: dict, source: str | None = None
-) -> None:
+async def _record_manual_surge_history(area_id: str, update_payload: dict, source: str | None = None) -> None:
     """Append a ``surge_pricing`` row when an admin changes surge by hand.
 
     This is the only UI path that sets a manual surge multiplier, and it

@@ -53,6 +53,11 @@ CREATE TABLE IF NOT EXISTS auto_payout_batches (
     --    "drivers_with_balance": {"missing_gst": ["<driver_id>", ...]}}
     -- Driver IDs only — never names/phones/bank details (PIPEDA).
     skipped_summary   JSONB,
+    -- Per-market slice of the run, so the admin page can report by service
+    -- area without a query per market. The batch itself is always fleet-wide:
+    --   {"<service_area_id>": {"paid": 12, "failed": 1, "skipped": 3,
+    --                          "amount": "5400.00"}, "unassigned": {...}}
+    area_summary      JSONB,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

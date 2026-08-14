@@ -13,10 +13,28 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 const getAutoPayoutBatches = vi.fn();
 const getBlockedPayoutDrivers = vi.fn();
+const getServiceAreas = vi.fn();
 
 vi.mock('@/lib/api', () => ({
   getAutoPayoutBatches: (...a: unknown[]) => getAutoPayoutBatches(...a),
   getBlockedPayoutDrivers: (...a: unknown[]) => getBlockedPayoutDrivers(...a),
+  getServiceAreas: (...a: unknown[]) => getServiceAreas(...a),
+}));
+
+// Radix Select renders through a portal and needs pointer APIs jsdom lacks;
+// stub it as a native <select> so the area filter stays testable.
+vi.mock('@/components/ui/select', () => ({
+  Select: ({ value, onValueChange, children }: React.PropsWithChildren<{ value: string; onValueChange: (v: string) => void }>) => (
+    <select aria-label="Filter by service area" value={value} onChange={(e) => onValueChange(e.target.value)}>
+      {children}
+    </select>
+  ),
+  SelectTrigger: ({ children }: React.PropsWithChildren) => <>{children}</>,
+  SelectValue: () => null,
+  SelectContent: ({ children }: React.PropsWithChildren) => <>{children}</>,
+  SelectItem: ({ value, children }: React.PropsWithChildren<{ value: string }>) => (
+    <option value={value}>{children}</option>
+  ),
 }));
 
 vi.mock('next/link', () => ({
@@ -32,6 +50,7 @@ vi.mock('@/components/ui/button', () => ({
 vi.mock('lucide-react', () => ({
   AlertTriangle: () => <span />,
   CalendarClock: () => <span />,
+  Filter: () => <span />,
   CheckCircle: () => <span />,
   ChevronDown: () => <span />,
   ChevronRight: () => <span />,
@@ -57,16 +76,27 @@ const BATCH = {
     counts: { missing_gst: 3, suspended: 1 },
     drivers_with_balance: { missing_gst: ['drv-gst-1'] },
   },
+  area_summary: {
+    sa_regina: { paid: 7, failed: 2, skipped: 3, amount: '980.50' },
+    sa_saskatoon: { paid: 3, failed: 0, skipped: 1, amount: '470.00' },
+  },
 };
 
 const BLOCKED = {
   driver_id: 'drv-gst-1',
   reason: 'missing_gst',
   pending_amount: '120.00',
+  service_area_id: 'sa_regina',
 };
+
+const AREAS = [
+  { id: 'sa_regina', name: 'Regina' },
+  { id: 'sa_saskatoon', name: 'Saskatoon' },
+];
 
 beforeEach(() => {
   vi.clearAllMocks();
+  getServiceAreas.mockResolvedValue(AREAS);
   getAutoPayoutBatches.mockResolvedValue({ batches: [BATCH], count: 1 });
   getBlockedPayoutDrivers.mockResolvedValue({
     blocked: [BLOCKED],
@@ -134,6 +164,68 @@ describe('AutoPayoutsPanel', () => {
     await waitFor(() =>
       expect(screen.getByText(/no runs recorded yet/i)).toBeInTheDocument(),
     );
+  });
+
+  it('scopes the blocked-driver query to the chosen service area', async () => {
+    render(<AutoPayoutsPanel />);
+    await waitFor(() => expect(screen.getByText('drv-gst-1')).toBeInTheDocument());
+    // Default view is fleet-wide.
+    expect(getBlockedPayoutDrivers).toHaveBeenLastCalledWith(50, undefined);
+
+    fireEvent.change(screen.getByLabelText(/filter by service area/i), {
+      target: { value: 'sa_regina' },
+    });
+
+    // Refetches server-side rather than filtering the already-capped page.
+    await waitFor(() =>
+      expect(getBlockedPayoutDrivers).toHaveBeenLastCalledWith(50, 'sa_regina'),
+    );
+  });
+
+  it('reports the selected area figures, not the fleet-wide totals', async () => {
+    render(<AutoPayoutsPanel />);
+    await waitFor(() => expect(screen.getAllByText('2026-W33').length).toBeGreaterThan(0));
+    // Fleet-wide to start (BATCH.total_amount).
+    expect(screen.getAllByText('$1,450.50').length).toBeGreaterThan(0);
+
+    fireEvent.change(screen.getByLabelText(/filter by service area/i), {
+      target: { value: 'sa_regina' },
+    });
+
+    // Regina's slice only — the fleet-wide total must disappear.
+    await waitFor(() => expect(screen.getAllByText('$980.50').length).toBeGreaterThan(0));
+    expect(screen.queryByText('$1,450.50')).not.toBeInTheDocument();
+    // Area name, not the raw id.
+    expect(screen.getAllByText(/Regina/).length).toBeGreaterThan(0);
+  });
+
+  it('says "not recorded" for a run predating per-area tracking', async () => {
+    getAutoPayoutBatches.mockResolvedValue({
+      batches: [{ ...BATCH, area_summary: null }],
+      count: 1,
+    });
+    render(<AutoPayoutsPanel />);
+    await waitFor(() => expect(screen.getAllByText('2026-W33').length).toBeGreaterThan(0));
+
+    fireEvent.change(screen.getByLabelText(/filter by service area/i), {
+      target: { value: 'sa_regina' },
+    });
+
+    // Must not imply the market earned $0.00 that week.
+    await waitFor(() => expect(screen.getAllByText(/not recorded/i).length).toBeGreaterThan(0));
+    expect(screen.queryByText('$0.00')).not.toBeInTheDocument();
+  });
+
+  it('breaks a run down by service area when expanded', async () => {
+    render(<AutoPayoutsPanel />);
+    await waitFor(() => expect(screen.getAllByText('2026-W33').length).toBeGreaterThan(0));
+
+    const weekCells = screen.getAllByText('2026-W33');
+    fireEvent.click(weekCells[weekCells.length - 1]);
+
+    await waitFor(() => expect(screen.getByText(/by service area/i)).toBeInTheDocument());
+    expect(screen.getByText('$980.50')).toBeInTheDocument();
+    expect(screen.getByText('$470.00')).toBeInTheDocument();
   });
 
   it('surfaces a load failure with a retry that refetches', async () => {

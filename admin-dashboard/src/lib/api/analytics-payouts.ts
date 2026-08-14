@@ -145,6 +145,16 @@ export interface AutoPayoutBatch {
         counts?: Record<string, number>;
         drivers_with_balance?: Record<string, string[]>;
     } | null;
+    /**
+     * Per-market slice of the run, keyed by service_area_id ("unassigned"
+     * for drivers with no area). The batch itself always runs fleet-wide —
+     * this exists so the page can report per area. Null on runs recorded
+     * before per-area tracking existed.
+     */
+    area_summary?: Record<
+        string,
+        { paid: number; failed: number; skipped: number; amount: string }
+    > | null;
     created_at?: string;
 }
 
@@ -153,15 +163,19 @@ export interface BlockedDriver {
     driver_id: string;
     reason: string;
     pending_amount: string;
+    service_area_id?: string | null;
 }
 
 export const getAutoPayoutBatches = (limit = 20) =>
     request<{ batches: AutoPayoutBatch[]; count: number }>(`/api/admin/auto-payouts/batches?limit=${limit}`);
 
-export const getBlockedPayoutDrivers = (limit = 50) =>
-    request<{ blocked: BlockedDriver[]; count: number; by_reason: Record<string, number> }>(
-        `/api/admin/auto-payouts/blocked-drivers?limit=${limit}`,
+export const getBlockedPayoutDrivers = (limit = 50, serviceAreaId?: string) => {
+    const sp = new URLSearchParams({ limit: String(limit) });
+    if (serviceAreaId) sp.set("service_area_id", serviceAreaId);
+    return request<{ blocked: BlockedDriver[]; count: number; by_reason: Record<string, number> }>(
+        `/api/admin/auto-payouts/blocked-drivers?${sp.toString()}`,
     );
+};
 
 /* ── Disputes (resolve) ─────────────────── */
 export const resolveDispute = (id: string, data: { resolution: string; refund_amount?: number; admin_note?: string }) =>

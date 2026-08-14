@@ -289,7 +289,7 @@ async def _handle_skipped_driver(driver: dict, reason: str, skipped_drivers: dic
     )
 
 
-async def find_blocked_drivers(limit: int = 50) -> list[dict]:
+async def find_blocked_drivers(limit: int = 50, service_area_id: str | None = None) -> list[dict]:
     """Drivers with money waiting that the batch cannot pay RIGHT NOW.
 
     Live preflight for ops — same gates the Sunday run uses, so blockers can
@@ -297,13 +297,17 @@ async def find_blocked_drivers(limit: int = 50) -> list[dict]:
     Balance is computed only for drivers that fail a gate, so the cost scales
     with the blocked set, not the fleet.
 
-    Returns driver_id / reason / pending_amount only — never names, phones,
-    or bank details (PIPEDA rules in CLAUDE.md).
+    ``service_area_id`` scopes the scan to one market (filtered server-side).
+    Note this filters the VIEW only; the batch itself always runs fleet-wide.
+
+    Returns driver_id / reason / pending_amount / service_area_id only —
+    never names, phones, or bank details (PIPEDA rules in CLAUDE.md).
     """
+    base_filter: dict = {"service_area_id": service_area_id} if service_area_id else {}
     out: list[dict] = []
     offset = 0
     while len(out) < limit:
-        page = await db_supabase.get_rows("drivers", {}, limit=_PAGE_SIZE, offset=offset, order="id")
+        page = await db_supabase.get_rows("drivers", base_filter, limit=_PAGE_SIZE, offset=offset, order="id")
         if not page:
             break
         for d in page:
@@ -317,7 +321,14 @@ async def find_blocked_drivers(limit: int = 50) -> list[dict]:
                 continue
             if balance < MIN_PAYOUT_AMOUNT:
                 continue
-            out.append({"driver_id": d["id"], "reason": reason, "pending_amount": str(balance)})
+            out.append(
+                {
+                    "driver_id": d["id"],
+                    "reason": reason,
+                    "pending_amount": str(balance),
+                    "service_area_id": d.get("service_area_id"),
+                }
+            )
             if len(out) >= limit:
                 break
         if len(page) < _PAGE_SIZE:
@@ -675,15 +686,30 @@ async def run_weekly_auto_payout() -> dict:
     skipped: dict[str, int] = {}
     # reason -> driver ids that actually had money waiting (ops work-list)
     skipped_drivers: dict[str, list[str]] = {}
+    # Per-market breakdown of this run. The batch itself is fleet-wide (one
+    # run per week); this exists so the admin page can report per service
+    # area without a second query per market.
+    area_summary: dict[str, dict] = {}
     total_amount = Decimal("0")
+
+    def _bump_area(area_id, *, paid: int = 0, failed: int = 0, skipped_n: int = 0, amount=Decimal("0")) -> None:
+        key = area_id or "unassigned"
+        entry = area_summary.setdefault(key, {"paid": 0, "failed": 0, "skipped": 0, "amount": Decimal("0")})
+        entry["paid"] += paid
+        entry["failed"] += failed
+        entry["skipped"] += skipped_n
+        entry["amount"] += amount
+
     errors: list[str] = []
 
     for driver in drivers:
         driver_id = driver["id"]
+        area_id = driver.get("service_area_id")
 
         skip_reason = _eligibility_skip_reason(driver)
         if skip_reason:
             skipped[skip_reason] = skipped.get(skip_reason, 0) + 1
+            _bump_area(area_id, skipped_n=1)
             await _handle_skipped_driver(driver, skip_reason, skipped_drivers)
             continue
 
@@ -692,6 +718,7 @@ async def run_weekly_auto_payout() -> dict:
         except Exception:
             logger.exception("[AUTO-PAYOUT] balance computation failed for driver %s", driver_id)
             drivers_failed += 1
+            _bump_area(area_id, failed=1)
             errors.append(f"{driver_id}: balance_error")
             continue
 
@@ -733,6 +760,7 @@ async def run_weekly_auto_payout() -> dict:
                 # or a stale reserved row from another week exists. The sweep
                 # owns stale rows; log loudly either way.
                 logger.warning("[AUTO-PAYOUT] driver %s blocked by an unrelated in-flight payout row", driver_id)
+                _bump_area(area_id, failed=1)
                 errors.append(f"{driver_id}: inflight_conflict")
                 continue
             row = existing_rows[0]
@@ -740,9 +768,11 @@ async def run_weekly_auto_payout() -> dict:
             if row_status == "completed":
                 drivers_paid += 1
                 total_amount += _d(row.get("amount") or 0)
+                _bump_area(area_id, paid=1, amount=_d(row.get("amount") or 0))
                 continue
             if row_status == "failed":
                 drivers_failed += 1
+                _bump_area(area_id, failed=1)
                 errors.append(f"{driver_id}: previously_failed")
                 continue
             # reserved from a crashed pass — retry with the row's pinned amount
@@ -751,18 +781,22 @@ async def run_weekly_auto_payout() -> dict:
             except Exception:
                 logger.exception("[AUTO-PAYOUT] retry of reserved payout %s failed", payout_id)
                 drivers_failed += 1
+                _bump_area(area_id, failed=1)
                 errors.append(f"{driver_id}: retry_error")
                 continue
             if outcome == "completed":
                 drivers_paid += 1
                 total_amount += _d(row.get("amount") or 0)
+                _bump_area(area_id, paid=1, amount=_d(row.get("amount") or 0))
             else:
                 drivers_failed += 1
+                _bump_area(area_id, failed=1)
                 errors.append(f"{driver_id}: {outcome}")
             continue
         except Exception:
             logger.exception("[AUTO-PAYOUT] reserve failed for driver %s", driver_id)
             drivers_failed += 1
+            _bump_area(area_id, failed=1)
             errors.append(f"{driver_id}: reserve_error")
             continue
 
@@ -776,6 +810,7 @@ async def run_weekly_auto_payout() -> dict:
         if result["outcome"] == "completed":
             drivers_paid += 1
             total_amount += balance
+            _bump_area(area_id, paid=1, amount=balance)
             await _notify_driver(
                 driver,
                 "Weekly payout sent",
@@ -784,6 +819,7 @@ async def run_weekly_auto_payout() -> dict:
             )
         elif result["outcome"] == "failed":
             drivers_failed += 1
+            _bump_area(area_id, failed=1)
             errors.append(f"{driver_id}: stripe_{result['failure_reason'][:40]}")
             await _notify_driver(
                 driver,
@@ -793,6 +829,7 @@ async def run_weekly_auto_payout() -> dict:
             )
         else:  # stays reserved; sweep/resume will retry
             drivers_failed += 1
+            _bump_area(area_id, failed=1)
             errors.append(f"{driver_id}: deferred_{result['classification']}")
 
     if drivers_failed == 0 and not errors:
@@ -817,6 +854,12 @@ async def run_weekly_auto_payout() -> dict:
                 # counts = everyone skipped; drivers_with_balance = the ones
                 # with money actually held up, i.e. the ops follow-up list.
                 "skipped_summary": ({"counts": skipped, "drivers_with_balance": skipped_drivers} if skipped else None),
+                # Per-market slice of this run, keyed by service_area_id
+                # ("unassigned" when a driver has no area). Amounts as strings
+                # so Decimal never round-trips through float on the way out.
+                "area_summary": (
+                    {k: {**v, "amount": str(v["amount"])} for k, v in area_summary.items()} if area_summary else None
+                ),
             },
         )
     except Exception:
@@ -843,6 +886,7 @@ async def run_weekly_auto_payout() -> dict:
         "drivers_failed": drivers_failed,
         "skipped": skipped,
         "skipped_drivers": skipped_drivers,
+        "area_summary": {k: {**v, "amount": str(v["amount"])} for k, v in area_summary.items()},
         "errors": errors[:10],
         "total_amount": str(total_amount),
         "resumed": resumed,

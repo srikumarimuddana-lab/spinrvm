@@ -653,6 +653,55 @@ class TestBlockedDriverVisibility:
         assert summary["drivers_with_balance"]["missing_gst"] == [DRIVER_ID]
 
     @pytest.mark.anyio
+    async def test_batch_records_per_service_area_breakdown(self):
+        """The run is fleet-wide, but must record a per-market slice so the
+        admin page can report by service area."""
+        from backend.utils.auto_payout import run_weekly_auto_payout
+
+        tables = {
+            "drivers": [
+                _driver(service_area_id="sa_regina"),
+                _driver(id="drv_saskatoon", user_id="u2", service_area_id="sa_saskatoon"),
+            ],
+            "rides_completed": [_ride(driver_earnings="60.00", tax_amount="0.00")],
+        }
+        with _apply([*_run_patches(tables, transfer=MagicMock(return_value=MagicMock(id="tr_area")))]):
+            result = await run_weekly_auto_payout()
+
+        areas = result["area_summary"]
+        assert areas["sa_regina"]["paid"] == 1
+        assert areas["sa_regina"]["amount"] == "60.00"
+        assert areas["sa_saskatoon"]["paid"] == 1
+
+    @pytest.mark.anyio
+    async def test_blocked_drivers_filter_by_service_area(self):
+        """Area filter must be pushed into the query, not applied after —
+        otherwise a market's list is capped by other markets' drivers."""
+        from backend.utils.auto_payout import find_blocked_drivers
+
+        seen_filters = []
+
+        async def get_rows(table, filters=None, **kw):
+            filters = filters or {}
+            if table == "drivers":
+                seen_filters.append(filters)
+                return [_driver(gst_bn=None, service_area_id="sa_regina")]
+            if table == "rides":
+                status = filters.get("status")
+                status = getattr(status, "value", status)
+                return [_ride(driver_earnings="75.00", tax_amount="0.00")] if status == "completed" else []
+            return []
+
+        with (
+            patch("backend.utils.auto_payout.db_supabase.get_rows", side_effect=get_rows),
+            patch("backend.utils.auto_payout.db_supabase.supabase", _sb_claims()),
+        ):
+            blocked = await find_blocked_drivers(limit=50, service_area_id="sa_regina")
+
+        assert seen_filters[0] == {"service_area_id": "sa_regina"}
+        assert blocked[0]["service_area_id"] == "sa_regina"
+
+    @pytest.mark.anyio
     async def test_find_blocked_drivers_reports_reason_and_amount(self):
         from backend.utils.auto_payout import find_blocked_drivers
 

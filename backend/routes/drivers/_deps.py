@@ -75,7 +75,12 @@ try:
     from ...utils.metrics import inc as _metric_inc
     from ...utils.metrics import observe as _metric_observe
     from ...utils.money import dollars_to_cents, to_decimal
-    from ...utils.rate_limiter import dsar_export_limit, location_update_limit, tax_doc_email_limit
+    from ...utils.rate_limiter import (
+        dsar_export_limit,
+        heatmap_read_limit,
+        location_update_limit,
+        tax_doc_email_limit,
+    )
     from ...utils.referral_terms import (
         paid_referee_earnings,
         paid_referral_earnings,
@@ -127,7 +132,12 @@ except ImportError:
     from utils.metrics import inc as _metric_inc  # type: ignore
     from utils.metrics import observe as _metric_observe  # type: ignore
     from utils.money import dollars_to_cents, to_decimal
-    from utils.rate_limiter import dsar_export_limit, location_update_limit, tax_doc_email_limit
+    from utils.rate_limiter import (  # type: ignore
+        dsar_export_limit,
+        heatmap_read_limit,
+        location_update_limit,
+        tax_doc_email_limit,
+    )
     from utils.referral_terms import (  # type: ignore
         paid_referee_earnings,
         paid_referral_earnings,

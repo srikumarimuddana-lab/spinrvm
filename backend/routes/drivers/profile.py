@@ -12,10 +12,12 @@ from ._deps import (  # noqa: F401
     Depends,
     HTTPException,
     Optional,
+    Request,
     datetime,
     db_supabase,
     generate_driver_code,
     get_current_user,
+    heatmap_read_limit,
     logger,
     timedelta,
     timezone,
@@ -350,12 +352,23 @@ def _heatmap_centroid(cr: int, cc: int, cell_lat: float, cell_lng: float):
 
 
 @router.get("/demand-heatmap")
-async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
+@heatmap_read_limit
+async def get_demand_heatmap(
+    request: Request = None,
+    current_user: dict = Depends(get_current_user),
+):
     """Return aggregated demand heatmap cells for the driver's service area.
 
     v1 (always): ``points: [[lat, lng, weight]]`` — decayed 7-day aggregate.
     v2 (gated):  ``cells``, ``surge``, ``forecast`` — component-separated
     for layer UI + next-6h demand timeline.
+
+    Rate limited at 20/minute per driver (``heatmap_read_limit``). The client
+    polls on the interval this endpoint itself serves, which is clamped to a
+    30 s floor — at most 2/minute normally — so the limit is ~10x headroom and
+    only bites a runaway client. Every sibling driver endpoint has a limit;
+    this one did not, and "the response is usually cached" is not a ceiling:
+    a stuck client or a stolen token can still drive uncached rebuilds.
     """
     import json as _json
 
@@ -674,6 +687,16 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
     if v2_cells is not None:
         result["cells"] = v2_cells
         result["surge"] = v2_surge
+        # The client draws each cell as a rectangle and has to re-derive its
+        # corners from the centroid, which needs the SAME grid size this
+        # response was bucketed with. It used to hardcode 0.004/0.006 — correct
+        # only while those were global constants. Now that cell size is tunable
+        # per service area, a tuned area would have had its polygons drawn at
+        # the wrong size and, because the client re-floors the centroid, snapped
+        # into the wrong grid square entirely. Additive: an older build ignores
+        # these and keeps its constants, which is exactly its previous behaviour.
+        result["cell_lat_deg"] = cell_lat
+        result["cell_lng_deg"] = cell_lng
         if v2_forecast:
             result["forecast"] = v2_forecast
 

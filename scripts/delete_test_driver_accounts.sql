@@ -38,10 +38,10 @@ DECLARE
     v_driver_ids    TEXT[];
     v_ride_ids      TEXT[];
     v_stripe_ids    TEXT[];
-    v_wallet_ids    UUID[];
-    v_ai_conv_ids   UUID[];
-    v_corp_member_ids UUID[];
-    v_fare_split_ids  UUID[];
+    v_wallet_ids    TEXT[];
+    v_ai_conv_ids   TEXT[];
+    v_corp_member_ids TEXT[];
+    v_fare_split_ids  TEXT[];
 
     v_uid           TEXT;
     v_did           TEXT;
@@ -76,7 +76,7 @@ BEGIN
     SELECT COALESCE(array_agg(d.id), '{}')
     INTO v_driver_ids
     FROM drivers d
-    WHERE d.user_id = ANY(v_user_ids);
+    WHERE d.user_id::text = ANY(v_user_ids);
 
     RAISE NOTICE 'Found % driver(s): %', COALESCE(array_length(v_driver_ids, 1), 0), v_driver_ids;
 
@@ -84,7 +84,7 @@ BEGIN
     SELECT COALESCE(array_agg(d.stripe_account_id), '{}')
     INTO v_stripe_ids
     FROM drivers d
-    WHERE d.id = ANY(v_driver_ids)
+    WHERE d.id::text = ANY(v_driver_ids)
       AND d.stripe_account_id IS NOT NULL;
 
     IF array_length(v_stripe_ids, 1) > 0 THEN
@@ -97,7 +97,7 @@ BEGIN
     SELECT COALESCE(array_agg(r.id), '{}')
     INTO v_ride_ids
     FROM rides r
-    WHERE r.driver_id = ANY(v_driver_ids);
+    WHERE r.driver_id::text = ANY(v_driver_ids);
 
     RAISE NOTICE 'Found % ride(s) as driver: %', COALESCE(array_length(v_ride_ids, 1), 0), v_ride_ids;
 
@@ -106,34 +106,34 @@ BEGIN
     SELECT COALESCE(array_agg(r.id), '{}')
     INTO v_ride_ids
     FROM rides r
-    WHERE r.driver_id = ANY(v_driver_ids)
-       OR r.rider_id = ANY(v_user_ids);
+    WHERE r.driver_id::text = ANY(v_driver_ids)
+       OR r.rider_id::text = ANY(v_user_ids);
 
     RAISE NOTICE 'Total rides (as driver or rider): %', COALESCE(array_length(v_ride_ids, 1), 0);
 
     -- Collect wallet IDs
-    SELECT COALESCE(array_agg(w.id), '{}')
+    SELECT COALESCE(array_agg(w.id::text), '{}')
     INTO v_wallet_ids
     FROM wallets w
     WHERE w.user_id::text = ANY(v_user_ids);
 
     -- Collect AI conversation IDs
-    SELECT COALESCE(array_agg(ac.id), '{}')
+    SELECT COALESCE(array_agg(ac.id::text), '{}')
     INTO v_ai_conv_ids
     FROM ai_conversations ac
-    WHERE ac.user_id = ANY(v_user_ids);
+    WHERE ac.user_id::text = ANY(v_user_ids);
 
     -- Collect corporate member IDs
-    SELECT COALESCE(array_agg(cm.id), '{}')
+    SELECT COALESCE(array_agg(cm.id::text), '{}')
     INTO v_corp_member_ids
     FROM corporate_members cm
     WHERE cm.user_id::text = ANY(v_user_ids);
 
     -- Collect fare split IDs
-    SELECT COALESCE(array_agg(fs.id), '{}')
+    SELECT COALESCE(array_agg(fs.id::text), '{}')
     INTO v_fare_split_ids
     FROM fare_splits fs
-    WHERE fs.ride_id = ANY(v_ride_ids)
+    WHERE fs.ride_id::text = ANY(v_ride_ids)
        OR fs.requester_id::text = ANY(v_user_ids);
 
     RAISE NOTICE '';
@@ -164,9 +164,9 @@ BEGIN
 
     -- ride_routes (CASCADE from rides, but explicit is safer)
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM ride_routes WHERE ride_id = ANY(v_ride_ids);
+        SELECT COUNT(*) INTO v_count FROM ride_routes WHERE ride_id::text = ANY(v_ride_ids);
     ELSE
-        DELETE FROM ride_routes WHERE ride_id = ANY(v_ride_ids);
+        DELETE FROM ride_routes WHERE ride_id::text = ANY(v_ride_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  ride_routes: %', v_count;
@@ -175,10 +175,10 @@ BEGIN
     -- ride_offers
     IF p_dry_run THEN
         SELECT COUNT(*) INTO v_count FROM ride_offers
-        WHERE ride_id = ANY(v_ride_ids) OR driver_id = ANY(v_driver_ids);
+        WHERE ride_id::text = ANY(v_ride_ids) OR driver_id::text = ANY(v_driver_ids);
     ELSE
         DELETE FROM ride_offers
-        WHERE ride_id = ANY(v_ride_ids) OR driver_id = ANY(v_driver_ids);
+        WHERE ride_id::text = ANY(v_ride_ids) OR driver_id::text = ANY(v_driver_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  ride_offers: %', v_count;
@@ -187,10 +187,10 @@ BEGIN
     -- ride_messages
     IF p_dry_run THEN
         SELECT COUNT(*) INTO v_count FROM ride_messages
-        WHERE ride_id = ANY(v_ride_ids) OR sender_id = ANY(v_user_ids);
+        WHERE ride_id::text = ANY(v_ride_ids) OR sender_id::text = ANY(v_user_ids);
     ELSE
         DELETE FROM ride_messages
-        WHERE ride_id = ANY(v_ride_ids) OR sender_id = ANY(v_user_ids);
+        WHERE ride_id::text = ANY(v_ride_ids) OR sender_id::text = ANY(v_user_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  ride_messages: %', v_count;
@@ -220,9 +220,9 @@ BEGIN
 
     -- ride_route_snapshot_objects
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM ride_route_snapshot_objects WHERE ride_id = ANY(v_ride_ids);
+        SELECT COUNT(*) INTO v_count FROM ride_route_snapshot_objects WHERE ride_id::text = ANY(v_ride_ids);
     ELSE
-        DELETE FROM ride_route_snapshot_objects WHERE ride_id = ANY(v_ride_ids);
+        DELETE FROM ride_route_snapshot_objects WHERE ride_id::text = ANY(v_ride_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  ride_route_snapshot_objects: %', v_count;
@@ -231,10 +231,10 @@ BEGIN
     -- ride_location_gap_events
     IF p_dry_run THEN
         SELECT COUNT(*) INTO v_count FROM ride_location_gap_events
-        WHERE ride_id = ANY(v_ride_ids) OR driver_id = ANY(v_driver_ids);
+        WHERE ride_id::text = ANY(v_ride_ids) OR driver_id::text = ANY(v_driver_ids);
     ELSE
         DELETE FROM ride_location_gap_events
-        WHERE ride_id = ANY(v_ride_ids) OR driver_id = ANY(v_driver_ids);
+        WHERE ride_id::text = ANY(v_ride_ids) OR driver_id::text = ANY(v_driver_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  ride_location_gap_events: %', v_count;
@@ -242,9 +242,9 @@ BEGIN
 
     -- ride_distance_recomputes
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM ride_distance_recomputes WHERE ride_id = ANY(v_ride_ids);
+        SELECT COUNT(*) INTO v_count FROM ride_distance_recomputes WHERE ride_id::text = ANY(v_ride_ids);
     ELSE
-        DELETE FROM ride_distance_recomputes WHERE ride_id = ANY(v_ride_ids);
+        DELETE FROM ride_distance_recomputes WHERE ride_id::text = ANY(v_ride_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  ride_distance_recomputes: %', v_count;
@@ -252,9 +252,9 @@ BEGIN
 
     -- ride_distance_integrity_events
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM ride_distance_integrity_events WHERE ride_id = ANY(v_ride_ids);
+        SELECT COUNT(*) INTO v_count FROM ride_distance_integrity_events WHERE ride_id::text = ANY(v_ride_ids);
     ELSE
-        DELETE FROM ride_distance_integrity_events WHERE ride_id = ANY(v_ride_ids);
+        DELETE FROM ride_distance_integrity_events WHERE ride_id::text = ANY(v_ride_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  ride_distance_integrity_events: %', v_count;
@@ -274,9 +274,9 @@ BEGIN
 
     -- corporate_rides
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM corporate_rides WHERE ride_id = ANY(v_ride_ids);
+        SELECT COUNT(*) INTO v_count FROM corporate_rides WHERE ride_id::text = ANY(v_ride_ids);
     ELSE
-        DELETE FROM corporate_rides WHERE ride_id = ANY(v_ride_ids);
+        DELETE FROM corporate_rides WHERE ride_id::text = ANY(v_ride_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  corporate_rides: %', v_count;
@@ -284,9 +284,9 @@ BEGIN
 
     -- stripe_disputes (FK → rides)
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM stripe_disputes WHERE ride_id = ANY(v_ride_ids);
+        SELECT COUNT(*) INTO v_count FROM stripe_disputes WHERE ride_id::text = ANY(v_ride_ids);
     ELSE
-        DELETE FROM stripe_disputes WHERE ride_id = ANY(v_ride_ids);
+        DELETE FROM stripe_disputes WHERE ride_id::text = ANY(v_ride_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  stripe_disputes: %', v_count;
@@ -298,9 +298,9 @@ BEGIN
 
     -- driver_documents (CASCADE from drivers, but explicit)
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM driver_documents WHERE driver_id = ANY(v_driver_ids);
+        SELECT COUNT(*) INTO v_count FROM driver_documents WHERE driver_id::text = ANY(v_driver_ids);
     ELSE
-        DELETE FROM driver_documents WHERE driver_id = ANY(v_driver_ids);
+        DELETE FROM driver_documents WHERE driver_id::text = ANY(v_driver_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  driver_documents: %', v_count;
@@ -308,9 +308,9 @@ BEGIN
 
     -- documents (legacy, no cascade)
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM documents WHERE driver_id = ANY(v_driver_ids);
+        SELECT COUNT(*) INTO v_count FROM documents WHERE driver_id::text = ANY(v_driver_ids);
     ELSE
-        DELETE FROM documents WHERE driver_id = ANY(v_driver_ids);
+        DELETE FROM documents WHERE driver_id::text = ANY(v_driver_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  documents: %', v_count;
@@ -318,9 +318,9 @@ BEGIN
 
     -- driver_location_history
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM driver_location_history WHERE driver_id = ANY(v_driver_ids);
+        SELECT COUNT(*) INTO v_count FROM driver_location_history WHERE driver_id::text = ANY(v_driver_ids);
     ELSE
-        DELETE FROM driver_location_history WHERE driver_id = ANY(v_driver_ids);
+        DELETE FROM driver_location_history WHERE driver_id::text = ANY(v_driver_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  driver_location_history: %', v_count;
@@ -328,9 +328,9 @@ BEGIN
 
     -- driver_daily_stats
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM driver_daily_stats WHERE driver_id = ANY(v_driver_ids);
+        SELECT COUNT(*) INTO v_count FROM driver_daily_stats WHERE driver_id::text = ANY(v_driver_ids);
     ELSE
-        DELETE FROM driver_daily_stats WHERE driver_id = ANY(v_driver_ids);
+        DELETE FROM driver_daily_stats WHERE driver_id::text = ANY(v_driver_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  driver_daily_stats: %', v_count;
@@ -338,9 +338,9 @@ BEGIN
 
     -- driver_activity_log
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM driver_activity_log WHERE driver_id = ANY(v_driver_ids);
+        SELECT COUNT(*) INTO v_count FROM driver_activity_log WHERE driver_id::text = ANY(v_driver_ids);
     ELSE
-        DELETE FROM driver_activity_log WHERE driver_id = ANY(v_driver_ids);
+        DELETE FROM driver_activity_log WHERE driver_id::text = ANY(v_driver_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  driver_activity_log: %', v_count;
@@ -348,9 +348,9 @@ BEGIN
 
     -- driver_notes
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM driver_notes WHERE driver_id = ANY(v_driver_ids);
+        SELECT COUNT(*) INTO v_count FROM driver_notes WHERE driver_id::text = ANY(v_driver_ids);
     ELSE
-        DELETE FROM driver_notes WHERE driver_id = ANY(v_driver_ids);
+        DELETE FROM driver_notes WHERE driver_id::text = ANY(v_driver_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  driver_notes: %', v_count;
@@ -358,9 +358,9 @@ BEGIN
 
     -- driver_insurance_periods (trigger disabled above)
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM driver_insurance_periods WHERE driver_id = ANY(v_driver_ids);
+        SELECT COUNT(*) INTO v_count FROM driver_insurance_periods WHERE driver_id::text = ANY(v_driver_ids);
     ELSE
-        DELETE FROM driver_insurance_periods WHERE driver_id = ANY(v_driver_ids);
+        DELETE FROM driver_insurance_periods WHERE driver_id::text = ANY(v_driver_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  driver_insurance_periods: %', v_count;
@@ -368,9 +368,9 @@ BEGIN
 
     -- driver_period_distances (trigger disabled above)
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM driver_period_distances WHERE driver_id = ANY(v_driver_ids);
+        SELECT COUNT(*) INTO v_count FROM driver_period_distances WHERE driver_id::text = ANY(v_driver_ids);
     ELSE
-        DELETE FROM driver_period_distances WHERE driver_id = ANY(v_driver_ids);
+        DELETE FROM driver_period_distances WHERE driver_id::text = ANY(v_driver_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  driver_period_distances: %', v_count;
@@ -389,10 +389,10 @@ BEGIN
     -- driver_onboarding_reminder_log (CASCADE from drivers, but explicit)
     IF p_dry_run THEN
         SELECT COUNT(*) INTO v_count FROM driver_onboarding_reminder_log
-        WHERE driver_id = ANY(v_driver_ids) OR user_id = ANY(v_user_ids);
+        WHERE driver_id::text = ANY(v_driver_ids) OR user_id::text = ANY(v_user_ids);
     ELSE
         DELETE FROM driver_onboarding_reminder_log
-        WHERE driver_id = ANY(v_driver_ids) OR user_id = ANY(v_user_ids);
+        WHERE driver_id::text = ANY(v_driver_ids) OR user_id::text = ANY(v_user_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  driver_onboarding_reminder_log: %', v_count;
@@ -400,9 +400,9 @@ BEGIN
 
     -- driver_statements (CASCADE from drivers)
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM driver_statements WHERE driver_id = ANY(v_driver_ids);
+        SELECT COUNT(*) INTO v_count FROM driver_statements WHERE driver_id::text = ANY(v_driver_ids);
     ELSE
-        DELETE FROM driver_statements WHERE driver_id = ANY(v_driver_ids);
+        DELETE FROM driver_statements WHERE driver_id::text = ANY(v_driver_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  driver_statements: %', v_count;
@@ -422,9 +422,9 @@ BEGIN
 
     -- driver_stripe_payouts
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM driver_stripe_payouts WHERE driver_id = ANY(v_driver_ids);
+        SELECT COUNT(*) INTO v_count FROM driver_stripe_payouts WHERE driver_id::text = ANY(v_driver_ids);
     ELSE
-        DELETE FROM driver_stripe_payouts WHERE driver_id = ANY(v_driver_ids);
+        DELETE FROM driver_stripe_payouts WHERE driver_id::text = ANY(v_driver_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  driver_stripe_payouts: %', v_count;
@@ -432,9 +432,9 @@ BEGIN
 
     -- driver_stripe_ledger
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM driver_stripe_ledger WHERE driver_id = ANY(v_driver_ids);
+        SELECT COUNT(*) INTO v_count FROM driver_stripe_ledger WHERE driver_id::text = ANY(v_driver_ids);
     ELSE
-        DELETE FROM driver_stripe_ledger WHERE driver_id = ANY(v_driver_ids);
+        DELETE FROM driver_stripe_ledger WHERE driver_id::text = ANY(v_driver_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  driver_stripe_ledger: %', v_count;
@@ -446,9 +446,9 @@ BEGIN
 
     -- subscription_payments
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM subscription_payments WHERE driver_id = ANY(v_driver_ids);
+        SELECT COUNT(*) INTO v_count FROM subscription_payments WHERE driver_id::text = ANY(v_driver_ids);
     ELSE
-        DELETE FROM subscription_payments WHERE driver_id = ANY(v_driver_ids);
+        DELETE FROM subscription_payments WHERE driver_id::text = ANY(v_driver_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  subscription_payments: %', v_count;
@@ -456,9 +456,9 @@ BEGIN
 
     -- driver_subscriptions
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM driver_subscriptions WHERE driver_id = ANY(v_driver_ids);
+        SELECT COUNT(*) INTO v_count FROM driver_subscriptions WHERE driver_id::text = ANY(v_driver_ids);
     ELSE
-        DELETE FROM driver_subscriptions WHERE driver_id = ANY(v_driver_ids);
+        DELETE FROM driver_subscriptions WHERE driver_id::text = ANY(v_driver_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  driver_subscriptions: %', v_count;
@@ -466,9 +466,9 @@ BEGIN
 
     -- payouts
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM payouts WHERE driver_id = ANY(v_driver_ids);
+        SELECT COUNT(*) INTO v_count FROM payouts WHERE driver_id::text = ANY(v_driver_ids);
     ELSE
-        DELETE FROM payouts WHERE driver_id = ANY(v_driver_ids);
+        DELETE FROM payouts WHERE driver_id::text = ANY(v_driver_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  payouts: %', v_count;
@@ -476,9 +476,9 @@ BEGIN
 
     -- bank_accounts
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM bank_accounts WHERE driver_id = ANY(v_driver_ids);
+        SELECT COUNT(*) INTO v_count FROM bank_accounts WHERE driver_id::text = ANY(v_driver_ids);
     ELSE
-        DELETE FROM bank_accounts WHERE driver_id = ANY(v_driver_ids);
+        DELETE FROM bank_accounts WHERE driver_id::text = ANY(v_driver_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  bank_accounts: %', v_count;
@@ -493,12 +493,12 @@ BEGIN
     IF p_dry_run THEN
         SELECT COUNT(*) INTO v_count FROM financial_event_entries fee
         WHERE fee.event_id IN (
-            SELECT fe.id FROM financial_events fe WHERE fe.user_id = ANY(v_user_ids)
+            SELECT fe.id FROM financial_events fe WHERE fe.user_id::text = ANY(v_user_ids)
         );
     ELSE
         DELETE FROM financial_event_entries
         WHERE event_id IN (
-            SELECT id FROM financial_events WHERE user_id = ANY(v_user_ids)
+            SELECT id FROM financial_events WHERE user_id::text = ANY(v_user_ids)
         );
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
@@ -507,9 +507,9 @@ BEGIN
 
     -- financial_events (GUC gate set above)
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM financial_events WHERE user_id = ANY(v_user_ids);
+        SELECT COUNT(*) INTO v_count FROM financial_events WHERE user_id::text = ANY(v_user_ids);
     ELSE
-        DELETE FROM financial_events WHERE user_id = ANY(v_user_ids);
+        DELETE FROM financial_events WHERE user_id::text = ANY(v_user_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  financial_events: %', v_count;
@@ -518,15 +518,15 @@ BEGIN
     -- Also delete financial_events linked to rides
     IF p_dry_run THEN
         SELECT COUNT(*) INTO v_count FROM financial_events
-        WHERE ride_id = ANY(v_ride_ids) AND user_id != ALL(COALESCE(v_user_ids, '{}'));
+        WHERE ride_id::text = ANY(v_ride_ids) AND user_id::text != ALL(COALESCE(v_user_ids, '{}'));
     ELSE
         DELETE FROM financial_event_entries
         WHERE event_id IN (
             SELECT id FROM financial_events
-            WHERE ride_id = ANY(v_ride_ids) AND user_id != ALL(COALESCE(v_user_ids, '{}'))
+            WHERE ride_id::text = ANY(v_ride_ids) AND user_id::text != ALL(COALESCE(v_user_ids, '{}'))
         );
         DELETE FROM financial_events
-        WHERE ride_id = ANY(v_ride_ids) AND user_id != ALL(COALESCE(v_user_ids, '{}'));
+        WHERE ride_id::text = ANY(v_ride_ids) AND user_id::text != ALL(COALESCE(v_user_ids, '{}'));
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  financial_events (ride-linked, other users): %', v_count;
@@ -569,10 +569,10 @@ BEGIN
     -- referral_payouts
     IF p_dry_run THEN
         SELECT COUNT(*) INTO v_count FROM referral_payouts
-        WHERE referrer_user_id = ANY(v_user_ids) OR referee_user_id = ANY(v_user_ids);
+        WHERE referrer_user_id::text = ANY(v_user_ids) OR referee_user_id::text = ANY(v_user_ids);
     ELSE
         DELETE FROM referral_payouts
-        WHERE referrer_user_id = ANY(v_user_ids) OR referee_user_id = ANY(v_user_ids);
+        WHERE referrer_user_id::text = ANY(v_user_ids) OR referee_user_id::text = ANY(v_user_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  referral_payouts: %', v_count;
@@ -605,10 +605,10 @@ BEGIN
     -- fare_split_participants
     IF p_dry_run THEN
         SELECT COUNT(*) INTO v_count FROM fare_split_participants
-        WHERE fare_split_id = ANY(v_fare_split_ids) OR user_id::text = ANY(v_user_ids);
+        WHERE fare_split_id::text = ANY(v_fare_split_ids) OR user_id::text = ANY(v_user_ids);
     ELSE
         DELETE FROM fare_split_participants
-        WHERE fare_split_id = ANY(v_fare_split_ids) OR user_id::text = ANY(v_user_ids);
+        WHERE fare_split_id::text = ANY(v_fare_split_ids) OR user_id::text = ANY(v_user_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  fare_split_participants: %', v_count;
@@ -617,9 +617,9 @@ BEGIN
     -- fare_splits
     IF p_dry_run THEN
         SELECT COUNT(*) INTO v_count FROM fare_splits
-        WHERE id = ANY(v_fare_split_ids);
+        WHERE id::text = ANY(v_fare_split_ids);
     ELSE
-        DELETE FROM fare_splits WHERE id = ANY(v_fare_split_ids);
+        DELETE FROM fare_splits WHERE id::text = ANY(v_fare_split_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  fare_splits: %', v_count;
@@ -627,9 +627,9 @@ BEGIN
 
     -- wallet_transactions (CASCADE from wallets)
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM wallet_transactions WHERE wallet_id = ANY(v_wallet_ids);
+        SELECT COUNT(*) INTO v_count FROM wallet_transactions WHERE wallet_id::text = ANY(v_wallet_ids);
     ELSE
-        DELETE FROM wallet_transactions WHERE wallet_id = ANY(v_wallet_ids);
+        DELETE FROM wallet_transactions WHERE wallet_id::text = ANY(v_wallet_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  wallet_transactions: %', v_count;
@@ -651,9 +651,9 @@ BEGIN
 
     -- notifications (CASCADE from users)
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM notifications WHERE user_id = ANY(v_user_ids);
+        SELECT COUNT(*) INTO v_count FROM notifications WHERE user_id::text = ANY(v_user_ids);
     ELSE
-        DELETE FROM notifications WHERE user_id = ANY(v_user_ids);
+        DELETE FROM notifications WHERE user_id::text = ANY(v_user_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  notifications: %', v_count;
@@ -661,9 +661,9 @@ BEGIN
 
     -- notification_preferences
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM notification_preferences WHERE user_id = ANY(v_user_ids);
+        SELECT COUNT(*) INTO v_count FROM notification_preferences WHERE user_id::text = ANY(v_user_ids);
     ELSE
-        DELETE FROM notification_preferences WHERE user_id = ANY(v_user_ids);
+        DELETE FROM notification_preferences WHERE user_id::text = ANY(v_user_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  notification_preferences: %', v_count;
@@ -671,9 +671,9 @@ BEGIN
 
     -- push_tokens
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM push_tokens WHERE user_id = ANY(v_user_ids);
+        SELECT COUNT(*) INTO v_count FROM push_tokens WHERE user_id::text = ANY(v_user_ids);
     ELSE
-        DELETE FROM push_tokens WHERE user_id = ANY(v_user_ids);
+        DELETE FROM push_tokens WHERE user_id::text = ANY(v_user_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  push_tokens: %', v_count;
@@ -681,9 +681,9 @@ BEGIN
 
     -- push_retry_queue
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM push_retry_queue WHERE user_id = ANY(v_user_ids);
+        SELECT COUNT(*) INTO v_count FROM push_retry_queue WHERE user_id::text = ANY(v_user_ids);
     ELSE
-        DELETE FROM push_retry_queue WHERE user_id = ANY(v_user_ids);
+        DELETE FROM push_retry_queue WHERE user_id::text = ANY(v_user_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  push_retry_queue: %', v_count;
@@ -691,9 +691,9 @@ BEGIN
 
     -- ai_messages (CASCADE from ai_conversations)
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM ai_messages WHERE conversation_id = ANY(v_ai_conv_ids);
+        SELECT COUNT(*) INTO v_count FROM ai_messages WHERE conversation_id::text = ANY(v_ai_conv_ids);
     ELSE
-        DELETE FROM ai_messages WHERE conversation_id = ANY(v_ai_conv_ids);
+        DELETE FROM ai_messages WHERE conversation_id::text = ANY(v_ai_conv_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  ai_messages: %', v_count;
@@ -701,9 +701,9 @@ BEGIN
 
     -- ai_conversations
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM ai_conversations WHERE user_id = ANY(v_user_ids);
+        SELECT COUNT(*) INTO v_count FROM ai_conversations WHERE user_id::text = ANY(v_user_ids);
     ELSE
-        DELETE FROM ai_conversations WHERE user_id = ANY(v_user_ids);
+        DELETE FROM ai_conversations WHERE user_id::text = ANY(v_user_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  ai_conversations: %', v_count;
@@ -716,12 +716,12 @@ BEGIN
     -- complaints
     IF p_dry_run THEN
         SELECT COUNT(*) INTO v_count FROM complaints
-        WHERE reporter_id = ANY(v_user_ids) OR reported_id = ANY(v_user_ids)
-           OR ride_id = ANY(v_ride_ids);
+        WHERE reporter_id::text = ANY(v_user_ids) OR reported_id::text = ANY(v_user_ids)
+           OR ride_id::text = ANY(v_ride_ids);
     ELSE
         DELETE FROM complaints
-        WHERE reporter_id = ANY(v_user_ids) OR reported_id = ANY(v_user_ids)
-           OR ride_id = ANY(v_ride_ids);
+        WHERE reporter_id::text = ANY(v_user_ids) OR reported_id::text = ANY(v_user_ids)
+           OR ride_id::text = ANY(v_ride_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  complaints: %', v_count;
@@ -730,12 +730,12 @@ BEGIN
     -- flags
     IF p_dry_run THEN
         SELECT COUNT(*) INTO v_count FROM flags
-        WHERE target_id = ANY(v_user_ids) OR target_id = ANY(v_driver_ids)
-           OR ride_id = ANY(v_ride_ids);
+        WHERE target_id::text = ANY(v_user_ids) OR target_id::text = ANY(v_driver_ids)
+           OR ride_id::text = ANY(v_ride_ids);
     ELSE
         DELETE FROM flags
-        WHERE target_id = ANY(v_user_ids) OR target_id = ANY(v_driver_ids)
-           OR ride_id = ANY(v_ride_ids);
+        WHERE target_id::text = ANY(v_user_ids) OR target_id::text = ANY(v_driver_ids)
+           OR ride_id::text = ANY(v_ride_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  flags: %', v_count;
@@ -744,10 +744,10 @@ BEGIN
     -- disputes (trigger disabled above)
     IF p_dry_run THEN
         SELECT COUNT(*) INTO v_count FROM disputes
-        WHERE reporter_id = ANY(v_user_ids) OR ride_id = ANY(v_ride_ids);
+        WHERE reporter_id::text = ANY(v_user_ids) OR ride_id::text = ANY(v_ride_ids);
     ELSE
         DELETE FROM disputes
-        WHERE reporter_id = ANY(v_user_ids) OR ride_id = ANY(v_ride_ids);
+        WHERE reporter_id::text = ANY(v_user_ids) OR ride_id::text = ANY(v_ride_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  disputes: %', v_count;
@@ -756,17 +756,17 @@ BEGIN
     -- lost_and_found_messages
     IF p_dry_run THEN
         SELECT COUNT(*) INTO v_count FROM lost_and_found_messages
-        WHERE sender_id = ANY(v_user_ids)
+        WHERE sender_id::text = ANY(v_user_ids)
            OR lost_and_found_id::text IN (
                SELECT id::text FROM lost_and_found
-               WHERE reporter_id = ANY(v_user_ids) OR ride_id = ANY(v_ride_ids)
+               WHERE reporter_id::text = ANY(v_user_ids) OR ride_id::text = ANY(v_ride_ids)
            );
     ELSE
         DELETE FROM lost_and_found_messages
-        WHERE sender_id = ANY(v_user_ids)
+        WHERE sender_id::text = ANY(v_user_ids)
            OR lost_and_found_id::text IN (
                SELECT id::text FROM lost_and_found
-               WHERE reporter_id = ANY(v_user_ids) OR ride_id = ANY(v_ride_ids)
+               WHERE reporter_id::text = ANY(v_user_ids) OR ride_id::text = ANY(v_ride_ids)
            );
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
@@ -776,10 +776,10 @@ BEGIN
     -- lost_and_found
     IF p_dry_run THEN
         SELECT COUNT(*) INTO v_count FROM lost_and_found
-        WHERE reporter_id = ANY(v_user_ids) OR ride_id = ANY(v_ride_ids);
+        WHERE reporter_id::text = ANY(v_user_ids) OR ride_id::text = ANY(v_ride_ids);
     ELSE
         DELETE FROM lost_and_found
-        WHERE reporter_id = ANY(v_user_ids) OR ride_id = ANY(v_ride_ids);
+        WHERE reporter_id::text = ANY(v_user_ids) OR ride_id::text = ANY(v_ride_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  lost_and_found: %', v_count;
@@ -788,10 +788,10 @@ BEGIN
     -- safety_incidents
     IF p_dry_run THEN
         SELECT COUNT(*) INTO v_count FROM safety_incidents
-        WHERE reported_by_user_id = ANY(v_user_ids) OR ride_id = ANY(v_ride_ids);
+        WHERE reported_by_user_id::text = ANY(v_user_ids) OR ride_id::text = ANY(v_ride_ids);
     ELSE
         DELETE FROM safety_incidents
-        WHERE reported_by_user_id = ANY(v_user_ids) OR ride_id = ANY(v_ride_ids);
+        WHERE reported_by_user_id::text = ANY(v_user_ids) OR ride_id::text = ANY(v_ride_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  safety_incidents: %', v_count;
@@ -804,9 +804,9 @@ BEGIN
     -- corporate_member_allowances
     IF p_dry_run THEN
         SELECT COUNT(*) INTO v_count FROM corporate_member_allowances
-        WHERE member_id = ANY(v_corp_member_ids);
+        WHERE member_id::text = ANY(v_corp_member_ids);
     ELSE
-        DELETE FROM corporate_member_allowances WHERE member_id = ANY(v_corp_member_ids);
+        DELETE FROM corporate_member_allowances WHERE member_id::text = ANY(v_corp_member_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  corporate_member_allowances: %', v_count;
@@ -815,9 +815,9 @@ BEGIN
     -- corporate_allowance_requests
     IF p_dry_run THEN
         SELECT COUNT(*) INTO v_count FROM corporate_allowance_requests
-        WHERE member_id = ANY(v_corp_member_ids);
+        WHERE member_id::text = ANY(v_corp_member_ids);
     ELSE
-        DELETE FROM corporate_allowance_requests WHERE member_id = ANY(v_corp_member_ids);
+        DELETE FROM corporate_allowance_requests WHERE member_id::text = ANY(v_corp_member_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  corporate_allowance_requests: %', v_count;
@@ -839,9 +839,9 @@ BEGIN
 
     -- support_tickets
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM support_tickets WHERE user_id = ANY(v_user_ids);
+        SELECT COUNT(*) INTO v_count FROM support_tickets WHERE user_id::text = ANY(v_user_ids);
     ELSE
-        DELETE FROM support_tickets WHERE user_id = ANY(v_user_ids);
+        DELETE FROM support_tickets WHERE user_id::text = ANY(v_user_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  support_tickets: %', v_count;
@@ -849,9 +849,9 @@ BEGIN
 
     -- saved_addresses
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM saved_addresses WHERE user_id = ANY(v_user_ids);
+        SELECT COUNT(*) INTO v_count FROM saved_addresses WHERE user_id::text = ANY(v_user_ids);
     ELSE
-        DELETE FROM saved_addresses WHERE user_id = ANY(v_user_ids);
+        DELETE FROM saved_addresses WHERE user_id::text = ANY(v_user_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  saved_addresses: %', v_count;
@@ -859,9 +859,9 @@ BEGIN
 
     -- emergency_contacts
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM emergency_contacts WHERE user_id = ANY(v_user_ids);
+        SELECT COUNT(*) INTO v_count FROM emergency_contacts WHERE user_id::text = ANY(v_user_ids);
     ELSE
-        DELETE FROM emergency_contacts WHERE user_id = ANY(v_user_ids);
+        DELETE FROM emergency_contacts WHERE user_id::text = ANY(v_user_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  emergency_contacts: %', v_count;
@@ -923,9 +923,9 @@ BEGIN
 
     -- refresh_tokens
     IF p_dry_run THEN
-        SELECT COUNT(*) INTO v_count FROM refresh_tokens WHERE user_id = ANY(v_user_ids);
+        SELECT COUNT(*) INTO v_count FROM refresh_tokens WHERE user_id::text = ANY(v_user_ids);
     ELSE
-        DELETE FROM refresh_tokens WHERE user_id = ANY(v_user_ids);
+        DELETE FROM refresh_tokens WHERE user_id::text = ANY(v_user_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  refresh_tokens: %', v_count;
@@ -959,14 +959,14 @@ BEGIN
     -- audit_logs (related to these users)
     IF p_dry_run THEN
         SELECT COUNT(*) INTO v_count FROM audit_logs
-        WHERE actor_id = ANY(v_user_ids)
-           OR entity_id = ANY(v_user_ids)
-           OR entity_id = ANY(v_driver_ids);
+        WHERE actor_id::text = ANY(v_user_ids)
+           OR entity_id::text = ANY(v_user_ids)
+           OR entity_id::text = ANY(v_driver_ids);
     ELSE
         DELETE FROM audit_logs
-        WHERE actor_id = ANY(v_user_ids)
-           OR entity_id = ANY(v_user_ids)
-           OR entity_id = ANY(v_driver_ids);
+        WHERE actor_id::text = ANY(v_user_ids)
+           OR entity_id::text = ANY(v_user_ids)
+           OR entity_id::text = ANY(v_driver_ids);
         GET DIAGNOSTICS v_count = ROW_COUNT;
     END IF;
     RAISE NOTICE '  audit_logs: %', v_count;
@@ -979,7 +979,7 @@ BEGIN
     -- reconciliation_discrepancies (resolved_by → user)
     IF NOT p_dry_run THEN
         UPDATE reconciliation_discrepancies SET resolved_by = NULL
-        WHERE resolved_by = ANY(v_user_ids);
+        WHERE resolved_by::text = ANY(v_user_ids);
     END IF;
 
     -- =====================================================================

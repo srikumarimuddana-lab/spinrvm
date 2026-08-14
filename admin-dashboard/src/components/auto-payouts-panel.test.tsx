@@ -49,6 +49,11 @@ vi.mock('@/components/ui/select', () => ({
   ),
 }));
 
+const exportToCsv = vi.fn();
+vi.mock('@/lib/export-csv', () => ({
+  exportToCsv: (...a: unknown[]) => exportToCsv(...a),
+}));
+
 vi.mock('next/link', () => ({
   default: ({ children, href }: React.PropsWithChildren<{ href: string }>) => <a href={href}>{children}</a>,
 }));
@@ -62,6 +67,7 @@ vi.mock('@/components/ui/button', () => ({
 vi.mock('lucide-react', () => ({
   AlertTriangle: () => <span />,
   CalendarClock: () => <span />,
+  Download: () => <span />,
   Filter: () => <span />,
   CheckCircle: () => <span />,
   ChevronDown: () => <span />,
@@ -297,6 +303,60 @@ describe('AutoPayoutsPanel', () => {
     fireEvent.click(screen.getByText(/refresh/i));
 
     await waitFor(() => expect(screen.getByText(/no runs recorded yet/i)).toBeInTheDocument());
+  });
+
+  it('exports blocked drivers with the amount held and no PII', async () => {
+    render(<AutoPayoutsPanel />);
+    await waitFor(() => expect(screen.getByText('drv-gst-1')).toBeInTheDocument());
+
+    fireEvent.click(screen.getAllByText(/export csv/i)[0]);
+
+    const [filename, rows, columns] = exportToCsv.mock.calls[0];
+    expect(filename).toBe('blocked-drivers_all-weeks_all-areas.csv');
+    expect(rows).toHaveLength(1);
+    const labels = columns.map((c: { label: string }) => c.label);
+    expect(labels).toContain('Amount held (CAD)');
+    // Driver id only — no name/phone/bank column may ever appear here.
+    expect(labels.join(' ').toLowerCase()).not.toMatch(/name|phone|email|bank|account number/);
+  });
+
+  it('exports runs one row per service area, with the filters in the filename', async () => {
+    render(<AutoPayoutsPanel />);
+    await waitFor(() => expect(screen.getAllByText('2026-W33').length).toBeGreaterThan(0));
+
+    fireEvent.change(screen.getByLabelText(/filter by week/i), { target: { value: '2026-W33' } });
+    await waitFor(() => expect(screen.getByText(/selected week/i)).toBeInTheDocument());
+
+    fireEvent.click(screen.getAllByText(/export csv/i).slice(-1)[0]);
+
+    const [filename, rows] = exportToCsv.mock.calls.slice(-1)[0];
+    expect(filename).toBe('weekly-payout-runs_2026-W33_all-areas.csv');
+    // BATCH has two areas -> two rows, each carrying the week and its dates.
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r: { service_area: string }) => r.service_area).sort()).toEqual([
+      'Regina',
+      'Saskatoon',
+    ]);
+    expect(rows[0].dates).toBe('Aug 10–16');
+  });
+
+  it('leaves run figures blank, not zero, when a market predates per-area tracking', async () => {
+    getAutoPayoutBatches.mockResolvedValue({
+      batches: [{ ...BATCH, area_summary: null }],
+      count: 1,
+    });
+    render(<AutoPayoutsPanel />);
+    await waitFor(() => expect(screen.getAllByText('2026-W33').length).toBeGreaterThan(0));
+
+    fireEvent.change(screen.getByLabelText(/filter by service area/i), {
+      target: { value: 'sa_regina' },
+    });
+    await waitFor(() => expect(screen.getAllByText(/not recorded/i).length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getAllByText(/export csv/i).slice(-1)[0]);
+    const [, rows] = exportToCsv.mock.calls.slice(-1)[0];
+    expect(rows[0].amount).toBe('');
+    expect(rows[0].paid).toBe('');
   });
 
   it('surfaces a load failure with a retry that refetches', async () => {

@@ -162,7 +162,6 @@ BEGIN
         -- Enable delete gates for append-only tables
         -- =================================================================
         PERFORM set_config('spinr.financial_events.allow_delete', 'true', true);
-        PERFORM set_config('spinr.audit_logs.allow_delete', 'true', true);
         PERFORM set_config('spinr.compliance_export_events.allow_delete', 'true', true);
 
         -- Temporarily disable triggers that have no GUC gate
@@ -178,6 +177,10 @@ BEGIN
             ALTER TABLE disputes
                 DISABLE TRIGGER disputes_no_delete;
         END IF;
+        -- audit_logs triggers unconditionally block mutations (no GUC gate)
+        ALTER TABLE audit_logs DISABLE TRIGGER audit_logs_no_delete;
+        ALTER TABLE audit_logs DISABLE TRIGGER audit_logs_no_mutate;
+        ALTER TABLE audit_logs DISABLE TRIGGER audit_logs_no_update;
     END IF;
 
     -- =====================================================================
@@ -1322,9 +1325,11 @@ BEGIN
             ALTER TABLE disputes
                 ENABLE TRIGGER disputes_no_delete;
         END IF;
+        ALTER TABLE audit_logs ENABLE TRIGGER audit_logs_no_delete;
+        ALTER TABLE audit_logs ENABLE TRIGGER audit_logs_no_mutate;
+        ALTER TABLE audit_logs ENABLE TRIGGER audit_logs_no_update;
 
         PERFORM set_config('spinr.financial_events.allow_delete', 'false', true);
-        PERFORM set_config('spinr.audit_logs.allow_delete', 'false', true);
         PERFORM set_config('spinr.compliance_export_events.allow_delete', 'false', true);
     END IF;
 

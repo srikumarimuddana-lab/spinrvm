@@ -43,7 +43,7 @@ Spinr now runs a weekly auto-payout batch every Sunday (UTC): every driver with 
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/migrations/313_auto_payout_and_instant_kill_switch.sql` | New `auto_payout_batches` table; `instant_payout_enabled` column on `service_areas` | Batch ledger + per-area kill switch |
+| `backend/migrations/314_auto_payout_and_instant_kill_switch.sql` | New `auto_payout_batches` table; `instant_payout_enabled` column on `service_areas` | Batch ledger + per-area kill switch |
 | `backend/utils/auto_payout.py` | New weekly auto-payout service + hourly Sunday loop + ops flag | Platform-controlled payouts |
 | `backend/core/lifespan.py` | Spawn `auto_payout` loop; watchdog entry | Run on schedule, replay-safe |
 | `backend/routes/drivers/payouts.py` | `POST /payouts` → 410 (legacy handler preserved off-route); `_require_instant_payout_enabled` gate | Remove manual cashout; kill switch |
@@ -77,7 +77,7 @@ Sunday (UTC), hourly loop → run_weekly_auto_payout()
 - **Weekly batch off, no redeploy**: set `app_settings.auto_payout_enabled = false` (admin dashboard settings). The loop then skips before writing any batch row or transfer.
 - **Instant payouts per area, no redeploy**: `service_areas.instant_payout_enabled` toggle.
 - **Restore manual cashout**: requires a redeploy (`_STANDARD_CASHOUT_DISABLED = False` in `backend/routes/drivers/payouts.py` — one-line revert; the original handler is preserved). Accepted: the removal is the product decision itself.
-- **Schema**: rollback SQL in migration 313's header comment (`DROP TABLE auto_payout_batches; ALTER TABLE service_areas DROP COLUMN instant_payout_enabled`).
+- **Schema**: rollback SQL in migration 314's header comment (`DROP TABLE auto_payout_batches; ALTER TABLE service_areas DROP COLUMN instant_payout_enabled`).
 - **Money already moved** by a completed batch is NOT undone by any flag — reversal would be per-transfer `stripe.Transfer` reversals, driver by driver; payout rows carry `stripe_transfer_id` for exactly this.
 
 ## 9. Verification performed

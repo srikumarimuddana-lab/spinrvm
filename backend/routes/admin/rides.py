@@ -3545,7 +3545,7 @@ async def admin_regenerate_imported_snapshots(
     if not base_url:
         raise HTTPException(status_code=500, detail="SUPABASE_URL not configured")
 
-    filters: Dict[str, Any] = {"legacy_import_metadata": {"$ne": None}}
+    filters: Dict[str, Any] = {"legacy_import_metadata": {"$notnull": True}}
     if not body.force:
         filters["route_snapshot_url"] = None
 

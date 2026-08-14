@@ -71,7 +71,7 @@ async def main(dry_run: bool = False, force: bool = False, limit: int | None = N
     else:
         logger.info("Google Maps API key found, will use Google Static Maps renderer")
 
-    filters = {"legacy_import_metadata": {"$ne": None}}
+    filters = {"legacy_import_metadata": {"$notnull": True}}
     if not force:
         filters["route_snapshot_url"] = None
 

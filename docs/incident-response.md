@@ -71,6 +71,7 @@ Post-mortem ≤ 72h (blameless)
 | Supabase unavailable | `docs/runbooks/supabase-down.md` |
 | Redis unavailable | `docs/runbooks/redis-down.md` |
 | Stripe reconciliation delta | `docs/runbooks/stripe-reconciliation.md` |
+| Chargeback / payment dispute evidence | `docs/runbooks/payment-dispute-evidence.md` |
 | Accidental data delete / corruption | `docs/runbooks/pitr-restore.md` |
 | SOS event | `docs/runbooks/sos-incident.md` |
 | pgsodium key compromise | `docs/runbooks/pii-key-rotation.md` |

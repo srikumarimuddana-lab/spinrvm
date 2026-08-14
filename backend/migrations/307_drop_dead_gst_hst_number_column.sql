@@ -1,0 +1,25 @@
+-- 307_drop_dead_gst_hst_number_column.sql
+-- Purpose: remove the unused `gst_hst_number` column from drivers.
+--
+-- Background: three GST-related columns exist on drivers:
+--   gst_bn           — canonical, written by driver app, Stripe KYC sync,
+--                      admin tax-id import, T4A PDF generation
+--   gst_registered   — boolean flag, used alongside gst_bn
+--   gst_hst_number   — dead duplicate of gst_bn, never written by app code.
+--                      The admin API reads gst_bn and aliases it as
+--                      "gst_hst_number" in the JSON response (admin/drivers.py
+--                      line 2868); the DB column itself is not read.
+--
+-- Pre-drop audit (2026-08-14):
+--   - 116 drivers have both columns populated; all 116 values are identical.
+--   - 0 drivers have gst_hst_number set but gst_bn NULL.
+--   - No trigger syncs the two columns.
+--   - No application code writes to gst_hst_number directly.
+--   - Migration 92 comments explicitly note this column was "briefly added"
+--     and conceptually dropped.
+--
+-- ROLLBACK:
+--   ALTER TABLE public.drivers ADD COLUMN IF NOT EXISTS gst_hst_number TEXT;
+--   UPDATE public.drivers SET gst_hst_number = gst_bn WHERE gst_bn IS NOT NULL;
+
+ALTER TABLE public.drivers DROP COLUMN IF EXISTS gst_hst_number;

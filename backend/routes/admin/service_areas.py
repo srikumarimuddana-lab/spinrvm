@@ -291,8 +291,8 @@ class ServiceAreaUpdateRequest(BaseModel):
                 continue
             try:
                 num = int(raw) if spec.kind == "int" else float(raw)
-            except (TypeError, ValueError):
-                raise ValueError(f"{key} must be a number, got {raw!r}")
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{key} must be a number, got {raw!r}") from exc
             if num != num:  # NaN
                 raise ValueError(f"{key} must be a number, got NaN")
             if not (spec.lo <= num <= spec.hi):
@@ -393,7 +393,7 @@ async def admin_get_area_heatmap_config(area_id: str):
         # Surface it: silently reporting defaults as "the global value" would
         # mislead an operator about what drivers are actually being served.
         logger.error("heatmap-config: failed to read app_settings: %s", e, exc_info=True)
-        raise HTTPException(status_code=503, detail="Could not read global settings")
+        raise HTTPException(status_code=503, detail="Could not read global settings") from e
 
     # What each key would resolve to with this area's overrides removed.
     inherited = resolve_heatmap_config(None, app_settings)
@@ -802,7 +802,28 @@ async def admin_update_service_area(
             {"updated_fields": list(update_payload.keys())},
         )
         await _record_manual_surge_history(area_id, update_payload)
+        await _invalidate_surge_status_cache(update_payload)
     return {"message": "Service area updated"}
+
+
+_SURGE_STATE_KEYS = ("surge_multiplier", "surge_source", "surge_active", "surge_enabled")
+
+
+async def _invalidate_surge_status_cache(update_payload: dict) -> None:
+    """Drop the admin surge-status cache when this write changed surge state.
+
+    ``GET /surge/status`` is cached for 30s (it live-recomputes demand and
+    supply per area). Without this, an operator who flips surge and refreshes
+    would see the *old* multiplier and reasonably conclude the change didn't
+    take — on the screen whose entire job is confirming a regulated price.
+    """
+    if not any(k in update_payload for k in _SURGE_STATE_KEYS):
+        return
+    try:
+        from utils.surge_engine import invalidate_surge_status_cache
+    except ImportError:
+        from ...utils.surge_engine import invalidate_surge_status_cache
+    await invalidate_surge_status_cache()
 
 
 async def _record_manual_surge_history(area_id: str, update_payload: dict, source: str | None = None) -> None:
@@ -922,6 +943,7 @@ async def admin_update_surge_pricing(area_id: str, surge: SurgePricingRequest, a
     # and tries to set the same primary key on multiple rows (unique violation
     # -> 500) the moment the surge engine has appended more than one row.
     await _record_manual_surge_history(area_id, area_update, source="manual")
+    await _invalidate_surge_status_cache(area_update)
 
     # PERF-001: Invalidate fare cache
     await invalidate_fare_cache()

@@ -224,6 +224,7 @@ export interface EarningsSummary {
     total_distance_km: number;
     total_duration_minutes: number;
     average_per_ride: string; // MoneyString
+    elapsed_days: number; // Days in this window — fixed for today/week/month, measured from the earliest ride for 'all'. Drives the driver-app's "per day" averages.
 }
 
 export interface DailyEarning {

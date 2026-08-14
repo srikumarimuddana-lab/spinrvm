@@ -67,10 +67,17 @@ config.resolver.blockList = [
 // Falling back to legacy main-field resolution loads Sentry's CJS build
 // (build/cjs/*) instead. Verified via bundle diff that @sentry/core is the ONLY
 // package whose resolution changes, so this is safe. See expo/expo#36589.
+// RE-TEST RECIPE (SDK 57 alignment pass, 2026-08-11): @sentry/react-native now
+// resolves ≥7.11, which may have fixed the frozen-ESM-namespace issue — but the
+// crash was RELEASE-BUILD-ONLY under Hermes, so flipping this flag requires a
+// release-build device test plus the same bundle-diff check, not just tsc/jest.
+// Deliberately left disabled; tracked in ACTION_ITEMS.
 config.resolver.unstable_enablePackageExports = false;
 
-// RN 0.85 moved some NativeComponent specs into src/private/specs_DEPRECATED/
-// using codegen types that Expo's Babel plugin can't parse. These codegen specs
+// RN keeps some NativeComponent specs in src/private/specs_DEPRECATED/ using
+// codegen types that Expo's Babel plugin can't parse (introduced in RN 0.85;
+// still true on SDK 57 / RN 0.86.2 — patches/react-native+0.86.2.patch works
+// around the same codegen breakage at the component layer). These codegen specs
 // return non-renderable objects under the New Architecture (Bridgeless) in
 // Expo Go, causing "Element type is invalid: got object" crashes.
 //

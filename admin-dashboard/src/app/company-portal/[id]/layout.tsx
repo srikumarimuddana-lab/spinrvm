@@ -111,8 +111,8 @@ export default function CompanyPortalLayout({
                         <ArrowLeft className="h-3.5 w-3.5" /> Switch company
                     </Link>
                     <div className="flex items-center gap-2">
-                        <div className="rounded-md bg-emerald-50 p-2">
-                            <Building2 className="h-5 w-5 text-emerald-600" />
+                        <div className="rounded-md bg-emerald-50 dark:bg-emerald-900/20 p-2">
+                            <Building2 className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
                         </div>
                         <div>
                             <div className="font-semibold leading-tight">
@@ -151,7 +151,7 @@ export default function CompanyPortalLayout({
 
             <main className="flex-1">
                 {error && (
-                    <div className="m-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                    <div className="m-4 rounded border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
                         {error}
                     </div>
                 )}

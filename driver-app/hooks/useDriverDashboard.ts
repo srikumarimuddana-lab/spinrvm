@@ -1,12 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Animated } from 'react-native';
+import { Animated , Platform, Vibration, Linking, AppState , Dimensions } from 'react-native';
 import { showAlert } from '../components/AlertDialog';
 import * as Location from 'expo-location';
-import { Platform, Vibration, Linking, AppState } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { showToast } from './useToast';
-
-export type ConnectionState = 'connected' | 'reconnecting' | 'disconnected';
 import { router } from 'expo-router';
 
 import { useAuthStore } from '@shared/store/authStore';
@@ -14,12 +12,16 @@ import { useDriverStore } from '../store/driverStore';
 import { useAlertPrefsStore } from '../store/alertPrefsStore';
 import { useRideOfferSound, setOfferSoundUrl } from './useRideOfferSound';
 import { tKey } from '../i18n';
-import api, { getApiErrorMessage } from '@shared/api/client';
+import api, { getApiErrorMessage, ensureFreshToken } from '@shared/api/client';
 import { useDriverConfig } from '@shared/hooks/queries';
 import { API_URL } from '@shared/config';
+// Keep the default import: many test files jest.mock(
+// '@shared/config/spinr.config', () => ({ default: {...} })) without a
+// matching named 'SpinrConfig' export, so switching to a named import
+// breaks those mocks (confirmed in rider-app's utils/aiChat.ts).
+// eslint-disable-next-line import/no-named-as-default
 import SpinrConfig from '@shared/config/spinr.config';
 import { onForegroundMessage } from '@shared/services/firebase';
-import { Dimensions } from 'react-native';
 import {
   startBackgroundLocation,
   stopBackgroundLocation,
@@ -40,6 +42,8 @@ import {
   type TripLocationBatchRequest,
 } from '../utils/tripLocationRecorder';
 import { captureException } from '@shared/services/errorReporting';
+
+export type ConnectionState = 'connected' | 'reconnecting' | 'disconnected';
 
 const { height } = Dimensions.get('window');
 // Each tier doubles; last-tier jitter must be large enough to disperse a
@@ -141,6 +145,11 @@ let _dismissRideOfferNotification: (() => Promise<void>) | null = null;
 let _displayRideOfferNotification: ((o: any, opts?: { silent?: boolean; muted?: boolean }) => Promise<void>) | null = null;
 if (Platform.OS === 'android' || Platform.OS === 'ios') {
   try {
+    // Guarded native-module require — notifeeService.ts statically imports
+    // notifee at its own module scope, so requiring it eagerly here would
+    // defeat this android/ios + try/catch guard (see _layout.tsx's matching
+    // comment on the same pattern).
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const _notifee = require('../services/notifeeService');
     _dismissRideOfferNotification = _notifee.dismissRideOfferNotification;
     _displayRideOfferNotification = _notifee.displayRideOfferNotification;
@@ -203,7 +212,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     hydrateDriverRideState,
     fetchEarnings,
     applyDriverConfig,
-    earnings,
     acceptRide: storeAcceptRide,
     declineRide: storeDeclineRide,
   } = useDriverStore();
@@ -218,7 +226,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // actually fires.
   const consumePendingAction = useCallback(async () => {
     try {
-      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
       const raw = await AsyncStorage.getItem(PENDING_ACTION_KEY);
       if (!raw) return;
       // Remove first so concurrent runs (mount + resume firing together)
@@ -381,6 +388,16 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       slideUpAnim.setValue(height);
       fadeAnim.setValue(0);
     }
+    // slideUpAnim/fadeAnim intentionally excluded — the same verified-safe
+    // stable useRef(...).current animation-driver idiom used throughout
+    // this app (created once at line 344-346, never reassigned). Listing a
+    // ref-derived value in a dependency array is itself a render-time ref
+    // read under react-hooks/refs (confirmed this round in otp.tsx's
+    // dotAnims — adding it there was tested and traded one violation for
+    // another). Their identity never changes, so excluding them doesn't
+    // change when this ActiveRidePanel show/hide animation fires — the only
+    // real trigger, rideState, is unchanged.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rideState]);
 
   // ─── Refresh user + driver profile on mount and on foreground ────
@@ -424,7 +441,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     setLocationStatus(prev => (prev === 'ok' ? prev : 'pending'));
     if (useCache) {
       try {
-        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
         const saved = await AsyncStorage.getItem('spinr_driver_last_location');
         if (saved) {
           const { lat, lng } = JSON.parse(saved);
@@ -480,7 +496,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       locationRef.current = loc;
       setLocationStatus('ok');
       try {
-        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
         AsyncStorage.setItem('spinr_driver_last_location', JSON.stringify({ lat: loc.coords.latitude, lng: loc.coords.longitude }));
       } catch {}
       return loc;
@@ -513,6 +528,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   }, []);
 
   useEffect(() => {
+    // Mount-only fetch; refreshLocation (useCallback([]), stable) sets state
+    // after its own await, not synchronously at the top of the effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     refreshLocation(true);
     const sub = AppState.addEventListener('change', (next) => {
       // Skip cache on resume — we want a fresh fix, not yesterday's.
@@ -617,7 +635,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       (async () => {
         try { await uploadLocationBatch(); } catch {}
         try {
-          const AsyncStorage = require('@react-native-async-storage/async-storage').default;
           await AsyncStorage.removeItem('spinr_driver_last_location');
         } catch {}
       })();
@@ -971,7 +988,12 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         console.warn('[WS] Unknown message type received:', data.type);
         break;
     }
-  }, [setIncomingRide, resetRideState, offerSound]);
+    // fetchEarnings is a stable driverStore action; foregroundLocationTransport
+    // is useCallback([]) (empty deps, closes over nothing reactive — just
+    // calls api.post) — both genuinely stable, safe to add directly. Also
+    // moot for connectWebSocket's own stability either way: the ref
+    // indirection below already decouples it from handleWSMessage's identity.
+  }, [setIncomingRide, resetRideState, offerSound, fetchEarnings, foregroundLocationTransport]);
 
   // Stable ref to the message handler so connectWebSocket's identity
   // doesn't flip every time the handler closure changes.
@@ -1001,7 +1023,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // with an expired token — the server rejects auth and the socket
     // immediately closes, burning a reconnect cycle.
     try {
-      const { ensureFreshToken } = require('@shared/api/client');
       await ensureFreshToken();
     } catch (err) {
       // Token refresh failed — the stored token may still be valid (short
@@ -1200,7 +1221,19 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         setConnectionState('disconnected');
       }
     };
-  }, []);
+    // fetchActiveRide is a driverStore *action* (defined once inside
+    // create(), never redefined by any subsequent set() call — zustand's
+    // set() shallow-merges, so an action absent from a partial update keeps
+    // its original reference forever), NOT reactive *state* like `user`.
+    // The comment above (userRef/isOnlineRef/handleWSMessageRef) explains
+    // why this callback deliberately avoids closing over reactive STATE
+    // values directly — doing so would recreate this callback on every
+    // store update and tear down the socket. An action's identity never
+    // changes, so it carries none of that risk; verified against zustand's
+    // merge semantics (grepped driverStore.ts for any full-state
+    // reassignment that could redefine fetchActiveRide — none exists, only
+    // shallow set({...partial}) calls throughout).
+  }, [fetchActiveRide]);
 
   useEffect(() => {
     if (!isOnline || !user) {
@@ -1216,6 +1249,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         try { wsRef.current.close(); } catch (e) { console.log('[WS] close error (going offline):', e); }
         wsRef.current = null;
       }
+      // Sync connection-state UI with the driver going offline / signing
+      // out. Doesn't feed back into isOnline/user, so this can't loop.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setConnectionState('disconnected');
       return;
     }
@@ -1491,7 +1527,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // on resume this only fires for a body tap / a still-pending offer.)
   const consumePendingOffer = useCallback(async () => {
     try {
-      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
       const raw = await AsyncStorage.getItem('spinr_pending_ride_offer');
       if (!raw) return;
       await AsyncStorage.removeItem('spinr_pending_ride_offer');
@@ -1522,7 +1557,12 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       if (next === 'active') consumePendingOffer();
     });
     return () => sub.remove();
-  }, [user, consumePendingOffer]);
+    // hydrateDriverRideState/fetchActiveRide are stable driverStore actions
+    // (same verified-stable-action reasoning as connectWebSocket's
+    // fetchActiveRide fix above); adding them doesn't change when this
+    // mount/foreground-resume effect fires — that's still driven entirely
+    // by `user` and the AppState listener, both unchanged.
+  }, [user, consumePendingOffer, hydrateDriverRideState, fetchActiveRide]);
 
   // ─── Hydrate the online flag from the authoritative profile (once) ──
   // isOnline is seeded at mount from driverData, which is frequently null on a
@@ -1546,6 +1586,14 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     if (isTogglingRef.current) return; // a toggle in flight is authoritative — let it settle
     onlineHydratedRef.current = true;
     if (!!serverOnline === isOnline) return;
+    // One-time hydration, guarded by onlineHydratedRef above (set true on
+    // the same pass, before this call) — every subsequent run of this
+    // effect short-circuits on the first line, so this can never re-fire
+    // and cascade even though `isOnline` is itself in the dep array below.
+    // Only sets the driver-toggled isOnline flag, never the system-computed
+    // is_available (CLAUDE.md invariant: is_available ⇒ is_online) — that
+    // stays entirely backend-owned.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsOnline(!!serverOnline);
     if (serverOnline) {
       // Re-arm background tracking for a resumed-online session. Idempotent:
@@ -1559,7 +1607,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     if (isOnline) {
       fetchEarnings('today');
     }
-  }, [isOnline]);
+    // fetchEarnings is a stable driverStore action; adding it doesn't
+    // change when this effect fires.
+  }, [isOnline, fetchEarnings]);
 
   // ─── Foreground FCM Message Handler ──────────────────────────────
   // FCM token registration + permissions live in app/_layout.tsx via
@@ -1673,7 +1723,14 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     return () => {
       if (typeof unsubscribe === 'function') unsubscribe();
     };
-  }, [isOnline, user, setIncomingRide, resetRideState]);
+    // offerSound is now a stable object (useRideOfferSound was fixed to
+    // memoize its returned { play, stop } — see that file's comment) so
+    // it's safe to add here. Before that fix it was a fresh object every
+    // render; naively adding it here would have re-subscribed
+    // onForegroundMessage on every render, risking a missed FCM message in
+    // the brief unsubscribe/resubscribe gap on this ride-offer delivery
+    // path — fixed at the root instead of masked with a suppression.
+  }, [isOnline, user, setIncomingRide, resetRideState, offerSound]);
 
   return {
     // State

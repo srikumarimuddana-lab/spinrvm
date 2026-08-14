@@ -75,7 +75,29 @@ export default function LegalScreen() {
     const [tosText, setTosText] = useState('');
     const [loading, setLoading] = useState(true);
 
+    // Declared before the `useEffect` below (react-hooks/immutability /
+    // React Compiler flags referencing a function before its source-order
+    // declaration) — same expression, same effect timing, no behavior change.
+    const fetchLegalContent = async () => {
+        try {
+            // Public endpoint — no auth, no /api/v1 prefix (mounted at root).
+            const response = await fetch(`${SpinrConfig.backendUrl}/settings/legal`);
+            const data = await response.json();
+            setPrivacyText(data.privacy_policy_text || STATIC_PRIVACY_POLICY);
+            setTosText(data.terms_of_service_text || STATIC_TERMS_OF_SERVICE);
+        } catch {
+            setPrivacyText(STATIC_PRIVACY_POLICY);
+            setTosText(STATIC_TERMS_OF_SERVICE);
+        } finally {
+            setLoading(false);
+        }
+    };
+
     useEffect(() => {
+        // Mount-only fetch; fetchLegalContent sets state after its own await
+        // (or in its catch fallback), not synchronously at the top of the
+        // effect. Empty deps, runs once.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         fetchLegalContent();
     }, []);
 
@@ -91,21 +113,6 @@ export default function LegalScreen() {
             return () => clearTimeout(delay);
         }
     }, [loading, type]);
-
-    const fetchLegalContent = async () => {
-        try {
-            // Public endpoint — no auth, no /api/v1 prefix (mounted at root).
-            const response = await fetch(`${SpinrConfig.backendUrl}/settings/legal`);
-            const data = await response.json();
-            setPrivacyText(data.privacy_policy_text || STATIC_PRIVACY_POLICY);
-            setTosText(data.terms_of_service_text || STATIC_TERMS_OF_SERVICE);
-        } catch (e) {
-            setPrivacyText(STATIC_PRIVACY_POLICY);
-            setTosText(STATIC_TERMS_OF_SERVICE);
-        } finally {
-            setLoading(false);
-        }
-    };
 
     return (
         <View style={styles.safeArea}>

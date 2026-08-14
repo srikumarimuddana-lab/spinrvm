@@ -74,6 +74,9 @@ export default function RiderReferralScreen() {
         }
     }, []);
 
+    // load is a useCallback with a stable ([]) dep array, so this fires
+    // once on mount; the state it sets isn't in this effect's deps.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { load(); }, [load]);
 
     const copyCode = async () => {
@@ -110,7 +113,7 @@ export default function RiderReferralScreen() {
             ) : error ? (
                 <View style={styles.errorState}>
                     <Ionicons name="cloud-offline-outline" size={48} color={colors.textDim} />
-                    <Text style={styles.errorTitle}>Couldn't load your referrals</Text>
+                    <Text style={styles.errorTitle}>Couldn&apos;t load your referrals</Text>
                     <Text style={styles.errorSub}>Something went wrong reaching our servers. Please try again.</Text>
                     <TouchableOpacity style={styles.retryBtn} onPress={load} accessibilityLabel="Retry loading referrals">
                         <Ionicons name="refresh" size={18} color="#fff" />

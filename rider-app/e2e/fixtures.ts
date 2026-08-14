@@ -126,7 +126,7 @@ export async function mockBackend(
   page: Page,
   opts: {
     activeRide?: typeof MOCK_RIDE | null;
-    rideStatusSequence?: Array<typeof MOCK_RIDE>;
+    rideStatusSequence?: typeof MOCK_RIDE[];
     /**
      * P0-5: per-spec override for POST /rides/{id}/process-payment.
      * The default is `success`. Specs that exercise the decline or 3DS

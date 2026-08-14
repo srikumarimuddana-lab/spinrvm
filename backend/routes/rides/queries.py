@@ -38,8 +38,8 @@ from ._shared import (  # noqa: F401
 router = APIRouter()
 
 
-@ride_read_limit
 @router.get("/active")
+@ride_read_limit
 async def get_active_ride(request: Request = None, current_user: dict = Depends(get_current_user)):
     """Get rider's current active/pending ride (if any). Used on app launch to resume."""
     # First check for rides that need payment (completed but not paid)
@@ -146,8 +146,8 @@ async def _fetch_ride_history_page(
     return await _deps.db_supabase.run_sync(_fn)
 
 
-@ride_read_limit
 @router.get("/history")
+@ride_read_limit
 async def get_ride_history(
     request: Request = None,
     limit: int = Query(default=20, ge=1, le=100),
@@ -271,8 +271,8 @@ async def get_rider_stats(
     }
 
 
-@ride_read_limit
 @router.get("/scheduled")
+@ride_read_limit
 async def get_scheduled_rides(request: Request = None, current_user: dict = Depends(get_current_user)):
     """Get all upcoming scheduled rides for the current rider."""
     rides = await _deps.db_supabase.get_rows(
@@ -289,8 +289,8 @@ async def get_scheduled_rides(request: Request = None, current_user: dict = Depe
     return rides
 
 
-@ride_read_limit
 @router.get("/{ride_id}")
+@ride_read_limit
 async def get_ride(
     ride_id: str,
     request: Request = None,

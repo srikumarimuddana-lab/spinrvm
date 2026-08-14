@@ -39,6 +39,7 @@ try:
     from .services.fare_service import DEFAULT_FARE, calculate_fare
     from .services.fare_service import _d as _fare_d
     from .services.fare_service import _f as _fare_f
+    from .utils.audit_logger import log_admin_action
     from .utils.pii import geohash as _geohash
     from .utils.surge_engine import SURGE_CAP
 except ImportError:
@@ -49,6 +50,7 @@ except ImportError:
     from services.fare_service import DEFAULT_FARE, calculate_fare
     from services.fare_service import _d as _fare_d
     from services.fare_service import _f as _fare_f
+    from utils.audit_logger import log_admin_action
     from utils.pii import geohash as _geohash
     from utils.surge_engine import SURGE_CAP
 
@@ -657,6 +659,7 @@ class UpdateTaxConfigRequest(BaseModel):
     pst_rate: Optional[float] = None
     hst_enabled: Optional[bool] = None
     hst_rate: Optional[float] = None
+    tax_justification: Optional[str] = None
 
 
 @pricing_router.get("/areas/{area_id}/fees")
@@ -720,8 +723,15 @@ async def delete_area_fee(area_id: str, fee_id: str):
 
 
 @pricing_router.put("/areas/{area_id}/tax")
-async def update_area_tax(area_id: str, req: UpdateTaxConfigRequest):
-    """Update tax configuration for a service area."""
+async def update_area_tax(area_id: str, req: UpdateTaxConfigRequest, admin: dict = Depends(get_admin_user)):
+    """Update tax configuration for a service area.
+
+    A29 (ACTION_ITEMS.md): not currently reachable from any frontend (no
+    caller for this `/api/v1/areas/{id}/tax` path today — the admin-
+    dashboard's own tax editor goes through `PUT /api/admin/service-areas/
+    {area_id}`, see the justification requirement there) but hardened here
+    too for consistency and in case this endpoint gets wired up later.
+    """
     update_data: Dict[str, Any] = {}
     for field in ["gst_enabled", "gst_rate", "pst_enabled", "pst_rate", "hst_enabled", "hst_rate"]:
         val = getattr(req, field)
@@ -729,7 +739,21 @@ async def update_area_tax(area_id: str, req: UpdateTaxConfigRequest):
             update_data[field] = val
 
     if update_data:
+        justification = (req.tax_justification or "").strip()
+        if not justification:
+            raise HTTPException(
+                status_code=400,
+                detail="Changing GST/PST/HST configuration requires a written justification "
+                "(regulatory + financial risk).",
+            )
         await db_supabase.update_one("service_areas", {"id": area_id}, update_data)
+        await log_admin_action(
+            admin,
+            "tax_config_updated",
+            "service_areas",
+            area_id,
+            {"updated_fields": list(update_data.keys()), "justification": justification},
+        )
 
     area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
     if not area:
@@ -920,11 +944,14 @@ async def calculate_all_fees(
     result["fees_total"] = float(_q2(fees_total))
 
     # Calculate taxes — Decimal end-to-end so the receipt line items
-    # reconcile to the cent. Saskatchewan rideshare is GST 5% only — PST does
-    # NOT apply to rideshare here, so pst_enabled defaults off. PST/HST remain
-    # per-area configurable from the admin panel for future markets/cohorts:
-    # GST + optional PST, or a combined HST rate. Each tax is quantized
-    # independently before summing so the breakdown matches the displayed total.
+    # reconcile to the cent. PST DOES apply to Saskatchewan rideshare (6%,
+    # confirmed 2026-08-11 — see docs/change-log/2026-08-11-sk-pst-enable.md;
+    # this comment previously claimed the opposite, which left
+    # Saskatoon/Regina under-collecting PST on every live fare until fixed).
+    # GST + optional PST, or a combined HST rate — per-area configurable from
+    # the admin panel for markets/cohorts with different tax rules. Each tax
+    # is quantized independently before summing so the breakdown matches the
+    # displayed total.
     taxable_amount = subtotal_d + fees_total
     tax_breakdown: Dict[str, Dict[str, float]] = {}
     tax_total = Decimal("0")
@@ -1518,6 +1545,37 @@ async def _deliver_push_now(
         return False
 
 
+# data["type"] values that are, in the rider-app copy's own words (see
+# rider-app/app/_layout.tsx's "ride-updates" Android channel, "Status updates
+# for your current ride"), exactly what the notification_preferences.
+# ride_updates toggle describes: a live status change on the user's own
+# in-progress ride. Gated here (single choke point) rather than at each of
+# the ~15 call sites so the preference check can't drift from the send call,
+# and so wiring it touches one file instead of the many ride-lifecycle route
+# modules other in-flight work (ACTION_ITEMS.md N10) is already editing.
+#
+# Deliberately narrow — see ACTION_ITEMS.md N9 for the full per-type
+# reasoning. Excluded on purpose:
+#   - anything already priority="dispatch"/"safety"/"account": the
+#     time_critical check below always runs first, so those never reach this
+#     gate regardless of type overlap (ride_cancelled is sent both ways).
+#   - ride_offer_expired / auto_offline / quota_exhausted: dispatch-process
+#     bookkeeping for the DRIVER's own availability, not "my ride's status".
+#   - scheduled_ride_* (reminder/nudge/delayed/dispatched): a distinct
+#     "upcoming booking reminder" UX, not a live ride's status; left for a
+#     follow-up pass rather than guessing at scope here.
+_RIDE_UPDATE_PUSH_TYPES = frozenset(
+    {
+        "driver_accepted",
+        "driver_arrived",
+        "ride_started",
+        "ride_completed",
+        "ride_cancelled",
+        "ride_noshow",
+    }
+)
+
+
 _TRANSIENT_NOTIFICATION_TYPES = frozenset(
     {
         # Per-candidate dispatch offer: fires once per driver considered for a
@@ -1612,6 +1670,11 @@ async def send_push_notification(
     The push_retry_queue.priority CHECK constraint must list every tier used
     here — see migration 272, which added ``account``.
 
+    Non-time-critical pushes are additionally subject to global quiet-hours +
+    daily-cap throttling (utils/notification_throttle.py) when
+    notification_throttling_enabled is on (defaults False — migration 304).
+    dispatch/safety/account bypass this exactly like they bypass the opt-out.
+
     Every call also writes an in-app notification-inbox row (best-effort,
     non-blocking) regardless of whether device delivery succeeds — the
     underlying event (ride completed, wallet credited, ...) already happened,
@@ -1644,6 +1707,49 @@ async def send_push_notification(
                     f"(priority={priority}); inbox row still recorded"
                 )
                 return False
+            # Finer-grained opt-out layered on top of push_enabled: a rider/
+            # driver who leaves push on in general may still turn off the
+            # "Ride Updates" toggle specifically (notification_preferences.
+            # ride_updates, default True). Only applies to the narrow
+            # _RIDE_UPDATE_PUSH_TYPES set — see that constant's comment.
+            notif_type = (data or {}).get("type")
+            if notif_type in _RIDE_UPDATE_PUSH_TYPES and pref_rows and pref_rows[0].get("ride_updates") is False:
+                logger.info(
+                    f"push: suppressed by ride_updates=false for user {user_id} "
+                    f"(type={notif_type}); inbox row still recorded"
+                )
+                return False
+
+            # Global quiet-hours + daily-cap throttling (utils/notification_throttle.py),
+            # gated behind notification_throttling_enabled (defaults False — ships
+            # dark, migration 304). Deliberately last in this block: push_enabled
+            # and ride_updates are per-user opt-outs the user chose; this is an
+            # operational delivery-shaping control layered on top, so it should
+            # never suppress something the two opt-out checks above didn't. Fail
+            # -open behavior for Redis/config errors lives inside should_throttle
+            # itself, not here — this call sites relies on that contract.
+            try:
+                from .settings_loader import get_app_settings
+            except ImportError:
+                from settings_loader import get_app_settings  # type: ignore
+            settings = await get_app_settings()
+            if settings.get("notification_throttling_enabled"):
+                try:
+                    from .utils.notification_throttle import should_throttle
+                except ImportError:
+                    from utils.notification_throttle import should_throttle  # type: ignore
+                throttled = await should_throttle(
+                    user_id,
+                    settings.get("notification_quiet_hours_start") or "22:00",
+                    settings.get("notification_quiet_hours_end") or "07:00",
+                    int(settings.get("notification_daily_cap") or 0),
+                )
+                if throttled:
+                    logger.info(
+                        f"push: suppressed by notification_throttling for user {user_id} "
+                        f"(priority={priority}); inbox row still recorded"
+                    )
+                    return False
         except Exception:
             logger.opt(exception=True).error(
                 f"push: preference lookup failed for user {user_id} — sending anyway (deliberate fail-open)"

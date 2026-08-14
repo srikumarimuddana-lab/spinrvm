@@ -168,6 +168,37 @@ def _record_db_queue_depth() -> None:
         _metric_gauge("spinr_db_thread_pool_queue_depth", queue.qsize())
 
 
+def get_db_pool_stats() -> dict:
+    """Live DB thread-pool + circuit-breaker state, sampled on demand.
+
+    Exists because the pool gauges are only written from inside ``run_sync``:
+    ``spinr_db_thread_pool_threads`` / ``_max_workers`` are set on the SUCCESS
+    path only (see the ``else`` branch below), so during an outage — exactly
+    when someone is reading them — they hold whatever the last successful call
+    left behind. Worse, if traffic stops entirely the queue-depth gauge freezes
+    too, so a saturated-then-idle pool and a healthy pool look identical.
+
+    Sampling the executor directly makes the reading independent of whether any
+    query has run recently. The capacity watchdog polls this; it also refreshes
+    the queue-depth gauge as a side effect so a /metrics scrape between two
+    queries reports a current value rather than a stale one.
+
+    Read-only: no DB call, no Redis call, no lock — safe to call from a loop on
+    every replica.
+    """
+    queue = getattr(_DB_EXECUTOR, "_work_queue", None)
+    queue_depth = queue.qsize() if queue is not None else 0
+
+    _metric_gauge("spinr_db_thread_pool_queue_depth", queue_depth)
+
+    return {
+        "queue_depth": queue_depth,
+        "threads": len(getattr(_DB_EXECUTOR, "_threads", ()) or ()),
+        "max_workers": getattr(_DB_EXECUTOR, "_max_workers", _DB_THREAD_POOL_SIZE),
+        "breaker_state": getattr(_breaker, "_state", "unknown"),
+    }
+
+
 # ── Error redaction ─────────────────────────────────────────────────
 # Postgres puts real column values in its error text, and this module is the
 # funnel every table's errors pass through. Redact before the string reaches a
@@ -581,6 +612,14 @@ def _postgrest_or_value(value: Any) -> str:
     return s
 
 
+# Operators `_apply_filters` knows how to compile. `$options` is a modifier on
+# `$regex`, not an operator of its own. Anything outside this set raises rather
+# than being silently ignored — see the comment in _apply_filters.
+_SUPPORTED_FILTER_OPS = frozenset(
+    {"$in", "$nin", "$gt", "$gte", "$lt", "$lte", "$ne", "$eq", "$notnull", "$regex", "$options"}
+)
+
+
 def _build_or_clause_term(col: str, val: Any) -> Optional[str]:
     """Convert one {col: predicate} pair into a PostgREST or_() leaf term.
 
@@ -593,6 +632,19 @@ def _build_or_clause_term(col: str, val: Any) -> Optional[str]:
     surface loudly rather than change what the query matches.
     """
     if isinstance(val, dict):
+        # Each branch below returns ONE leaf, so a multi-operator predicate
+        # (e.g. a two-sided range) would emit only its first operator and
+        # silently widen the OR — the same class of bug `_apply_filters` had.
+        # PostgREST can nest `and(...)` inside `or(...)`, but that spelling is
+        # unverified here, so this raises rather than guessing: loud beats a
+        # query that quietly matches more rows.
+        _ops = set(val) - {"$options"}
+        if len(_ops) > 1:
+            raise ValueError(
+                f"$or term {col!r}: multiple operators {sorted(_ops)} in one predicate are not supported "
+                "as a single or() leaf — split them into separate $and/$or terms rather than letting "
+                "one be dropped (a dropped leaf WIDENS the match)."
+            )
         if "$regex" in val:
             op = "ilike" if val.get("$options") == "i" else "like"
             # Escape LIKE wildcards before PostgREST-escaping, mirroring the
@@ -666,20 +718,61 @@ def _apply_filters(q, filters: Optional[Dict[str, Any]]):
                 q = _apply_filters(q, sub)
             continue
         if isinstance(v, dict):
-            if "$in" in v and isinstance(v["$in"], (list, tuple)):
-                clean = [_unwrap_enum(x) for x in v["$in"]]
-                q = q.in_(k, clean)
-            elif "$gt" in v:
+            # EVERY operator in the dict is applied, not just the first match.
+            # This was an if/elif chain, so a two-sided range —
+            # {"$gte": start, "$lt": end}, the ordinary way to express "inside
+            # this period" — silently compiled to the lower bound ALONE. The
+            # query then returned everything from `start` onward, and because
+            # nothing signalled the drop it read as correct data.
+            #
+            # That produced real money errors: every weekly/monthly driver
+            # statement summed payouts from its period start to the present
+            # (so all periods reported the same total), and the T4A year
+            # windows pulled later years into an earlier slip, over-reporting
+            # income to the CRA. Some callers had already worked around it by
+            # hand with $and of single-operator dicts
+            # (routes/admin/analytics.py) — that workaround is now unnecessary
+            # but stays correct.
+            #
+            # A predicate this compiler does not recognise still raises rather
+            # than being ignored, for the same reason the $or builder raises:
+            # a dropped predicate WIDENS the result set, and _apply_filters is
+            # shared with update/delete.
+            unknown = set(v) - _SUPPORTED_FILTER_OPS
+            if unknown:
+                raise ValueError(
+                    f"filter {k!r}: unsupported operator(s) {sorted(unknown)} in {v!r}. "
+                    "Add it to _apply_filters rather than letting it be dropped — "
+                    "a silently ignored predicate matches MORE rows, not fewer."
+                )
+            if "$in" in v:
+                if not isinstance(v["$in"], (list, tuple)):
+                    raise ValueError(f"filter {k!r}: $in expects a list/tuple, got {v['$in']!r}")
+                q = q.in_(k, [_unwrap_enum(x) for x in v["$in"]])
+            if "$eq" in v:
+                # Explicit equality, distinct from the bare `{col: value}` form
+                # below: a bare `None` value compiles to `IS NULL` (needed for
+                # nullable columns), but some columns are NOT NULL with a
+                # non-null default (e.g. `legacy_import_metadata JSONB NOT
+                # NULL DEFAULT '{}'::jsonb`) where "no data" is represented by
+                # that default value, not SQL NULL — `{col: None}` against
+                # such a column is unsatisfiable and silently matches zero
+                # rows instead of raising (found live via A26,
+                # docs/audit/2026-08-11-driver-rider-migration-audit.md).
+                # `{col: {"$eq": <value>}}` lets a caller filter on the exact
+                # value (including a dict/list, e.g. `{}`) without that trap.
+                q = q.eq(k, _unwrap_enum(v["$eq"]))
+            if "$gt" in v:
                 q = q.gt(k, _unwrap_enum(v["$gt"]))
-            elif "$gte" in v:
+            if "$gte" in v:
                 q = q.gte(k, _unwrap_enum(v["$gte"]))
-            elif "$lt" in v:
+            if "$lt" in v:
                 q = q.lt(k, _unwrap_enum(v["$lt"]))
-            elif "$lte" in v:
+            if "$lte" in v:
                 q = q.lte(k, _unwrap_enum(v["$lte"]))
-            elif "$ne" in v:
+            if "$ne" in v:
                 q = q.neq(k, _unwrap_enum(v["$ne"]))
-            elif "$notnull" in v:
+            if "$notnull" in v:
                 # SQL `<> NULL` never matches; PostgREST needs `not.is.null`.
                 # Lets callers filter server-side instead of scanning every row
                 # and dropping the nulls in Python (e.g. users with a
@@ -688,9 +781,11 @@ def _apply_filters(q, filters: Optional[Dict[str, Any]]):
                     q = q.not_.is_(k, "null")
                 else:
                     q = q.is_(k, "null")
-            elif "$nin" in v and isinstance(v["$nin"], (list, tuple)):
+            if "$nin" in v:
+                if not isinstance(v["$nin"], (list, tuple)):
+                    raise ValueError(f"filter {k!r}: $nin expects a list/tuple, got {v['$nin']!r}")
                 q = q.not_.in_(k, [_unwrap_enum(x) for x in v["$nin"]])
-            elif "$regex" in v:
+            if "$regex" in v:
                 # Escape LIKE wildcards in user input so `%`/`_` can't over-match
                 # or be used as a cheap scan vector (C6).
                 pattern = f"%{_escape_like(v['$regex'])}%"
@@ -708,6 +803,33 @@ def _apply_filters(q, filters: Optional[Dict[str, Any]]):
 
 
 # ── Generic CRUD ────────────────────────────────────────────────────
+
+
+def _write_skipped(op: str, table: str) -> None:
+    """Log a write that never reached a database because the client is absent.
+
+    Every write helper below returns a benign empty value when ``supabase`` is
+    falsy — ``None`` or ``[]`` — WITHOUT raising. That is what makes this class
+    of failure invisible: the caller sees a normal return, there is no
+    exception to catch, and code that treats "no exception" as "written"
+    reports success for a write that never happened. services/ledger_service.py
+    hit exactly this and had to add its own guard before it could tell a
+    written tax-ledger row from an unwritten one.
+
+    ERROR, not warning: CLAUDE.md is explicit that a DB error must never be
+    logged at warning and continued past. This IS a DB error — the write is
+    lost — it simply arrives without an exception attached.
+
+    Why these still do not RAISE (the question `update_one` deferred):
+    core/lifespan.py raises on a falsy client when ENV == production, so
+    Uvicorn never serves traffic in that state and production cannot reach
+    here. Below production it deliberately warns and boots so local work
+    without Supabase is possible — and raising from every write helper would
+    destroy exactly that affordance. Loud and honest beats fatal here; a money
+    path that needs more than a log should check the client itself, as
+    ledger_service now does.
+    """
+    logger.error(f"{op}({table}): supabase client is not configured — WRITE SKIPPED, no data was persisted")
 
 
 async def get_rows(
@@ -766,6 +888,7 @@ async def find_one(table: str, filters: Optional[Dict[str, Any]] = None) -> Opti
 
 async def insert_one(table: str, doc: Dict[str, Any]):
     if not supabase:
+        _write_skipped("insert_one", table)
         return None
     if not isinstance(doc, dict):
         raise TypeError(f"insert_one({table!r}) doc must be a dict, got {type(doc).__name__}: {doc!r}")
@@ -785,7 +908,12 @@ async def insert_one(table: str, doc: Dict[str, Any]):
 
 async def insert_many(table: str, docs: List[Dict[str, Any]]):
     """Bulk insert using Supabase's native batch insert (single round-trip)."""
-    if not supabase or not docs:
+    if not supabase:
+        # Note the split from `not docs`: an empty batch is a legitimate no-op,
+        # an absent client is a lost write. They used to share one branch.
+        _write_skipped("insert_many", table)
+        return []
+    if not docs:
         return []
     _bad = next((d for d in docs if not isinstance(d, dict)), None)
     if _bad is not None:
@@ -805,6 +933,7 @@ async def insert_many_ignore_conflicts(
     if any(not isinstance(doc, dict) for doc in docs):
         raise TypeError(f"insert_many_ignore_conflicts({table!r}) requires dict rows")
     if not supabase:
+        _write_skipped("insert_many_ignore_conflicts", table)
         return []
 
     rows = [_serialize_for_api(doc) for doc in docs]
@@ -841,14 +970,13 @@ def _log_safe_write(table: str, filters: Dict[str, Any], payload: Dict[str, Any]
 
 async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any], upsert: bool = False):
     if not supabase:
-        # NOTE: warn-and-return-None is a swallowed DB error that CLAUDE.md
-        # forbids, and it made every caller's write silently no-op. Promoting it
-        # to a raise is deliberately NOT done here: insert_many,
-        # insert_many_ignore_conflicts, delete_many, and
-        # driver_repo.claim_driver_atomic all swallow identically, and fixing one
-        # in isolation creates a worse inconsistency. Tracked as its own change
-        # so all five move together.
-        logger.warning(f"update_one({table}): supabase client is not configured — write skipped")
+        # This was the warn-and-continue that CLAUDE.md forbids, left in place
+        # because insert_many, insert_many_ignore_conflicts, delete_many and
+        # driver_repo.claim_driver_atomic all swallowed identically and fixing
+        # one in isolation would have been a worse inconsistency. That
+        # coordinated change is now done — every write helper routes through
+        # _write_skipped, which explains why they log rather than raise.
+        _write_skipped("update_one", table)
         return None
 
     await _pre_invalidate_for_table(table, filters)
@@ -914,6 +1042,7 @@ async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any]
 
 async def delete_many(table: str, filters: Dict[str, Any]):
     if not supabase:
+        _write_skipped("delete_many", table)
         return None
 
     await _pre_invalidate_for_table(table, filters)
@@ -947,6 +1076,13 @@ async def delete_one(table: str, filters: Dict[str, Any]):
 
 async def rpc(func_name: str, params: Dict[str, Any]):
     if not supabase:
+        # Named as a write even though an RPC can be read-only: the money-moving
+        # Postgres functions (wallet_pay_for_ride, corporate_wallet_apply_delta,
+        # settle_ride_card_payment) all come through an rpc call, so a silent
+        # None here is a silently-unapplied wallet delta. A caller that must
+        # distinguish "not called" from "returned NULL" checks the client
+        # itself — repositories/ledger_repo.py raises SettleRpcUnavailable.
+        _write_skipped("rpc", func_name)
         return None
 
     def _fn():

@@ -16,7 +16,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 let useRideStore: typeof import('../store/rideStore').useRideStore;
-let logoutCallbacks: Array<() => void> = [];
+let logoutCallbacks: (() => void)[] = [];
 
 jest.mock('@react-native-async-storage/async-storage', () => {
   const store: Record<string, string> = {};

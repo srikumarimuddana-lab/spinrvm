@@ -29,7 +29,7 @@ pins this actual (silent) behavior; it does not add the missing log line.
 from __future__ import annotations
 
 import asyncio
-import importlib
+import importlib.util
 import sys
 import types
 from contextlib import contextmanager
@@ -181,21 +181,48 @@ class TestLoopMonitorImportFallback:
 
     @contextmanager
     def _reloaded_with(self, backend_lm, utils_lm):
-        """Reload data_export_purge with sys.modules['backend.utils.loop_monitor']
-        and sys.modules['utils.loop_monitor'] forced to the given values
-        (None to force ImportError, a fake module to force success), yield
-        the reloaded module for the caller to assert against, then restore
-        the real cache entries and reload again on exit so later tests see
-        the real module state regardless of whether the assertions passed."""
-        import backend.utils.data_export_purge as mod
+        """Execute a throwaway copy of data_export_purge.py's module code,
+        with sys.modules['backend.utils.loop_monitor'] and
+        ['utils.loop_monitor'] forced to the given values (None to force
+        ImportError, a fake module to force success), and yield the fresh
+        module for the caller to assert against.
+
+        Deliberately does NOT importlib.reload() the real
+        backend.utils.data_export_purge / utils.data_export_purge module.
+        Per conftest.py's _BareModuleAliasFinder, those two names are the
+        SAME singleton object every other test file in this suite imports
+        and calls mod._tick()/mod.data_export_purge_loop() against —
+        reloading it in place used to work only because pytest happens to
+        collect this file after test_data_export_purge.py alphabetically;
+        any test-order change (a developer's global pytest-randomly config,
+        a future xdist/ordering change) could let this reload's forced
+        ImportError/fake-module state leak into an unrelated test's view of
+        the shared module mid-suite. Executing a fresh, unregistered module
+        object (never written to sys.modules) sidesteps the shared state
+        entirely — this test only needs to observe which _record_heartbeat
+        gets bound under each import-fallback branch, not to mutate the
+        module every other test relies on.
+
+        The probe is named identically to the real module (rather than a
+        synthetic name) purely so its `from .loop_monitor import ...`
+        relative import resolves to "backend.utils.loop_monitor" exactly as
+        it would for the genuine module — that's what makes forcing
+        sys.modules['backend.utils.loop_monitor'] actually take effect.
+        Never being registered in sys.modules is what keeps it isolated."""
+        import backend.utils.data_export_purge as real_mod
+
+        spec = importlib.util.spec_from_file_location(
+            "backend.utils.data_export_purge", real_mod.__file__
+        )
+        probe = importlib.util.module_from_spec(spec)
 
         orig_backend_lm = sys.modules.get("backend.utils.loop_monitor")
         orig_utils_lm = sys.modules.get("utils.loop_monitor")
         sys.modules["backend.utils.loop_monitor"] = backend_lm
         sys.modules["utils.loop_monitor"] = utils_lm
         try:
-            importlib.reload(mod)
-            yield mod
+            spec.loader.exec_module(probe)
+            yield probe
         finally:
             if orig_backend_lm is not None:
                 sys.modules["backend.utils.loop_monitor"] = orig_backend_lm
@@ -205,7 +232,6 @@ class TestLoopMonitorImportFallback:
                 sys.modules["utils.loop_monitor"] = orig_utils_lm
             else:
                 sys.modules.pop("utils.loop_monitor", None)
-            importlib.reload(mod)
 
     def test_absolute_fallback_used_when_relative_import_fails(self):
         """Line 37: relative import fails, absolute `utils.loop_monitor`

@@ -12,6 +12,9 @@
  * in-memory state (cancel, status advance, ride cleared).
  */
 
+import { useDriverStore } from '../driverStore';
+import api from '@shared/api/client';
+
 jest.mock('@shared/config/spinr.config', () => ({
   __esModule: true,
   default: { rideOffer: { countdownSeconds: 15 } },
@@ -46,9 +49,6 @@ jest.mock('../../utils/tripLocationRecorder', () => ({
 jest.mock('../../utils/tripLocationTransport', () => ({
   apiLocationBatchTransport: jest.fn(),
 }));
-
-import { useDriverStore } from '../driverStore';
-import api from '@shared/api/client';
 
 const mockApi = api as jest.Mocked<typeof api>;
 

@@ -1,32 +1,15 @@
 import '../utils/backgroundLocation';
 import { registerDriverSessionTeardown } from '../utils/sessionTeardown';
-
-// Arm the sign-out location teardown at module scope, before any screen mounts:
-// the API client's 401 interceptor can trigger a logout before the dashboard
-// ever renders, and a hook-based registration would miss it.
-registerDriverSessionTeardown();
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { View, Text, Platform, LogBox, AppState } from 'react-native';
-
-// LogBox's notification container uses a codegen native component that's
-// broken under Bridgeless mode (RN 0.85.2). Disable it in dev to prevent
-// the "_LogBoxNotificationContainer" crash. Errors still appear in Metro.
-if (__DEV__) {
-  LogBox.ignoreAllLogs(true);
-}
+import { Platform, LogBox, AppState } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Toast from 'react-native-toast-message';
 import { AlertDialog } from '../components/AlertDialog';
 import { toastConfig } from '../components/toastConfig';
-
-// Minimum time the branded splash (logo + tagline) stays on screen, even when
-// auth/location init finishes sooner — otherwise the tagline animation (which
-// only starts ~400ms in) is cut off and the driver barely sees the branding.
-const SPLASH_MIN_DISPLAY_MS = 3000;
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { initMetaSdk } from '@shared/analytics/meta';
 import { useAuthStore } from '@shared/store/authStore';
@@ -42,21 +25,6 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { queryClient, asyncStoragePersister, QUERY_CACHE_BUSTER } from '@shared/api/queryClient';
 import { captureMessage, setUser, initErrorReporting, wrapApp } from '@shared/services/errorReporting';
-
-// EAS Observe (SDK 55 API: AppMetricsRoot / AppMetrics). Native module —
-// present only in binaries built with it, so the guarded require keeps older
-// installed builds and Expo Go booting with metrics simply off.
-let ObserveMetricsRoot: any = null;
-let ObserveMetrics: any = null;
-try {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const _observe = require('expo-observe');
-  ObserveMetricsRoot = _observe.AppMetricsRoot ?? null;
-  ObserveMetrics = _observe.AppMetrics ?? null;
-} catch {
-  ObserveMetricsRoot = null;
-  ObserveMetrics = null;
-}
 import {
   initFirebaseServices,
   requestNotificationPermission,
@@ -64,8 +32,45 @@ import {
   onTokenRefresh,
   getAppCheckToken,
 } from '@shared/services/firebase';
-import { setAppCheckTokenProvider, setAppIdentity, onForceUpgrade } from '@shared/api/client';
+import { setAppCheckTokenProvider, setAppIdentity, onForceUpgrade, ensureFreshToken } from '@shared/api/client';
 import { ForceUpdateOverlay } from '@shared/components/ForceUpdateOverlay';
+
+// Arm the sign-out location teardown at module scope, before any screen mounts:
+// the API client's 401 interceptor can trigger a logout before the dashboard
+// ever renders, and a hook-based registration would miss it.
+registerDriverSessionTeardown();
+
+// LogBox's notification container uses a codegen native component that's
+// broken under Bridgeless mode (RN 0.85.2). Disable it in dev to prevent
+// the "_LogBoxNotificationContainer" crash. Errors still appear in Metro.
+if (__DEV__) {
+  LogBox.ignoreAllLogs(true);
+}
+
+// Minimum time the branded splash (logo + tagline) stays on screen, even when
+// auth/location init finishes sooner — otherwise the tagline animation (which
+// only starts ~400ms in) is cut off and the driver barely sees the branding.
+const SPLASH_MIN_DISPLAY_MS = 3000;
+
+// EAS Observe. Native module — present only in binaries built with it, so the
+// guarded require keeps older installed builds and Expo Go booting with
+// metrics simply off. API note: expo-observe ~57 renamed the root wrapper to
+// ObserveRoot (same .wrap() surface, now wrapping expo-app-metrics'
+// AppMetricsRoot); the SDK 55-era AppMetricsRoot export no longer exists on
+// the package, which made this lookup silently resolve null — metrics were
+// off in every SDK 57 build until the ObserveRoot fallback below (2026-08-11).
+// AppMetrics itself is still re-exported unchanged.
+let ObserveMetricsRoot: any = null;
+let ObserveMetrics: any = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const _observe = require('expo-observe');
+  ObserveMetricsRoot = _observe.ObserveRoot ?? _observe.AppMetricsRoot ?? null;
+  ObserveMetrics = _observe.AppMetrics ?? null;
+} catch {
+  ObserveMetricsRoot = null;
+  ObserveMetrics = null;
+}
 
 // Register App Check token retrieval at module load so early startup requests
 // (driver active-ride hydration and login OTP) wait for Firebase App Check
@@ -91,12 +96,19 @@ let dismissRideOfferNotification: any = null;
 let ensureNotifeeReady: any = null;
 if (Platform.OS === 'android' || Platform.OS === 'ios') {
   try {
+    // Guarded native-module requires — must stay runtime require(), not a
+    // static import: notifeeService.ts itself statically imports notifee at
+    // its own module scope, so requiring it eagerly here would defeat the
+    // whole guard (import both unconditionally instead of only on
+    // android/ios with a working native module).
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     notifee = require('@notifee/react-native').default;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const svc = require('../services/notifeeService');
     parseRideOfferEvent = svc.parseRideOfferEvent;
     dismissRideOfferNotification = svc.dismissRideOfferNotification;
     ensureNotifeeReady = svc.ensureNotifeeReady;
-  } catch (e) {
+  } catch {
     console.log('[Notifee] native module not available — falling back to expo-notifications only');
   }
 }
@@ -125,6 +137,10 @@ const canUseNotifications = !isExpoGo && Platform.OS !== 'web';
 let Notifications: any = null;
 if (canUseNotifications) {
   try {
+    // Guarded native-module require — must stay runtime require(), not a
+    // static import, so it only executes when notifications are usable
+    // (not Expo Go/web) and the catch can absorb a missing native binary.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     Notifications = require('expo-notifications');
   } catch (e) {
     console.log('[Push] expo-notifications unavailable:', e);
@@ -151,6 +167,11 @@ const LOGROCKET_ENABLED =
 let LogRocket: any = null;
 if (!isExpoGo && Platform.OS !== 'web' && LOGROCKET_ENABLED) {
   try {
+    // Guarded native-module require (same pattern as expo-observe above):
+    // must stay a runtime require(), not a static import, so it never
+    // executes when disabled/unavailable (Expo Go, web, or the kill flag)
+    // and so the catch below can absorb a missing native binary.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     LogRocket = require('@logrocket/react-native').default ?? require('@logrocket/react-native');
   } catch (e) {
     console.log('[LogRocket] unavailable:', e);
@@ -423,7 +444,11 @@ function RootLayout() {
       script.async = true;
       document.body.appendChild(script);
     }
-  }, []);
+    // initializeAuth/initializeLocation are stable Zustand store actions
+    // (defined once inside create(), identity never changes) — including
+    // them satisfies the lint rule without changing this mount-only effect's
+    // firing behavior.
+  }, [initializeAuth, initializeLocation]);
 
   // ── FCM token registration, gated on auth ──
   // `POST /notifications/register-token` requires an authenticated user,
@@ -507,8 +532,6 @@ function RootLayout() {
   // 1-2s refresh-then-retry delay.
   useEffect(() => {
     if (!isAuthInitialized || !authToken) return;
-
-    const { ensureFreshToken } = require('@shared/api/client');
 
     const sub = AppState.addEventListener('change', (nextState: string) => {
       if (nextState === 'active') {

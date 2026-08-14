@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useState, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Platform,
 } from 'react-native';
@@ -153,24 +153,32 @@ export default function RideDetailsScreen() {
       } else {
         showToast('Saved', 'Receipt PDF generated.', 'success');
       }
-    } catch (e: any) {
+    } catch {
       showToast('PDF Unavailable', 'PDF export requires the latest app version. Please update the app and try again.', 'warning');
     } finally {
       setPdfBusy(false);
     }
   };
 
-  useEffect(() => {
-    if (rideId) fetchRide();
-  }, [rideId]);
-
-  const fetchRide = async () => {
+  // Wrapped in useCallback([rideId]) so it's stable both for this file's
+  // own effect below and for useCompletedRouteRefresh (which stores it in a
+  // ref, so this wasn't required there — but keeping one definition stable
+  // avoids two different staleness stories for the same function).
+  const fetchRide = useCallback(async () => {
     try {
       const res = await api.get(`/rides/${rideId}`);
       setRide(res.data);
     } catch { }
     finally { setLoading(false); }
-  };
+  }, [rideId]);
+
+  useEffect(() => {
+    // Refetches only when rideId changes (fetchRide is itself keyed on
+    // [rideId], so depending on it is equivalent); the state fetchRide sets
+    // isn't in this effect's own deps.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (rideId) fetchRide();
+  }, [rideId, fetchRide]);
 
   useCompletedRouteRefresh(ride, fetchRide);
 
@@ -215,10 +223,16 @@ export default function RideDetailsScreen() {
   );
 
   const actualSections = useMemo(() => toReactNativeRouteSections(ride?.actual_route_segments), [ride?.actual_route_segments]);
-  const plannedSegments = useMemo(
-    () => toReactNativeSegments(ride?.planned_route_polyline ? [ride.planned_route_polyline] : []),
-    [ride?.planned_route_polyline],
-  );
+  const plannedSegments = useMemo(() => {
+    // Read the field once so the compiler's inferred dependency matches the
+    // declared one exactly (react-hooks/preserve-manual-memoization): the
+    // previous two-site read — one optional-chained (`ride?.…`), one not
+    // (`ride.…`) — made the inferred dependency the coarser `ride` object
+    // instead of the declared `.planned_route_polyline` field, so manual
+    // memoization silently wasn't being preserved.
+    const polyline = ride?.planned_route_polyline;
+    return toReactNativeSegments(polyline ? [polyline] : []);
+  }, [ride?.planned_route_polyline]);
   const isV2Route = _num(ride?.route_schema_version) >= 2;
   const hasActualRoute = actualSections.length > 0;
   const mapCoordinates = useMemo(

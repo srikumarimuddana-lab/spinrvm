@@ -15,7 +15,6 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useRideStore } from '../store/rideStore';
-import { useAuthStore } from '@shared/store/authStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { showToast } from '../store/toastStore';
@@ -26,7 +25,6 @@ import type { PlacePrediction } from '@shared/api/places';
 export default function SearchDestinationScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ mapPickField?: string; mapPickLat?: string; mapPickLng?: string; mapPickAddress?: string }>();
-  const { user } = useAuthStore();
   const {
     pickup, dropoff, stops,
     setPickup, setDropoff, addStop, removeStop, updateStop,
@@ -36,7 +34,7 @@ export default function SearchDestinationScreen() {
     clearEstimates,
   } = useRideStore();
 
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const [activeField, setActiveField] = useState<'pickup' | 'dropoff' | number>('dropoff');
@@ -62,13 +60,24 @@ export default function SearchDestinationScreen() {
   // users who have denied location permission.
   const [locationReady, setLocationReady] = useState(!!bias);
   useEffect(() => {
-    if (bias && !locationReady) setLocationReady(true);
-  }, [bias?.lat, bias?.lng]);
+    // Narrowed from `if (bias && ...)` to bias?.lat != null (bias is a
+    // fresh object literal every render, not memoized — bias?.lat is
+    // exactly as good a "is bias set" check and is already a tracked dep).
+    // locationReady is added below: once true, this guard's `!locationReady`
+    // check makes any further re-run a no-op — can't loop.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (bias?.lat != null && !locationReady) setLocationReady(true);
+  }, [bias?.lat, bias?.lng, locationReady]);
   useEffect(() => {
     if (locationReady) return;
     const t = setTimeout(() => setLocationReady(true), 2000);
     return () => clearTimeout(t);
-  }, []);
+    // locationReady added: when the effect above flips it to true first,
+    // this effect now proactively re-runs and exits early via the guard
+    // instead of leaving an abandoned 2s timer running to fire uselessly
+    // later (it would have called setLocationReady(true) again — harmless,
+    // but a real stale timer this closes).
+  }, [locationReady]);
 
   const {
     predictions,
@@ -82,6 +91,17 @@ export default function SearchDestinationScreen() {
   const dropoffRef = useRef<TextInput>(null);
   const stopRefs = useRef<(TextInput | null)[]>([]);
 
+  // Latest-value refs for reading pickup/dropoff inside effects that must
+  // NOT re-fire when pickup/dropoff themselves change (see the two effects
+  // below) — a plain dep would create a real regression: handleTextChange
+  // (below) sets pickup/dropoff to null the moment the rider types text
+  // that diverges from the stored address, which would make either effect
+  // fire mid-keystroke and silently overwrite what the rider just typed.
+  const pickupValueRef = useRef(pickup);
+  useEffect(() => { pickupValueRef.current = pickup; }, [pickup]);
+  const dropoffValueRef = useRef(dropoff);
+  useEffect(() => { dropoffValueRef.current = dropoff; }, [dropoff]);
+
   // Handle return from map picker
   useEffect(() => {
     if (params.mapPickLat && params.mapPickLng && params.mapPickAddress) {
@@ -93,14 +113,34 @@ export default function SearchDestinationScreen() {
       addRecentSearch(location);
       if (params.mapPickField === 'pickup') {
         setPickup(location);
+        // Deps are the map-pick lat/lng params; pickupText isn't a dep, so
+        // this can't retrigger this effect.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setPickupText(location.address);
-        if (!dropoff) setActiveField('dropoff');
+        if (!dropoffValueRef.current) setActiveField('dropoff');
       } else {
         setDropoff(location);
         setDropoffText(location.address);
       }
     }
-  }, [params.mapPickLat, params.mapPickLng]);
+    // addRecentSearch/setPickup/setDropoff are zustand actions (stable).
+    // params.mapPickAddress/mapPickField are added since they're read in
+    // the body (both change alongside mapPickLat/mapPickLng in practice —
+    // expo-router sets all four route params together when returning from
+    // the map picker). dropoff is deliberately READ VIA REF, not added
+    // directly — see the comment on dropoffValueRef above: this effect
+    // must fire only on an actual new map-pick response
+    // (mapPickLat/mapPickLng changing), never merely because the rider
+    // edited dropoff text elsewhere.
+  }, [
+    params.mapPickLat,
+    params.mapPickLng,
+    params.mapPickAddress,
+    params.mapPickField,
+    addRecentSearch,
+    setPickup,
+    setDropoff,
+  ]);
 
   useEffect(() => {
     fetchSavedAddresses();
@@ -134,21 +174,54 @@ export default function SearchDestinationScreen() {
         }
       })();
     }
-  }, []);
+    // fetchSavedAddresses/loadRecentSearches/setUserLocation are zustand
+    // actions (stable). userLocation is added deliberately: this codebase
+    // never resets userLocation back to null once set (checked — only its
+    // initial store default is null), so in practice this effect re-fires
+    // at most once, when userLocation transitions null → non-null; on that
+    // re-run the GPS-fetch block's `if (!userLocation)` guard is now false
+    // and skips, so only fetchSavedAddresses/loadRecentSearches run an
+    // extra (idempotent) time — an acceptable, understood tradeoff, not a
+    // guess, and it makes the effect correctly react if that assumption
+    // ever changes.
+  }, [fetchSavedAddresses, loadRecentSearches, setUserLocation, userLocation]);
 
   // When GPS location is available (from store), set pickup immediately
   useEffect(() => {
     if (userLocation) {
-      if (!pickup || pickup.address === 'Current Location') {
+      // Read via pickupValueRef (not the reactive `pickup` value) — see the
+      // comment on pickupValueRef above: handleTextChange sets pickup to
+      // null the instant the rider types text that diverges from the
+      // stored address, and this effect must NOT fire on that (it would
+      // silently overwrite the rider's in-progress typing back to
+      // "Current Location").
+      const currentPickup = pickupValueRef.current;
+      if (!currentPickup || currentPickup.address === 'Current Location') {
         setPickup({ address: 'Current Location', lat: userLocation.latitude, lng: userLocation.longitude });
+        // pickupText isn't a dep of this effect (only userLocation is), and
+        // the outer guard prevents this from firing once a real pickup is
+        // set. (The react-hooks/set-state-in-effect suppression previously
+        // here is no longer flagged by the linter now that `pickup` is read
+        // via pickupValueRef instead of directly — removed as unused
+        // rather than left as dead directive.)
         setPickupText('Current Location');
       }
     }
-  }, [userLocation]);
+    // setPickup is a zustand action (stable).
+  }, [userLocation, setPickup]);
 
-  // Sync stop texts when stops change
+  // Sync stop texts when stops change. Deliberately keyed on stops.length
+  // only, NOT the whole `stops` array: handleTextChange (below) calls
+  // updateStop(field, { address: '', ... }) the instant a stop's typed text
+  // diverges from its stored address, which changes the `stops` array's
+  // reference without changing its length — depending on the whole array
+  // would re-sync stopTexts from the (now-blanked) store value on every
+  // such keystroke, overwriting what the rider just typed.
   useEffect(() => {
+    // stopTexts isn't a dep of this effect (only stops.length is), so no loop.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setStopTexts(stops.map(s => s.address || ''));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stops.length]);
 
   // Focus the active field

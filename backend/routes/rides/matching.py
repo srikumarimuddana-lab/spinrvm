@@ -6,6 +6,14 @@ motion — no behaviour changes. See docs/refactors/god-file-split.md.
 
 from datetime import timedelta
 
+try:
+    from ...utils.service_area_scope import build_driver_area_filter, resolve_dispatch_area_scope
+except ImportError:  # pragma: no cover - dual-import pattern
+    from utils.service_area_scope import (  # type: ignore
+        build_driver_area_filter,
+        resolve_dispatch_area_scope,
+    )
+
 from . import _deps, _shared
 from ._deps import (  # noqa: F401
     Optional,
@@ -264,6 +272,25 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     }
     if ride.get("requires_wav"):
         _dispatch_filter["is_wav"] = True
+    # ── Cross-service-area ride guard ─────────────────────────────
+    # Driver approval is per service area, so a Saskatoon-approved driver must
+    # not be offered a Regina ride merely because they are parked inside its
+    # search radius. Scope resolution (whole area tree, NULL handling, flags)
+    # lives in utils/service_area_scope so this path and DispatchService cannot
+    # drift. Enforced again in Python by filter_and_rank_drivers below and a
+    # third time at accept (routes/drivers/ride_flow.py) — same layering the
+    # subscription gate uses.
+    _area_ids, _allow_unassigned_area = await resolve_dispatch_area_scope(
+        _deps.db_supabase, ride.get("service_area_id"), app_settings
+    )
+    if _area_ids is not None:
+        _dispatch_filter.update(build_driver_area_filter(_area_ids, allow_unassigned=_allow_unassigned_area))
+        logger.info(
+            "[DISPATCH] service-area guard: ride area=%s → %d compatible driver area(s), unassigned_allowed=%s",
+            ride.get("service_area_id"),
+            len(_area_ids),
+            _allow_unassigned_area,
+        )
     # A transient Supabase failure here is NOT "no drivers" — it raises to the
     # match_driver_to_ride recovery shell, which re-arms the retry chain with
     # backoff instead of letting the ride strand until the sweeper cancels it.
@@ -274,7 +301,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
         # carries encrypted PII (address, licence, vehicle details) that this hot
         # path (up to 500 rows every dispatch + retry, every replica) never needs;
         # the offer payload is built from the post-claim get_driver_by_id re-read.
-        columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id",
+        columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id,service_area_id",
         limit=500,
     )
 
@@ -495,7 +522,15 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
 
     # Pure filter+rank: drops orphan/no-location/low-rated drivers and
     # attaches per-driver distance. Pure function — no I/O.
-    drivers_with_distance = _deps.filter_and_rank_drivers(ride, all_drivers, algorithm, min_rating, search_radius)
+    drivers_with_distance = _deps.filter_and_rank_drivers(
+        ride,
+        all_drivers,
+        algorithm,
+        min_rating,
+        search_radius,
+        allowed_area_ids=_area_ids,
+        allow_unassigned_area=_allow_unassigned_area,
+    )
     logger.info(
         f"[DISPATCH] candidate pool (post-filter): {len(drivers_with_distance)} "
         f"real drivers within {search_radius}km with valid lat/lng and "
@@ -540,10 +575,12 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 }
                 if ride.get("requires_wav"):
                     _casc_filter["is_wav"] = True
+                if _area_ids is not None:
+                    _casc_filter.update(build_driver_area_filter(_area_ids, allow_unassigned=_allow_unassigned_area))
                 _casc_pool = await _deps.db_supabase.get_rows(
                     "drivers",
                     _casc_filter,
-                    columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id",
+                    columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id,service_area_id",
                     limit=500,
                 )
                 # Fix 4: Presence filter using _checked variant so a Redis outage
@@ -629,7 +666,13 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                         )
                         _casc_pool = []  # fail closed; non-subscriber cascade would bypass the gate
                 drivers_with_distance = _deps.filter_and_rank_drivers(
-                    ride, _casc_pool, algorithm, min_rating, search_radius
+                    ride,
+                    _casc_pool,
+                    algorithm,
+                    min_rating,
+                    search_radius,
+                    allowed_area_ids=_area_ids,
+                    allow_unassigned_area=_allow_unassigned_area,
                 )
                 if drivers_with_distance:
                     logger.info(
@@ -1074,6 +1117,7 @@ async def _offer_timeout_handler(
                         f"You missed {miss_count} ride offers in a row. "
                         "Tap 'Go Online' when you're ready to drive again.",
                         data={"type": "auto_offline", "reason": "missed_offers"},
+                        target_app="driver",
                     )
                 else:
                     await _deps.manager.send_personal_message(
@@ -1349,6 +1393,7 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                 "Ride Cancelled ❌",
                 "No nearby drivers were found. Your ride has been automatically cancelled. Please try again.",
                 {"type": "ride_cancelled", "ride_id": r_id, "is_auto": "true"},
+                target_app="rider",
             )
             if current_ride.get("guest_booking"):
                 # Corporate guest customer (no app): tell them by SMS —

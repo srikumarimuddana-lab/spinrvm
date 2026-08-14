@@ -163,3 +163,44 @@ async def test_build_statement_legacy_fare_component_fallback():
         db.get_rows = _tables(rides=rides)
         out = await stmt.build_statement({"id": "d1"}, "weekly", date(2026, 7, 20))
     assert out["earnings"]["ride_earnings"] == "10.50"
+
+
+@pytest.mark.asyncio
+async def test_build_statement_splits_previous_app_payouts():
+    """One era per number: stripe_sync rows (previous-app transfers) are
+    summed apart from Spinr payouts, and a period whose only money is
+    previous-app is flagged so the PDF can explain the $0.00 earnings
+    instead of leaving it beside a real paid-out figure."""
+    payouts = [
+        {"created_at": "2026-06-07T10:00:00+00:00", "amount": 20.77, "fee": 0, "status": "completed", "payout_type": "stripe_sync"},
+        {"created_at": "2026-06-11T10:00:00+00:00", "amount": 10.00, "fee": 0, "status": "completed", "payout_type": "stripe_sync"},
+        {"created_at": "2026-06-15T10:00:00+00:00", "amount": 12.00, "fee": 0, "status": "completed", "payout_type": "standard"},
+    ]
+    rides = [{"id": "r1", "driver_earnings": "12.00", "tip_amount": 0, "tax_amount": 0, "distance_km": 1, "duration_minutes": 5}]
+    with patch.object(stmt, "db_supabase") as db:
+        db.get_rows = _tables(rides, (), (), payouts, ())
+        out = await stmt.build_statement({"id": "d1"}, "monthly", date(2026, 6, 1))
+
+    assert out["payouts_total"] == "42.77"
+    assert out["payouts_spinr_total"] == "12.00"
+    assert out["payouts_previous_app_total"] == "30.77"
+    assert out["previous_app_only"] is False
+    assert out["payouts"][0]["label"] == "Previous app payout"
+
+
+@pytest.mark.asyncio
+async def test_build_statement_flags_previous_app_only_period():
+    """The June-2026 production case: two previous-app transfers, zero Spinr
+    activity — '$0.00 earned · $30.77 paid out' with no explanation."""
+    payouts = [
+        {"created_at": "2026-06-07T10:00:00+00:00", "amount": 20.77, "fee": 0, "status": "completed", "payout_type": "stripe_sync"},
+        {"created_at": "2026-06-11T10:00:00+00:00", "amount": 10.00, "fee": 0, "status": "completed", "payout_type": "stripe_sync"},
+    ]
+    with patch.object(stmt, "db_supabase") as db:
+        db.get_rows = _tables((), (), (), payouts, ())
+        out = await stmt.build_statement({"id": "d1"}, "monthly", date(2026, 6, 1))
+
+    assert out["earnings"]["total"] == "0.00"
+    assert out["payouts_previous_app_total"] == "30.77"
+    assert out["payouts_spinr_total"] == "0.00"
+    assert out["previous_app_only"] is True

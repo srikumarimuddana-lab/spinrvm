@@ -401,7 +401,7 @@ Data residency:
 User rights:
 - **Access**: rider/driver can request full data export via Support → backend generates JSON dump
 - **Correction**: profile fields are self-serve; non-trivial corrections go through Support
-- **Deletion**: right-to-delete retains only what the Saskatchewan Transportation Act requires (see regulatory section below). All other PII is scrubbed within 30 days. Ride records become anonymized (user_id nulled, coordinates rounded to city).
+- **Deletion**: right-to-delete retains only what the Saskatchewan Transportation Act requires (see regulatory section below). Profile fields (name, email, home address, payment methods) are scrubbed within 30 days of the request (`purge_pii_retention()` Step N, migration 296) — independent of the ride-record retention below. Ride records stay fully attributable (no anonymization) for the full 7-year window, then are hard-deleted (migration 216/289's "Uber/Lyft attributable retention" model — recorded decision, ACTION_ITEMS.md B18); only GPS pickup/dropoff drops earlier, at the separate 3-year ceiling. The general "rider identity hashed after 2 years" promise in `regulatory-sk.md` is not yet implemented — tracked as ACTION_ITEMS.md B23, since the literal fix would break active riders' own trip history.
 - **Consent**: consent language version is stored on signup. Material changes require re-consent.
 
 Breach protocol:

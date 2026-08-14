@@ -240,7 +240,7 @@ export default function BillingPage() {
             </header>
 
             {error && (
-                <p className="rounded bg-red-50 p-3 text-sm text-red-700">{error}</p>
+                <p className="rounded bg-destructive/10 p-3 text-sm text-destructive">{error}</p>
             )}
 
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

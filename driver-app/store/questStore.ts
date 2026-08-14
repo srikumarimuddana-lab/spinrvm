@@ -94,7 +94,7 @@ export const useQuestStore = create<QuestState>((set, get) => ({
       const res = await api.get<MyQuestProgress[] | { quests?: MyQuestProgress[]; my_quests?: MyQuestProgress[]; data?: MyQuestProgress[] }>('/quests/my-quests');
       const myQuests = arrayFromApi<MyQuestProgress>(res.data, ['quests', 'my_quests', 'data']);
       set({ myQuests, isLoadingMine: false });
-    } catch (error: unknown) {
+    } catch {
       set({ isLoadingMine: false });
     }
   },

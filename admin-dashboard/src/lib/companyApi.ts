@@ -23,6 +23,26 @@ import type {
 
 const API_BASE = "";
 
+// Backend's exact core/middleware.py::CSRFMiddleware 403 bodies (detail is a
+// plain string for this path, not the {message} object shape other routes
+// use). Matched narrowly so an unrelated 403 (e.g. require_company_admin
+// denying a member role) never triggers a refresh-and-retry loop.
+//
+// Both strings are included deliberately, even though "missing" and
+// "invalid" are different root causes (no CSRF cookie at all, vs. a header
+// that doesn't match the cookie present). A silentRefresh() attempt is safe
+// either way: if the session is genuinely gone (e.g. another tab logged
+// out), the refresh call itself fails and falls through to the existing
+// logout()/redirect path below — this just costs one extra round trip on
+// that case, in exchange for correctly self-healing the "missing" case too
+// (e.g. a cookie that hasn't been set yet on a very first write after a
+// slow rehydrate).
+const CSRF_ERROR_DETAILS = new Set(["CSRF token invalid", "CSRF token missing"]);
+
+function _isCsrfError(status: number, body: { detail?: unknown }): boolean {
+    return status === 403 && typeof body.detail === "string" && CSRF_ERROR_DETAILS.has(body.detail);
+}
+
 export async function companyRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
     const store = useCompanyAuthStore.getState();
     const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
@@ -41,7 +61,17 @@ export async function companyRequest<T>(path: string, options: RequestInit = {})
     const url = `${API_BASE}${path}`;
     const res = await fetch(url, { ...options, headers });
 
-    if (res.status === 401) {
+    // A CSRF-invalid 403 is retried exactly like a 401: the double-submit
+    // cookie (csrf_token_company) is shared across every tab/window on this
+    // origin, but the value echoed as X-CSRF-Token lives in this tab's
+    // in-memory Zustand state. If ANY other tab silently refreshed in the
+    // background (its own 401, or its own write), the shared cookie rotates
+    // to a new value this tab's memory doesn't know about — the very next
+    // write here (e.g. inviting a member) then 403s even though the session
+    // itself is perfectly valid. Without this, that's an unrecoverable dead
+    // end short of a manual reload; silentRefresh mints a fresh, locally-known
+    // token that matches whatever the cookie currently holds.
+    if (res.status === 401 || (await _peekCsrfError(res))) {
         const refreshed = await store.silentRefresh();
         if (refreshed) {
             // Rebuild BOTH auth headers from the refreshed store: the refresh
@@ -86,6 +116,18 @@ export async function companyRequest<T>(path: string, options: RequestInit = {})
         throw err;
     }
     return res.json() as T;
+}
+
+// `res.json()` can only be consumed once, and the plain-403 fallthrough below
+// needs to re-read the body — so this clones the response for the CSRF check
+// rather than consuming the original.
+async function _peekCsrfError(res: Response): Promise<boolean> {
+    if (res.status !== 403) return false;
+    const body = await res
+        .clone()
+        .json()
+        .catch(() => ({}) as { detail?: unknown });
+    return _isCsrfError(res.status, body);
 }
 
 /* ── Portal auth (phone OTP — rider identity) ── */

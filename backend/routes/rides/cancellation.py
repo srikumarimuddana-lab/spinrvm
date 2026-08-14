@@ -215,31 +215,25 @@ async def cancel_ride_rider(
                     cancel_fee_payment_intent_id = outcome.payment_intent_id
                     if outcome.status == "succeeded":
                         cancel_fee_payment_status = "paid"
-                        try:
-                            await _deps.db_supabase.insert_one(
-                                "financial_events",
-                                {
-                                    "event_type": "stripe_charge",
-                                    "user_id": current_user["id"],
-                                    "ride_id": ride_id,
-                                    "delta_cents": int(_round(total_cancel_fee * Decimal("100"))),
-                                    "ref": outcome.payment_intent_id,
-                                    "metadata": {"source": "cancellation_fee", "driver_id": driver_id or ""},
-                                    "created_at": datetime.now(timezone.utc).isoformat(),
-                                },
-                            )
-                        except Exception:
-                            # Never let a ledger-write failure block the cancel or
-                            # mask that the card WAS actually charged — log loudly
-                            # so ops can backfill the reconciliation row.
-                            logger.error(
-                                "[CANCEL] financial_events write failed for cancellation fee "
-                                "ride=%s pi=%s amount=%s — charge succeeded but is unrecorded",
-                                ride_id,
-                                outcome.payment_intent_id,
-                                total_cancel_fee,
-                                exc_info=True,
-                            )
+                        # Durable ledger write (retries + Sentry escalation on
+                        # exhaustion, never raises) — the charge already
+                        # succeeded, so this must not block the cancel either
+                        # way. fee_admin/fee_driver ride in metadata so the
+                        # double-entry projection can decompose the fee without
+                        # re-deriving the split.
+                        await _deps.record_ledger_event(
+                            event_type="stripe_charge",
+                            user_id=current_user["id"],
+                            ride_id=ride_id,
+                            delta_cents=_deps.ledger_to_cents(total_cancel_fee),
+                            ref=outcome.payment_intent_id,
+                            metadata={
+                                "source": "cancellation_fee",
+                                "driver_id": driver_id or "",
+                                "fee_admin": str(_round(charged_admin)),
+                                "fee_driver": str(_round(charged_driver)),
+                            },
+                        )
                     else:
                         cancel_fee_payment_status = "failed"
                         logger.error(
@@ -359,6 +353,27 @@ async def cancel_ride_rider(
                 },
                 f"driver_{driver['user_id']}",
             )
+            # N5 (ACTION_ITEMS.md): the WS message above only reaches a
+            # foreground app. A driver already assigned to this ride is en
+            # route to (or waiting at) pickup -- if their app is
+            # backgrounded, locked, or killed, they'd keep driving toward a
+            # rider who is gone with zero indication. priority="dispatch"
+            # mirrors the new-offer push (matching.py) for the same reason:
+            # this is as time-critical as an offer, bypasses the push
+            # opt-out, and falls back to the retry queue on a transient
+            # failure instead of being silently lost. Backgrounded via
+            # spawn() so a slow FCM/Expo round-trip doesn't hold up the
+            # rider's own cancel response.
+            _deps.spawn(
+                _deps.send_push_notification(
+                    driver["user_id"],
+                    "Ride Cancelled",
+                    "The rider cancelled this ride.",
+                    data={"type": "ride_cancelled", "ride_id": str(ride_id)},
+                    priority="dispatch",
+                    target_app="driver",
+                )
+            )
 
     # Batch dispatch: cancel pending ride_offers and notify those drivers.
     # With batch dispatch driver_id is NOT set on the ride row — offers
@@ -395,6 +410,25 @@ async def cancel_ride_rider(
                         await _deps.manager.send_personal_message(
                             {"type": "ride_cancelled", "ride_id": ride_id, "reason": "Rider cancelled"},
                             f"driver_{_uid}",
+                        )
+                        # N5 follow-up (ACTION_ITEMS.md): same WS-only gap as
+                        # the assigned-driver case above, for the pending-offer
+                        # (batch dispatch) path. A driver with a pending offer
+                        # for this ride is actively deciding whether to accept
+                        # -- if their app is backgrounded when the rider
+                        # cancels, the WS message never reaches them and the
+                        # stale offer panel keeps showing a ride that's gone.
+                        # Same priority/target_app/backgrounding rationale as
+                        # the assigned-driver push above.
+                        _deps.spawn(
+                            _deps.send_push_notification(
+                                _uid,
+                                "Ride Cancelled",
+                                "The rider cancelled this ride.",
+                                data={"type": "ride_cancelled", "ride_id": str(ride_id)},
+                                priority="dispatch",
+                                target_app="driver",
+                            )
                         )
                 except Exception as _e:
                     logger.warning(f"[CANCEL] failed to notify batch-offer driver {_offer_did}: {_e}")
@@ -486,32 +520,20 @@ async def _charge_scheduled_cancel_notice_fee(ride: dict, rider_id: str) -> None
                 fee_type="scheduled_cancel_notice_fee",
             )
             if outcome.status == "succeeded":
-                try:
-                    await _deps.db_supabase.insert_one(
-                        "financial_events",
-                        {
-                            "event_type": "stripe_charge",
-                            "user_id": rider_id,
-                            "ride_id": ride_id,
-                            "delta_cents": int(_round(fee * Decimal("100"))),
-                            "ref": outcome.payment_intent_id,
-                            "metadata": {"source": "scheduled_cancel_notice_fee"},
-                            "created_at": datetime.now(timezone.utc).isoformat(),
-                        },
-                    )
-                except Exception:
-                    logger.error(
-                        "[SCHED-CANCEL] financial_events write failed for notice-window fee "
-                        "ride=%s pi=%s amount=%s — charge succeeded but is unrecorded",
-                        ride_id,
-                        outcome.payment_intent_id,
-                        fee,
-                        exc_info=True,
-                    )
+                # Durable ledger write (retries + Sentry escalation, never
+                # raises). Rider-only pre-dispatch fee: no driver, no tax —
+                # the double-entry projection books it all to platform_revenue.
+                await _deps.record_ledger_event(
+                    event_type="stripe_charge",
+                    user_id=rider_id,
+                    ride_id=ride_id,
+                    delta_cents=_deps.ledger_to_cents(fee),
+                    ref=outcome.payment_intent_id,
+                    metadata={"source": "scheduled_cancel_notice_fee"},
+                )
             elif outcome.status != "unconfigured":
                 logger.error(
-                    "[SCHED-CANCEL] notice-window fee card charge failed ride=%s rider=%s amount=%s "
-                    "status=%s error=%s",
+                    "[SCHED-CANCEL] notice-window fee card charge failed ride=%s rider=%s amount=%s status=%s error=%s",
                     ride_id,
                     rider_id,
                     fee,

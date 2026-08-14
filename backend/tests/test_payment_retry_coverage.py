@@ -187,6 +187,45 @@ class TestAlertAdminsPaymentExhausted:
 
 
 # ---------------------------------------------------------------------------
+# _resolve_driver_user_ids (N3, ACTION_ITEMS.md)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveDriverUserIds:
+    @pytest.mark.anyio
+    async def test_empty_input_short_circuits_without_a_query(self):
+        mock_get = AsyncMock()
+        with patch("utils.payment_retry.db.get_rows", mock_get):
+            result = await payment_retry._resolve_driver_user_ids(set())
+        assert result == {}
+        mock_get.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_resolves_driver_id_to_user_id(self):
+        mock_get = AsyncMock(return_value=[{"id": "d1", "user_id": "u1"}, {"id": "d2", "user_id": "u2"}])
+        with patch("utils.payment_retry.db.get_rows", mock_get):
+            result = await payment_retry._resolve_driver_user_ids({"d1", "d2"})
+        assert result == {"d1": "u1", "d2": "u2"}
+        # Single batched $in query, not one per driver_id.
+        mock_get.assert_awaited_once()
+        assert mock_get.await_args[0][0] == "drivers"
+
+    @pytest.mark.anyio
+    async def test_driver_row_missing_user_id_is_excluded(self):
+        mock_get = AsyncMock(return_value=[{"id": "d1", "user_id": None}, {"id": "d2", "user_id": "u2"}])
+        with patch("utils.payment_retry.db.get_rows", mock_get):
+            result = await payment_retry._resolve_driver_user_ids({"d1", "d2"})
+        assert result == {"d2": "u2"}
+
+    @pytest.mark.anyio
+    async def test_db_failure_returns_empty_map_not_raises(self):
+        mock_get = AsyncMock(side_effect=RuntimeError("db down"))
+        with patch("utils.payment_retry.db.get_rows", mock_get):
+            result = await payment_retry._resolve_driver_user_ids({"d1"})
+        assert result == {}
+
+
+# ---------------------------------------------------------------------------
 # update_payout_status / notify_driver_payout_failed
 # ---------------------------------------------------------------------------
 
@@ -259,16 +298,45 @@ class TestRetryStuckPayouts:
 
     @pytest.mark.anyio
     async def test_claim_won_marks_failed_and_notifies(self):
+        # N3 (ACTION_ITEMS.md): notify_driver_payout_failed must be called
+        # with the driver's users.id (resolved via a batched "drivers"
+        # lookup), not payouts.driver_id — send_push_notification looks the
+        # recipient up by users.id and silently drops the push otherwise.
         payout = {"id": "p1", "driver_id": "d1", "retry_count": 3, "status": "pending"}
+
+        async def fake_get_rows(table, *args, **kwargs):
+            if table == "payouts":
+                return [payout]
+            if table == "drivers":
+                return [{"id": "d1", "user_id": "u1"}]
+            return []
+
         mock_update = AsyncMock(return_value={"id": "p1"})
         mock_notify = AsyncMock()
         with (
-            patch("utils.payment_retry.db.get_rows", AsyncMock(return_value=[payout])),
+            patch("utils.payment_retry.db.get_rows", AsyncMock(side_effect=fake_get_rows)),
             patch("utils.payment_retry.db.update_one", mock_update),
             patch("utils.payment_retry.notify_driver_payout_failed", mock_notify),
         ):
             await payment_retry.retry_stuck_payouts()
-        mock_notify.assert_awaited_once_with("d1", "p1")
+        mock_notify.assert_awaited_once_with("u1", "p1")
+        set_body = mock_update.await_args[0][2]["$set"]
+        assert set_body["status"] == "failed"
+
+    @pytest.mark.anyio
+    async def test_unresolvable_driver_user_id_skips_push_not_the_status_flip(self):
+        # A driver row that's gone missing (deleted, orphaned FK) must not
+        # block the payout being marked failed — only the push is skipped.
+        payout = {"id": "p1", "driver_id": "d1", "retry_count": 3, "status": "pending"}
+        mock_update = AsyncMock(return_value={"id": "p1"})
+        mock_notify = AsyncMock()
+        with (
+            patch("utils.payment_retry.db.get_rows", AsyncMock(return_value=[payout])),  # no "drivers" row
+            patch("utils.payment_retry.db.update_one", mock_update),
+            patch("utils.payment_retry.notify_driver_payout_failed", mock_notify),
+        ):
+            await payment_retry.retry_stuck_payouts()
+        mock_notify.assert_not_awaited()
         set_body = mock_update.await_args[0][2]["$set"]
         assert set_body["status"] == "failed"
 
@@ -582,6 +650,31 @@ class TestPaymentRetryLoop:
         mock_retry.assert_not_awaited()
         assert mock_hb.call_count == 2
         assert sleep_calls == [payment_retry.RETRY_INTERVAL_SECONDS, payment_retry.RETRY_INTERVAL_SECONDS]
+
+    @pytest.mark.anyio
+    async def test_loop_survives_a_redis_lock_error_and_still_runs_the_tick(self):
+        """2026-08-11 P1 fix: redis_set_nx now raises on a real Redis error
+        instead of silently falling back per-replica. Previously this call
+        sat directly in `while True:` with no surrounding try/except -- an
+        unhandled exception here would have killed the loop task
+        permanently instead of just proceeding without the (throttle-only)
+        lock."""
+        mock_retry = AsyncMock()
+
+        async def _fake_sleep(seconds):
+            raise asyncio.CancelledError()
+
+        with (
+            patch("utils.payment_retry.redis_set_nx", AsyncMock(side_effect=ConnectionError("redis down"))),
+            patch("utils.payment_retry.retry_failed_payments", mock_retry),
+            patch("utils.payment_retry.retry_stuck_payouts", AsyncMock()),
+            patch("utils.payment_retry.sweep_guest_corporate_settlements", AsyncMock()),
+            patch("utils.payment_retry.asyncio.sleep", _fake_sleep),
+            patch("utils.payment_retry._record_heartbeat", MagicMock()),
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await payment_retry.payment_retry_loop()
+        mock_retry.assert_awaited_once()
 
     @pytest.mark.anyio
     async def test_lock_acquired_runs_all_three_substeps_and_isolates_failures(self):

@@ -48,6 +48,24 @@ def _held_ride(auth_status="authorized", authorized_amount="35.00", pi="pi_hold"
     }
 
 
+def _fresh_ride(**overrides):
+    """A ride with no open pre-auth hold, so settle_card takes the direct
+    charge_ride path instead of _settle_against_hold."""
+    base = {
+        "id": RIDE_ID,
+        "rider_id": RIDER_ID,
+        "payment_method": "card",
+        "payment_intent_id": None,
+        "auth_status": None,
+        "authorized_amount": "0",
+        "total_fare": "25.00",
+        "driver_earnings": "20.00",
+        "tip_amount": "0",
+    }
+    base.update(overrides)
+    return base
+
+
 def _common_patches(*, capture=None, charge=None):
     """Patch DB writes, ledger, socket, push, and the Stripe helpers.
     Returns (patches, updates) where updates captures every update_ride patch."""
@@ -198,6 +216,51 @@ class TestCaptureFailureModes:
 
 
 @pytest.mark.asyncio
+class TestFreshChargeFailurePushTargetApp:
+    """N10 regression: settle_card's rider-facing 'Payment failed' push (no
+    pre-auth hold, straight charge_ride path) must pass target_app='rider'.
+    Fails if target_app reverts to the omitted default."""
+
+    async def test_declined_fresh_charge_pushes_rider_with_target_app(self):
+        from contextlib import ExitStack
+
+        from backend.services.payment_service import settle_card
+
+        declined = _outcome(status="declined", decline_code="card_declined", error_message="Declined")
+        patches, updates = _common_patches(charge=declined)
+
+        with ExitStack() as st:
+            ctxs = [st.enter_context(p) for p in patches]
+            push_mock = ctxs[5]  # position fixed by _common_patches: ...,send_personal_message,send_push_notification
+            result = await settle_card(_fresh_ride(), RIDE_ID, RIDER_ID, Decimal("25.00"), Decimal("0"))
+
+        assert result.success is False
+        assert result.error_code == "card_declined"
+        push_mock.assert_awaited_once()
+        assert push_mock.await_args.args[0] == RIDER_ID
+        assert push_mock.await_args.kwargs.get("target_app") == "rider"
+
+    async def test_generic_failure_fresh_charge_pushes_rider_with_target_app(self):
+        from contextlib import ExitStack
+
+        from backend.services.payment_service import settle_card
+
+        failed = _outcome(status="failed", error_message="Something went wrong")
+        patches, updates = _common_patches(charge=failed)
+
+        with ExitStack() as st:
+            ctxs = [st.enter_context(p) for p in patches]
+            push_mock = ctxs[5]
+            result = await settle_card(_fresh_ride(), RIDE_ID, RIDER_ID, Decimal("25.00"), Decimal("0"))
+
+        assert result.success is False
+        assert result.error_code == "payment_error"
+        push_mock.assert_awaited_once()
+        assert push_mock.await_args.args[0] == RIDER_ID
+        assert push_mock.await_args.kwargs.get("target_app") == "rider"
+
+
+@pytest.mark.asyncio
 class TestChangeCardOverride:
     """The in-app 'Change Card' escape: payment_method_id_override forces a
     fresh charge on the chosen card and never captures the booking-time hold
@@ -269,7 +332,11 @@ class TestChangeCardOverride:
             for p in patches:
                 st.enter_context(p)
             result = await settle_card(
-                _held_ride(), RIDE_ID, RIDER_ID, Decimal("30.00"), Decimal("5.00"),
+                _held_ride(),
+                RIDE_ID,
+                RIDER_ID,
+                Decimal("30.00"),
+                Decimal("5.00"),
                 payment_method_id_override="pm_NEW",
             )
 

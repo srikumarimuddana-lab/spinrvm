@@ -23,6 +23,9 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 
+import BookingProposalCard from '../components/BookingProposalCard';
+import { displayFareWithPromo } from '../components/bookingProposal';
+
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('expo-router', () => ({ useRouter: () => ({ push: jest.fn(), replace: jest.fn() }) }));
 
@@ -90,9 +93,6 @@ jest.mock('../store/workProfileStore', () => ({
     checkRide: jest.fn(() => ({ ok: true, reasons: [] })),
   }),
 }));
-
-import BookingProposalCard from '../components/BookingProposalCard';
-import { displayFareWithPromo } from '../components/bookingProposal';
 
 const PROPOSAL: any = {
   pickup_lat: 50.4079, pickup_lng: -104.6501, pickup_address: '4500 Gordon Rd, Regina',

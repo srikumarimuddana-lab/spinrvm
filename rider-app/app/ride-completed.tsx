@@ -17,12 +17,14 @@ import ConfirmSheet from '../components/ConfirmSheet';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import Analytics from '@shared/analytics';
+import { Analytics } from '@shared/analytics';
 import { useStripe } from '@stripe/stripe-react-native';
 import { attemptRidePayment, PaymentAlertButton } from '../utils/attemptRidePayment';
 import { useSpinrPaymentSheet } from '../hooks/useSpinrPaymentSheet';
 import { useCompletedRouteRefresh } from '@shared/hooks/useCompletedRouteRefresh';
 import { routeQualityLabel, toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils/routeSegments';
+import { useAnimatedValue } from '../hooks/useAnimatedValue';
+import { onRideRated } from '@shared/utils/appRating';
 
 // PR #664 stringified Decimal money fields in API responses (e.g. total_fare,
 // base_fare, tip_amount). The receipt UI needs them as numbers for arithmetic
@@ -30,8 +32,6 @@ import { routeQualityLabel, toReactNativeRouteSections, toReactNativeSegments } 
 // | undefined` cleanly without spreading parseFloat noise across the file.
 const toNum = (v: string | number | null | undefined): number =>
   typeof v === 'number' ? v : v ? parseFloat(v) || 0 : 0;
-const fmt = (v: string | number | null | undefined): string =>
-  toNum(v).toFixed(2);
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 
@@ -72,28 +72,33 @@ function RideCompletedScreenContent() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitPhase, setSubmitPhase] = useState<'idle' | 'rating' | 'confirming'>('idle');
   const [alreadyPaid, setAlreadyPaid] = useState(false);
-  const [paymentProcessed, setPaymentProcessed] = useState(false);
 
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
     title: string;
     message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+    buttons: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', message: '', variant: 'info', buttons: [] });
   const mapRef = React.useRef<MapView>(null);
   const [routeMapReady, setRouteMapReady] = useState(false);
-  const successScale = useRef(new Animated.Value(0)).current;
-  const successOpacity = useRef(new Animated.Value(0)).current;
+  const successScale = useAnimatedValue(0);
+  const successOpacity = useAnimatedValue(0);
 
   const actualSections = useMemo(
     () => toReactNativeRouteSections(currentRide?.actual_route_segments),
     [currentRide?.actual_route_segments],
   );
-  const plannedSegments = useMemo(
-    () => toReactNativeSegments(currentRide?.planned_route_polyline ? [currentRide.planned_route_polyline] : []),
-    [currentRide?.planned_route_polyline],
-  );
+  const plannedSegments = useMemo(() => {
+    // Read the field once so the compiler's inferred dependency matches the
+    // declared one exactly (react-hooks/preserve-manual-memoization): the
+    // previous two-site read — one optional-chained (`currentRide?.…`), one
+    // not (`currentRide.…`) — made the inferred dependency the coarser
+    // `currentRide` object instead of the declared `.planned_route_polyline`
+    // field, so manual memoization silently wasn't being preserved.
+    const polyline = currentRide?.planned_route_polyline;
+    return toReactNativeSegments(polyline ? [polyline] : []);
+  }, [currentRide?.planned_route_polyline]);
   const isV2Route = toNum(currentRide?.route_schema_version) >= 2;
   const hasActualRoute = actualSections.length > 0;
   const mapCoordinates = useMemo(
@@ -131,7 +136,8 @@ function RideCompletedScreenContent() {
       Animated.spring(successScale, { toValue: 1, tension: 60, friction: 8, useNativeDriver: true }),
       Animated.timing(successOpacity, { toValue: 1, duration: 400, useNativeDriver: true }),
     ]).start();
-  }, []);
+    // Both are stable Animated.Value instances (useAnimatedValue, created once).
+  }, [successScale, successOpacity]);
 
   const tipOptions = [2, 5, 10];
   const fare = toNum((currentRide as any)?.grand_total || currentRide?.total_fare);
@@ -150,11 +156,15 @@ function RideCompletedScreenContent() {
 
   useEffect(() => {
     if (rideId) fetchRide(rideId);
-  }, [rideId]);
+    // fetchRide is a zustand store action (stable reference).
+  }, [rideId, fetchRide]);
 
   // Check if ride was already paid (e.g. coming back to this screen)
   useEffect(() => {
     if (currentRide?.payment_status === 'paid') {
+      // alreadyPaid isn't a dep of this effect (only payment_status is), and
+      // this only ever sets true (never flips back), so no loop risk.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setAlreadyPaid(true);
     }
   }, [currentRide?.payment_status]);
@@ -173,7 +183,10 @@ function RideCompletedScreenContent() {
       clearRide();
       router.replace('/(tabs)');
     }
-  }, [currentRide?.payment_status]);
+    // clearRide is a zustand action (stable); router is expo-router's
+    // stable singleton. initialPaymentChecked ref already guards this to
+    // fire at most once, so adding these doesn't change that.
+  }, [currentRide?.payment_status, clearRide, router]);
 
   // Block back navigation — must complete rating & payment
   useEffect(() => {
@@ -330,7 +343,6 @@ function RideCompletedScreenContent() {
 
       // 3. Trigger app store rating prompt after good rides
       try {
-        const { onRideRated } = require('@shared/utils/appRating');
         await onRideRated(rating);
       } catch { /* non-critical */ }
 
@@ -343,7 +355,9 @@ function RideCompletedScreenContent() {
       setSubmitPhase('idle');
     }
   };
-  handleSubmitRef.current = handleSubmit;
+  useEffect(() => {
+    handleSubmitRef.current = handleSubmit;
+  });
 
   // Returned from the "Change Card" escape with a card chosen for this trip —
   // auto-retry the charge on it once. The ref guard stops a re-run on every
@@ -353,7 +367,19 @@ function RideCompletedScreenContent() {
     if (!payWithCard || alreadyPaid) return;
     if (retriedCardRef.current === payWithCard) return;
     retriedCardRef.current = payWithCard;
-    handleSubmit(payWithCard);
+    // Routed through handleSubmitRef (already the established pattern in
+    // this file for the Retry button, line ~279) instead of calling
+    // handleSubmit directly — handleSubmit is a plain async function that
+    // closes over many reactive values (isSubmitting, selectedTip,
+    // customTip, alreadyPaid, rating, comment, confirmPayment, currentRide,
+    // clearRide, router, …); wrapping all of that in a useCallback with a
+    // complete, correct dep list would be high-risk for a payment-path
+    // function. handleSubmitRef.current is kept current every render by the
+    // effect above (runs with no deps array), so by the time this effect
+    // body runs it's always the latest handleSubmit — same behavior as
+    // calling handleSubmit directly, without needing it in this effect's
+    // deps (refs are exempt from exhaustive-deps).
+    handleSubmitRef.current?.(payWithCard);
   }, [payWithCard, alreadyPaid]);
 
   // Google Pay path — presents the Stripe PaymentSheet modal so riders can
@@ -395,7 +421,7 @@ function RideCompletedScreenContent() {
               <Ionicons name="checkmark" size={32} color="#FFF" />
             </View>
           </View>
-          <Text style={styles.title}>You've arrived!</Text>
+          <Text style={styles.title}>You&apos;ve arrived!</Text>
           <Text style={styles.subtitle} numberOfLines={1}>
             {currentRide?.dropoff_address || 'Destination'}
           </Text>
@@ -690,7 +716,7 @@ function RideCompletedScreenContent() {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.actionBtnTitle}>Report Lost Item</Text>
-              <Text style={styles.actionBtnDesc}>Left something in the car? We'll help</Text>
+              <Text style={styles.actionBtnDesc}>Left something in the car? We&apos;ll help</Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color={colors.border} />
           </TouchableOpacity>

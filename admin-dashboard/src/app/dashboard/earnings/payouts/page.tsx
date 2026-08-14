@@ -115,12 +115,12 @@ function RetryModal({ open, payout, onClose, onConfirm }: RetryModalProps) {
                             {payout.failure_reason && (
                                 <div className="flex justify-between">
                                     <span className="text-muted-foreground">Failure reason</span>
-                                    <span className="text-red-600 text-xs max-w-[200px] text-right">{payout.failure_reason}</span>
+                                    <span className="text-destructive text-xs max-w-[200px] text-right">{payout.failure_reason}</span>
                                 </div>
                             )}
                         </div>
                     )}
-                    {error && <p className="text-sm text-red-500">{error}</p>}
+                    {error && <p className="text-sm text-destructive">{error}</p>}
                 </div>
                 <DialogFooter>
                     <Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button>
@@ -383,7 +383,7 @@ export default function PayoutsPage() {
                                         <TableCell>
                                             <Badge className={sc.cls}>{sc.label}</Badge>
                                             {p.failure_reason && (
-                                                <p className="text-xs text-red-500 mt-0.5">{p.failure_reason}</p>
+                                                <p className="text-xs text-destructive mt-0.5">{p.failure_reason}</p>
                                             )}
                                         </TableCell>
                                         <TableCell className="text-sm text-muted-foreground">

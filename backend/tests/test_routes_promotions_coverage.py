@@ -417,17 +417,19 @@ class TestListAvailablePromos:
                 raise rpc_error
             return rpc_result or []
 
-        return _PatchTuple((
-            patch(f"{PROMO_MOD}.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
-            patch(f"{PROMO_MOD}.db_supabase.rpc", AsyncMock(side_effect=_rpc)),
-            patch(f"{PROMO_MOD}.db_supabase.count_documents", AsyncMock(return_value=count)),
-            patch(
-                f"{PROMO_MOD}.db_supabase.get_user_by_id",
-                AsyncMock(
-                    return_value=user if user is not None else {"id": USER_ID, "created_at": "2020-01-01T00:00:00"}
+        return _PatchTuple(
+            (
+                patch(f"{PROMO_MOD}.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+                patch(f"{PROMO_MOD}.db_supabase.rpc", AsyncMock(side_effect=_rpc)),
+                patch(f"{PROMO_MOD}.db_supabase.count_documents", AsyncMock(return_value=count)),
+                patch(
+                    f"{PROMO_MOD}.db_supabase.get_user_by_id",
+                    AsyncMock(
+                        return_value=user if user is not None else {"id": USER_ID, "created_at": "2020-01-01T00:00:00"}
+                    ),
                 ),
-            ),
-        ))
+            )
+        )
 
     async def test_pickup_resolves_service_area_and_filters(self):
         from backend.routes.promotions import list_available_promos
@@ -909,3 +911,57 @@ class TestAdminDeletePromoCode:
 
         assert result == {"deleted": True}
         mock_delete.assert_awaited_once_with("promotions", {"id": "promo-1"})
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# E5 kill switch: promo_redemption_enabled
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestPromoRedemptionKillSwitch:
+    """_validate_promo_for_user is the single shared chokepoint both
+    POST /promo/apply (rider self-service) and apply_promo_for_admin
+    (admin apply-on-behalf-of-rider) funnel through -- one flag check here
+    covers both."""
+
+    async def test_flag_off_raises_503_before_any_promo_lookup(self):
+        from backend.routes.promotions import _validate_promo_for_user
+
+        with (
+            patch(f"{PROMO_MOD}.get_app_settings", AsyncMock(return_value={"promo_redemption_enabled": False})),
+            patch(f"{PROMO_MOD}.db_supabase.get_rows", AsyncMock()) as mock_get_rows,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await _validate_promo_for_user(code="COVER10", user_id=USER_ID, ride_fare=Decimal("20.00"))
+
+        assert exc.value.status_code == 503
+        mock_get_rows.assert_not_awaited()
+
+    async def test_flag_missing_key_defaults_to_enabled(self):
+        """A settings dict with no promo_redemption_enabled key (legacy
+        row) must still proceed -- the flag defaults to enabled."""
+        from backend.routes.promotions import _validate_promo_for_user
+
+        promo = _promo()
+        with (
+            patch(f"{PROMO_MOD}.get_app_settings", AsyncMock(return_value={})),
+            patch(f"{PROMO_MOD}.db_supabase.get_rows", AsyncMock(return_value=[promo])),
+            patch(f"{PROMO_MOD}.db_supabase.count_documents", AsyncMock(return_value=0)),
+        ):
+            result = await _validate_promo_for_user(code="COVER10", user_id=USER_ID, ride_fare=Decimal("20.00"))
+
+        assert result["valid"] is True
+
+    async def test_settings_lookup_error_fails_open(self):
+        """A settings-read error must never itself block redemption."""
+        from backend.routes.promotions import _validate_promo_for_user
+
+        promo = _promo()
+        with (
+            patch(f"{PROMO_MOD}.get_app_settings", AsyncMock(side_effect=RuntimeError("settings down"))),
+            patch(f"{PROMO_MOD}.db_supabase.get_rows", AsyncMock(return_value=[promo])),
+            patch(f"{PROMO_MOD}.db_supabase.count_documents", AsyncMock(return_value=0)),
+        ):
+            result = await _validate_promo_for_user(code="COVER10", user_id=USER_ID, ride_fare=Decimal("20.00"))
+
+        assert result["valid"] is True

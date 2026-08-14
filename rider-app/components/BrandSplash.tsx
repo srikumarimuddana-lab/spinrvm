@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -8,6 +8,7 @@ import {
   StyleSheet,
   View,
 } from 'react-native';
+import { useAnimatedValue } from '../hooks/useAnimatedValue';
 
 const LOGO = require('../assets/images/spinr-logo.png');
 
@@ -28,11 +29,11 @@ type Props = { onLayout?: (e: LayoutChangeEvent) => void };
  * RN Animated (no Reanimated) so it can mount before the rest of the app is up.
  */
 export default function BrandSplash({ onLayout }: Props) {
-  const logoOpacity = useRef(new Animated.Value(0)).current;
-  const logoScale = useRef(new Animated.Value(0.92)).current;
-  const tagOpacity = useRef(new Animated.Value(0)).current;
-  const tagY = useRef(new Animated.Value(-8)).current;
-  const footerOpacity = useRef(new Animated.Value(0)).current;
+  const logoOpacity = useAnimatedValue(0);
+  const logoScale = useAnimatedValue(0.92);
+  const tagOpacity = useAnimatedValue(0);
+  const tagY = useAnimatedValue(-8);
+  const footerOpacity = useAnimatedValue(0);
 
   useEffect(() => {
     // Logo: fade in with a gentle settle.

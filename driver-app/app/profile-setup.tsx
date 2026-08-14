@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -8,15 +8,13 @@ import {
   KeyboardAvoidingView,
   Platform,
   Keyboard,
-  TouchableWithoutFeedback,
   ActivityIndicator,
   ScrollView,
-  Animated,
   Alert,
   BackHandler,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useAuthStore, type User } from '@shared/store/authStore';
@@ -66,7 +64,8 @@ export default function ProfileSetupScreen() {
     if (!token && !user) {
       router.replace('/login' as any);
     }
-  }, [token, user]);
+    // router treated as a stable/safe dep, matching app/index.tsx.
+  }, [token, user, router]);
 
   useEffect(() => {
     if (!token && !user) return;
@@ -86,12 +85,30 @@ export default function ProfileSetupScreen() {
           return;
         }
       } catch (err: any) {
-        console.log('[ProfileSetup] /auth/me refetch failed:', err?.message || err);
+        // Logger-only, never surfaced to the driver — pass the whole error
+        // object per the no-restricted-syntax rule's own guidance rather than
+        // routing through getApiErrorMessage (which is for user-visible text).
+        console.log('[ProfileSetup] /auth/me refetch failed:', err);
       }
       if (!cancelled) setIsCheckingExisting(false);
     })();
     return () => { cancelled = true; };
-  }, []);
+    // token/user deliberately excluded: this is a one-time "does the driver
+    // already have a complete profile?" mount check (the `cancelled` guard
+    // and early-return shape only make sense run once). Adding `user` as a
+    // dep is a real feedback-loop risk, not just a style choice: this same
+    // effect calls `useAuthStore.setState({ user: fresh })` a few lines
+    // above when the fetched profile turns out complete — if `user` were a
+    // dep, that setState would change `user`'s identity and re-trigger this
+    // very effect. The re-run would very likely be a harmless no-op (same
+    // branch fires again, calls router.replace() a second time, returns
+    // before any further state change) but router.replace()'s idempotency
+    // for a second identical call isn't something this investigation could
+    // verify with certainty, so excluding is the safer, deliberate choice
+    // over guessing. router is included since nothing in this effect
+    // changes its identity, so it carries no such risk.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router]);
 
   // Fetch service areas and auto-select based on user location
   useEffect(() => {
@@ -146,6 +163,12 @@ export default function ProfileSetupScreen() {
         setCity(areas[0].city || areas[0].name);
       }
     })();
+    // serviceAreaId is intentionally excluded: it's read only as a "don't
+    // clobber an already-selected area" guard, same reasoning as
+    // become-driver.tsx's identical pattern. Adding it would re-run this
+    // service-areas fetch + location-based auto-select (including a fresh
+    // GPS reverse-geocode) every time the driver picks a different area.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleChangeNumber = useCallback(() => {

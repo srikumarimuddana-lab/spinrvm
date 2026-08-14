@@ -33,7 +33,6 @@ function PayoutScreen() {
         hasBankAccount,
         fetchDriverBalance,
         fetchBankAccount,
-        isLoading,
         error,
         clearError,
     } = useDriverStore();
@@ -746,7 +745,7 @@ function PayoutScreen() {
                     <View style={styles.infoRow}>
                         <Ionicons name="calendar-outline" size={18} color={colors.primary} />
                         <Text style={styles.infoRowText}>
-                            Spinr automatically pays out your earnings every Sunday. Balances of $10 or more are transferred to your connected Stripe account.
+                            Spinr automatically pays out your earnings every Sunday. Balances of $10 or more are sent to your connected account, and funds typically reach your bank in 2–3 business days.
                         </Text>
                     </View>
                 </View>
@@ -805,7 +804,7 @@ function PayoutScreen() {
                 <View style={styles.infoNote}>
                     <Ionicons name="information-circle" size={20} color={colors.textDim} />
                     <Text style={styles.infoText}>
-                        Earnings are automatically paid out every Sunday via Stripe. Minimum payout is $10 — balances below carry forward. Instant payouts (1.5% fee) may be available in your area. Stripe handles all identity verification and banking securely.
+                        Earnings are automatically paid out every Sunday via Stripe, and typically reach your bank in 2–3 business days. Minimum payout is $10 — balances below carry forward to the next week. Stripe handles all identity verification and banking securely.
                     </Text>
                 </View>
             </ScrollView>
@@ -1164,47 +1163,12 @@ function createStyles(colors: ThemeColors) {
             color: colors.text,
         },
 
-        // Payout
+        // Payout (payoutCard is still used by the Tax Documents card; the
+        // cashout input/button styles were removed with the manual-cashout UI)
         payoutCard: {
             backgroundColor: colors.surface,
             borderRadius: 16,
             padding: 16,
-        },
-        payoutInputRow: {
-            flexDirection: 'row',
-            alignItems: 'center',
-        },
-        dollarSign: {
-            fontSize: 24,
-            fontWeight: '700',
-            color: colors.text,
-            marginRight: 4,
-        },
-        payoutInput: {
-            flex: 1,
-            fontSize: 24,
-            fontWeight: '700',
-            color: colors.text,
-            paddingVertical: 8,
-        },
-        payoutButton: {
-            backgroundColor: colors.primary,
-            paddingHorizontal: 24,
-            paddingVertical: 12,
-            borderRadius: 12,
-        },
-        payoutButtonDisabled: {
-            opacity: 0.5,
-        },
-        payoutButtonText: {
-            color: '#fff',
-            fontSize: 16,
-            fontWeight: '700',
-        },
-        maxAmount: {
-            color: colors.primary,
-            fontSize: 13,
-            marginTop: 8,
         },
 
         infoNote: {

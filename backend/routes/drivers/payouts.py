@@ -842,12 +842,13 @@ async def request_payout(
     """Standard cashout is disabled — payouts are now Spinr-controlled and
     run automatically every Sunday for all eligible drivers (>= $10 balance).
     Drivers can still use instant payouts (fee-bearing) for early access."""
+    # Old app builds surface this string in a toast that clamps at 140 chars
+    # (shared/utils/toastMessage.ts) — keep it under that, and don't advertise
+    # instant payout while the driver app has no instant-payout UI to tap.
     raise HTTPException(
         status_code=410,
         detail=(
-            "Manual payouts have been replaced by automatic weekly payouts. "
-            "Your earnings are paid out every Sunday. Use Instant Payout "
-            "for early access (1.5% fee)."
+            "Cash out has been replaced by automatic weekly payouts — your earnings are sent to your bank every Sunday."
         ),
     )
 

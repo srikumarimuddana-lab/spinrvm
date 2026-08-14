@@ -34,6 +34,13 @@ vi.mock("next/image", () => ({
   default: (props: React.ImgHTMLAttributes<HTMLImageElement>) => <img {...props} />,
 }));
 
+vi.mock("next/dynamic", () => ({
+  default: () => {
+    const Stub = () => <div data-component="DynamicImport" />;
+    return Stub;
+  },
+}));
+
 vi.mock("@/store/authStore", () => {
   const state = {
     token: "fake-token",
@@ -57,6 +64,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
   const list = vi.fn().mockResolvedValue([]);
   // Shape-specific overrides for APIs whose callers destructure the response.
   const overrides: Record<string, unknown> = {
+    // Own instance (not the shared `list` fn) so a test can assert on this
+    // endpoint specifically rather than on every get* call in the barrel.
+    getSurgeStatus: vi.fn().mockResolvedValue([]),
     getRides: vi.fn().mockResolvedValue({ rides: [], total_count: 0 }),
     getDrivers: vi.fn().mockResolvedValue({ drivers: [], total_count: 0 }),
     getKybReverificationDue: vi.fn().mockResolvedValue({ threshold_months: 12, count: 0, companies: [] }),
@@ -127,6 +137,8 @@ vi.mock("lucide-react", () => {
     Upload: Icon, FileDown: Icon, CheckCircle2: Icon, Info: Icon,
     // sortable-table (used by users/earnings/analytics/corporate/disputes)
     ChevronsUpDown: Icon, Percent: Icon, Receipt: Icon, Undo2: Icon, Landmark: Icon,
+    // heatmap / service-areas AD-* additions
+    Flame: Icon, ArrowRightLeft: Icon,
   };
 });
 
@@ -264,8 +276,53 @@ vi.mock("recharts", () => ({
   CartesianGrid: () => null,
   Tooltip: () => null,
   Legend: () => null,
+  ReferenceLine: () => null,
   ResponsiveContainer: ({ children }: React.PropsWithChildren) => <div>{children}</div>,
 }));
+
+// Stub HeatMap component (used by heatmap page, dynamically imported)
+vi.mock("@/components/heat-map", () => ({
+  default: () => <div data-sub="HeatMap" />,
+}));
+
+// Stub the per-domain API submodules that pages import directly (bypassing the
+// "@/lib/api" barrel). These MUST be built from the real module via
+// importOriginal: a hand-written literal silently drops every export it forgets,
+// and because the barrel re-exports these same module ids, a dropped export
+// becomes `undefined` for barrel importers too — which is how an incomplete
+// settings-ai mock broke the unrelated /dashboard/settings page test.
+const wrapApiModule = async (
+  importOriginal: () => Promise<Record<string, unknown>>,
+  overrides: Record<string, unknown> = {},
+) => {
+  const actual = await importOriginal();
+  const noop = vi.fn().mockResolvedValue({});
+  const list = vi.fn().mockResolvedValue([]);
+  return {
+    ...Object.fromEntries(
+      Object.entries(actual).map(([key, val]) => {
+        if (typeof val !== "function") return [key, val];
+        return [key, /^(get|list|fetch)/.test(key) ? list : noop];
+      })
+    ),
+    ...overrides,
+  };
+};
+
+vi.mock("@/lib/api/settings-ai", (io) =>
+  wrapApiModule(io as () => Promise<Record<string, unknown>>, {
+    getSettings: vi.fn().mockResolvedValue({}),
+    updateSettings: vi.fn().mockResolvedValue({}),
+  })
+);
+
+vi.mock("@/lib/api/analytics-payouts", (io) =>
+  wrapApiModule(io as () => Promise<Record<string, unknown>>, {
+    getSurgeHistory: vi.fn().mockResolvedValue([]),
+    getDriverOfferTrends: vi.fn().mockResolvedValue({ daily_chart: [] }),
+    getDemandForecast: vi.fn().mockResolvedValue({}),
+  })
+);
 
 // Stub Google Maps (used by heatmap/service-areas)
 vi.mock("@react-google-maps/api", () => ({
@@ -474,6 +531,39 @@ describe("Dashboard page — /dashboard/drivers/import", () => {
 describe("Dashboard page — /dashboard/bulk-operations", () => {
   it("renders without crashing", async () => {
     const { default: Page } = await import("@/app/dashboard/bulk-operations/page");
+    await expect(renderPage(Page)).resolves.not.toThrow();
+  });
+});
+
+describe("Dashboard page — /dashboard/heatmap", () => {
+  it("renders without crashing", async () => {
+    const { default: Page } = await import("@/app/dashboard/heatmap/page");
+    await expect(renderPage(Page)).resolves.not.toThrow();
+  });
+
+  it("shows the live demand section heading", async () => {
+    // Renamed from "Unmet Demand": demand_count includes rides that already
+    // have a driver, so the old label overstated stranded riders.
+    const { default: Page } = await import("@/app/dashboard/heatmap/page");
+    await act(async () => { render(<Page />); });
+    expect(screen.getByText("Live Demand Pressure")).toBeTruthy();
+  });
+
+  it("does not poll for demand until live updates are switched on", async () => {
+    // The poll previously ran from mount for every open tab, forever, hitting
+    // two of the most expensive admin endpoints whether or not anyone looked.
+    const api = await import("@/lib/api");
+    const spy = vi.mocked(api.getSurgeStatus);
+    spy.mockClear();
+    const { default: Page } = await import("@/app/dashboard/heatmap/page");
+    await act(async () => { render(<Page />); });
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe("Dashboard page — /dashboard/service-areas", () => {
+  it("renders without crashing", async () => {
+    const { default: Page } = await import("@/app/dashboard/service-areas/page");
     await expect(renderPage(Page)).resolves.not.toThrow();
   });
 });

@@ -73,20 +73,41 @@ async def _get_historical_hourly_demand(
     start = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
 
     try:
-        filters: Dict[str, Any] = {"status": "completed"}
-        rides = await db.get_rows("rides", filters, limit=10000, order="created_at")
+        # Push the window and the area into SQL, and sort newest-first.
+        #
+        # This previously fetched `SELECT *` of the OLDEST 10,000 completed
+        # rides platform-wide (get_rows defaults desc=False) and filtered by
+        # date and area in Python afterwards. Two consequences: multi-MB
+        # payloads per call, and — once lifetime completed rides passed
+        # ~10,000 — none of the oldest 10k fell inside the lookback window, so
+        # the forecast silently and permanently degraded to the hardcoded
+        # default curve while still paying the full query cost. Nothing
+        # surfaced, because "no data" is a legitimate state.
+        #
+        # (service_area_id, created_at DESC) matches the composite index added
+        # in migration 310.
+        filters: Dict[str, Any] = {"status": "completed", "created_at": {"$gte": start}}
+        if area_id:
+            filters["service_area_id"] = area_id
+        rides = await db.get_rows(
+            "rides",
+            filters,
+            limit=10000,
+            order="created_at",
+            desc=True,
+            columns="created_at,service_area_id",
+        )
     except Exception as e:
         logger.error(f"Forecast: failed to fetch rides: {e}")
         return {}
 
-    # Filter by date and optionally area
     buckets: Dict[int, Dict[int, List[str]]] = defaultdict(lambda: defaultdict(list))
 
     for r in rides:
         created = r.get("created_at", "")
+        # Belt-and-braces: the window is enforced in SQL above, but a
+        # malformed timestamp must not land in a bucket.
         if not isinstance(created, str) or created < start:
-            continue
-        if area_id and r.get("service_area_id") != area_id:
             continue
 
         dt = parse_iso_utc(created)

@@ -201,3 +201,76 @@ class TestPublicServiceAreas:
             r = client.get("/api/v1/service-areas")
 
         assert r.json()[0]["polygon"] == []
+
+
+_AIRPORT_ZONE_ROW = {
+    "id": "zone-apt-001",
+    "name": "Regina Airport",
+    "is_airport": True,
+    "airport_fee": 5.0,
+    "parent_service_area_id": "area-001",
+    "is_active": True,
+    "polygon": _PLAIN_POLYGON,
+}
+
+
+class TestAirportZones:
+    """Tests for GET /service-areas/{area_id}/airport-zones (HM-21)."""
+
+    def test_returns_airport_zones_for_parent(self, client):
+        from backend.routes import service_areas as mod
+
+        with patch.object(mod.db_supabase, "get_rows", AsyncMock(return_value=[_AIRPORT_ZONE_ROW])):
+            r = client.get("/api/v1/service-areas/area-001/airport-zones")
+
+        assert r.status_code == 200
+        body = r.json()
+        assert len(body) == 1
+        assert body[0]["id"] == "zone-apt-001"
+        assert body[0]["name"] == "Regina Airport"
+        assert body[0]["is_airport"] is True
+        assert body[0]["airport_fee"] == 5.0
+
+    def test_filters_by_parent_and_airport_flag(self, client):
+        from backend.routes import service_areas as mod
+
+        mock_get = AsyncMock(return_value=[])
+        with patch.object(mod.db_supabase, "get_rows", mock_get):
+            client.get("/api/v1/service-areas/area-001/airport-zones")
+
+        call_args = mock_get.call_args
+        filters = call_args[0][1]
+        assert filters["parent_service_area_id"] == "area-001"
+        assert filters["is_airport"] is True
+        assert filters["is_active"] is True
+
+    def test_returns_polygon_as_lat_lng_array(self, client):
+        from backend.routes import service_areas as mod
+
+        with patch.object(mod.db_supabase, "get_rows", AsyncMock(return_value=[_AIRPORT_ZONE_ROW])):
+            r = client.get("/api/v1/service-areas/area-001/airport-zones")
+
+        poly = r.json()[0]["polygon"]
+        assert isinstance(poly, list)
+        assert len(poly) == 4
+        assert all("lat" in p and "lng" in p for p in poly)
+
+    def test_empty_when_no_airport_zones(self, client):
+        from backend.routes import service_areas as mod
+
+        with patch.object(mod.db_supabase, "get_rows", AsyncMock(return_value=None)):
+            r = client.get("/api/v1/service-areas/area-001/airport-zones")
+
+        assert r.status_code == 200
+        assert r.json() == []
+
+    def test_only_airport_fields_exposed(self, client):
+        from backend.routes import service_areas as mod
+
+        enriched = {**_AIRPORT_ZONE_ROW, "surge_multiplier": 2.0, "gst_rate": 5.0}
+        with patch.object(mod.db_supabase, "get_rows", AsyncMock(return_value=[enriched])):
+            r = client.get("/api/v1/service-areas/area-001/airport-zones")
+
+        zone = r.json()[0]
+        assert "surge_multiplier" not in zone
+        assert "gst_rate" not in zone

@@ -10,7 +10,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuestStore, MyQuestProgress } from '../../store/questStore';
 import { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
-import type { ThemeColors } from '@shared/theme/index';
+import type { ThemeColors, ThemeColorKey } from '@shared/theme/index';
 
 /**
  * Quests & Bonuses.
@@ -24,7 +24,7 @@ import type { ThemeColors } from '@shared/theme/index';
  * These render fine in tests but the failures were on-device only, so keep them.
  */
 
-const QUEST_META: Record<string, { icon: string; label: string; tone: keyof ThemeColors }> = {
+const QUEST_META: Record<string, { icon: string; label: string; tone: ThemeColorKey }> = {
   ride_count: { icon: 'car', label: 'Complete rides', tone: 'primary' },
   rides_completed: { icon: 'car', label: 'Complete rides', tone: 'primary' },
   earnings_target: { icon: 'cash', label: 'Earnings target', tone: 'success' },
@@ -33,7 +33,7 @@ const QUEST_META: Record<string, { icon: string; label: string; tone: keyof Them
   consecutive_days: { icon: 'calendar', label: 'Consecutive days', tone: 'warning' },
   rating_maintained: { icon: 'star', label: 'Maintain rating', tone: 'gold' },
 };
-const metaFor = (t?: string): { icon: string; label: string; tone: keyof ThemeColors } => {
+const metaFor = (t?: string): { icon: string; label: string; tone: ThemeColorKey } => {
   if (t && QUEST_META[t]) return QUEST_META[t];
   const label = (t || 'Bonus challenge').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   return { icon: 'trophy', label, tone: 'primary' };

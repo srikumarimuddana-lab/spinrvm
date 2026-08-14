@@ -183,6 +183,12 @@ async def run_weekly_auto_payout() -> dict:
     except ImportError:
         from settings_loader import get_app_settings  # type: ignore
     settings = await get_app_settings()
+    # Ops kill switch (app_settings pattern — flag-without-redeploy rollback).
+    # Missing/None means enabled; only an explicit false turns the batch off.
+    _flag = settings.get("auto_payout_enabled")
+    if _flag is False or str(_flag).strip().lower() == "false":
+        logger.warning("[AUTO-PAYOUT] disabled via app_settings.auto_payout_enabled, skipping week %s", week_key)
+        return {"status": "disabled", "week_key": week_key}
     stripe_secret = settings.get("stripe_secret_key", "")
     if not stripe_secret:
         logger.error("[AUTO-PAYOUT] stripe_secret_key not configured, skipping")

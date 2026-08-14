@@ -218,6 +218,31 @@ class TestRunWeeklyAutoPayout:
         assert result["status"] == "stripe_not_configured"
 
     @pytest.mark.anyio
+    async def test_skips_when_disabled_via_settings(self):
+        from backend.utils.auto_payout import run_weekly_auto_payout
+
+        async def mock_get_rows(table, filters, **kw):
+            return []
+
+        inserts = []
+
+        async def mock_insert_one(table, doc):
+            inserts.append(table)
+
+        mock_settings = AsyncMock(return_value={"auto_payout_enabled": False, "stripe_secret_key": "sk_test_xxx"})
+
+        with (
+            patch("backend.utils.auto_payout.current_week_key", return_value=WEEK_KEY),
+            patch("backend.utils.auto_payout.db_supabase.get_rows", side_effect=mock_get_rows),
+            patch("backend.utils.auto_payout.db_supabase.insert_one", side_effect=mock_insert_one),
+            patch("backend.settings_loader.get_app_settings", mock_settings),
+        ):
+            result = await run_weekly_auto_payout()
+
+        assert result["status"] == "disabled"
+        assert inserts == []
+
+    @pytest.mark.anyio
     async def test_pays_eligible_driver(self):
         from backend.utils.auto_payout import run_weekly_auto_payout
 

@@ -33,13 +33,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 try:
-    from ... import db_supabase
     from ...dependencies import get_admin_user
     from ...services import stripe_payout_sync_service as sync_svc
     from ...settings_loader import get_app_settings
     from ...utils.audit_logger import log_admin_action
 except ImportError:
-    import db_supabase  # type: ignore  # noqa: F401
     from dependencies import get_admin_user  # noqa: F401
     from services import stripe_payout_sync_service as sync_svc  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
@@ -166,57 +164,3 @@ async def commit_payout_sync(
     )
     return {**_report(plan, batch), "committed": True, **result}
 
-
-@router.get("/auto-payouts/batches")
-async def list_auto_payout_batches(
-    limit: int = 20,
-    admin: dict = Depends(get_admin_user),
-):
-    """Weekly auto-payout batch ledger (auto_payout_batches), newest first.
-
-    Ops visibility for the Sunday batch: status (running/completed/partial/
-    failed), per-week counts, total amount, and the aggregated error summary.
-    Read-only; any admin role may view (no money moves here). Uses the
-    idx_auto_payout_batches_created index from migration 314.
-    """
-    limit = max(1, min(int(limit or 20), 100))
-    try:
-        rows = await db_supabase.get_rows("auto_payout_batches", {}, limit=limit, order="created_at", desc=True)
-    except Exception as e:
-        logger.error(f"Failed to list auto-payout batches: {e}", exc_info=True)
-        raise HTTPException(status_code=503, detail="Auto-payout batches temporarily unavailable") from e
-    return {"batches": rows, "count": len(rows)}
-
-
-@router.get("/auto-payouts/blocked-drivers")
-async def list_blocked_drivers(
-    limit: int = 50,
-    admin: dict = Depends(get_admin_user),
-):
-    """Drivers with money waiting that the weekly batch cannot pay right now.
-
-    Live preflight, not a replay of last week: it evaluates the same
-    eligibility gates the Sunday run uses (Stripe account present + payouts
-    enabled, not suspended, CRA GST BN + SIN on file), so ops can chase
-    blockers before the run. Each row carries the reason and the amount
-    being held.
-
-    Diagnostic endpoint — it computes a balance per blocked driver, so
-    keep `limit` modest. Returns driver_id only, never PII.
-    """
-    limit = max(1, min(int(limit or 50), 200))
-    try:
-        from ...utils.auto_payout import find_blocked_drivers
-    except ImportError:
-        from utils.auto_payout import find_blocked_drivers  # type: ignore
-
-    try:
-        rows = await find_blocked_drivers(limit)
-    except Exception as e:
-        logger.error(f"Failed to list blocked drivers: {e}", exc_info=True)
-        raise HTTPException(status_code=503, detail="Blocked-driver preflight temporarily unavailable") from e
-
-    by_reason: dict[str, int] = {}
-    for r in rows:
-        by_reason[r["reason"]] = by_reason.get(r["reason"], 0) + 1
-    return {"blocked": rows, "count": len(rows), "by_reason": by_reason}

@@ -75,6 +75,7 @@ from .ai_console import router as ai_console_router
 from .analytics import api_router as analytics_router
 from .auth import admin_auth_router
 from .auth import router as auth_router
+from .auto_payouts import router as auto_payouts_router
 from .booking_import import router as booking_import_router
 from .compliance import api_router as compliance_router
 from .data_transfer_export import router as data_transfer_export_router
@@ -213,6 +214,11 @@ admin_router.include_router(maintenance_router, dependencies=[Depends(require_mo
 admin_router.include_router(analytics_router, dependencies=[Depends(require_module("dashboard"))])
 admin_router.include_router(monitoring_router, dependencies=[Depends(require_module("dashboard"))])
 admin_router.include_router(wallet_router, dependencies=[Depends(require_module("earnings"))])
+# Weekly auto-payout batch ledger + blocked-driver preflight. Read-only
+# monitoring views, so they sit on the `earnings` module alongside the other
+# driver-payout surfaces rather than the super_admin posture of the payout
+# SYNC router — nothing here can trigger or alter a payout.
+admin_router.include_router(auto_payouts_router, dependencies=[Depends(require_module("earnings"))])
 admin_router.include_router(incentives_router, dependencies=[Depends(require_module("service_areas"))])
 admin_router.include_router(disputes_admin_router, dependencies=[Depends(require_module("disputes"))])
 admin_router.include_router(compliance_router, dependencies=[Depends(require_module("compliance"))])

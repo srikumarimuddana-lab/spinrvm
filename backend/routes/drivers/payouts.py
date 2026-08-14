@@ -818,7 +818,7 @@ def _require_sin_for_payout(driver: dict) -> None:
 async def _require_instant_payout_enabled(driver: dict) -> None:
     """Block instant payout when the driver's service area has it disabled.
 
-    Per-service-area kill switch (migration 313). Drivers without a
+    Per-service-area kill switch (migration 314). Drivers without a
     service_area_id are allowed through — the kill switch is opt-out per
     market, not a global default-off."""
     sa_id = driver.get("service_area_id")
@@ -1066,7 +1066,7 @@ async def request_instant_payout(
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
     # Per-service-area kill switch: ops can disable instant payouts in
-    # specific markets without a code deploy (migration 313).
+    # specific markets without a code deploy (migration 314).
     await _require_instant_payout_enabled(driver)
 
     # CRA: rideshare drivers must be GST/HST-registered from their first fare.

@@ -278,6 +278,11 @@ KNOWN_KEY_PREFIXES = [
     "spinr:ws:",  # WebSocket pub/sub channel state
     "spinr:presence:driver:",  # Uber/Lyft-style driver presence (TTL heartbeat)
     "fares:",  # per-area fare config cache
+    # Registered so the ops Redis dashboard attributes these instead of
+    # bucketing them into __other__ — which is exactly when you need the
+    # attribution: someone staring at a memory graph trying to find the growth.
+    "spinr:heatmap:",  # per-area driver heatmap payload cache
+    "spinr:surge:status:",  # admin surge-status snapshot (30s)
 ]
 
 

@@ -228,8 +228,25 @@ export default function HeatMapPage() {
     useEffect(() => {
         if (!showDemand) return;
         fetchDemandData();
-        const interval = setInterval(fetchDemandData, 120_000);
-        return () => clearInterval(interval);
+
+        // Jittered rather than a fixed 120s interval. Every open tab that
+        // enabled this at the same time (a shift handover, an incident everyone
+        // opens at once) would otherwise land its polls in the same instant,
+        // and each poll fans out to the surge-status and forecast endpoints.
+        // ±10% is enough to spread them without changing the effective cadence.
+        let cancelled = false;
+        let timer: ReturnType<typeof setTimeout>;
+        const scheduleNext = () => {
+            const delay = 120_000 * (1 + (Math.random() * 0.2 - 0.1));
+            timer = setTimeout(() => {
+                if (cancelled) return;
+                fetchDemandData();
+                scheduleNext();
+            }, delay);
+        };
+        scheduleNext();
+
+        return () => { cancelled = true; clearTimeout(timer); };
     }, [fetchDemandData, showDemand]);
 
     // Convert API data to HeatMap component format.

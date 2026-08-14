@@ -15,6 +15,7 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 DRIVER_ID = "driver_auto_001"
 WEEK_KEY = "2026-W33"

@@ -35,6 +35,8 @@ export type ThemeColors = {
   warningBg: string;
   dangerBg: string;
   infoBg: string;
+  // Heatmap — 5-step sequential ramp (quiet → busy)
+  heatmapRamp: [string, string, string, string, string];
   // Aliases / Legacy
   accent: string;
   accentDim: string;
@@ -62,6 +64,7 @@ export const lightColors: ThemeColors = {
   warningBg: '#FFF7ED',
   dangerBg:  '#FEF2F2',
   infoBg:    '#EFF6FF',
+  heatmapRamp: ['#FFE3E0', '#FFB3AC', '#FF7A6E', '#FF3B30', '#B71C1C'],
   accent: '#FF3B30',
   accentDim: '#D32F2F',
   danger: '#DC2626',
@@ -91,11 +94,14 @@ export const darkColors: ThemeColors = {
   warningBg: '#431A03',
   dangerBg:  '#3D0B0B',
   infoBg:    '#0B243D',
+  heatmapRamp: ['#4E211E', '#7F2D26', '#B2382E', '#FF453A', '#FF8A80'],
   accent: '#FF453A',
   accentDim: '#D32F2F',
   danger: '#FF453A',
   orange: '#FF9F0A',        // iOS system orange (dark)
   gold: '#FFD700',
 };
+
+export type ThemeColorKey = { [K in keyof ThemeColors]: ThemeColors[K] extends string ? K : never }[keyof ThemeColors];
 
 export type ColorScheme = 'light' | 'dark' | 'system';

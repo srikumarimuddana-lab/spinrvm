@@ -1,16 +1,40 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { getHeatMapData, getHeatMapSettings, getServiceAreas, HeatMapData, HeatMapSettings } from "@/lib/api";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import { getHeatMapData, getHeatMapSettings, getServiceAreas, getSurgeStatus, getDemandForecast, HeatMapData, HeatMapSettings } from "@/lib/api";
 import dynamic from "next/dynamic";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Loader2, RefreshCw, Users, Car, Building2 } from "lucide-react";
+import { Loader2, RefreshCw, Users, Car, Building2, AlertTriangle, TrendingUp, TrendingDown } from "lucide-react";
+import {
+    DEMAND_BANDS,
+    bandForRatio,
+    bandRangeLabel,
+    demandBarWidths,
+    demandPressure,
+    isDormant,
+} from "@/lib/demand-bands";
+import { ForecastSlot, toForecastSlots, forecastBarHeightPct } from "@/lib/demand-forecast-transform";
+
+interface AreaDemand {
+    area_id: string;
+    name: string;
+    demand_count: number;
+    supply_count: number;
+    ratio: number;
+    multiplier: number;
+    surge_active: boolean;
+    surge_enabled: boolean;
+    source: string;
+    /** Active demand above idle supply — a pressure signal, NOT stranded riders. */
+    pressure: number;
+}
 
 // Dynamic import — MapLibre GL needs window, so defer to client.
 const HeatMap = dynamic(() => import("@/components/heat-map"), {
@@ -48,6 +72,16 @@ export default function HeatMapPage() {
     // Display toggles
     const [showPickups, setShowPickups] = useState(true);
     const [showDropoffs, setShowDropoffs] = useState(true);
+
+    // Live demand state. `showDemand` gates the 2-minute poll: without it the
+    // page hit two of the most expensive admin endpoints forever from mount,
+    // for every open tab, whether or not anyone was looking at the section.
+    const [showDemand, setShowDemand] = useState(false);
+    const [demandAreas, setDemandAreas] = useState<AreaDemand[]>([]);
+    const [demandLoading, setDemandLoading] = useState(true);
+    const [demandError, setDemandError] = useState<string | null>(null);
+    const [demandFetchedAt, setDemandFetchedAt] = useState<Date | null>(null);
+    const [forecast, setForecast] = useState<ForecastSlot[]>([]);
 
     // Fetch initial data
     useEffect(() => {
@@ -128,18 +162,86 @@ export default function HeatMapPage() {
         fetchHeatMapData();
     }, [fetchHeatMapData]);
 
-    // Convert API data to HeatMap component format
-    const pickupPoints = heatMapData?.pickup_points?.map((p) => ({
-        lat: p[0],
-        lng: p[1],
-        intensity: p[2],
-    })) || [];
+    // Fetch live demand + forecast.
+    //
+    // The two calls are settled independently rather than via Promise.all:
+    // they are gated by different admin modules (service_areas vs dashboard),
+    // so an all-or-nothing await meant a module-limited admin lost the half
+    // they were entitled to see — and the empty state then blamed the surge
+    // engine for what was really a permissions gap.
+    const fetchDemandData = useCallback(() => {
+        setDemandLoading(true);
+        const areaIdParam = serviceAreaId === "all" ? undefined : serviceAreaId;
 
-    const dropoffPoints = heatMapData?.dropoff_points?.map((p) => ({
-        lat: p[0],
-        lng: p[1],
-        intensity: p[2],
-    })) || [];
+        const surgeP = getSurgeStatus()
+            .then((surgeRes: any) => {
+                const areas: AreaDemand[] = (surgeRes || []).map((a: any) => ({
+                    area_id: a.area_id,
+                    name: a.name,
+                    demand_count: a.demand_count ?? 0,
+                    supply_count: a.supply_count ?? 0,
+                    ratio: a.ratio ?? 0,
+                    multiplier: a.multiplier ?? 1.0,
+                    surge_active: a.surge_active ?? false,
+                    // Areas with surge administratively off must not be
+                    // presented as if their ratio were driving pricing.
+                    surge_enabled: a.surge_enabled ?? true,
+                    source: a.source ?? "auto",
+                    pressure: demandPressure(a.demand_count ?? 0, a.supply_count ?? 0),
+                }));
+                areas.sort((a, b) => b.ratio - a.ratio);
+                setDemandAreas(areas);
+                setDemandError(null);
+                setDemandFetchedAt(new Date());
+            })
+            .catch((err) => {
+                // Never swallow: stale colours with no signal invite bad calls.
+                console.error("demand status fetch failed", err);
+                setDemandError(
+                    err?.status === 403
+                        ? "You don't have the Service Areas module, so live demand can't be shown."
+                        : "Couldn't refresh live demand."
+                );
+            });
+
+        const forecastP = getDemandForecast(6, areaIdParam)
+            .then((forecastRes: any) => setForecast(toForecastSlots(forecastRes)))
+            .catch((err) => {
+                console.error("demand forecast fetch failed", err);
+                setForecast([]);
+            });
+
+        Promise.allSettled([surgeP, forecastP]).then(() => setDemandLoading(false));
+    }, [serviceAreaId]);
+
+    useEffect(() => {
+        if (!showDemand) return;
+        fetchDemandData();
+        const interval = setInterval(fetchDemandData, 120_000);
+        return () => clearInterval(interval);
+    }, [fetchDemandData, showDemand]);
+
+    // Convert API data to HeatMap component format.
+    //
+    // Memoised on heatMapData, not recreated per render. <HeatMap> keys its
+    // data-sync effect on prop identity and calls an animated fitBounds() at
+    // the end of it, so fresh array/object literals on every render meant the
+    // 2-minute demand poll silently yanked an operator's zoomed-in map back to
+    // full extent — a re-render caused by state this map does not consume.
+    const pickupPoints = useMemo(
+        () => heatMapData?.pickup_points?.map((p) => ({ lat: p[0], lng: p[1], intensity: p[2] })) ?? [],
+        [heatMapData],
+    );
+
+    const dropoffPoints = useMemo(
+        () => heatMapData?.dropoff_points?.map((p) => ({ lat: p[0], lng: p[1], intensity: p[2] })) ?? [],
+        [heatMapData],
+    );
+
+    const heatMapSettings = useMemo(
+        () => ({ radius: settings?.heat_map_radius || 25, blur: settings?.heat_map_blur || 15 }),
+        [settings?.heat_map_radius, settings?.heat_map_blur],
+    );
 
     const stats = heatMapData?.stats || { total_rides: 0, corporate_rides: 0, regular_rides: 0 };
 
@@ -149,7 +251,9 @@ export default function HeatMapPage() {
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">Heat Map</h1>
                     <p className="text-muted-foreground mt-1">
-                        View ride density patterns across the platform.
+                        Historical ride density —{" "}
+                        {DATE_RANGE_PRESETS.find((p) => p.value === dateRange)?.label ?? "custom range"}.
+                        Live demand is in the section below.
                     </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -334,10 +438,7 @@ export default function HeatMapPage() {
                             dropoffPoints={dropoffPoints}
                             showPickups={showPickups}
                             showDropoffs={showDropoffs}
-                            settings={{
-                                radius: settings?.heat_map_radius || 25,
-                                blur: settings?.heat_map_blur || 15,
-                            }}
+                            settings={heatMapSettings}
                             height="600px"
                         />
                     )}
@@ -364,6 +465,284 @@ export default function HeatMapPage() {
                     </div>
                 </CardContent>
             </Card>
+
+            {/* ── Unmet Demand Section ─────────────────────────── */}
+            <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h2 className="text-xl font-semibold tracking-tight">Live Demand Pressure</h2>
+                        <p className="text-sm text-muted-foreground">
+                            Current demand vs idle drivers per service area — separate from the
+                            historical ride-density map above. Refreshes every 2 minutes while on.
+                        </p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2">
+                            <Switch id="show-live-demand" checked={showDemand} onCheckedChange={setShowDemand} />
+                            <Label htmlFor="show-live-demand" className="text-sm">Live updates</Label>
+                        </div>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={fetchDemandData}
+                            disabled={demandLoading || !showDemand}
+                        >
+                            <RefreshCw className={`mr-2 h-4 w-4 ${demandLoading ? "animate-spin" : ""}`} />
+                            Refresh
+                        </Button>
+                    </div>
+                </div>
+
+                {/* Staleness / error banner. Silent failure here means an operator
+                    reads minutes-old colours as live and acts on them. */}
+                {showDemand && demandError && (
+                    <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                        {demandError}
+                        {demandFetchedAt && (
+                            <span className="text-muted-foreground">
+                                {" "}Showing data from {demandFetchedAt.toLocaleTimeString()}.
+                            </span>
+                        )}
+                    </div>
+                )}
+                {showDemand && !demandError && demandFetchedAt && (
+                    <p className="text-xs text-muted-foreground" aria-live="polite">
+                        Demand data as of {demandFetchedAt.toLocaleTimeString()}
+                    </p>
+                )}
+                {!showDemand && (
+                    <Card>
+                        <CardContent className="py-8 text-center text-sm text-muted-foreground">
+                            Live updates are off. Turn them on to poll current demand and supply.
+                        </CardContent>
+                    </Card>
+                )}
+
+                {/* Summary stats */}
+                {showDemand && demandAreas.length > 0 && (
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <Card>
+                            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                                <CardTitle className="text-sm font-medium">Active Demand</CardTitle>
+                                <TrendingUp className="h-4 w-4 text-orange-500" />
+                            </CardHeader>
+                            <CardContent>
+                                <div className="text-2xl font-bold">
+                                    {demandAreas.reduce((s, a) => s + a.demand_count, 0)}
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                    rides in the last 10 min, incl. already matched
+                                </p>
+                            </CardContent>
+                        </Card>
+                        <Card>
+                            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                                <CardTitle className="text-sm font-medium">Idle Supply</CardTitle>
+                                <Car className="h-4 w-4 text-green-500" />
+                            </CardHeader>
+                            <CardContent>
+                                <div className="text-2xl font-bold">
+                                    {demandAreas.reduce((s, a) => s + a.supply_count, 0)}
+                                </div>
+                                <p className="text-xs text-muted-foreground">drivers online and available now</p>
+                            </CardContent>
+                        </Card>
+                        <Card>
+                            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                                <CardTitle className="text-sm font-medium">Demand Pressure</CardTitle>
+                                <AlertTriangle className="h-4 w-4 text-destructive" />
+                            </CardHeader>
+                            <CardContent>
+                                <div className="text-2xl font-bold text-destructive">
+                                    {demandAreas.reduce((s, a) => s + a.pressure, 0)}
+                                </div>
+                                {/* Deliberately NOT "unfulfilled requests": demand_count
+                                    includes rides that already have a driver, so this
+                                    figure overstates stranded riders — a busy but
+                                    fully-served market reads as a crisis. */}
+                                <p className="text-xs text-muted-foreground">
+                                    demand above idle supply — not stranded riders
+                                </p>
+                            </CardContent>
+                        </Card>
+                        <Card>
+                            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                                <CardTitle className="text-sm font-medium">Surge Active</CardTitle>
+                                <TrendingDown className="h-4 w-4 text-amber-500" />
+                            </CardHeader>
+                            <CardContent>
+                                <div className="text-2xl font-bold">
+                                    {demandAreas.filter(a => a.surge_active).length} / {demandAreas.length}
+                                </div>
+                                <p className="text-xs text-muted-foreground">areas with surge pricing</p>
+                            </CardContent>
+                        </Card>
+                    </div>
+                )}
+
+                {/* Band legend — the same scale the monitoring map uses, so the
+                    two screens can't drift apart in an operator's head. */}
+                {showDemand && demandAreas.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                        <span className="font-medium">Demand : supply ratio</span>
+                        {DEMAND_BANDS.map((band) => (
+                            <span key={band.key} className="flex items-center gap-1.5 text-muted-foreground">
+                                <span
+                                    aria-hidden="true"
+                                    className="inline-block h-2.5 w-2.5 rounded-sm"
+                                    style={{ backgroundColor: band.color }}
+                                />
+                                {band.label} ({bandRangeLabel(band)}) → {band.multiplier.toFixed(2)}× fare
+                            </span>
+                        ))}
+                    </div>
+                )}
+
+                {/* Per-area demand cards */}
+                {showDemand && (demandLoading && demandAreas.length === 0 ? (
+                    <div className="flex items-center justify-center py-8">
+                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                        <span className="sr-only">Loading demand data</span>
+                    </div>
+                ) : demandAreas.length === 0 ? (
+                    <Card>
+                        <CardContent className="py-8 text-center text-sm text-muted-foreground">
+                            {demandError
+                                ? "Demand data could not be loaded — see the message above."
+                                : "No active service areas reported demand data."}
+                        </CardContent>
+                    </Card>
+                ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {demandAreas.map((area) => {
+                            const band = bandForRatio(area.ratio);
+                            const dormant = isDormant(area.demand_count, area.supply_count);
+                            const bar = demandBarWidths(area.demand_count, area.supply_count);
+                            return (
+                                <Card
+                                    key={area.area_id}
+                                    style={dormant ? undefined : { borderColor: `${band.color}80` }}
+                                    className={dormant ? "opacity-70" : ""}
+                                >
+                                    <CardHeader className="pb-2">
+                                        <div className="flex items-center justify-between">
+                                            <CardTitle className="text-sm font-medium">{area.name}</CardTitle>
+                                            <div className="flex items-center gap-1.5">
+                                                {area.surge_active && (
+                                                    <Badge variant="outline" className="text-xs bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30">
+                                                        {area.multiplier.toFixed(2)}× surge
+                                                    </Badge>
+                                                )}
+                                                {area.source === "manual" && (
+                                                    <Badge variant="outline" className="text-xs">Manual</Badge>
+                                                )}
+                                                {/* An area with surge switched off is not a
+                                                    candidate for "go enable surge" — say so
+                                                    rather than colouring it like one. */}
+                                                {!area.surge_enabled && (
+                                                    <Badge variant="outline" className="text-xs text-muted-foreground">
+                                                        Surge off
+                                                    </Badge>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </CardHeader>
+                                    <CardContent>
+                                        {dormant ? (
+                                            <p className="py-2 text-sm text-muted-foreground">
+                                                No activity — no ride requests and no drivers online.
+                                            </p>
+                                        ) : (
+                                            <div className="space-y-2">
+                                                <div className="flex items-center justify-between text-sm">
+                                                    <span className="text-muted-foreground">Demand / idle supply</span>
+                                                    <span className="font-mono font-medium">
+                                                        {area.demand_count} / {area.supply_count}
+                                                    </span>
+                                                </div>
+                                                <div className="flex items-center justify-between text-sm">
+                                                    <span className="text-muted-foreground">Ratio</span>
+                                                    <span className={`font-mono font-medium ${band.textClass}`}>
+                                                        {area.ratio.toFixed(2)}
+                                                        <span className="ml-1 font-sans text-xs font-normal">
+                                                            ({band.label})
+                                                        </span>
+                                                    </span>
+                                                </div>
+                                                {area.pressure > 0 && (
+                                                    <div className="flex items-center justify-between text-sm">
+                                                        <span className="text-muted-foreground">Demand pressure</span>
+                                                        <span className="font-mono font-medium">
+                                                            +{area.pressure} over idle drivers
+                                                        </span>
+                                                    </div>
+                                                )}
+                                                <div className="mt-1">
+                                                    <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted">
+                                                        <div
+                                                            className="h-full bg-green-600 transition-all"
+                                                            style={{ width: `${bar.supplyPct}%` }}
+                                                        />
+                                                        <div
+                                                            className="h-full bg-destructive transition-all"
+                                                            style={{ width: `${bar.gapPct}%` }}
+                                                        />
+                                                    </div>
+                                                    <div className="mt-1 flex justify-between text-[11px] text-muted-foreground">
+                                                        <span>Idle drivers</span>
+                                                        <span>Demand above supply</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </CardContent>
+                                </Card>
+                            );
+                        })}
+                    </div>
+                ))}
+
+                {/* Demand forecast preview */}
+                {showDemand && forecast.length > 0 && (
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="text-lg">
+                                6-Hour Demand Forecast
+                                <span className="ml-2 text-sm font-normal text-muted-foreground">
+                                    {serviceAreaId === "all"
+                                        ? "— all areas"
+                                        : `— ${serviceAreas.find((a) => a.id === serviceAreaId)?.name ?? "selected area"}`}
+                                </span>
+                            </CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="flex items-end gap-2 h-32">
+                                {forecast.slice(0, 12).map((slot) => (
+                                    <div key={slot.hour} className="flex flex-1 flex-col items-center gap-1">
+                                        <div
+                                            className={`w-full rounded-t transition-all ${slot.isPeak ? "bg-orange-600" : "bg-orange-500/70"}`}
+                                            style={{ height: `${forecastBarHeightPct(slot, forecast.slice(0, 12))}%` }}
+                                        />
+                                        {/* The value lives in real text, not only a
+                                            hover tooltip, so keyboard and screen-reader
+                                            users get the chart's actual content. */}
+                                        <span className="sr-only">
+                                            {slot.label}: {slot.predictedRides} predicted rides
+                                            {slot.isPeak ? " (peak)" : ""}
+                                        </span>
+                                        <span aria-hidden="true" className="text-[11px] text-muted-foreground">
+                                            {slot.label}
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+                            <p className="mt-2 text-xs text-muted-foreground text-center">
+                                Predicted rides per hour over the next 6 hours
+                            </p>
+                        </CardContent>
+                    </Card>
+                )}
+            </div>
         </div>
     );
 }

@@ -5162,6 +5162,56 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   confirmed policy — and whichever way it resolves, that decision is
   written down so this doesn't silently drift a third time.
 
+### B27. `charge.dispute.closed` mis-marks rides and can update the wrong dispute row; dispute fees never reach the ledger
+
+- [ ] **Status:** open (found 2026-08-14 while writing
+  `docs/runbooks/payment-dispute-evidence.md`). Real money path, no live
+  chargeback has exercised it yet — which is why it's still latent.
+- **Issue/gap:** three defects in the `charge.dispute.closed` branch of
+  `backend/routes/webhooks.py` (≈ line 1183):
+  1. **`warning_closed` is treated as a loss.** Stripe fires
+     `charge.dispute.closed` for `won`, `lost` *and* `warning_closed` (an
+     early-fraud-warning/inquiry that resolved without becoming a real
+     chargeback). The code is `new_payment_status = "paid" if
+     dispute_status == "won" else "dispute_lost"` — so an inquiry that
+     closed in our favour permanently marks a fully-paid ride
+     `dispute_lost`, corrupting revenue reporting and the rider's record.
+  2. **The dispute row is looked up by `payment_intent_id`, not by
+     `stripe_dispute_id`.** `find_one("stripe_disputes",
+     {"payment_intent_id": pi})` ignores the table's only unique key
+     (`idx_stripe_disputes_dispute_id`). When the PI is absent Stripe sends
+     `""`, and rows are inserted with `""` too — so a PI-less close can
+     match an arbitrary earlier PI-less row and overwrite *its* status.
+     Two disputes on one PI hit the same bug.
+  3. **The dispute fee never lands in `financial_events`.** Stripe debits
+     the disputed amount *and* a per-dispute fee via
+     `dispute.balance_transactions`; neither is recorded, so
+     `docs/runbooks/stripe-reconciliation.md` will show an unexplained
+     delta for every chargeback.
+- **Also missing:** `charge.dispute.updated` is not in
+  `_STRIPE_HANDLED_EVENTS`, so `needs_response → under_review` transitions
+  are invisible; `charge.dispute.funds_withdrawn` /
+  `funds_reinstated` likewise.
+- **Action:** key the close lookup on `stripe_dispute_id`; map
+  `warning_closed` to a non-loss status (leave `paid`, or add a distinct
+  value — do **not** reuse `dispute_lost`); record the balance-transaction
+  amounts as `financial_events` rows; add `charge.dispute.updated` to the
+  allowlist.
+- **Risk of implementing:** low-moderate — webhook-only, additive on the
+  ledger side. The `warning_closed` fix changes what an existing branch
+  writes to `rides.payment_status`, so it needs a before/after in the
+  Change Impact Log and a check for any consumer that reads
+  `payment_status == 'dispute_lost'`.
+- **Verification:** extend `backend/tests/test_routes_webhooks_coverage.py`
+  — it covers `won`/`lost` but has no `warning_closed` case and no
+  two-disputes-one-PI case.
+- **Files:** `backend/routes/webhooks.py`, `backend/migrations/` (nullable
+  `evidence_due_by`/fee columns if taken with C23),
+  `backend/tests/test_routes_webhooks_coverage.py`
+- **Acceptance:** a `warning_closed` event leaves a paid ride `paid`; a
+  PI-less close updates only its own row; every closed dispute has matching
+  `financial_events` rows for the debit and the fee.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly
@@ -7403,6 +7453,62 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 - **Files:** `rider-app/tsconfig.json`, `driver-app/tsconfig.json`,
   `admin-dashboard/tsconfig.json` (+ possibly a new `vitest-setup.d.ts` in
   admin-dashboard); no application code.
+
+### C23. Chargeback operations: no deadline tracking, no admin visibility, no evidence tooling
+
+- [ ] **Status:** open (filed 2026-08-14 alongside
+  `docs/runbooks/payment-dispute-evidence.md`, which documents the manual
+  workaround for all three).
+- **Issue/gap:** the webhook records a chargeback and then nothing else
+  happens. Specifically:
+  1. **No `evidence_due_by`.** Stripe puts
+     `dispute.evidence_details.due_by` on the event; we drop it. Miss the
+     date (7–21 days depending on network) and the dispute is lost
+     automatically with no evidence considered. Nothing warns as it
+     approaches.
+  2. **No admin UI over `stripe_disputes` at all.** The Disputes page
+     (`admin-dashboard/src/app/dashboard/disputes`) reads the `disputes`
+     table — rider-raised refund requests, a different thing. Card-network
+     chargebacks are visible only via SQL or the Stripe Dashboard. The
+     `charge_dispute_created` admin WS broadcast fires into a UI that has
+     nowhere to show it.
+  3. **No evidence pack.** Assembling a response is 4–6 endpoints and 3 SQL
+     queries by hand (see the runbook). Everything needed already exists —
+     invoice PDF, `route-map.png`, `location-trail`, ride timeline,
+     `ride_offers`, account history, `ride_messages` — just not in one
+     place.
+  4. **No submission path.** `stripe.Dispute.modify(...)` is never called;
+     evidence is uploaded manually in the Stripe Dashboard.
+- **Action (in priority order):**
+  1. Additive migration: `evidence_due_by timestamptz`,
+     `evidence_submitted_at timestamptz`, `fee_cents integer` on
+     `stripe_disputes`; populate `evidence_due_by` in the
+     `charge.dispute.created` handler.
+  2. Alert on approach — a Sentry rule on the existing `CHARGEBACK:` error
+     log for the open event, plus a T-3-days warning (a replay-safe
+     background loop per `spinr-background-loop`, or a Stripe Dashboard
+     notification if we'd rather not add a 19th loop).
+  3. "Chargebacks" tab on the existing Disputes page reading
+     `stripe_disputes` — ride link, reason, amount, status, due date,
+     days-remaining. Read-only first.
+  4. `GET /api/admin/rides/{ride_id}/dispute-pack` → zip of invoice PDF,
+     route-map PNG, GPS-trail CSV, timeline JSON, account-history summary,
+     draft cover letter. PIPEDA-filtered by construction (driver_code only,
+     never driver phone/plate/address; GPS clipped to
+     `navigating_to_pickup` + `trip_in_progress`, matching what
+     `route-map.png` already does).
+  5. Only then consider submitting from admin via the Stripe Files API —
+     higher risk, and the Dashboard works.
+- **Why it's P2 not P1:** chargeback volume is currently ~zero, and the
+  runbook makes the manual path workable. Items 1–2 should jump to P1 the
+  first time a real dispute lands, because a missed deadline is an
+  unrecoverable loss.
+- **Files:** `backend/routes/webhooks.py`, new `backend/migrations/NN_*.sql`,
+  `backend/routes/admin/rides.py` (pack endpoint),
+  `admin-dashboard/src/app/dashboard/disputes/`
+- **Acceptance:** every open chargeback is visible in admin with its
+  deadline; a support agent can produce a complete, PIPEDA-clean evidence
+  pack for a ride in one click.
 
 ## P3 — Post-launch backlog (tracked, not gating)
 

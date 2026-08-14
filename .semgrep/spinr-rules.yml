@@ -72,13 +72,41 @@ rules:
       - pattern-not: float($X.quantize(...))
       - pattern-not: float(Decimal(...).quantize(...))
     paths:
+      # Every path here is verified to exist and to be free of findings under
+      # the pattern-nots above, so this rule can be made merge-blocking without
+      # first turning CI red. Two entries were previously dead — "fare_split.py"
+      # has no Python module anywhere (the feature is a Postgres RPC), and the
+      # corporate wallet service is named corporate_wallet_service.py — so the
+      # allowlist silently covered four files, not six.
       include:
         - "backend/routes/fares.py"
         - "backend/routes/payments.py"
         - "backend/routes/wallet.py"
-        - "backend/routes/fare_split.py"
+        - "backend/routes/rides/payments.py"
         - "backend/services/fare_service.py"
-        - "backend/services/corporate_wallet.py"
+        - "backend/services/payment_service.py"
+        - "backend/services/corporate_wallet_service.py"
+        - "backend/services/corporate_allowance_service.py"
+        - "backend/services/corporate_subscription_service.py"
+        - "backend/utils/stripe_charge.py"
+      # Deliberately NOT covered, with reasons — so the next person does not
+      # "helpfully" add them and turn the gate red:
+      #
+      #   backend/routes/drivers/earnings.py
+      #     Genuinely a money file, but its float() calls are Decimal->float at
+      #     the JSON response boundary (`"total_tax": float(_total_tax)`), which
+      #     CLAUDE.md mandates. They are not wrapped in _round()/_d() so the
+      #     pattern-nots do not clear them. Covering it needs either a boundary
+      #     pattern the rule can recognise or wrapping those conversions — the
+      #     latter changes rounding on live payout figures, so it is not a
+      #     drive-by edit.
+      #
+      #   backend/routes/drivers/_shared.py
+      #     Its float() calls are GPS coordinates, not money. Adding it would
+      #     generate pure noise and train people to ignore this rule.
+      #
+      #   backend/utils/payment_retry.py
+      #     Its one float() parses a unix timestamp, not an amount.
     message: |
       Money arithmetic must use Decimal. Use _d(), _round(), _f() helpers.
       See CLAUDE.md "Money arithmetic" rule.

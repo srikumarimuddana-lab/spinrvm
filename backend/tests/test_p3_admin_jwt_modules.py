@@ -119,8 +119,7 @@ class TestMintAdminAccessToken:
             "settings",
             "corporate_accounts",
             "documents",
-            "heatmap",
-            "staff",
+                    "staff",
         ]
         token = _mint(role="super_admin", modules=all_modules)
         payload = _decode(token)

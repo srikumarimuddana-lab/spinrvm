@@ -76,7 +76,14 @@ const NAV_GROUPS: NavGroup[] = [
                 ],
             },
             { href: "/dashboard/users", label: "Users", icon: Users, module: "users" },
-            { href: "/dashboard/heatmap", label: "Heat Map", icon: Flame, module: "heatmap" },
+            // Gated on "rides", not the former "heatmap" module: this page's
+            // primary content is /rides/heatmap-data, which require_module("rides")
+            // already enforces. "heatmap" gated no backend route at all — it only
+            // showed or hid this link — so an admin holding it without "rides" saw
+            // the link and then a page whose map request 403'd. Removed from the
+            // grantable list; see the note on AVAILABLE_MODULES in
+            // backend/routes/admin/staff.py.
+            { href: "/dashboard/heatmap", label: "Heat Map", icon: Flame, module: "rides" },
             { href: "/dashboard/analytics", label: "Analytics", icon: LayoutDashboard, module: "dashboard" },
             { href: "/dashboard/driver-offers", label: "Driver Offers", icon: Send, module: "dashboard" },
             // Referrals live inside Earnings & Payouts → Referrals tab. This

@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { AppState } from 'react-native';
 import api from '@shared/api/client';
 
+import { publishDemandHeatmap, registerDemandHeatmapPublisher } from './demandHeatmapShared';
+
 export type HeatmapCell = {
   lat: number;
   lng: number;
@@ -52,6 +54,9 @@ type HeatmapResponse = {
   total_rides?: number;
   refresh_seconds?: number;
   generated_at?: string;
+  /** Grid size the server bucketed with; absent on older backends. */
+  cell_lat_deg?: number;
+  cell_lng_deg?: number;
 };
 
 const DEFAULT_REFRESH_SECONDS = 90;
@@ -83,6 +88,11 @@ export function useDemandHeatmap(rideState: string, isOnline: boolean) {
   const [forecast, setForecast] = useState<ForecastEntry[]>([]);
   const [status, setStatus] = useState<HeatmapStatus>('loading');
   const [refreshSeconds, setRefreshSeconds] = useState(DEFAULT_REFRESH_SECONDS);
+  // Grid size the SERVER bucketed with. Null until a v2 payload arrives (and
+  // on older backends that don't send it), in which case renderers keep their
+  // own defaults.
+  const [cellLatDeg, setCellLatDeg] = useState<number | null>(null);
+  const [cellLngDeg, setCellLngDeg] = useState<number | null>(null);
   const lastFetchRef = useRef<number>(0);
   const errorCountRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -114,6 +124,13 @@ export function useDemandHeatmap(rideState: string, isOnline: boolean) {
       if (Array.isArray(data.cells)) {
         setV2Cells(data.cells);
         setIsV2(true);
+        // Only accept a sane positive number: a null/garbage value must fall
+        // back to the renderer's constants, never produce NaN corners (which
+        // crash the native Polygon on Android).
+        const cLat = data.cell_lat_deg;
+        const cLng = data.cell_lng_deg;
+        setCellLatDeg(typeof cLat === 'number' && Number.isFinite(cLat) && cLat > 0 ? cLat : null);
+        setCellLngDeg(typeof cLng === 'number' && Number.isFinite(cLng) && cLng > 0 ? cLng : null);
         setSurge(data.surge || null);
         setForecast(data.forecast || []);
         const weighted = v2CellsToWeighted(data.cells, layer);
@@ -128,6 +145,8 @@ export function useDemandHeatmap(rideState: string, isOnline: boolean) {
         setCells(pts);
         setV2Cells([]);
         setIsV2(false);
+        setCellLatDeg(null);
+        setCellLngDeg(null);
         setSurge(data.surge || null);
         setForecast([]);
         setStatus(pts.length > 0 ? 'ready' : 'empty');
@@ -226,6 +245,17 @@ export function useDemandHeatmap(rideState: string, isOnline: boolean) {
     }));
   }, [isV2, cells]);
 
+  // Publish to the shared snapshot so read-only surfaces (the Android Auto
+  // car map) mirror this hook instead of running a second poller with a
+  // different online signal. Registration is refcounted; when the last
+  // publisher unmounts the shared snapshot resets to idle, so the car shows
+  // nothing rather than a frozen map that looks live.
+  useEffect(() => registerDemandHeatmapPublisher(), []);
+
+  useEffect(() => {
+    publishDemandHeatmap({ cells, status, surge, isV2, cellLatDeg, cellLngDeg });
+  }, [cells, status, surge, isV2, cellLatDeg, cellLngDeg]);
+
   return {
     cells,
     status,
@@ -243,5 +273,9 @@ export function useDemandHeatmap(rideState: string, isOnline: boolean) {
     // Exposed so the effective poll interval (post-clamp) is observable —
     // it drives fleet-wide request volume and must be assertable in tests.
     refreshSeconds,
+    // Grid size the server used, so the renderer draws the cells it was sent
+    // rather than the size that happened to be the default when it was written.
+    cellLatDeg,
+    cellLngDeg,
   };
 }

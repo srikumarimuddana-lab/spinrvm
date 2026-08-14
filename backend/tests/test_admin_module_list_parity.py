@@ -87,9 +87,12 @@ _KNOWN_UNGATED_GRANTS = {
 # super_admin ever sees those links.
 _KNOWN_UNGRANTABLE_SIDEBAR = {
     "compliance",  # a REAL require_module gate that is not in AVAILABLE_MODULES
-    "ai_console",  # gates no backend route at all — ai_console_router is mounted
-    # with no dependency, so any admin can call the API while only
-    # super_admin sees the link. Reported, not changed here.
+    # `ai_console` used to be here too: the sidebar hid that entry behind a
+    # module no role could hold, which produced the right outcome for the wrong
+    # reason — it depended on nobody ever adding that string to
+    # AVAILABLE_MODULES. It now uses the explicit `superAdminOnly` flag (same as
+    # Sentry) against a grantable module, and the router is mounted under
+    # require_super_admin. See test_ai_console_super_admin_mount.py.
 }
 
 

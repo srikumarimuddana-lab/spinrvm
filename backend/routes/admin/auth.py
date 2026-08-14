@@ -174,11 +174,12 @@ ALL_MODULES = [
     "settings",
     "corporate_accounts",
     "documents",
-    "heatmap",
     "staff",
     "audit",
     "support_tickets",
 ]
+# "heatmap" was removed here and from AVAILABLE_MODULES (routes/admin/staff.py)
+# — it gated no backend route; see the note at that list for the full reasoning.
 
 # Auth sub-router — mounted at /admin/auth by server.py directly
 admin_auth_router = APIRouter(prefix="/admin/auth", tags=["Admin Auth"])
@@ -396,9 +397,7 @@ async def admin_login(request: Request, response: Response, body: LoginRequest):
             # recover from. The missing column is already surfaced loudly in
             # _verify_admin_payload's per-request log, so nothing is masked here.
             try:
-                await db_supabase.update_one(
-                    "admin_staff", {"id": staff["id"]}, {"last_activity_at": _now_iso}
-                )
+                await db_supabase.update_one("admin_staff", {"id": staff["id"]}, {"last_activity_at": _now_iso})
             except Exception as _idle_err:
                 logger.warning(
                     "Could not reset last_activity_at on login for staff %s: %s",
@@ -470,6 +469,12 @@ async def admin_refresh(request: Request, body: RefreshRequest):
     if user_id == "admin-001":
         email = settings.ADMIN_EMAIL
         role = "super_admin"
+        # NOTE: this literal already drifts from ALL_MODULES (it omits "audit"
+        # and "support_tickets"), so refresh returns a narrower list than login
+        # does for the same account. Inert today — admin-001 is super_admin, and
+        # both require_module() and the sidebar bypass the modules array for that
+        # role — so it is left alone here rather than widened as a side effect of
+        # removing "heatmap".
         modules = [
             "dashboard",
             "users",
@@ -487,7 +492,6 @@ async def admin_refresh(request: Request, body: RefreshRequest):
             "settings",
             "corporate_accounts",
             "documents",
-            "heatmap",
             "staff",
         ]
         token_version = 0

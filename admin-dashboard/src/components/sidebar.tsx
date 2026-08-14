@@ -146,10 +146,15 @@ const NAV_GROUPS: NavGroup[] = [
             { href: "/dashboard/sentry-logs", label: "Sentry Issues", icon: Bug, module: "settings", superAdminOnly: true },
             { href: "/dashboard/audit-logs", label: "Audit Logs", icon: Shield, module: "settings" },
             { href: "/dashboard/settings", label: "Settings", icon: Settings, module: "settings" },
-            // module "ai_console" is granted to no staff role — combined with
-            // the isSuperAdmin bypass this makes the entry super-admin-only;
-            // the page and the backend re-check the role themselves.
-            { href: "/dashboard/ai-console", label: "AI Console", icon: Sparkles, module: "ai_console" },
+            // Super-admin-only, stated with the flag rather than implied by a
+            // module string no role can hold. The previous spelling —
+            // module: "ai_console", granted to nobody — produced the right
+            // outcome for the wrong reason: it depended on that module NEVER
+            // being added to AVAILABLE_MODULES, so someone adding it for an
+            // unrelated feature would have silently exposed impersonation and
+            // rider chat-history reads in the nav. Same shape as Sentry above;
+            // the router is mounted under require_super_admin to match.
+            { href: "/dashboard/ai-console", label: "AI Console", icon: Sparkles, module: "settings", superAdminOnly: true },
             // Records & Compliance consolidates 4 formerly-separate entries
             // (Data Transfer, Compliance, Bulk Operations, Export Approvals)
             // into one page with 4 tabs — they all do the same underlying

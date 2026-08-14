@@ -130,9 +130,18 @@ admin_router = APIRouter(
 # `auth_router` is an empty placeholder; the real login/session/logout routes
 # live on `admin_auth_router`, mounted separately by server.py (no auth gate).
 admin_router.include_router(auth_router)
-# No module gate — the routes enforce role == super_admin themselves
-# (impersonation + chat-history reads are stricter than any module grant).
-admin_router.include_router(ai_console_router)
+# AI Console — impersonation + rider/driver chat-history reads, stricter than
+# any module grant. Every route in the router already calls
+# _require_super_admin() in its own body, and that stays as defence in depth —
+# but the boundary is now also structural.
+#
+# Why the change: relying only on the per-function calls made the boundary
+# invisible at the mount and dependent on every future route remembering it. A
+# new endpoint added to this router without that one line would have been
+# reachable by any admin, and nothing in the mount would have hinted otherwise.
+# Same reasoning as the data-transfer routers below (see the bulk_operations
+# note): make the boundary explicit and independent of what an author remembers.
+admin_router.include_router(ai_console_router, dependencies=[Depends(require_super_admin)])
 admin_router.include_router(settings_router, dependencies=[Depends(require_module("settings"))])
 admin_router.include_router(service_areas_router, dependencies=[Depends(require_module("service_areas"))])
 admin_router.include_router(venues_router, dependencies=[Depends(require_module("service_areas"))])

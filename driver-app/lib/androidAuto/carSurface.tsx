@@ -144,7 +144,11 @@ export function CarMapSurface(): React.ReactElement | null {
   // this cannot loop.
   React.useEffect(() => {
     setDebugFact('surface', 'rendering');
-    setDebugFact('mapsKey', GOOGLE_MAPS_API_KEY ? `present (${GOOGLE_MAPS_API_KEY.length} ch)` : 'MISSING');
+    // Labelled (js) deliberately: this is the bundle-inlined copy, NOT the
+    // AndroidManifest key the Maps SDK actually authenticates with. Empty here
+    // means the bundle was built without an EAS environment (an OTA missing
+    // --environment), which says nothing about the installed binary.
+    setDebugFact('mapsKey(js)', GOOGLE_MAPS_API_KEY ? `present (${GOOGLE_MAPS_API_KEY.length} ch)` : 'empty — OTA env?');
     setDebugFact('liteMode', Platform.OS === 'android' ? 'on' : 'n/a');
     setDebugFact('rideState', String(rideState));
     setDebugFact('leg', card.leg);
@@ -166,29 +170,26 @@ export function CarMapSurface(): React.ReactElement | null {
   const MapView = Maps.default;
   const MapsPolygon = Maps.Polygon;
 
-  // Without a key the native map renders an all-white canvas and reports
-  // nothing to JS. Say so on the surface instead: a driver seeing "Map
-  // unavailable" knows to use their phone, and whoever is testing gets the
-  // actual cause rather than a blank screen to guess at. Per CLAUDE.md, surface
-  // the failure loudly rather than degrading into something that merely looks
-  // broken.
+  // NOTE: this JS value does NOT decide whether the native map can render, and
+  // must never gate it.
+  //
+  // Two different keys are in play. The Maps SDK reads its key from the merged
+  // AndroidManifest, written at BUILD time from app.config.ts:191. This
+  // constant is the same variable inlined into the JS bundle — and `eas update`
+  // rebuilds that bundle, so an OTA published without --environment ships it
+  // empty while the installed binary's manifest key is perfectly intact.
+  //
+  // An earlier version of this file returned a "Map unavailable" screen here.
+  // That was wrong: on an env-less OTA it replaced a working map with an error,
+  // and masked whatever the real fault was. Warn, record, render anyway — the
+  // manifest is the authority.
   if (Platform.OS === 'android' && !GOOGLE_MAPS_API_KEY) {
-    console.error(
-      '[CarSurface] EXPO_PUBLIC_GOOGLE_MAPS_API_KEY is empty in this build — ' +
-      'the Android manifest has no Maps API key, so the car surface cannot ' +
-      'render a map. Set it in the EAS environment used by this build profile.'
+    console.warn(
+      '[CarSurface] EXPO_PUBLIC_GOOGLE_MAPS_API_KEY is empty in the JS bundle. ' +
+      'Expected on an OTA published without --environment; the native manifest ' +
+      'key is unaffected, so the map is still attempted.'
     );
-    pushDebug('error', 'EXPO_PUBLIC_GOOGLE_MAPS_API_KEY missing from this build');
-    setDebugFact('mapsKey', 'MISSING');
-    return (
-      <View style={[styles.fill, styles.diagnostic]}>
-        <Text style={styles.diagnosticTitle}>Map unavailable</Text>
-        <Text style={styles.diagnosticBody}>
-          This build has no Google Maps key. Use your phone for navigation.
-        </Text>
-        <CarDebugPanel />
-      </View>
-    );
+    pushDebug('info', 'JS bundle has no maps key (native manifest key may still be set)');
   }
 
   // CarMarker hard-imports react-native-maps; require it only after the maps

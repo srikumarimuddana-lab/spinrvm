@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import functools
 import hashlib
 import logging
 import os
@@ -51,9 +52,17 @@ except ImportError:
     from backend.supabase_client import supabase
 
 try:
-    from utils.route_snapshot import render_ride_snapshot, render_ride_snapshot_google
+    from utils.route_snapshot import (
+        normalize_polyline_points,
+        render_ride_snapshot,
+        render_ride_snapshot_google,
+    )
 except ImportError:
-    from backend.utils.route_snapshot import render_ride_snapshot, render_ride_snapshot_google
+    from backend.utils.route_snapshot import (
+        normalize_polyline_points,
+        render_ride_snapshot,
+        render_ride_snapshot_google,
+    )
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -109,10 +118,7 @@ async def main(dry_run: bool = False, force: bool = False, limit: int | None = N
             failed += 1
             continue
 
-        polyline = ride.get("planned_route_polyline")
-        route_polyline = None
-        if isinstance(polyline, list):
-            route_polyline = [[p.get("lat"), p.get("lng")] for p in polyline if isinstance(p, dict)]
+        route_polyline = normalize_polyline_points(ride.get("planned_route_polyline"))
 
         png_bytes = None
 
@@ -133,7 +139,8 @@ async def main(dry_run: bool = False, force: bool = False, limit: int | None = N
             try:
                 png_bytes = await loop.run_in_executor(
                     None,
-                    lambda: render_ride_snapshot(
+                    functools.partial(
+                        render_ride_snapshot,
                         pickup_lat=float(pickup_lat),
                         pickup_lng=float(pickup_lng),
                         dropoff_lat=float(dropoff_lat),
@@ -153,7 +160,8 @@ async def main(dry_run: bool = False, force: bool = False, limit: int | None = N
         try:
             await loop.run_in_executor(
                 None,
-                lambda: supabase.storage.from_(_BUCKET).upload(
+                functools.partial(
+                    supabase.storage.from_(_BUCKET).upload,
                     path=storage_path,
                     file=png_bytes,
                     file_options={

@@ -149,7 +149,21 @@ export function CarMapSurface(): React.ReactElement | null {
     // means the bundle was built without an EAS environment (an OTA missing
     // --environment), which says nothing about the installed binary.
     setDebugFact('mapsKey(js)', GOOGLE_MAPS_API_KEY ? `present (${GOOGLE_MAPS_API_KEY.length} ch)` : 'empty — OTA env?');
-    setDebugFact('liteMode', Platform.OS === 'android' ? 'on' : 'n/a');
+    setDebugFact('renderer', 'full (liteMode off)');
+    // expo-location reports -1 for "heading unknown" and null when the provider
+    // gives no bearing at all. Either way CarMarker falls back to a bearing
+    // derived from consecutive fixes, so this tells you WHICH path is driving
+    // the marker's rotation rather than leaving it to guesswork.
+    setDebugFact(
+      'heading',
+      here == null
+        ? 'no fix'
+        : here.heading == null
+          ? 'null → derived from travel'
+          : here.heading < 0
+            ? `${here.heading} (unknown) → derived`
+            : `${here.heading.toFixed(0)}° from GPS`,
+    );
     setDebugFact('rideState', String(rideState));
     setDebugFact('leg', card.leg);
     setDebugFact('zoomDelta', delta.toFixed(4));
@@ -235,29 +249,19 @@ export function CarMapSurface(): React.ReactElement | null {
         // platform default, so the car surface and the phone resolve the
         // provider identically.
         provider={Platform.OS === 'android' ? Maps.PROVIDER_GOOGLE : undefined}
-        // Lite mode is what makes the map appear on a head unit at all.
+        // NO liteMode. It was briefly enabled here on the theory that a GL
+        // SurfaceView could not composite onto the car's VirtualDisplay. That
+        // was a misdiagnosis: the blank map was an empty Maps API key (the OTA
+        // that carried this code was published without --environment, so every
+        // EXPO_PUBLIC_* value inlined empty). Once the key was restored the map
+        // rendered, and the on-surface debug panel had already shown
+        // `surface: rendering` — proving iternio's Presentation hosts React
+        // fine.
         //
-        // The car screen is a Presentation on a VirtualDisplay backed by the
-        // car's Surface (VirtualRenderer.kt: createVirtualDisplay + Presentation
-        // + ReactSurfaceView). A normal Google map draws through a GL
-        // SurfaceView, which allocates its own SurfaceFlinger layer and does not
-        // composite onto that virtual display — you get a blank rectangle. The
-        // same MapView renders correctly on the phone, on a real display, which
-        // is exactly the split we observed.
-        //
-        // Lite mode instead rasterises the map into an ordinary View
-        // (GoogleMapOptions.liteMode via MapManager.java:88), so it composites
-        // like any other view in the hierarchy.
-        //
-        // What we give up is nothing this surface used: gestures (already
-        // disabled — Android Auto forbids in-surface touch and routes
-        // interaction through template buttons), tilt and rotate (never used).
-        // Markers, polylines and polygons — the car marker, route line, pins and
-        // demand heatmap — all still render.
-        //
-        // Applied from initialProps at construction, so it cannot be toggled on
-        // a mounted map; the `key` below already remounts per leg.
-        liteMode={Platform.OS === 'android'}
+        // Lite mode is a static bitmap that "cannot be tilted or rotated at
+        // all", and it no-ops animateMarkerToCoordinate (CarMarker.tsx:175). It
+        // pinned the car marker to north and killed the glide between fixes.
+        // Full mode is the correct renderer here.
         onMapReady={onMapReady}
         onMapLoaded={onMapLoaded}
         // The projected car surface is non-interactive (Android Auto drives

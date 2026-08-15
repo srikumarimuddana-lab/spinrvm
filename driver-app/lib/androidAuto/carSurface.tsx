@@ -20,8 +20,8 @@
  * UNPROVEN ON HARDWARE: validated at the JS level only. The on-surface render
  * must still be confirmed on an EAS dev build + Android Auto DHU.
  */
-import React, { useMemo } from 'react';
-import { StyleSheet, View } from 'react-native';
+import React, { useCallback, useMemo } from 'react';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 import { useDriverStore } from '../../store/driverStore';
 import { useAuthStore } from '@shared/store/authStore';
 import { useDemandHeatmapView } from '../../hooks/demandHeatmapShared';
@@ -31,6 +31,8 @@ import { buildTripCard, type OfferLike } from './carCard';
 import { CarTripCard } from './CarTripCard';
 import { useCarMapCamera } from './carMapCamera';
 import { useCarLocation } from './useCarLocation';
+import { pushDebug, setDebugFact } from './carDebug';
+import { CarDebugPanel } from './CarDebugPanel';
 // RouteLine / RoutePins hard-import react-native-maps, so they are lazy-required
 // AFTER the maps guard below (never at module scope) — otherwise loading this
 // file in a maps-less context (web / Expo Go / tests) would crash before the
@@ -39,6 +41,14 @@ import { useCarLocation } from './useCarLocation';
 // Saskatoon — Spinr is Saskatchewan-first. Used only until the first fix /
 // last-known location loads, so the idle map never opens on null-island (0,0).
 const FALLBACK_CENTER = { latitude: 52.1332, longitude: -106.67 };
+
+// Inlined at build time by Expo. Empty here means the AAB was built without the
+// var set in its EAS environment, which lands an empty apiKey in the merged
+// AndroidManifest — Google Maps then draws a blank white canvas with no error
+// anywhere in JS. shared/components/AppMap.tsx guards on this for the phone;
+// the car surface needs the same guard, because a white void on a head unit is
+// indistinguishable from "the integration is broken".
+const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';
 
 // Heatmap cell geometry. Fallbacks only — the server sends the grid size it
 // actually bucketed with, because cell size is tunable per service area. Same
@@ -94,6 +104,24 @@ export function CarMapSurface(): React.ReactElement | null {
   // no way to tell is frozen.
   const { cells: heatmapCells, status: heatmapStatus, cellLatDeg, cellLngDeg } = useDemandHeatmapView();
 
+  // The surface has no dev menu, no red box and no Metro console, so these are
+  // the only signal that distinguishes "map never initialised" from "map
+  // initialised and drew nothing" (the classic symptom of an API key that is
+  // absent, or restricted to a signing certificate this build wasn't signed
+  // with — Play App Signing re-signs the AAB, so a key pinned to the upload
+  // key's SHA-1 is rejected on a Play-installed build while sideloaded APKs
+  // keep working). Read with: adb logcat -s ReactNativeJS:V
+  const onMapReady = useCallback(() => {
+    console.log('[CarSurface] MapView ready (native view attached)');
+    pushDebug('info', 'MapView onMapReady — native view attached');
+    setDebugFact('map', 'ready (no tiles yet)');
+  }, []);
+  const onMapLoaded = useCallback(() => {
+    console.log('[CarSurface] MapView finished rendering tiles');
+    pushDebug('info', 'MapView onMapLoaded — tiles rendered');
+    setDebugFact('map', 'TILES RENDERED');
+  }, []);
+
   const carHeatCells = useMemo(() => {
     const usable = heatmapStatus === 'ready' || heatmapStatus === 'empty';
     if (!usable || !heatmapCells.length || rideState !== 'idle') return [];
@@ -111,6 +139,21 @@ export function CarMapSurface(): React.ReactElement | null {
     [carHeatCells],
   );
 
+  // Point-in-time state for the debug panel. Effect (not render body) so a
+  // render never mutates the store; setFact no-ops on an unchanged value, so
+  // this cannot loop.
+  React.useEffect(() => {
+    setDebugFact('surface', 'rendering');
+    setDebugFact('mapsKey', GOOGLE_MAPS_API_KEY ? `present (${GOOGLE_MAPS_API_KEY.length} ch)` : 'MISSING');
+    setDebugFact('liteMode', Platform.OS === 'android' ? 'on' : 'n/a');
+    setDebugFact('rideState', String(rideState));
+    setDebugFact('leg', card.leg);
+    setDebugFact('zoomDelta', delta.toFixed(4));
+    setDebugFact('location', here ? `${here.latitude.toFixed(4)}, ${here.longitude.toFixed(4)}` : 'no fix (fallback)');
+    setDebugFact('route', route ? `${route.leg}, ${route.polyline.length} pts` : 'none');
+    setDebugFact('heatmap', `${heatmapStatus}, ${carHeatCells.length} cells`);
+  }, [rideState, card.leg, delta, here, route, heatmapStatus, carHeatCells.length]);
+
   let Maps: typeof import('react-native-maps') | null = null;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -122,6 +165,31 @@ export function CarMapSurface(): React.ReactElement | null {
 
   const MapView = Maps.default;
   const MapsPolygon = Maps.Polygon;
+
+  // Without a key the native map renders an all-white canvas and reports
+  // nothing to JS. Say so on the surface instead: a driver seeing "Map
+  // unavailable" knows to use their phone, and whoever is testing gets the
+  // actual cause rather than a blank screen to guess at. Per CLAUDE.md, surface
+  // the failure loudly rather than degrading into something that merely looks
+  // broken.
+  if (Platform.OS === 'android' && !GOOGLE_MAPS_API_KEY) {
+    console.error(
+      '[CarSurface] EXPO_PUBLIC_GOOGLE_MAPS_API_KEY is empty in this build — ' +
+      'the Android manifest has no Maps API key, so the car surface cannot ' +
+      'render a map. Set it in the EAS environment used by this build profile.'
+    );
+    pushDebug('error', 'EXPO_PUBLIC_GOOGLE_MAPS_API_KEY missing from this build');
+    setDebugFact('mapsKey', 'MISSING');
+    return (
+      <View style={[styles.fill, styles.diagnostic]}>
+        <Text style={styles.diagnosticTitle}>Map unavailable</Text>
+        <Text style={styles.diagnosticBody}>
+          This build has no Google Maps key. Use your phone for navigation.
+        </Text>
+        <CarDebugPanel />
+      </View>
+    );
+  }
 
   // CarMarker hard-imports react-native-maps; require it only after the maps
   // guard above so it can never crash a maps-less context (web / Expo Go).
@@ -154,7 +222,7 @@ export function CarMapSurface(): React.ReactElement | null {
   const center = here ?? route?.destination ?? FALLBACK_CENTER;
 
   return (
-    <View style={styles.fill}>
+    <View style={[styles.fill, styles.mapBackdrop]}>
       <MapView
         // Re-mount on a leg / idle transition so Android's Google Maps native
         // layer fully drops a leftover route overlay; within a leg the camera is
@@ -162,6 +230,35 @@ export function CarMapSurface(): React.ReactElement | null {
         // updates don't thrash the surface.
         key={route ? `${route.leg}` : 'idle'}
         style={styles.fill}
+        // Match shared/components/AppMap.tsx rather than relying on the
+        // platform default, so the car surface and the phone resolve the
+        // provider identically.
+        provider={Platform.OS === 'android' ? Maps.PROVIDER_GOOGLE : undefined}
+        // Lite mode is what makes the map appear on a head unit at all.
+        //
+        // The car screen is a Presentation on a VirtualDisplay backed by the
+        // car's Surface (VirtualRenderer.kt: createVirtualDisplay + Presentation
+        // + ReactSurfaceView). A normal Google map draws through a GL
+        // SurfaceView, which allocates its own SurfaceFlinger layer and does not
+        // composite onto that virtual display — you get a blank rectangle. The
+        // same MapView renders correctly on the phone, on a real display, which
+        // is exactly the split we observed.
+        //
+        // Lite mode instead rasterises the map into an ordinary View
+        // (GoogleMapOptions.liteMode via MapManager.java:88), so it composites
+        // like any other view in the hierarchy.
+        //
+        // What we give up is nothing this surface used: gestures (already
+        // disabled — Android Auto forbids in-surface touch and routes
+        // interaction through template buttons), tilt and rotate (never used).
+        // Markers, polylines and polygons — the car marker, route line, pins and
+        // demand heatmap — all still render.
+        //
+        // Applied from initialProps at construction, so it cannot be toggled on
+        // a mounted map; the `key` below already remounts per leg.
+        liteMode={Platform.OS === 'android'}
+        onMapReady={onMapReady}
+        onMapLoaded={onMapLoaded}
         // The projected car surface is non-interactive (Android Auto drives
         // interaction through template buttons, not in-surface touches); the
         // controlled region lets the zoom buttons + follow-me drive the camera.
@@ -213,8 +310,49 @@ export function CarMapSurface(): React.ReactElement | null {
           bare idle map so the screen stays an uncluttered live map until there
           is something to show. */}
       {card.leg !== 'idle' && <CarTripCard card={card} />}
+      {/* Always-on status pill. Two jobs:
+          - UX: the idle car screen is otherwise a bare map with no indication
+            the app is alive or connected, which is what Uber/Lyft put here.
+          - Diagnosis: it renders independently of react-native-maps, so a blank
+            map with a visible pill means the React surface is painting and the
+            fault is the map alone, while an entirely blank screen means the
+            root itself never rendered. That distinction previously needed a
+            throwaway build to establish. */}
+      <View style={styles.statusPill} pointerEvents="none">
+        <View style={[styles.statusDot, { backgroundColor: card.accent }]} />
+        <Text style={styles.statusText}>
+          {card.leg === 'idle' ? 'Spinr Driver · Ready' : card.statusLabel}
+        </Text>
+      </View>
+      {/* Renders above everything, including the map, so it stays readable even
+          if the map is the thing that's broken. Returns null unless toggled. */}
+      <CarDebugPanel />
     </View>
   );
 }
 
-const styles = StyleSheet.create({ fill: { flex: 1 } });
+const styles = StyleSheet.create({
+  fill: { flex: 1 },
+  // A map that fails to paint leaves whatever is behind it showing. White reads
+  // as "the app is broken"; this dark backdrop matches the car surface's own
+  // dark theme, so a tile-load failure looks like an unloaded map rather than a
+  // crash — and is visually distinct from iternio's DKGRAY "React never
+  // mounted" background (VirtualRenderer.kt sets that on the ReactSurfaceView).
+  mapBackdrop: { backgroundColor: '#0B0B0F' },
+  diagnostic: { alignItems: 'center', justifyContent: 'center', backgroundColor: '#0B0B0F', padding: 24 },
+  diagnosticTitle: { color: '#FFFFFF', fontSize: 22, fontWeight: '700', marginBottom: 8 },
+  diagnosticBody: { color: '#B6B6C0', fontSize: 15, textAlign: 'center' },
+  statusPill: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: 'rgba(11,11,15,0.82)',
+  },
+  statusDot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
+  statusText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
+});

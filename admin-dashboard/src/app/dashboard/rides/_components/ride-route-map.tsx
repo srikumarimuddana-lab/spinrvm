@@ -69,6 +69,12 @@ interface Props {
     /** Version 2 captured route geometry. Each segment remains independent so
      *  an offline gap is not rendered as a false straight-line connection. */
     actualSegments?: unknown;
+    /** Suppress the pickup→dropoff straight-line fallback, leaving just the two
+     *  markers. Set when the absence of geometry is itself the finding — e.g. a
+     *  legacy-imported ride that never had GPS — so the map cannot imply a path
+     *  that was never recorded. Defaults to false: every existing caller keeps
+     *  the fallback. */
+    suppressStraightFallback?: boolean;
 }
 
 const PLANNED_SOURCE_ID = "ride-planned-src";
@@ -91,6 +97,7 @@ export default function RideRouteMap({
     tripTrail,
     plannedTrail,
     actualSegments,
+    suppressStraightFallback = false,
 }: Props) {
     const containerRef = useRef<HTMLDivElement>(null);
     const mapRef = useRef<maplibregl.Map | null>(null);
@@ -251,7 +258,7 @@ export default function RideRouteMap({
             // Fallback: straight pickup→dropoff gradient when no other
             // route data exists. Uses buildStraightRouteGradient so it
             // matches the orange→red language everywhere else.
-            if (!hasPlannedTrail && !hasRouteGeometry && !(locationTrail && locationTrail.length > 1)) {
+            if (!suppressStraightFallback && !hasPlannedTrail && !hasRouteGeometry && !(locationTrail && locationTrail.length > 1)) {
                 const straightGradient = buildStraightRouteGradient(
                     [pickupLat, pickupLng],
                     [dropoffLat, dropoffLng],
@@ -301,7 +308,7 @@ export default function RideRouteMap({
             map.remove();
             mapRef.current = null;
         };
-    }, [pickupLat, pickupLng, dropoffLat, dropoffLng, locationTrail, pickupTrail, pickupApprox, tripTrail, plannedTrail, actualGeometry]);
+    }, [pickupLat, pickupLng, dropoffLat, dropoffLng, locationTrail, pickupTrail, pickupApprox, tripTrail, plannedTrail, actualGeometry, suppressStraightFallback]);
 
     return <div ref={containerRef} className="w-full h-[280px] rounded-xl overflow-hidden" />;
 }

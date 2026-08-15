@@ -35,6 +35,76 @@ Verified output (see full dry-run run in the PR description / session transcript
 - Any code that calls Stripe
 - Any live-data mutation of any kind
 
+## 3a. Follow-up design — corrected after review, before any write code is built
+
+An earlier version of this plan proposed the follow-up fix as "insert a new
+`payouts` row, `status='pending'`." **That was wrong and is corrected here
+before any of it gets built.**
+
+`routes/drivers/earnings.py`'s balance formula is:
+
+```
+payable_balance = total_earnings + total_bonuses - total_payouts
+```
+
+Payout rows **subtract** from balance — inserting one would move a driver's
+balance *down*, not credit them the missing money. Worse,
+`utils/legacy_rides.py` confirms every legacy-imported ride's earnings are
+**already unconditionally excluded** from `total_earnings` on the driver's
+own balance screen, regardless of whether an offsetting payout exists at
+all. So the other candidate ("just reduce the existing `legacy_import`
+offset payout's amount") is also a dead end: `drop_legacy_offset_payouts()`
+drops the entire `legacy_import` type from the sum by type, not by value —
+changing its amount would have zero effect on `payable_balance`.
+
+**Conclusion: these 35 rows cannot be fixed through the live in-app balance
+mechanism at all — the rides were deliberately designed to sit outside it.**
+The correct model mirrors how `stripe_sync` payouts already work in this
+codebase: a payout row that's a pure historical record of a real transfer,
+explicitly added to the same exclusion set `drop_legacy_offset_payouts()`
+already uses for `legacy_import`/`stripe_sync`, so it never touches
+`payable_balance`/`total_payouts` math (correct, since the underlying rides
+were never part of that math either) but is written once the real Stripe
+Transfer settles, for T4A/audit history.
+
+This applies identically to Group A and Group B — the group split matters
+for figuring out *whether the ride is imported yet*, not for *how the driver
+gets paid*, which is the same mechanism either way.
+
+## 3b. Current state → future state, all 20 driver buckets (verified)
+
+15 of the 20 buckets resolve to a real Spinr driver account today; 5 do not
+(`driver_id` is `NULL` on the imported/importable ride — an unmatched party
+from the original booking import) and are **blocked** until re-linked to a
+real account, independent of anything in this PR.
+
+| # | Driver key | Rows | Group | Current: in live `payable_balance`? | Future: correction |
+|---|---|---|---|---|---|
+| 1 | `4a00ac19-bf2d-…` | 5 | A | No (legacy rides excluded regardless) | `legacy_outstanding_correction` payout, $43.59 |
+| 2 | `350b5267-7a4d-…` | 2 | A | No | $33.32 |
+| 3 | `2b228479-106c-…` | 3 | A | No | $25.98 |
+| 4 | `a569909e-c866-…` | 2 | A | No | $22.43 |
+| 5 | `e2f16d17-5e6c-…` | 2 | A | No | $19.34 |
+| 6 | `1a7f6c28-b86c-…` | 1 | A | No | $13.27 |
+| 7 | `9f129036-3468-…` | 1 | A | No | $12.54 |
+| 8 | `2a216a28-ccd5-…` | 1 | A | No | $12.54 |
+| 9 | `9a9e6f2c-8dbe-…` | 1 | A | No | $12.39 |
+| 10 | `c1e19bec-0ce1-…` | 1 | A | No | $11.80 |
+| 11 | `efa8c93d-1d6a-…` | 1 | A | No | $10.63 |
+| 12 | `62bac274-9a63-…` | 1 | A | No | $10.05 |
+| 13 | `93a899d5-431b-…` | 1 | A | No | $9.45 |
+| 14 | `ac392c28-7a9a-…` | 1 | A | No | $7.54 |
+| 15 | `26b80bf4-744a-…` | 1 | A | No | $5.64 |
+| 16 | unmatched `69e6b56e…` | 1 | A | N/A — no Spinr account | **Blocked**: re-link before $11.22 payable |
+| 17 | unmatched `6a3f41ab…` | 1 | A | N/A | **Blocked**: $5.49, same issue |
+| 18 | unmatched `69f7be14…` | 1 | A | N/A | **Blocked**: $4.02, same issue |
+| 19 | unmatched `69bed3b4…` | 2 | B | N/A — not imported yet | Import for history (optional) + $5.35 correction once linked |
+| 20 | unmatched `6990a23a…` | 6 | B | N/A | $0.00 — `due` per old app, no money attached; no transfer needed |
+
+**Totals**: 15 payable today (real Spinr account on file) = **$250.51**. 3
+blocked in Group A = $20.73. Group B: $5.35 payable once linked, $0.00
+no-op. **Grand total $276.59 / 20 buckets** — matches §3's figure exactly.
+
 ## 4. Risk & impact on existing functionality
 
 - **Blast radius of the code that IS shipped**: one new, self-contained module with no callers anywhere else in the codebase yet (not wired into any route, CLI, or background loop). It imports `supabase_client` for a single read-only `.select()` query against `rides` — no write methods used, verified by reading the module's own source (only `.select()` appears; no `.insert()`/`.update()`/`.delete()`).
@@ -61,7 +131,7 @@ Not applicable — additive new file, no existing behavior changed.
 
 `git revert` — this PR contains no data writes and no live-code wiring (nothing imports this module from a route, CLI entry point, or background loop), so there is nothing to roll back beyond the code itself.
 
-**The rollback plan for the follow-up (write-path) PR, when it exists, is the one described in the session that produced this plan**: new `payouts` rows only, `status='pending'` (not `'completed'`) so the Stripe transfer is a distinct, later, explicitly-gated step; deterministic per-driver row IDs so the correction is idempotent on retry; delete-by-batch-tag is a clean rollback for any row that hasn't yet had its Stripe transfer settle. Once a transfer settles, no DB rollback undoes it — that step needs its own explicit go/no-go before this plan is executed for real, not folded into this PR.
+**The rollback plan for the follow-up (write-path) PR, when it exists, per §3a's corrected design**: new `payouts` rows only, `payout_type='legacy_outstanding_correction'`, added to the `total_payouts`/`payable_balance` exclusion set alongside `legacy_import`/`stripe_sync` so the row never perturbs any driver's live in-app number before or after it's written; deterministic per-driver row IDs so the correction is idempotent on retry; delete-by-batch-tag is a clean rollback for any row that hasn't yet had its Stripe transfer fire. Once a transfer settles, no DB rollback undoes it — that step needs its own explicit go/no-go before this plan is executed for real, not folded into this PR.
 
 ## 9. Verification performed
 

@@ -306,14 +306,28 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // show the ride-offer panel like an incoming call when the app is
         // backgrounded or killed. See plugins/withNotifeePermissions.js.
         './plugins/withNotifeePermissions',
-        // Strips com.google.android.gms.permission.AD_ID, which
-        // react-native-fbsdk-next contributes via manifest merge. Play rejects
-        // the upload outright when the manifest declares it and the Play
-        // Console advertising-ID declaration says otherwise. We don't read the
-        // advertiser ID (advertiserIDCollectionEnabled: false; Advanced
-        // Matching is server-side), so the declaration is correct and the
-        // permission is what's wrong. See plugins/withoutAdIdPermission.js.
-        './plugins/withoutAdIdPermission',
+        // Drops permissions our dependencies declare but this app never uses.
+        // Both were hard Play submit rejections, not warnings — see
+        // plugins/withoutUnusedPermissions.js.
+        //
+        //   AD_ID — react-native-fbsdk-next declares it. We don't read the
+        //   advertiser ID (advertiserIDCollectionEnabled: false; Meta Advanced
+        //   Matching runs server-side via the Conversions API), so the Play
+        //   Console "no advertising ID" declaration is accurate and the
+        //   manifest was the thing out of step.
+        //
+        //   ACTIVITY_RECOGNITION — expo-sensors declares it for the whole
+        //   module, but only its Pedometer needs it. We use expo-sensors solely
+        //   for the Accelerometer (utils/sensorIntegrity.ts, GPS-spoof
+        //   detection); Pedometer is never imported. Android's raw
+        //   accelerometer requires no permission, so removing this does not
+        //   affect spoof detection.
+        ['./plugins/withoutUnusedPermissions', {
+            permissions: [
+                'com.google.android.gms.permission.AD_ID',
+                'android.permission.ACTIVITY_RECOGNITION',
+            ],
+        }],
         // Copies the ride-offer notification sound into the native builds:
         // ride_offer.mp3 → Android res/raw (Notifee channel sound), and
         // ride_offer.caf → iOS bundle (APNs/Notifee sound). Without this the

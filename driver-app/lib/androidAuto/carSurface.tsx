@@ -210,6 +210,29 @@ export function CarMapSurface(): React.ReactElement | null {
         // platform default, so the car surface and the phone resolve the
         // provider identically.
         provider={Platform.OS === 'android' ? Maps.PROVIDER_GOOGLE : undefined}
+        // Lite mode is what makes the map appear on a head unit at all.
+        //
+        // The car screen is a Presentation on a VirtualDisplay backed by the
+        // car's Surface (VirtualRenderer.kt: createVirtualDisplay + Presentation
+        // + ReactSurfaceView). A normal Google map draws through a GL
+        // SurfaceView, which allocates its own SurfaceFlinger layer and does not
+        // composite onto that virtual display — you get a blank rectangle. The
+        // same MapView renders correctly on the phone, on a real display, which
+        // is exactly the split we observed.
+        //
+        // Lite mode instead rasterises the map into an ordinary View
+        // (GoogleMapOptions.liteMode via MapManager.java:88), so it composites
+        // like any other view in the hierarchy.
+        //
+        // What we give up is nothing this surface used: gestures (already
+        // disabled — Android Auto forbids in-surface touch and routes
+        // interaction through template buttons), tilt and rotate (never used).
+        // Markers, polylines and polygons — the car marker, route line, pins and
+        // demand heatmap — all still render.
+        //
+        // Applied from initialProps at construction, so it cannot be toggled on
+        // a mounted map; the `key` below already remounts per leg.
+        liteMode={Platform.OS === 'android'}
         onMapReady={onMapReady}
         onMapLoaded={onMapLoaded}
         // The projected car surface is non-interactive (Android Auto drives
@@ -263,6 +286,20 @@ export function CarMapSurface(): React.ReactElement | null {
           bare idle map so the screen stays an uncluttered live map until there
           is something to show. */}
       {card.leg !== 'idle' && <CarTripCard card={card} />}
+      {/* Always-on status pill. Two jobs:
+          - UX: the idle car screen is otherwise a bare map with no indication
+            the app is alive or connected, which is what Uber/Lyft put here.
+          - Diagnosis: it renders independently of react-native-maps, so a blank
+            map with a visible pill means the React surface is painting and the
+            fault is the map alone, while an entirely blank screen means the
+            root itself never rendered. That distinction previously needed a
+            throwaway build to establish. */}
+      <View style={styles.statusPill} pointerEvents="none">
+        <View style={[styles.statusDot, { backgroundColor: card.accent }]} />
+        <Text style={styles.statusText}>
+          {card.leg === 'idle' ? 'Spinr Driver · Ready' : card.statusLabel}
+        </Text>
+      </View>
     </View>
   );
 }
@@ -278,4 +315,17 @@ const styles = StyleSheet.create({
   diagnostic: { alignItems: 'center', justifyContent: 'center', backgroundColor: '#0B0B0F', padding: 24 },
   diagnosticTitle: { color: '#FFFFFF', fontSize: 22, fontWeight: '700', marginBottom: 8 },
   diagnosticBody: { color: '#B6B6C0', fontSize: 15, textAlign: 'center' },
+  statusPill: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: 'rgba(11,11,15,0.82)',
+  },
+  statusDot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
+  statusText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
 });

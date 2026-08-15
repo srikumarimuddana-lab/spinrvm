@@ -173,6 +173,14 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // Notifee renders the ongoing "live ride" notification (Android). Declares
         // POST_NOTIFICATIONS for Android 13+; see plugins/withNotifeePermissions.js.
         './plugins/withNotifeePermissions',
+        // Strips com.google.android.gms.permission.AD_ID, which
+        // react-native-fbsdk-next contributes via manifest merge. Play rejects
+        // the upload outright when the manifest declares it and the Play
+        // Console advertising-ID declaration says otherwise. We don't read the
+        // advertiser ID (advertiserIDCollectionEnabled: false; Advanced
+        // Matching is server-side), so the declaration is correct and the
+        // permission is what's wrong. See plugins/withoutAdIdPermission.js.
+        './plugins/withoutAdIdPermission',
         // SDK 57 / RN 0.86.2 androidx.* deps require compileSdk 36 (build tools
         // 36.0.0 provisioned by EAS; requirement dates from SDK 55 and still holds).
         // LogRocket requires minSdkVersion 25.

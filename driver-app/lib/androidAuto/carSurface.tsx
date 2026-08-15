@@ -31,6 +31,8 @@ import { buildTripCard, type OfferLike } from './carCard';
 import { CarTripCard } from './CarTripCard';
 import { useCarMapCamera } from './carMapCamera';
 import { useCarLocation } from './useCarLocation';
+import { pushDebug, setDebugFact } from './carDebug';
+import { CarDebugPanel } from './CarDebugPanel';
 // RouteLine / RoutePins hard-import react-native-maps, so they are lazy-required
 // AFTER the maps guard below (never at module scope) — otherwise loading this
 // file in a maps-less context (web / Expo Go / tests) would crash before the
@@ -111,9 +113,13 @@ export function CarMapSurface(): React.ReactElement | null {
   // keep working). Read with: adb logcat -s ReactNativeJS:V
   const onMapReady = useCallback(() => {
     console.log('[CarSurface] MapView ready (native view attached)');
+    pushDebug('info', 'MapView onMapReady — native view attached');
+    setDebugFact('map', 'ready (no tiles yet)');
   }, []);
   const onMapLoaded = useCallback(() => {
     console.log('[CarSurface] MapView finished rendering tiles');
+    pushDebug('info', 'MapView onMapLoaded — tiles rendered');
+    setDebugFact('map', 'TILES RENDERED');
   }, []);
 
   const carHeatCells = useMemo(() => {
@@ -132,6 +138,21 @@ export function CarMapSurface(): React.ReactElement | null {
     () => carHeatCells.reduce((m, c) => Math.max(m, c.weight), 0),
     [carHeatCells],
   );
+
+  // Point-in-time state for the debug panel. Effect (not render body) so a
+  // render never mutates the store; setFact no-ops on an unchanged value, so
+  // this cannot loop.
+  React.useEffect(() => {
+    setDebugFact('surface', 'rendering');
+    setDebugFact('mapsKey', GOOGLE_MAPS_API_KEY ? `present (${GOOGLE_MAPS_API_KEY.length} ch)` : 'MISSING');
+    setDebugFact('liteMode', Platform.OS === 'android' ? 'on' : 'n/a');
+    setDebugFact('rideState', String(rideState));
+    setDebugFact('leg', card.leg);
+    setDebugFact('zoomDelta', delta.toFixed(4));
+    setDebugFact('location', here ? `${here.latitude.toFixed(4)}, ${here.longitude.toFixed(4)}` : 'no fix (fallback)');
+    setDebugFact('route', route ? `${route.leg}, ${route.polyline.length} pts` : 'none');
+    setDebugFact('heatmap', `${heatmapStatus}, ${carHeatCells.length} cells`);
+  }, [rideState, card.leg, delta, here, route, heatmapStatus, carHeatCells.length]);
 
   let Maps: typeof import('react-native-maps') | null = null;
   try {
@@ -157,12 +178,15 @@ export function CarMapSurface(): React.ReactElement | null {
       'the Android manifest has no Maps API key, so the car surface cannot ' +
       'render a map. Set it in the EAS environment used by this build profile.'
     );
+    pushDebug('error', 'EXPO_PUBLIC_GOOGLE_MAPS_API_KEY missing from this build');
+    setDebugFact('mapsKey', 'MISSING');
     return (
       <View style={[styles.fill, styles.diagnostic]}>
         <Text style={styles.diagnosticTitle}>Map unavailable</Text>
         <Text style={styles.diagnosticBody}>
           This build has no Google Maps key. Use your phone for navigation.
         </Text>
+        <CarDebugPanel />
       </View>
     );
   }
@@ -300,6 +324,9 @@ export function CarMapSurface(): React.ReactElement | null {
           {card.leg === 'idle' ? 'Spinr Driver · Ready' : card.statusLabel}
         </Text>
       </View>
+      {/* Renders above everything, including the map, so it stays readable even
+          if the map is the thing that's broken. Returns null unless toggled. */}
+      <CarDebugPanel />
     </View>
   );
 }

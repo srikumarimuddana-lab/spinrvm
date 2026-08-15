@@ -36,6 +36,7 @@ import {
 import { buildOfferCard, type OfferLike } from './carCard';
 import { CarMapSurface } from './carSurface';
 import { useCarMapCamera } from './carMapCamera';
+import { isCarDebugAvailable, pushDebug, setDebugFact, useCarDebug } from './carDebug';
 
 const NAV_TEMPLATE_ID = 'spinr-aa-nav';
 const FALLBACK_OFFER_MS = 15_000;
@@ -46,8 +47,22 @@ const NAV_ICON = require('../../assets/images/nav_arrow.png');
 const ZOOM_IN_ICON = require('../../assets/images/zoom_in.png');
 const ZOOM_OUT_ICON = require('../../assets/images/zoom_out.png');
 
+// `console.log` stays gated on __DEV__ (release builds shouldn't chatter), but
+// the line is ALWAYS recorded to the on-surface debug buffer. Previously the
+// whole call was inside the __DEV__ guard, which compiled every android-auto
+// diagnostic out of exactly the release builds that can run on a head unit —
+// a template failure produced a blank screen and no trace anywhere.
 const log = (...args: unknown[]) => {
   if (__DEV__) console.log('[android-auto]', ...args);
+  pushDebug('info', ...args);
+};
+
+// Failures the driver can't see and logcat won't reach unless the phone is
+// tethered. Always recorded, and always console.error so Crashlytics/logcat
+// pick them up in release builds too.
+const logError = (...args: unknown[]) => {
+  console.error('[android-auto]', ...args);
+  pushDebug('error', ...args);
 };
 const noop = () => {};
 
@@ -136,7 +151,7 @@ export default function registerAutoPlay(): void {
     const webFallback = `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}&travelmode=driving`;
     log('hand-off →', provider, url);
     Linking.openURL(url).catch(() =>
-      Linking.openURL(webFallback).catch((e) => log('hand-off failed:', e)),
+      Linking.openURL(webFallback).catch((e) => logError('hand-off failed:', e)),
     );
   };
 
@@ -188,7 +203,7 @@ export default function registerAutoPlay(): void {
       case 'navigating_to_pickup':
         return act('Arrived', 'confirm', () => {
           const id = rideIdOf(useDriverStore.getState().activeRide);
-          if (id) useDriverStore.getState().arriveAtPickup(id).catch((e) => log('arrive failed:', e));
+          if (id) useDriverStore.getState().arriveAtPickup(id).catch((e) => logError('arrive failed:', e));
         });
       case 'arrived_at_pickup':
         // OTP start-trip stays on the phone — the header just routes the driver there.
@@ -198,10 +213,18 @@ export default function registerAutoPlay(): void {
       case 'trip_in_progress':
         return act('Complete trip', 'confirm', () => {
           const id = rideIdOf(useDriverStore.getState().activeRide);
-          if (id) useDriverStore.getState().completeRide(id).catch((e) => log('complete failed:', e));
+          if (id) useDriverStore.getState().completeRide(id).catch((e) => logError('complete failed:', e));
         });
       default:
-        return undefined; // idle / offer / completed: no progress action
+        // Idle / offer / completed have no progress action, which leaves the
+        // header free. Outside production, hand it to the debug panel — the car
+        // screen is otherwise undiagnosable without tethering the phone to a
+        // laptop, and idle is exactly the state a blank surface shows up in.
+        // A ride in progress always keeps its progress action; debug never
+        // displaces it.
+        return isCarDebugAvailable()
+          ? act('Debug', 'normal', () => useCarDebug.getState().toggle())
+          : undefined;
     }
   };
 
@@ -275,14 +298,14 @@ export default function registerAutoPlay(): void {
           title: 'Accept',
           style: 'default',
           onPress: () => {
-            useDriverStore.getState().acceptRide(rideId).catch((e) => log('accept failed:', e));
+            useDriverStore.getState().acceptRide(rideId).catch((e) => logError('accept failed:', e));
           },
         },
         secondaryAction: {
           title: 'Decline',
           style: 'destructive',
           onPress: () => {
-            useDriverStore.getState().declineRide(rideId).catch((e) => log('decline failed:', e));
+            useDriverStore.getState().declineRide(rideId).catch((e) => logError('decline failed:', e));
           },
         },
         durationMs: offerDurationMs(offer),
@@ -342,8 +365,11 @@ export default function registerAutoPlay(): void {
           mapButtons: mapButtonsFor(false),
         });
         template.setRootTemplate();
+        log('MapTemplate created + setRootTemplate OK');
+        setDebugFact('template', 'created');
       } catch (e) {
-        log('setRootTemplate (map) failed:', e);
+        logError('setRootTemplate (map) failed:', e);
+        setDebugFact('template', 'FAILED');
         template = null;
         return;
       }

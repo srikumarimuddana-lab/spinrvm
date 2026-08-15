@@ -306,6 +306,14 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // show the ride-offer panel like an incoming call when the app is
         // backgrounded or killed. See plugins/withNotifeePermissions.js.
         './plugins/withNotifeePermissions',
+        // Strips com.google.android.gms.permission.AD_ID, which
+        // react-native-fbsdk-next contributes via manifest merge. Play rejects
+        // the upload outright when the manifest declares it and the Play
+        // Console advertising-ID declaration says otherwise. We don't read the
+        // advertiser ID (advertiserIDCollectionEnabled: false; Advanced
+        // Matching is server-side), so the declaration is correct and the
+        // permission is what's wrong. See plugins/withoutAdIdPermission.js.
+        './plugins/withoutAdIdPermission',
         // Copies the ride-offer notification sound into the native builds:
         // ride_offer.mp3 → Android res/raw (Notifee channel sound), and
         // ride_offer.caf → iOS bundle (APNs/Notifee sound). Without this the

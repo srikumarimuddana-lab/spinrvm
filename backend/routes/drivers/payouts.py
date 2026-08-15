@@ -998,6 +998,15 @@ async def _request_payout_legacy(
             detail="Payout failed. Please try again.",
         ) from terminal_exc
 
+    # Dual-run cutover monitoring (A34/P3.1): count settled transfers to
+    # legacy-imported drivers. Flag-gated in the helper; never raises.
+    if stripe_payout_id:
+        try:
+            from ...utils.dual_run_monitor import record_legacy_payout
+        except ImportError:
+            from utils.dual_run_monitor import record_legacy_payout
+        await record_legacy_payout(driver, payout_id, req.amount)
+
     payout["status"] = final_status
     payout["stripe_payout_id"] = stripe_payout_id
     return {"success": True, "payout": serialize_doc(payout)}
@@ -1211,6 +1220,14 @@ async def request_instant_payout(
             status_code=500,
             detail="Instant payout failed. Please try again or contact support.",
         ) from persist_exc
+
+    # Dual-run cutover monitoring (A34/P3.1): the transfer has settled to the
+    # connect account at this point. Flag-gated in the helper; never raises.
+    try:
+        from ...utils.dual_run_monitor import record_legacy_payout
+    except ImportError:
+        from utils.dual_run_monitor import record_legacy_payout
+    await record_legacy_payout(driver, payout_id, req.amount)
 
     # ── Step 2: Payout on connect account ─────────────────────────────
     try:

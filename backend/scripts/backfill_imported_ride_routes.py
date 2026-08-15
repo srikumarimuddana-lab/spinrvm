@@ -171,7 +171,14 @@ async def main(dry_run: bool = False) -> None:
         dist_km, polyline = result
         update_data: dict = {"distance_km": dist_km}
         if not r.get("planned_route_polyline"):
-            update_data["planned_route_polyline"] = json.dumps([{"lat": p[0], "lng": p[1]} for p in polyline])
+            # [[lat, lng], …] — the shape migration 100 defines and every
+            # consumer reads (schemas.py List[List[float]], the apps'
+            # [number, number][] stores, admin's p[0]/p[1] indexing, and
+            # validCoordinate() in shared/utils/routeSegments.ts, which
+            # rejects a segment outright if its points aren't arrays).
+            # Writing {lat, lng} objects here silently blanked the route
+            # line on every ride-detail map — see migration 313.
+            update_data["planned_route_polyline"] = json.dumps([[p[0], p[1]] for p in polyline])
         try:
             await db_supabase.update_one("rides", r["id"], update_data)
             updated += 1

@@ -35,6 +35,32 @@ _GRADIENT_END_RGB = (238, 43, 43)  # #EE2B2B
 _GRADIENT_TOTAL = 24  # total colour sub-segments across the whole route (URL budget)
 
 
+def normalize_polyline_points(value: object) -> Optional[list[list[float]]]:
+    """Coerce a stored `planned_route_polyline` to `[[lat, lng], …]`.
+
+    The column's contract (migration 100) is a decoded `[[lat, lng], …]`, but
+    the legacy-import backfill briefly wrote `{"lat": …, "lng": …}` objects
+    instead (repaired by migration 313). Accept either so a snapshot render
+    never silently drops the route on a row that hasn't been converted yet.
+    Returns None when nothing usable is left.
+    """
+    if not isinstance(value, list):
+        return None
+    points: list[list[float]] = []
+    for p in value:
+        if isinstance(p, dict):
+            lat, lng = p.get("lat"), p.get("lng")
+        elif isinstance(p, (list, tuple)) and len(p) >= 2:
+            lat, lng = p[0], p[1]
+        else:
+            continue
+        if isinstance(lat, bool) or isinstance(lng, bool):
+            continue
+        if isinstance(lat, (int, float)) and isinstance(lng, (int, float)):
+            points.append([float(lat), float(lng)])
+    return points or None
+
+
 def _gradient_rgb(t: float) -> tuple[int, int, int]:
     t = 0.0 if t != t else max(0.0, min(1.0, t))  # NaN → 0
     return tuple(round(_GRADIENT_START_RGB[i] + (_GRADIENT_END_RGB[i] - _GRADIENT_START_RGB[i]) * t) for i in range(3))  # type: ignore[return-value]

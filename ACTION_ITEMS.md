@@ -7,7 +7,10 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-12 — C21 ADDED (open): two PRs (#3719, #3728, the
+_Last updated: 2026-08-15 — A34 ADDED (open): dual-run cutover readiness
+audit complete (PR #3954, `docs/audit/2026-08-15-dual-run-cutover/`);
+decommission blockers, launch-week collision/monitoring gaps, and required
+user decisions consolidated there. Prior: C21 ADDED (open): two PRs (#3719, #3728, the
 notification-throttling feature) merged via GitHub's native per-PR
 auto-merge before/without their full check set completing — #3719 merged
 while `CI/CD Pipeline`/`CI Guard Rails`/`Security Gates` were still
@@ -79,6 +82,33 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 ---
 
 ## P0 — Launch gating (code)
+
+### A34. Dual-run cutover readiness audit (2026-08-15) — decommission blockers and required decisions
+- [ ] **Status:** open — audit complete (all 4 phases reported, audit-only, PR #3954,
+  `docs/audit/2026-08-15-dual-run-cutover/P0…P3`), remediation NOT started. Old app
+  decommission target: **Oct 31, 2026 (tentative)**. Blockers before decommission:
+  (1) fresh final old-app export — true pending-money figure unknowable without it
+  ($276.59/20-driver floor from PR #3946 is stale by construction; 108 further 'due'
+  rows unresolved); (2) 224-vs-186 imported-ride discrepancy unexplained (prior audits
+  say 224, live prod holds 186 + 1 organic, zero soft-deletes); (3) insurance-period
+  audit trail structurally absent for all imported rides — legal/SGI decision needed
+  (reconstructed-and-flagged vs documented exception), engineering must NOT fabricate
+  period rows; (4) no final-export/teardown runbook existed — draft now in P3 report,
+  needs owner + dates. Launch-window items (this week): double-dispatch/double-payout
+  structurally possible (zero cross-system awareness; 150 imported drivers approved to
+  go online, 104 with Stripe accounts possibly shared with the old app's payer) —
+  needs an operational roster policy, code provides no guard; no live collision
+  monitoring exists — 3 cheapest additive signals identified in P1 report §P3.1;
+  open $16.63 Stripe dispute (`stripe_disputes.needs_response`) needs a response;
+  rider-referral program (1 ride → $5+$5) has no velocity cap or identity cross-check.
+  Deferred: Stripe-side reconciliation (7-item checklist in P0 report §0.3) — run the
+  day Stripe access is granted. Also recorded: rider importer stamped no
+  `legacy_import_metadata` on any of 1,134 users; 22 drivers unmarked; two
+  incompatible old-ID namespaces require a `legacy_id_crosswalk` before final
+  migration; `payout_gst_amount` ($105.17) must be mapped in the final import or
+  T4A understatement recurs.
+- **Files:** `docs/audit/2026-08-15-dual-run-cutover/` (4 phase reports), PR #3946 (parked dry-run, extend don't duplicate)
+- **Acceptance:** each numbered blocker either closed with evidence or explicitly risk-accepted by the user with a dated note here.
 
 ### A1. Per-module test-coverage floors for money paths
 - [x] **Status:** DONE (2026-07-28) — `matching.py` and `rides/payments.py`,

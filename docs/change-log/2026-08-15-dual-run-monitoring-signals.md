@@ -12,7 +12,7 @@ The system was never designed to share a driver/customer base with a second live
 New helper `backend/utils/dual_run_monitor.py` emitting three observation-only signals, called from two existing code paths:
 1. `audit_logs` row `legacy_driver_first_go_online` — once per imported driver, on their first actual offline→online flip (once-only via a `first_go_online_at` stamp merged into `drivers.legacy_import_metadata` — additive key, no existing key touched).
 2. Counter `spinr_drivers_go_online_total{is_legacy_import}` — every actual flip to online, all drivers, labeled.
-3. Counter `spinr_payments_legacy_driver_payout_total` — every settled Stripe transfer to a legacy-imported driver (both payout paths: standard + instant).
+3. Counter `spinr_payments_legacy_driver_payout_total` — every irreversibly-disbursed payout to a legacy-imported driver (standard path: after the terminal write; instant path: after Step 2 `Payout.create` succeeds — deliberately **not** at Step 1, whose transfer can still be reversed by a failed Step 2; placement per the manual money-auditor review of this PR).
 
 **Feature flag:** `dual_run_monitoring_enabled` in the `app_settings` DB row, read via the cached `settings_loader.get_app_settings()`. Default **enabled** when unset (these are pure observation signals wanted for launch week; nothing user-visible ships dark). Kill switch requires no redeploy.
 

@@ -1221,14 +1221,6 @@ async def request_instant_payout(
             detail="Instant payout failed. Please try again or contact support.",
         ) from persist_exc
 
-    # Dual-run cutover monitoring (A34/P3.1): the transfer has settled to the
-    # connect account at this point. Flag-gated in the helper; never raises.
-    try:
-        from ...utils.dual_run_monitor import record_legacy_payout
-    except ImportError:
-        from utils.dual_run_monitor import record_legacy_payout
-    await record_legacy_payout(driver, payout_id, req.amount)
-
     # ── Step 2: Payout on connect account ─────────────────────────────
     try:
         # Stripe deducts its own ~1% fee from the platform side (separate
@@ -1287,6 +1279,16 @@ async def request_instant_payout(
         logger.exception(
             "Failed to mark instant payout completed (money already disbursed)",
         )
+
+    # Dual-run cutover monitoring (A34/P3.1): count only after Step 2
+    # succeeded — the money has actually left for the driver's bank, so a
+    # later transfer reversal can no longer occur and the counter can't
+    # overcount. Flag-gated in the helper; never raises.
+    try:
+        from ...utils.dual_run_monitor import record_legacy_payout
+    except ImportError:
+        from utils.dual_run_monitor import record_legacy_payout
+    await record_legacy_payout(driver, payout_id, req.amount)
 
     payout["status"] = RideStatus.COMPLETED
     payout["stripe_payout_id"] = stripe_payout_id

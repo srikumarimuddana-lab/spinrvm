@@ -65,8 +65,8 @@ async def _enabled() -> bool:
     try:
         settings = await get_app_settings()
         return bool(settings.get(FLAG_KEY, True))
-    except Exception as exc:  # settings read must never block monitoring's callers
-        logger.warning("dual_run_monitor: app_settings lookup failed (%s); treating as enabled", exc)
+    except Exception:  # settings read must never block monitoring's callers
+        logger.exception("dual_run_monitor: app_settings lookup failed; treating as enabled")
         return True
 
 
@@ -114,7 +114,10 @@ async def record_go_online_flip(driver: Dict[str, Any], user: Dict[str, Any]) ->
 
 
 async def record_legacy_payout(driver: Dict[str, Any], payout_id: str, amount: Any) -> None:
-    """Call after a Stripe transfer to the driver has settled.
+    """Call only once the money can no longer be reversed away from the driver
+    (standard payout: after the terminal write following ``Transfer.create``;
+    instant payout: after the Step 2 ``Payout.create`` succeeds — counting at
+    Step 1 would overcount transfers later reversed by a failed Step 2).
 
     Counts payouts to legacy-imported drivers — the population whose Stripe
     Connect accounts may also be paid by the old platform during dual-run.

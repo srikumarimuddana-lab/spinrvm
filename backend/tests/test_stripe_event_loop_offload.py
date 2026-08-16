@@ -57,6 +57,11 @@ async def test_customer_creation_yields_to_event_loop() -> None:
         key_mode=key_mode,
         object_mode=object_mode,
         stale_by_mode=stale_by_mode,
+        # Decides the identity kwargs (email) sent to Stripe. Loaded the same
+        # isolated way rather than stubbed, so this test keeps exercising the
+        # REAL argument set — a stub would let the two drift apart silently.
+        # It is pure and reads no globals of its own.
+        _customer_identity_fields=_load_payments_function("_customer_identity_fields"),
     )
 
     timer = threading.Timer(0.1, release.set)

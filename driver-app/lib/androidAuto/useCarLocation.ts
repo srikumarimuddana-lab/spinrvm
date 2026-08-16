@@ -68,6 +68,41 @@ export function useCarLocation(): CarLatLng | null {
       Location = null;
     }
 
+    // FIRST seed: the OS's own cached fix.
+    //
+    // This is what makes a car-only cold launch work. When Android Auto starts
+    // the app with the phone UI closed, the process is not foregrounded, so
+    // watchPositionAsync below may deliver nothing at all — Android throttles
+    // foreground location for a backgrounded app with no foreground service,
+    // which is exactly the state a driver who is offline or has force-closed
+    // the app is in. getLastKnownPositionAsync reads the OS cache instead of
+    // opening a session, so it returns immediately and works regardless.
+    //
+    // Without it the map fell back to the AsyncStorage value the PHONE writes —
+    // absent entirely if the app has never run the dashboard — and then to
+    // Saskatoon, which is simply the wrong city for most drivers.
+    (async () => {
+      if (!Location) return;
+      try {
+        const { status } = await Location.getForegroundPermissionsAsync();
+        if (cancelled || status !== 'granted') return;
+        const last = await Location.getLastKnownPositionAsync();
+        if (cancelled || !last?.coords) return;
+        const next = {
+          latitude: last.coords.latitude,
+          longitude: last.coords.longitude,
+          heading: last.coords.heading ?? null,
+        };
+        setLoc((prev) => {
+          const chosen = prev ?? next;
+          lastFix = chosen;
+          return chosen;
+        });
+      } catch {
+        // No cached fix — the AsyncStorage seed and live watcher still apply.
+      }
+    })();
+
     // Seed the camera from the last-known fix the phone pipeline persisted, so an
     // idle car screen opens centered on the driver instead of waiting for GPS.
     (async () => {

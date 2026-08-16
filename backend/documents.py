@@ -32,6 +32,35 @@ def _is_valid_uuid(value: str) -> bool:
 
 
 # --- File Upload Security ---
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+_UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1 MB
+
+
+class FileTooLargeError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(status_code=413, detail="File too large (max 10MB)")
+
+
+async def read_upload_capped(file: UploadFile, max_bytes: int = MAX_FILE_SIZE) -> bytes:
+    """Read an UploadFile into memory, refusing to buffer more than max_bytes.
+
+    Reads in chunks and bails as soon as the cap is passed, so an oversized
+    body is never fully materialised — a plain ``await file.read()`` would
+    buffer the whole thing before anyone could check its length.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(_UPLOAD_CHUNK_SIZE)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise FileTooLargeError()
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 ALLOWED_MIME_TYPES = {
     "image/jpeg",
     "image/jpg",  # alias — some devices/pickers send this
@@ -496,13 +525,25 @@ def regenerate_signed_url(stored_url: str, expires_in: int = 3600) -> str:
 
 
 async def save_upload(file: UploadFile) -> str:
-    file_bytes = await file.read()
+    # Capped read: this path has no Request object to pre-check content-length
+    # against, and there is no global body-size middleware, so without this an
+    # authenticated caller could make the worker buffer an unbounded body.
+    try:
+        file_bytes = await read_upload_capped(file)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to read uploaded file: {e}")
+        raise HTTPException(status_code=400, detail="Could not read the uploaded file") from e
+
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Empty file")
 
     # Same byte-sniffing contract as /api/v1/upload: the content decides the
     # stored type and extension, not the client's filename or content-type
-    # header. Raised outside the try below so a 400 "unsupported format"
-    # reaches the caller as a 400 instead of being caught by the `except
-    # Exception` and re-raised as an opaque 500 "Could not save file".
+    # header. Raised outside the storage try below so a 400 "unsupported
+    # format" reaches the caller as a 400 instead of being caught by the
+    # `except Exception` and re-raised as an opaque 500 "Could not save file".
     content_type, file_ext = _resolve_upload_type(file_bytes, file.content_type or "application/octet-stream")
     filename = f"{uuid.uuid4()}{file_ext}"
 
@@ -1073,14 +1114,6 @@ files_router = APIRouter(prefix="/documents", tags=["Files"])
 upload_router = APIRouter(tags=["Upload"])
 
 
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
-
-
-class FileTooLargeError(HTTPException):
-    def __init__(self) -> None:
-        super().__init__(status_code=413, detail="File too large (max 10MB)")
-
-
 @upload_router.post("/upload")
 async def upload_file(
     request: Request,
@@ -1111,13 +1144,12 @@ async def upload_file(
         if content_length and int(content_length) > MAX_FILE_SIZE:
             raise FileTooLargeError()
 
-        content = await file.read()
+        # 10 MB hard cap -- documents are usually photos/PDFs. The
+        # content-length check above is only a fast path; a client can lie
+        # about or omit the header, so the read itself is what enforces it.
+        content = await read_upload_capped(file)
         if not content:
             raise HTTPException(status_code=400, detail="Empty file")
-
-        # 10 MB hard cap -- documents are usually photos/PDFs
-        if len(content) > MAX_FILE_SIZE:
-            raise FileTooLargeError()
 
         size = len(content)
 

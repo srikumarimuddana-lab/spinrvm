@@ -319,6 +319,7 @@ export {
     getUserWallet,
     creditUserWallet,
     debitUserWallet,
+    backfillStripeCustomerEmails,
 } from "./api/users-wallet";
 export {
     getPromotions,

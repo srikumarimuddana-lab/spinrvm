@@ -24,7 +24,8 @@ import { useWorkProfileStore } from '../store/workProfileStore';
 import { showToast } from '../store/toastStore';
 import type { Ride, RideRequiresAction } from '../store/rideStore';
 import ConfirmSheet from '../components/ConfirmSheet';
-import api, { getApiErrorMessage } from '@shared/api/client';
+import api, { getApiErrorMessage, isEngineError } from '@shared/api/client';
+import { recordNonFatal } from '../utils/crashlytics';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { Analytics } from '@shared/analytics';
@@ -220,6 +221,15 @@ function PaymentConfirmScreenContent() {
         router.replace({ pathname: '/driver-arriving', params: { rideId: bookedRide.id } } as any);
       }
     } catch (error: any) {
+      // Same capture as ride-options' proceedWithBooking: this catch also
+      // swallows client-side crashes (notably confirmPayment() when the
+      // Stripe native module is absent or older than the JS bundle), which
+      // rideStore's recordNonFatal never sees because they happen outside its
+      // try. Without this the only trace was a toast.
+      if (isEngineError(error)) {
+        console.error('[booking] client-side crash during booking', error);
+        recordNonFatal(error, { screen: 'payment-confirm', action: 'handleBookRide' });
+      }
       // Not user-facing: `error.message` here only drives the 409-detection
       // control-flow branch below (routing to the rider's already-active
       // ride instead of retrying booking). The actual user-visible message a

@@ -78,12 +78,6 @@ _MAGIC_BYTES = {
     b"%PDF": "application/pdf",
 }
 
-# Consumed by services/data_transfer/bundle_document_uploader.py, which gates
-# on the extension recorded in a bundle manifest (a trusted, server-written
-# value) rather than on a client-supplied filename. The upload endpoints no
-# longer use it — see _resolve_upload_type.
-ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf"}
-
 # Canonical extension per accepted type. The extension an upload is stored
 # under is derived from this map, never from the client-supplied filename —
 # see _resolve_upload_type.

@@ -74,6 +74,7 @@ async def main() -> int:
     # instruction people stop following once the counts get boring.
     totals = {"scanned": 0, "updated": 0, "unchanged": 0, "no_email": 0, "skipped_deleted": 0}
     missing_on_key: list[str] = []
+    throttled: list[str] = []
     failed: list[str] = []
     cursor: str | None = None
     batches = 0
@@ -116,6 +117,7 @@ async def main() -> int:
         totals["no_email"] += result.no_email
         totals["skipped_deleted"] += result.skipped_deleted
         missing_on_key.extend(result.missing_on_key)
+        throttled.extend(result.throttled)
         failed.extend(result.failed)
 
         if not result.has_more:
@@ -129,7 +131,7 @@ async def main() -> int:
 
     logger.info(
         "%s: %d batch(es) | %d updated, %d already correct, %d without an email, "
-        "%d mid-deletion (skipped), %d unreachable on this key, %d failed",
+        "%d mid-deletion (skipped), %d unreachable on this key, %d rate-limited, %d failed",
         "APPLIED" if args.apply else "DRY RUN",
         batches,
         totals["updated"],
@@ -137,6 +139,7 @@ async def main() -> int:
         totals["no_email"],
         totals["skipped_deleted"],
         len(missing_on_key),
+        len(throttled),
         len(failed),
     )
     if missing_on_key:
@@ -145,8 +148,17 @@ async def main() -> int:
             "visit to their own payment screen, NOT by this script): %s",
             json.dumps(missing_on_key),
         )
+    if throttled:
+        # Outstanding, not broken — but the sweep did not finish, so this must
+        # not exit 0 and read as complete.
+        logger.warning(
+            "%d rider(s) still rate-limited by Stripe after retries — re-run to finish (safe to repeat): %s",
+            len(throttled),
+            json.dumps(throttled),
+        )
     if failed:
         logger.error("failed: %s", json.dumps(failed))
+    if failed or throttled:
         return 1
     if not args.apply and totals["updated"]:
         logger.info("re-run with --apply to write these %d update(s)", totals["updated"])

@@ -70,7 +70,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -90,14 +92,36 @@ logger = logging.getLogger(__name__)
 # PostgREST caps an unbounded select at db-max-rows without signalling it.
 PAGE_SIZE = 500
 
-# Bound on one invocation so the HTTP entry point cannot run unboundedly long.
-DEFAULT_LIMIT = 500
-MAX_LIMIT = 2000
+# Ceiling on Stripe calls per second for the WHOLE sweep, enforced by `_Pacer`.
+#
+# Sized from an incident, not from the published limit. The first version ran 8
+# workers with no pacing; at ~2 calls per rider that sustained well over 100
+# req/s and Stripe threw `rate_limit` for 97 of 116 riders in one run. The SDK's
+# own `max_network_retries = 2` (utils/stripe_config.py) could not rescue it —
+# retries do not fix a job that is structurally too fast.
+#
+# 10/s is deliberately far below Stripe's ceiling (100/s live, 25/s test)
+# because this account is simultaneously serving real bookings: a maintenance
+# sweep must never be the reason a rider's card authorization gets throttled.
+STRIPE_CALLS_PER_SECOND = 10.0
 
-# Stay well inside Stripe's rate limit. Each row costs a retrieve (+ a modify
-# when applying), so this is the one knob that decides how hard a full sweep
-# leans on the API.
-MAX_CONCURRENCY = 8
+# Overlap network latency only — `_Pacer` is what actually bounds throughput,
+# so this does not need to be large.
+MAX_CONCURRENCY = 4
+
+# Extra retries layered ON TOP of the SDK's max_network_retries, with a longer
+# backoff than the SDK uses. A 429 means "come back later", so it is retried,
+# and only reported as throttled once the retries are spent.
+RATE_LIMIT_RETRIES = 3
+RATE_LIMIT_BACKOFF_BASE_SECONDS = 1.0
+RATE_LIMIT_BACKOFF_MAX_SECONDS = 8.0
+
+# Bound on one invocation so the HTTP entry point cannot run unboundedly long.
+# At STRIPE_CALLS_PER_SECOND and ~2 calls per rider, MAX_LIMIT is ~30s of
+# Stripe time — inside a typical 60s gateway timeout, with room for retries.
+# Callers sweep the whole fleet by following `next_cursor`, not by raising this.
+DEFAULT_LIMIT = 50
+MAX_LIMIT = 150
 
 
 @dataclass
@@ -129,6 +153,55 @@ def _redact_emails(text: str) -> str:
     return _EMAIL_RE.sub("[email-redacted]", text or "")
 
 
+class _Pacer:
+    """Space Stripe calls across all workers to a fixed calls-per-second ceiling.
+
+    A semaphore bounds how many calls are *in flight*; it does not bound the
+    *rate*, because each one finishes in ~50-100 ms and the next starts
+    immediately. That distinction is what caused the incident this class exists
+    to prevent: 8 in-flight calls became >100 req/s and Stripe throttled almost
+    the whole run.
+
+    Reserves a slot under the lock and sleeps outside it, so workers queue on
+    arithmetic rather than on each other's network time.
+    """
+
+    def __init__(self, rate_per_second: float) -> None:
+        self._interval = 1.0 / max(rate_per_second, 0.1)
+        self._lock = asyncio.Lock()
+        self._next_slot = 0.0
+
+    async def wait(self) -> None:
+        async with self._lock:
+            now = time.monotonic()
+            slot = max(now, self._next_slot)
+            self._next_slot = slot + self._interval
+            delay = slot - now
+        if delay > 0:
+            await asyncio.sleep(delay)
+
+
+async def _stripe_call(pacer: _Pacer, fn):
+    """Run one blocking Stripe call: paced, and retried on 429.
+
+    Retries only ``RateLimitError``. Everything else — a decline, a missing
+    object, a bad key — is evidence about the request itself and is raised for
+    the caller to classify, unretried.
+    """
+    for attempt in range(RATE_LIMIT_RETRIES + 1):
+        await pacer.wait()
+        try:
+            return await asyncio.to_thread(fn)
+        except stripe.error.RateLimitError:
+            if attempt >= RATE_LIMIT_RETRIES:
+                raise
+            backoff = min(RATE_LIMIT_BACKOFF_BASE_SECONDS * (2**attempt), RATE_LIMIT_BACKOFF_MAX_SECONDS)
+            # Jitter so concurrent workers that were throttled together do not
+            # all come back in the same instant and throttle each other again.
+            await asyncio.sleep(backoff * (0.5 + random.random()))
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
 @dataclass
 class BackfillResult:
     applied: bool = False
@@ -151,7 +224,16 @@ class BackfillResult:
     changes: list[EmailChange] = field(default_factory=list)
     # "user_id:cus_…" for customers this key cannot see. Reported, not repaired.
     missing_on_key: list[str] = field(default_factory=list)
+    # Still rate-limited after RATE_LIMIT_RETRIES. NOT a failure — the write is
+    # simply outstanding, and a later run picks it up. Kept apart from `failed`
+    # so a throttled sweep does not read like a broken one.
+    throttled: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
+
+    @property
+    def incomplete(self) -> bool:
+        """True when riders in this selection still need work after this run."""
+        return bool(self.has_more or self.throttled or self.failed)
 
 
 def _selector(user_ids: Optional[list[str]], emails: Optional[list[str]], cursor: Optional[str]) -> dict:
@@ -272,6 +354,7 @@ async def backfill_stripe_customer_emails(
 
     result = BackfillResult(applied=bool(apply), has_more=has_more, next_cursor=next_cursor, key_mode=mode)
     semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
+    pacer = _Pacer(STRIPE_CALLS_PER_SECOND)
     lock = asyncio.Lock()
 
     async def _one(user: dict) -> None:
@@ -301,7 +384,9 @@ async def backfill_stripe_customer_emails(
 
         async with semaphore:
             try:
-                customer = await asyncio.to_thread(lambda: stripe.Customer.retrieve(customer_id, api_key=stripe_secret))
+                customer = await _stripe_call(
+                    pacer, lambda: stripe.Customer.retrieve(customer_id, api_key=stripe_secret)
+                )
                 current = (getattr(customer, "email", None) or "").strip()
                 async with lock:
                     result.scanned += 1
@@ -311,14 +396,21 @@ async def backfill_stripe_customer_emails(
                     return
 
                 if apply:
-                    await asyncio.to_thread(
-                        lambda: stripe.Customer.modify(customer_id, email=email, api_key=stripe_secret)
+                    await _stripe_call(
+                        pacer, lambda: stripe.Customer.modify(customer_id, email=email, api_key=stripe_secret)
                     )
                 async with lock:
                     result.updated += 1
                     result.changes.append(
                         EmailChange(user_id=user_id, customer_id=str(customer_id), had_email=bool(current))
                     )
+            except stripe.error.RateLimitError:
+                # Still throttled after the retries. The write is outstanding,
+                # not broken — a later run picks this rider up. Logged once per
+                # run in aggregate below rather than once per rider, which is
+                # what turned the incident into 97 identical ERROR lines.
+                async with lock:
+                    result.throttled.append(f"{user_id}:{customer_id}")
             except Exception as e:  # noqa: BLE001 - classified immediately below
                 if is_missing_on_key(e, customer_id):
                     # Stranded by a key-mode rotation. Reported, deliberately
@@ -341,6 +433,18 @@ async def backfill_stripe_customer_emails(
 
     await asyncio.gather(*(_one(u) for u in users))
 
+    if result.throttled:
+        # One aggregate line, not one per rider. Warning rather than error:
+        # this is the degraded-but-recoverable case in CLAUDE.md's
+        # observability table — the sweep simply has not finished yet.
+        logger.warning(
+            "Stripe throttled %d of %d rider(s) after %d retries — re-run to finish",
+            len(result.throttled),
+            len(users),
+            RATE_LIMIT_RETRIES,
+            extra={"domain": "payments", "key_mode": mode, "throttled": len(result.throttled)},
+        )
+
     logger.info(
         "Stripe customer email backfill finished",
         extra={
@@ -354,6 +458,7 @@ async def backfill_stripe_customer_emails(
             "no_email": result.no_email,
             "skipped_deleted": result.skipped_deleted,
             "missing_on_key": len(result.missing_on_key),
+            "throttled": len(result.throttled),
             "failed": len(result.failed),
             "has_more": result.has_more,
         },

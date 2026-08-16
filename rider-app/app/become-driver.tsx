@@ -23,7 +23,7 @@ import { useAuthStore } from '@shared/store/authStore';
 // the same change was tried there).
 // eslint-disable-next-line import/no-named-as-default
 import SpinrConfig from '@shared/config/spinr.config';
-import { uploadFile } from '@shared/api/upload';
+import { uploadFile, resolveUploadMimeType } from '@shared/api/upload';
 import { showToast } from '../store/toastStore';
 import { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -142,7 +142,11 @@ export default function BecomeDriverScreen() {
       const asset = result.assets[0];
       setUploadingDoc(`${reqId}_${side}`);
 
-      const url = await uploadFile(asset.uri, asset.name, asset.mimeType || 'image/jpeg');
+      const url = await uploadFile(
+        asset.uri,
+        asset.name,
+        resolveUploadMimeType(asset.name || asset.uri, asset.mimeType),
+      );
 
       setDocs(prev => ({
         ...prev,

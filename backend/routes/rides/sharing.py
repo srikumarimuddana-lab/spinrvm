@@ -21,6 +21,7 @@ from ._deps import (  # noqa: F401
     logger,
     ride_action_limit,
     secrets,
+    timedelta,
     timezone,
     uuid,
 )
@@ -58,11 +59,54 @@ async def get_share_trip_link(ride_id: str, current_user: dict = Depends(get_cur
     if ride.get("status") in RideStatus.terminal_statuses():
         raise HTTPException(status_code=400, detail="Cannot share a completed or cancelled ride")
 
-    # Generate or reuse a share token (with creation timestamp for expiry)
+    # Generate or reuse a share token (with creation timestamp for expiry).
+    #
+    # The timestamp is NOT optional here. track_shared_ride only enforces the
+    # 24h expiry when shared_trip_token_created_at is set, and this GET path
+    # used to mint the token without it -- while being the path the rider app's
+    # own "Share my trip" button and the driver Safety overlay both call. The
+    # POST path stamped it correctly, so links born here never expired at all
+    # and kept exposing pickup/dropoff, live driver coordinates, plate and
+    # photo indefinitely to anyone the link was ever forwarded to.
     share_token = ride.get("shared_trip_token")
     if not share_token:
         share_token = secrets.token_urlsafe(32)
-        await _deps.db_supabase.update_ride(ride_id, {"shared_trip_token": share_token})
+        await _deps.db_supabase.update_ride(
+            ride_id,
+            {
+                "shared_trip_token": share_token,
+                "shared_trip_token_created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    else:
+        # An existing token needs its clock (re)started in two cases, or this
+        # endpoint hands back a link that track_shared_ride will 404:
+        #   1. no timestamp at all -- minted before this fix
+        #   2. a timestamp already past the 24h window
+        # (2) matters because the ride is still live here (terminal statuses
+        # were rejected above): a rider re-sharing a >24h trip would otherwise
+        # get a 200 with a dead link and no indication anything was wrong.
+        #
+        # Stamped with *now* rather than the ride's creation time: back-dating
+        # could instantly invalidate a link a rider is actively sharing. This
+        # starts the clock instead -- the conservative direction for a
+        # live-tested surface.
+        _created = ride.get("shared_trip_token_created_at")
+        _needs_stamp = not _created
+        if _created:
+            try:
+                _created_dt = datetime.fromisoformat(_created) if isinstance(_created, str) else _created
+                _needs_stamp = datetime.now(timezone.utc) - _created_dt > timedelta(hours=24)
+            except (ValueError, TypeError):
+                # Malformed timestamp: re-stamp rather than leave the link in a
+                # state whose expiry nobody can evaluate.
+                logger.error(f"Malformed shared_trip_token_created_at for ride {ride_id}")
+                _needs_stamp = True
+        if _needs_stamp:
+            await _deps.db_supabase.update_ride(
+                ride_id,
+                {"shared_trip_token_created_at": datetime.now(timezone.utc).isoformat()},
+            )
 
     # Clean customer-facing link: {tracking-domain}/{token}. The tracking
     # domain (e.g. track.spinr.ca) rewrites /{token} → /track/{token} server-side.
@@ -197,6 +241,18 @@ async def track_shared_ride(share_token: str):
         except (ValueError, TypeError):
             pass  # Malformed timestamp — allow access but log
             logger.error(f"Malformed shared_trip_token_created_at for ride {ride.get('id')}")
+    elif ride.get("status") in RideStatus.terminal_statuses():
+        # Legacy token minted by the GET path before it stamped a timestamp.
+        # Those links were unconditionally immortal: with no timestamp there
+        # was nothing to compare against, so the block above simply skipped.
+        #
+        # A blanket "no timestamp = expired" would revoke links riders may be
+        # actively sharing on a live trip, so the cutoff is the ride ending
+        # instead. Once terminal there is no safety purpose left in the link,
+        # and it stops exposing pickup/dropoff. Live rides are unaffected, and
+        # get_share_trip_link backfills a timestamp the next time it is called
+        # for the ride, after which the normal 24h rule applies.
+        raise HTTPException(status_code=404, detail="Share link has expired")
 
     if ride.get("status") in RideStatus.terminal_statuses():
         return {

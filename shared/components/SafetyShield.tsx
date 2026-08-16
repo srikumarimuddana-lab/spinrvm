@@ -155,6 +155,10 @@ export function SafetyShield({ rideId, onTrigger, onOpenOverlay, lat, lng }: Saf
       {toastVisible && (
         <View style={styles.toast}>
           <View style={styles.toastDot} />
+          {/* Names appear only for contacts the backend confirmed as notified.
+              With none confirmed (no contacts saved, or a deduplicated replay
+              whose original send isn't re-derivable) the toast claims only
+              what is certain: Spinr Safety was alerted. */}
           <Text style={styles.toastText} numberOfLines={2}>
             Silent alert sent
             {toastContactNames.length > 0 ? ` — ${toastContactNames.join(', ')} + Spinr Safety notified` : ' — Spinr Safety notified'}

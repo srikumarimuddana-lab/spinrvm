@@ -555,15 +555,19 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.sosButton}>
+          {/* onTrigger is only ever invoked with a real rideId -- SOSButton
+              guards the no-ride case itself and shows its own "No Active
+              Ride" prompt with a 911 option the rider must confirm. This
+              used to carry an `else { Linking.openURL('tel:911') }` branch
+              that was unreachable for that reason, but would have become an
+              UNPROMPTED 911 dial the moment anyone made SOSButton call
+              onTrigger without a rideId -- the obvious shape of the pending
+              rideless-SOS work (ACTION_ITEMS.md B15(c)). domain-safety.md's
+              hardest rule is "Never auto-dial 911" (wrong-PSAP routing wastes
+              seconds), so the branch is removed rather than left as a trap. */}
           <SOSButton
             rideId={currentRide?.id}
-            onTrigger={async (rideId, lat, lng) => {
-              if (rideId) {
-                await triggerEmergency(rideId, lat, lng);
-              } else {
-                Linking.openURL('tel:911');
-              }
-            }}
+            onTrigger={triggerEmergency}
             size="small"
             t={t}
           />

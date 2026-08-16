@@ -49,7 +49,29 @@ _MAGIC_BYTES = {
     b"%PDF": "application/pdf",
 }
 
+# Consumed by services/data_transfer/bundle_document_uploader.py, which gates
+# on the extension recorded in a bundle manifest (a trusted, server-written
+# value) rather than on a client-supplied filename. The upload endpoints no
+# longer use it — see _resolve_upload_type.
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf"}
+
+# Canonical extension per accepted type. The extension an upload is stored
+# under is derived from this map, never from the client-supplied filename —
+# see _resolve_upload_type.
+_MIME_TO_EXTENSION = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "application/pdf": ".pdf",
+}
+
+# ISO base-media-format brands used by iPhone photos. Detected only so the
+# upload path can reject them with an actionable message: no browser renders
+# HEIF, so storing one would break admin document review silently rather than
+# at upload time.
+_HEIF_MIME = "image/heic"
+_HEIF_BRANDS = frozenset({b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx", b"heif", b"mif1", b"msf1"})
 
 
 def _is_valid_webp(data: bytes) -> bool:
@@ -57,8 +79,72 @@ def _is_valid_webp(data: bytes) -> bool:
     return data[:4] == b"RIFF" and data[8:12] == b"WEBP"
 
 
+def _is_heif(data: bytes) -> bool:
+    """Return True if data is an ISO-BMFF file with a HEIF/HEIC brand."""
+    return len(data) >= 12 and data[4:8] == b"ftyp" and data[8:12] in _HEIF_BRANDS
+
+
+def _sniff_mime_type(content: bytes) -> Optional[str]:
+    """Identify a file's real type from its header bytes, or None if unknown."""
+    if _is_valid_webp(content):
+        return "image/webp"
+    if _is_heif(content):
+        return _HEIF_MIME
+    for magic, magic_mime in _MAGIC_BYTES.items():
+        if content.startswith(magic):
+            return magic_mime
+    return None
+
+
+def _resolve_upload_type(content: bytes, declared_type: str) -> tuple[str, str]:
+    """Return the (mime_type, extension) an upload should be stored under.
+
+    The file's own bytes are authoritative; the client's declared
+    content-type is only consulted when the header is unrecognised. Mobile
+    pickers routinely mislabel uploads — expo-image-picker reports every
+    asset it returns as ``image/jpeg`` whatever the real format is, Android's
+    document picker sends ``application/octet-stream``, and an iPhone gallery
+    asset keeps its ``.HEIC`` filename even after Expo has re-encoded the
+    bytes to JPEG. Gating on the declared type (or on the filename extension)
+    therefore rejected most real driver-signup uploads.
+
+    Raises HTTPException(400) for HEIF and for content we cannot place.
+    """
+    sniffed = _sniff_mime_type(content)
+    if sniffed == _HEIF_MIME:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "HEIC/HEIF photos aren't supported. On iPhone, either take the photo "
+                "with the in-app camera, or set Settings → Camera → Formats → Most "
+                "Compatible and re-take it. JPG, PNG, GIF, WEBP and PDF are accepted."
+            ),
+        )
+    if sniffed:
+        return sniffed, _MIME_TO_EXTENSION[sniffed]
+
+    # Header unrecognised (an image format we have no signature for, a
+    # truncated file). Fall back to the declared type, exactly as the old
+    # magic-byte check did for unknown headers.
+    normalised = "image/jpeg" if declared_type == "image/jpg" else declared_type
+    if normalised in _MIME_TO_EXTENSION:
+        return normalised, _MIME_TO_EXTENSION[normalised]
+
+    raise HTTPException(
+        status_code=400,
+        detail=(f"Unsupported file format (received '{declared_type}'). Please upload a JPG, PNG, GIF, WEBP or PDF."),
+    )
+
+
 def _validate_file_type(content: bytes, declared_type: str) -> None:
-    """Validate file MIME type against allowlist and verify magic bytes."""
+    """Validate file MIME type against allowlist and verify magic bytes.
+
+    Kept for callers whose declared content-type is trustworthy: admin
+    illustration uploads from a browser (routes/admin/vehicle_fleet.py) and
+    bundle replay, which derives the type from a server-written manifest
+    extension. Uploads from the mobile pickers go through
+    _resolve_upload_type instead, which does not trust the declared type.
+    """
     # Normalise image/jpg → image/jpeg before allowlist check
     normalised = "image/jpeg" if declared_type == "image/jpg" else declared_type
     if normalised not in ALLOWED_MIME_TYPES:
@@ -410,14 +496,19 @@ def regenerate_signed_url(stored_url: str, expires_in: int = 3600) -> str:
 
 
 async def save_upload(file: UploadFile) -> str:
-    file_ext = os.path.splitext(file.filename)[1]
+    file_bytes = await file.read()
+
+    # Same byte-sniffing contract as /api/v1/upload: the content decides the
+    # stored type and extension, not the client's filename or content-type
+    # header. Raised outside the try below so a 400 "unsupported format"
+    # reaches the caller as a 400 instead of being caught by the `except
+    # Exception` and re-raised as an opaque 500 "Could not save file".
+    content_type, file_ext = _resolve_upload_type(file_bytes, file.content_type or "application/octet-stream")
     filename = f"{uuid.uuid4()}{file_ext}"
 
     try:
-        file_bytes = await file.read()
-        _validate_file_type(file_bytes, file.content_type or "application/octet-stream")
         supabase.storage.from_("driver-documents").upload(
-            file=file_bytes, path=filename, file_options={"content-type": file.content_type}
+            file=file_bytes, path=filename, file_options={"content-type": content_type}
         )
 
         url_res = supabase.storage.from_("driver-documents").create_signed_url(filename, 3600)
@@ -1007,8 +1098,8 @@ async def upload_file(
     # identity documents (licence, insurance, registration) and the uploaded
     # name routinely carries the driver's name or licence number — the same
     # reason `safe_name` below never echoes it back to the caller (12-8).
-    # The extension is the only part with diagnostic value here, since the
-    # next failure mode is the ALLOWED_EXTENSIONS check.
+    # The extension is the only part with diagnostic value here, since a
+    # picker that mislabels the extension usually mislabels content_type too.
     logger.info(
         "[upload] hit /api/v1/upload user={} ext={} content_type={}",
         (current_user or {}).get("id"),
@@ -1029,15 +1120,13 @@ async def upload_file(
             raise FileTooLargeError()
 
         size = len(content)
-        original_filename = file.filename or "upload"
-        content_type = file.content_type or "application/octet-stream"
 
-        _validate_file_type(content, content_type)
-
-        # Validate file extension against allowlist (12-11)
-        ext = Path(original_filename).suffix.lower()
-        if ext not in ALLOWED_EXTENSIONS:
-            raise HTTPException(status_code=400, detail=f"File type {ext} not allowed")
+        # Type and extension are both derived from the file's own bytes — the
+        # client-supplied filename is never trusted for either (12-11). A
+        # mobile picker's declared content-type and filename extension
+        # disagree with the real content often enough that gating on them
+        # rejected most genuine driver-signup uploads.
+        content_type, ext = _resolve_upload_type(content, file.content_type or "application/octet-stream")
 
         # Preserve extension so Supabase serves the object with a sensible
         # content-type when the browser fetches the public URL.

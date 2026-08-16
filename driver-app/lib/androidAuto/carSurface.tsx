@@ -90,7 +90,18 @@ export function CarMapSurface(): React.ReactElement | null {
   const delta = useCarMapCamera((s) => s.delta);
   const here = useCarLocation();
   const route = selectCarRoute(rideState, activeRide);
-  const card = buildTripCard(rideState, activeRide, incomingRide as OfferLike | null);
+  // Cumulative earnings for the completed-trip card. Fetched by the phone, so
+  // a car-only cold launch legitimately has none — buildTripCard omits the line
+  // rather than showing a misleading zero.
+  const earningsSummary = useDriverStore((s) => s.earnings);
+  const earningsCtx = useMemo(
+    () =>
+      earningsSummary
+        ? { total: earningsSummary.total_earnings, rides: earningsSummary.total_rides }
+        : null,
+    [earningsSummary],
+  );
+  const card = buildTripCard(rideState, activeRide, incomingRide as OfferLike | null, earningsCtx);
   // Read-only view of the phone's poller — NOT a second useDemandHeatmap().
   //
   // Two independent instances meant two timers (double the requests, battery

@@ -7,7 +7,7 @@
  * kept alongside it rather than split across app boundaries).
  */
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Modal, Pressable, Linking, Animated } from 'react-native';
+import { View, Text, StyleSheet, Modal, Pressable, Linking, Animated, Share } from 'react-native';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import { useHoldToConfirm } from '../hooks/useHoldToConfirm';
@@ -36,7 +36,9 @@ export function SafetyOverlay({ visible, onClose, rideId, onTrigger }: SafetyOve
     null,
   );
   const [failed, setFailed] = useState(false);
+  const [shareState, setShareState] = useState<'idle' | 'loading' | 'failed'>('idle');
   const pulse = useRef(new Animated.Value(1)).current;
+  const shareFailTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!visible) return;
@@ -44,6 +46,7 @@ export function SafetyOverlay({ visible, onClose, rideId, onTrigger }: SafetyOve
     // a stale confirmation view.
     setSentContacts(null);
     setFailed(false);
+    setShareState('idle');
 
     let cancelled = false;
     (async () => {
@@ -82,6 +85,14 @@ export function SafetyOverlay({ visible, onClose, rideId, onTrigger }: SafetyOve
     return () => loop.stop();
   }, [visible, pulse]);
 
+  // Don't leave the share-failure reset timer running after unmount.
+  useEffect(
+    () => () => {
+      if (shareFailTimer.current) clearTimeout(shareFailTimer.current);
+    },
+    [],
+  );
+
   const handleConfirm = () => {
     (async () => {
       try {
@@ -100,13 +111,36 @@ export function SafetyOverlay({ visible, onClose, rideId, onTrigger }: SafetyOve
 
   const call911 = () => Linking.openURL('tel:911');
 
+  // Previously this fetched the URL and threw it away — no share sheet, no
+  // clipboard, nothing. Tapping "Share Live Trip Link" in a safety overlay
+  // appeared to succeed while doing nothing at all, the worst failure mode a
+  // safety control can have. Now it opens the OS share sheet with the real
+  // link, and surfaces failure inline.
+  //
+  // The message is written for the DRIVER sharing their own trip, not reused
+  // from rider-app's buildShareTripMessage: that one describes the driver and
+  // vehicle to a rider's contacts, which is the wrong subject here — and it
+  // lives in rider-app/lib, so importing it into shared/ would break
+  // driver-app's build (see SafetyShield.tsx's header on that coupling).
   const shareTripLink = async () => {
+    setShareState('loading');
     try {
-      await api.get(`/rides/${rideId}/share`);
+      const res = await api.get<{ share_url?: string; share_token?: string }>(
+        `/rides/${rideId}/share`,
+      );
+      const url = res.data?.share_url;
+      if (!url) throw new Error('no share_url in response');
+      await Share.share({
+        message: `I'm sharing my live Spinr trip with you for safety. Follow it here:\n${url}`,
+      });
+      setShareState('idle');
     } catch {
-      // Best-effort — a failed share-link fetch isn't a safety-critical
-      // failure (911/contacts-alert paths are unaffected); no inline
-      // error state needed here, matching this action's low stakes.
+      // Inline amber only — never Alert.alert. This overlay's whole premise is
+      // that a threatening passenger sees nothing change on the driver's
+      // screen (B16), so even a failure stays quiet.
+      setShareState('failed');
+      if (shareFailTimer.current) clearTimeout(shareFailTimer.current);
+      shareFailTimer.current = setTimeout(() => setShareState('idle'), 3000);
     }
   };
 
@@ -192,12 +226,24 @@ export function SafetyOverlay({ visible, onClose, rideId, onTrigger }: SafetyOve
 
             <Pressable
               onPress={shareTripLink}
-              style={[styles.actionBtn, styles.shareBtn]}
+              disabled={shareState === 'loading'}
+              style={[
+                styles.actionBtn,
+                styles.shareBtn,
+                shareState === 'failed' && styles.actionBtnFailed,
+              ]}
               accessibilityRole="button"
               accessibilityLabel="Share live trip link"
+              accessibilityState={{ busy: shareState === 'loading', disabled: shareState === 'loading' }}
             >
               <Text style={styles.actionBtnTitle}>Share Live Trip Link</Text>
-              <Text style={styles.actionBtnSub}>Anyone with the link can track this ride</Text>
+              <Text style={styles.actionBtnSub}>
+                {shareState === 'loading'
+                  ? 'Getting your link…'
+                  : shareState === 'failed'
+                  ? "Couldn't get the link — tap to retry"
+                  : 'Anyone with the link can track this ride'}
+              </Text>
             </Pressable>
 
             <Pressable

@@ -22,6 +22,7 @@ what do we already have, what's feasible, and does a per-service-area "city auth
 | **Where we're behind** | No consolidated Safety entry point; no law-enforcement "proof of trip"; share-trip is fragmented and partly broken |
 | **Biggest surprise found** | Share links minted through the rider's own "Share my trip" button **never expire** (see F3) |
 | **Your "city authority" idea** | Sound instinct, and the per-area conditional-render pattern already exists in this codebase — but it must be **new additive columns**, not a reuse of the existing `regulatory_authority` field, and it belongs in a Safety Hub, **not** next to the 911 button |
+| **Calgary changes its priority** | 311 is the City of Calgary's designated rideshare complaint channel under Livery Transport Bylaw 20M2021 — so this field is an **expansion launch gate**, not a nicety (§3.4). Chasing it also surfaced a driver-eligibility conflict that is bigger than this analysis (§3.5) |
 
 ---
 
@@ -108,15 +109,67 @@ in three business days costs seconds that matter. This is the same reasoning beh
   concern"* or *"Local transport authority"*, with hours.
 - **SOS / active-emergency panel** → no. 911 stays the only phone action there.
 
-### 3.4 Saskatchewan reality check
+### 3.4 Per-city reality check — and why Calgary makes this a launch gate
 
-For our launch cities this field will often be **empty**, which is precisely why your conditional
-render is the right call:
-- **Regina / Saskatoon** — ride-share is regulated provincially (SGI Auto Fund) plus municipal
-  business licensing. There is no dedicated municipal ride-share hotline of the kind Toronto's PTC
-  or Calgary's Livery Transport Services operate.
-- So the honest default in SK is: name + URL populated (SGI), phone **blank** → the row renders as an
-  informational link, not a call button.
+**Saskatchewan (Regina / Saskatoon)** — ride-share is regulated provincially (SGI Auto Fund) plus
+municipal business licensing. There is no dedicated municipal ride-share hotline. Honest default
+here: name + URL populated (SGI), phone **blank** → renders as an informational link, not a call
+button. This is exactly why the conditional render is the right design.
+
+**Calgary — the field is not optional.** The City of Calgary regulates ride-share as a
+"Transportation Network Company" under **Livery Transport Bylaw 20M2021** (Council-approved
+2021-03-22), administered by Livery Transport Services. **311 is the City's designated complaint
+channel for rideshare** — by phone or the 311 mobile app — and the City states it investigates
+reported concerns. So for a Calgary service area the row is fully populated:
+
+```
+safety_authority_name  = 'City of Calgary 311'
+safety_authority_phone = '311'
+safety_authority_url   = 'https://www.calgary.ca/taxis-ride-share/tnc.html'
+safety_authority_hours = '24/7'
+```
+
+That reframes this feature: in SK it's a *nice-to-have informational row*; in Calgary it's part of
+operating legitimately in the market. It should be treated as an **expansion launch gate**, not a
+Tier-2 nicety — which is why it stays in Sprint 2 rather than sliding.
+
+Note `'311'` is a 3-digit service code, not an E.164 number. Whatever validation goes on
+`safety_authority_phone` must accept short codes (311, 211, 811) — a naive phone regex will reject
+the single most important value this column will ever hold.
+
+### 3.5 Calgary surfaces a much larger gap than the phone number
+
+Chasing the 311 requirement turned up driver-eligibility rules that our engine cannot currently
+express. Calgary requires, for a Transportation Network Driver's Licence (TNDL):
+
+| Calgary requirement | Our state |
+|---|---|
+| Alberta driver's licence **Class 1, 2 or 4**, ≤ 9 demerits | ❌ **Direct conflict.** CLAUDE.md's driver-eligibility rule hardcodes *"Valid Class 5 driver's license (standard) — Class 1-4 drivers need separate approval."* In Alberta, Class 5 is the ordinary licence and **Class 4 is the commercial class Calgary actually mandates**. Our stated rule would reject exactly the drivers Calgary requires. |
+| Police Information Check **with vulnerable sector**, dated within **60 days** | 🟡 We require CRC + Vulnerable Sector Check renewed annually — but not the 60-day-at-application freshness window. |
+| Vehicle inspection (AB Motor Vehicle Record of Inspection or Enhanced Livery standard) within **30 days** of application | 🟡 We require annual inspection + vehicle < 10 years; no per-area recency rule. |
+| Mandatory **Livery Driver Training Program**, ≥ 80% pass | ❌ No training/certification concept exists in the onboarding model at all. |
+| Affiliation with a City-licensed TNC; rides and payment only through a **City-approved app** | ❌ Platform-level licensing obligation, not a code change — flagging it, not scoping it. |
+
+Two concrete code facts behind that table:
+
+- **`service_areas.required_documents` (JSONB) already exists** and is genuinely load-bearing —
+  `backend/documents.py:475-494,591,722,928-946`, `backend/onboarding_status.py:144-164`, and
+  `backend/services/driver_import_service.py:516` all resolve a driver's required docs from their
+  service area. So the *document* half of Calgary's requirements (PIC, inspection, training
+  certificate) is expressible today with **no schema change** — it's data entry plus, at most, a
+  per-document recency field.
+- **`license_class` is stored but never enforced.** It's imported
+  (`driver_import_service.py:135,697`), displayed in admin (`drivers/page.tsx:1323,1366`), there's a
+  whole backfill screen for it, and it's exported onto SGI forms
+  (`services/data_transfer/sgi_field_maps.py:72`) — but grep finds **zero** eligibility checks
+  against it. `go_online` gates on document expiry only. So the Class-5 rule in CLAUDE.md is a
+  *documented* policy that no code enforces, which is why the Calgary conflict hasn't bitten yet.
+
+**Implication:** the fix for Calgary is not "add a per-area licence-class rule" bolted onto a
+hardcoded assumption — it's that eligibility should be **per-service-area data**, the way
+`required_documents` already is. That is a materially bigger piece of work than this safety
+analysis, and it belongs in its own scoping doc under expansion, not here. Recorded so it isn't
+rediscovered later.
 
 ### 3.5 Delivery path — already open
 
@@ -235,7 +288,14 @@ with §3's authority field — same regulatory framing, same screen family.
 
 #### F6. Per-service-area safety authority contact — **your idea**, as scoped in §3 🟢
 
-**Effort: S. Risk: Low.**
+**Effort: S. Risk: Low.** Blank in SK, populated with 311 in Calgary. Phone validation must accept
+3-digit service codes (§3.4). Treat as an **expansion launch gate** for any Calgary rollout, not a
+discretionary Tier-2 item.
+
+**Related but out of scope here:** §3.5's per-area driver-eligibility gap (Calgary mandates a
+commercial licence class our documented policy rejects; no training-certification concept exists;
+`license_class` is stored but never enforced). Needs its own scoping doc under expansion — do not
+let it ride along on a safety PR.
 
 #### F7. Auto-share / trusted contacts ("Follow my ride" as Uber actually ships it) 🟡
 
@@ -327,6 +387,19 @@ Stated explicitly rather than left implied:
 - **Uber's behaviour is inferred from the screenshot + public knowledge**, not from testing their
   app. "Proof of trip status" and "Follow my ride" semantics are described as commonly documented;
   the exact contents of their screens were not verified.
+- **The Calgary bylaw text itself was NOT read.** `calgary.ca` is blocked by this environment's
+  network egress proxy, so §3.4/§3.5 rest on secondary sources summarising the City's published
+  TNC pages. What is well-corroborated: 311 is the designated rideshare complaint channel, bylaw
+  20M2021 exists and was approved 2021-03-22, and the TNDL driver requirements listed (Class 1/2/4,
+  60-day PIC, 30-day inspection, 80% training pass). **What is NOT confirmed: whether 20M2021
+  obliges the TNC's *app* to display the 311 channel**, versus 311 simply being the City's channel
+  that riders use independently. That distinction decides whether §3.4 is a hard compliance
+  requirement or a strong product convention — **read the Vehicle for Hire Bylaw 20M2021 PDF before
+  citing it as a launch gate in any external or legal document.**
+- **No Alberta legal review.** §3.5's Class 5 vs Class 4 conflict is read off published City
+  requirements against our own CLAUDE.md text. It has not been reviewed by anyone qualified, and
+  Alberta provincial rules (Alberta.ca "ride-for-hire services") were not cross-checked against the
+  municipal ones.
 - **Effort sizes are relative T-shirt estimates**, not costed against anyone's calendar.
 - **No legal review** of the SK recording-consent position in F10 — flagged as needing sign-off
   precisely because it wasn't obtained.

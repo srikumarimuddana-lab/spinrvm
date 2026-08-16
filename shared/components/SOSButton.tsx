@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { getSOSLocation } from '../utils/sosLocation';
-import type { SOSTriggerResult } from '../types/safety';
+import { deriveContactOutcome, type SOSContactOutcome, type SOSTriggerResult } from '../types/safety';
 
 // This component is shared by rider-app and driver-app, which each ship
 // their own, independent i18n instance (different translation JSON, two
@@ -23,7 +23,16 @@ import type { SOSTriggerResult } from '../types/safety';
 const DEFAULT_STRINGS: Record<string, string> = {
   'sos.button_label': 'Emergency SOS',
   'sos.alert_title': '🚨 Emergency Alert Sent',
+  // Four outcomes for the contact leg. The alert itself reached our safety
+  // team in all four -- only what happened to the rider's emergency contacts
+  // differs, and we must never claim more than the response supports.
   'sos.alert_msg': 'Your location has been shared with Spinr support and your emergency contacts.\n\nDo you want to call 911?',
+  'sos.alert_msg_contacts_failed':
+    'Your location has been shared with Spinr support.\n\nWe could NOT reach your emergency contacts — please call them directly.\n\nDo you want to call 911?',
+  'sos.alert_msg_no_contacts':
+    'Your location has been shared with Spinr support.\n\nYou have no emergency contacts saved, so nobody else was alerted.\n\nDo you want to call 911?',
+  'sos.alert_msg_contacts_unknown':
+    'Your location has been shared with Spinr support.\n\nWe could not confirm whether your emergency contacts were reached — consider calling them directly.\n\nDo you want to call 911?',
   'sos.call_911': 'Call 911',
   'sos.im_ok': "I'm OK",
   'sos.failure_title': '⚠️ Alert Not Sent',
@@ -61,7 +70,12 @@ interface SOSButtonProps {
    * (deriveContactOutcome treats a void result as "no contacts" rather than
    * claiming success). See shared/types/safety.ts.
    */
-  onTrigger: (rideId: string, lat?: number, lng?: number) => Promise<SOSTriggerResult | void>;
+  onTrigger: (
+    rideId: string,
+    lat?: number,
+    lng?: number,
+    idempotencyKey?: string,
+  ) => Promise<SOSTriggerResult | void>;
   size?: 'small' | 'large';
   /**
    * Translation function — pass `useTranslation().t` (rider-app) or
@@ -121,10 +135,24 @@ export function SOSButton({ rideId, onTrigger, size = 'small', t }: SOSButtonPro
     }
   };
 
-  const showSuccessAlert = () => {
+  // The success dialog used to assert unconditionally that emergency contacts
+  // had been notified. That was untrue whenever every SMS failed, and untrue
+  // for a rider with no contacts saved. The endpoint has always returned the
+  // per-contact outcome; we now branch the copy on it. The title stays the
+  // same in every case because the part it claims -- the alert reached our
+  // safety team -- is what actually did happen on any 200.
+  const showSuccessAlert = (outcome: SOSContactOutcome) => {
+    const msgKey =
+      outcome === 'contacts_notified'
+        ? 'sos.alert_msg'
+        : outcome === 'contacts_failed'
+        ? 'sos.alert_msg_contacts_failed'
+        : outcome === 'no_contacts'
+        ? 'sos.alert_msg_no_contacts'
+        : 'sos.alert_msg_contacts_unknown';
     Alert.alert(
       translate('sos.alert_title'),
-      translate('sos.alert_msg'),
+      translate(msgKey),
       [
         {
           text: translate('sos.call_911'),
@@ -175,11 +203,20 @@ export function SOSButton({ rideId, onTrigger, size = 'small', t }: SOSButtonPro
       console.warn('[SOS] No location fix within deadline — sending alert without coordinates');
     }
 
+    // One idempotency key per PRESS, deliberately generated outside the retry
+    // loop so every attempt below carries the same value. The backend uses it
+    // to return the original incident instead of inserting a duplicate and
+    // re-sending emergency-contact SMS when a retry follows a response that
+    // was lost in transit (migration 315). Not security-sensitive — it only
+    // has to be unique per user — so this avoids pulling in a UUID dependency.
+    const idempotencyKey = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
     // Attempt backend call with two retries (3 total attempts) using
     // 1 s / 2 s backoff before declaring failure. Never treat missing
     // rideId as success — that would show "Alert Sent" without any
     // backend notification going out.
     let backendOk = false;
+    let contactOutcome: SOSContactOutcome = 'unknown';
     if (rideId) {
       for (let attempt = 0; attempt < SOS_MAX_ATTEMPTS && !backendOk; attempt++) {
         if (attempt > 0) {
@@ -187,7 +224,12 @@ export function SOSButton({ rideId, onTrigger, size = 'small', t }: SOSButtonPro
           await new Promise<void>((r) => setTimeout(r, delay));
         }
         try {
-          await onTrigger(rideId, lat, lng);
+          const result = await onTrigger(rideId, lat, lng, idempotencyKey);
+          // Derived, never assumed: deriveContactOutcome falls back to
+          // 'unknown' for a void-returning caller or a deduped replay, so a
+          // caller that can't report contact status never causes us to claim
+          // contacts were reached.
+          contactOutcome = deriveContactOutcome(result ?? null);
           backendOk = true;
         } catch {}
       }
@@ -207,7 +249,7 @@ export function SOSButton({ rideId, onTrigger, size = 'small', t }: SOSButtonPro
       );
     } else if (backendOk) {
       setTriggered(true);
-      showSuccessAlert();
+      showSuccessAlert(contactOutcome);
     } else {
       // Mark failed BEFORE showing the alert so the button is already amber
       // when the dialog appears. Dismissing the dialog leaves failed=true.
@@ -275,7 +317,20 @@ export function SOSButton({ rideId, onTrigger, size = 'small', t }: SOSButtonPro
           disabled: sending,
         }}
       >
-        <Ionicons name={iconName} size={isLarge ? 28 : 20} color="#FFF" />
+        {/* The label used to render only at size="large". Every map placement
+            uses "small", so in its most-visible spot this button was a bare
+            shield glyph — the same symbol a non-emergency safety screen would
+            use, giving a rider in trouble nothing that reads as "emergency".
+            Small now shows the SOS wordmark when idle. The transient states
+            (sending / sent / failed) keep the icon: it conveys progress better
+            than a word, is short-lived, and the persistent FAILED caption
+            below already spells out what happened. Geometry is unchanged —
+            still a 44px circle — so no map layout shifts. */}
+        {!isLarge && !sending && !triggered && !failed ? (
+          <Text style={styles.btnTextSmall}>{translate('sos.label_default')}</Text>
+        ) : (
+          <Ionicons name={iconName} size={isLarge ? 28 : 20} color="#FFF" />
+        )}
         {isLarge && <Text style={styles.btnText}>{labelText}</Text>}
       </TouchableOpacity>
       {pressing && (
@@ -328,6 +383,10 @@ const styles = StyleSheet.create({
   },
   btnText: {
     color: '#FFF', fontSize: 12, fontWeight: '800', letterSpacing: 0.5,
+  },
+  // Sized to sit inside the 44px small circle without changing its geometry.
+  btnTextSmall: {
+    color: '#FFF', fontSize: 13, fontWeight: '800', letterSpacing: 0.3,
   },
   holdHint: {
     position: 'absolute', bottom: -20, alignSelf: 'center',

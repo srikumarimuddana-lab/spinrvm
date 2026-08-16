@@ -234,6 +234,9 @@ class _Req:
     message = "Emergency!"
     latitude = 50.4452
     longitude = -104.6189
+    # Mirrors EmergencyRequest's default (migration 315). None = no dedup,
+    # which is the always-insert path these paging tests exercise.
+    idempotency_key = None
 
 
 async def _trigger_emergency(page_on_call_mock):

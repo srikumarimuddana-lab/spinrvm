@@ -3326,6 +3326,75 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 - **What was NOT verified:** same boundary as A32 — not exercised against
   real Supabase or a real migrated driver account, no visual verification.
 
+### A34. Legacy-imported ride count silently dropped 224 → 186 in production between 2026-08-13 and 2026-08-16, no attributable cause found — CRITICAL, unresolved
+- **Source:** dual-run cutover audit (Phase 0.4), 2026-08-16. A30 (2026-08-13,
+  live-verified) recorded **224** rows for
+  `legacy_import_metadata->>'source' = 'legacy_mongo_booking_import'`. The
+  identical query, run live again 2026-08-16, returns **186** — a 38-row
+  drop, confirmed real (not a filter/measurement difference):
+  - Same result via both the old `!= '{}'` filter and the exact-source
+    filter — not a query-shape artifact.
+  - `deleted_at` (migration 33 soft-delete column): 0 of the 186 remaining
+    rows are soft-deleted, and the missing rows aren't soft-deleted either
+    (they're gone from the table entirely, not hidden).
+  - Single import batch (`20260729184745`) both before and after — no
+    re-import, no dedup pass ran.
+  - Single Supabase project (`soavhtdhefowwvforzwb`/`spinrmobileapp`), zero
+    branches — ruled out "different environment" explanations.
+  - No application code path deletes from `rides` anywhere in this repo
+    (grepped). No `rides`-deletion row exists in the app's own `audit_logs`
+    table, ever.
+  - Postgres's own `pg_stat_user_tables` shows **1,961 lifetime DELETE
+    operations** against `rides` (`n_tup_del`) against only 718 lifetime
+    inserts — real, substantial delete activity the app never issued.
+- **What direct Supabase log access could and couldn't establish:**
+  - A dashboard SQL-editor session (`session:2b1c96df-be35-4789-a7f7-949f8eb8c616`)
+    applied several migrations directly against production on **2026-08-13,
+    13:36–13:41 UTC** — including recreating `purge_pii_retention()`
+    (migration 296) — bypassing `scripts/migrate.py`, the repo's documented
+    migration runner. This is the same calendar day the row count was last
+    confirmed at 224.
+  - `purge_pii_retention()`'s Step B (`DELETE FROM rides WHERE created_at <
+    now() - INTERVAL '7 years'`) **cannot** be the mechanism as currently
+    defined — every legacy ride's `created_at` is in 2026. Whether an
+    *earlier* version of this function (before the 08-13 rewrite) had a
+    different interval is unknown — the previous definition wasn't
+    recoverable from available logs.
+  - Zero `pii_retention_purge` rows exist in `audit_logs` — this function
+    has either never run for real in production, or an earlier version
+    deleted rows without writing that audit entry at all (today's version
+    does write one; whether it always did is unknown).
+  - No `DELETE FROM rides` statement for this specific gap was found in
+    Postgres logs — Supabase's log capture for this project appears to log
+    dashboard-run SQL and DDL, not ordinary application DML, so a
+    server-side DELETE issued outside the dashboard (e.g. a direct
+    `psql`/service-role connection) would leave no trace in `query_logs`
+    either.
+- **Status: open, unresolved, no attributable root cause.** The mechanism
+  is not the application, not explainable by any documented import/dedup
+  process, and not conclusively any specific SQL statement found in logs.
+  The one concrete lead is the dashboard session above, active in the same
+  window the count changed — that's a person to ask directly, not proof of
+  cause.
+- **Why this matters beyond the row count itself:** any "live-verified"
+  dollar figure or row count in this repo's audit docs (including A30,
+  A31, A32, A33, and every figure in this session's own Phase 0 report) is
+  a snapshot that can silently change with **no durable record of why**.
+  There is currently no DB-level (trigger/logical-replication/pgAudit)
+  capture of DELETE statements on `rides` — only the app's own
+  `audit_logs`, which nothing bypassing the app ever touches.
+- **Recommended next step (needs a human, not more log queries):** (1) ask
+  whoever owns the `2b1c96df…` dashboard session directly what ran between
+  2026-08-13 and 2026-08-16; (2) treat every legacy-migration dollar figure
+  in this repo as provisional until this is explained; (3) consider adding
+  a DB-level audit trigger (or enabling pgAudit) on `rides` at minimum, so
+  a future unattributed deletion is traceable instead of forensic
+  guesswork.
+- **What was NOT verified:** the actual DELETE statement or its issuer;
+  whether the pre-2026-08-13 version of `purge_pii_retention()` had a
+  shorter `c_ride_keep_age`; whether any driver/rider-facing data (not just
+  admin-visible rows) was affected by the missing 38 rides.
+
 ## P1 — Fix before launch (code)
 
 ### B0. Migration runner shreds any migration whose text contains "CONCURRENTLY"

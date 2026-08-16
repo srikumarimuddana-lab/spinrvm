@@ -26,7 +26,7 @@ import api, { getApiErrorMessage } from '@shared/api/client';
 // breaks those mocks (confirmed in rider-app's utils/aiChat.ts).
 // eslint-disable-next-line import/no-named-as-default
 import SpinrConfig from '@shared/config/spinr.config';
-import { uploadFile } from '@shared/api/upload';
+import { uploadFile, resolveUploadMimeType } from '@shared/api/upload';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -348,7 +348,10 @@ export default function BecomeDriverScreen() {
         const asset = result.assets[0];
         // Generate a name if missing (common with camera)
         const name = asset.fileName || genFallbackFileName();
-        const mimeType = asset.type === 'image' || !asset.type ? 'image/jpeg' : asset.type;
+        // asset.type is expo-image-picker's media *category* ('image'|'video'),
+        // not a MIME type — sending it as one had every PNG/GIF declared as
+        // image/jpeg and rejected by the backend's content check.
+        const mimeType = resolveUploadMimeType(name || asset.uri, asset.type);
 
         await processUpload(asset.uri, name, mimeType, reqId, side);
       }
@@ -367,7 +370,8 @@ export default function BecomeDriverScreen() {
       if (result.canceled) return;
 
       const asset = result.assets[0];
-      await processUpload(asset.uri, asset.name, asset.mimeType || 'image/jpeg', reqId, side);
+      const mimeType = resolveUploadMimeType(asset.name || asset.uri, asset.mimeType);
+      await processUpload(asset.uri, asset.name, mimeType, reqId, side);
     } catch {
       Alert.alert('Error', 'Failed to pick file');
     }

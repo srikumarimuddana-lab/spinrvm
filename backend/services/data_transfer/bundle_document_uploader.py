@@ -17,11 +17,11 @@ from typing import Any
 
 try:
     from ... import db_supabase
-    from ...documents import ALLOWED_EXTENSIONS, _extract_signed_url, _validate_file_type
+    from ...documents import _extract_signed_url, _validate_file_type
     from ...supabase_client import supabase
 except ImportError:
     import db_supabase
-    from documents import ALLOWED_EXTENSIONS, _extract_signed_url, _validate_file_type
+    from documents import _extract_signed_url, _validate_file_type
     from supabase_client import supabase
 
 logger = logging.getLogger(__name__)
@@ -32,9 +32,14 @@ DOCUMENT_STORAGE_BUCKET = "driver-documents"
 # own ALLOWED_MIME_TYPES allowlist — "application/octet-stream" is not a
 # member, so passing it always raised and was silently swallowed by this
 # module's own `except Exception: continue`, meaning every document in
-# every bundle replay was skipped. Map the bundle's known-safe extension
-# (already checked against ALLOWED_EXTENSIONS above this lookup) to its
+# every bundle replay was skipped. Map the bundle manifest's extension to a
 # real MIME type instead.
+#
+# This map is also the extension allowlist: an extension absent from it has no
+# type to declare, so the document is skipped. It used to be a separate
+# `ALLOWED_EXTENSIONS` set imported from documents.py, which had to be kept in
+# sync with these keys by hand and was read by nothing else once the upload
+# endpoints moved to byte-sniffing.
 _EXT_TO_MIME_TYPE = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -96,10 +101,10 @@ async def replay_documents(
         # those columns existed still import. Either way an unresolvable
         # extension lands on ".bin" and is rejected below rather than guessed.
         ext = Path(doc.get("bundled_file") or doc.get("_storage_key") or "").suffix.lower() or ".bin"
-        if ext not in ALLOWED_EXTENSIONS:
+        content_type = _EXT_TO_MIME_TYPE.get(ext)
+        if content_type is None:
             logger.warning("data-transfer import: skipping document with disallowed extension %s", ext)
             continue
-        content_type = _EXT_TO_MIME_TYPE.get(ext, "application/octet-stream")
         try:
             _validate_file_type(content, content_type)
         except Exception:

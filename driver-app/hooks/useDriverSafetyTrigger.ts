@@ -47,6 +47,16 @@ export async function triggerDriverEmergency(
   lat?: number,
   lng?: number,
 ): Promise<DriverSafetyTriggerResult> {
+  // One key per trigger, generated OUTSIDE the loop so every attempt below
+  // carries the same value. The backend returns the original incident instead
+  // of inserting a duplicate and re-sending emergency-contact SMS when a retry
+  // follows a response lost in transit (migration 315).
+  //
+  // It lives here rather than in the hook precisely because this function is
+  // now the shared entry point: the Android Auto surface reaches the emergency
+  // POST through it too, and a driver triggering SOS from a head unit is on
+  // exactly the flaky-connectivity path this guards against.
+  const idempotencyKey = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   let lastError: unknown;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     if (attempt > 0) {
@@ -56,7 +66,7 @@ export async function triggerDriverEmergency(
     try {
       const res = await api.post<{ contacts?: DriverSafetyContactStatus[] }>(
         `/rides/${rideId}/emergency`,
-        { latitude: lat, longitude: lng },
+        { latitude: lat, longitude: lng, idempotency_key: idempotencyKey },
       );
       return { contacts: res.data?.contacts || [] };
     } catch (err) {

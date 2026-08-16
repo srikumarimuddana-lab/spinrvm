@@ -97,6 +97,27 @@ export function CarMapSurface(): React.ReactElement | null {
   // a car-only cold launch legitimately has none — buildTripCard omits the line
   // rather than showing a misleading zero.
   const earningsSummary = useDriverStore((s) => s.earnings);
+
+  // Fetch it ourselves. `fetchEarnings` is otherwise called ONLY from the phone's
+  // Activity tab (components/activity/ActivityView.tsx), so `earnings` stayed
+  // null for any driver who had not opened that tab — and always on a car-only
+  // cold launch, where no phone screen mounts at all. The pill and the
+  // completed-trip line were therefore invisible in exactly the session they
+  // were built for.
+  //
+  // Unlike the demand heatmap there is no phone-side publisher to subscribe to
+  // here, so the car has to be the fetcher. Once on mount, then again whenever a
+  // trip completes — that is the only moment the day's total actually changes.
+  React.useEffect(() => {
+    if (rideState !== 'idle' && rideState !== 'trip_completed') return;
+    const fetchEarnings = useDriverStore.getState().fetchEarnings;
+    if (typeof fetchEarnings !== 'function') return;
+    fetchEarnings('day').catch((e) => {
+      // Non-fatal: the pill simply stays hidden. Recorded so a persistently
+      // missing pill is diagnosable from the car rather than a mystery.
+      pushDebug('error', 'earnings fetch failed:', e);
+    });
+  }, [rideState]);
   const earningsCtx = useMemo(
     () =>
       earningsSummary
@@ -170,6 +191,7 @@ export function CarMapSurface(): React.ReactElement | null {
     // --environment), which says nothing about the installed binary.
     setDebugFact('mapsKey(js)', GOOGLE_MAPS_API_KEY ? `present (${GOOGLE_MAPS_API_KEY.length} ch)` : 'empty — OTA env?');
     setDebugFact('renderer', 'full (liteMode off)');
+    setDebugFact('earnings', todayEarnings ? `${todayEarnings} today` : 'none yet (pill hidden)');
     // expo-location reports -1 for "heading unknown" and null when the provider
     // gives no bearing at all. Either way CarMarker falls back to a bearing
     // derived from consecutive fixes, so this tells you WHICH path is driving
@@ -196,7 +218,7 @@ export function CarMapSurface(): React.ReactElement | null {
     setDebugFact('location', here ? `${here.latitude.toFixed(4)}, ${here.longitude.toFixed(4)}` : 'no fix (fallback)');
     setDebugFact('route', route ? `${route.leg}, ${route.polyline.length} pts` : 'none');
     setDebugFact('heatmap', `${heatmapStatus}, ${carHeatCells.length} cells`);
-  }, [rideState, card.leg, delta, here, route, heatmapStatus, carHeatCells.length, offsetLat, offsetLng]);
+  }, [rideState, card.leg, delta, here, route, heatmapStatus, carHeatCells.length, offsetLat, offsetLng, todayEarnings]);
 
   let Maps: typeof import('react-native-maps') | null = null;
   try {

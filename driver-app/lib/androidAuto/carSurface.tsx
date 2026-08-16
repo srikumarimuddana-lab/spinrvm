@@ -33,6 +33,7 @@ import { useCarMapCamera } from './carMapCamera';
 import { useCarLocation } from './useCarLocation';
 import { pushDebug, setDebugFact } from './carDebug';
 import { CarDebugPanel } from './CarDebugPanel';
+import { carColors } from './carTheme';
 // RouteLine / RoutePins hard-import react-native-maps, so they are lazy-required
 // AFTER the maps guard below (never at module scope) — otherwise loading this
 // file in a maps-less context (web / Expo Go / tests) would crash before the
@@ -88,6 +89,8 @@ export function CarMapSurface(): React.ReactElement | null {
   const activeRide = useDriverStore((s) => s.activeRide);
   const incomingRide = useDriverStore((s) => s.incomingRide);
   const delta = useCarMapCamera((s) => s.delta);
+  const offsetLat = useCarMapCamera((s) => s.offsetLat);
+  const offsetLng = useCarMapCamera((s) => s.offsetLng);
   const here = useCarLocation();
   const route = selectCarRoute(rideState, activeRide);
   // Cumulative earnings for the completed-trip card. Fetched by the phone, so
@@ -102,6 +105,12 @@ export function CarMapSurface(): React.ReactElement | null {
     [earningsSummary],
   );
   const card = buildTripCard(rideState, activeRide, incomingRide as OfferLike | null, earningsCtx);
+  // Money only — the pill is glanceable chrome, so the ride count that the
+  // completed-trip card carries would be noise here.
+  const todayEarnings = useMemo(() => {
+    const total = Number(earningsCtx?.total);
+    return Number.isFinite(total) && total > 0 ? `$${total.toFixed(2)}` : null;
+  }, [earningsCtx]);
   // Read-only view of the phone's poller — NOT a second useDemandHeatmap().
   //
   // Two independent instances meant two timers (double the requests, battery
@@ -178,10 +187,16 @@ export function CarMapSurface(): React.ReactElement | null {
     setDebugFact('rideState', String(rideState));
     setDebugFact('leg', card.leg);
     setDebugFact('zoomDelta', delta.toFixed(4));
+    setDebugFact(
+      'pan',
+      offsetLat === 0 && offsetLng === 0
+        ? 'following driver'
+        : `${offsetLat.toFixed(4)}, ${offsetLng.toFixed(4)} (recenter to clear)`,
+    );
     setDebugFact('location', here ? `${here.latitude.toFixed(4)}, ${here.longitude.toFixed(4)}` : 'no fix (fallback)');
     setDebugFact('route', route ? `${route.leg}, ${route.polyline.length} pts` : 'none');
     setDebugFact('heatmap', `${heatmapStatus}, ${carHeatCells.length} cells`);
-  }, [rideState, card.leg, delta, here, route, heatmapStatus, carHeatCells.length]);
+  }, [rideState, card.leg, delta, here, route, heatmapStatus, carHeatCells.length, offsetLat, offsetLng]);
 
   let Maps: typeof import('react-native-maps') | null = null;
   try {
@@ -245,7 +260,14 @@ export function CarMapSurface(): React.ReactElement | null {
 
   // Follow the driver; fall back to the active destination, then a city center,
   // so the camera always has a valid target even before the first GPS fix.
-  const center = here ?? route?.destination ?? FALLBACK_CENTER;
+  // The pan offset is added on top: while it is non-zero the driver has dragged
+  // the map, so the view stays where they put it instead of being yanked back
+  // by the next GPS fix. The Recenter map button clears it.
+  const followTarget = here ?? route?.destination ?? FALLBACK_CENTER;
+  const center = {
+    latitude: followTarget.latitude + offsetLat,
+    longitude: followTarget.longitude + offsetLng,
+  };
 
   return (
     <View style={[styles.fill, styles.mapBackdrop]}>
@@ -334,11 +356,25 @@ export function CarMapSurface(): React.ReactElement | null {
             fault is the map alone, while an entirely blank screen means the
             root itself never rendered. That distinction previously needed a
             throwaway build to establish. */}
-      <View style={styles.statusPill} pointerEvents="none">
-        <View style={[styles.statusDot, { backgroundColor: card.accent }]} />
-        <Text style={styles.statusText}>
-          {card.leg === 'idle' ? 'Spinr Driver · Ready' : card.statusLabel}
-        </Text>
+      <View style={styles.pillRow} pointerEvents="none">
+        <View style={styles.statusPill}>
+          <View style={[styles.statusDot, { backgroundColor: card.accent }]} />
+          <Text style={styles.statusText}>
+            {card.leg === 'idle' ? 'Spinr Driver · Ready' : card.statusLabel}
+          </Text>
+        </View>
+        {/* Earnings pill. Persistent, not just on the completed-trip card: a
+            driver should be able to glance at the dashboard mid-shift and see
+            the day adding up, which is the whole point of putting earnings on
+            this screen. Hidden when the store has no summary (a car-only cold
+            launch never ran the phone's fetch) rather than showing $0.00 — a
+            zero on the earnings pill would read as "you've made nothing". */}
+        {todayEarnings && (
+          <View style={styles.earningsPill}>
+            <Text style={styles.earningsPillLabel}>TODAY</Text>
+            <Text style={styles.earningsPillValue}>{todayEarnings}</Text>
+          </View>
+        )}
       </View>
       {/* Renders above everything, including the map, so it stays readable even
           if the map is the thing that's broken. Returns null unless toggled. */}
@@ -358,10 +394,15 @@ const styles = StyleSheet.create({
   diagnostic: { alignItems: 'center', justifyContent: 'center', backgroundColor: '#0B0B0F', padding: 24 },
   diagnosticTitle: { color: '#FFFFFF', fontSize: 22, fontWeight: '700', marginBottom: 8 },
   diagnosticBody: { color: '#B6B6C0', fontSize: 15, textAlign: 'center' },
-  statusPill: {
+  pillRow: {
     position: 'absolute',
     top: 12,
     left: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  statusPill: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 12,
@@ -369,6 +410,17 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: 'rgba(11,11,15,0.82)',
   },
+  earningsPill: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: 'rgba(11,11,15,0.82)',
+  },
+  earningsPillLabel: { color: carColors.textMuted, fontSize: 11, fontWeight: '700', letterSpacing: 1 },
+  earningsPillValue: { color: carColors.gold, fontSize: 17, fontWeight: '800' },
   statusDot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
   statusText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
 });

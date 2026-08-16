@@ -48,6 +48,7 @@ const FALLBACK_OFFER_MS = 15_000;
 const NAV_ICON = require('../../assets/images/nav_arrow.png');
 const ZOOM_IN_ICON = require('../../assets/images/zoom_in.png');
 const ZOOM_OUT_ICON = require('../../assets/images/zoom_out.png');
+const RECENTER_ICON = require('../../assets/images/recenter.png');
 
 // `console.log` stays gated on __DEV__ (release builds shouldn't chatter), but
 // the line is ALWAYS recorded to the on-surface debug buffer. Previously the
@@ -172,6 +173,20 @@ export default function registerAutoPlay(): void {
     },
   ];
 
+  // Recenter: clears the pan and resumes following the driver. Always present —
+  // once the head unit can pan the map (onDidPan below), a driver who has
+  // dragged away needs a way back, and hunting for it only when it appears
+  // would be worse than a button that is occasionally a no-op. Leaves zoom
+  // alone; the driver chose that deliberately.
+  const recenterButton = {
+    type: 'custom' as const,
+    image: { type: 'asset' as const, image: RECENTER_ICON },
+    onPress: () => {
+      useCarMapCamera.getState().recenter();
+      log('recentred on driver');
+    },
+  };
+
   // Navigate button only while navigating; zoom buttons in every state.
   const mapButtonsFor = (hasRoute: boolean) => {
     const navHandoffButtons = hasRoute
@@ -183,7 +198,9 @@ export default function registerAutoPlay(): void {
           },
         ]
       : [];
-    return [...navHandoffButtons, ...zoomButtons];
+    // Android Auto's action strip caps at 4. In a ride that is Navigate +
+    // Recenter + 2 zoom = exactly 4; idle drops Navigate and sits at 3.
+    return [...navHandoffButtons, recenterButton, ...zoomButtons];
   };
 
   // The single state-driven header action (top-right on Android). Accept/Decline
@@ -564,6 +581,14 @@ export default function registerAutoPlay(): void {
           id: NAV_TEMPLATE_ID,
           component: CarMapSurface,
           onStopNavigation: noop, // we never run our own turn-by-turn
+          // Head-unit pan gestures. Without this the surface's controlled
+          // `region` would fight the driver: the native map would move under
+          // their finger and then snap back on the next GPS fix. Routing the
+          // translation into the camera store makes the pan stick until they
+          // press Recenter.
+          onDidPan: (translation: { x: number; y: number }) => {
+            useCarMapCamera.getState().pan(translation.x, translation.y);
+          },
           mapButtons: mapButtonsFor(false),
         });
         template.setRootTemplate();

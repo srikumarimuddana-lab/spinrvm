@@ -68,51 +68,88 @@ async def main() -> int:
     except ImportError:  # pragma: no cover - CLI convenience
         from backend.services import stripe_customer_email_backfill as svc  # type: ignore
 
-    try:
-        result = await svc.backfill_stripe_customer_emails(
-            user_ids=args.user_ids,
-            emails=args.emails,
-            limit=args.limit or svc.DEFAULT_LIMIT,
-            apply=args.apply,
-        )
-    except RuntimeError as e:
-        logger.error("%s — nothing to address. Aborting.", e)
-        return 1
+    # Walk every batch here rather than making the operator re-invoke. The
+    # service is bounded per call (so the HTTP entry point can't run forever),
+    # but a CLI has no such constraint and "re-run to continue" is exactly the
+    # instruction people stop following once the counts get boring.
+    totals = {"scanned": 0, "updated": 0, "unchanged": 0, "no_email": 0, "skipped_deleted": 0}
+    missing_on_key: list[str] = []
+    failed: list[str] = []
+    cursor: str | None = None
+    batches = 0
+    announced_mode = False
 
-    for c in result.changes:
-        # Never the address itself — only whether one was already present.
-        logger.info(
-            "%s user=%s customer=%s (had_email=%s)",
-            "UPDATED" if result.applied else "WOULD UPDATE",
-            c.user_id,
-            c.customer_id,
-            c.had_email,
-        )
+    while True:
+        try:
+            result = await svc.backfill_stripe_customer_emails(
+                user_ids=args.user_ids,
+                emails=args.emails,
+                limit=args.limit or svc.DEFAULT_LIMIT,
+                cursor=cursor,
+                apply=args.apply,
+            )
+        except RuntimeError as e:
+            logger.error("%s — nothing to address. Aborting.", e)
+            return 1
+
+        if not announced_mode:
+            # Which account a bulk PII transfer is addressing, stated once and
+            # up front — the only moment it is still actionable.
+            logger.info(
+                "Stripe key mode: %s | %s", result.key_mode.upper() or "UNKNOWN", "APPLY" if args.apply else "DRY RUN"
+            )
+            announced_mode = True
+
+        batches += 1
+        for c in result.changes:
+            # Never the address itself — only whether one was already present.
+            logger.info(
+                "%s user=%s customer=%s (had_email=%s)",
+                "UPDATED" if result.applied else "WOULD UPDATE",
+                c.user_id,
+                c.customer_id,
+                c.had_email,
+            )
+        totals["scanned"] += result.scanned
+        totals["updated"] += result.updated
+        totals["unchanged"] += result.unchanged
+        totals["no_email"] += result.no_email
+        totals["skipped_deleted"] += result.skipped_deleted
+        missing_on_key.extend(result.missing_on_key)
+        failed.extend(result.failed)
+
+        if not result.has_more:
+            break
+        if not result.next_cursor:
+            # Should not happen; refuse to loop forever on the same page rather
+            # than silently re-processing it.
+            logger.error("more riders remain but no cursor was returned — stopping after %d batch(es)", batches)
+            return 1
+        cursor = result.next_cursor
 
     logger.info(
-        "%s: %d updated, %d already correct, %d without a Stripe customer, "
-        "%d without an email, %d unreachable on this key, %d failed",
-        "APPLIED" if result.applied else "DRY RUN",
-        result.updated,
-        result.unchanged,
-        result.no_customer,
-        result.no_email,
-        len(result.missing_on_key),
-        len(result.failed),
+        "%s: %d batch(es) | %d updated, %d already correct, %d without an email, "
+        "%d mid-deletion (skipped), %d unreachable on this key, %d failed",
+        "APPLIED" if args.apply else "DRY RUN",
+        batches,
+        totals["updated"],
+        totals["unchanged"],
+        totals["no_email"],
+        totals["skipped_deleted"],
+        len(missing_on_key),
+        len(failed),
     )
-    if result.missing_on_key:
+    if missing_on_key:
         logger.warning(
             "unreachable on this key (test->live residue; repaired on the rider's next "
             "visit to their own payment screen, NOT by this script): %s",
-            json.dumps(result.missing_on_key),
+            json.dumps(missing_on_key),
         )
-    if result.has_more:
-        logger.warning("more riders remain beyond this batch; re-run to continue")
-    if result.failed:
-        logger.error("failed: %s", json.dumps(result.failed))
+    if failed:
+        logger.error("failed: %s", json.dumps(failed))
         return 1
-    if not result.applied and result.updated:
-        logger.info("re-run with --apply to write these %d update(s)", result.updated)
+    if not args.apply and totals["updated"]:
+        logger.info("re-run with --apply to write these %d update(s)", totals["updated"])
     return 0
 
 

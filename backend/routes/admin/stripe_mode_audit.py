@@ -279,6 +279,10 @@ class BackfillEmailsRequest(BaseModel):
     # Bounded so one request cannot run unboundedly long; the response says
     # whether more riders remain rather than truncating silently.
     limit: int = Field(email_backfill_svc.DEFAULT_LIMIT, ge=1, le=email_backfill_svc.MAX_LIMIT)
+    # Resume token from a previous response's next_cursor. Without it a second
+    # call re-reads the first page and reports "nothing to sync" while the rest
+    # of the fleet goes untouched.
+    cursor: Optional[str] = Field(None, max_length=128)
     # Dry run by DEFAULT: this transfers rider PII to a US processor in bulk,
     # so writing must be asked for explicitly.
     apply: bool = False
@@ -316,6 +320,7 @@ async def admin_backfill_stripe_customer_emails(
             user_ids=body.user_ids,
             emails=body.emails,
             limit=body.limit,
+            cursor=body.cursor,
             apply=body.apply,
         )
     except RuntimeError as e:
@@ -332,19 +337,22 @@ async def admin_backfill_stripe_customer_emails(
             "scanned": result.scanned,
             "updated": result.updated,
             "unchanged": result.unchanged,
-            "no_customer": result.no_customer,
             "no_email": result.no_email,
+            "skipped_deleted": result.skipped_deleted,
             "missing_on_key": len(result.missing_on_key),
             "failed": len(result.failed),
+            "key_mode": result.key_mode,
         },
     )
 
     # A write run that could not reach some customers must not read as success.
+    # `updated` counts successes only — a failed row never reaches the counter —
+    # so it is reported as-is rather than having the failures subtracted twice.
     if result.applied and result.failed:
         raise HTTPException(
             status_code=502,
             detail=(
-                f"{result.updated - len(result.failed)} customer(s) updated, "
+                f"{result.updated} customer(s) updated, "
                 f"{len(result.failed)} could not be written. Re-run — it is safe to repeat."
             ),
         )
@@ -354,9 +362,13 @@ async def admin_backfill_stripe_customer_emails(
         "scanned": result.scanned,
         "updated": result.updated,
         "unchanged": result.unchanged,
-        "no_customer": result.no_customer,
         "no_email": result.no_email,
+        "skipped_deleted": result.skipped_deleted,
         "has_more": result.has_more,
+        "next_cursor": result.next_cursor,
+        # Which Stripe account this addressed, so the operator confirming a
+        # bulk PII transfer is told LIVE vs TEST rather than inferring it.
+        "key_mode": result.key_mode,
         # IDs only — never the email addresses themselves (PIPEDA).
         "changes": [
             {"user_id": c.user_id, "customer_id": c.customer_id, "had_email": c.had_email} for c in result.changes

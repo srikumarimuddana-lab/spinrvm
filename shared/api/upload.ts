@@ -35,6 +35,58 @@ export function resolveUploadMimeType(nameOrUri: string, pickerType?: string | n
     return 'image/jpeg';
 }
 
+export interface MultipartResponse {
+    ok: boolean;
+    status: number;
+    statusText: string;
+    text: string;
+}
+
+/**
+ * POST a multipart body via XMLHttpRequest — deliberately NOT fetch().
+ *
+ * Expo SDK 54+ replaces global `fetch` with its WinterCG implementation
+ * (expo/src/winter/runtime.native.ts installs it unless
+ * EXPO_PUBLIC_USE_RN_FETCH=1). That implementation only accepts a string, a
+ * Blob, or an object exposing bytes() as a FormData part — see
+ * expo/src/winter/fetch/convertFormData.ts, whose own docstring says "`uri` is
+ * not supported for React Native's FormData". React Native's proprietary
+ * { uri, name, type } file descriptor therefore throws
+ * "Unsupported FormDataPart implementation" before any request is sent.
+ *
+ * Expo's FormData patch overwrites append/set but leaves React Native's
+ * getParts() intact, and the winter runtime does not touch XMLHttpRequest — so
+ * XHR still handles { uri } natively. It also streams the file from disk
+ * rather than reading all 10 MB into JS memory, which the Blob/bytes()
+ * workaround would.
+ */
+export function postMultipart(
+    url: string,
+    body: FormData,
+    headers: Record<string, string> = {},
+): Promise<MultipartResponse> {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+        // Never set Content-Type: the native layer generates it along with the
+        // multipart boundary. Setting it by hand produces a boundary-less
+        // header and the server fails to parse the body.
+        Object.entries(headers).forEach(([key, value]) => {
+            if (value) xhr.setRequestHeader(key, value);
+        });
+        xhr.onload = () =>
+            resolve({
+                ok: xhr.status >= 200 && xhr.status < 300,
+                status: xhr.status,
+                statusText: xhr.statusText || '',
+                text: xhr.responseText || '',
+            });
+        xhr.onerror = () => reject(new Error('Network request failed'));
+        xhr.onabort = () => reject(new Error('Upload was cancelled'));
+        xhr.send(body as unknown as Document);
+    });
+}
+
 /**
  * Uploads a file to the backend server.
  * @param uri The local URI of the file.
@@ -59,14 +111,12 @@ export async function uploadFile(uri: string, name: string, type: string): Promi
         return fd;
     };
 
-    const doUpload = async (token: string | null): Promise<Response> => {
-        // We do NOT set Content-Type header so that the engine sets the boundary correctly.
-        return fetch(`${SpinrConfig.backendUrl}/api/v1/upload`, {
-            method: 'POST',
-            headers: token ? { Authorization: `Bearer ${token}` } : {},
-            body: buildFormData(),
-        });
-    };
+    const doUpload = async (token: string | null): Promise<MultipartResponse> =>
+        postMultipart(
+            `${SpinrConfig.backendUrl}/api/v1/upload`,
+            buildFormData(),
+            token ? { Authorization: `Bearer ${token}` } : {},
+        );
 
     try {
         // Auth: /api/v1/upload is behind get_current_user, so we MUST attach
@@ -103,11 +153,10 @@ export async function uploadFile(uri: string, name: string, type: string): Promi
         }
 
         if (!response.ok) {
-            const text = await response.text();
-            throw new Error(`Upload failed: ${response.status} ${text}`);
+            throw new Error(`Upload failed: ${response.status} ${response.text}`);
         }
 
-        const data = await response.json();
+        const data = JSON.parse(response.text || '{}');
         return data.url;
     } catch (error) {
         console.error('File upload error:', error);

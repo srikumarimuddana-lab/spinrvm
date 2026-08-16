@@ -6,7 +6,8 @@ import { useFocusEffect } from "expo-router/react-navigation";
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
-import api, { getAuthHeader, getApiErrorMessage } from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
+import { uploadFile, resolveUploadMimeType } from '@shared/api/upload';
 import { useAuthStore } from '@shared/store/authStore';
 // Keep the default import: many test files jest.mock(
 // '@shared/config/spinr.config', () => ({ default: {...} })) without a
@@ -18,24 +19,6 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { ScreenHeader } from '../components/ScreenHeader';
 
-
-// Derive a proper MIME type from a file URI / name.
-// expo-image-picker returns asset.type = 'image' (not a MIME), so we check
-// the extension instead. HEIC/HEIF are mapped to image/jpeg because the
-// backend allowlist doesn't include Apple-native formats.
-const EXT_TO_MIME: Record<string, string> = {
-    jpg: 'image/jpeg', jpeg: 'image/jpeg',
-    png: 'image/png',
-    gif: 'image/gif',
-    webp: 'image/webp',
-    pdf: 'application/pdf',
-    heic: 'image/jpeg', heif: 'image/jpeg',
-};
-function getMimeFromUri(uri: string, fileName?: string | null): string {
-    const name = fileName || uri;
-    const ext = name.split('.').pop()?.toLowerCase() || '';
-    return EXT_TO_MIME[ext] || 'image/jpeg';
-}
 
 // Module-level (not component-scope) so react-hooks/purity doesn't treat this
 // as an impure call "during render" — it's only ever invoked from the
@@ -107,77 +90,16 @@ export default function DocumentsScreen() {
         try {
             setUploading(`${reqId}-${side}`);
 
-            // 1. Upload file via native fetch() — NOT axios.
+            // 1. Upload via the shared helper, which posts over XMLHttpRequest.
             //
-            // Why: axios's FormData handling in React Native is fragile.
-            // Combinations of headers/transformRequest cause either
-            // "missing boundary" or a serialized "[object Object]" because
-            // axios's default transformRequest tries to JSON.stringify the
-            // FormData. fetch() in React Native handles multipart bodies
-            // natively and sets the boundary correctly, so we use it here.
-            //
-            // Build a fresh FormData per attempt — React Native consumes it
-            // on the first send and passing the same instance into a retry
-            // fires an empty body.
-            const buildFormData = () => {
-                const fd = new FormData();
-                fd.append('file', {
-                    uri,
-                    name,
-                    type: mimeType,
-                } as any);
-                return fd;
-            };
-
-            const uploadUrl = `${SpinrConfig.backendUrl}/api/v1/upload`;
-
-            const doUpload = async (token: string | null): Promise<Response> => {
-                return fetch(uploadUrl, {
-                    method: 'POST',
-                    headers: {
-                        // Do NOT set Content-Type — fetch generates it with the boundary.
-                        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-                        Accept: 'application/json',
-                    },
-                    body: buildFormData() as any,
-                });
-            };
-
-            // Mirror the axios client's silent-refresh-on-401 behavior. Raw
-            // fetch skips the interceptor, so if the access token expired
-            // between screens we have to refresh and retry manually — or the
-            // user sees "No authorization token provided" instead of their
-            // session being transparently restored.
-            let token = await getAuthHeader();
-            if (!token) {
-                const refreshed = await useAuthStore.getState().refreshTokens();
-                token = refreshed ? await getAuthHeader() : null;
-                if (!token) {
-                    throw new Error('Your session has expired. Please log in again.');
-                }
-            }
-
-            let resp = await doUpload(token);
-
-            if (resp.status === 401) {
-                const refreshed = await useAuthStore.getState().refreshTokens();
-                if (refreshed) {
-                    const freshToken = await getAuthHeader();
-                    if (freshToken) {
-                        resp = await doUpload(freshToken);
-                    }
-                }
-            }
-
-            if (!resp.ok) {
-                const text = await resp.text().catch(() => '');
-                throw new Error(
-                    `Upload failed (${resp.status}): ${text || resp.statusText || 'Unknown error'}`
-                );
-            }
-
-            const uploadData = await resp.json();
-            const fileUrl = uploadData.url;
+            // This screen used to inline its own fetch() call. Two reasons it
+            // no longer does: the duplicate drifted from shared/api/upload.ts,
+            // and more importantly Expo SDK 54+ swaps global fetch for its
+            // WinterCG implementation, which rejects React Native's
+            // { uri, name, type } FormData part with "Unsupported FormDataPart
+            // implementation" before the request is ever sent. See the comment
+            // on postMultipart for the full mechanism.
+            const fileUrl = await uploadFile(uri, name, mimeType);
             if (!fileUrl) {
                 throw new Error('Upload succeeded but server did not return a file URL.');
             }
@@ -239,7 +161,7 @@ export default function DocumentsScreen() {
                 // asset.type from expo-image-picker is 'image'|'video', not a MIME type.
                 // Derive the real MIME from the file extension so the backend magic-byte
                 // check doesn't reject a PNG declared as image/jpeg.
-                const mimeType = getMimeFromUri(asset.uri, name);
+                const mimeType = resolveUploadMimeType(name || asset.uri, asset.type);
 
                 await processUpload(asset.uri, name, mimeType, reqId, side);
             }
@@ -258,7 +180,8 @@ export default function DocumentsScreen() {
             if (result.canceled) return;
 
             const asset = result.assets[0];
-            await processUpload(asset.uri, asset.name, asset.mimeType || getMimeFromUri(asset.uri, asset.name), reqId, side);
+            const mimeType = resolveUploadMimeType(asset.name || asset.uri, asset.mimeType);
+            await processUpload(asset.uri, asset.name, mimeType, reqId, side);
 
         } catch {
             // processUpload surfaces its own API errors and doesn't rethrow, so

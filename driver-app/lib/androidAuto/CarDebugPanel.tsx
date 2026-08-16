@@ -10,7 +10,7 @@
  */
 import React from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useCarDebug, type DebugLine } from './carDebug';
+import { isCarDebugAvailable, useCarDebug, type DebugLine } from './carDebug';
 
 /**
  * Age of a line relative to the NEWEST line, not to wall-clock now.
@@ -34,7 +34,10 @@ export function CarDebugPanel(): React.ReactElement | null {
   const lines = useCarDebug((s) => s.lines);
   const facts = useCarDebug((s) => s.facts);
 
-  if (!enabled) return null;
+  // Belt-and-braces: `enabled` can only be toggled by the Debug header action,
+  // which isCarDebugAvailable() no longer offers — but a stale `true` left in
+  // the store from a previous session must not paint over a driver's map.
+  if (!enabled || !isCarDebugAvailable()) return null;
 
   // `lines` is newest-first (carDebug.push unshifts), so [0] is the reference
   // point every other row is measured against.

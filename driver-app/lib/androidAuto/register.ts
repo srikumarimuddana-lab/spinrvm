@@ -638,8 +638,38 @@ export default function registerAutoPlay(): void {
     });
     // Cold-launch while a head unit is ALREADY connected: the connect event may
     // have fired during native init before this listener existed, so apply now.
+    //
+    // Re-checked on a short schedule rather than once. This runs at JS bundle
+    // load, and on a car-only cold launch — Android Auto starting the app with
+    // the phone UI closed, which is exactly the case a driver hits after force
+    // closing the app — the native connection handshake can still be in flight
+    // at this moment. A single synchronous check then returns false, and if
+    // 'didConnect' already fired natively there is no second event to catch it:
+    // the car screen sits blank for the whole session with no template ever
+    // built. Polling a few times over ~6s closes that window; every attempt
+    // after the template exists is a no-op, since onConnect is idempotent.
+    let coldStartAttempts = 0;
+    const coldStartPoll = setInterval(() => {
+      coldStartAttempts += 1;
+      if (template) {
+        clearInterval(coldStartPoll);
+        return;
+      }
+      if (HybridAutoPlay.isConnected?.()) {
+        log('cold-start poll found a connected head unit on attempt', coldStartAttempts);
+        onConnect();
+        clearInterval(coldStartPoll);
+        return;
+      }
+      if (coldStartAttempts >= 12) {
+        // Not connected — the ordinary 'didConnect' listener takes it from here.
+        clearInterval(coldStartPoll);
+      }
+    }, 500);
+
     if (HybridAutoPlay.isConnected?.()) {
       onConnect();
+      clearInterval(coldStartPoll);
     }
   } catch (e) {
     // Was a dev-only log(): in production a listener-registration failure left

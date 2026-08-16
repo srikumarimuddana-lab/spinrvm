@@ -231,6 +231,25 @@ export default function registerAutoPlay(): void {
   let template: InstanceType<typeof MapTemplate> | null = null;
   let lastKey: string | null = null;
 
+  // ---- Automatic navigation hand-off ---------------------------------------
+  // On accepting a ride (and again when the trip starts) the driver's nav app is
+  // launched for the current leg, so they don't have to reach for a button
+  // before pulling away.
+  //
+  // The hard part is firing on a real transition and ONLY a real transition. A
+  // head unit that swaps to the reversing camera and back re-runs this sync, and
+  // relaunching Google Maps every time the driver reverses would be intolerable.
+  // So:
+  //   - `handedOffFor` records the leg already handed off (ride id + leg), so a
+  //     repeated sync for the same leg is a no-op.
+  //   - `primed` stays false until the first sync of a session has completed.
+  //     Connecting mid-ride therefore ADOPTS the current leg silently instead of
+  //     launching nav at the driver. Only a transition observed while already
+  //     connected counts as an accept.
+  // Both are cleared on a genuine disconnect, so the next session re-adopts.
+  let handedOffFor: string | null = null;
+  let primed = false;
+
   // ---- Ride-offer alert lifecycle -----------------------------------------
   // iternio warns that updating an alert re-shows it, so we show exactly once
   // per offer (keyed by ride id) and dismiss when the offer state is left.
@@ -342,6 +361,21 @@ export default function registerAutoPlay(): void {
       }
     }
 
+    // Auto hand-off — see `handedOffFor` / `primed` above for why this cannot
+    // simply fire whenever a nav leg is present.
+    const navLegKey = route ? `${rideIdOf(activeRide)}:${route.leg}` : null;
+    if (!primed) {
+      handedOffFor = navLegKey; // adopt the leg we connected into, silently
+      primed = true;
+    } else if (navLegKey && navLegKey !== handedOffFor) {
+      handedOffFor = navLegKey;
+      log('auto hand-off for leg', navLegKey);
+      setDebugFact('navHandoff', `${route?.leg} → ${navProvider}`);
+      handoffToNav(navProvider);
+    } else if (!navLegKey) {
+      handedOffFor = null; // ride ended; the next leg is a fresh hand-off
+    }
+
     syncOfferAlert(rideState, offerOf(incomingRide, activeRide));
   };
 
@@ -350,13 +384,19 @@ export default function registerAutoPlay(): void {
   const onConnect = () => {
     // Guard: only build the surface for a genuinely connected head unit.
     if (!HybridAutoPlay.isConnected?.()) return;
-    useCarMapCamera.getState().reset(); // start each session framed at the default zoom
 
     // Idempotent: the cold-launch-already-connected branch and the 'didConnect'
     // listener can both fire for one connection — build (and reset) at most once.
     // A genuine reconnect goes through didDisconnect (template = null) first, so
     // the reset still runs for a real new session.
+    //
+    // The camera reset MUST stay inside this guard. It used to sit above it,
+    // which contradicted the comment and meant every didConnect re-framed the
+    // map: a head unit that swaps to the reversing camera and back re-fires
+    // didConnect without a disconnect, so a driver who had zoomed out watched
+    // the map snap back to the default span each time.
     if (!template) {
+      useCarMapCamera.getState().reset(); // start each session framed at the default zoom
       try {
         template = new MapTemplate({
           id: NAV_TEMPLATE_ID,
@@ -392,6 +432,9 @@ export default function registerAutoPlay(): void {
       clearOfferAlert();
       template = null;
       lastKey = null;
+      // Next session re-adopts its leg rather than launching nav on connect.
+      handedOffFor = null;
+      primed = false;
     });
     // Cold-launch while a head unit is ALREADY connected: the connect event may
     // have fired during native init before this listener existed, so apply now.

@@ -131,7 +131,13 @@ export default function DriverRegistrationPage() {
         const data = new FormData();
         data.append("file", file);
         const token = formData.token;
-        const res = await fetch("/api/upload", {
+        // /api/v1, not /api: upload_router and drivers_router are mounted only
+        // under v1_api_router (backend/server.py). next.config's catch-all
+        // proxies /api/:path* through verbatim, so "/api/upload" reached a
+        // route the backend does not serve and every upload here 404'd.
+        // (/api/auth/* and /api/admin/* below are correct — those routers ARE
+        // mounted at the bare /api prefix.)
+        const res = await fetch("/api/v1/upload", {
             method: "POST",
             body: data,
             headers: token ? {
@@ -183,8 +189,8 @@ export default function DriverRegistrationPage() {
                 documents: docUrls
             };
 
-            // 3. Register
-            const res = await fetch("/api/drivers/register", {
+            // 3. Register — /api/v1 for the same reason as the upload above.
+            const res = await fetch("/api/v1/drivers/register", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",

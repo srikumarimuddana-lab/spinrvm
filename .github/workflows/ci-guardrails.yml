@@ -30,6 +30,14 @@ jobs:
     name: Coverage regression check
     runs-on: ubuntu-latest
     continue-on-error: true
+    outputs:
+      # C24 (ACTION_ITEMS.md): with no CODECOV_TOKEN, base_pct always
+      # resolves to 0 and "no regression detected" and "no baseline to
+      # compare against" become indistinguishable to anyone reading just
+      # needs.coverage-regression-gate.result (continue-on-error always
+      # reports that as 'success' regardless of what happened inside).
+      # This output lets guardrail-summary render the honest distinction.
+      baseline_status: ${{ steps.assert_no_regression.outputs.baseline_status }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -95,12 +103,14 @@ jobs:
           echo "Base branch coverage: $BASE_PCT%"
 
       - name: Assert no regression
+        id: assert_no_regression
         run: |
           PR_PCT=$(cat .coverage-pr)
           BASE_PCT="${{ steps.base_coverage.outputs.base_pct }}"
           export BASE_PCT
           python3 - <<'PYEOF'
-          import sys, os
+          import os
+
           pr_pct   = float(open('.coverage-pr').read().strip() or 0)
           base_pct = float(os.environ.get('BASE_PCT', '0') or 0)
           # Allow up to 2% regression before blocking (accounts for flaky mocks)
@@ -109,13 +119,47 @@ jobs:
           print(f"Base coverage : {base_pct:.1f}%")
           print(f"PR coverage   : {pr_pct:.1f}%")
           print(f"Delta         : {delta:+.1f}%")
-          if base_pct > 0 and delta < -TOLERANCE:
+
+          github_output = os.environ["GITHUB_OUTPUT"]
+          github_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+
+          # C24 (ACTION_ITEMS.md): base_pct==0 means "Fetch base branch
+          # coverage from Codecov" got no real data (no CODECOV_TOKEN
+          # configured) -- NOT "verified zero regression". Conflating those
+          # two into one silent PASS is exactly the bug this fixes. This
+          # branch must never claim regression was checked when it wasn't.
+          if base_pct <= 0:
+              print("UNKNOWN: no base-branch coverage data available -- this run did NOT verify")
+              print("whether coverage regressed. See ACTION_ITEMS.md C24 (no CODECOV_TOKEN secret")
+              print("configured, so the Codecov API call in the previous step returned nothing).")
+              with open(github_output, "a") as f:
+                  f.write("baseline_status=no-baseline\n")
+              if github_summary:
+                  with open(github_summary, "a") as f:
+                      f.write(
+                          "### ⚠️ Coverage Regression: NOT actually checked\n\n"
+                          "No base-branch coverage data was available (missing `CODECOV_TOKEN` "
+                          "secret -- see `ACTION_ITEMS.md` **C24**). This run could not tell "
+                          "whether this PR regressed coverage or not. The green check above "
+                          "reflects that this gate doesn't block merges while the token is "
+                          "missing, not that coverage was verified.\n"
+                      )
+              # Not sys.exit(1): a missing baseline is an infra gap outside any
+              # single PR author's control, not something this specific PR
+              # did -- job-level continue-on-error already means this never
+              # blocked a merge either way. What changes here is the message
+              # is now honest instead of claiming a check that didn't happen.
+          elif delta < -TOLERANCE:
               print(f"FAIL: Coverage regressed by {abs(delta):.1f}% (tolerance: {TOLERANCE}%)")
               print("Open a Change Request via .github/ISSUE_TEMPLATE/ci_change_request.yml if")
               print("the regression is intentional (e.g., removed dead code).")
-              sys.exit(1)
+              with open(github_output, "a") as f:
+                  f.write("baseline_status=verified\n")
+              raise SystemExit(1)
           else:
-              print("PASS: Coverage within tolerance.")
+              print("PASS: Coverage within tolerance (verified against a real baseline).")
+              with open(github_output, "a") as f:
+                  f.write("baseline_status=verified\n")
           PYEOF
 
   # ─── 1b. Corporate per-module coverage floor ─────────────────────────────
@@ -920,7 +964,17 @@ jobs:
 
             const icon = r => r === 'success' ? '✅' : r === 'failure' ? '❌' : r === 'skipped' ? '⏭️' : '⚠️';
             const rows = Object.entries(jobs)
-              .map(([name, result]) => `| ${icon(result)} **${name}** | \`${result}\` |`)
+              .map(([name, result]) => {
+                // C24: coverage-regression-gate's `.result` is always
+                // 'success' (job-level continue-on-error masks a real
+                // step failure) whether it actually verified no regression
+                // or found no baseline to compare against at all -- those
+                // are not the same thing and must not render the same way.
+                if (name === 'Coverage Regression' && '${{ needs.coverage-regression-gate.outputs.baseline_status }}' === 'no-baseline') {
+                  return `| ⚠️ **${name}** | \`not verified (no baseline — see ACTION_ITEMS.md C24)\` |`;
+                }
+                return `| ${icon(result)} **${name}** | \`${result}\` |`;
+              })
               .join('\n');
 
             const body = `## CI Guard Rails Summary\n\n| Gate | Status |\n|---|---|\n${rows}\n\n` +

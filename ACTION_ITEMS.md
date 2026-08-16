@@ -5934,7 +5934,24 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   purely the external Codecov *reporting* path, not CI's own gate.
 
 ### C24. "Coverage Regression" guardrail cannot fail while `CODECOV_TOKEN` is unset — every PR auto-passes it
-- [ ] **Status:** open — found 2026-08-16 while resolving C12.
+- [x] **Status:** partially CLOSED 2026-08-16, same day as found. The
+  **honesty half** is fixed: `ci-guardrails.yml`'s "Assert no regression"
+  step now distinguishes `base_pct <= 0` (no baseline — cannot verify
+  anything) from a genuinely verified pass/fail, sets a
+  `baseline_status` job output (`no-baseline` vs `verified`), and
+  `guardrail-summary` renders the PR-facing table row as
+  `⚠️ not verified (no baseline — see ACTION_ITEMS.md C24)` instead of a
+  bare ✅ when there's no baseline — the false "PASS: Coverage within
+  tolerance" message is gone; the step's own log and the PR summary now
+  both say plainly that no regression check happened. **Still open:** this
+  does not add real regression detection back — that still needs a real
+  `CODECOV_TOKEN` (same blocker as C12, no account access available in any
+  session so far). Deliberately did **not** make `base_pct <= 0` a hard
+  `sys.exit(1)` — job-level `continue-on-error: true` was already present
+  before this fix and a missing token isn't any individual PR author's
+  fault; turning it into a blocking failure for every PR until someone
+  adds the token would be a bigger, more disruptive behavior change than
+  this fix's actual goal (truthful reporting), and wasn't asked for.
 - **What's wrong:** `.github/workflows/ci-guardrails.yml`'s "Fetch base
   branch coverage from Codecov" step (`base_coverage` job step, ~line 82)
   calls `https://codecov.io/api/v2/github/.../branches/{base}/coverage`

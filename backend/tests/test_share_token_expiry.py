@@ -74,6 +74,26 @@ class TestGetShareLinkStampsTimestamp:
         assert "shared_trip_token_created_at" in updates[0][1]
         assert "shared_trip_token" not in updates[0][1], "the token itself must not change"
 
+    async def test_expired_token_on_a_live_ride_is_restamped(self):
+        """Review follow-up: reusing an existing token without checking its age
+        handed back a 200 carrying a link that track_shared_ride would 404.
+        The ride is still live here (terminal statuses are rejected earlier),
+        so re-sharing must produce a usable link."""
+        stale = (datetime.now(timezone.utc) - timedelta(hours=30)).isoformat()
+        result, updates = await self._get_link(_ride(shared_trip_token=TOKEN, shared_trip_token_created_at=stale))
+
+        assert result["share_token"] == TOKEN
+        assert len(updates) == 1, "an expired token must have its clock restarted"
+        assert "shared_trip_token_created_at" in updates[0][1]
+
+    async def test_malformed_timestamp_is_restamped_rather_than_left_unevaluable(self):
+        result, updates = await self._get_link(
+            _ride(shared_trip_token=TOKEN, shared_trip_token_created_at="not-a-date")
+        )
+
+        assert result["share_token"] == TOKEN
+        assert len(updates) == 1
+
     async def test_already_stamped_token_is_not_rewritten(self):
         stamped = datetime.now(timezone.utc).isoformat()
         _result, updates = await self._get_link(_ride(shared_trip_token=TOKEN, shared_trip_token_created_at=stamped))

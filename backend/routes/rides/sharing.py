@@ -21,6 +21,7 @@ from ._deps import (  # noqa: F401
     logger,
     ride_action_limit,
     secrets,
+    timedelta,
     timezone,
     uuid,
 )
@@ -77,17 +78,35 @@ async def get_share_trip_link(ride_id: str, current_user: dict = Depends(get_cur
                 "shared_trip_token_created_at": datetime.now(timezone.utc).isoformat(),
             },
         )
-    elif not ride.get("shared_trip_token_created_at"):
-        # Backfill-on-read for a token minted before this fix. Deliberately
-        # stamped with *now* rather than the ride's creation time: back-dating
-        # could instantly invalidate a link a rider is actively sharing during
-        # a live trip. This starts the clock instead, so an existing link stays
-        # valid for one more window and then expires like any other -- the
-        # conservative direction for a live-tested surface.
-        await _deps.db_supabase.update_ride(
-            ride_id,
-            {"shared_trip_token_created_at": datetime.now(timezone.utc).isoformat()},
-        )
+    else:
+        # An existing token needs its clock (re)started in two cases, or this
+        # endpoint hands back a link that track_shared_ride will 404:
+        #   1. no timestamp at all -- minted before this fix
+        #   2. a timestamp already past the 24h window
+        # (2) matters because the ride is still live here (terminal statuses
+        # were rejected above): a rider re-sharing a >24h trip would otherwise
+        # get a 200 with a dead link and no indication anything was wrong.
+        #
+        # Stamped with *now* rather than the ride's creation time: back-dating
+        # could instantly invalidate a link a rider is actively sharing. This
+        # starts the clock instead -- the conservative direction for a
+        # live-tested surface.
+        _created = ride.get("shared_trip_token_created_at")
+        _needs_stamp = not _created
+        if _created:
+            try:
+                _created_dt = datetime.fromisoformat(_created) if isinstance(_created, str) else _created
+                _needs_stamp = datetime.now(timezone.utc) - _created_dt > timedelta(hours=24)
+            except (ValueError, TypeError):
+                # Malformed timestamp: re-stamp rather than leave the link in a
+                # state whose expiry nobody can evaluate.
+                logger.error(f"Malformed shared_trip_token_created_at for ride {ride_id}")
+                _needs_stamp = True
+        if _needs_stamp:
+            await _deps.db_supabase.update_ride(
+                ride_id,
+                {"shared_trip_token_created_at": datetime.now(timezone.utc).isoformat()},
+            )
 
     # Clean customer-facing link: {tracking-domain}/{token}. The tracking
     # domain (e.g. track.spinr.ca) rewrites /{token} → /track/{token} server-side.

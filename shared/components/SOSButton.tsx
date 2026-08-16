@@ -67,8 +67,9 @@ interface SOSButtonProps {
    * Fires the backend alert. May resolve with the endpoint's body so the
    * success dialog can report what actually happened to the emergency
    * contacts; `void` is still accepted for callers that don't surface it
-   * (deriveContactOutcome treats a void result as "no contacts" rather than
-   * claiming success). See shared/types/safety.ts.
+   * (deriveContactOutcome maps a void result to 'unknown' — never to
+   * "notified", and never to "no contacts saved", since a caller that
+   * returns nothing tells us nothing either way). See shared/types/safety.ts.
    */
   onTrigger: (
     rideId: string,
@@ -327,7 +328,15 @@ export function SOSButton({ rideId, onTrigger, size = 'small', t }: SOSButtonPro
             below already spells out what happened. Geometry is unchanged —
             still a 44px circle — so no map layout shifts. */}
         {!isLarge && !sending && !triggered && !failed ? (
-          <Text style={styles.btnTextSmall}>{translate('sos.label_default')}</Text>
+          // allowFontScaling={false}: the circle is a fixed 44px, so an OS
+          // text-scale setting would clip or overflow the wordmark. The icon
+          // this replaced used a fixed numeric size and was immune, so the
+          // swap would otherwise have quietly introduced an a11y-setting
+          // dependency. numberOfLines guards the same edge on any locale
+          // whose word is longer than "SOS".
+          <Text style={styles.btnTextSmall} allowFontScaling={false} numberOfLines={1}>
+            {translate('sos.label_default')}
+          </Text>
         ) : (
           <Ionicons name={iconName} size={isLarge ? 28 : 20} color="#FFF" />
         )}

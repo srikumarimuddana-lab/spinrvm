@@ -1,6 +1,40 @@
 import SpinrConfig from '../config/spinr.config';
 import { getAuthHeader } from './client';
 
+const EXT_TO_MIME: Record<string, string> = {
+    jpg: 'image/jpeg', jpeg: 'image/jpeg',
+    png: 'image/png',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    pdf: 'application/pdf',
+    // iOS gallery assets keep a .HEIC filename even when expo-image-picker has
+    // already re-encoded the bytes to JPEG (it does whenever `quality` is set).
+    // Declaring image/jpeg matches the bytes in that common case; a genuine
+    // HEIF file is caught by the backend's byte sniff and rejected with an
+    // actionable message.
+    heic: 'image/jpeg', heif: 'image/jpeg',
+};
+
+/**
+ * Best-effort MIME type for a picked file.
+ *
+ * Pickers are unreliable sources for this: expo-image-picker's `asset.type` is
+ * the media *category* ('image' | 'video'), never a MIME type, and Android's
+ * document picker often reports 'application/octet-stream'. Prefer a type
+ * derived from the file extension, and only fall back to what the picker said
+ * when the extension tells us nothing.
+ */
+export function resolveUploadMimeType(nameOrUri: string, pickerType?: string | null): string {
+    const ext = (nameOrUri || '').split('?')[0].split('.').pop()?.toLowerCase() || '';
+    const fromExt = EXT_TO_MIME[ext];
+    if (fromExt) return fromExt;
+    // 'image'/'video' are expo-image-picker categories, not MIME types.
+    if (pickerType && pickerType.includes('/') && pickerType !== 'application/octet-stream') {
+        return pickerType;
+    }
+    return 'image/jpeg';
+}
+
 /**
  * Uploads a file to the backend server.
  * @param uri The local URI of the file.

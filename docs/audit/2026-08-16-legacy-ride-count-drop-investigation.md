@@ -99,6 +99,10 @@ Also notable: `financial_events` is currently **0 rows** in production, despite 
 
 Neither of these was chased further in this investigation — flagged in `ACTION_ITEMS.md` A34 for follow-up, ideally by whoever owns these ad-hoc SQL scripts.
 
-## 8. Bottom line
+## 8. Bottom line — CLOSED, confirmed by the repo owner (2026-08-16)
 
-The 224 → 186 drop was very likely caused by a legitimate (or at least intentional) phone-scoped account-deletion script executed twice on 2026-08-14, whose logic explicitly resolves and deletes `rides` tied to the target accounts — not a bug, not silent data corruption, and not caused by anything in this repo's own import/dedup code. But this is the leading explanation based on strong circumstantial evidence, not a fully closed case — the exact affected rows and the human intent behind the two real executions are still unconfirmed. Every legacy-migration figure produced by this or prior audits should be treated as a snapshot until this is closed out with the people who ran these scripts.
+Confirmed directly: the 4 targeted phone numbers were intentional test accounts ("Kiran", "Vikas", "Yash", "testy") deleted manually ahead of go-live, during the same validation pass of driver/rider reporting and activity-stats screens that surfaced the `payout_gst_amount` import gap (`docs/change-log/2026-08-15-legacy-import-gst-preservation.md`). This matches the evidence in §5b exactly — "Kiran" and "Yash"/"Yash Kumar" were literally the names on two of the four phone numbers in the legacy CSV, and the test-labeled entries ("Test YK", "Yy", "Hh", "Test Y") cover "testy".
+
+**Not a bug, not silent data corruption.** Intentional pre-launch cleanup that happened to also remove legacy-imported rides linked to those test accounts via the importer's own phone-match logic. The investigation in §1–7 stands as an accurate record of the mechanism and the forensic path used to find it — useful precedent for any future unexplained-deletion investigation on this project — but the underlying event itself needs no further remediation.
+
+Two process gaps surfaced along the way, independent of this event being benign, are tracked separately: `ACTION_ITEMS.md` A35 (the script's guard-trigger bypass on `driver_insurance_periods` would not be safe against a real driver's regulatory-covered history) and A36 (`financial_events` sitting at 0 rows in production despite active use, cause not yet determined).

@@ -3326,7 +3326,7 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 - **What was NOT verified:** same boundary as A32 — not exercised against
   real Supabase or a real migrated driver account, no visual verification.
 
-### A34. Legacy-imported ride count dropped 224 → 186 in production — mechanism found: targeted manual DSAR-style deletion script, 2026-08-14 — CRITICAL, mechanism confirmed, exact scope not fully verified
+### A34. Legacy-imported ride count dropped 224 → 186 in production — CLOSED (2026-08-16), explained as intentional pre-launch test-account cleanup; two residual follow-ups spun off separately
 - **Source:** dual-run cutover audit (Phase 0.4/0.4-followup), 2026-08-16. A30
   (2026-08-13, live-verified) recorded **224** rows for
   `legacy_import_metadata->>'source' = 'legacy_mongo_booking_import'`. The
@@ -3386,30 +3386,25 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     a pre-import "clean the environment" step, not implicated here — but
     its mere existence (see flag below) is a standing risk independent of
     this finding.
-- **Status: mechanism identified with strong circumstantial evidence, exact
-  row count and full list of affected legacy rides NOT confirmed.**
-  `RAISE NOTICE`-level output (which would have printed exact per-table
-  deleted-row counts) is not captured by this project's log verbosity
-  settings, and the deleted `users`/`drivers` rows are themselves gone, so
-  there's no way to retroactively list exactly which of the 38 missing
-  legacy rides belonged to these 4 phone numbers vs. some other cause.
-  Treat as the leading explanation, not a closed case.
-- **Separate, standing risk surfaced by this investigation (needs its own
-  triage, independent of A34's core question):** both scripts found in
-  `pg_stat_statements` disable this repo's append-only regulatory guard
-  triggers (`driver_insurance_periods_no_mutate`, `financial_events`'s
-  delete gate, `audit_logs_no_delete`) to perform a hard delete of
-  `driver_insurance_periods` — SGI's 7-year audit trail — for the matched
-  driver(s). CLAUDE.md's own PIPEDA section states trip/insurance-period
-  records must be retained the full regulatory window regardless of a
-  deletion request; a script that hard-deletes `driver_insurance_periods`
-  as part of fulfilling a phone-scoped deletion request appears to
-  contradict that policy. Also notable: `financial_events` is currently
-  **0 rows** in production despite 42 files in this repo actively
-  reading/writing it (webhooks, reconciliation, ledger service) — consistent
-  with one of these scripts having wiped it at some point with nothing
-  since repopulating it. Neither of these was chased further here — flagging
-  for a follow-up, ideally by whoever owns these ad-hoc SQL scripts.
+- **Status: CLOSED (2026-08-16), explained by the repo owner.** Confirmed:
+  the 4 targeted phone numbers were intentional test accounts ("Kiran",
+  "Vikas", "Yash", "testy") deleted manually ahead of go-live while
+  validating driver/rider reporting and activity-stats screens — the same
+  validation pass that surfaced the `payout_gst_amount` import gap
+  (`docs/change-log/2026-08-15-legacy-import-gst-preservation.md`). This
+  matches the evidence exactly: "Kiran" and "Yash"/"Yash Kumar" were
+  literally the names attached to two of the four phone numbers in the
+  legacy CSV, and the test-labeled entries ("Test YK", "Yy", "Hh", "Test Y")
+  cover "testy". **Not a bug, not unexplained data loss** — intentional
+  pre-launch cleanup that happened to also remove legacy-imported rides
+  linked to those test accounts' phone numbers via the importer's own
+  phone-match logic. No further action needed on the row-count question
+  itself; every legacy-migration figure produced after 2026-08-14 (i.e.
+  everything in this session) reflects the post-cleanup state and does not
+  need re-verification against the earlier 224 baseline.
+- **Two residual items spun off separately** (both process/tooling gaps
+  surfaced *by* this investigation, independent of the cleanup itself being
+  legitimate) — see **A35** and **A36** below.
 - **Why this matters beyond the row count itself:** any "live-verified"
   dollar figure or row count in this repo's audit docs (including A30,
   A31, A32, A33, and every figure in this session's own Phase 0 report) is
@@ -3418,28 +3413,71 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   `pg_stat_statements` (aggregate query shapes, no row-level detail, no
   actor identity) offers any forensic trail at all, and only for as long as
   `stats_reset` hasn't fired again.
-- **Recommended next step (needs a human, not more log queries):** (1)
-  confirm with whoever runs these ad-hoc phone-scoped deletion scripts
-  whether the 4 target phones were real DSAR requests, test-account
-  cleanup, or something else, and whether they knew these accounts had
-  legacy-imported ride history attached; (2) reconcile the
-  `driver_insurance_periods`-hard-delete behavior in this script against
-  the documented 7-year retention policy — likely needs the script fixed
-  to exclude that table, not just documented as intentional; (3) explain
-  or repopulate `financial_events` given its 0-row state; (4) consider a
-  DB-level audit trigger (or enabling pgAudit / raising log verbosity to
-  capture DML) on `rides`, `driver_insurance_periods`, and `financial_events`
-  at minimum, so a future unattributed deletion is traceable instead of
-  forensic guesswork; (5) treat every legacy-migration dollar figure in
-  this repo as provisional until the exact 38-row list is confirmed or
-  ruled irrelevant.
-- **What was NOT verified:** the exact 38 ride IDs affected; whether all 4
-  phone numbers' Spinr accounts actually had a legacy-imported ride
-  attached (only circumstantial CSV-presence evidence, not a row-level
-  confirmation, since the source rows are now deleted); who ran these
-  scripts or from what connection (no actor identity in
-  `pg_stat_statements`); whether the third, dry-run-only invocation of the
-  phone-scoped script ran before or after the two real ones.
+- **What was NOT independently re-verified after the owner's confirmation:**
+  the exact 38 ride IDs affected (not recoverable — the deleted
+  `users`/`drivers` rows are gone, and `RAISE NOTICE` output isn't captured
+  at this project's log verbosity); whether all 4 phone numbers' accounts
+  specifically had a legacy-imported ride attached (only circumstantial
+  CSV-presence evidence). Neither blocks closure — the mechanism, actor
+  intent, and timing are all now independently corroborated.
+
+### A35. Ad-hoc account-deletion scripts bypass the documented 7-year `driver_insurance_periods` retention policy
+- **Source:** surfaced while investigating A34 (2026-08-16), not itself
+  part of A34's original question.
+- **Issue:** the phone-scoped test-account cleanup script found in
+  `pg_stat_statements` (see A34) disables this repo's append-only
+  regulatory guard triggers (`driver_insurance_periods_no_mutate`,
+  `financial_events`'s delete gate, `audit_logs_no_delete`) in order to
+  hard-delete `driver_insurance_periods` rows for the matched driver(s).
+  CLAUDE.md's own PIPEDA section and `docs/runbooks/data-retention.md`
+  both state insurance-period transitions must be retained for the full
+  7-year SGI regulatory window *regardless* of a deletion request — the
+  documented, sanctioned Step H DSAR process (`purge_pii_retention()`)
+  enforces this by construction: it explicitly refuses to touch any
+  account that has `rides`, `driver_insurance_periods`, `payouts`, or
+  `bank_accounts` rows at all. This ad-hoc script does the opposite —
+  it's not a variant of the sanctioned process, it's a separate,
+  hand-written tool that never had that guard in the first place.
+- **Confirmed benign in this instance** — A34's cleanup targeted test
+  accounts, not real regulatory-covered drivers — but the script itself
+  would do the same thing to a real driver's insurance-period history if
+  reused for an actual DSAR request.
+- **Status:** open. **Recommended fix:** either retire this ad-hoc script
+  in favor of always routing account deletion through
+  `purge_pii_retention()`'s Step H (which already has the correct
+  eligibility guard), or if a faster manual path is genuinely needed for
+  test-data cleanup, fork it into a clearly-named test-only variant that
+  hard-fails (not just skips) on any account with `driver_insurance_periods`
+  rows, so it can never silently do this against a real driver.
+- **What was NOT verified:** whether this script has ever been run against
+  an account that *did* have real `driver_insurance_periods` history —
+  A34 only confirmed the 2026-08-14 runs were test accounts.
+
+### A36. `financial_events` is 0 rows in production despite active use by 42 files
+- **Source:** surfaced while investigating A34 (2026-08-16), not itself
+  part of A34's original question.
+- **Issue:** `select count(*) from financial_events` returns **0** in
+  production, despite the table being read/written by `webhooks.py`,
+  `ledger_service.py`, `payment_service.py`, `stripe_reconcile.py`,
+  `reconciliation.py`, `payment_retry.py`, and 36 other files per a repo
+  grep — this table is the 7-year CRA/SOC2 money ledger
+  (`backend/migrations/58_financial_events.sql`), not a dead/unused
+  feature. A 0-row count on an actively-integrated ledger table in a
+  system with confirmed real Stripe transaction activity (per this
+  session's Phase 0.0/0.1 Stripe cross-check) is unexpected.
+- **Two live hypotheses, neither confirmed:** (1) one of the two ad-hoc
+  scripts found during A34's investigation (the wholesale environment-wipe
+  variant, `stats_since` 2026-07-16, predates the legacy import) wiped it
+  and nothing has repopulated it since; (2) the write path for
+  `financial_events` is broken or not actually wired into the live
+  card-payment settlement flow, independent of any deletion script.
+- **Status:** open, not chased further in this session. **Recommended next
+  step:** check whether any recent completed card-paid ride produced a
+  `financial_events` row at settlement time (a fresh test transaction is
+  the fastest way to distinguish "wiped, write path fine" from "write path
+  broken") before assuming either hypothesis.
+- **What was NOT verified:** which hypothesis is correct; whether this
+  predates or postdates the 2026-07-16 wholesale-wipe script's first call.
 
 ## P1 — Fix before launch (code)
 

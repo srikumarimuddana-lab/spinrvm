@@ -340,6 +340,7 @@ async def admin_backfill_stripe_customer_emails(
             "no_email": result.no_email,
             "skipped_deleted": result.skipped_deleted,
             "missing_on_key": len(result.missing_on_key),
+            "throttled": len(result.throttled),
             "failed": len(result.failed),
             "key_mode": result.key_mode,
         },
@@ -348,6 +349,12 @@ async def admin_backfill_stripe_customer_emails(
     # A write run that could not reach some customers must not read as success.
     # `updated` counts successes only — a failed row never reaches the counter —
     # so it is reported as-is rather than having the failures subtracted twice.
+    #
+    # Throttling is deliberately NOT a 502. A 429 from Stripe means "come back
+    # later", not "this broke": raising here threw away the counts (they only
+    # survived as prose in `detail`) and aborted the client's batch loop, so a
+    # rate-limited sweep looked like an outage. Throttled riders come back in
+    # `throttled` on a 200 and the client reports the run as incomplete.
     if result.applied and result.failed:
         raise HTTPException(
             status_code=502,
@@ -366,6 +373,10 @@ async def admin_backfill_stripe_customer_emails(
         "skipped_deleted": result.skipped_deleted,
         "has_more": result.has_more,
         "next_cursor": result.next_cursor,
+        # True when riders in this selection still need work — more pages,
+        # throttled rows, or failures. The client must not report success on it.
+        "incomplete": result.incomplete,
+        "throttled": result.throttled,
         # Which Stripe account this addressed, so the operator confirming a
         # bulk PII transfer is told LIVE vs TEST rather than inferring it.
         "key_mode": result.key_mode,

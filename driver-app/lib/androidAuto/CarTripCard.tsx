@@ -1,25 +1,33 @@
 /**
- * The branded Lyft-style card drawn over the Android Auto map surface.
+ * The Spinr card drawn over the Android Auto map surface.
  *
  * Display-only — Android Auto forbids in-surface touch, so this never holds a
  * touchable; all interaction goes through the template's header actions, map
- * buttons, and the ride-offer alert (see register.ts). It just renders the
- * glanceable card model from carCard.ts: a coloured status pill, the rider, the
- * current destination with ETA/distance, the fare with a surge badge, a WAV
- * chip, and an optional guidance hint.
+ * buttons, and the ride-offer alert (see register.ts).
  *
- * Big type, high contrast, and a single card — sized for a dashboard read at a
- * glance, per Android Auto's driver-distraction guidance.
+ * ─── Why it looks the way it does ────────────────────────────────────────────
+ * Google's Car app quality guidelines forbid animated elements on a connected
+ * head unit, and Play enforces it at review before a public release. So none of
+ * the sense of quality here can come from motion. It has to come from static
+ * properties only: hierarchy, type scale, contrast, spacing, restraint.
+ *
+ * The organising decision is that MONEY IS THE HERO. On the offer and completed
+ * cards the fare is the largest element on the screen — larger than the rider
+ * name, larger than the destination — because it is what the driver is deciding
+ * on and what the work is for. Previously it sat at 24px in a footer row,
+ * visually equal to an ETA. Everything else is deliberately subordinate.
+ *
+ * Colour comes from carTheme.ts, which sources shared/theme's dark palette —
+ * the same tokens the phone renders with, so the head unit reads as the same
+ * product rather than a companion built by someone else.
+ *
+ * Every size here is floored well above its phone equivalent: this is read at
+ * arm's length, in a moving vehicle, in one glance.
  */
 import React from 'react';
 import { Image, StyleSheet, Text, View } from 'react-native';
 import type { TripCard } from './carCard';
-
-const CARD_BG = 'rgba(20,20,22,0.92)';
-const ON_DARK = '#ffffff';
-const MUTED = '#b8b8bf';
-const SURGE_BG = '#ff8a00';
-const BONUS_BG = '#0f9d58';
+import { carColors, carSpace, carType } from './carTheme';
 
 const LOGO = require('../../assets/images/spinr-logo.png');
 
@@ -44,11 +52,11 @@ function Avatar({
   );
 }
 
-/** A small rounded chip (rating, WAV, surge). */
+/** A small rounded chip (rating, WAV, surge, bonus). */
 function Chip({
   label,
   bg,
-  color = ON_DARK,
+  color = carColors.text,
 }: {
   label: string;
   bg: string;
@@ -66,10 +74,18 @@ function Chip({
 export function CarTripCard({ card }: { card: TripCard }): React.ReactElement {
   const showDest = !!card.destinationLabel;
   const meta = [card.etaLabel, card.distanceLabel].filter(Boolean).join(' · ');
+  // The two legs where the driver's attention is on money: deciding whether to
+  // take a ride, and seeing what one paid. En route, the destination matters
+  // more than the fare, so the hero treatment would be misplaced.
+  const moneyIsHero = card.leg === 'offer' || card.leg === 'complete';
 
   return (
     <View style={styles.wrap} pointerEvents="none">
       <View style={styles.card}>
+        {/* Hairline top edge. Reads as elevation without a shadow — cheap to
+            rasterise on a projected surface, and static. */}
+        <View style={styles.edge} />
+
         {/* Status pill + brand */}
         <View style={styles.headerRow}>
           <View style={[styles.pill, { backgroundColor: card.accent }]}>
@@ -80,7 +96,28 @@ export function CarTripCard({ card }: { card: TripCard }): React.ReactElement {
           <Image source={LOGO} style={styles.logo} resizeMode="contain" />
         </View>
 
-        {/* Rider row — avatar (photo or initial) + name + rating/WAV/surge chips */}
+        {/* Hero earnings. Micro-label above so the number needs no unit of
+            explanation, then the figure at display size. */}
+        {moneyIsHero && card.fareLabel && (
+          <View style={styles.heroBlock}>
+            <Text style={styles.heroLabel}>
+              {card.leg === 'complete' ? 'YOU EARNED' : 'YOU’LL EARN'}
+            </Text>
+            <View style={styles.heroRow}>
+              <Text style={styles.hero} numberOfLines={1}>
+                {card.fareLabel}
+              </Text>
+              {card.surgeLabel && <Chip label={card.surgeLabel} bg={carColors.surge} />}
+            </View>
+            {card.earningsTodayLabel && (
+              <Text style={styles.earningsToday} numberOfLines={1}>
+                {card.earningsTodayLabel}
+              </Text>
+            )}
+          </View>
+        )}
+
+        {/* Rider row — avatar (photo or initial) + name + rating/WAV chips */}
         {(card.riderName || card.riderRating || card.riderPhoto) && (
           <View style={styles.row}>
             <Avatar photo={card.riderPhoto} name={card.riderName} accent={card.accent} />
@@ -89,16 +126,20 @@ export function CarTripCard({ card }: { card: TripCard }): React.ReactElement {
                 {card.riderName}
               </Text>
             )}
-            {card.riderRating && <Chip label={`★ ${card.riderRating}`} bg="#2c2c2e" color="#ffd23f" />}
-            {card.wav && <Chip label="WAV" bg="#0a84ff" />}
-            {card.surgeLabel && <Chip label={card.surgeLabel} bg={SURGE_BG} />}
+            {card.riderRating && (
+              <Chip label={`★ ${card.riderRating}`} bg={carColors.raised} color={carColors.gold} />
+            )}
+            {card.wav && <Chip label="WAV" bg={carColors.info} />}
+            {/* Surge already rides with the hero figure when money leads. */}
+            {!moneyIsHero && card.surgeLabel && <Chip label={card.surgeLabel} bg={carColors.surge} />}
           </View>
         )}
 
-        {/* Earnings perks — bonus + active incentive/quest */}
+        {/* Earnings perks — bonus + active incentive/quest. Gold, because this
+            is the "you made extra" signal and should feel distinct from fare. */}
         {(card.bonusLabel || card.perkLabel) && (
           <View style={styles.row}>
-            {card.bonusLabel && <Chip label={card.bonusLabel} bg={BONUS_BG} />}
+            {card.bonusLabel && <Chip label={card.bonusLabel} bg={carColors.gold} color="#1A1A1A" />}
             {card.perkLabel && (
               <Text style={styles.perk} numberOfLines={1}>
                 {card.perkLabel}
@@ -124,8 +165,8 @@ export function CarTripCard({ card }: { card: TripCard }): React.ReactElement {
           </View>
         )}
 
-        {/* Fare + ETA/distance footer */}
-        {(card.fareLabel || meta) && (
+        {/* En-route footer: fare stays present but subordinate to the destination. */}
+        {!moneyIsHero && (card.fareLabel || meta) && (
           <View style={styles.footerRow}>
             {card.fareLabel && <Text style={styles.fare}>{card.fareLabel}</Text>}
             {meta.length > 0 && (
@@ -134,6 +175,12 @@ export function CarTripCard({ card }: { card: TripCard }): React.ReactElement {
               </Text>
             )}
           </View>
+        )}
+        {/* When money leads, ETA/distance still belong — just quietly. */}
+        {moneyIsHero && meta.length > 0 && (
+          <Text style={styles.meta} numberOfLines={1}>
+            {meta}
+          </Text>
         )}
 
         {/* Guidance hint (e.g. phone-only start-trip prompt) */}
@@ -156,11 +203,20 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   card: {
-    backgroundColor: CARD_BG,
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 8,
+    backgroundColor: carColors.cardBg,
+    borderRadius: carSpace.cardRadius,
+    paddingHorizontal: carSpace.cardPadX,
+    paddingVertical: carSpace.cardPadY,
+    gap: carSpace.gap,
+    overflow: 'hidden',
+  },
+  edge: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 1,
+    backgroundColor: carColors.cardEdge,
   },
   headerRow: {
     flexDirection: 'row',
@@ -169,27 +225,52 @@ const styles = StyleSheet.create({
   },
   pill: {
     borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
+    paddingHorizontal: 13,
+    paddingVertical: 6,
     maxWidth: '78%',
   },
-  pillText: { color: ON_DARK, fontSize: 16, fontWeight: '700' },
-  logo: { width: 56, height: 20, opacity: 0.9 },
+  pillText: { color: carColors.text, fontSize: carType.label, fontWeight: '700', letterSpacing: 0.2 },
+  logo: { width: 60, height: 21, opacity: 0.92 },
+
+  heroBlock: { gap: 2 },
+  heroLabel: {
+    color: carColors.textMuted,
+    fontSize: carType.micro,
+    fontWeight: '700',
+    letterSpacing: 1.1,
+  },
+  heroRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  hero: {
+    color: carColors.text,
+    fontSize: carType.hero,
+    fontWeight: '800',
+    letterSpacing: -1,
+  },
+  earningsToday: { color: carColors.textDim, fontSize: carType.label, fontWeight: '600' },
+
   row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  avatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#2c2c2e' },
+  avatar: { width: 42, height: 42, borderRadius: 21, backgroundColor: carColors.raised },
   avatarFallback: { alignItems: 'center', justifyContent: 'center' },
-  avatarInitial: { color: ON_DARK, fontSize: 20, fontWeight: '800' },
-  rider: { color: ON_DARK, fontSize: 22, fontWeight: '700', flexShrink: 1 },
-  perk: { color: '#7ee2a8', fontSize: 14, fontWeight: '600', flexShrink: 1 },
-  chip: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
-  chipText: { fontSize: 13, fontWeight: '700' },
+  avatarInitial: { color: carColors.text, fontSize: 21, fontWeight: '800' },
+  rider: { color: carColors.text, fontSize: carType.title, fontWeight: '700', flexShrink: 1 },
+  perk: { color: carColors.success, fontSize: carType.label, fontWeight: '600', flexShrink: 1 },
+  chip: { borderRadius: 9, paddingHorizontal: 9, paddingVertical: 4 },
+  chipText: { fontSize: carType.micro, fontWeight: '700' },
+
   destRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   dot: { width: 12, height: 12, borderRadius: 6 },
   destText: { flexShrink: 1 },
-  caption: { color: MUTED, fontSize: 12, fontWeight: '600', textTransform: 'uppercase' },
-  dest: { color: ON_DARK, fontSize: 18, fontWeight: '600' },
+  caption: {
+    color: carColors.textMuted,
+    fontSize: carType.micro,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  dest: { color: carColors.text, fontSize: carType.body, fontWeight: '600' },
+
   footerRow: { flexDirection: 'row', alignItems: 'baseline', gap: 12 },
-  fare: { color: ON_DARK, fontSize: 24, fontWeight: '800' },
-  meta: { color: MUTED, fontSize: 15, fontWeight: '600' },
-  hint: { color: '#ffd23f', fontSize: 14, fontWeight: '600' },
+  fare: { color: carColors.text, fontSize: carType.title, fontWeight: '800' },
+  meta: { color: carColors.textDim, fontSize: carType.label, fontWeight: '600' },
+  hint: { color: carColors.gold, fontSize: carType.label, fontWeight: '600' },
 });

@@ -339,11 +339,123 @@ B16 and untracked anywhere today.
 | F12 | **PIN verification at pickup** (rider reads a 4-digit code to the driver) | M | Prevents wrong-car entry, an industry-standard control. `ride_code` exists but is an ops reference, not a pickup challenge. |
 | F13 | **Emergency-contact OTP + STOP opt-out** (F4's consent gap, built rather than documented away) | M | PIPEDA-motivated. Prerequisite for F7. |
 
+### Tier 0 — The in-ride SOS button itself (second pass, `shared/components/SOSButton.tsx`)
+
+The Safety Hub work above is additive. These are defects in the control that already ships to every
+rider on the map and every screen of an active ride. They outrank everything in Tier 1.
+
+Worth stating first: the parts that are *well* built. `shared/utils/sosLocation.ts` is genuinely
+careful — a hard-bounded fix race, staleness ceiling (2 min) and accuracy ceiling (500 m) so
+responders are never handed a km-scale cell-tower fix as an exact position, and a documented
+"proceed with no coordinates" fallback. The persistent amber FAILED state that survives dialog
+dismissal is the right call. The problems are around that core, not in it.
+
+#### S1. The success dialog claims contacts were notified without checking 🔴
+
+`sos.alert_msg` asserts *"Your location has been shared with Spinr support **and your emergency
+contacts**"* on any backend 200. But the backend
+(`backend/routes/rides/safety.py:228-253`) returns `contacts_notified`, a per-contact
+`contacts[{id,name,notified}]` array, and on SMS failure a `notification_warning`
+("Emergency contacts could not be reached — please call them directly").
+
+Nothing reads any of it. `SOSButton`'s `onTrigger` is typed `Promise<void>`
+(`SOSButton.tsx:56`) and `rideStore.triggerEmergency` does `await api.post(...); return;`
+(`rider-app/store/rideStore.ts:950-951`) — the response is discarded at both layers.
+
+Consequences, all live today:
+- Every Twilio SMS can fail and the rider is still told their contacts were notified.
+- A rider with **zero** emergency contacts saved gets the same sentence.
+- The per-contact `notified` field built for B16 is only consumed by the driver's flag-dark
+  `SafetyOverlay`. The rider's shipping SOS never surfaces it.
+
+A safety flow must not claim a notification it cannot confirm. **Effort: S** — the data is already
+on the wire; this is plumbing a return type and branching the copy.
+
+#### S2. Nested retry — up to 9 SOS POSTs, no idempotency key 🔴
+
+Both layers retry independently:
+
+| Layer | Attempts | Backoff |
+|---|---|---|
+| `SOSButton.triggerSOS` (`SOSButton.tsx:176-186`) | 3 | 1 s, 2 s |
+| `rideStore.triggerEmergency` (`rideStore.ts:945-961`) | 3 | 1 s, 2 s |
+
+They compose: **up to 9 POSTs to `/rides/{id}/emergency`** per press. The endpoint has no
+idempotency key (contrast `claim_stripe_event` on the payments side), and each successful call
+inserts a fresh `safety_incidents` row *and* SMS-blasts every emergency contact.
+
+So a request that succeeds server-side but whose response is lost to a flaky connection — the exact
+network conditions an SOS is pressed in — produces duplicate incidents in the safety queue and
+repeat "URGENT" SMS to the rider's family. Worst case the rider waits roughly **15 s**
+(3 s location + five backoff gaps + round trips) before learning it failed and being offered 911.
+
+**Effort: S.** Collapse to one retry ladder and add an idempotency key.
+
+#### S3. On the map, with no active ride, the button cannot do anything 🟠
+
+`POST /rides/{ride_id}/emergency` is the only SOS endpoint — grep confirms no rideless equivalent.
+`SOSButton.triggerSOS` only calls `onTrigger` when `rideId` is truthy (`:175`); otherwise it shows
+"No Active Ride — call 911 directly."
+
+On the rider home map (`rider-app/app/(tabs)/index.tsx:558`) there is usually **no** active ride.
+So in its most-visible placement the button files no incident, sends no SMS, alerts no safety team
+— it only suggests 911. This is ACTION_ITEMS **B15(c)**, still open and the sole reason B15's
+checkbox is unticked.
+
+Uber's toolkit works regardless of trip state. **Effort: M** — needs a ride-optional SOS endpoint,
+which is a real backend design question (what does a safety incident with no ride scope look like in
+the admin queue?), not a UI tweak.
+
+#### S4. A dead branch that would auto-dial 911 if it ever ran 🟠
+
+`rider-app/app/(tabs)/index.tsx:559-566`:
+
+```ts
+onTrigger={async (rideId, lat, lng) => {
+  if (rideId) { await triggerEmergency(rideId, lat, lng); }
+  else { Linking.openURL('tel:911'); }   // unreachable
+}}
+```
+
+The `else` is unreachable — `SOSButton` never invokes `onTrigger` without a `rideId`. Harmless
+today. But it is a loaded trap: fixing S3 by making `SOSButton` always call `onTrigger` would
+silently activate an **unprompted 911 dial**, violating domain-safety.md's hardest rule
+(*"Never auto-dial 911"*). Delete it now, before S3 makes it live. **Effort: XS.**
+
+#### S5. No one-tap 911 anywhere on the map 🟡
+
+911 is only ever offered *after* a 1.2 s hold plus the full network round trip — in the success,
+failure, or no-ride dialog. A rider who simply wants emergency services fastest must go through our
+alert flow first. The Safety Hub (F2) fixes the discoverability half; the map itself still has no
+direct affordance.
+
+#### S6. "I'm OK" tells nobody 🟡
+
+The success dialog's "I'm OK" calls `setTriggered(false)` and nothing else — no backend call, no
+all-clear. The incident stays `open` in the safety queue and the contacts who got "URGENT: … call
+them or emergency services immediately" never get a follow-up. Correctly, domain-safety.md forbids
+*auto*-resolving an SOS — but there is no user-initiated false-alarm signal at all, which is both a
+support-load and a trust problem. **Effort: S**, needs a product decision on what contacts are told.
+
+#### S7. On the map it renders as an unlabelled shield 🟡
+
+The `SOS` text only renders at `size="large"` (`SOSButton.tsx:271`), and the map uses
+`size="small"` — so it is a bare shield glyph, the same icon the (safe, non-emergency) Safety Hub
+would use. `accessibilityLabel` is correct so screen readers are fine; the visual affordance is the
+gap.
+
 ---
 
 ## 5. Recommended sequence
 
 ```
+Sprint 0 — The shipping SOS button   (defects in a live safety control)
+  S1  stop claiming contacts notified without checking
+  S2  collapse nested retry + idempotency key
+  S4  delete the dead auto-dial-911 branch     ← XS, do before S3 ever lands
+  S6  false-alarm / all-clear path
+  S7  visible label at size="small"
+
 Sprint 1 — Fix + foundation  (all XS-S, no legal dependency)
   F3  share-token expiry              ← security, live surface
   F1  driver share-link button        ← dead safety control
@@ -354,6 +466,9 @@ Sprint 2 — Parity features
   F6  per-area safety authority       ← your idea, lands inside the Hub
   F5  Proof of trip status            ← same regulatory screen family
   F8  real-device QA → flip discreet SOS flag
+
+  S3  rideless SOS (B15(c)) — backend design question, not a UI tweak
+  S5  direct 911 affordance on the map
 
 Sprint 3+ — Consent-gated
   F13 emergency-contact OTP/STOP

@@ -530,18 +530,18 @@ describe('rideStore — syncOfflineRequests', () => {
 
 describe('rideStore — triggerEmergency network failure', () => {
   test('throws on API failure so SOSButton retry loop can detect it (R-P0-1)', async () => {
-    // triggerEmergency retries up to MAX_ATTEMPTS (3) times before throwing.
-    // Mock all 3 attempts to fail so the function exhausts retries and rethrows.
-    mockApi.post
-      .mockRejectedValueOnce(new Error('Network error'))
-      .mockRejectedValueOnce(new Error('Network error'))
-      .mockRejectedValueOnce(new Error('Network error'));
+    // triggerEmergency issues exactly one POST and rethrows. It no longer
+    // retries internally: SOSButton already retries 3x around it, and the two
+    // ladders multiplied to up to 9 real POSTs per press (analysis finding S2).
+    mockApi.post.mockRejectedValueOnce(new Error('Network error'));
 
     await expect(
       useRideStore.getState().triggerEmergency('ride-456', 43.65, -79.38)
     ).rejects.toThrow('Network error');
 
+    expect(mockApi.post).toHaveBeenCalledTimes(1);
+
     // triggerEmergency does NOT set store.error — failure UX is SOSButton's responsibility
     expect(useRideStore.getState().error).toBeNull();
-  }, 10000); // 3-attempt retry has 1s+2s back-off delays
+  });
 });

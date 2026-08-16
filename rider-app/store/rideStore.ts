@@ -3,6 +3,7 @@ import { showToast } from './toastStore';
 import api, { SpinrApiError, hasAuthToken, getApiErrorMessage } from '@shared/api/client';
 import { useAuthStore, registerLogoutCallback } from '@shared/store/authStore';
 import { dropoffLikelyMisresolved } from '@shared/utils/bookingDistanceGuard';
+import type { SOSTriggerResult } from '@shared/types/safety';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { RideStatus } from '../constants/rideStatus';
 import { recordNonFatal } from '../utils/crashlytics';
@@ -317,7 +318,7 @@ interface RideState {
   setLastEtaMin: (min: number) => void;
   rateRide: (rideId: string, rating: number, comment?: string, tipAmount?: number) => Promise<void>;
   hydrateActiveRide: () => Promise<void>;
-  triggerEmergency: (rideId: string, latitude?: number, longitude?: number) => Promise<void>;
+  triggerEmergency: (rideId: string, latitude?: number, longitude?: number) => Promise<SOSTriggerResult>;
   addRecentSearch: (location: Location) => void;
   loadRecentSearches: () => Promise<void>;
   syncOfflineRequests: () => Promise<void>;
@@ -942,22 +943,20 @@ export const useRideStore = create<RideState>((set, get) => ({
       latitude,
       longitude,
     };
-    const MAX_ATTEMPTS = 3;
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      try {
-        await api.post(`/rides/${rideId}/emergency`, payload);
-        return; // success
-      } catch (error: unknown) {
-        lastError = error;
-        if (attempt < MAX_ATTEMPTS) {
-          await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
-        }
-      }
-    }
-    // All attempts failed — rethrow so SOSButton can set backendOk=false and
-    // show its own "Alert Not Sent" UI with the 911 prompt.
-    throw lastError;
+    // Deliberately NO retry ladder here. SOSButton.triggerSOS already retries
+    // 3x with 1s/2s backoff; a second ladder at this layer multiplied rather
+    // than added -- 3 outer x 3 inner = up to 9 real POSTs per press, each one
+    // able to insert its own safety_incidents row and re-send the "URGENT"
+    // SMS to every emergency contact. driver-app/hooks/useDriverSafetyTrigger.ts
+    // documents this exact hazard and routes around it; this removes the cause.
+    // Retry policy now lives in exactly one place (SOSButton).
+    //
+    // Throws on failure so SOSButton sets backendOk=false and shows its own
+    // "Alert Not Sent" UI with the 911 prompt -- unchanged contract.
+    const res = await api.post<SOSTriggerResult>(`/rides/${rideId}/emergency`, payload);
+    // Returned (not discarded) so the success dialog can tell the rider what
+    // actually happened to their emergency contacts. See shared/types/safety.ts.
+    return res.data as SOSTriggerResult;
   },
 
   fetchSavedAddresses: async () => {

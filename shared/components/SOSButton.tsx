@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { getSOSLocation } from '../utils/sosLocation';
+import type { SOSTriggerResult } from '../types/safety';
 
 // This component is shared by rider-app and driver-app, which each ship
 // their own, independent i18n instance (different translation JSON, two
@@ -53,7 +54,14 @@ function defaultT(key: string): string {
 
 interface SOSButtonProps {
   rideId?: string;
-  onTrigger: (rideId: string, lat?: number, lng?: number) => Promise<void>;
+  /**
+   * Fires the backend alert. May resolve with the endpoint's body so the
+   * success dialog can report what actually happened to the emergency
+   * contacts; `void` is still accepted for callers that don't surface it
+   * (deriveContactOutcome treats a void result as "no contacts" rather than
+   * claiming success). See shared/types/safety.ts.
+   */
+  onTrigger: (rideId: string, lat?: number, lng?: number) => Promise<SOSTriggerResult | void>;
   size?: 'small' | 'large';
   /**
    * Translation function — pass `useTranslation().t` (rider-app) or

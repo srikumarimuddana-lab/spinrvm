@@ -43,13 +43,22 @@ WAV = b"RIFF\x24\x00\x00\x00WAVE" + b"\x00" * 32
 
 
 class _FakeUpload:
+    """Mirrors starlette's UploadFile.read(size) cursor semantics, so the
+    chunked read in read_upload_capped is exercised rather than bypassed."""
+
     def __init__(self, filename: str | None, content_type: str | None, data: bytes):
         self.filename = filename
         self.content_type = content_type
         self._data = data
+        self._pos = 0
 
-    async def read(self) -> bytes:
-        return self._data
+    async def read(self, size: int = -1) -> bytes:
+        if size < 0:
+            chunk = self._data[self._pos :]
+        else:
+            chunk = self._data[self._pos : self._pos + size]
+        self._pos += len(chunk)
+        return chunk
 
 
 def _request(content_length: str | None = None):
@@ -207,6 +216,26 @@ class TestUploadEndpoint:
                 current_user={"id": "u-1"},
             )
         assert exc.value.status_code == 413
+
+    @pytest.mark.anyio
+    async def test_oversize_body_rejected_even_when_content_length_lies(self):
+        """The content-length header is a fast path, not the enforcement — a
+        client can omit it or understate it. The read itself must cap."""
+        oversize = JPEG + b"\x00" * (11 * 1024 * 1024)
+        with pytest.raises(HTTPException) as exc:
+            await self._upload(self._storage(), "a.jpg", "image/jpeg", oversize)
+        assert exc.value.status_code == 413
+
+    @pytest.mark.anyio
+    async def test_multi_chunk_file_under_the_cap_is_reassembled_intact(self):
+        """Spans several 1 MB read chunks; guards against a chunking bug that
+        would truncate or reorder the body."""
+        sb = self._storage()
+        body = JPEG + b"\x5a" * (3 * 1024 * 1024)
+        out = await self._upload(sb, "a.jpg", "image/jpeg", body)
+
+        assert out["size"] == len(body)
+        assert sb.storage.from_.return_value.upload.call_args.kwargs["file"] == body
 
     @pytest.mark.anyio
     async def test_original_filename_is_never_echoed_back(self):

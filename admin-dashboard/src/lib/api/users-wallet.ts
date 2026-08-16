@@ -93,6 +93,10 @@ export const backfillStripeCustomerEmails = (opts?: {
     user_ids?: string[];
     emails?: string[];
     limit?: number;
+    /* Resume token from a previous response's next_cursor. Omitting it restarts
+     * at the first page, which is why the caller must loop on next_cursor
+     * rather than re-issuing a bare call to "continue". */
+    cursor?: string;
     apply?: boolean;
 }) =>
     request<{
@@ -100,9 +104,11 @@ export const backfillStripeCustomerEmails = (opts?: {
         scanned: number;
         updated: number;
         unchanged: number;
-        no_customer: number;
         no_email: number;
+        skipped_deleted: number;
         has_more: boolean;
+        next_cursor: string | null;
+        key_mode: string;
         changes: { user_id: string; customer_id: string; had_email: boolean }[];
         missing_on_key: string[];
         failed: string[];

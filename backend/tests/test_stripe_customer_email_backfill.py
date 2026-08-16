@@ -46,8 +46,12 @@ class _Harness:
         cfg = {"stripe_secret_key": LIVE_KEY}
         cfg.update(settings or {})
         self.pages = [rows]
+        self.queries: list[tuple[dict, dict]] = []
 
-        async def _get_rows(_table, _filters=None, **_kw):
+        async def _get_rows(_table, _filters=None, **kw):
+            # Record what the service actually asked the DB for — the SQL-side
+            # exclusions and the ordering are load-bearing, not incidental.
+            self.queries.append((dict(_filters or {}), dict(kw)))
             # One page, then exhausted — the service stops on a short page.
             return self.pages.pop(0) if self.pages else []
 
@@ -164,6 +168,67 @@ class TestNothingIsSilentlyDropped:
         assert result.has_more is True
         assert len(result.changes) == 3
 
+    async def test_rider_mid_deletion_is_skipped_not_transferred(self):
+        """A rider between "delete my account" and the retention purge still
+        has an address on their row. It must never reach Stripe."""
+        with _Harness(_rows(1, status="pending_deletion")) as h:
+            result = await svc.backfill_stripe_customer_emails(apply=True)
+        assert result.skipped_deleted == 1
+        assert result.updated == 0
+        h.retrieve.assert_not_called()
+        h.modify.assert_not_called()
+
+
+class TestResumability:
+    """A partial sweep that reports success is worse than one that fails.
+
+    The first version restarted at offset 0 with no ordering, so run 2 re-read
+    run 1's page, found everything already correct, and reported "nothing to
+    sync" while the rest of the fleet had never been touched.
+    """
+
+    async def test_query_is_ordered_so_paging_is_well_defined(self):
+        with _Harness(_rows(1)) as h:
+            await svc.backfill_stripe_customer_emails()
+        _filters, kwargs = h.queries[0]
+        assert kwargs.get("order") == "id"
+
+    async def test_query_excludes_deleted_rows_and_riders_without_a_customer(self):
+        with _Harness(_rows(1)) as h:
+            await svc.backfill_stripe_customer_emails()
+        filters, _kwargs = h.queries[0]
+        # Deleted riders must not even be read.
+        assert filters["deleted_at"] is None
+        # Riders with no customer have nothing to repair; including them would
+        # burn the per-run budget and starve the ones that do.
+        assert filters["stripe_customer_id"] == {"$notnull": True}
+
+    async def test_cursor_becomes_a_greater_than_predicate(self):
+        with _Harness(_rows(1)) as h:
+            await svc.backfill_stripe_customer_emails(cursor="user-41")
+        filters, _kwargs = h.queries[0]
+        assert filters["id"]["$gt"] == "user-41"
+
+    async def test_cursor_and_user_ids_compose_so_a_scoped_run_resumes(self):
+        with _Harness(_rows(1)) as h:
+            await svc.backfill_stripe_customer_emails(user_ids=["a", "b"], cursor="a")
+        filters, _kwargs = h.queries[0]
+        assert filters["id"] == {"$in": ["a", "b"], "$gt": "a"}
+
+    async def test_next_cursor_points_at_the_last_row_processed(self):
+        """Not the last row READ — the next run must resume immediately after
+        the final row this one actually handled, with no gap."""
+        with _Harness(_rows(5)):
+            result = await svc.backfill_stripe_customer_emails(limit=3)
+        assert result.has_more is True
+        assert result.next_cursor == "user-2"
+
+    async def test_no_cursor_when_the_sweep_reached_the_end(self):
+        with _Harness(_rows(2)):
+            result = await svc.backfill_stripe_customer_emails(limit=10)
+        assert result.has_more is False
+        assert result.next_cursor is None
+
 
 class TestStrandedCustomers:
     async def test_missing_on_key_is_reported_not_repaired(self):
@@ -188,6 +253,30 @@ class TestConfiguration:
                 await svc.backfill_stripe_customer_emails()
 
     async def test_limit_is_clamped_to_max(self):
-        with _Harness(_rows(1)):
+        """The previous version of this test asserted `updated == 1`, which is
+        true whether or not clamping happens — it proved nothing. Assert the
+        cap itself: an absurd limit must not become an unbounded sweep."""
+        with _Harness(_rows(svc.MAX_LIMIT + 5)):
             result = await svc.backfill_stripe_customer_emails(limit=10**9)
-        assert result.updated == 1  # no crash; cap applied internally
+        assert len(result.changes) == svc.MAX_LIMIT
+        assert result.has_more is True
+
+    async def test_key_mode_is_reported_so_the_operator_knows_the_account(self):
+        with _Harness(_rows(1)):
+            result = await svc.backfill_stripe_customer_emails()
+        assert result.key_mode == "live"
+
+
+class TestPiiDiscipline:
+    async def test_a_stripe_error_quoting_the_email_is_redacted_before_logging(self, caplog):
+        """Stripe echoes the value it rejected, and here that value IS the
+        address — a raw str(exc) in the log would defeat the no-emails rule."""
+        boom = MagicMock(
+            side_effect=stripe.error.InvalidRequestError("Invalid email address: rider0@example.com", param="email")
+        )
+        with _Harness(_rows(1), retrieve=boom):
+            with caplog.at_level("ERROR"):
+                result = await svc.backfill_stripe_customer_emails(apply=True)
+        assert result.failed == ["user-0:cus_0"]
+        assert "rider0@example.com" not in caplog.text
+        assert "[email-redacted]" in caplog.text

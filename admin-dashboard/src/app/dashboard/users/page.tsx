@@ -237,15 +237,21 @@ export default function UsersPage() {
     };
 
     const [stripeEmailSyncRunning, setStripeEmailSyncRunning] = useState(false);
+    // The endpoint is bounded per call so one request can't run for minutes.
+    // This walks the batches itself: telling the operator to "run again" is how
+    // a partial sweep gets mistaken for a finished one, since a second bare
+    // call restarts at page one and reports everything already correct.
+    const STRIPE_SYNC_MAX_BATCHES = 40;
     const handleBackfillStripeEmails = async () => {
         // Preview FIRST, always. This sends rider email addresses to Stripe (a
-        // US processor) in bulk, so the operator sees the exact count before
-        // anything leaves the country.
+        // US processor) in bulk, so the operator sees the count — and which
+        // Stripe account it is — before anything leaves the country.
         setStripeEmailSyncRunning(true);
         try {
             const preview = await backfillStripeCustomerEmails({ apply: false });
             const stranded = preview.missing_on_key.length;
-            if (preview.updated === 0) {
+            const account = (preview.key_mode || "unknown").toUpperCase();
+            if (preview.updated === 0 && !preview.has_more) {
                 toast({
                     title: "Nothing to sync",
                     description:
@@ -257,22 +263,43 @@ export default function UsersPage() {
             const newly = preview.changes.filter(c => !c.had_email).length;
             const corrected = preview.updated - newly;
             if (!window.confirm(
-                `Attach rider emails to ${preview.updated} of ${preview.scanned} Stripe customer(s)?\n\n` +
-                `${newly} have no email at all · ${corrected} carry a different address\n\n` +
+                `Sync rider emails to Stripe (${account} account)?\n\n` +
+                `First batch: ${preview.updated} of ${preview.scanned} customer(s) need updating — ` +
+                `${newly} have no email at all, ${corrected} carry a different address.\n\n` +
                 "This sends those riders' email addresses to Stripe so they can be found by " +
                 "address in the dashboard. Only the email field is written — no customer is " +
-                "created, no saved card is touched." +
+                "created, no saved card is touched. Riders who have requested deletion are skipped." +
                 (stranded ? `\n\n${stranded} customer(s) are unreachable on the current Stripe key and will be skipped — those repair themselves on the rider's next visit to their own payment screen.` : "") +
-                (preview.has_more ? "\n\nMore riders remain beyond this batch — run again after this one." : "")
+                (preview.has_more ? "\n\nMore riders remain beyond this batch. Confirming processes ALL remaining batches, not just this one." : "")
             )) return;
 
-            const applied = await backfillStripeCustomerEmails({ apply: true });
+            const totals = { updated: 0, unchanged: 0, stranded: 0, failed: 0 };
+            let cursor: string | undefined;
+            let batches = 0;
+            let stoppedEarly = false;
+            for (;;) {
+                const res = await backfillStripeCustomerEmails({ apply: true, cursor });
+                batches += 1;
+                totals.updated += res.updated;
+                totals.unchanged += res.unchanged;
+                totals.stranded += res.missing_on_key.length;
+                totals.failed += res.failed.length;
+                if (!res.has_more) break;
+                // No cursor with has_more set would loop on the same page —
+                // stop and say so rather than spinning or silently truncating.
+                if (!res.next_cursor || batches >= STRIPE_SYNC_MAX_BATCHES) {
+                    stoppedEarly = true;
+                    break;
+                }
+                cursor = res.next_cursor;
+            }
             toast({
-                title: "Stripe customer emails synced",
+                title: stoppedEarly ? "Stripe email sync stopped early" : "Stripe customer emails synced",
                 description:
-                    `${applied.updated} updated, ${applied.unchanged} already correct` +
-                    (applied.has_more ? " · more remain, run again" : "") +
-                    (applied.missing_on_key.length ? ` · ${applied.missing_on_key.length} unreachable` : ""),
+                    `${totals.updated} updated, ${totals.unchanged} already correct` +
+                    (totals.stranded ? ` · ${totals.stranded} unreachable` : "") +
+                    (stoppedEarly ? ` · stopped after ${batches} batches, riders remain — run again to continue` : ""),
+                variant: stoppedEarly ? "destructive" : undefined,
             });
         } catch (e: any) {
             toast({ title: "Stripe email sync failed", description: e?.message || "Unknown error", variant: "destructive" });

@@ -3326,74 +3326,120 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 - **What was NOT verified:** same boundary as A32 — not exercised against
   real Supabase or a real migrated driver account, no visual verification.
 
-### A34. Legacy-imported ride count silently dropped 224 → 186 in production between 2026-08-13 and 2026-08-16, no attributable cause found — CRITICAL, unresolved
-- **Source:** dual-run cutover audit (Phase 0.4), 2026-08-16. A30 (2026-08-13,
-  live-verified) recorded **224** rows for
+### A34. Legacy-imported ride count dropped 224 → 186 in production — mechanism found: targeted manual DSAR-style deletion script, 2026-08-14 — CRITICAL, mechanism confirmed, exact scope not fully verified
+- **Source:** dual-run cutover audit (Phase 0.4/0.4-followup), 2026-08-16. A30
+  (2026-08-13, live-verified) recorded **224** rows for
   `legacy_import_metadata->>'source' = 'legacy_mongo_booking_import'`. The
   identical query, run live again 2026-08-16, returns **186** — a 38-row
-  drop, confirmed real (not a filter/measurement difference):
-  - Same result via both the old `!= '{}'` filter and the exact-source
-    filter — not a query-shape artifact.
-  - `deleted_at` (migration 33 soft-delete column): 0 of the 186 remaining
-    rows are soft-deleted, and the missing rows aren't soft-deleted either
-    (they're gone from the table entirely, not hidden).
-  - Single import batch (`20260729184745`) both before and after — no
-    re-import, no dedup pass ran.
-  - Single Supabase project (`soavhtdhefowwvforzwb`/`spinrmobileapp`), zero
-    branches — ruled out "different environment" explanations.
-  - No application code path deletes from `rides` anywhere in this repo
-    (grepped). No `rides`-deletion row exists in the app's own `audit_logs`
-    table, ever.
-  - Postgres's own `pg_stat_user_tables` shows **1,961 lifetime DELETE
-    operations** against `rides` (`n_tup_del`) against only 718 lifetime
-    inserts — real, substantial delete activity the app never issued.
-- **What direct Supabase log access could and couldn't establish:**
-  - A dashboard SQL-editor session (`session:2b1c96df-be35-4789-a7f7-949f8eb8c616`)
-    applied several migrations directly against production on **2026-08-13,
-    13:36–13:41 UTC** — including recreating `purge_pii_retention()`
-    (migration 296) — bypassing `scripts/migrate.py`, the repo's documented
-    migration runner. This is the same calendar day the row count was last
-    confirmed at 224.
-  - `purge_pii_retention()`'s Step B (`DELETE FROM rides WHERE created_at <
-    now() - INTERVAL '7 years'`) **cannot** be the mechanism as currently
-    defined — every legacy ride's `created_at` is in 2026. Whether an
-    *earlier* version of this function (before the 08-13 rewrite) had a
-    different interval is unknown — the previous definition wasn't
-    recoverable from available logs.
-  - Zero `pii_retention_purge` rows exist in `audit_logs` — this function
-    has either never run for real in production, or an earlier version
-    deleted rows without writing that audit entry at all (today's version
-    does write one; whether it always did is unknown).
-  - No `DELETE FROM rides` statement for this specific gap was found in
-    Postgres logs — Supabase's log capture for this project appears to log
-    dashboard-run SQL and DDL, not ordinary application DML, so a
-    server-side DELETE issued outside the dashboard (e.g. a direct
-    `psql`/service-role connection) would leave no trace in `query_logs`
-    either.
-- **Status: open, unresolved, no attributable root cause.** The mechanism
-  is not the application, not explainable by any documented import/dedup
-  process, and not conclusively any specific SQL statement found in logs.
-  The one concrete lead is the dashboard session above, active in the same
-  window the count changed — that's a person to ask directly, not proof of
-  cause.
+  drop, confirmed real (not a filter/measurement difference — same result
+  via both the old `!= '{}'` filter and the exact-source filter; not
+  soft-deleted (`deleted_at IS NULL` on all 186 remaining, and the missing
+  rows aren't hidden, they're gone); single import batch
+  (`20260729184745`) both before and after, so no re-import/dedup ran;
+  single Supabase project, zero branches; no application code path in this
+  repo ever deletes from `rides`; zero `rides`-deletion rows in the app's
+  own `audit_logs`).
+- **Mechanism found (2026-08-16, via `pg_stat_statements`, not
+  `postgres_logs`):** Postgres statement logging on this project only
+  captures DDL (`CREATE`/`ALTER`/`COMMENT`) — confirmed by exhaustively
+  sweeping `postgres_logs` across 2026-08-13 through 08-16 and finding
+  **zero** plain `DELETE`/`UPDATE`/`INSERT` statements anywhere, from any
+  source, despite `audit_logs` showing hundreds of real app-level ride
+  writes in the same window. This means ordinary DML — from the app, a
+  direct `psql` connection, or the Supabase dashboard SQL editor — is
+  structurally invisible to `postgres_logs` on this project regardless of
+  when it ran. `pg_stat_statements` (a separate, always-on catalog,
+  `stats_reset` 2026-05-22) was the tool that actually found it:
+  - A hand-written, phone-number-scoped account-deletion script (`DO $$
+    ... v_phones TEXT[] ... `) exists and was run for real
+    (`p_dry_run := false`) **twice on 2026-08-14** (`stats_since` timestamps
+    20:13:03 and 20:38:25 UTC — squarely inside the 08-13→08-16 gap
+    window), targeting 4 phone numbers total (1 in the first run, 3 in the
+    second). A third, dry-run-only call against the same script exists too.
+  - The script is a comprehensive right-to-delete/DSAR-style hard-delete:
+    resolves `users` by phone → `drivers` → **`rides` by
+    `driver_id`/`rider_id` match** → 16 groups of dependent tables → ends
+    with `DELETE FROM rides WHERE id = ANY(v_ride_ids)`, then `drivers`,
+    then `users`. It disables the append-only guard triggers on
+    `driver_insurance_periods`, `driver_period_distances`, `disputes`, and
+    `audit_logs` to do this (see separate flag below — this conflicts with
+    this repo's own documented 7-year regulatory retention policy).
+  - Confirmed against `bookings.csv`/`drivers.csv`/`customers.csv`: 3 of
+    the 4 targeted phone numbers (`3062929175`, `3066009097`, `3065203304`
+    in local 10-digit form) appear **repeatedly** in the legacy MongoDB
+    export as both driver and customer records — several clearly test
+    accounts ("Test YK", "Yy", "Hh", "Test Y") alongside apparently-real
+    names ("Kiran", "Tristan", "Yash Kumar", "Ryan D"). Since the legacy
+    importer links legacy bookings to real Spinr accounts by phone match
+    (A30: 100% rider / 94.2% driver match rate), any of these phone
+    numbers' Spinr accounts that had a legacy-imported ride attached would
+    have had that ride swept up by this script's
+    `rides.driver_id/rider_id`-based deletion — this is a coherent,
+    well-evidenced explanation for some or all of the 38-row gap.
+  - A **separate, distinct** script was also found in `pg_stat_statements`:
+    an unconditional environment-wipe (`DELETE FROM rides`/`drivers`/
+    non-admin `users` with no `WHERE`, same guard-trigger-disable pattern).
+    Ruled out as the cause of *this* gap — its `stats_since` is
+    2026-07-16, predating the 07-29 legacy import batch, and a wholesale
+    wipe after 07-29 would have left either 0 rows or a new batch tag, not
+    186 rows all carrying the *original* import batch id. Almost certainly
+    a pre-import "clean the environment" step, not implicated here — but
+    its mere existence (see flag below) is a standing risk independent of
+    this finding.
+- **Status: mechanism identified with strong circumstantial evidence, exact
+  row count and full list of affected legacy rides NOT confirmed.**
+  `RAISE NOTICE`-level output (which would have printed exact per-table
+  deleted-row counts) is not captured by this project's log verbosity
+  settings, and the deleted `users`/`drivers` rows are themselves gone, so
+  there's no way to retroactively list exactly which of the 38 missing
+  legacy rides belonged to these 4 phone numbers vs. some other cause.
+  Treat as the leading explanation, not a closed case.
+- **Separate, standing risk surfaced by this investigation (needs its own
+  triage, independent of A34's core question):** both scripts found in
+  `pg_stat_statements` disable this repo's append-only regulatory guard
+  triggers (`driver_insurance_periods_no_mutate`, `financial_events`'s
+  delete gate, `audit_logs_no_delete`) to perform a hard delete of
+  `driver_insurance_periods` — SGI's 7-year audit trail — for the matched
+  driver(s). CLAUDE.md's own PIPEDA section states trip/insurance-period
+  records must be retained the full regulatory window regardless of a
+  deletion request; a script that hard-deletes `driver_insurance_periods`
+  as part of fulfilling a phone-scoped deletion request appears to
+  contradict that policy. Also notable: `financial_events` is currently
+  **0 rows** in production despite 42 files in this repo actively
+  reading/writing it (webhooks, reconciliation, ledger service) — consistent
+  with one of these scripts having wiped it at some point with nothing
+  since repopulating it. Neither of these was chased further here — flagging
+  for a follow-up, ideally by whoever owns these ad-hoc SQL scripts.
 - **Why this matters beyond the row count itself:** any "live-verified"
   dollar figure or row count in this repo's audit docs (including A30,
   A31, A32, A33, and every figure in this session's own Phase 0 report) is
-  a snapshot that can silently change with **no durable record of why**.
-  There is currently no DB-level (trigger/logical-replication/pgAudit)
-  capture of DELETE statements on `rides` — only the app's own
-  `audit_logs`, which nothing bypassing the app ever touches.
-- **Recommended next step (needs a human, not more log queries):** (1) ask
-  whoever owns the `2b1c96df…` dashboard session directly what ran between
-  2026-08-13 and 2026-08-16; (2) treat every legacy-migration dollar figure
-  in this repo as provisional until this is explained; (3) consider adding
-  a DB-level audit trigger (or enabling pgAudit) on `rides` at minimum, so
-  a future unattributed deletion is traceable instead of forensic
-  guesswork.
-- **What was NOT verified:** the actual DELETE statement or its issuer;
-  whether the pre-2026-08-13 version of `purge_pii_retention()` had a
-  shorter `c_ride_keep_age`; whether any driver/rider-facing data (not just
-  admin-visible rows) was affected by the missing 38 rides.
+  a snapshot that can silently change with **no durable record of why** —
+  `postgres_logs` does not capture DML on this project, so only
+  `pg_stat_statements` (aggregate query shapes, no row-level detail, no
+  actor identity) offers any forensic trail at all, and only for as long as
+  `stats_reset` hasn't fired again.
+- **Recommended next step (needs a human, not more log queries):** (1)
+  confirm with whoever runs these ad-hoc phone-scoped deletion scripts
+  whether the 4 target phones were real DSAR requests, test-account
+  cleanup, or something else, and whether they knew these accounts had
+  legacy-imported ride history attached; (2) reconcile the
+  `driver_insurance_periods`-hard-delete behavior in this script against
+  the documented 7-year retention policy — likely needs the script fixed
+  to exclude that table, not just documented as intentional; (3) explain
+  or repopulate `financial_events` given its 0-row state; (4) consider a
+  DB-level audit trigger (or enabling pgAudit / raising log verbosity to
+  capture DML) on `rides`, `driver_insurance_periods`, and `financial_events`
+  at minimum, so a future unattributed deletion is traceable instead of
+  forensic guesswork; (5) treat every legacy-migration dollar figure in
+  this repo as provisional until the exact 38-row list is confirmed or
+  ruled irrelevant.
+- **What was NOT verified:** the exact 38 ride IDs affected; whether all 4
+  phone numbers' Spinr accounts actually had a legacy-imported ride
+  attached (only circumstantial CSV-presence evidence, not a row-level
+  confirmation, since the source rows are now deleted); who ran these
+  scripts or from what connection (no actor identity in
+  `pg_stat_statements`); whether the third, dry-run-only invocation of the
+  phone-scoped script ran before or after the two real ones.
 
 ## P1 — Fix before launch (code)
 

@@ -6,7 +6,7 @@
 |---|---|
 | Date | 2026-08-16 |
 | Author | Claude Code (session: driver-signup-upload-format) |
-| Surface(s) | backend, driver-app, rider-app |
+| Surface(s) | backend, driver-app, rider-app, admin-dashboard |
 | Domain (Sentry tag) | drivers |
 | PR / commit link | branch `claude/driver-signup-upload-format-f0hdxa` |
 | Related issue or gap ID | live-testing report: "upload failed, unsupported format" during driver signup |
@@ -67,6 +67,39 @@ Client-side, `resolveUploadMimeType` in `shared/api/upload.ts` derives the decla
 type from the file extension and ignores non-MIME picker values (`'image'`,
 `'application/octet-stream'`). This is defence in depth — the backend no longer
 depends on it — but it keeps the declared type correct for the fallback path.
+
+## 3b. Second round — findings from self-review
+
+A senior-backend review pass over the first three commits produced eight
+findings, all fixed. Four were defects in the original fix, four were
+pre-existing problems it surfaced.
+
+| # | Finding | Verdict | Fix |
+|---|---|---|---|
+| M1 | `ALLOWED_MIME_TYPES` and `_MIME_TO_EXTENSION` are parallel allowlists that must agree, with nothing enforcing it | Introduced by the fix | Import-time consistency check + test; `image/jpg` alias made explicit via `_MIME_ALIASES` |
+| M2 | `save_upload` had no size cap — `MAX_FILE_SIZE` was enforced only in `upload_file`, and there is no global body-size middleware | Pre-existing | `read_upload_capped()` chunked read, 413 as soon as the cap is passed, used on both upload paths |
+| M3 | Web driver-registration page called `/api/upload` and `/api/drivers/register`; both routers mount only under `/api/v1` | Pre-existing | Both paths corrected |
+| L1 | `_sniff_mime_type` could return a MIME absent from `_MIME_TO_EXTENSION` — a `KeyError` waiting for the next caller | Introduced | Sentinel documented; test pins that it stays unstorable |
+| L2 | A HEIF too short to sniff got the generic message, not the actionable one | Introduced | Declared type consulted for that case |
+| L3 | Moving the read out of `save_upload`'s `try` lost its error log | Introduced | Log restored; read failure (400) now distinguished from storage failure (500) |
+| L4 | AVIF had no signature, so an AVIF declared `image/jpeg` was stored as a JPEG | Introduced (it was rejected on extension pre-fix) | Detected and rejected alongside HEIF |
+| N1 | `ALLOWED_EXTENSIONS` lived in `documents.py` but was read only by `bundle_document_uploader`, duplicating its `_EXT_TO_MIME_TYPE` keys | Pre-existing | Folded into that module's existing map |
+
+**M2 and M3 are the two that matter most.** M2 is a memory-exhaustion vector on
+two authenticated endpoints. M3 means the entire web driver signup flow has been
+dead past OTP verification — a *different* root cause from the mobile
+"unsupported format" report, with a similar-looking symptom, so it is worth
+checking which surface any given live-testing failure came from.
+
+**On AVIF/HEIF (product decision, flagging explicitly):** both are rejected
+rather than stored. No `<img>` in admin document review renders HEIF, and React
+Native `<Image>` support for both HEIF and AVIF is inconsistent across OS
+versions, so storing them would break the driver's own document preview and the
+admin's review pane *silently at read time* instead of loudly at upload time.
+Rejecting also restores the pre-fix effective behaviour (both were refused on
+their file extension). If you would rather accept them and transcode
+server-side, that is a real option but it needs an image-processing dependency
+(`pillow-heif`) and its own review.
 
 ## 4. Risk & impact on existing functionality
 
@@ -145,6 +178,11 @@ without any app update, since the fix is server-side.
 | `driver-app/__tests__/lib/uploadMimeType.test.ts` | New — 13 cases | Pins the picker-metadata contract |
 | `driver-app/app/become-driver.tsx` | `pickImage`/`pickFile` use `resolveUploadMimeType` | Was hardcoding `image/jpeg` / passing `asset.type` as a MIME type |
 | `rider-app/app/become-driver.tsx` | `handleUpload` uses `resolveUploadMimeType` | Same `asset.mimeType \|\| 'image/jpeg'` fallback |
+| `backend/tests/test_save_upload_limits.py` | New — 7 tests | Size cap, empty body, read-failure and 400-not-500 cover for `save_upload` (M2, L3) |
+| `backend/services/data_transfer/bundle_document_uploader.py` | Gates on `_EXT_TO_MIME_TYPE` instead of importing `ALLOWED_EXTENSIONS` | N1 — the two key sets were identical and hand-synced |
+| `backend/services/data_transfer/bundle_zip_builder.py` | Comment update | Named the removed symbol |
+| `backend/tests/test_bundle_document_uploader_coverage.py` | Docstring updates | Named the removed symbol |
+| `admin-dashboard/src/app/register/driver/page.tsx` | `/api/upload` → `/api/v1/upload`, `/api/drivers/register` → `/api/v1/drivers/register` | M3 — neither path is served at the bare `/api` prefix |
 
 ## 7. Before / after
 
@@ -194,8 +232,8 @@ Not feature-flagged: see §9 for why.
 
 ## 9. Verification performed
 
-- [x] **Backend suite, full.** `pytest -m "not slow"` → **11641 passed, 8 skipped,
-      1 xfailed, 0 failed** (9m38s).
+- [x] **Backend suite, full.** `pytest -m "not slow"` → **11662 passed, 8 skipped,
+      1 xfailed, 0 failed** (9m20s), re-run after the second round of fixes.
 - [x] **Backend, targeted.** `pytest tests/test_upload_file_format.py
       tests/test_documents.py tests/test_admin_document_upload.py
       tests/test_bundle_document_uploader.py tests/test_bundle_document_uploader_coverage.py
@@ -208,6 +246,9 @@ Not feature-flagged: see §9 for why.
       a stashed working tree. Nothing in this change touches Android Auto.
       New `__tests__/lib/uploadMimeType.test.ts` → 13 passed.
 - [x] **rider-app.** `tsc --noEmit` clean. `yarn test` → **480 passed, 480 total**.
+- [x] **admin-dashboard.** `tsc --noEmit` clean and **`npm run build` succeeded** —
+      a genuine Next.js production build, not a dev server; `/register/driver` is in
+      the emitted route table.
 - [x] **Real production build run** (not just a dev server or `tsc --noEmit`):
       `npx expo export --platform web` succeeded for **driver-app** and **rider-app** —
       the closest equivalent to a production build for these Expo surfaces, since neither
@@ -238,6 +279,18 @@ Not feature-flagged: see §9 for why.
 
 State explicitly, so silence does not imply coverage:
 
+- **The admin-dashboard `/register/driver` fix was not exercised at runtime.** The
+  path correction is verified by reading the route table in `backend/server.py`
+  (`v1_api_router` at `:320`/`:349`, mounted with `prefix="/api/v1"` at `:364`) and by
+  confirming no `src/app/api/upload` or `src/app/api/drivers` handler exists — not by
+  issuing a request against a running backend. That page has **no test coverage at
+  all**, and I did not add any: the two fetch calls are inline closures inside the
+  page component, so pinning them would have meant either rendering the whole page or
+  scraping its source, and a source-scraping test is a worse artifact than the bug it
+  guards. Flagging the coverage gap rather than papering over it.
+- **The `/api` vs `/api/v1` prefix split was not audited repo-wide.** I checked only
+  the calls on the page I touched. Other admin-dashboard callers may target the wrong
+  prefix in the same way; a sweep would be a separate piece of work.
 - **No native (EAS) build.** The production check for driver-app/rider-app was
   `expo export --platform web`, which exercises the Metro bundle and the full module
   graph but not the iOS/Android native compile. No EAS build credentials exist in this

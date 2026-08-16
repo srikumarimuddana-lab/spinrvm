@@ -95,12 +95,51 @@ _MIME_TO_EXTENSION = {
     "application/pdf": ".pdf",
 }
 
-# ISO base-media-format brands used by iPhone photos. Detected only so the
-# upload path can reject them with an actionable message: no browser renders
-# HEIF, so storing one would break admin document review silently rather than
-# at upload time.
-_HEIF_MIME = "image/heic"
-_HEIF_BRANDS = frozenset({b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx", b"heif", b"mif1", b"msf1"})
+# Every accepted MIME type must have a canonical extension, or the upload
+# endpoints silently refuse a type the rest of the module says is allowed.
+# `image/jpg` is an alias normalised to image/jpeg before any lookup, so it is
+# deliberately absent from _MIME_TO_EXTENSION rather than missing from it.
+_MIME_ALIASES = {"image/jpg": "image/jpeg"}
+if set(_MIME_TO_EXTENSION) | set(_MIME_ALIASES) != ALLOWED_MIME_TYPES:
+    # A raise, not an assert: `python -O` strips asserts, and this invariant
+    # failing means one upload path accepts a type another silently refuses.
+    raise RuntimeError(
+        "ALLOWED_MIME_TYPES and _MIME_TO_EXTENSION have drifted apart: "
+        f"{ALLOWED_MIME_TYPES ^ (set(_MIME_TO_EXTENSION) | set(_MIME_ALIASES))}"
+    )
+
+# ISO base-media-format brands. These are real image formats, but no
+# <img> tag in the admin document-review UI can render HEIF and React
+# Native's <Image> support for both HEIF and AVIF is inconsistent across OS
+# versions — so they are detected in order to be REJECTED with an actionable
+# message. Storing one would break document review silently at review time
+# instead of loudly at upload time.
+_UNRENDERABLE_BRANDS = {
+    b"heic": "HEIC",
+    b"heix": "HEIC",
+    b"heim": "HEIC",
+    b"heis": "HEIC",
+    b"hevc": "HEIC",
+    b"hevx": "HEIC",
+    b"heif": "HEIF",
+    b"mif1": "HEIF",
+    b"msf1": "HEIF",
+    b"avif": "AVIF",
+    b"avis": "AVIF",
+}
+# Declared content-types that name an unrenderable format. Used so a file too
+# short or too truncated to sniff still gets the actionable message rather
+# than the generic "unsupported format" one.
+_UNRENDERABLE_MIMES = {
+    "image/heic": "HEIC",
+    "image/heif": "HEIF",
+    "image/heic-sequence": "HEIC",
+    "image/heif-sequence": "HEIF",
+    "image/avif": "AVIF",
+}
+# Sentinel returned by _sniff_mime_type for these formats. It is intentionally
+# NOT a key in _MIME_TO_EXTENSION — nothing may be stored under it.
+_UNRENDERABLE_MIME = "image/x-unrenderable"
 
 
 def _is_valid_webp(data: bytes) -> bool:
@@ -108,21 +147,42 @@ def _is_valid_webp(data: bytes) -> bool:
     return data[:4] == b"RIFF" and data[8:12] == b"WEBP"
 
 
-def _is_heif(data: bytes) -> bool:
-    """Return True if data is an ISO-BMFF file with a HEIF/HEIC brand."""
-    return len(data) >= 12 and data[4:8] == b"ftyp" and data[8:12] in _HEIF_BRANDS
+def _unrenderable_brand(data: bytes) -> Optional[str]:
+    """Return the display name ('HEIC'/'HEIF'/'AVIF') if data is an ISO-BMFF
+    file with a brand we refuse to store, else None."""
+    if len(data) < 12 or data[4:8] != b"ftyp":
+        return None
+    return _UNRENDERABLE_BRANDS.get(data[8:12])
 
 
 def _sniff_mime_type(content: bytes) -> Optional[str]:
-    """Identify a file's real type from its header bytes, or None if unknown."""
+    """Identify a file's real type from its header bytes, or None if unknown.
+
+    May return ``_UNRENDERABLE_MIME``, which is deliberately absent from
+    ``_MIME_TO_EXTENSION`` — callers must route it to a rejection rather than
+    indexing the extension map with it. Prefer ``_resolve_upload_type``, which
+    handles that for you.
+    """
     if _is_valid_webp(content):
         return "image/webp"
-    if _is_heif(content):
-        return _HEIF_MIME
+    if _unrenderable_brand(content):
+        return _UNRENDERABLE_MIME
     for magic, magic_mime in _MAGIC_BYTES.items():
         if content.startswith(magic):
             return magic_mime
     return None
+
+
+def _unrenderable_format_error(fmt: str) -> HTTPException:
+    """400 for a real image format we can detect but refuse to store."""
+    return HTTPException(
+        status_code=400,
+        detail=(
+            f"{fmt} photos aren't supported. On iPhone, either take the photo with "
+            "the in-app camera, or set Settings → Camera → Formats → Most Compatible "
+            "and re-take it. JPG, PNG, GIF, WEBP and PDF are accepted."
+        ),
+    )
 
 
 def _resolve_upload_type(content: bytes, declared_type: str) -> tuple[str, str]:
@@ -137,25 +197,25 @@ def _resolve_upload_type(content: bytes, declared_type: str) -> tuple[str, str]:
     bytes to JPEG. Gating on the declared type (or on the filename extension)
     therefore rejected most real driver-signup uploads.
 
-    Raises HTTPException(400) for HEIF and for content we cannot place.
+    Raises HTTPException(400) for HEIF/AVIF and for content we cannot place.
     """
+    normalised = _MIME_ALIASES.get(declared_type, declared_type)
+
     sniffed = _sniff_mime_type(content)
-    if sniffed == _HEIF_MIME:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "HEIC/HEIF photos aren't supported. On iPhone, either take the photo "
-                "with the in-app camera, or set Settings → Camera → Formats → Most "
-                "Compatible and re-take it. JPG, PNG, GIF, WEBP and PDF are accepted."
-            ),
-        )
+    if sniffed == _UNRENDERABLE_MIME:
+        raise _unrenderable_format_error(_unrenderable_brand(content) or "HEIC")
     if sniffed:
         return sniffed, _MIME_TO_EXTENSION[sniffed]
 
-    # Header unrecognised (an image format we have no signature for, a
-    # truncated file). Fall back to the declared type, exactly as the old
-    # magic-byte check did for unknown headers.
-    normalised = "image/jpeg" if declared_type == "image/jpg" else declared_type
+    # Header unrecognised — too short to sniff, truncated, or a format we have
+    # no signature for. A file that never got far enough to sniff but *says*
+    # it is one of the unrenderable formats still earns the actionable message
+    # rather than the generic one.
+    if normalised in _UNRENDERABLE_MIMES:
+        raise _unrenderable_format_error(_UNRENDERABLE_MIMES[normalised])
+
+    # Otherwise fall back to the declared type, exactly as the old magic-byte
+    # check did for unknown headers.
     if normalised in _MIME_TO_EXTENSION:
         return normalised, _MIME_TO_EXTENSION[normalised]
 

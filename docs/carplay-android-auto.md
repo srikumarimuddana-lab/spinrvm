@@ -1,15 +1,23 @@
 # CarPlay & Android Auto — integration strategy
 
-**Last verified:** 2026-07-10
+**Last verified:** 2026-08-16 (first hardware validation)
 **Status:** Android Auto implemented on **@iternio/react-native-auto-play** (Nitro / New
 Architecture). Committed: the dependency, the JS entry registration, and the car-UI layer
 (`driver-app/lib/androidAuto/`) — an always-on live map (the driver's current location shown
 as a car marker, with zoom buttons) that overlays the stored route during a ride, plus a
 Lyft-style branded trip card and in-car ride actions (Accept/Decline offer alert, Arrived,
 Complete) driven from the same `useDriverStore`.
-**Still unproven on hardware:** it must be confirmed by an **EAS dev build** on an
-Android Auto DHU (Nitro codegen under Expo prebuild + the on-surface map render are the two
-open unknowns). No release branch should merge until that build passes.
+
+**PROVEN ON HARDWARE (2026-08-16).** Validated on a real vehicle head unit: app discovery
+from a Play-installed build, `CarAppService` registration, `MapTemplate` creation +
+`setRootTemplate`, the React surface rendering, and a live Google map with the car marker.
+The two open unknowns from the original plan both cleared — Nitro codegen builds under Expo
+prebuild on SDK 57 / RN 0.86.2, and react-native-maps **does** render onto the Android Auto
+surface. See `docs/change-log/2026-08-16-android-auto-hardware-validation.md` for the five
+blockers hit on the way and how each was resolved.
+
+**Still unvalidated on hardware:** marker rotation/glide and the redesigned earnings card
+both landed after the last device test. Neither has been seen in a car.
 **Decision inputs:** Scope = *driving-task v1, architected for an in-dash-nav phase later*;
 platforms = *Android Auto now, iOS CarPlay dormant*; approach = *a maintained, New-Architecture
 native library + keep all ride logic in shared TS/Zustand*.
@@ -103,10 +111,38 @@ store and hand turn-by-turn to the driver's own Google Maps / Waze.
   insurance-period / settlement invariant is preserved for free.
 - **Icons:** purpose-built monochrome glyphs — `nav_arrow.png` (3 densities) for the Navigate
   hand-off, `zoom_in/zoom_out.png` for the camera. (Header actions are text, so need no icon.)
-- **Still unproven on hardware:** Nitro codegen building under Expo prebuild, the on-surface
-  map + card render, and the alert/header rendering need the EAS dev build + DHU. The JS
-  contract is covered by **56 unit tests** (`lib/androidAuto/__tests__/`).
+- **Hardware-validated (2026-08-16):** Nitro codegen builds under Expo prebuild on SDK 57 /
+  RN 0.86.2; the surface hosts the React tree; the live map renders. Still unseen in a car:
+  marker rotation/glide, the redesigned earnings card, and the alert/header rendering.
+  The JS contract is covered by **56 unit tests** (`lib/androidAuto/__tests__/`) — but note
+  the suite currently cannot run at all (`jest.setup.js` fails to resolve `firebase/auth`),
+  so treat that coverage as stale until the runner is repaired.
+- **How the surface actually works** (learned the hard way, worth not re-deriving):
+  iternio's `VirtualRenderer.kt` creates a `VirtualDisplay` from the car's `SurfaceContainer`
+  with `VIRTUAL_DISPLAY_FLAG_PRESENTATION`, hosts an Android `Presentation` on it, and mounts
+  a Fabric root via `ReactSurfaceView`. It is a real display context — a normal GL-backed
+  Google map composites there fine. **Do not enable `liteMode`**: it was tried on a
+  compositing theory that turned out to be wrong (the blank map was an empty API key), and
+  it pins the car marker to north and kills `animateMarkerToCoordinate`.
+  `VirtualRenderer.kt:313` paints the React host `DKGRAY` before your tree draws — so a
+  dark-grey screen means React never mounted, while a white one means it mounted and the map
+  drew blank.
+- **Diagnosing the car screen:** there is no dev menu, red box, or Metro console on a head
+  unit, and `register.ts`'s `log()` used to be `__DEV__`-gated — compiling every diagnostic
+  out of the release builds that are the only ones Android Auto will load. Use the on-surface
+  debug panel instead: the **Debug** header action in idle (non-production builds) shows a
+  facts table (template state, maps key, renderer, ride state, location, heading, route,
+  heatmap) and a live error log.
 - **Not yet wired:** online/offline toggle, OTP start-trip + rider rating (stay on phone).
+  On the toggle specifically: `toggleOnline` lives in `useDriverDashboard` (component state,
+  not mounted on a car-only cold launch) and its failure paths call `router.push('/documents')`,
+  `router.push('/vehicle-info')` and toasts — none of which mean anything from a car seat. It
+  also needs "Allow all the time" location and rolls the driver back offline without it.
+  Wiring it needs the eligibility checks lifted into the store with car-appropriate feedback,
+  not a button.
+- **No animation, ever.** Google's Car app quality guidelines forbid animated elements on a
+  connected head unit and Play enforces it at review before a public release. The card's
+  richness comes from hierarchy, type scale, contrast and spacing only.
 
 ### iOS CarPlay — dormant
 

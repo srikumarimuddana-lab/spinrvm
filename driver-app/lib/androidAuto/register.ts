@@ -206,11 +206,21 @@ export default function registerAutoPlay(): void {
   // The single state-driven header action (top-right on Android). Accept/Decline
   // live in the offer alert, so the header is the *progress* action for the leg.
   const headerActionsFor = (rideState: string) => {
-    const mkAction = (title: string, style: 'confirm' | 'normal', onPress: () => void) => ({
+    // `flags` is opt-in per action. Android Auto allows exactly ONE primary
+    // action in a strip and rejects a second — an earlier version marked both
+    // the progress action and SOS as Flag.Primary, which made setHeaderActions
+    // throw and took the WHOLE header down, SOS included. Only the leg's
+    // progress action is primary.
+    const mkAction = (
+      title: string,
+      style: 'confirm' | 'normal',
+      onPress: () => void,
+      flags?: number,
+    ) => ({
       type: 'text' as const,
       title,
       style: style === 'confirm' ? ('confirm' as const) : ('normal' as const),
-      flags: Flag.Primary,
+      ...(flags === undefined ? {} : { flags }),
       onPress,
     });
 
@@ -219,11 +229,11 @@ export default function registerAutoPlay(): void {
     // must never have to hunt for safety in a menu. Text action, so it needs no
     // icon asset and reads unambiguously at a glance. `headerActions` is typed
     // Array<NitroAction>, so a second entry is legitimate.
-    const sosAction = mkAction('SOS', 'normal', confirmEmergency);
+    const sosAction = mkAction('SOS', 'normal', confirmEmergency); // deliberately NOT primary
 
     /** Leg progress action + SOS. */
     const act = (title: string, style: 'confirm' | 'normal', onPress: () => void) => ({
-      android: [mkAction(title, style, onPress), sosAction],
+      android: [mkAction(title, style, onPress, Flag.Primary), sosAction],
     });
 
     switch (rideState) {
@@ -253,7 +263,7 @@ export default function registerAutoPlay(): void {
         // ride there is nothing to report against. Offering a button that
         // silently does nothing would be worse than not offering it.
         return isCarDebugAvailable()
-          ? { android: [mkAction('Debug', 'normal', () => useCarDebug.getState().toggle())] }
+          ? { android: [mkAction('Debug', 'normal', () => useCarDebug.getState().toggle(), Flag.Primary)] }
           : undefined;
     }
   };
@@ -536,7 +546,10 @@ export default function registerAutoPlay(): void {
         template.setMapButtons(mapButtonsFor(!!route));
         template.setHeaderActions(headerActionsFor(rideState));
       } catch (e) {
-        log('chrome update failed:', e);
+        // Loud: a throw here leaves the driver with no header actions at all —
+        // no Arrived, no Complete trip, no SOS — and nothing else reports it.
+        logError('chrome update failed (header/map buttons may be missing):', e);
+        setDebugFact('chrome', 'FAILED — see log');
       }
     }
 
@@ -625,8 +638,38 @@ export default function registerAutoPlay(): void {
     });
     // Cold-launch while a head unit is ALREADY connected: the connect event may
     // have fired during native init before this listener existed, so apply now.
+    //
+    // Re-checked on a short schedule rather than once. This runs at JS bundle
+    // load, and on a car-only cold launch — Android Auto starting the app with
+    // the phone UI closed, which is exactly the case a driver hits after force
+    // closing the app — the native connection handshake can still be in flight
+    // at this moment. A single synchronous check then returns false, and if
+    // 'didConnect' already fired natively there is no second event to catch it:
+    // the car screen sits blank for the whole session with no template ever
+    // built. Polling a few times over ~6s closes that window; every attempt
+    // after the template exists is a no-op, since onConnect is idempotent.
+    let coldStartAttempts = 0;
+    const coldStartPoll = setInterval(() => {
+      coldStartAttempts += 1;
+      if (template) {
+        clearInterval(coldStartPoll);
+        return;
+      }
+      if (HybridAutoPlay.isConnected?.()) {
+        log('cold-start poll found a connected head unit on attempt', coldStartAttempts);
+        onConnect();
+        clearInterval(coldStartPoll);
+        return;
+      }
+      if (coldStartAttempts >= 12) {
+        // Not connected — the ordinary 'didConnect' listener takes it from here.
+        clearInterval(coldStartPoll);
+      }
+    }, 500);
+
     if (HybridAutoPlay.isConnected?.()) {
       onConnect();
+      clearInterval(coldStartPoll);
     }
   } catch (e) {
     // Was a dev-only log(): in production a listener-registration failure left

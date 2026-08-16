@@ -36,14 +36,25 @@ export interface DebugLine {
 }
 
 /**
- * Debug UI is available everywhere except production. The `android-auto` and
- * `preview` EAS profiles both set EXPO_PUBLIC_ENV=preview, so store builds used
- * for car testing DO get the panel, while a production release never does.
- * Deliberately not `__DEV__`: that is precisely the flag that hid the existing
- * logs from every build capable of reaching a head unit.
+ * Whether the Debug header action is offered at all.
+ *
+ * OFF by default. The car screen is a driver's working surface, not a console —
+ * once the integration is behaving, a Debug button in the header is clutter on a
+ * screen that should stay glanceable, and the header is competing for room with
+ * the leg's progress action and SOS.
+ *
+ * Flip this to `process.env.EXPO_PUBLIC_ENV !== 'production'` to bring it back
+ * for a testing session. Everything behind it stays wired: `pushDebug` /
+ * `setDebugFact` keep recording into the ring buffer regardless, so the moment
+ * it is re-enabled the panel has real history rather than starting empty.
+ *
+ * Deliberately not keyed on `__DEV__`: that is precisely the flag that hid
+ * register.ts's diagnostics from every build capable of reaching a head unit.
  */
+const DEBUG_PANEL_ENABLED = false;
+
 export const isCarDebugAvailable = (): boolean =>
-  process.env.EXPO_PUBLIC_ENV !== 'production';
+  DEBUG_PANEL_ENABLED && process.env.EXPO_PUBLIC_ENV !== 'production';
 
 interface CarDebugState {
   enabled: boolean;

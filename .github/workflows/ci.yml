@@ -81,33 +81,19 @@ jobs:
         run: |
           pytest --cov=. --cov-report=xml --cov-report=term-missing --timeout=30 -v
 
-      - name: Upload coverage to Codecov
-        id: codecov_upload
-        if: always()
-        continue-on-error: true
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
-        with:
-          file: ./backend/coverage.xml
-          flags: backend
-          name: backend-coverage
-
-      # C12 (ACTION_ITEMS.md): continue-on-error above means a rejected
-      # upload (e.g. tokenless mode on a push-triggered run, no
-      # CODECOV_TOKEN secret configured) still reports this job as green
-      # with nothing telling you Codecov has no data for this run. This
-      # step doesn't fix the underlying cause — that needs a human to add
-      # CODECOV_TOKEN as a repo secret — it only stops the failure from
-      # being silent. `steps.*.outcome` reflects the step's real result
-      # before continue-on-error rewrites `conclusion` to success.
-      - name: Flag Codecov upload failure (was previously silent)
-        if: always() && steps.codecov_upload.outcome == 'failure'
-        run: |
-          echo "::warning title=Codecov upload failed::Coverage for this run was not recorded on Codecov (upload step failed but continue-on-error keeps this job green). See ACTION_ITEMS.md C12 — most likely cause is a missing CODECOV_TOKEN repository secret on a push-triggered run (tokenless uploads are rejected outside same-repo PRs)."
-          {
-            echo "### ⚠️ Codecov upload failed"
-            echo ""
-            echo "Coverage for this run was **not** recorded on Codecov, even though this job is green (\`continue-on-error\` masks it from the check conclusion). See \`ACTION_ITEMS.md\` **C12**."
-          } >> "$GITHUB_STEP_SUMMARY"
+      # Codecov upload removed 2026-08-16 (ACTION_ITEMS.md C12 resolved, not
+      # deferred): no CODECOV_TOKEN repo secret exists and no one currently
+      # has Codecov account access to create one, so every run's upload has
+      # failed at the Codecov API since this repo's CI history began ("Token
+      # required - not valid tokenless upload") — the previous
+      # continue-on-error + warning-annotation step correctly stopped this
+      # from being silent, but it was still permanent CI noise for a feature
+      # nobody could complete. Coverage gating itself is unaffected: the
+      # "Coverage Regression" and "Corporate Coverage Floor" guardrails in
+      # ci-guardrails.yml compute PR-branch coverage locally via `pytest
+      # --cov` and never depended on this upload. Re-add if a real
+      # CODECOV_TOKEN is ever provisioned — see ci-guardrails.yml's base
+      # branch coverage fetch for the other half of this same gap.
 
   # Python dependency CVE audit.
   # Runs as its own job — NOT as a step inside backend-test — because a newly
@@ -173,13 +159,8 @@ jobs:
         working-directory: frontend
         run: yarn test --ci --coverage --forceExit --reporters=default
 
-      - name: Upload coverage
-        if: always()
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
-        with:
-          file: ./frontend/coverage/coverage-final.json
-          flags: frontend
-          name: frontend-coverage
+      # Codecov upload removed 2026-08-16 — see backend-test's removal
+      # comment above for the full rationale (ACTION_ITEMS.md C12).
 
   # Driver App Tests
   driver-app-test:
@@ -224,28 +205,8 @@ jobs:
         run: yarn test --ci --coverage --forceExit --reporters=default
 
 
-      - name: Upload coverage
-        id: codecov_upload
-        if: always()
-        continue-on-error: true
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
-        with:
-          file: ./driver-app/coverage/coverage-final.json
-          flags: driver-app
-          name: driver-app-coverage
-
-      # C12 (ACTION_ITEMS.md): see backend-test's identical step above for
-      # the full rationale — surfaces a silently-swallowed upload failure
-      # without changing this job's overall (green) conclusion.
-      - name: Flag Codecov upload failure (was previously silent)
-        if: always() && steps.codecov_upload.outcome == 'failure'
-        run: |
-          echo "::warning title=Codecov upload failed::Coverage for this run was not recorded on Codecov (upload step failed but continue-on-error keeps this job green). See ACTION_ITEMS.md C12 — most likely cause is a missing CODECOV_TOKEN repository secret on a push-triggered run (tokenless uploads are rejected outside same-repo PRs)."
-          {
-            echo "### ⚠️ Codecov upload failed"
-            echo ""
-            echo "Coverage for this run was **not** recorded on Codecov, even though this job is green (\`continue-on-error\` masks it from the check conclusion). See \`ACTION_ITEMS.md\` **C12**."
-          } >> "$GITHUB_STEP_SUMMARY"
+      # Codecov upload removed 2026-08-16 — see backend-test's removal
+      # comment above for the full rationale (ACTION_ITEMS.md C12).
 
   # Rider App Tests (dedicated app — rider-app/)
   # Note: frontend/ is the legacy combined app, still tested by frontend-test.
@@ -288,28 +249,8 @@ jobs:
         working-directory: rider-app
         run: yarn test --ci --coverage --forceExit --reporters=default
 
-      - name: Upload coverage
-        id: codecov_upload
-        if: always()
-        continue-on-error: true
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
-        with:
-          file: ./rider-app/coverage/coverage-final.json
-          flags: rider-app
-          name: rider-app-coverage
-
-      # C12 (ACTION_ITEMS.md): see backend-test's identical step above for
-      # the full rationale — surfaces a silently-swallowed upload failure
-      # without changing this job's overall (green) conclusion.
-      - name: Flag Codecov upload failure (was previously silent)
-        if: always() && steps.codecov_upload.outcome == 'failure'
-        run: |
-          echo "::warning title=Codecov upload failed::Coverage for this run was not recorded on Codecov (upload step failed but continue-on-error keeps this job green). See ACTION_ITEMS.md C12 — most likely cause is a missing CODECOV_TOKEN repository secret on a push-triggered run (tokenless uploads are rejected outside same-repo PRs)."
-          {
-            echo "### ⚠️ Codecov upload failed"
-            echo ""
-            echo "Coverage for this run was **not** recorded on Codecov, even though this job is green (\`continue-on-error\` masks it from the check conclusion). See \`ACTION_ITEMS.md\` **C12**."
-          } >> "$GITHUB_STEP_SUMMARY"
+      # Codecov upload removed 2026-08-16 — see backend-test's removal
+      # comment above for the full rationale (ACTION_ITEMS.md C12).
 
   # Admin Dashboard Tests
   admin-test:

@@ -154,8 +154,15 @@ export function SafetyOverlay({ visible, onClose, rideId, onTrigger }: SafetyOve
           <View style={styles.content}>
             <Ionicons name="checkmark-circle" size={48} color="#38A169" />
             <Text style={styles.sentTitle}>Alert Sent Silently</Text>
+            {/* Only claim contacts were notified when the response actually
+                says so. An empty list means either no contacts are saved or
+                this was a deduplicated replay whose original send we can't
+                re-derive — in both cases Spinr Safety WAS alerted, which is
+                what we state instead. Same rule the rider dialog follows. */}
             <Text style={styles.sentSub}>
-              Your contacts and Spinr Safety have been notified. They can see your live location.
+              {sentContacts.length > 0
+                ? 'Your contacts and Spinr Safety have been notified. They can see your live location.'
+                : 'Spinr Safety has been notified and can see your live location. No emergency contact was confirmed — call someone directly if you need them.'}
             </Text>
             <View style={styles.sentList}>
               {sentContacts.map((c) => (

@@ -4,6 +4,8 @@ Split from ``backend/routes/rides.py`` (god-file refactor). Pure code
 motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
+import re
+
 from . import _deps
 from ._deps import (  # noqa: F401
     APIRouter,
@@ -35,9 +37,16 @@ class EmergencyRequest(BaseModel):
     longitude: Optional[float] = None
     # One key per SOS *press*, reused across that press's retry attempts.
     # Optional: older clients omit it and keep the previous insert-always
-    # behavior. Bounded and charset-restricted because it reaches a DB
-    # uniqueness index; a UUID4 from the client is the expected shape.
-    idempotency_key: Optional[str] = Field(default=None, min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    # behavior.
+    #
+    # Deliberately NOT constrained with min_length/pattern. This is optional
+    # metadata on an emergency endpoint: a strict constraint turns a malformed
+    # key into a 422 that rejects the whole SOS, identically on all three
+    # retries, and a client bug would then silently disable a rider's panic
+    # button. Fail open instead -- validate in the handler and drop a bad key
+    # (losing dedup, keeping the alert). max_length is kept only as a cheap
+    # bound on payload size.
+    idempotency_key: Optional[str] = Field(default=None, max_length=200)
 
 
 @router.post("/{ride_id}/emergency")
@@ -85,13 +94,26 @@ async def trigger_emergency(
     # Scoped to (reporter, key): two people on the same ride must both be able
     # to raise an alarm. Best-effort at this layer -- concurrent replicas can
     # both miss here, which is why migration 315 also carries a UNIQUE index.
+    # Validated here rather than by pydantic so a malformed key degrades to
+    # "no dedup" instead of 422-ing the emergency (see EmergencyRequest).
+    _idem_key: Optional[str] = None
     if body.idempotency_key:
+        _candidate = body.idempotency_key.strip()
+        if re.fullmatch(r"[A-Za-z0-9_-]{8,64}", _candidate):
+            _idem_key = _candidate
+        else:
+            logger.warning(
+                f"[SOS] Ignoring malformed idempotency_key for ride {ride_id} "
+                f"user {current_user['id']} -- proceeding without deduplication"
+            )
+
+    if _idem_key:
         try:
             _prior = await _deps.db_supabase.get_rows(
                 "safety_incidents",
                 {
                     "reported_by_user_id": current_user["id"],
-                    "sos_idempotency_key": body.idempotency_key,
+                    "sos_idempotency_key": _idem_key,
                 },
                 limit=1,
             )
@@ -137,25 +159,79 @@ async def trigger_emergency(
         "reported_at": now_iso,
         "created_at": now_iso,
     }
-    if body.idempotency_key:
-        incident["sos_idempotency_key"] = body.idempotency_key
+    if _idem_key:
+        incident["sos_idempotency_key"] = _idem_key
 
     try:
         await _deps.db_supabase.insert_one("safety_incidents", incident)
     except Exception as exc:
-        # Mirrors backend/routes/safety.py's submit_safety_report — a DB
-        # failure here must never look like a 500 the client can't react to.
-        # SOSButton.tsx retries 3x (1s/2s backoff) on any thrown error from
-        # this call and only shows its persistent FAILED/"call 911" state
-        # once all attempts are exhausted, so a clean 503 here is what makes
-        # that retry path actually fire instead of a bare unhandled 500.
-        logger.error(
-            f"[SOS] Failed to persist emergency incident ride_id={ride_id} user_id={current_user['id']}: {exc}",
-            exc_info=True,
-        )
-        raise HTTPException(
-            status_code=503, detail="Unable to send emergency alert. Please try again or call 911."
-        ) from exc
+        # Two recoverable failures are possible once an idempotency key is in
+        # play, and neither may be allowed to surface as "alert not sent".
+        _recovered_id = None
+        if _idem_key:
+            # (1) UNIQUE-index collision (23505). A concurrent request with the
+            # same key -- a client retry firing while the first is still in
+            # flight -- already recorded this press. The alert HAS gone out;
+            # returning 503 here would tell the user their SOS failed while
+            # their contacts were being texted. Re-read and return the original.
+            try:
+                _raced = await _deps.db_supabase.get_rows(
+                    "safety_incidents",
+                    {
+                        "reported_by_user_id": current_user["id"],
+                        "sos_idempotency_key": _idem_key,
+                    },
+                    limit=1,
+                )
+            except Exception:  # pragma: no cover - best effort
+                _raced = None
+            if _raced:
+                logger.info(
+                    f"[SOS] Insert raced a concurrent duplicate for ride {ride_id} "
+                    f"user {current_user['id']} -- returning incident {_raced[0].get('id')}"
+                )
+                return {
+                    "success": True,
+                    "incident_id": _raced[0].get("id"),
+                    "duplicate": True,
+                    "contacts_notified": 0,
+                    "contacts": [],
+                }
+
+            # (2) Column does not exist yet. If this build reaches production
+            # before migration 315 is applied, PostgREST rejects the whole
+            # payload for referencing an unknown column -- which would break
+            # SOS outright for every key-sending client, on every retry.
+            # Migration 313's header documents this repo being bitten by
+            # exactly that failure mode before. Retry once without the key:
+            # we lose deduplication (pre-315 behavior) and keep the alert.
+            incident.pop("sos_idempotency_key", None)
+            try:
+                await _deps.db_supabase.insert_one("safety_incidents", incident)
+                _recovered_id = incident["id"]
+                logger.error(
+                    f"[SOS] Insert with sos_idempotency_key failed for ride {ride_id}; "
+                    f"succeeded without it. Migration 315 is likely not applied on this "
+                    f"database -- dedup is INACTIVE. Original error: {exc}",
+                    exc_info=True,
+                )
+            except Exception:  # pragma: no cover - fall through to the 503 below
+                _recovered_id = None
+
+        if _recovered_id is None:
+            # Mirrors backend/routes/safety.py's submit_safety_report — a DB
+            # failure here must never look like a 500 the client can't react to.
+            # SOSButton.tsx retries 3x (1s/2s backoff) on any thrown error from
+            # this call and only shows its persistent FAILED/"call 911" state
+            # once all attempts are exhausted, so a clean 503 here is what makes
+            # that retry path actually fire instead of a bare unhandled 500.
+            logger.error(
+                f"[SOS] Failed to persist emergency incident ride_id={ride_id} user_id={current_user['id']}: {exc}",
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=503, detail="Unable to send emergency alert. Please try again or call 911."
+            ) from exc
 
     # Notify admin dashboard via WebSocket. Keep the existing
     # emergency_alert event firing for backward compatibility with any

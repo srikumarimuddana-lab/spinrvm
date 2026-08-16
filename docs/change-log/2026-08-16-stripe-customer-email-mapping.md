@@ -100,12 +100,46 @@ identification and dispute handling, and it restores parity with the mapping the
 already operated. Email is still never written to logs, Sentry, or analytics; the new log lines
 and the backfill script report `user_id` and `cus_…` only, pinned by a test.
 
+### 4a. The admin button (follow-up in the same branch)
+
+The backfill is exposed as **Users → "Sync Stripe emails"**, requested so the sweep can be run
+without shell access. Shape follows the repo's existing precedent exactly
+(`recomputeStatementTotals`): the logic lives in a service, and the button and the CLI both call
+it, so they can never apply a different repair.
+
+`POST /api/admin/stripe/customer-emails/backfill` is mounted on the `stripe_mode_audit` router,
+which `routes/admin/__init__.py:172` already gates with `require_super_admin` — and the handler
+re-checks `_require_super_admin` in its body rather than trusting the mount, matching the two
+existing endpoints there. That is the right bar: this is a bulk PII transfer to a US processor.
+
+Blast radius of the button itself: the endpoint is new (no existing caller to break), the service
+is new, and the CLI was rewritten to delegate to it. The admin dashboard change is additive — one
+button and one API function; no existing page, component, or call is modified. `CreditCard` was
+already imported on that page.
+
+Two deliberate constraints on the endpoint, both pinned by tests:
+
+- **A stranded customer (`resource_missing`) is reported, never repaired.** Re-provisioning
+  rewrites `users.stripe_customer_id` *and clears `default_payment_method`* — doing that from a
+  bulk admin sweep would break settlement for riders who are not in the room. Repair stays with
+  the rider's own card screen. This matches the deliberate choice the neighbouring `probe`
+  endpoint already documents.
+- **A write run with per-customer failures returns 502, not 200.** A partial sweep must not read
+  as success.
+
 ## 5. User-experience effect
 
 **No rider-, driver-, or corporate-facing change.** Nothing in any app renders differently, no copy
 changed, no notification changed, and nothing is visible mid-session to a rider mid-ride or a
 driver online. The only observable difference is in the Stripe dashboard, which is internal:
 searching a rider's email now finds their customer.
+
+**Internal admin (new):** a "Sync Stripe emails" button on the Users page. It always previews
+first — it retrieves every customer from Stripe and reports the exact counts, writing nothing —
+then asks for confirmation naming how many riders have no email at all versus a different address,
+and how many are unreachable on the current key. Nothing is transferred until the operator
+confirms. The confirm copy states plainly what leaves the country and what is not touched (no
+customer created, no saved card affected).
 
 Internal admin effect: support can resolve an email to a Stripe customer directly instead of
 querying Supabase first.
@@ -116,7 +150,12 @@ querying Supabase first.
 |---|---|---|
 | `backend/routes/payments.py` | Added `_customer_identity_fields()`; both `Customer.create` calls now send `email`; `_reprovision_stripe_customer` reads the user row; added `sync_stripe_customer_email()` | Make rider customers findable by email, and keep them that way |
 | `backend/routes/users.py` | On `email_changed`, `spawn(sync_stripe_customer_email(...))` | A later profile edit would otherwise drift Stripe back to a stale address |
-| `backend/scripts/backfill_stripe_customer_emails.py` | New; dry-run default, `--apply` to write | Customers created before this change have no email |
+| `backend/services/stripe_customer_email_backfill.py` | New; the shared backfill, dry-run default | One implementation behind both the admin button and the CLI, so they cannot drift |
+| `backend/routes/admin/stripe_mode_audit.py` | New `POST /stripe/customer-emails/backfill` (super_admin) | Run the sweep from the dashboard without shell access |
+| `backend/scripts/backfill_stripe_customer_emails.py` | New; thin CLI over the service | Same repair, same safety properties, from a terminal |
+| `admin-dashboard/src/lib/api/users-wallet.ts` + `src/lib/api.ts` | New `backfillStripeCustomerEmails()` | Typed client for the endpoint |
+| `admin-dashboard/src/app/dashboard/users/page.tsx` | "Sync Stripe emails" button, preview-then-confirm | The requested operator entry point |
+| `backend/tests/test_stripe_customer_email_backfill.py` | New; 14 cases | Pin dry-run-writes-nothing, idempotency, stranded-not-repaired, no-PII-in-payload |
 | `backend/tests/test_stripe_customer_email_mapping.py` | New; 20 cases | Pin both creation paths, the withheld fields, the sync, and the no-PII-in-logs rule |
 | `backend/tests/test_stripe_event_loop_offload.py` | Pass the new helper into the isolated namespace | Its `ast`-compiled harness needs every global the function body reads (see §9) |
 
@@ -171,6 +210,14 @@ at both call sites.
 - [x] **Automated tests run** — full backend suite: **11,631 passed**, 8 skipped, 1 xfailed, 0 failed
       (690 s). Includes 20 new unit cases in `tests/test_stripe_customer_email_mapping.py`.
       Targeted run of the new file plus `test_stripe_customer_mode_drift.py`: 35/35.
+      After the admin-button follow-up: 14 further cases in
+      `tests/test_stripe_customer_email_backfill.py` (14/14), and the
+      `stripe|payment|admin|user` selection re-run green at **3,133 passed**.
+- [x] **Real production build run** for the admin-dashboard change — `npm run build`, exit 0,
+      `/dashboard/users` compiled; plus `tsc --noEmit` clean. Stated explicitly per CLAUDE.md:
+      this was a real build, not just a type-check.
+- [x] **Route registration verified** — the new path appears on the router alongside the two
+      existing `stripe/mode-audit` endpoints.
 - [x] **A real regression was caught and fixed by the suite.**
       `tests/test_stripe_event_loop_offload.py` compiles `get_or_create_stripe_customer` in an
       isolated namespace via `ast`, so it must be handed every global the body reads — the new
@@ -197,11 +244,19 @@ at both call sites.
 
 - **Not tested against live Supabase or live Stripe.** All tests mock `stripe.Customer.*` and the
   DB layer. No real customer was created or modified.
-- **The backfill script has not been executed** — not even in dry-run — because this environment
-  has no Supabase credentials or Stripe key. It is written to the repo's dry-run-default
-  convention but is **unexercised code**; run it with no flags first and read the output before
-  ever passing `--apply`.
-- **No production build / deploy check.** Backend only; no frontend surface touched.
+- **Neither the backfill button nor the CLI has ever been run against a real Stripe account** —
+  not even in dry-run — because this environment has no Supabase credentials or Stripe key. The
+  service is unit-tested against mocks, but the end-to-end path (real users table → real Stripe
+  retrieve) is **unexercised**. Preview first (the button does this automatically; the CLI needs
+  no flags) and read the counts before confirming or passing `--apply`.
+- **The admin button was not clicked.** No browser or running backend here, so the UI was verified
+  by `npm run build` (real production build, exit 0) and `tsc --noEmit`, not by interaction. The
+  preview-then-confirm flow, the toast copy, and the `window.confirm` wording were reasoned
+  about, not seen. There is also no visual-regression tooling for admin-dashboard (standing gap).
+- **The endpoint was not exercised over HTTP.** Route registration was verified by importing the
+  router and listing its paths; the super_admin gate is by inspection (it mirrors the two existing
+  endpoints on the same router, which is `require_super_admin`-mounted) and by the in-body
+  `_require_super_admin` call — not by an authenticated request test.
 - **The 24 h idempotency-replay window (§4) was reasoned about, not observed.** No test can
   exercise Stripe's server-side replay cache.
 - **`admin/rides.py`'s email-sending path was left as-is.** It is now consistent with the new

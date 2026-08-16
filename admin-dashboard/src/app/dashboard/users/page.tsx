@@ -43,7 +43,7 @@ import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Users, Search, Mail, Phone, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus, Eye, EyeOff, CreditCard, MapPin, Gift } from "lucide-react";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatDate } from "@/lib/utils";
-import { getUsersPaginated, getUserDetails, updateUserStatus, updateUserFlags, getStats, getUserWallet, creditUserWallet, debitUserWallet, exportUsers, logPiiReveal } from "@/lib/api";
+import { getUsersPaginated, getUserDetails, updateUserStatus, updateUserFlags, getStats, getUserWallet, creditUserWallet, debitUserWallet, exportUsers, logPiiReveal, backfillStripeCustomerEmails } from "@/lib/api";
 import { maskEmail, maskPhone } from "@/lib/pii";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useToast } from "@/components/ui/use-toast";
@@ -236,6 +236,51 @@ export default function UsersPage() {
         }
     };
 
+    const [stripeEmailSyncRunning, setStripeEmailSyncRunning] = useState(false);
+    const handleBackfillStripeEmails = async () => {
+        // Preview FIRST, always. This sends rider email addresses to Stripe (a
+        // US processor) in bulk, so the operator sees the exact count before
+        // anything leaves the country.
+        setStripeEmailSyncRunning(true);
+        try {
+            const preview = await backfillStripeCustomerEmails({ apply: false });
+            const stranded = preview.missing_on_key.length;
+            if (preview.updated === 0) {
+                toast({
+                    title: "Nothing to sync",
+                    description:
+                        `${preview.scanned} Stripe customer${preview.scanned === 1 ? "" : "s"} checked — all already carry the rider's email.` +
+                        (stranded ? ` ${stranded} unreachable on the current key.` : ""),
+                });
+                return;
+            }
+            const newly = preview.changes.filter(c => !c.had_email).length;
+            const corrected = preview.updated - newly;
+            if (!window.confirm(
+                `Attach rider emails to ${preview.updated} of ${preview.scanned} Stripe customer(s)?\n\n` +
+                `${newly} have no email at all · ${corrected} carry a different address\n\n` +
+                "This sends those riders' email addresses to Stripe so they can be found by " +
+                "address in the dashboard. Only the email field is written — no customer is " +
+                "created, no saved card is touched." +
+                (stranded ? `\n\n${stranded} customer(s) are unreachable on the current Stripe key and will be skipped — those repair themselves on the rider's next visit to their own payment screen.` : "") +
+                (preview.has_more ? "\n\nMore riders remain beyond this batch — run again after this one." : "")
+            )) return;
+
+            const applied = await backfillStripeCustomerEmails({ apply: true });
+            toast({
+                title: "Stripe customer emails synced",
+                description:
+                    `${applied.updated} updated, ${applied.unchanged} already correct` +
+                    (applied.has_more ? " · more remain, run again" : "") +
+                    (applied.missing_on_key.length ? ` · ${applied.missing_on_key.length} unreachable` : ""),
+            });
+        } catch (e: any) {
+            toast({ title: "Stripe email sync failed", description: e?.message || "Unknown error", variant: "destructive" });
+        } finally {
+            setStripeEmailSyncRunning(false);
+        }
+    };
+
     const totalForRoleStat = roleFilter === "driver"
         ? stats?.total_drivers
         : roleFilter === "rider"
@@ -269,6 +314,16 @@ export default function UsersPage() {
                     }}>
                         {showPii ? <EyeOff className="mr-2 h-4 w-4" /> : <Eye className="mr-2 h-4 w-4" />}
                         {showPii ? "Hide PII" : "Show PII"}
+                    </Button>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleBackfillStripeEmails}
+                        disabled={stripeEmailSyncRunning}
+                        title="Attach riders' emails to their Stripe customers so they can be found by address in the Stripe dashboard. Previews the count before writing (super admin)."
+                    >
+                        <CreditCard className="mr-2 h-4 w-4" />
+                        {stripeEmailSyncRunning ? "Syncing…" : "Sync Stripe emails"}
                     </Button>
                     <Button variant="outline" onClick={handleExport} disabled={users.length === 0}>
                         <Download className="mr-2 h-4 w-4" /> Export

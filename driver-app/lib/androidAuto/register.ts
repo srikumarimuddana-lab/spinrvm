@@ -206,11 +206,21 @@ export default function registerAutoPlay(): void {
   // The single state-driven header action (top-right on Android). Accept/Decline
   // live in the offer alert, so the header is the *progress* action for the leg.
   const headerActionsFor = (rideState: string) => {
-    const mkAction = (title: string, style: 'confirm' | 'normal', onPress: () => void) => ({
+    // `flags` is opt-in per action. Android Auto allows exactly ONE primary
+    // action in a strip and rejects a second — an earlier version marked both
+    // the progress action and SOS as Flag.Primary, which made setHeaderActions
+    // throw and took the WHOLE header down, SOS included. Only the leg's
+    // progress action is primary.
+    const mkAction = (
+      title: string,
+      style: 'confirm' | 'normal',
+      onPress: () => void,
+      flags?: number,
+    ) => ({
       type: 'text' as const,
       title,
       style: style === 'confirm' ? ('confirm' as const) : ('normal' as const),
-      flags: Flag.Primary,
+      ...(flags === undefined ? {} : { flags }),
       onPress,
     });
 
@@ -219,11 +229,11 @@ export default function registerAutoPlay(): void {
     // must never have to hunt for safety in a menu. Text action, so it needs no
     // icon asset and reads unambiguously at a glance. `headerActions` is typed
     // Array<NitroAction>, so a second entry is legitimate.
-    const sosAction = mkAction('SOS', 'normal', confirmEmergency);
+    const sosAction = mkAction('SOS', 'normal', confirmEmergency); // deliberately NOT primary
 
     /** Leg progress action + SOS. */
     const act = (title: string, style: 'confirm' | 'normal', onPress: () => void) => ({
-      android: [mkAction(title, style, onPress), sosAction],
+      android: [mkAction(title, style, onPress, Flag.Primary), sosAction],
     });
 
     switch (rideState) {
@@ -253,7 +263,7 @@ export default function registerAutoPlay(): void {
         // ride there is nothing to report against. Offering a button that
         // silently does nothing would be worse than not offering it.
         return isCarDebugAvailable()
-          ? { android: [mkAction('Debug', 'normal', () => useCarDebug.getState().toggle())] }
+          ? { android: [mkAction('Debug', 'normal', () => useCarDebug.getState().toggle(), Flag.Primary)] }
           : undefined;
     }
   };
@@ -536,7 +546,10 @@ export default function registerAutoPlay(): void {
         template.setMapButtons(mapButtonsFor(!!route));
         template.setHeaderActions(headerActionsFor(rideState));
       } catch (e) {
-        log('chrome update failed:', e);
+        // Loud: a throw here leaves the driver with no header actions at all —
+        // no Arrived, no Complete trip, no SOS — and nothing else reports it.
+        logError('chrome update failed (header/map buttons may be missing):', e);
+        setDebugFact('chrome', 'FAILED — see log');
       }
     }
 

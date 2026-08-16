@@ -42,6 +42,17 @@ const LAST_LOCATION_KEY = 'spinr_driver_last_location';
  */
 let lastFix: CarLatLng | null = null;
 
+/**
+ * The last fix, readable from outside React.
+ *
+ * `register.ts` runs outside the component tree and needs coordinates for the
+ * emergency payload — an SOS without a position is far less use to a safety
+ * team. Returns null when no fix has landed yet; the emergency endpoint takes
+ * lat/lng as optional, so a positionless alert still sends rather than being
+ * blocked on GPS.
+ */
+export const getLastCarFix = (): CarLatLng | null => lastFix;
+
 export function useCarLocation(): CarLatLng | null {
   const [loc, setLoc] = useState<CarLatLng | null>(lastFix);
   const subRef = useRef<{ remove: () => void } | null>(null);

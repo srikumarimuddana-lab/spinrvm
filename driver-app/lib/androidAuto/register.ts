@@ -37,6 +37,8 @@ import { buildOfferCard, type OfferLike } from './carCard';
 import { CarMapSurface } from './carSurface';
 import { useCarMapCamera } from './carMapCamera';
 import { isCarDebugAvailable, pushDebug, setDebugFact, useCarDebug } from './carDebug';
+import { getLastCarFix } from './useCarLocation';
+import { triggerDriverEmergency } from '../../hooks/useDriverSafetyTrigger';
 
 const NAV_TEMPLATE_ID = 'spinr-aa-nav';
 const FALLBACK_OFFER_MS = 15_000;
@@ -187,16 +189,24 @@ export default function registerAutoPlay(): void {
   // The single state-driven header action (top-right on Android). Accept/Decline
   // live in the offer alert, so the header is the *progress* action for the leg.
   const headerActionsFor = (rideState: string) => {
+    const mkAction = (title: string, style: 'confirm' | 'normal', onPress: () => void) => ({
+      type: 'text' as const,
+      title,
+      style: style === 'confirm' ? ('confirm' as const) : ('normal' as const),
+      flags: Flag.Primary,
+      onPress,
+    });
+
+    // SOS rides ALONGSIDE the leg's progress action rather than replacing it —
+    // a driver must never have to give up "Complete trip" to reach safety, and
+    // must never have to hunt for safety in a menu. Text action, so it needs no
+    // icon asset and reads unambiguously at a glance. `headerActions` is typed
+    // Array<NitroAction>, so a second entry is legitimate.
+    const sosAction = mkAction('SOS', 'normal', confirmEmergency);
+
+    /** Leg progress action + SOS. */
     const act = (title: string, style: 'confirm' | 'normal', onPress: () => void) => ({
-      android: [
-        {
-          type: 'text' as const,
-          title,
-          style: style === 'confirm' ? ('confirm' as const) : ('normal' as const),
-          flags: Flag.Primary,
-          onPress,
-        },
-      ] as const,
+      android: [mkAction(title, style, onPress), sosAction],
     });
 
     switch (rideState) {
@@ -222,8 +232,11 @@ export default function registerAutoPlay(): void {
         // laptop, and idle is exactly the state a blank surface shows up in.
         // A ride in progress always keeps its progress action; debug never
         // displaces it.
+        // No SOS here: the emergency endpoint is ride-scoped, so with no active
+        // ride there is nothing to report against. Offering a button that
+        // silently does nothing would be worse than not offering it.
         return isCarDebugAvailable()
-          ? act('Debug', 'normal', () => useCarDebug.getState().toggle())
+          ? { android: [mkAction('Debug', 'normal', () => useCarDebug.getState().toggle())] }
           : undefined;
     }
   };
@@ -256,6 +269,155 @@ export default function registerAutoPlay(): void {
   let alertSeq = 1;
   let shownOfferId: string | null = null;
   let shownAlertNum: number | null = null;
+
+  // ---- Emergency (SOS) -----------------------------------------------------
+  // Ride-scoped: the endpoint is POST /rides/{id}/emergency, so this is offered
+  // only while there is an active ride — which is also when a driver is most
+  // exposed.
+  //
+  // TWO TAPS, DELIBERATELY. A single mis-tap on a head unit must never page the
+  // safety team and alarm the driver's emergency contacts, so the header action
+  // raises a confirmation and only the confirm actually sends. That is the whole
+  // reason this is not a one-press button.
+  //
+  // Per CLAUDE.md, Spinr's SOS "notifies emergency contacts and our safety team
+  // and *offers* one-tap 911; it never auto-dials". The result alert therefore
+  // offers 911 as an explicit driver-initiated action and never places a call by
+  // itself.
+  let sosInFlight = false;
+
+  const sendEmergency = (rideId: string) => {
+    // Guard the double-tap, not the retry: triggerDriverEmergency already owns
+    // the only retry policy (3 attempts, 1s/2s backoff) and its docstring warns
+    // that wrapping it again is how one press became nine POSTs.
+    if (sosInFlight) {
+      log('SOS already in flight — ignoring repeat press');
+      return;
+    }
+    sosInFlight = true;
+
+    const fix = getLastCarFix();
+    log('SOS sending for ride', rideId, fix ? 'with position' : 'WITHOUT position (no fix yet)');
+    setDebugFact('sos', 'sending…');
+
+    triggerDriverEmergency(rideId, fix?.latitude, fix?.longitude)
+      .then((res) => {
+        const n = res.contacts.length;
+        const notified = res.contacts.filter((c) => c.notified).length;
+        log('SOS sent — contacts notified', `${notified}/${n}`);
+        setDebugFact('sos', `sent · ${notified}/${n} contacts`);
+        showEmergencySentAlert(notified, n);
+      })
+      .catch((e) => {
+        // A failed SOS that looks like a success is the worst possible outcome
+        // on this surface — the driver would believe help is coming. Say so
+        // loudly and tell them to use the phone.
+        logError('SOS FAILED to send:', e);
+        setDebugFact('sos', 'FAILED');
+        showEmergencyFailedAlert();
+      })
+      .finally(() => {
+        sosInFlight = false;
+      });
+  };
+
+  const showEmergencySentAlert = (notified: number, total: number) => {
+    if (!template) return;
+    const id = alertSeq++;
+    const subtitle =
+      total > 0
+        ? `Safety team alerted · ${notified} of ${total} emergency contacts notified`
+        : 'Safety team alerted';
+    try {
+      template.showAlert({
+        id,
+        title: { text: 'Emergency alert sent' },
+        subtitle: { text: subtitle },
+        // Offered, never automatic — the driver decides.
+        primaryAction: {
+          title: 'Call 911',
+          style: 'destructive',
+          onPress: () => {
+            template?.dismissAlert(id);
+            Linking.openURL('tel:911').catch((e) => logError('911 dial failed:', e));
+          },
+        },
+        secondaryAction: {
+          title: 'Close',
+          style: 'default',
+          onPress: () => template?.dismissAlert(id),
+        },
+        durationMs: 20000,
+        priority: 'high',
+      });
+    } catch (e) {
+      logError('SOS result alert failed:', e);
+    }
+  };
+
+  const showEmergencyFailedAlert = () => {
+    if (!template) return;
+    const id = alertSeq++;
+    try {
+      template.showAlert({
+        id,
+        title: { text: 'Emergency alert FAILED to send' },
+        subtitle: { text: 'Use your phone, or call 911 directly.' },
+        primaryAction: {
+          title: 'Call 911',
+          style: 'destructive',
+          onPress: () => {
+            template?.dismissAlert(id);
+            Linking.openURL('tel:911').catch((e) => logError('911 dial failed:', e));
+          },
+        },
+        secondaryAction: {
+          title: 'Close',
+          style: 'default',
+          onPress: () => template?.dismissAlert(id),
+        },
+        durationMs: 30000,
+        priority: 'high',
+      });
+    } catch (e) {
+      logError('SOS failure alert failed:', e);
+    }
+  };
+
+  const confirmEmergency = () => {
+    const rideId = rideIdOf(useDriverStore.getState().activeRide);
+    if (!rideId) {
+      log('SOS pressed with no active ride — nothing to report against');
+      return;
+    }
+    if (!template) return;
+    const id = alertSeq++;
+    try {
+      template.showAlert({
+        id,
+        title: { text: 'Send emergency alert?' },
+        subtitle: { text: 'Alerts Spinr safety and your emergency contacts with your location.' },
+        primaryAction: {
+          title: 'Send alert',
+          style: 'destructive',
+          onPress: () => {
+            template?.dismissAlert(id);
+            sendEmergency(rideId);
+          },
+        },
+        secondaryAction: {
+          title: 'Cancel',
+          style: 'default',
+          onPress: () => template?.dismissAlert(id),
+        },
+        // Long enough to read and decide while driving; no auto-send on timeout.
+        durationMs: 20000,
+        priority: 'high',
+      });
+    } catch (e) {
+      logError('SOS confirm alert failed:', e);
+    }
+  };
 
   const showInfoAlert = (title: string, subtitle?: string) => {
     if (!template) return;

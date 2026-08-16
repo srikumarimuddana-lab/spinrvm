@@ -29,27 +29,47 @@ export interface DriverSafetyTriggerResult {
  * inner attempts). The flag-off legacy driver-app path keeps its own
  * separate, single-attempt-plus-rethrow onTrigger (see (tabs)/index.tsx).
  */
+/**
+ * The retry-wrapped emergency POST, as a plain function.
+ *
+ * Extracted from the hook so a non-React caller can reach the SAME code path —
+ * specifically the Android Auto surface (`lib/androidAuto/register.ts`), which
+ * runs outside the component tree and cannot call a hook. Duplicating this
+ * would mean two retry policies on an emergency path that must not drift, and
+ * the double-wrapping hazard in the docstring above is exactly what that kind
+ * of drift causes.
+ *
+ * Callers get ONE retry policy: 3 attempts, 1000ms/2000ms backoff. Never wrap
+ * this in another retry.
+ */
+export async function triggerDriverEmergency(
+  rideId: string,
+  lat?: number,
+  lng?: number,
+): Promise<DriverSafetyTriggerResult> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    if (attempt > 0) {
+      const delay = RETRY_DELAYS_MS[attempt - 1] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1];
+      await new Promise<void>((resolve) => setTimeout(resolve, delay));
+    }
+    try {
+      const res = await api.post<{ contacts?: DriverSafetyContactStatus[] }>(
+        `/rides/${rideId}/emergency`,
+        { latitude: lat, longitude: lng },
+      );
+      return { contacts: res.data?.contacts || [] };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError;
+}
+
 export function useDriverSafetyTrigger() {
   const trigger = useCallback(
-    async (rideId: string, lat?: number, lng?: number): Promise<DriverSafetyTriggerResult> => {
-      let lastError: unknown;
-      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-        if (attempt > 0) {
-          const delay = RETRY_DELAYS_MS[attempt - 1] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1];
-          await new Promise<void>((resolve) => setTimeout(resolve, delay));
-        }
-        try {
-          const res = await api.post<{ contacts?: DriverSafetyContactStatus[] }>(
-            `/rides/${rideId}/emergency`,
-            { latitude: lat, longitude: lng },
-          );
-          return { contacts: res.data?.contacts || [] };
-        } catch (err) {
-          lastError = err;
-        }
-      }
-      throw lastError;
-    },
+    (rideId: string, lat?: number, lng?: number): Promise<DriverSafetyTriggerResult> =>
+      triggerDriverEmergency(rideId, lat, lng),
     [],
   );
 

@@ -26,8 +26,35 @@ export interface CarLatLng {
 
 const LAST_LOCATION_KEY = 'spinr_driver_last_location';
 
+/**
+ * Last fix, held at MODULE scope so it outlives the component.
+ *
+ * The car surface is a React root inside a Presentation on a VirtualDisplay.
+ * When the head unit takes the screen away — the reversing camera on a slow
+ * manoeuvre is the common one — Android Auto destroys the surface and rebuilds
+ * it on return, remounting this hook. With the fix held only in component
+ * state, that remount dropped it to null, the camera fell back to the last-known
+ * AsyncStorage value (or Saskatoon), and the map visibly jumped away and back
+ * once the next GPS fix landed a few seconds later.
+ *
+ * Keeping it here means a remount re-renders at the driver's actual position
+ * immediately. Same reasoning as carMapCamera.ts holding zoom outside the tree.
+ */
+let lastFix: CarLatLng | null = null;
+
+/**
+ * The last fix, readable from outside React.
+ *
+ * `register.ts` runs outside the component tree and needs coordinates for the
+ * emergency payload — an SOS without a position is far less use to a safety
+ * team. Returns null when no fix has landed yet; the emergency endpoint takes
+ * lat/lng as optional, so a positionless alert still sends rather than being
+ * blocked on GPS.
+ */
+export const getLastCarFix = (): CarLatLng | null => lastFix;
+
 export function useCarLocation(): CarLatLng | null {
-  const [loc, setLoc] = useState<CarLatLng | null>(null);
+  const [loc, setLoc] = useState<CarLatLng | null>(lastFix);
   const subRef = useRef<{ remove: () => void } | null>(null);
 
   useEffect(() => {
@@ -51,8 +78,14 @@ export function useCarLocation(): CarLatLng | null {
         if (cancelled || !raw) return;
         const { lat, lng } = JSON.parse(raw) as { lat?: number; lng?: number };
         if (Number.isFinite(lat) && Number.isFinite(lng)) {
-          // Don't clobber a live fix that may have already landed.
-          setLoc((prev) => prev ?? { latitude: lat as number, longitude: lng as number, heading: null });
+          // Don't clobber a live fix that may have already landed — including
+          // one carried across a surface remount in `lastFix`.
+          const seeded = { latitude: lat as number, longitude: lng as number, heading: null };
+          setLoc((prev) => {
+            const next = prev ?? lastFix ?? seeded;
+            lastFix = next;
+            return next;
+          });
         }
       } catch {
         // No last-known fix yet — the live watcher below will center us.
@@ -71,11 +104,13 @@ export function useCarLocation(): CarLatLng | null {
             distanceInterval: 10,
           },
           (p) => {
-            setLoc({
+            const next = {
               latitude: p.coords.latitude,
               longitude: p.coords.longitude,
               heading: p.coords.heading ?? null,
-            });
+            };
+            lastFix = next; // survives the next surface teardown/rebuild
+            setLoc(next);
           },
         );
         if (cancelled) {

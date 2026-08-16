@@ -19,7 +19,67 @@ unsupported-format error. Reported from live app testing. Only one path actually
 worked — take-a-photo-with-the-camera, which happens to produce a JPEG that matches
 what the app claimed it was sending.
 
-## 2. Root cause
+## 1b. Correction — the reported error was misread on the first pass
+
+The original report read "upload failed unsupported format data implemenration".
+That was parsed as *"unsupported format"* and treated as a backend rejection. It
+was actually **"Unsupported FormDataPart implementation"** — a client-side Expo
+error, thrown on-device before any HTTP request is sent.
+
+Both problems are real and both are fixed here, but the ordering matters for
+anyone reading this later:
+
+- **The client-side throw (§2b) is what drivers were actually hitting.** It fires
+  first and unconditionally, so the request never left the phone.
+- **The backend rejections (§2) are real too** — reproduced against the pre-fix
+  code across the 11 combinations the pickers produce, 7 rejected — but they were
+  *unreachable* while the client threw. They would have become the next failure
+  the moment the transport was fixed.
+
+Fixing only the backend would not have changed what the driver saw. Fixing only
+the transport would have moved the error from a client crash to a 400.
+
+## 2b. Root cause — client side (the one drivers hit)
+
+Expo SDK 54+ replaces global `fetch` with its WinterCG implementation.
+`expo/src/winter/runtime.native.ts` ends with:
+
+```ts
+const useRnFetch = process.env.EXPO_PUBLIC_USE_RN_FETCH === '1' || ... === 'true';
+if (!useRnFetch) {
+  install('fetch', () => require('./fetch').fetch);
+}
+```
+
+`EXPO_PUBLIC_USE_RN_FETCH` is set nowhere in this repo, so global `fetch` **is**
+Expo's. Its multipart encoder accepts only three part shapes
+(`expo/src/winter/fetch/convertFormData.ts`): a string, a `Blob`, or an object
+exposing `bytes()`. Anything else hits:
+
+```ts
+} else {
+  throw new Error('Unsupported FormDataPart implementation');
+}
+```
+
+The file docstring states the consequence outright: *"`uri` is not supported for
+React Native's FormData."* Expo even ships a test asserting that a
+`{ uri, type, name }` part rejects with that exact message — which is precisely
+what every upload path here appends, because it is React Native's own file
+descriptor convention and the only way to upload without loading the file into
+JS memory.
+
+**Fix:** post over `XMLHttpRequest`. Expo's FormData patch overwrites
+`append`/`set` but leaves React Native's `getParts()` intact, and the winter
+runtime never touches XHR, so `{ uri }` still works natively — and streams from
+disk instead of buffering up to 10 MB.
+
+**Alternative considered and rejected:** setting `EXPO_PUBLIC_USE_RN_FETCH=1`
+would fix it in one line, but swaps the fetch implementation for *every* request
+the app makes. The XHR change touches only the upload path and needs no native
+dependency, so it ships over OTA.
+
+## 2. Root cause — backend (unreachable until the above was fixed)
 
 `POST /api/v1/upload` had two gates, and both trusted client-supplied metadata that
 the mobile pickers do not report reliably:
@@ -183,6 +243,9 @@ without any app update, since the fix is server-side.
 | `backend/services/data_transfer/bundle_zip_builder.py` | Comment update | Named the removed symbol |
 | `backend/tests/test_bundle_document_uploader_coverage.py` | Docstring updates | Named the removed symbol |
 | `admin-dashboard/src/app/register/driver/page.tsx` | `/api/upload` → `/api/v1/upload`, `/api/drivers/register` → `/api/v1/drivers/register` | M3 — neither path is served at the bare `/api` prefix |
+| `shared/api/upload.ts` | Added `postMultipart` (XHR); `uploadFile` no longer uses `fetch` | §2b — Expo's fetch throws on React Native's `{ uri }` FormData part |
+| `driver-app/app/documents.tsx` | Replaced its inline `fetch` upload with the shared helper; dropped local `getMimeFromUri` | Same throw; the duplicate had also drifted |
+| `driver-app/__tests__/lib/uploadTransport.test.ts` | New — 6 tests | Pins XHR-not-fetch, the `{uri,name,type}` payload, and no hand-set Content-Type |
 
 ## 7. Before / after
 

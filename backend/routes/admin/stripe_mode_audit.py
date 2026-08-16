@@ -46,6 +46,7 @@ try:
     from ... import db_supabase
     from ...db_supabase import run_sync
     from ...dependencies import get_admin_user
+    from ...services import stripe_customer_email_backfill as email_backfill_svc
     from ...settings_loader import get_app_settings
     from ...utils.audit_logger import log_admin_action
     from ...utils.stripe_mode import LIVE, TEST, is_missing_on_key, key_mode, object_mode
@@ -53,6 +54,7 @@ except ImportError:
     import db_supabase  # type: ignore
     from db_supabase import run_sync  # type: ignore
     from dependencies import get_admin_user  # type: ignore
+    from services import stripe_customer_email_backfill as email_backfill_svc  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
     from utils.audit_logger import log_admin_action  # type: ignore
     from utils.stripe_mode import LIVE, TEST, is_missing_on_key, key_mode, object_mode  # type: ignore
@@ -214,9 +216,7 @@ async def probe_stripe_identities(
                     stranded.append(obj_id)
                 else:
                     # Our key or the network — NOT evidence about this object.
-                    logger.error(
-                        "[STRIPE-MODE-AUDIT] inconclusive probe for %s", obj_id, exc_info=True
-                    )
+                    logger.error("[STRIPE-MODE-AUDIT] inconclusive probe for %s", obj_id, exc_info=True)
                     inconclusive.append(obj_id)
                 return
             resolvable.append(obj_id)
@@ -264,5 +264,107 @@ async def probe_stripe_identities(
             "Stranded identities are replaced automatically on the user's next interaction "
             "(riders: payment screen; drivers: Set up payouts). Cards and Connect accounts from "
             "the previous mode cannot be recovered — Stripe has no test→live copy path."
+        ),
+    }
+
+
+class BackfillEmailsRequest(BaseModel):
+    """Scope for the Stripe customer email backfill. Empty body = every rider."""
+
+    model_config = {"extra": "forbid"}
+
+    # Omit for every rider; pass ids/addresses to rehearse on a few first.
+    user_ids: Optional[List[str]] = Field(None, max_length=500)
+    emails: Optional[List[str]] = Field(None, max_length=500)
+    # Bounded so one request cannot run unboundedly long; the response says
+    # whether more riders remain rather than truncating silently.
+    limit: int = Field(email_backfill_svc.DEFAULT_LIMIT, ge=1, le=email_backfill_svc.MAX_LIMIT)
+    # Dry run by DEFAULT: this transfers rider PII to a US processor in bulk,
+    # so writing must be asked for explicitly.
+    apply: bool = False
+
+
+@router.post("/stripe/customer-emails/backfill")
+async def admin_backfill_stripe_customer_emails(
+    body: BackfillEmailsRequest,
+    admin: dict = Depends(get_admin_user),
+) -> Dict[str, Any]:
+    """Attach riders' emails to Stripe customers created without one.
+
+    Rider customers minted before the email-mapping change carry only
+    ``metadata.user_id``, so searching Stripe by a rider's address finds
+    nothing and every support / dispute / refund lookup needs a Supabase
+    round-trip first. This repairs those customers in place.
+
+    ``apply=false`` (the default) retrieves every customer and returns the
+    exact diff without writing — that is what the dashboard previews before
+    asking to confirm.
+
+    Unlike the probe above this DOES write to Stripe, but only the ``email``
+    field: no customer is created, no identity is re-provisioned, and no
+    ``payment_method`` is touched. A customer this key cannot see is reported,
+    never repaired — that stays with the rider's own card screen, where the
+    person whose default card would be cleared is present.
+
+    super_admin only: a bulk PII transfer to a US processor, the same bar as
+    the rest of this module.
+    """
+    _require_super_admin(admin)
+
+    try:
+        result = await email_backfill_svc.backfill_stripe_customer_emails(
+            user_ids=body.user_ids,
+            emails=body.emails,
+            limit=body.limit,
+            apply=body.apply,
+        )
+    except RuntimeError as e:
+        # Stripe unconfigured — a setup problem, not an empty success.
+        raise HTTPException(status_code=503, detail="Stripe is not configured.") from e
+
+    await log_admin_action(
+        admin,
+        "stripe_customer_email_backfill",
+        "users",
+        (body.user_ids[0] if body.user_ids and len(body.user_ids) == 1 else "*"),
+        {
+            "applied": result.applied,
+            "scanned": result.scanned,
+            "updated": result.updated,
+            "unchanged": result.unchanged,
+            "no_customer": result.no_customer,
+            "no_email": result.no_email,
+            "missing_on_key": len(result.missing_on_key),
+            "failed": len(result.failed),
+        },
+    )
+
+    # A write run that could not reach some customers must not read as success.
+    if result.applied and result.failed:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"{result.updated - len(result.failed)} customer(s) updated, "
+                f"{len(result.failed)} could not be written. Re-run — it is safe to repeat."
+            ),
+        )
+
+    return {
+        "applied": result.applied,
+        "scanned": result.scanned,
+        "updated": result.updated,
+        "unchanged": result.unchanged,
+        "no_customer": result.no_customer,
+        "no_email": result.no_email,
+        "has_more": result.has_more,
+        # IDs only — never the email addresses themselves (PIPEDA).
+        "changes": [
+            {"user_id": c.user_id, "customer_id": c.customer_id, "had_email": c.had_email} for c in result.changes
+        ],
+        "missing_on_key": result.missing_on_key,
+        "failed": result.failed,
+        "note": (
+            "Customers unreachable on this key are stranded by a test→live rotation. They are "
+            "repaired on the rider's next visit to their own payment screen, not by this tool."
         ),
     }

@@ -78,3 +78,36 @@ export const debitUserWallet = (userId: string, amount: number, reason: string) 
         body: JSON.stringify({ user_id: userId, amount, reason }),
     });
 
+
+/* ── Stripe customer email backfill (super_admin) ─────────────────────────
+ * Attaches riders' emails to Stripe customers created before the
+ * email-mapping change, so a rider is findable by address in the Stripe
+ * dashboard instead of needing a Supabase round-trip first.
+ *
+ * apply=false is a pure preview — every customer is retrieved from Stripe and
+ * the exact diff returned, but nothing is written. That is what the UI shows
+ * before asking to confirm.
+ *
+ * Responses carry IDs only, never email addresses (PIPEDA). */
+export const backfillStripeCustomerEmails = (opts?: {
+    user_ids?: string[];
+    emails?: string[];
+    limit?: number;
+    apply?: boolean;
+}) =>
+    request<{
+        applied: boolean;
+        scanned: number;
+        updated: number;
+        unchanged: number;
+        no_customer: number;
+        no_email: number;
+        has_more: boolean;
+        changes: { user_id: string; customer_id: string; had_email: boolean }[];
+        missing_on_key: string[];
+        failed: string[];
+        note: string;
+    }>(`/api/admin/stripe/customer-emails/backfill`, {
+        method: "POST",
+        body: JSON.stringify(opts ?? {}),
+    });

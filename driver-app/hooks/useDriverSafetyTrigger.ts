@@ -32,6 +32,12 @@ export interface DriverSafetyTriggerResult {
 export function useDriverSafetyTrigger() {
   const trigger = useCallback(
     async (rideId: string, lat?: number, lng?: number): Promise<DriverSafetyTriggerResult> => {
+      // One key per trigger, generated outside the loop so all attempts share
+      // it. The backend returns the original incident rather than inserting a
+      // duplicate and re-sending emergency-contact SMS when a retry follows a
+      // lost response (migration 315). This hook owns its own retry ladder, so
+      // it owns its own key -- same contract SOSButton uses on the rider side.
+      const idempotencyKey = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
       let lastError: unknown;
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         if (attempt > 0) {
@@ -41,7 +47,7 @@ export function useDriverSafetyTrigger() {
         try {
           const res = await api.post<{ contacts?: DriverSafetyContactStatus[] }>(
             `/rides/${rideId}/emergency`,
-            { latitude: lat, longitude: lng },
+            { latitude: lat, longitude: lng, idempotency_key: idempotencyKey },
           );
           return { contacts: res.data?.contacts || [] };
         } catch (err) {

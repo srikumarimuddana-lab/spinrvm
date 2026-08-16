@@ -318,7 +318,12 @@ interface RideState {
   setLastEtaMin: (min: number) => void;
   rateRide: (rideId: string, rating: number, comment?: string, tipAmount?: number) => Promise<void>;
   hydrateActiveRide: () => Promise<void>;
-  triggerEmergency: (rideId: string, latitude?: number, longitude?: number) => Promise<SOSTriggerResult>;
+  triggerEmergency: (
+    rideId: string,
+    latitude?: number,
+    longitude?: number,
+    idempotencyKey?: string,
+  ) => Promise<SOSTriggerResult>;
   addRecentSearch: (location: Location) => void;
   loadRecentSearches: () => Promise<void>;
   syncOfflineRequests: () => Promise<void>;
@@ -937,11 +942,21 @@ export const useRideStore = create<RideState>((set, get) => ({
     }
   },
 
-  triggerEmergency: async (rideId: string, latitude?: number, longitude?: number) => {
+  triggerEmergency: async (
+    rideId: string,
+    latitude?: number,
+    longitude?: number,
+    idempotencyKey?: string,
+  ) => {
     const payload = {
       message: 'Emergency assistance requested via app button',
       latitude,
       longitude,
+      // Generated once per SOS press by SOSButton and reused across that
+      // press's retries, so a retry after a lost response returns the
+      // original incident instead of re-alerting the rider's contacts.
+      // Omitted key = pre-migration-315 behavior (insert always).
+      ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
     };
     // Deliberately NO retry ladder here. SOSButton.triggerSOS already retries
     // 3x with 1s/2s backoff; a second ladder at this layer multiplied rather

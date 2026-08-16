@@ -9,6 +9,7 @@ from ._deps import (  # noqa: F401
     APIRouter,
     BaseModel,
     Depends,
+    Field,
     HTTPException,
     Optional,
     Request,
@@ -32,6 +33,11 @@ class EmergencyRequest(BaseModel):
     message: str = "Emergency assistance requested"
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    # One key per SOS *press*, reused across that press's retry attempts.
+    # Optional: older clients omit it and keep the previous insert-always
+    # behavior. Bounded and charset-restricted because it reaches a DB
+    # uniqueness index; a UUID4 from the client is the expected shape.
+    idempotency_key: Optional[str] = Field(default=None, min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
 
 
 @router.post("/{ride_id}/emergency")
@@ -66,6 +72,57 @@ async def trigger_emergency(
     # rather than a parallel write. After this, the rider SOS path
     # lives in the same admin Safety queue as the driver report and
     # the auto check-in escalation.
+    # Idempotency (migration 315). The client retries this call on any failure
+    # because an SOS must survive a flaky connection -- but a request that
+    # landed and whose response was lost is indistinguishable, client-side,
+    # from one that never arrived. Without this guard every such retry created
+    # another incident row AND re-sent the "URGENT" SMS to the reporter's
+    # emergency contacts. Mirrors the claim_stripe_event() posture on the
+    # payments side.
+    #
+    # Checked BEFORE the insert and before any notification fires, so a replay
+    # returns the original incident having triggered zero new side effects.
+    # Scoped to (reporter, key): two people on the same ride must both be able
+    # to raise an alarm. Best-effort at this layer -- concurrent replicas can
+    # both miss here, which is why migration 315 also carries a UNIQUE index.
+    if body.idempotency_key:
+        try:
+            _prior = await _deps.db_supabase.get_rows(
+                "safety_incidents",
+                {
+                    "reported_by_user_id": current_user["id"],
+                    "sos_idempotency_key": body.idempotency_key,
+                },
+                limit=1,
+            )
+        except Exception as exc:
+            # Never let the dedup lookup block the alert: a failed read must
+            # fall through to the normal path (at worst a duplicate incident,
+            # which is strictly better than a dropped SOS).
+            logger.error(
+                f"[SOS] Idempotency lookup failed ride_id={ride_id} user_id={current_user['id']}: {exc}",
+                exc_info=True,
+            )
+            _prior = None
+        if _prior:
+            _existing = _prior[0]
+            logger.info(
+                f"[SOS] Duplicate suppressed for ride {ride_id} user {current_user['id']} "
+                f"-- returning incident {_existing.get('id')}"
+            )
+            return {
+                "success": True,
+                "incident_id": _existing.get("id"),
+                # Replayed, not re-sent. Report what the ORIGINAL call achieved
+                # rather than fabricating a fresh count -- the per-contact
+                # outcome of that first send is not re-derivable here, so the
+                # client is told this was a duplicate and should keep showing
+                # the result it already has.
+                "duplicate": True,
+                "contacts_notified": 0,
+                "contacts": [],
+            }
+
     now_iso = datetime.now(timezone.utc).isoformat()
     incident = {
         "id": str(uuid.uuid4()),
@@ -80,6 +137,8 @@ async def trigger_emergency(
         "reported_at": now_iso,
         "created_at": now_iso,
     }
+    if body.idempotency_key:
+        incident["sos_idempotency_key"] = body.idempotency_key
 
     try:
         await _deps.db_supabase.insert_one("safety_incidents", incident)

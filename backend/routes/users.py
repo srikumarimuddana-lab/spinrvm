@@ -170,6 +170,18 @@ async def create_profile(request: CreateProfileRequest, current_user: dict = Dep
         # owned the account.
         spawn(send_email_changed_notice(updated_user, old_email))
 
+    if email_changed:
+        # Keep the Stripe customer findable by the rider's CURRENT address.
+        # Backgrounded and self-swallowing for the same reason as the mail
+        # above: the profile write is committed and a Stripe hiccup must not
+        # fail the edit. Imported lazily — routes.payments imports from this
+        # package, so a module-level import would close a cycle.
+        try:
+            from .payments import sync_stripe_customer_email
+        except ImportError:
+            from routes.payments import sync_stripe_customer_email  # type: ignore
+        spawn(sync_stripe_customer_email(current_user["id"]))
+
     return UserProfile(**updated_user)
 
 

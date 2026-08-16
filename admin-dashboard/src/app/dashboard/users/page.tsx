@@ -273,7 +273,7 @@ export default function UsersPage() {
                 (preview.has_more ? "\n\nMore riders remain beyond this batch. Confirming processes ALL remaining batches, not just this one." : "")
             )) return;
 
-            const totals = { updated: 0, unchanged: 0, stranded: 0, failed: 0 };
+            const totals = { updated: 0, unchanged: 0, stranded: 0, throttled: 0, failed: 0 };
             let cursor: string | undefined;
             let batches = 0;
             let stoppedEarly = false;
@@ -283,6 +283,7 @@ export default function UsersPage() {
                 totals.updated += res.updated;
                 totals.unchanged += res.unchanged;
                 totals.stranded += res.missing_on_key.length;
+                totals.throttled += res.throttled.length;
                 totals.failed += res.failed.length;
                 if (!res.has_more) break;
                 // No cursor with has_more set would loop on the same page —
@@ -293,13 +294,20 @@ export default function UsersPage() {
                 }
                 cursor = res.next_cursor;
             }
+            // Throttled riders were skipped, not written. Reporting this run as
+            // a success would leave them permanently unsynced in the operator's
+            // mind — the same silent-partial-success trap as stopping early.
+            const incomplete = stoppedEarly || totals.throttled > 0 || totals.failed > 0;
             toast({
-                title: stoppedEarly ? "Stripe email sync stopped early" : "Stripe customer emails synced",
+                title: incomplete ? "Stripe email sync incomplete" : "Stripe customer emails synced",
                 description:
                     `${totals.updated} updated, ${totals.unchanged} already correct` +
                     (totals.stranded ? ` · ${totals.stranded} unreachable` : "") +
-                    (stoppedEarly ? ` · stopped after ${batches} batches, riders remain — run again to continue` : ""),
-                variant: stoppedEarly ? "destructive" : undefined,
+                    (totals.throttled ? ` · ${totals.throttled} rate-limited by Stripe` : "") +
+                    (totals.failed ? ` · ${totals.failed} failed` : "") +
+                    (stoppedEarly ? ` · stopped after ${batches} batches` : "") +
+                    (incomplete ? " — run again to finish (safe to repeat)" : ""),
+                variant: incomplete ? "destructive" : undefined,
             });
         } catch (e: any) {
             toast({ title: "Stripe email sync failed", description: e?.message || "Unknown error", variant: "destructive" });

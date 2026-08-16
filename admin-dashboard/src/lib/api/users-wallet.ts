@@ -108,9 +108,14 @@ export const backfillStripeCustomerEmails = (opts?: {
         skipped_deleted: number;
         has_more: boolean;
         next_cursor: string | null;
+        /* More pages, throttled rows, or failures — the run did not finish. */
+        incomplete: boolean;
         key_mode: string;
         changes: { user_id: string; customer_id: string; had_email: boolean }[];
         missing_on_key: string[];
+        /* Rate-limited by Stripe after the service's retries. Outstanding, not
+         * broken — a later run picks these up. */
+        throttled: string[];
         failed: string[];
         note: string;
     }>(`/api/admin/stripe/customer-emails/backfill`, {

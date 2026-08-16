@@ -272,11 +272,42 @@ them were the tool quietly under-performing while reporting success.
 6. **A test that proved nothing.** `test_limit_is_clamped_to_max` asserted `updated == 1`, true
    whether or not clamping happened. It now asserts the cap itself.
 
-Two further findings were **not** fixed and are carried as open items: the Stripe receipt-email
-risk (§5, needs a Dashboard check, not a code change) and the request-duration ceiling — at
-`MAX_LIMIT = 2000` one call can issue ~4,000 Stripe requests and outlive a gateway timeout. The
-UI never sends a limit, so it runs at the 500 default and loops; the ceiling only bites a caller
-that asks for it explicitly.
+One further finding was **not** fixed and is carried as an open item: the Stripe receipt-email
+risk (§5, needs a Dashboard check, not a code change). The request-duration ceiling was left open
+too — and then caused the incident in §9c, so it is now fixed.
+
+### 9c. Production incident — Stripe rate limit, first live run
+
+**What happened.** The first real run of the button (2026-08-16 22:09 UTC, request
+`88899aae-e5bf-4ab9-a743-41212d950220`) throttled almost immediately: **19 riders updated, 97
+failed** with `Request rate limit exceeded`, and the endpoint returned 502.
+
+**Root cause — mine.** `MAX_CONCURRENCY = 8` bounded how many Stripe calls were *in flight*, not
+the *rate*. Each call completes in ~50–100 ms and the next starts immediately, so 8 workers at
+~2 calls per rider (retrieve + modify) sustained well over 100 req/s — past Stripe's live ceiling
+(100/s) and far past test mode's (25/s). The SDK's own `max_network_retries = 2`
+(`utils/stripe_config.py`) was already retrying and could not rescue it: **retries do not fix a
+job that is structurally too fast.** I had reviewed this file twice and treated a semaphore as a
+rate limit both times.
+
+**Fixes:**
+
+| Change | Why |
+|---|---|
+| New `_Pacer`, `STRIPE_CALLS_PER_SECOND = 10` | Bounds the actual rate across all workers. Deliberately far below Stripe's ceiling because this account is simultaneously taking real bookings — a maintenance sweep must never be why a rider's authorization gets throttled |
+| `MAX_CONCURRENCY` 8 → 4 | Overlaps latency only; the pacer is the real limiter now |
+| `RATE_LIMIT_RETRIES = 3`, exponential backoff + jitter, on top of the SDK's 2 | A 429 means "come back later". Jitter so workers throttled together don't return in lockstep and re-throttle each other |
+| `DEFAULT_LIMIT` 500 → 50, `MAX_LIMIT` 2000 → 150 | At 10 calls/s a 150-rider batch is ~30 s of Stripe time — inside a 60 s gateway timeout with room for retries. This is the §9b open item, now closed by the incident. Callers sweep the fleet with `next_cursor`, not by raising the cap |
+| New `throttled` bucket, separate from `failed` | A 429 is not a broken write |
+| 502 now fires only for genuine failures | Throttling returned a 502 that discarded the counts into a prose `detail` string and aborted the client's batch loop, so a rate-limited sweep read as an outage |
+| Aggregate throttle log at `warning` | 97 identical ERROR lines is not a signal. Degraded-but-recovered → warning + count, per CLAUDE.md's observability table |
+| `incomplete` flag on the response; UI/CLI report it | A throttled run must never toast as success or exit 0 |
+
+**Rider impact: none.** No ride, payment, or wallet state was touched. The 19 riders whose emails
+were written are correct and the operation is idempotent — a re-run leaves them `unchanged`. The
+97 throttled riders were simply not written yet.
+
+**Still true:** re-running is safe and picks up where this left off. Nothing needs undoing.
 - [x] **A real regression was caught and fixed by the suite.**
       `tests/test_stripe_event_loop_offload.py` compiles `get_or_create_stripe_customer` in an
       isolated namespace via `ast`, so it must be handed every global the body reads — the new

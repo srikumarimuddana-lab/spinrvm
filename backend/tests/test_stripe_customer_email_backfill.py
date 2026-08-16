@@ -13,6 +13,7 @@ is not in the room.
 
 from __future__ import annotations
 
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -24,6 +25,27 @@ pytestmark = [pytest.mark.unit, pytest.mark.anyio]
 
 # Concatenated so the repo's pre-commit secret scanner doesn't flag the fixture.
 LIVE_KEY = "sk_live_" + "abc123"
+
+# Captured at import, BEFORE the speed-up fixture below rebinds them. The
+# sizing assertions are about the values that ship, so they must not read the
+# test-local overrides.
+SHIPPED_RATE = svc.STRIPE_CALLS_PER_SECOND
+SHIPPED_MAX_LIMIT = svc.MAX_LIMIT
+
+
+@pytest.fixture(autouse=True)
+def _fast_pacing(monkeypatch):
+    """Run the sweep at test speed, not production speed.
+
+    Pacing and backoff are deliberately slow in production — that is the whole
+    point of them — but sleeping through 10 calls/second and multi-second
+    retry backoff would put this file well outside the <100 ms/test unit
+    budget. Retry *counts* and classification are unaffected, which is what
+    these tests actually assert; only the wall-clock is compressed.
+    """
+    monkeypatch.setattr(svc, "STRIPE_CALLS_PER_SECOND", 10_000.0)
+    monkeypatch.setattr(svc, "RATE_LIMIT_BACKOFF_BASE_SECONDS", 0.001)
+    monkeypatch.setattr(svc, "RATE_LIMIT_BACKOFF_MAX_SECONDS", 0.002)
 
 
 def _rows(n: int = 1, **overrides) -> list[dict]:
@@ -265,6 +287,84 @@ class TestConfiguration:
         with _Harness(_rows(1)):
             result = await svc.backfill_stripe_customer_emails()
         assert result.key_mode == "live"
+
+
+class TestRateLimiting:
+    """Regression cover for a production incident.
+
+    The first version ran 8 workers with no pacing. A semaphore bounds calls
+    *in flight*, not the *rate* — each finished in ~50-100 ms and the next
+    started immediately — so the sweep sustained >100 req/s and Stripe threw
+    `rate_limit` for 97 of 116 riders in a single run. The SDK's own
+    `max_network_retries = 2` could not save it: retries do not fix a job that
+    is structurally too fast.
+    """
+
+    async def test_pacer_spaces_calls_to_the_configured_rate(self):
+        pacer = svc._Pacer(rate_per_second=50.0)  # 20 ms apart
+        start = time.monotonic()
+        for _ in range(5):
+            await pacer.wait()
+        # 5 slots at 20 ms = 80 ms of spacing after the first (free) slot.
+        assert time.monotonic() - start >= 0.07
+
+    async def test_pacer_rate_is_well_under_stripes_ceiling(self):
+        """Sized for an account that is simultaneously taking real bookings —
+        a maintenance sweep must never throttle a rider's authorization."""
+        assert SHIPPED_RATE <= 25.0
+
+    async def test_batch_size_fits_inside_a_gateway_timeout(self):
+        """MAX_LIMIT x ~2 calls, paced, must stay well under 60s or the
+        operator gets a dead connection while the sweep runs on regardless."""
+        worst_case_seconds = (SHIPPED_MAX_LIMIT * 2) / SHIPPED_RATE
+        assert worst_case_seconds <= 40
+
+    async def test_a_429_is_retried_and_then_succeeds(self):
+        attempts = {"n": 0}
+
+        def _throttle_once(_cid, **_kw):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise stripe.error.RateLimitError("Request rate limit exceeded")
+            return _customer(None)
+
+        with _Harness(_rows(1), retrieve=MagicMock(side_effect=_throttle_once)):
+            result = await svc.backfill_stripe_customer_emails(apply=True)
+        assert attempts["n"] == 2
+        assert result.updated == 1
+        assert result.throttled == []
+
+    async def test_persistent_429_is_throttled_not_failed(self):
+        """A 429 means "come back later", not "this broke". Reporting it as a
+        failure sent a 502 that threw away the counts and aborted the client's
+        batch loop, so a rate-limited sweep looked like an outage."""
+        always = MagicMock(side_effect=stripe.error.RateLimitError("Request rate limit exceeded"))
+        with _Harness(_rows(1), retrieve=always):
+            result = await svc.backfill_stripe_customer_emails(apply=True)
+        assert result.throttled == ["user-0:cus_0"]
+        assert result.failed == []
+        # Retried the configured number of times before giving up.
+        assert always.call_count == svc.RATE_LIMIT_RETRIES + 1
+
+    async def test_throttled_run_reports_itself_incomplete(self):
+        always = MagicMock(side_effect=stripe.error.RateLimitError("Request rate limit exceeded"))
+        with _Harness(_rows(1), retrieve=always):
+            result = await svc.backfill_stripe_customer_emails(apply=True)
+        assert result.incomplete is True
+
+    async def test_a_clean_finished_run_is_not_incomplete(self):
+        with _Harness(_rows(2)):
+            result = await svc.backfill_stripe_customer_emails(limit=10)
+        assert result.incomplete is False
+
+    async def test_a_non_429_error_is_not_retried(self):
+        """Only throttling is transient. Retrying a decline or a bad key just
+        multiplies the damage."""
+        boom = MagicMock(side_effect=stripe.error.InvalidRequestError("nope", param=None))
+        with _Harness(_rows(1), retrieve=boom):
+            result = await svc.backfill_stripe_customer_emails(apply=True)
+        assert boom.call_count == 1
+        assert result.failed == ["user-0:cus_0"]
 
 
 class TestPiiDiscipline:

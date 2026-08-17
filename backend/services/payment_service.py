@@ -435,6 +435,305 @@ async def charge_late_tip(
     return PaymentResult(success=True, charged_amount=_money_str(tip_amount))
 
 
+async def charge_late_wallet_tip(
+    ride: dict,
+    ride_id: str,
+    rider_id: str,
+    tip_amount: Decimal,
+) -> Decimal:
+    """Debit the rider's personal wallet for a tip added AFTER the ride's
+    fare was already settled. Best-effort — never raises.
+
+    Uses ``wallet_apply_delta`` (not ``wallet_pay_for_ride``, which is
+    ride-settlement-specific and already consumed for this ride) with
+    ``type_="late_tip_debit"`` — migration 319's dedup key, disjoint from
+    the original settlement's ``"ride_payment"`` row for this same ride.
+    Reusing ``"ride_payment"`` here would silently deduplicate against
+    that row and apply zero additional debit while still reporting
+    success.
+
+    ``clamp_to_floor=True`` means a wallet with insufficient balance is
+    debited for whatever it has rather than failing outright: per the
+    2026-08-17 trust-first product decision, a late tip must never
+    surface a rider-facing error. Any shortfall between the amount
+    returned here and ``tip_amount`` is Spinr's to absorb — the same
+    outcome as before this real-debit path existed, just smaller (or
+    zero) whenever the wallet actually has the funds.
+
+    Returns the amount actually collected, ``0 <= collected <= tip_amount``.
+    A wallet lookup/RPC failure absorbs the full amount (returns 0)
+    instead of raising — logged loudly, never rider-facing.
+    """
+    try:
+        wallet = await db_supabase.find_one("wallets", {"user_id": rider_id})
+        if not wallet or not wallet.get("is_active", True):
+            logger.info(
+                "[PAYMENT] late tip wallet debit for ride {} skipped ({}) — absorbing full ${}",
+                ride_id,
+                "no wallet on file" if not wallet else "wallet suspended",
+                _money_str(tip_amount),
+            )
+            return Decimal("0")
+
+        result = await db_supabase.wallet_apply_delta(
+            wallet_id=wallet["id"],
+            user_id=rider_id,
+            type_="late_tip_debit",
+            delta=-tip_amount,
+            reference_id=ride_id,
+            description=f"Late tip for ride {ride_id}",
+            metadata={"ride_id": ride_id, "source": "late_tip"},
+            floor=Decimal("0"),
+            clamp_to_floor=True,
+        )
+    except Exception as exc:
+        logger.opt(exception=exc).error(
+            "[PAYMENT] late tip wallet debit failed for ride {} rider {} — absorbing full ${}: {}",
+            ride_id,
+            rider_id,
+            _money_str(tip_amount),
+            exc,
+        )
+        return Decimal("0")
+
+    # applied_delta is signed (negative for a debit); a clamped partial debit
+    # returns the smaller magnitude actually applied, per wallet_apply_delta's
+    # own contract (utils/... clamp_to_floor docstring, migration 249).
+    collected = _round(max(-_d(result.get("applied_delta")), Decimal("0")))
+    if collected < tip_amount:
+        logger.info(
+            "[PAYMENT] late tip wallet debit for ride {} partially collected: "
+            "${} of ${} (insufficient balance) — absorbing the rest",
+            ride_id,
+            _money_str(collected),
+            _money_str(tip_amount),
+        )
+    return collected
+
+
+async def charge_late_corporate_tip(
+    ride: dict,
+    ride_id: str,
+    tip_amount: Decimal,
+) -> Decimal:
+    """Debit the employee's allowance (falling back to the company master
+    wallet) for a tip added AFTER the ride's fare was already settled.
+    Best-effort — never raises.
+
+    Mirrors ``settle_corporate``'s allowance-then-master-wallet saga,
+    scoped to just the tip amount, using migration 319's disjoint
+    ``"late_tip_debit"`` / ``"late_tip_adjustment"`` types so this never
+    dedup-collides with the original settlement's ledger rows for the
+    same ride (reusing ``"ride_debit"``/``"adjustment"`` would silently
+    apply zero additional debit).
+
+    Deliberately does NOT reverse a partial success the way
+    ``settle_corporate`` reverses the allowance debit if its master-wallet
+    fallback then fails. That reversal exists because the ORIGINAL
+    settlement must be all-or-nothing (the ride has to be fully paid, or
+    the caller retries with a different payment method) — neither applies
+    to a late tip under the 2026-08-17 trust-first decision, where keeping
+    a partial collection and absorbing only the genuinely uncollectable
+    remainder is the intended outcome, not a failure to compensate away.
+
+    Returns the amount actually collected, ``0 <= collected <= tip_amount``.
+    """
+    tip = _round(tip_amount)
+    company_id = ride.get("corporate_account_id")
+    if not company_id:
+        logger.error(
+            "[PAYMENT] late tip on corporate ride {} has no corporate_account_id — absorbing full ${}",
+            ride_id,
+            _money_str(tip),
+        )
+        return Decimal("0")
+
+    try:
+        membership = None
+        stamped_member_id = ride.get("corporate_member_id")
+        if stamped_member_id:
+            candidate = await db_supabase.get_corporate_member_by_id(stamped_member_id)
+            if candidate and candidate.get("company_id") == company_id and candidate.get("status") == "active":
+                membership = candidate
+        else:
+            memberships = await db_supabase.list_active_memberships_for_user(ride["rider_id"])
+            membership = next((m for m in memberships if m.get("company_id") == company_id), None)
+        if not membership:
+            logger.info(
+                "[PAYMENT] late tip on corporate ride {} — no active membership found, absorbing full ${}",
+                ride_id,
+                _money_str(tip),
+            )
+            return Decimal("0")
+
+        allowance = await db_supabase.get_member_allowance(membership["id"]) or {}
+        corp_wallet = await db_supabase.get_corporate_wallet_by_company(company_id) or {}
+        if not corp_wallet.get("id"):
+            logger.info(
+                "[PAYMENT] late tip on corporate ride {} — company {} has no wallet, absorbing full ${}",
+                ride_id,
+                company_id,
+                _money_str(tip),
+            )
+            return Decimal("0")
+
+        if allowance.get("type") == "unlimited":
+            allowance_debit = tip
+        elif allowance.get("id"):
+            remaining = _round(_d(allowance.get("amount") or 0) - max(_d(allowance.get("used") or 0), _d("0")))
+            remaining = max(remaining, _round(Decimal("0")))
+            allowance_debit = min(remaining, tip)
+        else:
+            allowance_debit = _round(Decimal("0"))
+        master_debit = tip - allowance_debit
+
+        collected_via_allowance = Decimal("0")
+        collected_via_master = Decimal("0")
+        actor = membership.get("user_id") or ride.get("rider_id") or "system"
+
+        if allowance_debit > 0 and allowance.get("id"):
+            try:
+                await corporate_allowance_service.apply_late_tip_debit(
+                    wallet_id=corp_wallet["id"],
+                    allowance_id=allowance["id"],
+                    member_id=membership["id"],
+                    amount=_f(allowance_debit),
+                    actor_user_id=actor,
+                    notes=f"ride:{ride_id}:late_tip_allowance",
+                    ride_id=ride_id,
+                    floor=0.0,
+                )
+                collected_via_allowance += allowance_debit
+            except Exception as alw_err:
+                detail = (
+                    (getattr(alw_err, "details", None) or {}).get("original", "") if hasattr(alw_err, "details") else ""
+                )
+                text = f"{alw_err} {detail}"
+                if "allowance_cap_exceeded" in text:
+                    logger.info(
+                        "[PAYMENT] late tip allowance cap hit for member {} ride {} — routing full ${} to master wallet",
+                        membership["id"],
+                        ride_id,
+                        _money_str(tip),
+                    )
+                else:
+                    logger.opt(exception=alw_err).error(
+                        "[PAYMENT] late tip allowance debit failed for ride {}: {} — routing full ${} to master wallet",
+                        ride_id,
+                        alw_err,
+                        _money_str(tip),
+                    )
+                # Either way the allowance debit did not apply (collected_via_
+                # allowance is still 0) — the whole tip now needs the master path.
+                master_debit = tip
+
+        if master_debit > 0 and corp_wallet.get("id"):
+            try:
+                await corporate_wallet_service.apply_late_tip_master_debit(
+                    wallet_id=corp_wallet["id"],
+                    amount=master_debit,
+                    ride_id=ride_id,
+                    actor_user_id=actor,
+                    notes=f"Late tip master-fallback debit {ride_id}",
+                    floor=0.0,
+                )
+                collected_via_master += master_debit
+            except Exception as master_err:
+                logger.opt(exception=master_err).error(
+                    "[PAYMENT] late tip master-fallback debit failed for ride {}: {} — absorbing ${}",
+                    ride_id,
+                    master_err,
+                    _money_str(master_debit),
+                )
+
+        # Record the collected amounts on the ride's EXISTING ride_payment_sources
+        # row (one per ride, written by settle_corporate at original settlement)
+        # rather than a new row — that table is the sole source for the company's
+        # billing summary/statement/PDF totals (routes/corporate_company.py
+        # _aggregate_rows, utils/corporate_statement_pdf.py), both of which sum
+        # allowance_debit_amount + master_fallback_amount as "total billed to
+        # company" (repositories/corporate_repo.py's own docstring). Without this,
+        # a late tip moves real money in corporate_wallet_transactions /
+        # corporate_member_allowances.used but never appears in what the company
+        # is actually invoiced — found by spinr-corporate-billing-reviewer.
+        # Best-effort: the money movement above already succeeded (or didn't);
+        # a failure to update this bookkeeping row must not undo it or block the
+        # return value, but must be logged loudly since it means the company's
+        # next statement will under-report by this amount.
+        if collected_via_allowance > 0 or collected_via_master > 0:
+            try:
+                existing = await db_supabase.find_one("ride_payment_sources", {"ride_id": ride_id})
+                if existing:
+                    await db_supabase.update_one(
+                        "ride_payment_sources",
+                        {"ride_id": ride_id},
+                        {
+                            "allowance_debit_amount": _f(
+                                _d(existing.get("allowance_debit_amount") or 0) + collected_via_allowance
+                            ),
+                            "master_fallback_amount": _f(
+                                _d(existing.get("master_fallback_amount") or 0) + collected_via_master
+                            ),
+                        },
+                    )
+                else:
+                    logger.error(
+                        "[PAYMENT] late tip on corporate ride {} collected ${} but no ride_payment_sources "
+                        "row exists to record it against — company's next billing statement will under-report "
+                        "this amount",
+                        ride_id,
+                        _money_str(collected_via_allowance + collected_via_master),
+                    )
+            except Exception as rps_err:
+                logger.opt(exception=rps_err).error(
+                    "[PAYMENT] failed to record late tip (${} allowance, ${} master) on ride_payment_sources "
+                    "for ride {} — money was collected but the company's next billing statement will "
+                    "under-report by this amount: {}",
+                    _money_str(collected_via_allowance),
+                    _money_str(collected_via_master),
+                    ride_id,
+                    rps_err,
+                )
+
+        # Visibility-only section spend tracking (same hook settle_corporate
+        # uses — "track and display, never block"). Without this, a late tip
+        # on a ride booked under a department/section budget would silently
+        # under-count against that section for the month, same class of gap
+        # as the ride_payment_sources one above but lower severity (display-
+        # only, not the actual invoice total).
+        if membership.get("section_id") and (collected_via_allowance + collected_via_master) > 0:
+            try:
+                await db_supabase.record_section_spend(
+                    section_id=membership["section_id"],
+                    month=datetime.now(timezone.utc).strftime("%Y-%m"),
+                    amount=collected_via_allowance + collected_via_master,
+                )
+            except Exception:
+                logger.opt(exception=True).error(
+                    "[PAYMENT] failed to record section spend for late tip ride={} section={}",
+                    ride_id,
+                    membership["section_id"],
+                )
+
+        collected = _round(min(collected_via_allowance + collected_via_master, tip))
+        if collected < tip:
+            logger.info(
+                "[PAYMENT] late tip on corporate ride {} partially collected: ${} of ${} — absorbing the rest",
+                ride_id,
+                _money_str(collected),
+                _money_str(tip),
+            )
+        return max(collected, Decimal("0"))
+    except Exception as exc:
+        logger.opt(exception=exc).error(
+            "[PAYMENT] late tip corporate debit raised unexpectedly for ride {} — absorbing full ${}: {}",
+            ride_id,
+            _money_str(tip),
+            exc,
+        )
+        return Decimal("0")
+
+
 # ── Wallet settlement ───────────────────────────────────────────────
 
 

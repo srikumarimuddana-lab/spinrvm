@@ -131,6 +131,10 @@ async def cancel_ride_rider(
     # means the fee is already collected and the card-charge path below must be
     # skipped, or the rider is billed twice.
     fee_taken_from_hold = Decimal("0")
+    # True only when cancel_authorization actually released the hold, so the
+    # auth_status write below can tell 'released' apart from 'left open after a
+    # failed capture'.
+    _hold_released_in_full = False
 
     # WS-8 (finding 11): the booking-time hold must not sit on the rider's card
     # for up to 7 days after a cancel. Two ways out, and which one we take
@@ -209,6 +213,7 @@ async def cancel_ride_rider(
             try:
                 _released = await _deps.cancel_authorization(ride_id=ride_id, payment_intent_id=_booking_pi)
                 if _released:
+                    _hold_released_in_full = True
                     logger.info("[CANCEL] released pre-auth hold ride_id=%s pi=%s", ride_id, _booking_pi)
             except Exception as _rel_exc:
                 logger.error("[CANCEL] pre-auth release failed ride_id=%s: %s", ride_id, _rel_exc, exc_info=True)
@@ -364,10 +369,27 @@ async def cancel_ride_rider(
         "cancellation_fee_driver": _f(charged_driver),
         "updated_at": _now,
     }
-    # WS-8: mark the booking-time hold as released so reconcilers and the
-    # preauth_capture sweeper skip this ride.
-    if _booking_pi and _auth in ("authorized", "fare_only"):
-        _base_update["auth_status"] = "released"
+    # WS-8: record what actually happened to the booking-time hold. This used to
+    # write "released" whenever a live hold existed, which was true when the only
+    # outcome was cancel-the-hold. There are now three outcomes and they must not
+    # be conflated — `auth_status` is a strict 4-state contract (migration 156)
+    # that reconcilers read as the source of truth:
+    #
+    #   captured  — the fee was partially captured from the hold. Money moved.
+    #               Writing "released" here would claim nothing was taken.
+    #   released  — the hold was cancelled in full. Nothing taken.
+    #   unchanged — the capture FAILED and we deliberately left the hold open
+    #               (see the else-branch above). It must stay "authorized"/
+    #               "fare_only", because orphaned_hold_reconciler and
+    #               card_hold_release both select on OPEN_AUTH_STATES. Marking it
+    #               released would hide a genuinely open hold from the very
+    #               sweepers that exist to catch it, stranding the rider's funds
+    #               until Stripe's ~7-day expiry.
+    if _hold_is_live:
+        if fee_taken_from_hold > 0:
+            _base_update["auth_status"] = "captured"
+        elif _hold_released_in_full:
+            _base_update["auth_status"] = "released"
     if cancel_fee_charge_attempted:
         # WS-8: store the fee PI in its own column (migration 251) instead
         # of overwriting payment_intent_id — preserving the booking-time PI

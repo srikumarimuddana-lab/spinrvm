@@ -492,12 +492,19 @@ def _reads_incremental_support(intent: Any) -> bool:
             return False
         details = getattr(charge, "payment_method_details", None) or {}
         card = (details.get("card") if isinstance(details, dict) else getattr(details, "card", None)) or {}
-        value = (
-            card.get("incremental_authorization_supported")
+        # On a CARD-NOT-PRESENT charge this is a nested object,
+        # card.incremental_authorization.status == "available" | "unavailable".
+        # The flat boolean `incremental_authorization_supported` belongs to
+        # payment_method_details.card_present (Terminal only) and is simply
+        # absent here — reading it would return None forever and silently pin
+        # every ride to the two-charge fallback.
+        inc = (
+            card.get("incremental_authorization")
             if isinstance(card, dict)
-            else getattr(card, "incremental_authorization_supported", None)
-        )
-        return bool(value)
+            else getattr(card, "incremental_authorization", None)
+        ) or {}
+        status = inc.get("status") if isinstance(inc, dict) else getattr(inc, "status", None)
+        return status == "available"
     except Exception:  # pragma: no cover — never let a probe break authorization
         logger.debug("could not read incremental_authorization_supported", exc_info=True)
         return False
@@ -567,11 +574,18 @@ async def authorize_ride(
         "off_session": off_session,
         # Ask Stripe to keep this authorization incrementable so a post-trip tip
         # can be added to THIS hold rather than charged separately (one Stripe
-        # fixed fee instead of two). Requesting it is free and never fails the
-        # authorization — Stripe reports back, per card, whether it was actually
-        # granted, which we read below. Requires capture_method="manual", which
-        # this path already uses.
-        "request_incremental_authorization_support": True,
+        # fixed fee instead of two). Stripe reports back, per card, whether it
+        # was actually granted — read by _reads_incremental_support below.
+        #
+        # NESTING AND SPELLING BOTH MATTER. This is
+        # payment_method_options.card.request_incremental_authorization, a
+        # Literal["if_available","never"]. There is a similarly-named
+        # payment_method_options.card_present.request_incremental_authorization_
+        # SUPPORT (a bool), but that one is Terminal/in-person only. This is a
+        # card-not-present charge, so the card variant is the correct one; the
+        # card_present spelling at top level is not a valid create param at all
+        # and would risk a 400 on EVERY booking authorization.
+        "payment_method_options": {"card": {"request_incremental_authorization": "if_available"}},
         # Needed to read the granted capability off the charge below.
         "expand": ["latest_charge"],
         # Disable redirect-based payment methods (see charge_ride above):

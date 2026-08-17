@@ -1696,6 +1696,26 @@ async def _settle_against_hold(
             ride_id,
             cap.error_message,
         )
+        # The caller now mints a NEW PaymentIntent for the full amount and
+        # repoints rides.payment_intent_id at it, which is the only durable
+        # reference to this hold — so unless we release it here, nobody can find
+        # it again and the rider's funds stay reserved until Stripe's ~7-day
+        # expiry. That gap predates this code for the fare-only case, but a
+        # successful increment makes the abandoned hold LARGER (fare + tip), so
+        # it is worth closing rather than inheriting.
+        #
+        # Best-effort: if the release fails there is nothing further to do here
+        # (the hold expires on its own), and it must not stop the fresh charge
+        # that actually settles the ride.
+        try:
+            await cancel_authorization(ride_id=ride_id, payment_intent_id=held_pi)
+        except Exception as _rel_exc:  # pragma: no cover — helper never raises
+            logger.error(
+                "[PAYMENT] could not release uncapturable hold pi={} for ride {}: {}",
+                held_pi,
+                ride_id,
+                _rel_exc,
+            )
         return None
 
     if cap.status == "declined":

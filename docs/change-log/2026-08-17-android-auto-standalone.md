@@ -290,7 +290,62 @@ read as more than it is.
   replaces that one `moduleNameMapper` entry and changes nothing else. CI
   installs with `--frozen-lockfile` and is unaffected.
 
-## 11. Sign-off
+## 11. Post-audit addenda (same day)
+
+Two defects found by auditing the phone-closed path end to end rather than
+trusting the unit tests. Both are fixed on this branch (`d0476c6`, `79a3fc5`) and
+both are recorded here because the first would have been a P0.
+
+### 11a. The car could sign a driver out (`d0476c6`) — was P0
+
+`app/_layout.tsx:78` calls `setAppCheckTokenProvider(getAppCheckToken)` at module
+scope, and that module never evaluates on a car-only launch. Consequence chain,
+verified against the code at each hop:
+
+| Hop | Evidence |
+|---|---|
+| provider stays null → header omitted | `shared/api/client.ts` `appCheckHeader()` returns `{}` |
+| backend rejects | `backend/core/middleware.py:824` — `enforcement_enabled=is_production` |
+| `/auth/refresh` is not exempt | `_APP_CHECK_EXEMPT_PREFIXES` — "Mobile keeps `/api/v1/auth/*` App-Check-enforced" |
+| 401 read as revoked credential | `shared/store/authStore.ts` — "Refresh token rejected (401) — logging out" → `logout()` deletes the refresh token |
+
+So plugging into a car would have signed the driver out of their phone. Strictly
+worse than the blank screen this whole change set addresses, and **invisible in
+dev**, where enforcement is off.
+
+Introduced by `ff59126`, whose commit message called the call safe. That
+reasoning was incomplete: it checked `initialize()`'s teardown branches against a
+*revoked* token and concluded only a genuine 401 clears anything — without asking
+what else can produce a 401. App Check can, with a perfectly valid session.
+
+Fixed by wiring App Check from `carSession` (provider registered **before** the
+`initFirebaseServices()` await, because `isAppCheckTokenReady()` answers `true`
+when no provider is registered) and by gating **every** authenticated call site —
+bootstrap, 60s timer, AppState listener — on a token actually being obtainable.
+No token, no requests; the driver keeps their session and the car degrades to
+map + marker + buttons.
+
+### 11b. Going offline while plugged in killed the marker (`79a3fc5`)
+
+The connect-time start defers to `spinr-background-location` when the driver is
+online. If that driver then goes offline, `toggleOnline` → `stopBackgroundLocation()`
+removes the service the car deferred to and nothing replaces it. Fixed by
+re-asserting `startCarLocationService()` on the existing 60s tick — chosen over
+touching `stopBackgroundLocation()`, which is also on the logout and
+session-expiry paths where starting a location service is the last thing wanted.
+
+### 11c. Known limitation, not fixed: never-been-online drivers
+
+`ACCESS_BACKGROUND_LOCATION` is requested in exactly one place —
+`utils/backgroundLocation.ts:371`, reached only from `toggleOnline`. A driver who
+has signed in but **never gone online** does not have it, so
+`startCarLocationService()` returns `'no-permission'` and the marker falls back
+to the throttled foreground watcher. Any driver who has completed a shift is
+unaffected. Not fixed here because the alternative — prompting from a head unit
+at driving speed — is unacceptable; the right fix is a one-time phone-side
+prompt during onboarding, which is out of scope for this change.
+
+## 12. Sign-off
 
 - [x] Rollback plan is concrete and testable
 - [x] Blast radius is stated, not assumed

@@ -50,7 +50,7 @@ If the bad deploy included a `backend/migrations/NN_*.sql` file that already ran
 
 1. **Do not delete or modify the migration file.** Migrations are append-only.
 2. Write a new `NN+1_rollback_<description>.sql` that reverses the DDL change (drop column, revert index, etc.).
-3. Apply via `python migrate.py --env production` after the rollback deploy is stable.
+3. Apply via `python -m backend.scripts.run_migrations` after the rollback deploy is stable.
 4. If data was corrupted, follow the **PITR restore runbook** at `docs/runbooks/pitr-restore.md`.
 
 ---

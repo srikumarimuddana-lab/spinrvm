@@ -164,8 +164,16 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     Stripe account the mirror covers (old app's/new app's/both) — unconfirmed.
   - **RESOLVED**: rider legacy-import provenance — 918/1,137 users backfilled
     2026-08-17 (`docs/change-log/2026-08-17-rider-provenance-backfill-executed.md`).
-    The *code* gap (`rider_import_service.py` never stamps new imports) is
-    still open — small, separate fix.
+    **Correction (2026-08-17, later same day):** that change-log's claim that
+    "the code gap (`rider_import_service.py` never stamps new imports) is
+    still open" was stale/wrong — `rider_import_service.py` already stamps
+    `legacy_import_metadata` on both create and update as of `a591cf1`
+    (PR #3678, merged 2026-08-11, **before** the backfill even ran), with
+    dedicated coverage in `test_admin_rider_import.py`
+    (`test_commit_stamps_provenance_on_created_user`,
+    `test_commit_stamps_provenance_on_updated_user_without_clobbering_other_metadata`).
+    No code change needed; this note exists only to stop a future session
+    from re-doing already-shipped work off a stale status line.
   - **RESOLVED**: `payout_gst_amount` for the 186 already-migrated rides —
     backfilled additive-only, $102.09 total
     (`docs/change-log/2026-08-16-gst-backfill-executed.md`). **D1 remains

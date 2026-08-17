@@ -30,6 +30,10 @@ interface Faq {
     category: string;
     audience: string;
     is_active: boolean;
+    // Lower sorts first within a category on the public FAQ screens. Existing
+    // rows default to 0 — most FAQs will share that value until an admin
+    // explicitly promotes one, which is expected (see sort field note below).
+    sort_order: number;
     created_at: string;
     updated_at?: string;
 }
@@ -40,6 +44,7 @@ interface FaqFormState {
     category: string;
     audience: string;
     is_active: boolean;
+    sort_order: number;
 }
 
 const EMPTY_FORM: FaqFormState = {
@@ -48,6 +53,7 @@ const EMPTY_FORM: FaqFormState = {
     category: "general",
     audience: "both",
     is_active: true,
+    sort_order: 0,
 };
 
 const AUDIENCE_LABELS: Record<string, string> = {
@@ -102,7 +108,10 @@ export default function FaqsPage() {
         return matchSearch && matchAudience;
     });
 
-    const { sorted, sort, toggle } = useTableSort(filtered);
+    // Default view matches display order on the public FAQ screens (sort_order
+    // asc) rather than whatever order the API happened to return, so the table
+    // is a true preview of what riders/drivers see.
+    const { sorted, sort, toggle } = useTableSort(filtered, { key: "sort_order", dir: "asc" });
 
     function openCreate() {
         setEditTarget(null);
@@ -119,6 +128,7 @@ export default function FaqsPage() {
             category: faq.category,
             audience: faq.audience,
             is_active: faq.is_active,
+            sort_order: faq.sort_order ?? 0,
         });
         setSaveError(null);
         setDialogOpen(true);
@@ -210,6 +220,7 @@ export default function FaqsPage() {
                 <Table>
                     <TableHeader>
                         <TableRow className="bg-muted/40">
+                            <SortableHead column="sort_order" sort={sort} onSort={toggle} align="right" className="w-16">Order</SortableHead>
                             <SortableHead column="question" sort={sort} onSort={toggle} className="w-[40%]">Question</SortableHead>
                             <SortableHead column="category" sort={sort} onSort={toggle}>Category</SortableHead>
                             <SortableHead column="audience" sort={sort} onSort={toggle}>Audience</SortableHead>
@@ -220,19 +231,22 @@ export default function FaqsPage() {
                     <TableBody>
                         {loading ? (
                             <TableRow>
-                                <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                                <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
                                     Loading…
                                 </TableCell>
                             </TableRow>
                         ) : filtered.length === 0 ? (
                             <TableRow>
-                                <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                                <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
                                     {search || audienceFilter !== "all" ? "No FAQs match your filters." : "No FAQs yet. Create one above."}
                                 </TableCell>
                             </TableRow>
                         ) : (
                             sorted.map((faq) => (
                                 <TableRow key={faq.id}>
+                                    <TableCell className="text-right text-sm text-muted-foreground tabular-nums">
+                                        {faq.sort_order ?? 0}
+                                    </TableCell>
                                     <TableCell className="font-medium max-w-xs truncate" title={faq.question}>
                                         {faq.question}
                                     </TableCell>
@@ -340,6 +354,20 @@ export default function FaqsPage() {
                                     </SelectContent>
                                 </Select>
                             </div>
+                        </div>
+                        <div className="space-y-1.5">
+                            <Label htmlFor="faq-sort-order">Display order</Label>
+                            <Input
+                                id="faq-sort-order"
+                                type="number"
+                                inputMode="numeric"
+                                className="w-28"
+                                value={form.sort_order}
+                                onChange={(e) => setForm((f) => ({ ...f, sort_order: Number(e.target.value) || 0 }))}
+                            />
+                            <p className="text-xs text-muted-foreground">
+                                Lower numbers show first within a category. Most FAQs are 0 — set a lower value to pin one to the top.
+                            </p>
                         </div>
                         <div className="flex items-center gap-2">
                             <Switch

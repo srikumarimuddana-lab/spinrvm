@@ -131,3 +131,24 @@ class TestGetPublicFaqsFiltering:
         ):
             result = _run(faqs_route.get_public_faqs(category=None, audience=None, lat=52.0, lng=-106.0))
         assert [r["id"] for r in result] == ["a1"]
+
+    def test_response_ordered_by_sort_order_ascending(self):
+        # Neither app re-sorts client-side (rider-app/driver-app both trust
+        # this array's order for display) — a lower sort_order must come
+        # first regardless of the DB fetch order.
+        rows = [
+            {"id": "third", "sort_order": 2},
+            {"id": "first", "sort_order": 0},
+            {"id": "second", "sort_order": 1},
+        ]
+        with patch("backend.routes.faqs.db_supabase.get_rows", AsyncMock(return_value=rows)):
+            result = _run(faqs_route.get_public_faqs(category=None, audience=None))
+        assert [r["id"] for r in result] == ["first", "second", "third"]
+
+    def test_response_missing_sort_order_treated_as_zero(self):
+        rows = [{"id": "explicit-zero", "sort_order": 0}, {"id": "no-field"}, {"id": "positive", "sort_order": 1}]
+        with patch("backend.routes.faqs.db_supabase.get_rows", AsyncMock(return_value=rows)):
+            result = _run(faqs_route.get_public_faqs(category=None, audience=None))
+        # "positive" sorts strictly last; the two zero-equivalent rows keep
+        # their relative fetch order ahead of it (stable sort).
+        assert [r["id"] for r in result] == ["explicit-zero", "no-field", "positive"]

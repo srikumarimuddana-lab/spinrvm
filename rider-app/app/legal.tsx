@@ -29,15 +29,25 @@ export default function LegalScreen() {
     // Wrapped in useCallback (deps: [type]) so the effect below can safely
     // depend on it — as a plain function it would have been recreated every
     // render, which would have made the effect refetch every render too.
+    //
+    // Reads the per-audience /legal-documents endpoint instead of the legacy
+    // shared /settings/legal blob, so riders see rider-audience content
+    // (Terms of Service Part A only, no driver-specific terms) once it's
+    // published. The endpoint falls back to the legacy shared blob
+    // server-side when no per-audience row exists yet, so this is a
+    // non-breaking switch — same displayed content today, correct
+    // audience-scoped content once the admin dashboard publishes it.
     const fetchLegalText = useCallback(async () => {
         try {
-            const response = await fetch(`${SpinrConfig.backendUrl}/settings/legal`);
+            const docType = type === 'tos' ? 'tos' : 'privacy';
+            const response = await fetch(
+                `${SpinrConfig.backendUrl}/legal-documents?audience=rider&type=${docType}`
+            );
             const data = await response.json();
-            if (type === 'tos') {
-                setContent(data.terms_of_service_text || 'No Terms of Service have been added yet.');
-            } else {
-                setContent(data.privacy_policy_text || 'No Privacy Policy has been added yet.');
-            }
+            const fallback = docType === 'tos'
+                ? 'No Terms of Service have been added yet.'
+                : 'No Privacy Policy has been added yet.';
+            setContent(data.content || fallback);
         } catch (e) {
             console.error(e);
             setContent('Failed to load document. Please check your connection.');

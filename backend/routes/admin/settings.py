@@ -261,6 +261,15 @@ class SettingsUpdateRequest(BaseModel):
     # credentials.
     sos_paging_webhook_url: Optional[str] = None
     sos_paging_routing_key: Optional[str] = None
+    # Safety panel — global tiles (migration 316 covers the per-service-area
+    # local-authority row instead). Surfaced to the apps via GET /settings.
+    # Blank email/phone hides that tile, same "render only what's configured"
+    # rule the authority row uses. Not credentials — these are published to
+    # riders and drivers by design, so no masking or super_admin gate.
+    safety_team_email: Optional[str] = None
+    safety_team_phone: Optional[str] = None
+    sos_show_share_trip: Optional[bool] = None
+    sos_show_report_issue: Optional[bool] = None
     # Dispatch & matching — also configurable per service area (area overrides global).
     max_simultaneous_offers: Optional[int] = Field(default=None, ge=1, le=10)
     ride_offer_timeout_seconds: Optional[int] = Field(default=None, ge=5, le=60)

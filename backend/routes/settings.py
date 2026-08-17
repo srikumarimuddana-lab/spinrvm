@@ -57,6 +57,21 @@ async def get_public_settings():
         # B16) -- dark-launched, driver-app only. Default False = the
         # driver dashboard keeps rendering the existing shared SOSButton.
         "driver_discreet_sos_enabled": bool(settings.get("driver_discreet_sos_enabled", False)),
+        # Safety panel — global config. Only the LOCAL AUTHORITY varies per
+        # service area (migration 316); the Spinr-side contacts and tile
+        # toggles are the same everywhere, so keeping them here means changing
+        # one value instead of every service-area row.
+        #
+        # The email/phone rows are hidden by the apps when blank, matching the
+        # same "render only what is configured" rule the authority row follows.
+        "safety_team_email": settings.get("safety_team_email", ""),
+        "safety_team_phone": settings.get("safety_team_phone", ""),
+        # Tiles with no data of their own to gate on, so they need an explicit
+        # switch. Default True: both are already-shipped capabilities (trip
+        # sharing, safety reporting) and hiding them by default would make the
+        # panel look emptier than the product actually is.
+        "sos_show_share_trip": bool(settings.get("sos_show_share_trip", True)),
+        "sos_show_report_issue": bool(settings.get("sos_show_report_issue", True)),
     }
 
 

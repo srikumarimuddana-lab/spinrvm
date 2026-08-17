@@ -7,9 +7,11 @@ pre-authorization hold (auth_status in authorized/fare_only), settlement
 CAPTURES that PaymentIntent for (fare + tip) in one Stripe fee instead of
 creating a fresh charge. Covered branches:
 
-  - within-buffer tip → single capture, paid, auth_status=captured
-  - tip over buffer    → capture the hold + fresh charge for the overflow
-  - over-buffer overflow charge fails → settle captured portion, log, paid
+  - tip within the hold → single capture, paid, auth_status=captured
+  - tip over the hold   → capture the hold + fresh charge for the overflow
+  - overflow charge fails → settle captured portion, log, paid
+  - incrementable hold  → raise the hold, then ONE capture (no second fee)
+  - increment absent/declined → capture + separate tip charge (two fees)
   - capture declined (issuer reversal) → failed + 402
   - capture failed (expired hold)      → fall back to a fresh full charge
   - no hold present                    → unchanged fresh-charge path
@@ -397,3 +399,99 @@ class TestNoHoldUnchanged:
 
         assert result.success is True
         cap_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+class TestIncrementFoldsTipIntoOneCharge:
+    """The hold is now the bare fare, so ANY tip pushes the total over it.
+
+    Rather than always paying a second Stripe fixed fee, settlement first tries
+    to raise the hold to cover the tip and capture once. These tests pin that
+    routing, including both fallbacks — the capability being absent, and the
+    issuer refusing the increase.
+    """
+
+    def _exact_fare_ride(self, incrementable):
+        # Hold == fare, which is what the zero-buffer booking path now produces.
+        r = _held_ride(authorized_amount="25.00")
+        r["auth_incrementable"] = incrementable
+        return r
+
+    async def test_incrementable_hold_settles_as_one_capture(self):
+        from contextlib import ExitStack
+
+        from backend.services.payment_service import settle_card
+
+        inc = _outcome(status="authorized", payment_intent_id="pi_hold", charged_amount=Decimal("27.00"))
+        cap = _outcome(status="captured", payment_intent_id="pi_hold", charged_amount=Decimal("27.00"))
+        charge_mock = AsyncMock()
+        patches, updates = _common_patches(capture=cap)
+        ps = "backend.services.payment_service."
+        inc_mock = AsyncMock(return_value=inc)
+
+        with ExitStack() as st:
+            for p in patches:
+                st.enter_context(p)
+            st.enter_context(patch(ps + "increment_authorization", inc_mock))
+            st.enter_context(patch(ps + "charge_ride", charge_mock))
+            result = await settle_card(
+                self._exact_fare_ride(True), RIDE_ID, RIDER_ID, Decimal("27.00"), Decimal("2.00")
+            )
+
+        assert result.success is True
+        inc_mock.assert_awaited_once()
+        assert inc_mock.call_args.kwargs["new_total"] == Decimal("27.00")
+        # One fee: no second PaymentIntent for the tip.
+        charge_mock.assert_not_awaited()
+        assert _last(updates, "payment_status") == "paid"
+
+    async def test_non_incrementable_card_uses_two_charges(self):
+        from contextlib import ExitStack
+
+        from backend.services.payment_service import settle_card
+
+        cap = _outcome(status="captured", payment_intent_id="pi_hold", charged_amount=Decimal("25.00"))
+        over = _outcome(status="succeeded", payment_intent_id="pi_tip", charged_amount=Decimal("2.00"))
+        patches, updates = _common_patches(capture=cap, charge=over)
+        ps = "backend.services.payment_service."
+        inc_mock = AsyncMock()
+
+        with ExitStack() as st:
+            for p in patches:
+                st.enter_context(p)
+            st.enter_context(patch(ps + "increment_authorization", inc_mock))
+            result = await settle_card(
+                self._exact_fare_ride(False), RIDE_ID, RIDER_ID, Decimal("27.00"), Decimal("2.00")
+            )
+
+        assert result.success is True
+        # Gated on the stored capability — no doomed Stripe round-trip.
+        inc_mock.assert_not_awaited()
+        assert _last(updates, "payment_status") == "paid"
+
+    async def test_declined_increment_falls_back_to_two_charges(self):
+        """Issuer refused the extra amount; the original hold must still settle."""
+        from contextlib import ExitStack
+
+        from backend.services.payment_service import settle_card
+
+        inc = _outcome(status="declined", decline_code="insufficient_funds")
+        cap = _outcome(status="captured", payment_intent_id="pi_hold", charged_amount=Decimal("25.00"))
+        over = _outcome(status="succeeded", payment_intent_id="pi_tip", charged_amount=Decimal("2.00"))
+        patches, updates = _common_patches(capture=cap, charge=over)
+        ps = "backend.services.payment_service."
+        inc_mock = AsyncMock(return_value=inc)
+
+        with ExitStack() as st:
+            for p in patches:
+                st.enter_context(p)
+            st.enter_context(patch(ps + "increment_authorization", inc_mock))
+            result = await settle_card(
+                self._exact_fare_ride(True), RIDE_ID, RIDER_ID, Decimal("27.00"), Decimal("2.00")
+            )
+
+        assert result.success is True
+        inc_mock.assert_awaited_once()
+        # A failed increment leaves the original hold intact, so the fare still
+        # captures and only the tip needs a second charge.
+        assert _last(updates, "payment_status") == "paid"

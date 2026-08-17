@@ -11,6 +11,50 @@
 | PR / commit link | (filled in on PR creation) |
 | Related issue or gap ID | Follow-up to `docs/change-log/2026-08-17-add-tip-late-charge-guard.md` (Finding 1's wallet/corporate branch, which absorbed unconditionally with no debit attempt) |
 
+## Update — independent review findings, addressed before merge
+
+Per this repo's guidance for money/migration PRs when no automated Codex review is available,
+`spinr-migration-reviewer` and `spinr-corporate-billing-reviewer` were run against the initial
+version of this change before requesting merge. Findings and resolution:
+
+- **CI ("Check for CREATE OR REPLACE conflicts across migrations") failed on first push** — the
+  migration redefines `corporate_allowance_apply_delta` (last defined in migration 297), which the
+  guard rail correctly flags as a cross-migration redefinition unless annotated. **Fixed**: added
+  `-- migration-override-ok: ...` to the migration header, same convention migration 214 used for
+  the same reason.
+- **`spinr-migration-reviewer` verdict: SAFE TO APPLY, no blockers.** Independently confirmed the
+  function-body diff against migration 297 introduces only the three documented deltas (no drift),
+  confirmed the `ride_debit_reversal` bug-fix claim by grepping every migration touching
+  `corporate_wallet_transactions`, and confirmed grants/signature are preserved by `CREATE OR
+  REPLACE`. Two non-blocking notes, both accepted as-is: (1) the `ADD CONSTRAINT` lock-duration
+  pattern on `wallet_transactions`/`corporate_wallet_transactions` mirrors existing precedent
+  (migrations 198/199), not new risk; (2) the migration's rollback for the function body is a
+  placeholder comment ("restore to 297's body verbatim") rather than inline SQL — sufficient since
+  `CREATE OR REPLACE` needs no preceding `DROP`, but noted for a future reader.
+- **`spinr-corporate-billing-reviewer` found a real BLOCKER, now fixed**: `charge_late_corporate_tip`
+  moved real money (via the allowance/master-wallet RPCs) but never recorded it on
+  `ride_payment_sources` — the *sole* source for the company's `/billing/summary`,
+  `/billing/statements/{month}`, and PDF statement totals (`routes/corporate_company.py`'s
+  `_aggregate_rows`, `utils/corporate_statement_pdf.py`, both of which sum
+  `allowance_debit_amount + master_fallback_amount` as "total billed to company"). A corporate
+  finance admin reconciling their statement against their actual wallet-balance delta would have
+  seen an unexplained gap equal to every collected late tip. **Fixed**: `charge_late_corporate_tip`
+  now increments the ride's *existing* `ride_payment_sources` row (one per ride, written at
+  original settlement) by the amount actually collected via each path, rather than inserting a new
+  row (the table's PK is `ride_id`). Best-effort — a failure to update this bookkeeping row is
+  logged loudly but never claws back money that already moved. See §3/§4 below for the updated
+  detail; this correction also means the earlier "grepped ... none found that would misbehave"
+  blast-radius claim in this doc's original version undersold the risk — corrected here rather
+  than silently rewritten.
+- **`spinr-corporate-billing-reviewer` warnings, also fixed**: (1) no `record_section_spend` call
+  for late tips, unlike `settle_corporate` — added, same "visibility-only, never block" pattern;
+  (2) no SQL-contract test pinning the widened per-member allowance-cap guard for the new
+  `'late_tip_debit'` type, so a future edit dropping it from the `IN (...)` check would silently
+  let late tips bypass the per-employee cap with nothing catching it in CI — added
+  `tests/test_migration_319_late_tip_types.py`, same style as the existing migration-297 contract
+  test; (3) `charge_late_corporate_tip`'s legacy-ride fallback path (no `corporate_member_id`
+  stamped) had no dedicated test — added.
+
 ## 1. Issue / gap identified
 
 `add_tip`'s wallet/company_allowance branch (shipped earlier the same day) absorbed 100% of a
@@ -99,11 +143,19 @@ has it, only absorbing the genuine shortfall instead of the whole amount uncondi
 - **Allowance-cap enforcement is preserved for the new type** — the migration's cap guard was
   extended to `p_type IN ('ride_debit', 'late_tip_debit')`, not left scoped to `'ride_debit'`
   only (which would have silently let late tips bypass the per-employee spending cap).
-- **`ride_payment_sources`, admin/reporting reads of `corporate_wallet_transactions`,
-  reconciliation jobs**: grepped for any reader that assumes every `corporate_wallet_transactions`
-  row for a given `ride_id` has `type IN ('ride_debit','adjustment')` only — none found that would
-  misbehave on a new type value; readers either filter by `ride_id` alone (a late-tip row is
-  correctly additional context on the same ride) or don't touch this table.
+- **`ride_payment_sources`**: `spinr-corporate-billing-reviewer` found that the initial version of
+  this change moved real money via the allowance/master-wallet RPCs but never recorded it here —
+  the table `_aggregate_rows`/the PDF statement builder actually sum for the company's invoice
+  total. **Fixed**: `charge_late_corporate_tip` now increments the ride's existing row's
+  `allowance_debit_amount`/`master_fallback_amount` by what was actually collected via each path
+  (see §3). Correcting the record: an earlier version of this section claimed a plain grep found no
+  reader that would "misbehave" on the new ledger types — true for a crash/type-check risk, but it
+  missed this silent-under-reporting risk, which is a different failure mode. No other reader of
+  `corporate_wallet_transactions` (admin/reporting, reconciliation jobs) was affected — those
+  either filter by `ride_id` generically or don't touch the table.
+- **`record_section_spend`**: `settle_corporate` calls this for department/section budget
+  visibility; the initial version of `charge_late_corporate_tip` didn't. Fixed — same
+  "visibility-only, never block" pattern, same call shape.
 - **Migration ordering**: same "apply before deploying the paired backend code" requirement
   migration 297 documented for the same function — `charge_late_corporate_tip`'s
   `apply_late_tip_debit` call will fail with "invalid allowance type" against a database that
@@ -130,7 +182,8 @@ after a ride is already completed and paid, same reachability as the original Fi
 | `backend/routes/rides/_deps.py` | Re-export the two new `payment_service` functions | Same pattern as `charge_late_tip` |
 | `backend/routes/rides/payments.py` | `add_tip`'s wallet/corporate branch now attempts real collection before absorbing the remainder | Closes this follow-up |
 | `backend/tests/test_charge_late_wallet_tip.py` | New — 5 unit tests | Direct coverage of the wallet helper |
-| `backend/tests/test_charge_late_corporate_tip.py` | New — 10 unit tests | Direct coverage of the corporate saga, including cap-exceeded/failure branches |
+| `backend/tests/test_charge_late_corporate_tip.py` | New — 17 unit tests (10 original + 7 from review fixes: `ride_payment_sources` recording ×4, section spend ×2, legacy fallback ×1) | Direct coverage of the corporate saga, including cap-exceeded/failure branches and the billing-visibility fix |
+| `backend/tests/test_migration_319_late_tip_types.py` | New — 9 SQL-contract tests | Pins the widened per-member cap guard, delta math, CHECK constraints, and signature/grants against the actual migration text — same style as the existing migration-297 contract test |
 | `backend/tests/test_rides_payments_coverage.py` | Updated wallet/corporate `add_tip` tests for success/partial outcomes | Endpoint-level coverage of the new wiring |
 
 ## 7. Before / after
@@ -179,7 +232,7 @@ same-day fix, because this one includes a migration:
 
 ## 9. Verification performed
 
-- [x] Automated tests: `pytest tests/test_charge_late_tip.py tests/test_charge_late_wallet_tip.py tests/test_charge_late_corporate_tip.py tests/test_rides_payments_coverage.py -q --no-cov` → **45 passed**. Broader sweep `pytest tests/ -k "tip or payment or settle_card or settle_wallet or settle_corporate or corporate_allowance or corporate_wallet or webhooks or ledger or wallet" -q --no-cov` → **1170 passed, 1 pre-existing unrelated skip, 0 failed**. Full `-m unit` sweep → **2777 passed, 1 skipped, 1 failed** — the 1 failure (`test_scheduled_rides_coverage.py::test_lock_not_acquired_still_proceeds_to_fetch`) reproduces identically on unmodified `main` (verified via `git stash`), confirmed pre-existing and unrelated.
+- [x] Automated tests (final, after the review-driven fixes): `pytest tests/test_charge_late_tip.py tests/test_charge_late_wallet_tip.py tests/test_charge_late_corporate_tip.py tests/test_migration_319_late_tip_types.py tests/test_rides_payments_coverage.py -q --no-cov` → **61 passed**. Broader sweep `pytest tests/ -k "tip or payment or settle_card or settle_wallet or settle_corporate or corporate_allowance or corporate_wallet or webhooks or ledger or wallet" -q --no-cov` → **1186 passed, 1 pre-existing unrelated skip, 0 failed**. Full `-m unit` sweep (pre-fix baseline) → **2777 passed, 1 skipped, 1 failed** — the 1 failure (`test_scheduled_rides_coverage.py::test_lock_not_acquired_still_proceeds_to_fetch`) reproduces identically on unmodified `main` (verified via `git stash`), confirmed pre-existing and unrelated.
 - [x] `ruff check` on all changed/added Python files → clean.
 - [x] Migration validated with the repo's own `scripts/check_migration.py` → all hard checks pass (naming, sequence, RLS n/a, rollback-comment, dangerous-ops).
 - [x] A convention violation was caught and fixed during this work: 4 `logger.error(..., exc_info=True)` calls (loguru has no `exc_info` parameter — it's silently swallowed as a format kwarg with no traceback captured) were rewritten to `logger.opt(exception=...).error(...)`, caught by this repo's own `tests/test_loguru_call_conventions.py`.

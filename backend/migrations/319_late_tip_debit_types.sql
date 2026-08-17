@@ -1,6 +1,13 @@
 -- ============================================================
 -- Migration 319: late-tip debit types (wallet + corporate)
 --
+-- migration-override-ok: this migration intentionally redefines
+-- corporate_allowance_apply_delta (first defined in 29, last redefined in
+-- 297) to add the 'late_tip_debit' type — see "WHAT" below. Body is copied
+-- verbatim from migration 297 with only the three documented additions
+-- (new type in the whitelist, new ELSIF branch, extended cap guard); same
+-- redefinition pattern migration 214 used for the same reason.
+--
 -- WHY A NEW TYPE INSTEAD OF REUSING 'ride_payment' / 'ride_debit' / 'adjustment'
 -- -------------------------------------------------------------------------
 -- wallet_apply_delta (migration 249) and corporate_wallet_apply_delta /

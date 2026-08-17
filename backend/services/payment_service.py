@@ -587,7 +587,8 @@ async def charge_late_corporate_tip(
             allowance_debit = _round(Decimal("0"))
         master_debit = tip - allowance_debit
 
-        collected = Decimal("0")
+        collected_via_allowance = Decimal("0")
+        collected_via_master = Decimal("0")
         actor = membership.get("user_id") or ride.get("rider_id") or "system"
 
         if allowance_debit > 0 and allowance.get("id"):
@@ -602,11 +603,11 @@ async def charge_late_corporate_tip(
                     ride_id=ride_id,
                     floor=0.0,
                 )
-                collected += allowance_debit
+                collected_via_allowance += allowance_debit
             except Exception as alw_err:
-                detail = (getattr(alw_err, "details", None) or {}).get("original", "") if hasattr(
-                    alw_err, "details"
-                ) else ""
+                detail = (
+                    (getattr(alw_err, "details", None) or {}).get("original", "") if hasattr(alw_err, "details") else ""
+                )
                 text = f"{alw_err} {detail}"
                 if "allowance_cap_exceeded" in text:
                     logger.info(
@@ -622,8 +623,8 @@ async def charge_late_corporate_tip(
                         alw_err,
                         _money_str(tip),
                     )
-                # Either way the allowance debit did not apply (collected is
-                # still 0 for it) — the whole tip now needs the master path.
+                # Either way the allowance debit did not apply (collected_via_
+                # allowance is still 0) — the whole tip now needs the master path.
                 master_debit = tip
 
         if master_debit > 0 and corp_wallet.get("id"):
@@ -636,7 +637,7 @@ async def charge_late_corporate_tip(
                     notes=f"Late tip master-fallback debit {ride_id}",
                     floor=0.0,
                 )
-                collected += master_debit
+                collected_via_master += master_debit
             except Exception as master_err:
                 logger.opt(exception=master_err).error(
                     "[PAYMENT] late tip master-fallback debit failed for ride {}: {} — absorbing ${}",
@@ -645,7 +646,76 @@ async def charge_late_corporate_tip(
                     _money_str(master_debit),
                 )
 
-        collected = _round(min(collected, tip))
+        # Record the collected amounts on the ride's EXISTING ride_payment_sources
+        # row (one per ride, written by settle_corporate at original settlement)
+        # rather than a new row — that table is the sole source for the company's
+        # billing summary/statement/PDF totals (routes/corporate_company.py
+        # _aggregate_rows, utils/corporate_statement_pdf.py), both of which sum
+        # allowance_debit_amount + master_fallback_amount as "total billed to
+        # company" (repositories/corporate_repo.py's own docstring). Without this,
+        # a late tip moves real money in corporate_wallet_transactions /
+        # corporate_member_allowances.used but never appears in what the company
+        # is actually invoiced — found by spinr-corporate-billing-reviewer.
+        # Best-effort: the money movement above already succeeded (or didn't);
+        # a failure to update this bookkeeping row must not undo it or block the
+        # return value, but must be logged loudly since it means the company's
+        # next statement will under-report by this amount.
+        if collected_via_allowance > 0 or collected_via_master > 0:
+            try:
+                existing = await db_supabase.find_one("ride_payment_sources", {"ride_id": ride_id})
+                if existing:
+                    await db_supabase.update_one(
+                        "ride_payment_sources",
+                        {"ride_id": ride_id},
+                        {
+                            "allowance_debit_amount": _f(
+                                _d(existing.get("allowance_debit_amount") or 0) + collected_via_allowance
+                            ),
+                            "master_fallback_amount": _f(
+                                _d(existing.get("master_fallback_amount") or 0) + collected_via_master
+                            ),
+                        },
+                    )
+                else:
+                    logger.error(
+                        "[PAYMENT] late tip on corporate ride {} collected ${} but no ride_payment_sources "
+                        "row exists to record it against — company's next billing statement will under-report "
+                        "this amount",
+                        ride_id,
+                        _money_str(collected_via_allowance + collected_via_master),
+                    )
+            except Exception as rps_err:
+                logger.opt(exception=rps_err).error(
+                    "[PAYMENT] failed to record late tip (${} allowance, ${} master) on ride_payment_sources "
+                    "for ride {} — money was collected but the company's next billing statement will "
+                    "under-report by this amount: {}",
+                    _money_str(collected_via_allowance),
+                    _money_str(collected_via_master),
+                    ride_id,
+                    rps_err,
+                )
+
+        # Visibility-only section spend tracking (same hook settle_corporate
+        # uses — "track and display, never block"). Without this, a late tip
+        # on a ride booked under a department/section budget would silently
+        # under-count against that section for the month, same class of gap
+        # as the ride_payment_sources one above but lower severity (display-
+        # only, not the actual invoice total).
+        if membership.get("section_id") and (collected_via_allowance + collected_via_master) > 0:
+            try:
+                await db_supabase.record_section_spend(
+                    section_id=membership["section_id"],
+                    month=datetime.now(timezone.utc).strftime("%Y-%m"),
+                    amount=collected_via_allowance + collected_via_master,
+                )
+            except Exception:
+                logger.opt(exception=True).error(
+                    "[PAYMENT] failed to record section spend for late tip ride={} section={}",
+                    ride_id,
+                    membership["section_id"],
+                )
+
+        collected = _round(min(collected_via_allowance + collected_via_master, tip))
         if collected < tip:
             logger.info(
                 "[PAYMENT] late tip on corporate ride {} partially collected: ${} of ${} — absorbing the rest",

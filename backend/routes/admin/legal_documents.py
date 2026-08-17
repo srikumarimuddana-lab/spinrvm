@@ -34,6 +34,7 @@ ALLOWED_TYPES = {
     "promotions-referral",
     "insurance-periods",
     "deactivation-appeals",
+    "background-check-consent",
 }
 
 

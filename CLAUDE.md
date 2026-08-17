@@ -105,14 +105,25 @@ ruff format .                      # format
 
 ```bash
 cd backend
-python scripts/migrate.py            # ordered SQL runner over backend/migrations/; no --env flag —
-                                      # environment is selected by whichever SUPABASE_URL /
-                                      # SUPABASE_SERVICE_ROLE_KEY (or PG_CONNECTION_STRING /
-                                      # DATABASE_URL) are set when it runs. Add --dry-run to preview.
-                                      # The direct db.<ref>.supabase.co host is IPv6-only; on
-                                      # IPv4-only networks set PG_CONNECTION_STRING to the Session
-                                      # pooler connection string instead (takes precedence).
+python -m backend.scripts.run_migrations           # ordered SQL runner over backend/migrations/;
+                                                     # requires DATABASE_URL (direct Postgres/pooler
+                                                     # connection — REST client is intentionally not
+                                                     # used, multi-statement DDL needs a raw psycopg
+                                                     # session). Add --dry-run to preview, --status to
+                                                     # show applied vs pending.
 ```
+
+**Use `run_migrations.py`, not `migrate.py`.** Both scripts exist in
+`backend/scripts/`; only `run_migrations.py` matches production's actual
+`schema_migrations` schema (`filename`/`checksum`/`applied_at`/`applied_by`,
+defined by migration 24). `migrate.py` targets an older, different
+`schema_migrations` shape (`version`/`applied_at`, migration 00) that was
+never the one actually applied to production — running it today would fail
+immediately on its own tracking-row `INSERT` (`column "version" does not
+exist`). Found and confirmed 2026-08-17 while manually applying migration
+317 (see `ACTION_ITEMS.md` A39); tracked there for someone to decide whether
+to reconcile/deprecate `migrate.py` or delete it outright — until then,
+`run_migrations.py` is the only one to reach for.
 
 ## Architecture
 

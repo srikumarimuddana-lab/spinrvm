@@ -1,6 +1,6 @@
 # Migration Conventions
 
-Migrations live in `backend/migrations/` and are applied in filename order by `backend/migrate.py`.
+Migrations live in `backend/migrations/` and are applied in filename order by `backend/scripts/run_migrations.py` (not `backend/scripts/migrate.py` — that script targets an older `schema_migrations` shape that was never the one actually applied to production; see the root `CLAUDE.md`'s Database Migrations section and `ACTION_ITEMS.md` A39).
 
 Naming: `NN_short_description.sql` where `NN` is a zero-padded sequence number — check the current highest with `ls backend/migrations | sort -V | tail -1` before picking the next one. Pick the next available number — never reuse or reorder existing numbers. If two PRs conflict on a number, the second one renames to the next free slot before merge. Note: the runner uses the full filename as the idempotency key, so already-applied migrations must never be renamed. Duplicate numeric prefixes exist from history and are handled by full-filename keying — do not introduce new duplicates; a CI prefix-uniqueness check blocks them.
 

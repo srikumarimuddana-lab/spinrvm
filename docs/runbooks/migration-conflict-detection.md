@@ -17,7 +17,9 @@ a checklist that catches it before merge.
 
 ## The failure mode in one paragraph
 
-Spinr's migration runner (`backend/scripts/migrate.py`) iterates files in
+Spinr's migration runner (`backend/scripts/run_migrations.py` — not
+`backend/scripts/migrate.py`, which targets a different, never-actually-used
+`schema_migrations` shape; see `ACTION_ITEMS.md` A39) iterates files in
 alphanumeric order via `sorted(glob.glob('*.sql'))`. Two migrations
 sharing the same numeric prefix (e.g. `56_a.sql` and `56_b.sql`) both run,
 but the second one wins for any object both modify. If both call

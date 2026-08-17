@@ -998,6 +998,15 @@ async def _request_payout_legacy(
             detail="Payout failed. Please try again.",
         ) from terminal_exc
 
+    # Dual-run cutover monitoring (A34/P3.1): count settled transfers to
+    # legacy-imported drivers. Flag-gated in the helper; never raises.
+    if stripe_payout_id:
+        try:
+            from ...utils.dual_run_monitor import record_legacy_payout
+        except ImportError:
+            from utils.dual_run_monitor import record_legacy_payout
+        await record_legacy_payout(driver, payout_id, req.amount)
+
     payout["status"] = final_status
     payout["stripe_payout_id"] = stripe_payout_id
     return {"success": True, "payout": serialize_doc(payout)}
@@ -1270,6 +1279,16 @@ async def request_instant_payout(
         logger.exception(
             "Failed to mark instant payout completed (money already disbursed)",
         )
+
+    # Dual-run cutover monitoring (A34/P3.1): count only after Step 2
+    # succeeded — the money has actually left for the driver's bank, so a
+    # later transfer reversal can no longer occur and the counter can't
+    # overcount. Flag-gated in the helper; never raises.
+    try:
+        from ...utils.dual_run_monitor import record_legacy_payout
+    except ImportError:
+        from utils.dual_run_monitor import record_legacy_payout
+    await record_legacy_payout(driver, payout_id, req.amount)
 
     payout["status"] = RideStatus.COMPLETED
     payout["stripe_payout_id"] = stripe_payout_id

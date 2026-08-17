@@ -64,12 +64,14 @@ from zoneinfo import ZoneInfo
 
 try:
     from .. import db_supabase
+    from ..utils.dual_run_monitor import record_legacy_payout
     from ..utils.error_handling import DuplicateRecordError
     from ..utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts
     from ..utils.money import dollars_to_cents
     from ..utils.redis_client import redis_set_nx
 except ImportError:  # pragma: no cover - dual-import pattern
     import db_supabase  # type: ignore
+    from utils.dual_run_monitor import record_legacy_payout  # type: ignore
     from utils.error_handling import DuplicateRecordError  # type: ignore
     from utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts  # type: ignore
     from utils.money import dollars_to_cents  # type: ignore
@@ -561,6 +563,10 @@ async def _retry_reserved_row(row: dict, stripe_secret: str, now: datetime) -> s
     result["next_attempt"] = next_attempt
     await _finalize_payout_row(payout_id, result, retry_bump=was_retryable)
     if result["outcome"] == "completed":
+        # Dual-run cutover monitoring (A34/P3.1): auto-payout uses a plain
+        # Transfer with no second Stripe step, so completed == disbursed.
+        # Flag-gated in the helper; never raises.
+        await record_legacy_payout(driver_rows[0], payout_id, amount)
         await _notify_driver(
             driver_rows[0],
             "Weekly payout sent",
@@ -811,6 +817,8 @@ async def run_weekly_auto_payout() -> dict:
             drivers_paid += 1
             total_amount += balance
             _bump_area(area_id, paid=1, amount=balance)
+            # Dual-run cutover monitoring (A34/P3.1) — flag-gated, never raises.
+            await record_legacy_payout(driver, payout_id, balance)
             await _notify_driver(
                 driver,
                 "Weekly payout sent",

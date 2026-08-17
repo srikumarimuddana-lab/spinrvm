@@ -655,6 +655,17 @@ async def update_driver_status(
     if status_flipped:
         await _deps.record_period_transition(driver_id, 1 if is_online else 0)
 
+    # Dual-run cutover monitoring (A34/P3.1): on an actual offline→online
+    # flip, emit the labeled go-online counter and — once per legacy-imported
+    # driver — the first-activation audit row. Flag-gated in the helper
+    # (app_settings.dual_run_monitoring_enabled); never raises.
+    if status_flipped and is_online:
+        try:
+            from ...utils.dual_run_monitor import record_go_online_flip
+        except ImportError:
+            from utils.dual_run_monitor import record_go_online_flip
+        await record_go_online_flip(driver, current_user)
+
     # Presence: Go Online is the strongest possible liveness signal — the
     # driver is actively using the app. Refresh the TTL now so dispatch can
     # see them immediately without waiting for the next WS heartbeat. Go

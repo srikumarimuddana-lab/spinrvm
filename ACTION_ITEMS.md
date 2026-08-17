@@ -7,10 +7,14 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-17 — A35 FIXED (detection loop + sanctioned
+_Last updated: 2026-08-17 — A37 FIXED (real-time `ddl_command_end` event
+trigger, migration 318, closing the poll-interval gap A35 deliberately
+deferred; verified against a real isolated Supabase branch, not a mock —
+see `docs/change-log/2026-08-17-a37-guard-trigger-ddl-realtime-audit.md`).
+Prior same day: A35 FIXED (detection loop + sanctioned
 cleanup-tool replacement, migration 317 applied to production, reviewed by
-migration + regulatory-compliance agents); A37/A38 ADDED (open, deliberately
-deferred follow-ups spun off from A35's review); A39 ADDED and CLOSED same
+migration + regulatory-compliance agents); A38 ADDED (open, deliberately
+deferred follow-up spun off from A35's review); A39 ADDED and CLOSED same
 day (two competing migration runners found — `migrate.py` doesn't match
 production's actual schema and would fail if run; docs corrected to point
 at `run_migrations.py`, the one that's actually live). Prior: A34 ADDED (open): dual-run cutover readiness
@@ -3540,7 +3544,7 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     positive/negative, verified by test) rather than actually detecting
     anything.
 
-### A37. Real-time DDL detection for regulatory guard triggers (event trigger) — open, deliberately deferred from A35
+### A37. Real-time DDL detection for regulatory guard triggers (event trigger) — CLOSED (2026-08-17)
 - **Source:** surfaced by `spinr-regulatory-compliance-checker`'s review of
   the A35 fix (2026-08-17) — see
   `docs/change-log/2026-08-17-a35-retention-guard-monitor.md`.
@@ -3561,7 +3565,35 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   from this session first. Per CLAUDE.md's "escalate, don't silently ship,
   when in doubt" rule — this needs a deliberate, tested, separately-reviewed
   PR, not a bundled addition to a same-day fix.
-- **Status:** open, no owner assigned.
+- **Fix:** migration 318 adds `guard_trigger_ddl_audit`, a
+  `ddl_command_end` event trigger scoped to `WHEN TAG IN ('ALTER TABLE')`,
+  that re-runs migration 317's `check_disabled_guard_triggers()` at the
+  instant any `ALTER TABLE` finishes and writes an append-only
+  `regulatory_guard_trigger_disabled_realtime` `audit_logs` row if a guard is
+  found disabled at that moment. `_audit_guard_trigger_ddl()`'s entire body
+  is wrapped in `EXCEPTION WHEN OTHERS THEN RAISE WARNING` so no internal bug
+  can escape and block the triggering DDL.
+  `backend/utils/retention_guard_monitor.py` was extended with
+  `_fetch_realtime_events()`, merging these rows into the same
+  per-`(table, trigger)` dedupe/escalation path as the existing 6h RPC poll —
+  so a same-session disable/re-enable now pages within one poll cycle
+  (previously: never), while the permanent record is instantaneous. Detail:
+  `docs/change-log/2026-08-17-a37-guard-trigger-ddl-realtime-audit.md`.
+- **Both original blockers addressed, not asserted away:** verified against
+  a real, isolated Supabase database branch (not a mock) — unrelated
+  `ALTER TABLE` succeeds cleanly with the trigger installed; disabling a
+  guard produces an immediate correct audit row; re-enabling produces no
+  error/no duplicate; and with `check_disabled_guard_triggers()` deliberately
+  dropped to force an internal failure, a subsequent `ALTER TABLE` still
+  succeeded — proving the exception-swallowing holds under real failure, not
+  just in code review. See the change-log's §9 for the exact branch id and
+  command sequence.
+- **Status:** closed. Detect-only, as scoped — never re-enables a trigger,
+  never blocks the DDL that disabled one; actual paging stays the existing
+  6h loop's job (true sub-6h paging directly from SQL, e.g. `pg_notify` +
+  a listener, is a reasonable future enhancement, deliberately not built
+  here to avoid adding a new always-on process dependency to a
+  database-wide DDL hook).
 
 ### A38. `purge_pii_retention()` Step H never checks `rides.driver_id` for a driver account
 - **Source:** surfaced by `spinr-regulatory-compliance-checker`'s review of

@@ -125,6 +125,22 @@ export default function BecomeDriverScreen() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [datePickerTarget, setDatePickerTarget] = useState<string | null>(null); // reqId
 
+  // CRC/VSC background-check consent — captured here (Review step) rather
+  // than fetched/recorded live during the wizard, because the driver's
+  // account/drivers row doesn't exist until registerDriver() succeeds at
+  // final submit; POST /drivers/crc-consent requires one. The consent TEXT
+  // is public (no auth) so it can be fetched during the wizard; the actual
+  // consent record is written right after registerDriver() succeeds. See
+  // backend/services/driver_crc_consent.py and
+  // docs/legal/background-check-consent.md.
+  const [crcConsentText, setCrcConsentText] = useState('');
+  const [crcConsentChecked, setCrcConsentChecked] = useState(false);
+  // False until fetchCrcConsentText confirms real content is published.
+  // The Submit button's consent requirement only applies once this is true
+  // — see fetchCrcConsentText for why an unpublished/unreachable consent
+  // form must not block registration.
+  const [crcConsentPublished, setCrcConsentPublished] = useState(false);
+
   // Declared here (before first use below) rather than further down with the
   // other handlers — react-hooks/immutability (React Compiler) flags
   // referencing a function value before its declaration in source order.
@@ -231,12 +247,47 @@ export default function BecomeDriverScreen() {
     }
   };
 
+  const fetchCrcConsentText = async () => {
+    try {
+      // Public endpoint — no auth, no /api/v1 prefix (mounted at root).
+      const response = await fetch(
+        `${SpinrConfig.backendUrl}/legal-documents?audience=driver&type=background-check-consent`
+      );
+      const data = await response.json();
+      if (data.content) {
+        setCrcConsentText(data.content);
+        setCrcConsentPublished(true);
+      } else {
+        // No admin has published this text yet (production starts with
+        // every legal_documents row empty — see docs/legal/legal-text-publication-checklist.md).
+        // Do NOT hard-require the checkbox in this case: driver onboarding
+        // is a live, already-shipped flow, and blocking every application
+        // on a checkbox next to placeholder text would break registration
+        // entirely until an admin publishes real content. The checkbox
+        // becomes required automatically once real content is published.
+        setCrcConsentText('This consent form has not been published yet. You can continue — we will ask you to confirm this consent once it is available.');
+        setCrcConsentPublished(false);
+        setCrcConsentChecked(true);
+      }
+    } catch (e) {
+      console.log('Error fetching CRC consent text:', e);
+      setCrcConsentText('Failed to load. Please check your connection and try again.');
+      // Same reasoning as above — don't block registration on a network
+      // hiccup fetching consent text; requiring the checkbox to be
+      // meaningfully answerable when the content itself failed to load
+      // would be worse than proceeding.
+      setCrcConsentPublished(false);
+      setCrcConsentChecked(true);
+    }
+  };
+
   useEffect(() => {
     // Mount-only fetch + local-draft restore; both are async functions that
     // set state after their own await, not synchronously at the top of the
     // effect. Empty deps, runs once — no re-render loop risk.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchRequirements();
+    fetchCrcConsentText();
     loadDraft();
   }, []);
 
@@ -451,6 +502,13 @@ export default function BecomeDriverScreen() {
   const prevStep = () => setCurrentStep(prev => prev - 1);
 
   const handleSubmit = async () => {
+    if (!crcConsentChecked) {
+      Alert.alert(
+        'Consent required',
+        'Please read and check the Criminal Record Check / Vulnerable Sector Check consent before submitting your application.'
+      );
+      return;
+    }
     try {
       // Map requirements to legacy expiry fields using keyword matching
       // (same logic as backend _REQUIREMENT_EXPIRY_FIELD_KEYWORDS)
@@ -529,6 +587,22 @@ export default function BecomeDriverScreen() {
         // New Dynamic Docs
         documents: documentsPayload,
       });
+
+      // Record the CRC/VSC consent captured above now that the drivers row
+      // exists (POST /drivers/crc-consent requires one — see the state
+      // declaration comment above). Only when real content was actually
+      // published and shown — recording "consented" against no real
+      // consent text would be a spurious audit entry, not a genuine
+      // consent. Best-effort otherwise: the application itself already
+      // succeeded, so a failure here shouldn't block the driver from
+      // proceeding — they can still consent later from Settings.
+      if (crcConsentPublished) {
+        try {
+          await api.post('/drivers/crc-consent');
+        } catch (consentErr) {
+          console.log('Error recording CRC consent:', consentErr);
+        }
+      }
 
       Alert.alert('Success', 'Application submitted! You can now log in, but you must complete your profile to go online.', [
         {
@@ -792,10 +866,35 @@ export default function BecomeDriverScreen() {
                 <Text style={styles.reviewRow}><Text style={{ fontWeight: 'bold' }}>Docs Set:</Text> {Object.values(docs).filter(d => d.front).length} / {requirements.length}</Text>
               </View>
 
+              <Text style={[styles.label, { marginTop: 20 }]}>Background Check Consent</Text>
+              <View style={styles.consentBox}>
+                <ScrollView style={{ maxHeight: 140 }} nestedScrollEnabled>
+                  <Text style={styles.consentText}>{crcConsentText || 'Loading…'}</Text>
+                </ScrollView>
+              </View>
               <TouchableOpacity
-                style={[styles.primaryButton, isLoading && styles.disabledButton]}
+                style={[styles.consentCheckboxRow, !crcConsentPublished && { opacity: 0.5 }]}
+                onPress={() => crcConsentPublished && setCrcConsentChecked((c) => !c)}
+                disabled={!crcConsentPublished}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: crcConsentChecked, disabled: !crcConsentPublished }}
+              >
+                <Ionicons
+                  name={crcConsentChecked ? 'checkbox' : 'square-outline'}
+                  size={22}
+                  color={crcConsentChecked ? colors.primary : '#999'}
+                />
+                <Text style={styles.consentCheckboxLabel}>
+                  {crcConsentPublished
+                    ? 'I consent to a Criminal Record Check and Vulnerable Sector Check as described above.'
+                    : "This consent isn't required yet — we'll ask you to confirm it once it's available."}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.primaryButton, (isLoading || !crcConsentChecked) && styles.disabledButton]}
                 onPress={handleSubmit}
-                disabled={isLoading}
+                disabled={isLoading || !crcConsentChecked}
               >
                 {isLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryButtonText}>Submit Application</Text>}
               </TouchableOpacity>
@@ -872,6 +971,14 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
 
   reviewCard: { padding: 20, backgroundColor: colors.surfaceLight, borderRadius: 12 },
   reviewRow: { fontSize: 16, marginBottom: 10 },
+
+  consentBox: {
+    borderWidth: 1, borderColor: colors.border, borderRadius: 10,
+    padding: 12, backgroundColor: colors.surfaceLight, marginTop: 6,
+  },
+  consentText: { fontSize: 13, lineHeight: 19, color: colors.text },
+  consentCheckboxRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginTop: 12, marginBottom: 4 },
+  consentCheckboxLabel: { flex: 1, fontSize: 13, lineHeight: 19, color: colors.text },
 
   secondaryButton: {
     backgroundColor: 'transparent', borderRadius: 30, padding: 15,

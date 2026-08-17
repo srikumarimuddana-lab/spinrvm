@@ -338,6 +338,48 @@ async def record_refund_event(
     )
 
 
+async def record_dispute_close_events(
+    dispute_id: str,
+    user_id: str,
+    ride_id: str | None,
+    balance_transactions: list,
+    *,
+    dispute_status: str,
+) -> None:
+    """Append one financial_events row per Stripe balance transaction on
+    ``charge.dispute.closed`` (B27).
+
+    Stripe posts the disputed-amount debit and its own per-dispute fee as
+    separate entries in ``dispute.balance_transactions`` when a dispute
+    closes. Neither was previously recorded, so
+    ``docs/runbooks/stripe-reconciliation.md`` showed an unexplained delta
+    for every chargeback. ``delta_cents`` is taken verbatim from Stripe's own
+    signed ``amount`` (negative = debited from us, positive = reinstated) —
+    no sign inference here, since a `won` dispute can still carry a
+    non-refundable dispute fee that stays negative. Never raises — mirrors
+    ``record_refund_event``'s never-fail posture; the money has already
+    moved by the time this webhook fires.
+    """
+    for bt in balance_transactions:
+        amount_cents = int(bt.get("amount", 0) or 0)
+        if amount_cents == 0:
+            continue
+        await ledger_service.record_event(
+            event_type=f"stripe_dispute_{bt.get('type') or 'adjustment'}",
+            user_id=user_id,
+            ride_id=ride_id,
+            delta_cents=amount_cents,
+            ref=dispute_id,
+            metadata={
+                "stripe_dispute_id": dispute_id,
+                "balance_transaction_id": bt.get("id") or "",
+                "fee_cents": int(bt.get("fee", 0) or 0),
+                "dispute_status": dispute_status,
+                "currency": bt.get("currency") or "",
+            },
+        )
+
+
 async def charge_late_tip(
     ride: dict,
     ride_id: str,

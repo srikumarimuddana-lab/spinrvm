@@ -26,6 +26,11 @@ export interface CarLatLng {
 
 const LAST_LOCATION_KEY = 'spinr_driver_last_location';
 
+/** A fix older than this is treated as stale and actively refreshed. */
+const STALE_AFTER_MS = 12_000;
+/** How often staleness is checked. Cheap — it usually decides to do nothing. */
+const WATCHDOG_INTERVAL_MS = 8_000;
+
 /**
  * Last fix, held at MODULE scope so it outlives the component.
  *
@@ -41,6 +46,8 @@ const LAST_LOCATION_KEY = 'spinr_driver_last_location';
  * immediately. Same reasoning as carMapCamera.ts holding zoom outside the tree.
  */
 let lastFix: CarLatLng | null = null;
+/** When `lastFix` was set, so staleness is measurable. */
+let lastFixAt = 0;
 
 /**
  * The last fix, readable from outside React.
@@ -103,6 +110,46 @@ export function useCarLocation(): CarLatLng | null {
       }
     })();
 
+    // SECOND: actively request a CURRENT fix, and let it overwrite the cache.
+    //
+    // This is the fix for "the map shows where I started". The other seeds and
+    // the module-level lastFix are all *stale by construction* — they exist so a
+    // remount has something to draw immediately. But a remount is exactly what
+    // happens every time the car's reversing/side camera takes the screen and
+    // gives it back, and on that path the driver has usually MOVED. Showing them
+    // a several-minute-old position as though it were current is worse than
+    // showing nothing: it looks like the app has lost the plot.
+    //
+    // watchPositionAsync alone cannot cover this. It re-subscribes on remount and
+    // its first callback can be many seconds out, and while the phone app is
+    // backgrounded (idle driver, screen off) Android throttles foreground updates
+    // hard — which is why the position could sit stale for minutes. A direct
+    // request is serviced immediately where a subscription is not.
+    //
+    // Unlike the seeds below, this one DOES overwrite: a freshly-requested fix is
+    // by definition better than anything cached.
+    (async () => {
+      if (!Location) return;
+      try {
+        const { status } = await Location.getForegroundPermissionsAsync();
+        if (cancelled || status !== 'granted') return;
+        const current = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.High,
+        });
+        if (cancelled || !current?.coords) return;
+        const next = {
+          latitude: current.coords.latitude,
+          longitude: current.coords.longitude,
+          heading: current.coords.heading ?? null,
+        };
+        lastFix = next;
+        lastFixAt = Date.now();
+        setLoc(next);
+      } catch {
+        // Timed out or unavailable — the cached seeds and the watcher stand.
+      }
+    })();
+
     // Seed the camera from the last-known fix the phone pipeline persisted, so an
     // idle car screen opens centered on the driver instead of waiting for GPS.
     (async () => {
@@ -134,9 +181,14 @@ export function useCarLocation(): CarLatLng | null {
         if (cancelled || status !== 'granted') return;
         const sub = await Location.watchPositionAsync(
           {
-            accuracy: Location.Accuracy.Balanced,
-            timeInterval: 4000,
-            distanceInterval: 10,
+            // Matches TRIP_CADENCE in utils/backgroundLocation.ts rather than the
+            // idle cadence. The car surface is a moving-vehicle view the driver
+            // is actively looking at, and Balanced accuracy can fall back to
+            // network positioning — which is both coarse and, critically,
+            // carries no bearing, so the car marker had nothing to rotate to.
+            accuracy: Location.Accuracy.High,
+            timeInterval: 2000,
+            distanceInterval: 5,
           },
           (p) => {
             const next = {
@@ -145,6 +197,7 @@ export function useCarLocation(): CarLatLng | null {
               heading: p.coords.heading ?? null,
             };
             lastFix = next; // survives the next surface teardown/rebuild
+            lastFixAt = Date.now();
             setLoc(next);
           },
         );
@@ -158,8 +211,47 @@ export function useCarLocation(): CarLatLng | null {
       }
     })();
 
+    // Watchdog against a starved subscription.
+    //
+    // watchPositionAsync is not a guarantee. While the phone app is backgrounded
+    // — an idle driver with the screen off, which is most of a shift spent
+    // cruising for work — Android throttles foreground location updates heavily,
+    // and the callback can go quiet for minutes. The marker then sits at a
+    // position the driver left long ago, which is precisely what makes the car
+    // screen look broken.
+    //
+    // So: if no fix has landed in STALE_AFTER_MS, ask for one directly. Direct
+    // requests are serviced where a subscription is throttled. This does nothing
+    // while the watcher is healthy — it only spends battery on the exact failure
+    // it exists to cover, and Android Auto generally means the phone is charging.
+    const staleWatchdog = setInterval(() => {
+      if (cancelled || !Location) return;
+      if (Date.now() - lastFixAt < STALE_AFTER_MS) return;
+      (async () => {
+        try {
+          const { status } = await Location.getForegroundPermissionsAsync();
+          if (cancelled || status !== 'granted') return;
+          const current = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.High,
+          });
+          if (cancelled || !current?.coords) return;
+          const next = {
+            latitude: current.coords.latitude,
+            longitude: current.coords.longitude,
+            heading: current.coords.heading ?? null,
+          };
+          lastFix = next;
+          lastFixAt = Date.now();
+          setLoc(next);
+        } catch {
+          // Still unavailable — try again on the next tick.
+        }
+      })();
+    }, WATCHDOG_INTERVAL_MS);
+
     return () => {
       cancelled = true;
+      clearInterval(staleWatchdog);
       try {
         subRef.current?.remove();
       } catch {

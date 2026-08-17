@@ -39,6 +39,11 @@ jest.mock('../../../utils/backgroundLocation', () => ({
 const mockPublishCarFix = jest.fn();
 jest.mock('../carFixChannel', () => ({ publishCarFix: (f: unknown) => mockPublishCarFix(f) }));
 
+const mockRecordNonFatal = jest.fn();
+jest.mock('../../../utils/crashlytics', () => ({
+  recordNonFatal: (...a: unknown[]) => mockRecordNonFatal(...a),
+}));
+
 const mockIntegrity = jest.fn<{ trusted: boolean; reason?: string }, [unknown]>(() => ({
   trusted: true,
 }));
@@ -53,14 +58,32 @@ const {
   handleCarLocationTask,
   startCarLocationService,
   stopCarLocationService,
+  _carLocationMode,
+  _resetCarLocationTelemetry,
 } = mod as typeof import('../carLocationTask');
+
+/**
+ * What expo-location throws from LocationModule.kt:327 whenever
+ * AppForegroundedSingleton.isForegrounded is false — which, on a car-only
+ * launch, is always. The message is the literal Kotlin string.
+ */
+const fgsRefusal = () =>
+  Object.assign(
+    new Error(
+      "Couldn't start the foreground service. Foreground service cannot be started " +
+        'when the application is in the background',
+    ),
+    { code: 'ERR_FOREGROUND_SERVICE_START_NOT_ALLOWED' },
+  );
 
 const fix = (lat: number, heading: number | null = 90) => ({
   coords: { latitude: lat, longitude: -106.67, heading },
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   jest.clearAllMocks();
+  _resetCarLocationTelemetry();
+  await stopCarLocationService(); // resets the module's mode between cases
   jest.spyOn(console, 'warn').mockImplementation(() => {});
   jest.spyOn(console, 'log').mockImplementation(() => {});
   mockIntegrity.mockReturnValue({ trusted: true });
@@ -164,11 +187,84 @@ describe('start guards', () => {
     await expectNoStart('already-running');
   });
 
-  it('swallows an Android 12+ background-FGS-start refusal', async () => {
-    mockLocation.startLocationUpdatesAsync.mockRejectedValue(
-      new Error('ForegroundServiceStartNotAllowedException'),
-    );
+});
+
+describe('Android refusing a background foreground-service start', () => {
+  // This is not an edge case. expo-location gates the FGS start on
+  // AppForegroundedSingleton.isForegrounded (LocationModule.kt:327), and that
+  // singleton is set ONLY by Activity lifecycle hooks (:374-380). An Android
+  // Auto car-only launch creates no Activity, so the refusal is guaranteed on
+  // the exact path this module exists for.
+  const arrangeRefusal = () => {
+    mockLocation.startLocationUpdatesAsync
+      .mockRejectedValueOnce(fgsRefusal())
+      .mockResolvedValueOnce(undefined);
+  };
+
+  it('falls back to a task with no notification rather than giving up', async () => {
+    arrangeRefusal();
+
+    await expect(startCarLocationService()).resolves.toBe('started-no-notification');
+
+    expect(mockLocation.startLocationUpdatesAsync).toHaveBeenCalledTimes(2);
+    const [, first] = mockLocation.startLocationUpdatesAsync.mock.calls[0];
+    const [, second] = mockLocation.startLocationUpdatesAsync.mock.calls[1];
+    expect(first.foregroundService).toBeDefined();
+    expect(second.foregroundService).toBeUndefined();
+    // The ONLY difference is the service block — accuracy and cadence must not
+    // silently change when we degrade.
+    expect(second.accuracy).toBe(first.accuracy);
+    expect(second.timeInterval).toBe(first.timeInterval);
+    expect(second.distanceInterval).toBe(first.distanceInterval);
+  });
+
+  it('reports the refusal once per process, not once per attempt', async () => {
+    // startCarLocationService runs on every connect AND every 60s tick.
+    arrangeRefusal();
+    await startCarLocationService();
+    expect(mockRecordNonFatal).toHaveBeenCalledTimes(1);
+    expect(mockRecordNonFatal.mock.calls[0][1]).toMatchObject({
+      reason: 'foreground_service_start_refused',
+    });
+
+    mockLocation.hasStartedLocationUpdatesAsync.mockResolvedValue(true);
+    arrangeRefusal();
+    await startCarLocationService();
+    expect(mockRecordNonFatal).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps re-attempting the upgrade while degraded', async () => {
+    // Android stops refusing once the phone app is foregrounded, so a degraded
+    // task is not finished business the way a healthy one is.
+    arrangeRefusal();
+    await startCarLocationService();
+    expect(_carLocationMode()).toBe('no-notification');
+
+    mockLocation.hasStartedLocationUpdatesAsync.mockResolvedValue(true);
+    mockLocation.startLocationUpdatesAsync.mockResolvedValue(undefined);
+
+    await expect(startCarLocationService()).resolves.toBe('started');
+    expect(_carLocationMode()).toBe('foreground-service');
+  });
+
+  it('does not re-attempt once the foreground service is actually running', async () => {
+    await expect(startCarLocationService()).resolves.toBe('started');
+    mockLocation.hasStartedLocationUpdatesAsync.mockResolvedValue(true);
+    await expect(startCarLocationService()).resolves.toBe('already-running');
+  });
+
+  it('reports fgs-refused when the fallback fails too', async () => {
+    mockLocation.startLocationUpdatesAsync
+      .mockRejectedValueOnce(fgsRefusal())
+      .mockRejectedValueOnce(new Error('permission revoked mid-call'));
+    await expect(startCarLocationService()).resolves.toBe('fgs-refused');
+  });
+
+  it('does not mistake an unrelated failure for a refusal', async () => {
+    mockLocation.startLocationUpdatesAsync.mockRejectedValue(new Error('some other native error'));
     await expect(startCarLocationService()).resolves.toBe('unavailable');
+    expect(mockLocation.startLocationUpdatesAsync).toHaveBeenCalledTimes(1);
+    expect(mockRecordNonFatal).not.toHaveBeenCalled();
   });
 });
 

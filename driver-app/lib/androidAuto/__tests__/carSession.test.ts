@@ -78,6 +78,14 @@ jest.mock('../carLocationTask', () => ({
   startCarLocationService: () => mockStartCarLocation(),
 }));
 
+const mockConsumeFixCount = jest.fn<number, []>(() => 30);
+jest.mock('../carFixChannel', () => ({ consumeFixCount: () => mockConsumeFixCount() }));
+
+const mockRecordNonFatal = jest.fn();
+jest.mock('../../../utils/crashlytics', () => ({
+  recordNonFatal: (...a: unknown[]) => mockRecordNonFatal(...a),
+}));
+
 let mockAppStateCb: ((s: string) => void) | null = null;
 const mockRemoveAppState = jest.fn();
 jest.mock('react-native', () => ({
@@ -113,6 +121,7 @@ beforeEach(() => {
   mockDriver.activeRide = null;
   mockDriver.incomingRide = null;
   mockConsumePending.mockResolvedValue(false);
+  mockConsumeFixCount.mockReturnValue(30);
   mockAppCheckReady.mockResolvedValue(true);
   mockInitFirebase.mockResolvedValue(undefined);
   mockApiGet.mockResolvedValue({ data: { ride_offer_timeout_seconds: 20 } });
@@ -354,6 +363,50 @@ describe('lifecycle', () => {
 
       expect(jest.getTimerCount()).toBe(before);
       expect(mockRemoveAppState).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('reports a starved location task once, after a grace period', async () => {
+    // The open question the no-notification fallback leaves behind: does Android
+    // throttle a plain background task while Android Auto has us bound? Only a
+    // real head unit can answer, so the fix rate is measured and reported.
+    jest.useFakeTimers();
+    try {
+      await startCarSession();
+      mockConsumeFixCount.mockReturnValue(1); // throttled to ~1/min
+
+      jest.advanceTimersByTime(60_000); // tick 1 — inside the grace period
+      await settle();
+      jest.advanceTimersByTime(60_000); // tick 2 — still grace (cold GPS is slow)
+      await settle();
+      expect(mockRecordNonFatal).not.toHaveBeenCalled();
+
+      jest.advanceTimersByTime(60_000); // tick 3 — now it counts
+      await settle();
+      expect(mockRecordNonFatal).toHaveBeenCalledTimes(1);
+      expect(mockRecordNonFatal.mock.calls[0][1]).toMatchObject({
+        reason: 'car_location_throttled',
+        fixes_per_min: '1',
+      });
+
+      // Once per session, not once per minute of driving.
+      jest.advanceTimersByTime(180_000);
+      await settle();
+      expect(mockRecordNonFatal).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('a healthy fix rate is never reported', async () => {
+    jest.useFakeTimers();
+    try {
+      await startCarSession();
+      jest.advanceTimersByTime(300_000);
+      await settle();
+      expect(mockRecordNonFatal).not.toHaveBeenCalled();
     } finally {
       jest.useRealTimers();
     }

@@ -43,6 +43,8 @@ import {
 } from '../../services/backgroundMessaging';
 import { pushDebug, setDebugFact } from './carDebug';
 import { startCarLocationService } from './carLocationTask';
+import { consumeFixCount } from './carFixChannel';
+import { recordNonFatal } from '../../utils/crashlytics';
 
 const log = (...args: unknown[]) => {
   if (__DEV__) console.log('[car-session]', ...args);
@@ -134,6 +136,22 @@ async function canCallApi(): Promise<boolean> {
  * strand a driver mid-trip with an idle car screen.
  */
 const CANCELLABLE_STATES = new Set(['ride_offered', 'navigating_to_pickup', 'arrived_at_pickup']);
+
+/**
+ * Fixes per minute below which the location task is considered starved.
+ *
+ * The task requests one fix every 2s, so a healthy minute is ~30. Android's
+ * background-location limits allow a few per HOUR, so anything in single digits
+ * means we are being throttled — which is the open question the no-notification
+ * fallback in carLocationTask leaves behind. Reported once per session so a real
+ * head unit answers it without anyone having to tether a laptop in a car.
+ */
+const STARVED_FIXES_PER_MIN = 6;
+/** Ticks to let pass before judging — a cold GPS start is legitimately slow. */
+const RATE_GRACE_TICKS = 2;
+
+let rateTicks = 0;
+let rateReported = false;
 
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 let appStateSub: { remove: () => void } | null = null;
@@ -242,6 +260,30 @@ function onBackgroundDispatch(event: BackgroundDispatchEvent): void {
   }
 }
 
+/**
+ * Observe how many fixes actually arrived this minute, and report a starved task
+ * once per session.
+ *
+ * Deliberately once: this runs every 60s per connected driver, so an unguarded
+ * report would be an event per driver per minute of driving. One event carrying
+ * the observed rate is enough to answer the question.
+ */
+function reportFixRate(): void {
+  const fixes = consumeFixCount();
+  rateTicks += 1;
+  setDebugFact('fixRate', `${fixes}/min`);
+  log('fix rate', `${fixes}/min`);
+  if (rateReported || rateTicks <= RATE_GRACE_TICKS) return;
+  if (fixes >= STARVED_FIXES_PER_MIN) return;
+  rateReported = true;
+  recordNonFatal(new Error(`Car location starved: ${fixes} fixes/min`), {
+    domain: 'drivers',
+    module: 'androidAuto',
+    reason: 'car_location_throttled',
+    fixes_per_min: String(fixes),
+  });
+}
+
 /** The reads a connected car wants, issued together and individually caught. */
 async function refreshCarData(reason: string): Promise<void> {
   if (!(await canCallApi())) {
@@ -302,7 +344,10 @@ export async function startCarSession(): Promise<void> {
     //   - background location permission was granted after connect.
     // NOT gated on App Check: drawing a map needs no token, and this is the one
     // thing on the car screen that must keep working when nothing else does.
-    startCarLocationService().catch(() => {});
+    startCarLocationService()
+      .then((result) => setDebugFact('carLocation', result))
+      .catch(() => {});
+    reportFixRate();
   }, REFRESH_INTERVAL_MS);
 
   // Subscribed before the awaits below: an offer can land during the bootstrap,
@@ -362,6 +407,9 @@ export async function startCarSession(): Promise<void> {
 /** Tear down. Safe to call when nothing was started. */
 export function stopCarSession(): void {
   started = false;
+  rateTicks = 0;
+  rateReported = false;
+  consumeFixCount();
   if (refreshTimer !== null) {
     clearInterval(refreshTimer);
     refreshTimer = null;

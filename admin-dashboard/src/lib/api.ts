@@ -20,6 +20,12 @@ export type {
     AdminUploadDocumentInput,
 } from "./api/driver-documents";
 export {
+    getDriverAppeals,
+    getDriverAppealStats,
+    resolveDriverAppeal,
+} from "./api/driver-appeals";
+export type { DriverAppeal, DriverAppealStats } from "./api/driver-appeals";
+export {
     getRides,
     exportRides,
     getRideDetails,

@@ -47,10 +47,18 @@ const SHARED_TYPES: { doc_type: DocType; label: string }[] = [
     { doc_type: "insurance-periods", label: "Insurance Coverage Periods" },
 ];
 
+// Driver-only pages: deactivation-appeals (drivers are the ones who can be
+// deactivated) and background-check-consent (drivers are the ones whose
+// CRC/VSC is collected — see docs/legal/background-check-consent.md).
+const DRIVER_ONLY_TYPES: { doc_type: DocType; label: string }[] = [
+    { doc_type: "deactivation-appeals", label: "Driver Deactivation & Appeals Policy" },
+    { doc_type: "background-check-consent", label: "Background-Check (CRC/VSC) Consent" },
+];
+
 const DOCS: { audience: Audience; doc_type: DocType; label: string }[] = [
     ...SHARED_TYPES.map((d) => ({ audience: "rider" as Audience, ...d })),
     ...SHARED_TYPES.map((d) => ({ audience: "driver" as Audience, ...d })),
-    { audience: "driver", doc_type: "deactivation-appeals", label: "Driver Deactivation & Appeals Policy" },
+    ...DRIVER_ONLY_TYPES.map((d) => ({ audience: "driver" as Audience, ...d })),
 ];
 
 const A_CFG: Record<Audience, { l: string; c: string }> = {
@@ -154,9 +162,7 @@ export default function LegalDocumentsTab() {
                 </TabsList>
                 {(["rider", "driver"] as Audience[]).map((audience) => {
                     const typesForAudience =
-                        audience === "driver"
-                            ? [...SHARED_TYPES, { doc_type: "deactivation-appeals" as DocType, label: "Driver Deactivation & Appeals Policy" }]
-                            : SHARED_TYPES;
+                        audience === "driver" ? [...SHARED_TYPES, ...DRIVER_ONLY_TYPES] : SHARED_TYPES;
                     const docType = docTypeByAudience[audience];
                     const activeDef = typesForAudience.find((t) => t.doc_type === docType) ?? typesForAudience[0];
                     const k = keyOf(audience, activeDef.doc_type);

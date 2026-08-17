@@ -27,6 +27,7 @@
 import { Linking, Platform } from 'react-native';
 import { recordNonFatal } from '../../utils/crashlytics';
 import { useDriverStore } from '../../store/driverStore';
+import { useAuthStore } from '@shared/store/authStore';
 import {
   buildHandoffUrl,
   defaultNavButtons,
@@ -586,9 +587,42 @@ export default function registerAutoPlay(): void {
     }
   };
 
+  // Restore the session from the car, because nothing else will.
+  //
+  // authStore.initialize() is called from app/index.tsx and app/_layout.tsx —
+  // PHONE screens. On a car-only cold launch (Android Auto starting the app
+  // after a force close) neither mounts, so the app never authenticates: no
+  // token, so no earnings, no profile, no API call of any kind can succeed. The
+  // car screen was structurally incapable of loading data on its own.
+  //
+  // initialize() reads the stored refresh token and rehydrates the session. It
+  // is safe to call from here: it performs no navigation, and a transient
+  // failure deliberately KEEPS the refresh token and flags the session
+  // recoverable rather than logging the driver out (authStore.ts — "Do NOT
+  // delete it — the next app launch should retry"). Only a genuine 401, where
+  // the server has already revoked the token, clears anything.
+  //
+  // Fire-and-forget: the map, the car marker and the template buttons need no
+  // auth at all and must never wait on this. It only decides whether the
+  // data-backed extras (earnings today) can appear.
+  const ensureSession = () => {
+    try {
+      const auth = useAuthStore.getState();
+      if (auth.isInitialized || auth.isLoading) return;
+      log('car-only launch — initialising session from the car');
+      auth.initialize?.().catch((e) => logError('session init from car failed:', e));
+    } catch (e) {
+      logError('session init from car threw:', e);
+    }
+  };
+
   const onConnect = () => {
     // Guard: only build the surface for a genuinely connected head unit.
     if (!HybridAutoPlay.isConnected?.()) return;
+
+    // Before anything else: the baseline (map/marker/buttons) does not depend
+    // on this, but everything data-backed does.
+    ensureSession();
 
     // Idempotent: the cold-launch-already-connected branch and the 'didConnect'
     // listener can both fire for one connection — build (and reset) at most once.

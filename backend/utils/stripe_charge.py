@@ -93,6 +93,12 @@ class ChargeOutcome:
     decline_code: Optional[str] = None
     error_message: Optional[str] = None
     raw: Dict[str, Any] = field(default_factory=dict)
+    # Whether THIS authorization can later have its amount raised via
+    # PaymentIntent.increment_authorization (see ``increment_authorization``).
+    # Set by ``authorize_ride`` from the card's own capability flag — it varies
+    # per card brand and issuer, so it is read back from Stripe rather than
+    # assumed. False means a post-trip tip must be a separate charge.
+    incremental_authorization_supported: bool = False
 
 
 async def charge_ride(
@@ -458,6 +464,37 @@ async def _resolve_stripe_secret(ride_id: str) -> Optional[str]:
     return secret
 
 
+def _reads_incremental_support(intent: Any) -> bool:
+    """Whether Stripe granted incremental-authorization support on this hold.
+
+    Support is per-card, not per-account: Visa/Mastercard grant it broadly, some
+    Amex issuers refuse, and Discover restricts by merchant category. So the
+    answer is read off the charge Stripe actually created rather than inferred
+    from our account settings — a wrong guess here would either strand a tip or
+    fire a doomed increment call.
+
+    Returns False on any missing/odd shape. False is the safe direction: it only
+    costs one extra Stripe fixed fee (the tip becomes its own charge), whereas a
+    false True would fail the increment at settlement.
+    """
+    try:
+        charge = getattr(intent, "latest_charge", None)
+        if charge is None or isinstance(charge, str):
+            # Not expanded (or expand silently dropped) — cannot tell, assume no.
+            return False
+        details = getattr(charge, "payment_method_details", None) or {}
+        card = (details.get("card") if isinstance(details, dict) else getattr(details, "card", None)) or {}
+        value = (
+            card.get("incremental_authorization_supported")
+            if isinstance(card, dict)
+            else getattr(card, "incremental_authorization_supported", None)
+        )
+        return bool(value)
+    except Exception:  # pragma: no cover — never let a probe break authorization
+        logger.debug("could not read incremental_authorization_supported", exc_info=True)
+        return False
+
+
 async def authorize_ride(
     *,
     ride: Dict[str, Any],
@@ -520,6 +557,15 @@ async def authorize_ride(
         "capture_method": "manual",
         "confirm": True,
         "off_session": off_session,
+        # Ask Stripe to keep this authorization incrementable so a post-trip tip
+        # can be added to THIS hold rather than charged separately (one Stripe
+        # fixed fee instead of two). Requesting it is free and never fails the
+        # authorization — Stripe reports back, per card, whether it was actually
+        # granted, which we read below. Requires capture_method="manual", which
+        # this path already uses.
+        "request_incremental_authorization_support": True,
+        # Needed to read the granted capability off the charge below.
+        "expand": ["latest_charge"],
         # Disable redirect-based payment methods (see charge_ride above):
         # a confirmed PaymentIntent with redirect methods enabled requires a
         # `return_url`, which a server-side hold can't supply — Stripe was
@@ -569,6 +615,7 @@ async def authorize_ride(
             status="authorized",
             payment_intent_id=pi_id,
             charged_amount=to_decimal(amount),
+            incremental_authorization_supported=_reads_incremental_support(intent),
         )
     if status in ("requires_action", "requires_source_action"):
         return ChargeOutcome(status="requires_action", payment_intent_id=pi_id, client_secret=client_secret)

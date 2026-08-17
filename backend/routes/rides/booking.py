@@ -62,7 +62,52 @@ router = APIRouter()
 # can still succeed — the card is fundable, the buffer just tipped a thin balance
 # over. Any other decline (lost/stolen/generic) is the card itself being bad, so
 # a smaller hold won't help and we block instead of retrying.
+# NOTE: only reachable when the buffer is non-zero. With the normal zero buffer
+# the hold already IS the fare, so there is no lower amount to fall back to.
 _RETRYABLE_AT_LOWER_AMOUNT = frozenset({"insufficient_funds"})
+
+# Buffer used ONLY when the booking-time fare is not locked — see
+# ``_resolve_auth_buffer``. Proportional rather than the old flat $10, which was
+# 200% of a $5 fare.
+_UNLOCKED_FARE_BUFFER_RATE = Decimal("0.25")
+_UNLOCKED_FARE_BUFFER_MIN = Decimal("2.00")
+_UNLOCKED_FARE_BUFFER_MAX = Decimal("10.00")
+
+
+async def _resolve_auth_buffer(grand_total: Decimal) -> Decimal:
+    """Headroom to hold on top of the fare the rider was quoted.
+
+    Normally ZERO. ``fare_lock_enabled`` (migration 248) makes settlement keep the
+    booking-time fare, so the hold never needs to cover more than the number the
+    rider already agreed to. Holding more puts a pending charge on their bank feed
+    that is larger than the price they were shown, which reads as an overcharge —
+    a $5 ride used to show a $15 hold.
+
+    If the fare lock is ever switched off, settlement can exceed the quote again
+    and a zero-buffer hold would under-cover it, so fall back to a proportional
+    buffer. ``RIDE_AUTH_BUFFER_CAD`` still acts as a floor in that case, so an
+    operator can force extra headroom via env without a code change.
+    """
+    configured = _round(_d(_deps._settings.RIDE_AUTH_BUFFER_CAD))
+    try:
+        settings = await _deps.get_app_settings()
+        fare_locked = bool((settings or {}).get("fare_lock_enabled", False))
+    except Exception as e:
+        # Assume UNLOCKED on lookup failure: over-holding is recoverable (the
+        # excess is released at capture), under-holding fails settlement.
+        logger.error(
+            "[preauth] fare-lock lookup failed, sizing buffer as if unlocked: %s",
+            e,
+            exc_info=True,
+        )
+        fare_locked = False
+
+    if fare_locked:
+        return configured
+
+    proportional = _round(_d(grand_total) * _UNLOCKED_FARE_BUFFER_RATE)
+    proportional = max(_UNLOCKED_FARE_BUFFER_MIN, min(proportional, _UNLOCKED_FARE_BUFFER_MAX))
+    return max(configured, proportional)
 
 
 @dataclass
@@ -189,12 +234,20 @@ async def _preauthorize_ride_card(
     payment_method_id: Optional[str],
     block_on_decline: bool = True,
 ) -> _PreauthOutcome:
-    """Place a buffered card hold at booking; return a ``_PreauthOutcome``.
+    """Place the booking-time card hold; return a ``_PreauthOutcome``.
 
-    Holds ``grand_total + RIDE_AUTH_BUFFER_CAD`` via a manual-capture
-    PaymentIntent so a post-trip tip can later be captured on the SAME intent
-    (one Stripe fee) and a dead card is surfaced BEFORE a driver is dispatched.
+    Holds ``grand_total`` — the exact fare the rider was quoted — via a manual-
+    capture PaymentIntent, so a dead card is surfaced BEFORE a driver is
+    dispatched. Holding before dispatch (rather than after a driver accepts) is
+    deliberate and matches Uber/Lyft: on a 0% commission platform, a driver who
+    accepts and drives to pickup only to hit a dead card has worked for free.
     The held PaymentIntent id reuses the existing ``payment_intent_id`` column.
+
+    The hold no longer carries tip headroom. A post-trip tip is added to this
+    same authorization via ``increment_authorization`` where the card supports it
+    (``auth_incrementable``), and charged separately where it does not — see
+    ``services/payment_service``. ``_resolve_auth_buffer`` explains the one case
+    that still adds headroom.
 
     Outcomes:
       - hold placed → ``fields`` populated (authorized / fare_only).
@@ -210,7 +263,7 @@ async def _preauthorize_ride_card(
         # No saved card to hold against — leave settlement to the post-trip path.
         return _PreauthOutcome()
 
-    buffer = _round(_d(_deps._settings.RIDE_AUTH_BUFFER_CAD))
+    buffer = await _resolve_auth_buffer(_round(_d(grand_total)))
     hold_amount = _round(_d(grand_total) + buffer)
     _ride_stub = {"id": ride_id, "payment_method": "card"}
 
@@ -228,6 +281,10 @@ async def _preauthorize_ride_card(
                 "payment_intent_id": outcome.payment_intent_id,
                 "authorized_amount": _f(hold_amount),
                 "auth_status": "authorized",
+                # Persisted because settlement happens in a LATER request and
+                # cannot re-ask Stripe cheaply. Drives whether a tip is added to
+                # this hold or charged separately.
+                "auth_incrementable": outcome.incremental_authorization_supported,
             }
         )
 
@@ -246,9 +303,13 @@ async def _preauthorize_ride_card(
         )
 
     if outcome.status == "declined":
-        if outcome.decline_code in _RETRYABLE_AT_LOWER_AMOUNT:
+        # ``buffer > 0`` matters: the retry only makes sense when the declined
+        # hold was LARGER than the fare. With the normal zero buffer the hold
+        # already is the fare, so re-authorizing the same amount would just be a
+        # second identical decline — fall straight through to the decline path.
+        if outcome.decline_code in _RETRYABLE_AT_LOWER_AMOUNT and buffer > 0:
             # Buffer tipped a thin balance over — retry holding the fare only so
-            # a rider who can afford the ride still rides (loses single-fee tips).
+            # a rider who can afford the ride still rides.
             fare_outcome = await _deps.authorize_ride(
                 ride=_ride_stub,
                 rider_id=rider_id,
@@ -266,6 +327,7 @@ async def _preauthorize_ride_card(
                         "payment_intent_id": fare_outcome.payment_intent_id,
                         "authorized_amount": _f(_round(_d(grand_total))),
                         "auth_status": "fare_only",
+                        "auth_incrementable": fare_outcome.incremental_authorization_supported,
                     }
                 )
             if fare_outcome.status == "requires_action":

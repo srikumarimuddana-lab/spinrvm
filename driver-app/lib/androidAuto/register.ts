@@ -38,6 +38,13 @@ import { CarMapSurface } from './carSurface';
 import { useCarMapCamera } from './carMapCamera';
 import { isCarDebugAvailable, pushDebug, setDebugFact, useCarDebug } from './carDebug';
 import { getLastCarFix } from './useCarLocation';
+import { bumpCarSurfaceGeneration } from './carSurfaceGeneration';
+// Static, not lazy: importing this file is what runs its TaskManager.defineTask.
+// A task must be defined at bundle load or the OS has nothing to deliver to when
+// it relaunches the process for a location event. index.js only requires this
+// module on Android, so iOS never loads it.
+import { startCarLocationService, stopCarLocationService } from './carLocationTask';
+import { startCarSession, stopCarSession } from './carSession';
 import { triggerDriverEmergency } from '../../hooks/useDriverSafetyTrigger';
 
 const NAV_TEMPLATE_ID = 'spinr-aa-nav';
@@ -585,9 +592,36 @@ export default function registerAutoPlay(): void {
     }
   };
 
+  // Same rule for the post-connect chrome refreshes below: a timer that outlives
+  // the session it was scheduled for is a leak, and one that fires after a
+  // disconnect would push chrome at a template that no longer exists.
+  let chromeRefreshTimers: ReturnType<typeof setTimeout>[] = [];
+  const stopChromeRefresh = () => {
+    chromeRefreshTimers.forEach(clearTimeout);
+    chromeRefreshTimers = [];
+  };
+
   const onConnect = () => {
     // Guard: only build the surface for a genuinely connected head unit.
     if (!HybridAutoPlay.isConnected?.()) return;
+
+    // Before anything else: the baseline (map/marker/buttons) does not depend
+    // on any of this, but everything data-backed does. carSession restores the
+    // session and then loads what the phone dashboard would have — active ride,
+    // today's earnings, dispatch config — none of which any phone screen is
+    // around to fetch on a car-only launch.
+    startCarSession().catch((e) => logError('car session bootstrap failed:', e));
+
+    // Keep the marker alive without the phone app. Android throttles foreground
+    // location for a process it considers backgrounded — which is exactly what a
+    // car-only launch is — so the in-hook watcher alone goes quiet at speed.
+    // Every failure path leaves that watcher in charge, i.e. today's behaviour.
+    startCarLocationService()
+      .then((result) => {
+        log('car location service:', result);
+        setDebugFact('carLocation', result);
+      })
+      .catch((e) => logError('car location service threw:', e));
 
     // Idempotent: the cold-launch-already-connected branch and the 'didConnect'
     // listener can both fire for one connection — build (and reset) at most once.
@@ -628,6 +662,31 @@ export default function registerAutoPlay(): void {
       lastKey = null; // force a chrome refresh on a fresh session
       shownOfferId = null;
       shownAlertNum = null;
+
+      // Self-heal an early build.
+      //
+      // On a car-only cold launch — Android Auto starting the app after a force
+      // close — the template can be created before the JS bundle's assets are
+      // resolvable. The map buttons then render as broken-image placeholders and
+      // the surface comes up empty, and the only recovery was for the driver to
+      // unplug and replug. The cold-start poll below makes this MORE likely,
+      // since it builds the moment a connection appears rather than waiting.
+      //
+      // So re-push the chrome twice on a short delay. setMapButtons re-resolves
+      // the icons, and bumping the surface generation remounts the map. Both are
+      // no-ops when the first attempt already worked — lastKey is cleared so the
+      // chrome genuinely re-sets, and a remount of an already-good map is
+      // invisible.
+      stopChromeRefresh(); // never stack two sessions' worth
+      chromeRefreshTimers = [1200, 4000].map((delay) =>
+        setTimeout(() => {
+          if (!template || !HybridAutoPlay.isConnected?.()) return;
+          lastKey = null; // force setMapButtons/setHeaderActions to run again
+          apply();
+          bumpCarSurfaceGeneration();
+          log('post-connect chrome refresh at', delay, 'ms');
+        }, delay),
+      );
     }
 
     stopColdStartPoll(); // whatever got us here, the poll has done its job
@@ -649,6 +708,10 @@ export default function registerAutoPlay(): void {
       handedOffFor = null;
       primed = false;
       stopColdStartPoll();
+      stopChromeRefresh();
+      stopCarSession();
+      // The screen it was drawing for is gone; so must the notification be.
+      stopCarLocationService().catch((e) => logError('car location stop failed:', e));
     });
     // Cold-launch while a head unit is ALREADY connected: the connect event may
     // have fired during native init before this listener existed, so apply now.

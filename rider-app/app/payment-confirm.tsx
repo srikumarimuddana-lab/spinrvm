@@ -539,9 +539,17 @@ function PaymentConfirmScreenContent() {
         {selectedPayment === 'card' && (
           <View style={styles.holdNote}>
             <Ionicons name="lock-closed-outline" size={15} color={colors.textDim} style={{ marginRight: 8, marginTop: 1 }} />
+            {/*
+              The hold equals the fare shown above — the backend authorizes
+              grand_total exactly (RIDE_AUTH_BUFFER_CAD is 0). This used to read
+              `totalFare + 10` because the hold carried a $10 tip buffer, which
+              made a $5 ride announce a $15 hold. Do NOT reintroduce arithmetic
+              here: the buffer is a server-side decision this screen cannot see,
+              so a hardcoded number can only ever drift out of sync with it.
+            */}
             <Text style={styles.holdNoteText}>
-              A temporary hold of ${(totalFare + 10).toFixed(2)} (estimated fare + $10) is placed on your card.
-              You&apos;re only charged the final fare plus any tip you add after the ride.
+              A temporary hold of ${totalFare.toFixed(2)} is placed on your card — the same as your fare,
+              not an extra charge. You&apos;re only charged once the ride ends.
             </Text>
           </View>
         )}

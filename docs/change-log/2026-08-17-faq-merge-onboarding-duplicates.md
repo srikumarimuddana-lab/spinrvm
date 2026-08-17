@@ -21,7 +21,7 @@ Migration 212 was written to "complement migration 210" (its own header comment 
 
 ## 3. Fix / remediation
 
-New migration `backend/migrations/326_merge_duplicate_onboarding_faqs.sql` merges each of the 3 pairs:
+New migration `backend/migrations/327_merge_duplicate_onboarding_faqs.sql` merges each of the 3 pairs:
 
 1. **"Check application status"** — kept migration 210's row (`'How do I check the status of my driver application?'`) for its fuller answer (a "waited a while, contact support" fallback the 212 row lacked), merging in the 212 row's explicit "Spinr Driver app" naming. Migration 212's `'How do I check the status of my application?'` deactivated.
 2. **"How long does approval take"** — kept 210's row (`'How long does document review and approval take?'`) unchanged; deactivated 212's near-word-for-word duplicate (`'How long does approval take?'`).
@@ -58,12 +58,12 @@ While scanning for other consumers of these question strings (standard blast-rad
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/migrations/326_merge_duplicate_onboarding_faqs.sql` | New migration: deactivates 3 near-duplicate driver-onboarding FAQ rows, merges a small phrase into 1 kept row | Remove side-by-side duplicate/conflicting FAQ content |
-| `docs/driver-faqs-saskatchewan.md` | Removed the two now-deactivated migration-212 entries; updated entry count; added a note pointing to migration 326 | Keep the static doc mirror from going stale relative to the DB |
+| `backend/migrations/327_merge_duplicate_onboarding_faqs.sql` | New migration: deactivates 3 near-duplicate driver-onboarding FAQ rows, merges a small phrase into 1 kept row | Remove side-by-side duplicate/conflicting FAQ content |
+| `docs/driver-faqs-saskatchewan.md` | Removed the two now-deactivated migration-212 entries; updated entry count; added a note pointing to migration 327 | Keep the static doc mirror from going stale relative to the DB |
 
 ## 8. Rollback plan
 
-`git-revert-safe` — no schema change, no hard delete. Reactivating the 3 rows and reverting the 1 merged answer is a straight SQL swap, given in full in the migration's header comment (including an old-text guard on the rollback's answer-revert, so a post-326 hand-edit wouldn't be clobbered by the rollback either).
+`git-revert-safe` — no schema change, no hard delete. Reactivating the 3 rows and reverting the 1 merged answer is a straight SQL swap, given in full in the migration's header comment (including an old-text guard on the rollback's answer-revert, so a post-327 hand-edit wouldn't be clobbered by the rollback either).
 
 ## 9. Verification performed
 

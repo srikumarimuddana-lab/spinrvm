@@ -1,4 +1,4 @@
--- 326_merge_duplicate_onboarding_faqs.sql
+-- 327_merge_duplicate_onboarding_faqs.sql
 --
 -- Content fix, not a schema change: migrations 210 (general driver set) and
 -- 212 (Saskatchewan driver set) each independently authored the same three
@@ -59,7 +59,7 @@
 --     WHERE audience = 'driver' AND question = 'How do I check the status of my driver application?'
 --     AND answer = 'Open the Spinr Driver app and go to your Account / Onboarding section to see your current status. Review starts once all your required documents are uploaded and readable. If it has been a while with no update, contact support.';
 --   (the AND answer= guard mirrors the forward migration's idempotency principle — matching the
---   post-326 text so a hand-edit made after 326 applied isn't clobbered by the rollback either.)
+--   post-327 text so a hand-edit made after 327 applied isn't clobbered by the rollback either.)
 
 -- ---------- 1. "check application status" — keep 210, merge in 212's naming ----------
 

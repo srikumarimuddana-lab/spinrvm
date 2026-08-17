@@ -826,6 +826,100 @@ async def capture_ride(
     )
 
 
+async def capture_cancellation_fee(
+    *,
+    ride_id: str,
+    payment_intent_id: str,
+    fee: Union[Decimal, int],
+    authorized_amount: Union[Decimal, int],
+) -> ChargeOutcome:
+    """Take a cancellation fee out of the booking hold, releasing the rest.
+
+    A partial capture: Stripe captures ``fee`` and automatically releases the
+    remainder of the authorization. Preferred over cancelling the hold and then
+    charging a fresh PaymentIntent, because the funds are *already reserved* —
+    this fee cannot be declined for insufficient funds, whereas a new charge
+    against the same card can (and did, whenever a rider's balance moved between
+    booking and cancelling).
+
+    ``fee`` is capped at ``authorized_amount``. Stripe rejects a capture larger
+    than the authorization, but the cap is also a policy decision: on a $4 fare
+    with a $5 cancellation fee we take the $4 and let the rest go rather than
+    chase the shortfall with a second charge. A cancellation fee larger than the
+    ride itself is not defensible to a rider or a regulator, and the extra dollar
+    is not worth the support ticket.
+
+    ``ChargeOutcome.status``:
+        "captured"      fee taken, remainder released. ``charged_amount`` is what
+                        was ACTUALLY captured, which may be less than ``fee``.
+        "declined"      card declined at capture (rare — issuer reversal)
+        "failed"        hold expired / already captured / Stripe-ops error;
+                        caller falls back to charging a fresh PaymentIntent
+        "unconfigured"  Stripe not installed/configured (dev/test)
+
+    Never raises — callers switch on ``outcome.status``.
+    """
+    capped = min(to_decimal(fee), to_decimal(authorized_amount))
+    if capped < to_decimal(fee):
+        logger.info(
+            "[CANCEL] fee capped to held amount ride=%s fee=%s held=%s uncollected=%s",
+            ride_id,
+            to_decimal(fee),
+            to_decimal(authorized_amount),
+            to_decimal(fee) - capped,
+        )
+    if capped <= 0:
+        return ChargeOutcome(status="captured", charged_amount=Decimal("0.00"))
+    if not payment_intent_id:
+        return ChargeOutcome(status="failed", error_message="No authorization PaymentIntent to capture")
+
+    secret = await _resolve_stripe_secret(ride_id)
+    if secret is None:
+        return ChargeOutcome(status="unconfigured", error_message="Payment processing is not configured")
+
+    amount_cents = dollars_to_cents(capped)
+    try:
+        intent = await asyncio.to_thread(
+            lambda: stripe.PaymentIntent.capture(
+                payment_intent_id,
+                amount_to_capture=amount_cents,
+                api_key=secret,
+                # Distinct namespace from ride-capture: a cancelled ride and a
+                # completed one are different events on the same PI, and reusing
+                # the settlement key would let one dedupe against the other.
+                idempotency_key=f"ride-cancelfee-{ride_id}-{amount_cents}",
+            )
+        )
+    except _StripeCardError as e:
+        err = getattr(e, "error", None)
+        decline_code = getattr(err, "decline_code", None) or getattr(err, "code", None)
+        logger.info("[CANCEL] fee capture declined ride=%s pi=%s code=%s", ride_id, payment_intent_id, decline_code)
+        return ChargeOutcome(
+            status="declined",
+            payment_intent_id=payment_intent_id,
+            decline_code=decline_code,
+            error_message=str(getattr(err, "message", None) or e),
+        )
+    except _StripeBaseError as e:
+        logger.error("[CANCEL] Stripe error capturing fee ride=%s pi=%s: %s", ride_id, payment_intent_id, e)
+        return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id, error_message=str(e))
+    except Exception as e:  # pragma: no cover — defence-in-depth
+        logger.exception("[CANCEL] unexpected error capturing fee ride=%s: %s", ride_id, e)
+        return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id, error_message=str(e))
+
+    status = getattr(intent, "status", "") or ""
+    pi_id = getattr(intent, "id", None) or payment_intent_id
+    if status == "succeeded":
+        return ChargeOutcome(status="captured", payment_intent_id=pi_id, charged_amount=capped)
+
+    logger.error("[CANCEL] unhandled fee-capture PI status=%s ride=%s pi=%s", status, ride_id, pi_id)
+    return ChargeOutcome(
+        status="failed",
+        payment_intent_id=pi_id,
+        error_message=f"Unhandled cancellation-fee capture status: {status}",
+    )
+
+
 async def cancel_authorization(*, ride_id: str, payment_intent_id: str) -> bool:
     """Cancel an uncaptured pre-authorization hold so the funds are released.
 

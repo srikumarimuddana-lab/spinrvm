@@ -133,7 +133,7 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         # 'transfer_completed' payout silently stopped reducing the balance, so
         # the driver could re-withdraw the same earnings.)
         #
-        # Two payout types are NOT money out of a Spinr balance:
+        # Three payout types are NOT money out of a Spinr balance:
         #
         # - 'stripe_sync': legacy-app payout HISTORY materialized from Stripe
         #   transfer records (services/stripe_payout_sync_service.py) for
@@ -141,6 +141,12 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         #   OLD app and are not in this DB's rides, so deducting them would
         #   drive every migrated driver's payable_balance negative and block
         #   real withdrawals.
+        # - 'legacy_outstanding_correction': real Stripe Transfers the NEW app
+        #   sends for legacy-app earnings the old app itself recorded as never
+        #   paid (services/legacy_payout_correction_service.py). Same reason as
+        #   stripe_sync — the underlying rides' earnings are excluded above, so
+        #   deducting the correction too would double-subtract money that was
+        #   never in this balance to begin with.
         # - 'legacy_import': the synthetic offset the booking importer wrote to
         #   cancel imported ride earnings. Those rides are now excluded above,
         #   so their offset must go too — dropping only one half would move the
@@ -149,11 +155,13 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
             await db_supabase.get_rows("payouts", {"driver_id": driver["id"]}, limit=5000)
         )
         _not_money_out = {"reversed", "failed"}
+        _not_balance_affecting_types = {"stripe_sync", "legacy_outstanding_correction"}
         total_payouts = sum(
             (
                 _d(p.get("amount") or 0)
                 for p in payout_rows
-                if str(p.get("status") or "").lower() not in _not_money_out and p.get("payout_type") != "stripe_sync"
+                if str(p.get("status") or "").lower() not in _not_money_out
+                and p.get("payout_type") not in _not_balance_affecting_types
             ),
             Decimal("0"),
         )
@@ -211,13 +219,24 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
     # counts — this closes the same gap for the dollar figure.
     # previous_app_history_visible() still exists (utils/legacy_rides) and
     # is still correct; it's just no longer called here.
+    def _is_paid_previous_app_row(p: dict) -> bool:
+        payout_type = p.get("payout_type")
+        status = str(p.get("status") or "").lower()
+        if payout_type == "stripe_sync":
+            return status not in _not_money_out
+        if payout_type == "legacy_outstanding_correction":
+            # Unlike stripe_sync (always 'completed' by construction — it
+            # only ever materializes an ALREADY-settled Stripe Transfer),
+            # a correction row starts 'awaiting_stripe_onboarding' or
+            # 'ready_for_transfer' and is NOT yet real money until
+            # fire_ready_transfers actually moves it. Counting those early
+            # statuses here would show a driver money they have not
+            # received yet.
+            return status == "completed"
+        return False
+
     previous_app_paid = sum(
-        (
-            _d(p.get("amount") or 0)
-            for p in payout_rows
-            if p.get("payout_type") == "stripe_sync" and str(p.get("status") or "").lower() not in _not_money_out
-        ),
-        Decimal("0"),
+        (_d(p.get("amount") or 0) for p in payout_rows if _is_paid_previous_app_row(p)), Decimal("0")
     )
 
     instant_payout_available = True

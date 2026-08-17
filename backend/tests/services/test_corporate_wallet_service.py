@@ -158,6 +158,59 @@ async def test_adjustment_without_floor_omits_floor_param():
 
 
 @pytest.mark.asyncio
+async def test_late_tip_master_debit_uses_late_tip_adjustment_type_and_negative_delta():
+    """Master-fallback debits for a late tip (migration 319, PR #4047) must
+    use a dedup key distinct from 'adjustment' — reusing it would silently
+    collide with settle_corporate's own master-fallback row for the same
+    ride and apply zero additional debit. The caller passes a positive
+    debit amount; the function negates it internally so the wallet
+    actually loses money."""
+    rows = [{"transaction_id": "t6", "balance_after": "95.00"}]
+    rpc = _build_rpc(rows)
+    with patch("services.corporate_wallet_service.supabase") as mock_sb:
+        mock_sb.rpc = rpc
+        from services.corporate_wallet_service import apply_late_tip_master_debit
+
+        await apply_late_tip_master_debit(
+            wallet_id="w1",
+            amount=5,
+            ride_id="ride_1",
+            actor_user_id="rider_1",
+            notes="Late tip master-fallback debit ride_1",
+            floor=0,
+        )
+    params = rpc.call_args.args[1]
+    assert params["p_scope"] == "master"
+    assert params["p_type"] == "late_tip_adjustment"
+    assert params["p_delta"] == "-5.00"
+    assert params["p_ride_id"] == "ride_1"
+    assert params["p_floor"] == "0.00"
+
+
+@pytest.mark.asyncio
+async def test_late_tip_master_debit_rejects_non_positive_amount():
+    from services.corporate_wallet_service import apply_late_tip_master_debit
+
+    with pytest.raises(ValueError, match="positive"):
+        await apply_late_tip_master_debit(wallet_id="w1", amount=0, ride_id="ride_1")
+    with pytest.raises(ValueError, match="positive"):
+        await apply_late_tip_master_debit(wallet_id="w1", amount=-1, ride_id="ride_1")
+
+
+@pytest.mark.asyncio
+async def test_late_tip_master_debit_without_floor_omits_floor_param():
+    rows = [{"transaction_id": "t7", "balance_after": "95.00"}]
+    rpc = _build_rpc(rows)
+    with patch("services.corporate_wallet_service.supabase") as mock_sb:
+        mock_sb.rpc = rpc
+        from services.corporate_wallet_service import apply_late_tip_master_debit
+
+        await apply_late_tip_master_debit(wallet_id="w1", amount=5, ride_id="ride_1")
+    params = rpc.call_args.args[1]
+    assert params["p_floor"] is None
+
+
+@pytest.mark.asyncio
 async def test_apply_propagates_rpc_exception_without_swallowing():
     """A DB/RPC failure (e.g. lock timeout, constraint violation) must
     surface loudly, never be swallowed into a generic fallback (CLAUDE.md

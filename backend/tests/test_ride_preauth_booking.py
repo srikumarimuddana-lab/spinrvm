@@ -2,11 +2,20 @@
 Unit tests for the booking-time card pre-authorization helper
 backend/routes/rides.py::_preauthorize_ride_card.
 
-The helper places a buffered manual-capture hold (grand_total +
-RIDE_AUTH_BUFFER_CAD) at booking and decides, per Stripe outcome, whether to:
+The helper places a manual-capture hold at booking and decides, per Stripe
+outcome, whether to:
   - persist the hold (authorized / fare_only),
   - block the booking with 402 (genuine decline), or
   - degrade to "no hold, proceed" (SCA, ops error, unconfigured, no card).
+
+Hold sizing is fare-lock dependent, which is what most of these tests pin:
+  - fare_lock_enabled TRUE (production default, migration 248) -> buffer is
+    ZERO, so the hold equals the quoted fare. A $5 ride holds $5, not $15.
+  - fare_lock_enabled FALSE -> settlement could exceed the quote, so a
+    proportional buffer comes back (25% of fare, floored at $2, capped at $10).
+
+The buffer also gates the insufficient_funds retry: retrying "at a lower amount"
+is only meaningful when the hold was larger than the fare in the first place.
 
 `authorize_ride` is patched on the bound name in routes.rides so no Stripe is
 touched. ChargeOutcome is the real dataclass.
@@ -37,47 +46,139 @@ def _outcome(**kw):
 
 def _patch_authorize(*returns):
     """Patch routes.rides._deps.authorize_ride with a sequence of ChargeOutcomes
-    (one per call — buffered hold, then optional fare-only retry)."""
+    (one per call — the hold, then the optional fare-only retry)."""
     return patch(
         "backend.routes.rides._deps.authorize_ride",
         AsyncMock(side_effect=list(returns)),
     )
 
 
+def _patch_fare_lock(enabled: bool):
+    """Pin app_settings.fare_lock_enabled, which decides the hold buffer.
+
+    Every hold-sizing test sets this explicitly rather than relying on a default:
+    the two branches produce different hold amounts, and a test that silently
+    drifted onto the wrong branch would still "pass" while asserting the wrong
+    number.
+    """
+    return patch(
+        "backend.routes.rides._deps.get_app_settings",
+        AsyncMock(return_value={"fare_lock_enabled": enabled}),
+    )
+
+
 @pytest.mark.asyncio
 class TestPreauthorizeRideCard:
-    async def test_authorized_persists_hold_with_buffer(self):
+    async def test_authorized_holds_exact_fare_under_fare_lock(self):
+        """The headline behaviour: hold == quoted fare, no tip headroom.
+
+        A rider quoted $25 sees a $25 pending charge. The old flat $10 buffer
+        made that $35, which reads on a bank feed as being overcharged.
+        """
         from backend.routes.rides import _preauthorize_ride_card
 
-        with _patch_authorize(_outcome(status="authorized", payment_intent_id="pi_hold")) as auth:
-            result = await _preauthorize_ride_card(**_BASE)
+        with _patch_fare_lock(True):
+            with _patch_authorize(_outcome(status="authorized", payment_intent_id="pi_hold")) as auth:
+                result = await _preauthorize_ride_card(**_BASE)
 
         assert result.fields == {
             "payment_intent_id": "pi_hold",
-            "authorized_amount": 35.0,  # 25.00 fare + 10.00 buffer
+            "authorized_amount": 25.0,  # fare exactly — no buffer
             "auth_status": "authorized",
+            "auth_incrementable": False,
         }
         assert result.requires_action is False
-        # Buffered amount actually requested
-        assert auth.call_args.kwargs["amount"] == Decimal("35.00")
+        assert auth.call_args.kwargs["amount"] == Decimal("25.00")
 
-    async def test_insufficient_funds_falls_back_to_fare_only(self):
+    async def test_small_fare_is_not_dwarfed_by_the_hold(self):
+        """Regression for the complaint that started this: $5 ride, $15 hold."""
         from backend.routes.rides import _preauthorize_ride_card
 
-        with _patch_authorize(
-            _outcome(status="declined", decline_code="insufficient_funds"),
-            _outcome(status="authorized", payment_intent_id="pi_fare_only"),
-        ) as auth:
-            result = await _preauthorize_ride_card(**_BASE)
+        with _patch_fare_lock(True):
+            with _patch_authorize(_outcome(status="authorized", payment_intent_id="pi_small")) as auth:
+                await _preauthorize_ride_card(**{**_BASE, "grand_total": Decimal("5.00")})
+
+        assert auth.call_args.kwargs["amount"] == Decimal("5.00")
+
+    async def test_increment_capability_is_persisted(self):
+        """Settlement runs in a later request, so the capability must be stored."""
+        from backend.routes.rides import _preauthorize_ride_card
+
+        with _patch_fare_lock(True):
+            with _patch_authorize(
+                _outcome(
+                    status="authorized",
+                    payment_intent_id="pi_inc",
+                    incremental_authorization_supported=True,
+                )
+            ):
+                result = await _preauthorize_ride_card(**_BASE)
+
+        assert result.fields["auth_incrementable"] is True
+
+    async def test_insufficient_funds_does_not_retry_under_fare_lock(self):
+        """With a zero buffer there is no lower amount to retry at.
+
+        Re-authorizing the identical amount would just decline again, so the
+        booking blocks on the first decline instead of burning a second call.
+        """
+        from backend.routes.rides import _preauthorize_ride_card
+
+        with _patch_fare_lock(True):
+            with _patch_authorize(
+                _outcome(status="declined", decline_code="insufficient_funds"),
+            ) as auth:
+                with pytest.raises(HTTPException) as ei:
+                    await _preauthorize_ride_card(**_BASE)
+
+        assert ei.value.status_code == 402
+        assert auth.call_count == 1
+
+    async def test_insufficient_funds_falls_back_to_fare_only_when_unlocked(self):
+        """The retry survives, but only on the branch where it means something.
+
+        Fare unlocked -> 25% of $25 = $6.25 buffer -> $31.25 hold. If that trips
+        a thin balance, retry at the bare fare so a rider who can afford the ride
+        still rides.
+        """
+        from backend.routes.rides import _preauthorize_ride_card
+
+        with _patch_fare_lock(False):
+            with _patch_authorize(
+                _outcome(status="declined", decline_code="insufficient_funds"),
+                _outcome(status="authorized", payment_intent_id="pi_fare_only"),
+            ) as auth:
+                result = await _preauthorize_ride_card(**_BASE)
 
         assert result.fields == {
             "payment_intent_id": "pi_fare_only",
             "authorized_amount": 25.0,  # fare only, no buffer
             "auth_status": "fare_only",
+            "auth_incrementable": False,
         }
-        # Second call held the fare only
         assert auth.call_count == 2
+        assert auth.call_args_list[0].kwargs["amount"] == Decimal("31.25")
         assert auth.call_args_list[1].kwargs["amount"] == Decimal("25.00")
+
+    async def test_unlocked_buffer_is_floored_for_tiny_fares(self):
+        """25% of $4 is $1, below the $2 floor — the floor wins."""
+        from backend.routes.rides import _preauthorize_ride_card
+
+        with _patch_fare_lock(False):
+            with _patch_authorize(_outcome(status="authorized", payment_intent_id="pi_tiny")) as auth:
+                await _preauthorize_ride_card(**{**_BASE, "grand_total": Decimal("4.00")})
+
+        assert auth.call_args.kwargs["amount"] == Decimal("6.00")
+
+    async def test_unlocked_buffer_is_capped_for_large_fares(self):
+        """25% of $200 is $50, above the $10 cap — the cap wins."""
+        from backend.routes.rides import _preauthorize_ride_card
+
+        with _patch_fare_lock(False):
+            with _patch_authorize(_outcome(status="authorized", payment_intent_id="pi_big")) as auth:
+                await _preauthorize_ride_card(**{**_BASE, "grand_total": Decimal("200.00")})
+
+        assert auth.call_args.kwargs["amount"] == Decimal("210.00")
 
     async def test_both_declined_blocks_with_402(self):
         from backend.routes.rides import _preauthorize_ride_card

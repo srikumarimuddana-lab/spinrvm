@@ -204,7 +204,13 @@ try:
         settle_corporate,
         settle_wallet,
     )
-    from ...utils.stripe_charge import authorize_ride, cancel_authorization, charge_ancillary_fee, verify_authorization
+    from ...utils.stripe_charge import (
+        authorize_ride,
+        cancel_authorization,
+        capture_cancellation_fee,
+        charge_ancillary_fee,
+        verify_authorization,
+    )
 except ImportError:
     from services.cancellation_service import (  # type: ignore
         calculate_cancellation_fee,
@@ -225,6 +231,7 @@ except ImportError:
     from utils.stripe_charge import (  # type: ignore
         authorize_ride,
         cancel_authorization,
+        capture_cancellation_fee,
         charge_ancillary_fee,
         verify_authorization,
     )

@@ -7,7 +7,16 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-17 — A37 FIXED (real-time `ddl_command_end` event
+_Last updated: 2026-08-17 — A36 CLOSED (root cause of the empty
+`financial_events` table found via live webhook-payload evidence: no
+native Spinr ride has ever completed a real payment yet — 100% of
+completed card-paid rides in production are legacy-imported, and the
+write path itself is sound, simply never invoked with real traffic;
+neither original hypothesis, wiped or broken, held up); A40 ADDED (open,
+operational question) — the same investigation confirmed, via real
+webhook payloads (not inference), that the OLD app is still issuing
+live Stripe charges on the shared Stripe account as recently as
+2026-08-15. Prior same day: A37 FIXED (real-time `ddl_command_end` event
 trigger, migration 318, closing the poll-interval gap A35 deliberately
 deferred; verified against a real isolated Supabase branch, not a mock;
 `spinr-migration-reviewer` + `spinr-regulatory-compliance-checker` manual
@@ -3669,7 +3678,8 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   runbook step not checked in this repo) invokes `migrate.py` specifically
   — only this repo's own CI config was checked.
 
-### A36. `financial_events` is 0 rows in production despite active use by 42 files
+### A36. `financial_events` is 0 rows in production despite active use by 42 files — CLOSED (2026-08-17), root cause found: neither hypothesis was right
+
 - **Source:** surfaced while investigating A34 (2026-08-16), not itself
   part of A34's original question.
 - **Issue:** `select count(*) from financial_events` returns **0** in
@@ -3681,19 +3691,134 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   feature. A 0-row count on an actively-integrated ledger table in a
   system with confirmed real Stripe transaction activity (per this
   session's Phase 0.0/0.1 Stripe cross-check) is unexpected.
-- **Two live hypotheses, neither confirmed:** (1) one of the two ad-hoc
-  scripts found during A34's investigation (the wholesale environment-wipe
-  variant, `stats_since` 2026-07-16, predates the legacy import) wiped it
-  and nothing has repopulated it since; (2) the write path for
-  `financial_events` is broken or not actually wired into the live
-  card-payment settlement flow, independent of any deletion script.
-- **Status:** open, not chased further in this session. **Recommended next
-  step:** check whether any recent completed card-paid ride produced a
-  `financial_events` row at settlement time (a fresh test transaction is
-  the fastest way to distinguish "wiped, write path fine" from "write path
-  broken") before assuming either hypothesis.
-- **What was NOT verified:** which hypothesis is correct; whether this
-  predates or postdates the 2026-07-16 wholesale-wipe script's first call.
+- **Root cause, established 2026-08-17 with hard evidence (both original
+  hypotheses ruled out):**
+  1. `services/ledger_service.py`'s `record_event` (the only writer of
+     `financial_events`) is called from exactly two places:
+     `payment_service.record_payment_event`/`record_refund_event` —
+     **both only invoked from inside `routes/webhooks.py`'s
+     `if ride_id:` branches**, where `ride_id = meta.get("ride_id")` comes
+     from the incoming Stripe event's `metadata.ride_id` field
+     (`routes/webhooks.py:747`, `:854`). No other code path ever calls
+     either function.
+  2. Every completed, card-paid ride in production is legacy-imported:
+     `select count(*) from rides where status='completed' and
+     payment_method in ('card','stripe')` → **186/186** carry
+     `legacy_import_metadata->>'source' = 'legacy_mongo_booking_import'`.
+     Legacy imports are bulk `INSERT`s from `booking_import_service.py` —
+     they never touch the live Stripe webhook path and correctly never
+     write `financial_events` (a different, deliberate mechanism handles
+     their money bookkeeping — the `legacy_import`/`stripe_sync` payout
+     types, see A31-A33).
+  3. **Only 2 native (non-legacy) rides exist in all of production**
+     (`select count(*) from rides where legacy_import_metadata->>'source'
+     is distinct from 'legacy_mongo_booking_import'` → 2), both
+     `status='cancelled'`, `payment_status='pending'` — **never charged.**
+     No native Spinr ride has ever reached `status='completed'` with a
+     real Stripe payment in this production database.
+  4. Yet `stripe_events` has **1,232 real webhook deliveries** since
+     2026-06-16, including 117 `payment_intent.succeeded` / 178
+     `charge.succeeded` — genuine Stripe activity confirmed by inspecting
+     actual payloads. Every one inspected carries
+     `metadata = {"type": "card", "booking": "<24-hex ObjectId>",
+     "user_id": "<24-hex ObjectId>"}` — the OLD app's MongoDB-shaped
+     metadata contract, not the new app's `{"ride_id": "<uuid>",
+     "user_id": "<uuid>"}` contract. **The old app is still live and
+     processing real customer payments on the same Stripe account**, as
+     recently as 2026-08-15 (the day before this investigation started).
+  5. Because these events carry no `ride_id`, `routes/webhooks.py`'s
+     `if ride_id:` branch — the only call site of `record_payment_event` —
+     never executes for them. They fall through harmlessly to a
+     catch-all `mark_stripe_event_processed()` (no retry storm), with one
+     minor, low-severity side effect: the `if user_id:` push-notification
+     branch (`routes/webhooks.py:877`) still fires
+     `send_push_notification(user_id=<mongo_objectid>, ...)` for these —
+     wrapped in `try/except`, silently swallowed, wasted work only, not a
+     correctness bug (not fixed here, low priority — see Files below if
+     picked up later).
+- **Conclusion: neither original hypothesis was correct.** Not "wiped by
+  the environment-wipe script" (that script's `stats_since` predates the
+  first legacy import and, per the evidence above, there was never a real
+  row to wipe from this specific table). Not "write path broken" — the
+  write path (`ledger_service.py`'s retry + Sentry-escalation logic) is
+  sound by inspection and has simply never been invoked with real traffic,
+  because no native ride has ever completed a real payment yet. **A
+  0-row `financial_events` table is the CORRECT, accurate state for a
+  system that has not yet processed a single real completed ride** — not
+  a bug.
+- **New finding, more important than the original question:** the old app
+  is confirmed, via live webhook payload evidence (not inference), to
+  still be issuing real Stripe charges on the same Stripe account as of
+  2 days before this investigation. This sharpens (with concrete evidence)
+  the existing `docs/audit/2026-08-15-dual-run-cutover/P0-critical-
+  money-and-regulatory.md` finding #2's "the old app is still running and
+  we can't see inside it" into "confirmed still running, here is exactly
+  what its webhook traffic looks like." Spun off as **A40** below.
+- **Files reviewed (no code changed — this was a pure investigation):**
+  `backend/services/ledger_service.py`, `backend/services/payment_service.py`,
+  `backend/routes/webhooks.py` (lines 666-889 specifically).
+- **What was NOT verified:** whether the old app's webhook traffic is
+  expected/intentional for the current phase of the migration (a business
+  question, not a code question) or whether it should be re-pointed away
+  from the shared endpoint; whether any OTHER event type (beyond
+  `payment_intent.succeeded`) silently no-ops the same way for old-app
+  traffic — only `payment_intent.succeeded` payloads were inspected
+  directly.
+
+### A40. Old app confirmed still live, issuing real Stripe charges on the shared Stripe account (webhook-payload evidence, 2026-08-17)
+
+- **Source:** surfaced while closing A36 (above) — inspecting real
+  `stripe_events` payloads to explain why `financial_events` was empty.
+- **Issue:** live production `stripe_events` (1,232 rows since
+  2026-06-16) contains `payment_intent.succeeded` (117) and
+  `charge.succeeded` (178) events whose `metadata` is shaped
+  `{"type": "card", "booking": "<24-hex Mongo ObjectId>", "user_id":
+  "<24-hex Mongo ObjectId>"}` — the OLD app's metadata contract, landing
+  on THIS (new app's) Stripe webhook endpoint. Most recent observed:
+  2026-08-15, real amounts (e.g. $9.95, $6.00, $4.46, $20.27 CAD),
+  real `booking` references. This is concrete confirmation — not
+  inference — that the old app is currently processing real customer
+  payments on the same Stripe account the new app uses, and that events
+  from both apps are being delivered to a shared webhook receiver.
+- **Why this matters:** `docs/audit/2026-08-15-dual-run-cutover/P0-
+  critical-money-and-regulatory.md` finding #2 already flagged the
+  *structural* risk ("the new system has no idea the old app exists...
+  possibly the *same* Stripe accounts the old app pays into") but framed
+  it as unconfirmed ("we can't see inside it"). This finding closes that
+  gap with direct evidence: the shared-account risk is not hypothetical,
+  it is actively happening, today, and has been for at least the 2 months
+  `stripe_events` has been capturing webhook deliveries (2026-06-16
+  onward — possibly longer; that's just when this table's retention
+  starts).
+- **Current handling is safe, not silently wrong:** `routes/webhooks.py`
+  correctly no-ops these events for ride/payment purposes (no `ride_id`
+  in metadata → no ride update, no `financial_events` write, no double
+  processing) — see A36. The one minor side effect (a wasted, silently
+  swallowed push-notification attempt against an old-app user_id) is
+  low-severity and not itself a data-integrity risk.
+- **Open questions this raises, none answered here:**
+  1. Is the old app's continued live Stripe activity expected/sanctioned
+     for the current migration phase, or should it have stopped by now?
+  2. Are OLD-app Connect/payout-side webhook events (`transfer.created`,
+     `account.updated`, etc. — also present in the `stripe_events` type
+     breakdown) similarly falling through unprocessed, or could any of
+     those interact with NEW-app driver Connect accounts if a driver's
+     Stripe account is shared across both apps (per P0 finding #2's "104
+     of them already have Stripe payout accounts on file — possibly the
+     *same* Stripe accounts the old app pays into")?
+  3. Should the webhook endpoint eventually be split (old app → its own
+     endpoint) before the Oct 31 decommission, or does it not matter
+     since old-app events are already inert here?
+- **Status:** open, no owner assigned — this is an operational/business
+  question (is old-app Stripe activity still sanctioned right now) more
+  than a code question. **Recommended next step:** confirm with whoever
+  owns the old app's operational status whether its continued live
+  payment processing is expected; if not, that's the actual incident, not
+  a code bug in this repo.
+- **What was NOT verified:** whether any old-app event type interacts
+  unsafely with new-app data (only `payment_intent.succeeded` was traced
+  end-to-end); whether this predates 2026-06-16 (`stripe_events`'
+  observed floor, not necessarily when old-app traffic started).
 
 ## P1 — Fix before launch (code)
 

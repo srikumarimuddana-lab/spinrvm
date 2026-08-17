@@ -128,9 +128,17 @@ export function CarMapSurface(): React.ReactElement | null {
   const card = buildTripCard(rideState, activeRide, incomingRide as OfferLike | null, earningsCtx);
   // Money only — the pill is glanceable chrome, so the ride count that the
   // completed-trip card carries would be noise here.
+  //
+  // Shown at $0.00 too. An earlier version hid the pill below a positive total,
+  // on the theory that a zero reads as "you have made nothing" — but that was
+  // wrong twice over. At the start of a shift $0.00 is simply the truth, and it
+  // is what Uber and Lyft both show; and hiding the pill makes "no earnings yet"
+  // indistinguishable from "this feature is broken", which is exactly how it was
+  // first reported. Only a genuinely absent summary hides it now.
   const todayEarnings = useMemo(() => {
-    const total = Number(earningsCtx?.total);
-    return Number.isFinite(total) && total > 0 ? `$${total.toFixed(2)}` : null;
+    if (!earningsCtx) return null;
+    const total = Number(earningsCtx.total);
+    return Number.isFinite(total) && total >= 0 ? `$${total.toFixed(2)}` : null;
   }, [earningsCtx]);
   // Read-only view of the phone's poller — NOT a second useDemandHeatmap().
   //

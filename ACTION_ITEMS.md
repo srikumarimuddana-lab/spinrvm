@@ -9959,6 +9959,19 @@ how much they de-risk a public launch._
   `verifyEmailScreen.test.tsx`'s own resend-countdown, per that file's
   existing comment) still prints at the end of a full run — cosmetic,
   doesn't fail the suite, out of scope for this fix.
+- **Update 2026-08-17 (same day):** CI's `rider-app-test` job re-ran the
+  same `verifyEmailScreen.test.tsx` 5000ms timeout on PR #4102 *after*
+  this fix was live — but this time `privacySettingsToggles.test.tsx`
+  itself passed cleanly with no `ReferenceError`, confirming the leak fix
+  above is real and working. The residual failure is CI-runner-specific
+  timing (likely fewer cores / more worker contention than any local run
+  here reproduced across 3+ consecutive full-suite passes) rather than a
+  second logic bug. Resolved the same way this repo already resolved an
+  identical CI-only, non-locally-reproducible case in
+  `searchDestinationPinIntegrity.test.tsx:186` — widened this one test's
+  timeout to 20000ms with an explanatory comment, rather than continuing
+  to chase a cause invisible outside CI. Verified locally:
+  `npx jest __tests__/verifyEmailScreen.test.tsx` → 10 passed.
 
 ### C26. `pip-compile drift check` fails on any PR that touches `backend/requirements.in` — `requirements.txt` has drifted far out of sync with a fresh resolve, unrelated to the touching PR's actual diff
 

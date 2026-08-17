@@ -1,0 +1,67 @@
+name: Deploy metrics-agent to Fly.io
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'metrics-agent/**'
+      - '.github/workflows/deploy-metrics-agent.yml'
+  workflow_dispatch:
+
+# Serialize deploys, same rationale as deploy-fly.yml: never abort an
+# in-flight rollout, never drop a queued commit's deploy.
+concurrency:
+  group: deploy-metrics-agent-${{ github.ref }}
+  cancel-in-progress: false
+
+# Standalone Fly app implementing ADR-010's metrics-aggregation MVP, Option B
+# (see metrics-agent/README.md and issue #3295). Deliberately NOT part of
+# deploy-fly.yml / backend/fly.toml — kept as its own app so a new
+# third-party binary (Grafana Alloy) never touches the hardened,
+# digest-pinned backend runtime image.
+#
+# This app must already exist on Fly before this workflow can deploy to it —
+# run bootstrap-metrics-agent.yml once first (creates the app, verifies the
+# required Fly secrets are set). This workflow only re-deploys an existing
+# app; it does not create one.
+
+jobs:
+  deploy:
+    name: Deploy to Fly.io
+    runs-on: ubuntu-latest
+    env:
+      FLY_APP: spinr-metrics-agent-yyz
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Verify FLY_API_TOKEN is set
+        run: |
+          if [ -z "${{ secrets.FLY_API_TOKEN }}" ]; then
+            echo "::error title=Missing secret::FLY_API_TOKEN is not set."
+            exit 1
+          fi
+          echo "FLY_API_TOKEN is set (length=${#FLY_API_TOKEN})."
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Verify app exists (run bootstrap-metrics-agent.yml first if not)
+        run: |
+          if ! flyctl status -a "${FLY_APP}" >/dev/null 2>&1; then
+            echo "::error title=App does not exist::${FLY_APP} has not been created yet."
+            echo "Run the 'Bootstrap metrics-agent Fly app' workflow first (workflow_dispatch)."
+            exit 1
+          fi
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      # Build context must be metrics-agent/ so the Docker build picks up its
+      # own Dockerfile, config.alloy, and discover-targets.sh.
+      - name: Deploy to Fly.io
+        working-directory: metrics-agent
+        run: flyctl deploy --remote-only --config fly.toml
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

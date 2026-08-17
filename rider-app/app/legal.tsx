@@ -13,48 +13,50 @@ import { Ionicons } from '@expo/vector-icons';
 import { SpinrConfig } from '@shared/config/spinr.config';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { isValidLegalDocType, legalDocFallbackText, legalDocTitle } from '@shared/config/legalDocs';
 
 export default function LegalScreen() {
     const router = useRouter();
     const params = useLocalSearchParams();
-    const type = params.type as 'tos' | 'privacy';
+    // Accepts any published doc type (see shared/config/legalDocs.ts), not
+    // just 'tos'/'privacy' — defaults to 'tos' for back-compat with any
+    // existing deep link that omits the param.
+    const rawType = (params.type as string) || 'tos';
+    const docType = isValidLegalDocType(rawType) ? rawType : 'tos';
     const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
 
     const [content, setContent] = useState<string>('');
     const [loading, setLoading] = useState(true);
 
-    const title = type === 'tos' ? 'Terms of Service' : 'Privacy Policy';
+    const title = legalDocTitle(docType);
 
-    // Wrapped in useCallback (deps: [type]) so the effect below can safely
-    // depend on it — as a plain function it would have been recreated every
-    // render, which would have made the effect refetch every render too.
+    // Wrapped in useCallback (deps: [docType]) so the effect below can
+    // safely depend on it — as a plain function it would have been
+    // recreated every render, which would have made the effect refetch
+    // every render too.
     //
     // Reads the per-audience /legal-documents endpoint instead of the legacy
     // shared /settings/legal blob, so riders see rider-audience content
     // (Terms of Service Part A only, no driver-specific terms) once it's
     // published. The endpoint falls back to the legacy shared blob
-    // server-side when no per-audience row exists yet, so this is a
-    // non-breaking switch — same displayed content today, correct
-    // audience-scoped content once the admin dashboard publishes it.
+    // server-side when no per-audience row exists yet (tos/privacy only),
+    // so this is a non-breaking switch — same displayed content today,
+    // correct audience-scoped content once the admin dashboard publishes it.
     const fetchLegalText = useCallback(async () => {
         try {
-            const docType = type === 'tos' ? 'tos' : 'privacy';
             const response = await fetch(
                 `${SpinrConfig.backendUrl}/legal-documents?audience=rider&type=${docType}`
             );
             const data = await response.json();
-            const fallback = docType === 'tos'
-                ? 'No Terms of Service have been added yet.'
-                : 'No Privacy Policy has been added yet.';
-            setContent(data.content || fallback);
+            setContent(data.content || legalDocFallbackText(docType));
         } catch (e) {
             console.error(e);
             setContent('Failed to load document. Please check your connection.');
         } finally {
             setLoading(false);
         }
-    }, [type]);
+    }, [docType]);
 
     useEffect(() => {
         // Re-fetches only when the `type` route param changes (fetchLegalText

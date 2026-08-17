@@ -246,7 +246,7 @@ class TestChargeDisputeClosed:
     def test_won_dispute_restores_paid_status(self):
         from backend.routes import webhooks as wh
 
-        data_obj = {"payment_intent": "pi_won", "status": "won"}
+        data_obj = {"id": "dp_won", "payment_intent": "pi_won", "status": "won"}
         raw = _make_stripe_event("charge.dispute.closed", data_obj, event_id="evt_close_1")
         update_one_mock = AsyncMock()
 
@@ -258,6 +258,10 @@ class TestChargeDisputeClosed:
             patch(
                 "backend.routes.webhooks.db_supabase.find_one",
                 AsyncMock(return_value={"id": "dispute_row_1", "ride_id": "ride_won"}),
+            ),
+            patch(
+                "backend.routes.webhooks.db_supabase.get_rows",
+                AsyncMock(return_value=[{"id": "ride_won", "rider_id": "rider_won"}]),
             ),
             patch("backend.routes.webhooks.db_supabase.update_one", update_one_mock),
         ):
@@ -275,7 +279,7 @@ class TestChargeDisputeClosed:
     def test_lost_dispute_marks_dispute_lost(self):
         from backend.routes import webhooks as wh
 
-        data_obj = {"payment_intent": "pi_lost", "status": "lost"}
+        data_obj = {"id": "dp_lost", "payment_intent": "pi_lost", "status": "lost"}
         raw = _make_stripe_event("charge.dispute.closed", data_obj, event_id="evt_close_2")
         update_one_mock = AsyncMock()
 
@@ -287,6 +291,10 @@ class TestChargeDisputeClosed:
             patch(
                 "backend.routes.webhooks.db_supabase.find_one",
                 AsyncMock(return_value={"id": "dispute_row_2", "ride_id": "ride_lost"}),
+            ),
+            patch(
+                "backend.routes.webhooks.db_supabase.get_rows",
+                AsyncMock(return_value=[{"id": "ride_lost", "rider_id": "rider_lost"}]),
             ),
             patch("backend.routes.webhooks.db_supabase.update_one", update_one_mock),
         ):

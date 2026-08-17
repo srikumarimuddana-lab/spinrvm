@@ -3892,7 +3892,13 @@ async def generate_decal_pdf_endpoint(
             await db_supabase.update_one("drivers", {"id": driver["id"]}, updates)
             driver.update(updates)
 
-    pdf_bytes = generate_decal_pdf(drivers)
+    try:
+        from ...settings_loader import get_app_settings
+    except ImportError:
+        from settings_loader import get_app_settings  # type: ignore[no-redef]
+
+    settings = await get_app_settings()
+    pdf_bytes = generate_decal_pdf(drivers, company=settings)
 
     await log_admin_action(
         admin,

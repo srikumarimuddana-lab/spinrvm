@@ -11,10 +11,9 @@
  *   1. The link carries BOTH the area and the demand flag. Dropping either
  *      lands the operator on an unfiltered map with the overlay off, which
  *      looks like the link simply didn't work.
- *   2. It is hidden from an admin without the `rides` module. Live Monitoring
- *      is gated by `rides` while this page is gated by `heatmap`, so an
- *      unconditional link sends a heatmap-only admin to /403 — a broken link,
- *      not a permission boundary they can understand.
+ *   2. It is hidden from an admin without the `rides` module — the module that
+ *      gates Live Monitoring. An unconditional link sends anyone else to /403,
+ *      which reads as a broken link rather than a permission boundary.
  */
 
 import React from "react";
@@ -35,7 +34,7 @@ const AREA = {
 
 // Mutable so each test can pick the viewer's grants before importing the page.
 const authState: { user: { role: string; modules: string[] } | null } = {
-  user: { role: "operations", modules: ["heatmap", "rides"] },
+  user: { role: "operations", modules: ["rides"] },
 };
 
 vi.mock("@/store/authStore", () => ({
@@ -82,7 +81,7 @@ async function mountWithDemand() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  authState.user = { role: "operations", modules: ["heatmap", "rides"] };
+  authState.user = { role: "operations", modules: ["rides"] };
 });
 
 describe("demand card → live map cross-link", () => {
@@ -99,9 +98,9 @@ describe("demand card → live map cross-link", () => {
   });
 
   it("hides the link from an admin without the rides module", async () => {
-    // Live Monitoring is gated by `rides`; this page by `heatmap`. Showing the
-    // link anyway would send them to /403.
-    authState.user = { role: "operations", modules: ["heatmap"] };
+    // Live Monitoring is gated by `rides`. An admin who can reach this page
+    // without that module must not be shown a link to /403.
+    authState.user = { role: "operations", modules: ["dashboard"] };
     await mountWithDemand();
 
     expect(screen.queryByRole("link", { name: /on the live map/i })).toBeNull();

@@ -220,6 +220,13 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         Decimal("0"),
     )
 
+    instant_payout_available = True
+    sa_id = driver.get("service_area_id")
+    if sa_id:
+        sa_rows = await db_supabase.get_rows("service_areas", {"id": sa_id}, limit=1)
+        if sa_rows and sa_rows[0].get("instant_payout_enabled") is False:
+            instant_payout_available = False
+
     return {
         # total_earnings = ride income + tax + incentives + cancel fees +
         # bonuses — full gross composition, matching /earnings and driver
@@ -243,6 +250,7 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         "stripe_id_number_provided": bool(driver.get("stripe_id_number_provided", False)),
         "total_tips": _money_str(total_tips),
         "total_rides": total_rides,
+        "instant_payout_available": instant_payout_available,
     }
 
 

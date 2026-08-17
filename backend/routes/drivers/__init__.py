@@ -160,6 +160,7 @@ from .payouts import (  # noqa: F401
     _attempt_transfer_reversal,
     _ensure_stripe_account,
     _gst_on_file,
+    _request_payout_legacy,
     _require_gst_for_payout,
     _require_sin_for_payout,
     _stripe_bounce_page,

@@ -937,6 +937,7 @@ function RootLayoutInner({
             <Stack.Screen name="support" />
             <Stack.Screen name="ai-assistant" />
             <Stack.Screen name="legal" />
+            <Stack.Screen name="safety-hub" />
             <Stack.Screen name="emergency-contacts" />
             <Stack.Screen name="report-safety" />
             <Stack.Screen name="privacy-settings" />

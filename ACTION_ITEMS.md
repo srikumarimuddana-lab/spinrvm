@@ -6012,8 +6012,22 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   repo).
 
 ### C12. Codecov uploads on `main` pushes silently fail — no token configured
-- [ ] **Status:** open — partially addressed 2026-08-11 (the "also worth
-  doing alongside" half, not the actual fix — see below). The `CODECOV_TOKEN`
+- [x] **Status:** CLOSED 2026-08-16 — user explicitly chose "remove the
+  step" over "fix the token" (no Codecov account access available in-session
+  to generate one). All 4 `codecov/codecov-action@v6` upload steps removed
+  from `ci.yml` (`backend-test`, the already-dead `frontend-test`,
+  `driver-app-test`, `rider-app-test`) along with their now-orphaned
+  `steps.codecov_upload.outcome == 'failure'` warning-annotation follow-ups.
+  Verified the "Coverage Regression"/"Corporate Coverage Floor" guardrails
+  in `ci-guardrails.yml` never depended on these uploads (they compute
+  PR-branch coverage locally via `pytest --cov`), so this is a pure noise
+  reduction — no gating behavior changed. **Investigating this surfaced a
+  separate, more important gap — see C24.** Re-open (new item, don't reuse
+  this checkbox) if Codecov access is ever obtained and the dashboard/
+  historical-trend value is wanted back.
+- **Prior status before closing:** open — partially addressed 2026-08-11 (the
+  "also worth doing alongside" half, not the actual fix — see below). The
+  `CODECOV_TOKEN`
   secret itself is still missing; do not close this checkbox until it's
   added and `token: ${{ secrets.CODECOV_TOKEN }}` is wired into the 3 steps
   below.
@@ -6071,6 +6085,58 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 - **Not blocking:** actual test pass/fail and coverage-floor enforcement
   (the `--cov-fail-under` gate inside `pytest`) are unaffected — this is
   purely the external Codecov *reporting* path, not CI's own gate.
+
+### C24. "Coverage Regression" guardrail cannot fail while `CODECOV_TOKEN` is unset — every PR auto-passes it
+- [x] **Status:** partially CLOSED 2026-08-16, same day as found. The
+  **honesty half** is fixed: `ci-guardrails.yml`'s "Assert no regression"
+  step now distinguishes `base_pct <= 0` (no baseline — cannot verify
+  anything) from a genuinely verified pass/fail, sets a
+  `baseline_status` job output (`no-baseline` vs `verified`), and
+  `guardrail-summary` renders the PR-facing table row as
+  `⚠️ not verified (no baseline — see ACTION_ITEMS.md C24)` instead of a
+  bare ✅ when there's no baseline — the false "PASS: Coverage within
+  tolerance" message is gone; the step's own log and the PR summary now
+  both say plainly that no regression check happened. **Still open:** this
+  does not add real regression detection back — that still needs a real
+  `CODECOV_TOKEN` (same blocker as C12, no account access available in any
+  session so far). Deliberately did **not** make `base_pct <= 0` a hard
+  `sys.exit(1)` — job-level `continue-on-error: true` was already present
+  before this fix and a missing token isn't any individual PR author's
+  fault; turning it into a blocking failure for every PR until someone
+  adds the token would be a bigger, more disruptive behavior change than
+  this fix's actual goal (truthful reporting), and wasn't asked for.
+- **What's wrong:** `.github/workflows/ci-guardrails.yml`'s "Fetch base
+  branch coverage from Codecov" step (`base_coverage` job step, ~line 82)
+  calls `https://codecov.io/api/v2/github/.../branches/{base}/coverage`
+  with `Authorization: Bearer ${CODECOV_TOKEN}`. With no `CODECOV_TOKEN`
+  secret configured (same root cause as C12), that call fails; the script's
+  own fallback (`... || echo "0"`) sets `BASE_PCT=0`. The next step,
+  "Assert no regression", only fails when `base_pct > 0 and delta <
+  -TOLERANCE` — since `base_pct` is always `0`, that condition can **never**
+  be true. The gate does not degrade gracefully, it **structurally cannot
+  fail**, and has printed "PASS: Coverage within tolerance" on every PR this
+  session regardless of what the PR actually did to coverage.
+- **Impact:** "Coverage Regression: success" in every Guard Rails summary
+  this session (and, per the mechanism, every PR since this workflow was
+  introduced) has been a rubber stamp, not a real check. A PR that
+  genuinely tanked backend coverage would show the same green tick as one
+  that improved it. This is a real gap in the release-quality gate, more
+  consequential than C12's noisy-but-harmless upload failures.
+- **Root cause:** same missing `CODECOV_TOKEN` secret as C12, but this is
+  the half that actually changes gating behavior — C12 only affected
+  external reporting.
+- **Why not fixed here:** same constraint as C12 — no Codecov account
+  access available in this session to generate a real token. Two real
+  fixes, not mutually exclusive: (1) add `CODECOV_TOKEN` so the base-branch
+  fetch actually works; (2) regardless of (1), make the "Assert no
+  regression" step fail loudly (or at minimum warn) when `base_pct == 0`
+  instead of silently treating "no baseline data" as "no regression" —
+  those are different findings and should not share one code path.
+- **Confirmed NOT shared:** checked `corporate-coverage-floor-gate` (the
+  "Corporate Coverage Floor" guardrail) directly — it's a fully separate
+  job that runs its own test suite and calls
+  `scripts/check_corporate_coverage_floor.py` locally, no Codecov API call
+  anywhere in it. Only "Coverage Regression" has this bug.
 
 ### C13. Required `pull_request`-triggered workflows silently never fire on some PRs
 - [ ] **Status:** open — found 2026-08-10 on PR #3494. `CI/CD Pipeline`

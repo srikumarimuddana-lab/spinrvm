@@ -6,9 +6,10 @@
  * Code under test: shared/components/SafetyOverlay.tsx
  */
 import React from 'react';
-import { Alert, Linking } from 'react-native';
+import { Alert, Linking, Share as RNShare } from 'react-native';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { SafetyOverlay } from '@shared/components/SafetyOverlay';
+import api from '@shared/api/client';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 
@@ -145,6 +146,50 @@ describe('SafetyOverlay', () => {
     });
 
     expect(onTrigger).toHaveBeenCalled();
+    expect(Alert.alert).not.toHaveBeenCalled();
+  });
+
+  // --- Regression: the share button used to do nothing at all (finding F1) ---
+
+  it('opens the OS share sheet with the real link', async () => {
+    // It previously awaited GET /rides/{id}/share and discarded the response:
+    // no share sheet, no clipboard. The control appeared to succeed while
+    // doing nothing, which is the worst failure mode for a safety action.
+    const shareSpy = jest.spyOn(RNShare, 'share').mockResolvedValue({ action: 'sharedAction' } as any);
+
+    const { getByLabelText } = render(
+      <SafetyOverlay visible rideId="ride-1" onClose={jest.fn()} onTrigger={jest.fn()} />,
+    );
+    await flush();
+
+    fireEvent.press(getByLabelText('Share live trip link'));
+    await flush();
+
+    expect(shareSpy).toHaveBeenCalledTimes(1);
+    expect(shareSpy.mock.calls[0][0].message).toContain('https://track.spinr.ca/tok');
+  });
+
+  it('shows an inline failure — never an Alert — when the link cannot be fetched', async () => {
+    // The overlay's premise is that a threatening passenger sees nothing
+    // change on the driver's screen (B16), so even failure stays quiet.
+    (api.get as jest.Mock).mockImplementationOnce((url: string) =>
+      url.includes('/emergency-contacts')
+        ? Promise.resolve({ data: { contacts: [] } })
+        : Promise.reject(new Error('offline')),
+    );
+    (api.get as jest.Mock).mockImplementationOnce(() => Promise.reject(new Error('offline')));
+    const shareSpy = jest.spyOn(RNShare, 'share');
+
+    const { getByLabelText, getByText } = render(
+      <SafetyOverlay visible rideId="ride-1" onClose={jest.fn()} onTrigger={jest.fn()} />,
+    );
+    await flush();
+
+    fireEvent.press(getByLabelText('Share live trip link'));
+    await flush();
+
+    expect(getByText(/Couldn't get the link/)).toBeTruthy();
+    expect(shareSpy).not.toHaveBeenCalled();
     expect(Alert.alert).not.toHaveBeenCalled();
   });
 });

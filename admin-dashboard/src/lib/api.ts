@@ -268,6 +268,7 @@ export {
     adminUpdateDriverStripeAccount,
     adminValidateRiderImport,
     adminCommitRiderImport,
+    adminRegenerateImportedSnapshots,
 } from "./api/imports";
 export type {
     DriverImportReportItem,
@@ -293,6 +294,7 @@ export type {
     RiderImportDuplicate,
     RiderImportReport,
     RiderImportCommitResult,
+    SnapshotRegenerateResult,
 } from "./api/imports";
 export {
     getCloudMessages,
@@ -317,6 +319,7 @@ export {
     getUserWallet,
     creditUserWallet,
     debitUserWallet,
+    backfillStripeCustomerEmails,
 } from "./api/users-wallet";
 export {
     getPromotions,
@@ -411,9 +414,16 @@ export {
     getPayoutStats,
     closePayoutPeriod,
     getPayoutsOverview,
+    getAutoPayoutBatches,
+    getBlockedPayoutDrivers,
     resolveDispute,
 } from "./api/analytics-payouts";
-export type { PayoutsOverview, ClosePayoutPeriodResponse } from "./api/analytics-payouts";
+export type {
+    PayoutsOverview,
+    ClosePayoutPeriodResponse,
+    AutoPayoutBatch,
+    BlockedDriver,
+} from "./api/analytics-payouts";
 export {
     getActiveRides,
     getMonitoringDrivers,

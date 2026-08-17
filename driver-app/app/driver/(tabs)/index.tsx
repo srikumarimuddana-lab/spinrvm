@@ -36,6 +36,7 @@ import { showToast } from '../../../hooks/useToast';
 import api, { isAppCheckTokenReady } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import type { SOSTriggerResult } from '@shared/types/safety';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from '@shared/api/queryClient';
@@ -292,6 +293,8 @@ function DriverDashboard() {
     setLayer: setHeatmapLayer,
     forecast: heatmapForecast,
     hotspots: heatmapHotspots,
+    cellLatDeg: heatmapCellLat,
+    cellLngDeg: heatmapCellLng,
   } = useDemandHeatmap(rideState, isOnline);
 
   // Airport sub-zones — rendered as blue dashed polygons on idle map (HM-21)
@@ -777,7 +780,12 @@ function DriverDashboard() {
 
         {/* Demand heatmap — cross-platform cell polygons (HM-05) */}
         {heatmapCells.length > 0 && Platform.OS !== 'web' && (
-          <HeatmapCells cells={heatmapCells} region={null} />
+          <HeatmapCells
+            cells={heatmapCells}
+            region={null}
+            cellLatDeg={heatmapCellLat}
+            cellLngDeg={heatmapCellLng}
+          />
         )}
 
         {/* Airport sub-zone polygons — blue dashed outlines (HM-21) */}
@@ -880,7 +888,7 @@ function DriverDashboard() {
           <View style={{ position: 'absolute', top: insets.top + 56, right: 16, zIndex: 50 }}>
             <SOSButton
               rideId={activeRide.ride.id}
-              onTrigger={async (rideId, lat, lng) => {
+              onTrigger={async (rideId, lat, lng, idempotencyKey) => {
                 // Bug fix (B16): rethrow instead of swallowing. Previously
                 // this try/catch+console.error meant SOSButton's own
                 // retry/FAILED state could never activate for drivers even
@@ -888,7 +896,19 @@ function DriverDashboard() {
                 // like silent success after one attempt. Pure improvement,
                 // no plausible regression on the happy path: the only
                 // behavior change flag-off drivers see.
-                await api.post(`/rides/${rideId}/emergency`, { latitude: lat, longitude: lng });
+                //
+                // Forwards idempotencyKey and RETURNS the response body. Both
+                // matter and were missed when the rider side was fixed:
+                // without the key, SOSButton's 3 retries can still create 3
+                // incidents and 3x "URGENT" SMS on this (default, live) driver
+                // path; without the return, deriveContactOutcome sees `void`
+                // and every successful driver SOS would show the "we could not
+                // confirm your contacts were reached" copy.
+                const res = await api.post<SOSTriggerResult>(
+                  `/rides/${rideId}/emergency`,
+                  { latitude: lat, longitude: lng, idempotency_key: idempotencyKey },
+                );
+                return res.data;
               }}
               t={t}
             />

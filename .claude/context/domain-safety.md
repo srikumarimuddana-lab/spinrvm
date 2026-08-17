@@ -15,7 +15,15 @@ _Load when working on: SOS flow, emergency contacts, insurance period transition
 Spinr SOS is an **assist**, not a replacement for 911.
 
 1. User holds SOS button 1.2 s (`SOS_HOLD_MS` in `shared/components/SOSButton.tsx`; prevents accidental trigger)
-2. Client posts `/safety/sos` with `{ride_id?, lat, lng, user_id}` — fire-and-forget, retry 3×
+2. Client posts **`POST /rides/{ride_id}/emergency`** (there is no `/safety/sos`
+   endpoint — that path never existed) with `{message, latitude, longitude,
+   idempotency_key}`. Retry is **3 attempts, 1 s/2 s backoff, in `SOSButton`
+   only** — `rideStore.triggerEmergency` deliberately has no ladder of its own,
+   because until 2026-08-16 the two multiplied to as many as 9 real POSTs per
+   press. `idempotency_key` is generated once per *press* and reused across that
+   press's attempts, so a retry after a lost response returns the original
+   incident instead of duplicating it and re-alerting contacts (migration 315).
+   Not fire-and-forget: the response is awaited and read.
 3. Backend creates `safety_incidents` row (append-only) and in parallel:
    - Notifies all emergency contacts via SMS (Twilio) with rider name + last-known location link
    - Broadcasts a WS event to the admin dashboard, emails the safety distribution list, and logs a
@@ -36,7 +44,13 @@ Spinr SOS is an **assist**, not a replacement for 911.
      payload carries only IDs (`incident_id`, `ride_id`, `reported_by_user_id`) and a geohashed
      area (`utils.pii.geohash`) — never raw lat/lng, name, email, or phone (PIPEDA).
    - Pushes `sos_acknowledged` WS event back to the user app
-4. App shows a one-tap **"Call 911"** button — we never auto-dial
+4. App shows a one-tap **"Call 911"** button — we never auto-dial. The
+   accompanying copy branches on what actually happened to the emergency
+   contacts (reached / none reached / none saved / unknown), derived from the
+   response via `deriveContactOutcome` in `shared/types/safety.ts`. **Never
+   claim a notification the response does not support** — until 2026-08-16 this
+   dialog asserted contacts had been notified on any 200, including when every
+   SMS failed and when the user had no contacts saved.
 5. Safety team opens live view of ride (driver ID, vehicle, route trace, audio recording if enabled)
 
 Hard rules:
@@ -47,10 +61,35 @@ Hard rules:
 
 ## Emergency contacts
 
-- Max 5 per user, stored encrypted (`pgcrypto`) in `emergency_contacts`
-- Phone number validated at add-time via OTP ping ("Jane added you as emergency contact — reply STOP to opt out")
+> **Corrected 2026-08-16.** This section previously described a design that was
+> never built — encryption at rest, an OTP opt-in ping, a STOP keyword, and a
+> max-5 constraint. All four were verified absent from the code. The aspirational
+> text is preserved under "Intended, not built" below so the intent isn't lost,
+> but do not treat any of it as current behaviour.
+
+**What actually exists today:**
+- Stored as **plaintext** `TEXT` in `emergency_contacts` (`name`, `phone`,
+  `relationship`) — see `migrations/120_ensure_emergency_contacts_and_gps_column.sql`
+  and `08_complete_schema.sql`. No `pgcrypto` anywhere near this table.
+- **No cap is enforced.** `routes/rides/safety.py` reads with `limit=5`, which
+  silently truncates: a user can store more than five contacts and the extras
+  are never notified, with nothing telling them so. There is no DB constraint
+  and no insert-time check in `routes/users.py`.
+- **No consent handshake.** We send SMS to these numbers during an SOS without
+  the recipient ever having opted in. There is no OTP ping, no STOP handling,
+  no opt-out path. Under PIPEDA this is a real exposure, not just a doc gap —
+  tracked as finding F13 in `docs/proposals/2026-08-16-safety-toolkit-gap-analysis.md`.
+- `relationship` is stored but is **not** included in the SOS payload or the
+  SMS body; nothing surfaces it to a dispatcher.
+- Per-contact delivery status **is** returned by `POST /rides/{id}/emergency`
+  (`contacts[{id,name,notified}]` + `contacts_notified`) and is consumed by both
+  apps as of 2026-08-16.
+
+**Intended, not built** (kept as the target design, unimplemented):
+- Max 5 per user, stored encrypted (`pgcrypto`)
+- Phone validated at add-time via OTP ping ("Jane added you as emergency contact — reply STOP to opt out")
 - Contact can opt out any time via STOP keyword or dashboard
-- Surfaced in SOS payload by relationship (`spouse`, `parent`, `friend`) for dispatcher context
+- Relationship surfaced in the SOS payload for dispatcher context
 
 ## Insurance period transitions (audit-critical)
 
@@ -82,16 +121,41 @@ Rules specific to safety domain:
 ## Share trip / live location
 
 - Rider can share live ETA + route with up to 3 phone numbers per ride
-- Link expires 2 h after `completed` — never permanent
+- **Link expiry is 24 h from when the token was minted** — not the "2 h after
+  `completed`" this doc promised until 2026-08-16. The code has always
+  implemented 24-h-from-creation (`routes/rides/sharing.py::track_shared_ride`).
+  Which window is correct is a product decision that has not been made; the doc
+  is corrected here to describe what actually ships. **Nothing is permanent**:
+  until 2026-08-16 a token minted by `GET /rides/{id}/share` was never stamped
+  with a creation time and so never expired at all — fixed, with legacy
+  unstamped tokens expiring once their ride reaches a terminal state.
 - Shared view shows driver first name, vehicle plate, live location — never driver phone or last name
 - Never share rider PII with the driver's shared contacts (no reverse-sharing)
+- The driver can also share their own trip link from the Safety overlay
+  (driver-app, behind `driver_discreet_sos_enabled`)
 
 ## Night ride protections
 
-- Rides between 22:00 and 05:00 local automatically enable:
-  - Audio recording (rider + driver consented in ToS; jurisdictional check for two-party consent)
-  - Route-deviation alert (> 500 m off suggested route for > 60 s → silent ping to safety team)
-  - Forced check-in at 15 min mark for rides > 30 min
+> **Corrected 2026-08-16.** There is no night-ride branch in the code at all —
+> nothing keys off 22:00–05:00. Of the three protections listed here, one exists
+> in a different form and two do not exist.
+
+**What actually exists today:**
+- **Safety check-in** — real, but not night-scoped and not at 15 min.
+  `utils/safety_checkin_loop.py` runs for **every** ride: at **20 minutes**
+  `in_progress` it sends a silent "Are you okay?" push, and escalates to an open
+  safety incident if there's no response within 90 s. Replay-safe across replicas
+  via three Redis keys.
+- **Audio recording** — does not exist. No recording code, no storage, no consent
+  capture. Blocked on legal review before it could be built: Saskatchewan is
+  one-party consent, but a platform recording *both* parties needs explicit
+  consent from each plus retention/access rules.
+- **Route-deviation safety alert** — does not exist. `utils/route_validation.py`
+  computes a `deviation_pct`, but that is **GPS-spoofing fraud detection** on
+  completed trips; it does not run live and pings nobody on the safety team.
+
+**Intended, not built:** the 22:00–05:00 auto-enable, audio recording, the
+>500 m/60 s live deviation ping, and the 15-minute check-in threshold.
 
 ## Common pitfalls
 

@@ -75,6 +75,7 @@ from .ai_console import router as ai_console_router
 from .analytics import api_router as analytics_router
 from .auth import admin_auth_router
 from .auth import router as auth_router
+from .auto_payouts import router as auto_payouts_router
 from .booking_import import router as booking_import_router
 from .compliance import api_router as compliance_router
 from .data_transfer_export import router as data_transfer_export_router
@@ -130,9 +131,18 @@ admin_router = APIRouter(
 # `auth_router` is an empty placeholder; the real login/session/logout routes
 # live on `admin_auth_router`, mounted separately by server.py (no auth gate).
 admin_router.include_router(auth_router)
-# No module gate — the routes enforce role == super_admin themselves
-# (impersonation + chat-history reads are stricter than any module grant).
-admin_router.include_router(ai_console_router)
+# AI Console — impersonation + rider/driver chat-history reads, stricter than
+# any module grant. Every route in the router already calls
+# _require_super_admin() in its own body, and that stays as defence in depth —
+# but the boundary is now also structural.
+#
+# Why the change: relying only on the per-function calls made the boundary
+# invisible at the mount and dependent on every future route remembering it. A
+# new endpoint added to this router without that one line would have been
+# reachable by any admin, and nothing in the mount would have hinted otherwise.
+# Same reasoning as the data-transfer routers below (see the bulk_operations
+# note): make the boundary explicit and independent of what an author remembers.
+admin_router.include_router(ai_console_router, dependencies=[Depends(require_super_admin)])
 admin_router.include_router(settings_router, dependencies=[Depends(require_module("settings"))])
 admin_router.include_router(service_areas_router, dependencies=[Depends(require_module("service_areas"))])
 admin_router.include_router(venues_router, dependencies=[Depends(require_module("service_areas"))])
@@ -213,6 +223,11 @@ admin_router.include_router(maintenance_router, dependencies=[Depends(require_mo
 admin_router.include_router(analytics_router, dependencies=[Depends(require_module("dashboard"))])
 admin_router.include_router(monitoring_router, dependencies=[Depends(require_module("dashboard"))])
 admin_router.include_router(wallet_router, dependencies=[Depends(require_module("earnings"))])
+# Weekly auto-payout batch ledger + blocked-driver preflight. Read-only
+# monitoring views, so they sit on the `earnings` module alongside the other
+# driver-payout surfaces rather than the super_admin posture of the payout
+# SYNC router — nothing here can trigger or alter a payout.
+admin_router.include_router(auto_payouts_router, dependencies=[Depends(require_module("earnings"))])
 admin_router.include_router(incentives_router, dependencies=[Depends(require_module("service_areas"))])
 admin_router.include_router(disputes_admin_router, dependencies=[Depends(require_module("disputes"))])
 admin_router.include_router(compliance_router, dependencies=[Depends(require_module("compliance"))])

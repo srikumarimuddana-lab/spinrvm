@@ -16,6 +16,8 @@ import { Switch } from "@/components/ui/switch";
 import { getSettings, updateSettings } from "@/lib/api/settings-ai";
 import { getSurgeHistory } from "@/lib/api/analytics-payouts";
 import { TUNING_PLAYBOOK, tuningWarnings, warningsFor } from "@/lib/heatmap-tuning-guidance";
+import { parseAllowlistIds } from "@/lib/allowlist-ids";
+import { useUnsavedChangesWarning } from "@/hooks/useUnsavedChangesWarning";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 
 const GeofenceMap = lazy(() => import("@/components/geofence-map"));
@@ -620,6 +622,13 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
     regulatory_region: area.regulatory_region || area.province || "SK",
     regulatory_requirements_url: area.regulatory_requirements_url || "",
     regulatory_notes: area.regulatory_notes || "",
+    // Safety panel (migration 316) — rider/driver facing, distinct from the
+    // regulatory_* fields above which are driver-licensing metadata.
+    emergency_number: area.emergency_number || "911",
+    safety_authority_name: area.safety_authority_name || "",
+    safety_authority_phone: area.safety_authority_phone || "",
+    safety_authority_url: area.safety_authority_url || "",
+    safety_authority_hours: area.safety_authority_hours || "",
     max_pickup_radius_km: area.max_pickup_radius_km || 5,
     is_active: area.is_active !== false,
     driver_matching_algorithm: area.driver_matching_algorithm || "nearest",
@@ -667,6 +676,14 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
       regulatory_region: form.regulatory_region || form.province,
       regulatory_requirements_url: form.regulatory_requirements_url,
       regulatory_notes: form.regulatory_notes,
+      // Blank strings are sent through as-is: the apps treat an empty
+      // safety_authority_name as "hide the row", so clearing a field is a
+      // valid way to remove the tile for an area.
+      emergency_number: (form.emergency_number || "").trim() || "911",
+      safety_authority_name: form.safety_authority_name,
+      safety_authority_phone: form.safety_authority_phone,
+      safety_authority_url: form.safety_authority_url,
+      safety_authority_hours: form.safety_authority_hours,
       max_pickup_radius_km: parseFloat(String(form.max_pickup_radius_km)) || 5,
       is_active: form.is_active,
       driver_matching_algorithm: form.driver_matching_algorithm,
@@ -743,6 +760,42 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
           <label className="block text-xs font-semibold text-muted-foreground mb-1">Regulatory Notes</label>
           <textarea className="w-full border rounded-lg px-3 py-2 text-sm min-h-[80px]" value={form.regulatory_notes} onChange={e => setForm({ ...form, regulatory_notes: e.target.value })} placeholder="Summarize local driver approval/licensing rules for this service area" />
         </div>
+        {/* ---- Safety panel (migration 316) ----
+            Kept visually separate from the Regulatory block above on purpose:
+            those fields decide who licenses a DRIVER, these decide what a
+            RIDER sees when they press SOS. Conflating them is how a licensing
+            office ends up on an emergency screen. */}
+        <div className="md:col-span-3 mt-2 pt-3 border-t">
+          <h4 className="text-sm font-semibold">Safety panel (rider &amp; driver facing)</h4>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Shown when someone opens SOS in this area. Leave the authority name blank to hide that
+            row entirely — a new area with nothing filled in simply shows no local contact.
+          </p>
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Emergency Number</label>
+          <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.emergency_number} onChange={e => setForm({ ...form, emergency_number: e.target.value })} placeholder="911" />
+          <p className="text-[11px] text-muted-foreground mt-1">Dialled by the SOS panel. Leave as 911 unless this area genuinely differs.</p>
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Local Authority Name</label>
+          <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.safety_authority_name} onChange={e => setForm({ ...form, safety_authority_name: e.target.value })} placeholder="e.g. City of Calgary 311" />
+          <p className="text-[11px] text-muted-foreground mt-1">Non-emergency complaint channel. Blank = row hidden.</p>
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Local Authority Phone</label>
+          <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.safety_authority_phone} onChange={e => setForm({ ...form, safety_authority_phone: e.target.value })} placeholder="e.g. 311" />
+          <p className="text-[11px] text-muted-foreground mt-1">Short codes like 311 are fine. Blank = link only, no call button.</p>
+        </div>
+        <div className="md:col-span-2">
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Local Authority URL</label>
+          <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.safety_authority_url} onChange={e => setForm({ ...form, safety_authority_url: e.target.value })} placeholder="Link to the local rideshare complaint page" />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Authority Hours</label>
+          <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.safety_authority_hours} onChange={e => setForm({ ...form, safety_authority_hours: e.target.value })} placeholder="e.g. 24/7" />
+        </div>
+
         <div>
           <label className="block text-xs font-semibold text-muted-foreground mb-1">Pickup Radius (km)</label>
           <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" step="0.5" value={form.max_pickup_radius_km} onChange={e => setForm({ ...form, max_pickup_radius_km: e.target.value as any })} />
@@ -2264,7 +2317,11 @@ function SurgeHistoryChart({ areaId, areaName }: { areaId: string; areaName: str
               </defs>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis
-                dataKey={hours <= 24 ? "time" : "fullTime"}
+                // < 24, not <= 24: a full 24-hour window spans two dates, so a
+                // bare clock label repeats ("14:30" appears for both yesterday
+                // and today) and the chart reads as if it doubled back on
+                // itself. Anything at or above a day carries the date.
+                dataKey={hours < 24 ? "time" : "fullTime"}
                 fontSize={11}
                 interval="preserveStartEnd"
                 angle={hours > 24 ? -30 : 0}
@@ -2348,6 +2405,10 @@ export function AreaHeatmapOverrides({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+
+  // Narrower blast radius than the global tab (one area), but the same silent
+  // loss on a stray reload.
+  useUnsavedChangesWarning(dirty);
 
   useEffect(() => {
     let cancelled = false;
@@ -2577,6 +2638,11 @@ function HeatmapConfigTab({ onSuccess, onError }: { onSuccess: () => void; onErr
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
+  // This is the one tab whose values apply to every service area and reach
+  // every online driver on their next refresh, so losing an edit to a stray
+  // reload is worth a prompt. Covers browser-level exits only — see the hook.
+  useUnsavedChangesWarning(dirty);
+
   useEffect(() => {
     getSettings().then((s: any) => {
       const next = { ...HEATMAP_DEFAULTS };
@@ -2616,9 +2682,10 @@ function HeatmapConfigTab({ onSuccess, onError }: { onSuccess: () => void; onErr
   const handleSave = async () => {
     setSaving(true);
     try {
-      // Split on any whitespace as well as commas: a space-separated paste
-      // previously survived as one junk token that matched no driver, silently.
-      const ids = driverIdsText.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+      // One parser, shared with the count shown below the field. They used to
+      // split differently, so a space-separated paste displayed as 1 ID and
+      // saved as several.
+      const { ids } = parseAllowlistIds(driverIdsText);
       await updateSettings({
         driver_heatmap_enabled: form.driver_heatmap_enabled,
         driver_heatmap_v2_enabled: form.driver_heatmap_v2_enabled,
@@ -2749,11 +2816,26 @@ function HeatmapConfigTab({ onSuccess, onError }: { onSuccess: () => void; onErr
           onChange={e => { setDriverIdsText(e.target.value); setDirty(true); }}
           placeholder="e.g. abc-123-def&#10;ghi-456-jkl"
         />
-        {driverIdsText.trim() && (
-          <p className="text-xs text-muted-foreground mt-1">
-            {driverIdsText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean).length} driver ID(s) in allowlist
-          </p>
-        )}
+        {driverIdsText.trim() && (() => {
+          const { ids, invalid } = parseAllowlistIds(driverIdsText);
+          return (
+            <>
+              <p className="text-xs text-muted-foreground mt-1">
+                {ids.length} driver ID(s) in allowlist
+              </p>
+              {invalid.length > 0 && (
+                // Surfaced, not dropped: the allowlist decides who gets v2
+                // during a dark launch, so an entry that matches nothing makes
+                // the rollout look like it did nothing.
+                <p role="alert" className="text-xs text-amber-700 dark:text-amber-400 mt-1">
+                  {invalid.length} entr{invalid.length === 1 ? "y does" : "ies do"} not look like a
+                  user ID and will match no driver: {invalid.slice(0, 3).join(", ")}
+                  {invalid.length > 3 ? "…" : ""}
+                </p>
+              )}
+            </>
+          );
+        })()}
       </div>
 
       {/* Save button */}

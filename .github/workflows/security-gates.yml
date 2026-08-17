@@ -264,33 +264,73 @@ jobs:
             exit "$rc"
           fi
 
-          # Findings are not yet blocking. Still deliberate, but the reason
-          # has narrowed since this was written — do not read the original
-          # note as current state:
+          # This broad scan stays advisory. SR-03 (money) is now enforced by its
+          # own blocking step below; the remaining Spinr rules have known
+          # untriaged findings and would turn every PR red:
           #
-          #   spinr-no-float-in-money (SR-03) HAS been tuned. It now excludes
-          #   the _f()/_fd() helper bodies and float() over an already-rounded
-          #   Decimal, i.e. the response-boundary conversion CLAUDE.md
-          #   mandates. Its allowlist was also audited (2026-08-13): two of the
-          #   six paths did not exist, so it silently covered four files. It
-          #   now covers ten verified-clean money modules.
+          #   spinr-background-loop-needs-idempotency  2 (core/lifespan.py)
+          #   spinr-ride-state-needs-guard             1 (repositories/driver_repo.py)
+          #   spinr-stripe-idempotency-static          1 (routes/payments.py)
           #
-          #   spinr-jwt-role-must-reread and the other two over-broad rules
-          #   have NOT been re-checked and are the remaining blockers.
-          #
-          # To finish this: run semgrep locally against the current ruleset,
-          # confirm SR-03 reports zero findings (it should — every allowlisted
-          # path was checked by hand), then either delete this block or add a
-          # second, SR-03-scoped invocation that fails the job while the other
-          # rules stay advisory. That verification could not be done in the
-          # session that corrected the allowlist because semgrep is not
-          # installed in that environment, and turning a gate red on an
-          # unverified assumption is worse than leaving it advisory.
+          # Those counts are from a real local run (2026-08-14), not an
+          # estimate. Each needs triage — confirmed bug, or over-broad rule —
+          # before it can block. Do that per rule, and promote them the same
+          # way SR-03 was promoted: fix or justify every finding first, then
+          # move the rule into the blocking step.
           #
           # Findings are uploaded to the GitHub Security tab below either way.
           if [ "$rc" -eq 1 ]; then
-            echo "::warning::semgrep reported findings — visible in the Security tab (not yet merge-blocking; rule tuning pending)"
+            echo "::warning::semgrep reported findings — visible in the Security tab (advisory rules only; SR-03 is enforced separately)"
           fi
+
+      # ── SR-03: money arithmetic — BLOCKING ────────────────────────────────
+      #
+      # Promoted from advisory on 2026-08-14, after actually running semgrep
+      # rather than reasoning about it. That run mattered: the previous note
+      # here asserted SR-03 was clean because "every allowlisted path was
+      # checked by hand" — the tool found 3 findings in services/fare_service.py
+      # that the hand-check had missed. Two were a real convention violation (a
+      # rider-facing area-fee line item built with raw float() while the same
+      # fee's contribution to the total used Decimal); one was a display label
+      # and is now an explicit inline nosemgrep with its reason. So: do not
+      # promote a rule on a code read. Run it.
+      #
+      # Scoped to SR-03 by filtering the ruleset's own JSON rather than
+      # splitting the rule into a second file — one source of truth for the
+      # pattern and its allowlist, which is what drifted last time.
+      - name: Money-safety gate (SR-03, blocking)
+        run: |
+          rc=0
+          semgrep scan \
+            --config=.semgrep/spinr-rules.yml \
+            --metrics=off \
+            --json --output=spinr-rules.json || rc=$?
+
+          # Same exit-code discipline as the scan above: a gate that failed to
+          # run must never be mistaken for a gate that passed.
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 1 ]; then
+            echo "::error::semgrep exited $rc — the money gate failed to RUN (bad config, network, or internal error)."
+            echo "::error::This is a broken gate, not a clean one. Do not suppress it."
+            exit "$rc"
+          fi
+
+          python3 - <<'PY'
+          import json, sys
+          results = json.load(open("spinr-rules.json")).get("results", [])
+          hits = [r for r in results if r.get("check_id", "").endswith("spinr-no-float-in-money")]
+          for h in hits:
+              print(
+                  f"::error file={h['path']},line={h['start']['line']}::"
+                  "float arithmetic in money code. Use Decimal via _d()/_round(), and _f() only "
+                  "at the JSON response boundary (CLAUDE.md, Money arithmetic). If this is a "
+                  "display label rather than a value, add an inline `# nosemgrep: "
+                  "spinr-no-float-in-money` with the reason."
+              )
+          if hits:
+              print(f"::error::SR-03 money gate: {len(hits)} finding(s) — blocking.")
+              sys.exit(1)
+          print("SR-03 money gate: 0 findings.")
+          PY
 
       - uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
         if: always()

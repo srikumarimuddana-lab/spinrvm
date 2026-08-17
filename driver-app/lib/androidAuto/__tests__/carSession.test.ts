@@ -73,6 +73,11 @@ jest.mock('../../../store/driverStore', () => ({
   useDriverStore: { getState: () => mockDriver },
 }));
 
+const mockStartCarLocation = jest.fn<Promise<string>, []>(() => Promise.resolve('started'));
+jest.mock('../carLocationTask', () => ({
+  startCarLocationService: () => mockStartCarLocation(),
+}));
+
 let mockAppStateCb: ((s: string) => void) | null = null;
 const mockRemoveAppState = jest.fn();
 jest.mock('react-native', () => ({
@@ -289,6 +294,25 @@ describe('lifecycle', () => {
       const afterFirst = jest.getTimerCount();
       await startCarSession();
       expect(jest.getTimerCount()).toBe(afterFirst);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('re-asserts the location service on every tick, even with no API access', async () => {
+    // Covers go-offline-while-plugged-in: stopBackgroundLocation tears down the
+    // dispatch service the car had deferred to, leaving nothing running. Also a
+    // service the OS killed, and permission granted after connect.
+    jest.useFakeTimers();
+    try {
+      await startCarSession();
+      mockStartCarLocation.mockClear();
+      mockAppCheckReady.mockResolvedValue(false); // drawing a map needs no token
+
+      jest.advanceTimersByTime(60_000);
+      await settle();
+
+      expect(mockStartCarLocation).toHaveBeenCalledTimes(1);
     } finally {
       jest.useRealTimers();
     }

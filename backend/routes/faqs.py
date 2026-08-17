@@ -3,6 +3,20 @@
 Drivers and riders read FAQs without authentication. Admin CRUD lives
 at /admin/faqs. Only active entries are exposed here; admins toggle
 `is_active` to hide drafts from clients.
+
+NOTE (found 2026-08-17, not resolved here — flagged to the user instead of
+unilaterally deleting/reordering anything): `features.py`'s `support_router`
+also defines a public `GET /faqs` handler, and is included into
+`v1_api_router` *before* this module's `faqs_router` (see `backend/server.py`).
+Starlette matches the first-registered route for a given path+method, so this
+module's `get_public_faqs` never actually runs in production —
+`features.py::get_faqs` is the live handler for `GET /api/v1/faqs` (its
+sort_order ordering was fixed separately, alongside this file's). This file's
+own ordering fix below is harmless but currently inert. Kept here for
+correctness/consistency rather than removed, in case the shadowing is
+intentionally resolved later (e.g. by deleting whichever implementation is
+meant to be retired) — that's a genuine two-implementations situation, not a
+decision to make unilaterally inside an unrelated fix.
 """
 
 import logging
@@ -79,4 +93,11 @@ async def get_public_faqs(
     # Global FAQs (no service areas) always show; area-tagged FAQs only when the
     # caller's area (or an ancestor) is in the tag list. No location → global only.
     scope = await _resolve_area_scope(service_area_id, lat, lng)
-    return [f for f in faqs if not f.get("service_area_ids") or (set(f["service_area_ids"]) & scope)]
+    visible = [f for f in faqs if not f.get("service_area_ids") or (set(f["service_area_ids"]) & scope)]
+
+    # sort_order asc is the display order within a category (both apps group
+    # client-side by category and otherwise trust this array's order); rows
+    # sharing a sort_order (e.g. the default 0) keep the created_at desc order
+    # already fetched above, since list.sort() is stable.
+    visible.sort(key=lambda f: f.get("sort_order") or 0)
+    return visible

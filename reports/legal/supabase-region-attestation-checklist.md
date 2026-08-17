@@ -64,8 +64,31 @@ Add to the annual privacy audit (next: 2027-04-27): confirm Supabase region has 
 
 | Step | Owner | Status | Date |
 |------|-------|--------|------|
-| Verify region in Supabase dashboard | Privacy Officer | ⬜ Open | — |
-| Obtain signed DPA from Supabase | Legal | ⬜ Open | — |
-| File DPA as `reports/legal/dpa-supabase-2026.pdf` | Legal | ⬜ Open | — |
-| Update `docs/vendor-register.md` effective date | Legal | ⬜ Open | — |
-| Set `SUPABASE_REGION=ca-central-1` in Railway | Engineering | ⬜ Open | — |
+| Verify region in Supabase dashboard | Privacy Officer | ✅ Closed — see note below | 2026-08-17 |
+| Obtain signed DPA from Supabase | Legal | ⬜ Open — requires Legal to contact Supabase Sales; not something an engineering/agent session can complete | — |
+| File DPA as `reports/legal/dpa-supabase-2026.pdf` | Legal | ⬜ Open — blocked on the DPA above | — |
+| Update `docs/vendor-register.md` effective date | Legal | ⬜ Open — per that file's own instruction, only update once the DPA is actually signed, not on region confirmation alone | — |
+| Set `SUPABASE_REGION=ca-central-1` in Fly.io | Engineering | ✅ Closed — confirmed in `backend/fly.toml:42` | 2026-08-17 |
+| Set `SUPABASE_REGION=ca-central-1` in Railway | Engineering | ⚠ **Unverifiable from this repo** — `railway.json` carries no env vars (Railway env is dashboard/CLI-managed, not committed). Given ACTION_ITEMS.md C5 (Railway silently drifting from `main`, deploy workflow blocked), do not assume this is set — verify directly in the Railway dashboard before relying on Railway as a live fallback. | — |
+
+### Verification note — 2026-08-17
+
+Queried the Supabase Management API directly (`list_projects` / `get_project`,
+not a dashboard screenshot but the same underlying source of truth) for the
+Spinr project (`ref: soavhtdhefowwvforzwb`, name `spinrmobileapp`):
+
+```
+region: ca-central-1
+status: ACTIVE_HEALTHY
+database.host: db.soavhtdhefowwvforzwb.supabase.co
+```
+
+This closes Step 1 — the project's actual region is confirmed as
+`ca-central-1` (Canada), matching what `backend/core/config.py`'s production
+boot guard and `backend/fly.toml` both assume. **This does not close Steps
+2–4** — a signed DPA with Supabase is a separate legal/contractual action
+this verification cannot substitute for, and the Railway-side env var
+remains unverified. The Privacy Policy draft's data-residency sentence
+(§3) can now cite a confirmed region fact for the *primary* backend (Fly),
+but should still flag the DPA and Railway gaps as open until Legal closes
+them.

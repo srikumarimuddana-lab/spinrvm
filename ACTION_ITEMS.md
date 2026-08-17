@@ -164,8 +164,25 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     Stripe account the mirror covers (old app's/new app's/both) — unconfirmed.
   - **RESOLVED**: rider legacy-import provenance — 918/1,137 users backfilled
     2026-08-17 (`docs/change-log/2026-08-17-rider-provenance-backfill-executed.md`).
-    The *code* gap (`rider_import_service.py` never stamps new imports) is
-    still open — small, separate fix.
+    **Correction (2026-08-17, CR-4105):** the line above previously said the
+    *code* gap ("`rider_import_service.py` never stamps new imports") was
+    still open — that was stale even at the time it was written;
+    `legacy_import_metadata` stamping on `build_plan()` has been present
+    since commit `846e8bf` (2026-08-11), predating this note. The real,
+    separate code gap found and fixed under CR-4105 was different:
+    `rider_import_service.py:315` stamped `created_at = now()` on every
+    net-new imported rider (the source CSV has no signup-date column to
+    recover a real value from), which let `routes/promotions.py`'s
+    `new_user_days` promo-eligibility check treat old-app customers as
+    brand-new signups. Fixed by excluding riders carrying
+    `legacy_import_metadata->'rider_csv_import'` from `new_user_days`
+    eligibility regardless of `created_at` age (PR TBD — see
+    `docs/change-log/2026-08-17-rider-import-promo-eligibility-fix.md`).
+    `created_at` itself was deliberately left unchanged/un-backdated — see
+    that change-log entry for why. **Open follow-up:** whether any of the
+    918 already-backfilled riders need retroactive correction is unconfirmed
+    without a live DB query — flagged, not resolved, in the same change-log
+    entry.
   - **RESOLVED**: `payout_gst_amount` for the 186 already-migrated rides —
     backfilled additive-only, $102.09 total
     (`docs/change-log/2026-08-16-gst-backfill-executed.md`). **D1 remains

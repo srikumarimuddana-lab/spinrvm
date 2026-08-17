@@ -395,17 +395,24 @@ async def get_faqs(
     if audience:
         query["audience"] = {"$in": ["both", audience]}
     # Exclude the semantic-search embedding vector from the public payload.
+    # Fetch created_at desc (not sort_order) so the Python-side stable sort
+    # below can layer "sort_order asc" on top without a second DB round trip:
+    # db_supabase.get_rows only takes one order column, and ordering by
+    # sort_order alone gives Postgres no tiebreak for the many rows sharing
+    # the default 0 — their relative order would be undefined and could
+    # shuffle between requests, which reads as the Help Center flickering.
     faqs = (
         await db_supabase.get_rows(
             "faqs",
             query,
             limit=200,
-            order="sort_order",
-            desc=False,
+            order="created_at",
+            desc=True,
             columns="id,question,answer,category,sort_order,is_active,created_at,updated_at,audience,service_area_ids",
         )
         or []
     )
+    faqs.sort(key=lambda f: f.get("sort_order") or 0)
 
     try:
         from routes.fares import resolve_area_scope, resolve_service_area_for_point

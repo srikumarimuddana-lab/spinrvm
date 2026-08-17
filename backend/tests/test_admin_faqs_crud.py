@@ -61,6 +61,20 @@ def test_create_faq_falls_back_to_generated_id_when_row_missing_id(test_client):
     assert resp.json()["faq_id"]  # a uuid string was generated
 
 
+def test_create_faq_defaults_sort_order_to_zero(test_client):
+    with patch("backend.db_supabase.insert_one", new=AsyncMock(return_value={"id": "faq-1"})) as mock_insert:
+        resp = test_client.post("/api/admin/faqs", json=_faq_payload())
+    assert resp.status_code == 200
+    assert mock_insert.call_args[0][1]["sort_order"] == 0
+
+
+def test_create_faq_accepts_explicit_sort_order(test_client):
+    with patch("backend.db_supabase.insert_one", new=AsyncMock(return_value={"id": "faq-1"})) as mock_insert:
+        resp = test_client.post("/api/admin/faqs", json=_faq_payload(sort_order=5))
+    assert resp.status_code == 200
+    assert mock_insert.call_args[0][1]["sort_order"] == 5
+
+
 # ---------- update ----------
 
 
@@ -104,6 +118,23 @@ def test_update_faq_no_changes_skips_write(test_client):
     mock_update.assert_not_awaited()
 
 
+def test_update_faq_sort_order(test_client):
+    with patch("backend.db_supabase.update_one", new=AsyncMock()) as mock_update:
+        resp = test_client.put("/api/admin/faqs/faq-1", json={"sort_order": 3})
+
+    assert resp.status_code == 200
+    updates = mock_update.call_args[0][2]
+    assert updates["sort_order"] == 3
+
+
+def test_update_faq_sort_order_omitted_not_touched(test_client):
+    with patch("backend.db_supabase.update_one", new=AsyncMock()) as mock_update:
+        resp = test_client.put("/api/admin/faqs/faq-1", json={"category": "billing"})
+
+    assert resp.status_code == 200
+    assert "sort_order" not in mock_update.call_args[0][2]
+
+
 # ---------- delete ----------
 
 
@@ -125,6 +156,34 @@ def test_list_faqs_excludes_embedding_column(test_client):
 
     assert resp.status_code == 200
     assert "embedding" not in mock_get_rows.call_args.kwargs["columns"]
+
+
+def test_list_faqs_orders_by_sort_order_then_preserves_fetch_order_on_ties(test_client):
+    # Fetched already created_at-desc from the DB (newest first); rows sharing
+    # a sort_order must keep that relative order (stable sort), while a lower
+    # sort_order always sorts ahead of a higher one regardless of recency.
+    rows = [
+        {"id": "newest", "sort_order": 0},
+        {"id": "pinned-second", "sort_order": 1},
+        {"id": "oldest", "sort_order": 0},
+        {"id": "pinned-first", "sort_order": -1},
+    ]
+    with patch("backend.db_supabase.get_rows", new=AsyncMock(return_value=rows)):
+        resp = test_client.get("/api/admin/faqs")
+
+    assert resp.status_code == 200
+    ids = [r["id"] for r in resp.json()]
+    assert ids == ["pinned-first", "newest", "oldest", "pinned-second"]
+
+
+def test_list_faqs_missing_sort_order_treated_as_zero(test_client):
+    rows = [{"id": "explicit-zero", "sort_order": 0}, {"id": "missing-field"}]
+    with patch("backend.db_supabase.get_rows", new=AsyncMock(return_value=rows)):
+        resp = test_client.get("/api/admin/faqs")
+
+    assert resp.status_code == 200
+    # Both treated as 0 — order between them is whatever the DB fetch gave (stable sort).
+    assert {r["id"] for r in resp.json()} == {"explicit-zero", "missing-field"}
 
 
 # ---------- notifications: send ----------

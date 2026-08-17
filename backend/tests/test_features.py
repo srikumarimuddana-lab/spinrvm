@@ -159,6 +159,38 @@ class TestFAQs:
 
         assert result["answer"] == "Updated answer..."
 
+    @pytest.mark.asyncio
+    async def test_get_faqs_route_orders_by_sort_order_ascending(self):
+        """features.get_faqs is the actual live GET /faqs handler (registered
+        before routes/faqs.py's — see the note in that file). A lower
+        sort_order must sort first regardless of DB fetch order, since neither
+        app re-sorts this list client-side."""
+        from backend import features
+
+        rows = [
+            {"id": "third", "sort_order": 2},
+            {"id": "first", "sort_order": 0},
+            {"id": "second", "sort_order": 1},
+        ]
+        with (
+            patch("backend.features.db_supabase.get_rows", new=AsyncMock(return_value=rows)),
+            patch("backend.routes.fares.resolve_area_scope", new=AsyncMock(return_value=set())),
+        ):
+            result = await features.get_faqs()
+        assert [r["id"] for r in result] == ["first", "second", "third"]
+
+    @pytest.mark.asyncio
+    async def test_get_faqs_route_missing_sort_order_treated_as_zero(self):
+        from backend import features
+
+        rows = [{"id": "explicit-zero", "sort_order": 0}, {"id": "no-field"}, {"id": "positive", "sort_order": 1}]
+        with (
+            patch("backend.features.db_supabase.get_rows", new=AsyncMock(return_value=rows)),
+            patch("backend.routes.fares.resolve_area_scope", new=AsyncMock(return_value=set())),
+        ):
+            result = await features.get_faqs()
+        assert [r["id"] for r in result] == ["explicit-zero", "no-field", "positive"]
+
 
 class TestSurgePricing:
     """Tests for surge pricing functionality."""

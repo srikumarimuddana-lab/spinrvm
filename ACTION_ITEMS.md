@@ -7,7 +7,13 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-15 — A34 ADDED (open): dual-run cutover readiness
+_Last updated: 2026-08-17 — A35 FIXED (detection loop + sanctioned
+cleanup-tool replacement, migration 317 applied to production, reviewed by
+migration + regulatory-compliance agents); A37/A38 ADDED (open, deliberately
+deferred follow-ups spun off from A35's review); A39 ADDED and CLOSED same
+day (two competing migration runners found — `migrate.py` doesn't match
+production's actual schema and would fail if run; docs corrected to point
+at `run_migrations.py`, the one that's actually live). Prior: A34 ADDED (open): dual-run cutover readiness
 audit complete (PR #3954, `docs/audit/2026-08-15-dual-run-cutover/`);
 decommission blockers, launch-week collision/monitoring gaps, and required
 user decisions consolidated there. Prior: C21 ADDED (open): two PRs (#3719, #3728, the
@@ -3576,6 +3582,56 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   attempting to also patch Step H's SQL, since Step H is money/regulatory-
   adjacent production code that changes hard-delete behavior and deserves
   its own dedicated review, not a drive-by edit inside an unrelated fix.
+
+### A39. Two competing migration runners; the one CLAUDE.md documents (`migrate.py`) does not match production's actual `schema_migrations` schema — CLOSED (2026-08-17), docs corrected
+- **Source:** found while manually applying migration 317 (the A35 fix) to
+  production, since `python scripts/migrate.py` couldn't be run in this
+  session (no `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`/`DATABASE_URL` in
+  the shell) and applying it directly surfaced the mismatch.
+- **Issue:** `backend/scripts/` contains **two** independent migration
+  runners with **two different** `schema_migrations` table shapes:
+  - `migrate.py` — expects `schema_migrations(version TEXT PRIMARY KEY,
+    applied_at)`, defined by `backend/migrations/00_schema_migrations_table.sql`.
+    This is the one `CLAUDE.md`'s "Database Migrations" section (and
+    `backend/migrations/CLAUDE.md`, and `AGENTS.md`) documented as
+    canonical.
+  - `run_migrations.py` — expects `schema_migrations(filename TEXT PRIMARY
+    KEY, checksum, applied_at, applied_by)`, defined by
+    `backend/migrations/24_schema_migrations.sql` (an April 2026
+    production-readiness fix, P0-B4, that added checksum verification and
+    fixed a real duplicate-prefix ordering bug — see that migration's own
+    top comment).
+  - **Confirmed live** (`select table_schema, column_name ... from
+    information_schema.columns where table_name='schema_migrations'`):
+    production's actual table has `filename`/`checksum`/`applied_at`/
+    `applied_by` — migration 24's shape, i.e. `run_migrations.py`'s.
+    Existing rows are stamped `applied_by='backfill-verified'`, a bootstrap
+    trace confirming `run_migrations.py` (or an equivalent manual process
+    using its schema) is what's actually been used against production.
+  - **`migrate.py` would fail immediately if run against production
+    today** — `INSERT INTO schema_migrations (version) VALUES (%s)` against
+    a table with no `version` column raises `column "version" does not
+    exist`. No evidence it has ever successfully tracked a migration
+    against the live database.
+  - Confirmed via `.github/workflows/`: **CI never invokes either script**
+    to actually apply migrations (`migration-check.yml` only lints
+    filenames/format) — migrations have always been applied manually or via
+    a one-off process, which is how this drift went unnoticed.
+- **Fix:** corrected the documented command in `CLAUDE.md`,
+  `backend/migrations/CLAUDE.md`, `AGENTS.md`, and
+  `docs/runbooks/migration-conflict-detection.md` to
+  `python -m backend.scripts.run_migrations`, with a note explaining why
+  `migrate.py` is wrong. **Did not delete or fix `migrate.py` itself** — a
+  human should decide whether to reconcile it (update it to match migration
+  24's schema and keep it as an alternative/rewrite path) or delete it
+  outright; it wasn't touched here to avoid a unilateral call on which
+  runner's other behavior (e.g. `migrate.py`'s `--dry-run` flag and
+  autocommit/`CONCURRENTLY` handling) should be considered authoritative
+  going forward.
+- **What was NOT verified:** whether any deploy pipeline outside
+  `.github/workflows/` (e.g. a Fly/Railway post-deploy hook, a manual
+  runbook step not checked in this repo) invokes `migrate.py` specifically
+  — only this repo's own CI config was checked.
 
 ### A36. `financial_events` is 0 rows in production despite active use by 42 files
 - **Source:** surfaced while investigating A34 (2026-08-16), not itself

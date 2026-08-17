@@ -38,6 +38,7 @@ import { CarMapSurface } from './carSurface';
 import { useCarMapCamera } from './carMapCamera';
 import { isCarDebugAvailable, pushDebug, setDebugFact, useCarDebug } from './carDebug';
 import { getLastCarFix } from './useCarLocation';
+import { bumpCarSurfaceGeneration } from './carSurfaceGeneration';
 import { triggerDriverEmergency } from '../../hooks/useDriverSafetyTrigger';
 
 const NAV_TEMPLATE_ID = 'spinr-aa-nav';
@@ -628,6 +629,30 @@ export default function registerAutoPlay(): void {
       lastKey = null; // force a chrome refresh on a fresh session
       shownOfferId = null;
       shownAlertNum = null;
+
+      // Self-heal an early build.
+      //
+      // On a car-only cold launch — Android Auto starting the app after a force
+      // close — the template can be created before the JS bundle's assets are
+      // resolvable. The map buttons then render as broken-image placeholders and
+      // the surface comes up empty, and the only recovery was for the driver to
+      // unplug and replug. The cold-start poll below makes this MORE likely,
+      // since it builds the moment a connection appears rather than waiting.
+      //
+      // So re-push the chrome twice on a short delay. setMapButtons re-resolves
+      // the icons, and bumping the surface generation remounts the map. Both are
+      // no-ops when the first attempt already worked — lastKey is cleared so the
+      // chrome genuinely re-sets, and a remount of an already-good map is
+      // invisible.
+      [1200, 4000].forEach((delay) => {
+        setTimeout(() => {
+          if (!template || !HybridAutoPlay.isConnected?.()) return;
+          lastKey = null; // force setMapButtons/setHeaderActions to run again
+          apply();
+          bumpCarSurfaceGeneration();
+          log('post-connect chrome refresh at', delay, 'ms');
+        }, delay);
+      });
     }
 
     stopColdStartPoll(); // whatever got us here, the poll has done its job

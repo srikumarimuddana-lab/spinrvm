@@ -158,6 +158,43 @@ async def test_apply_rollback_rejects_non_positive():
 
 
 @pytest.mark.asyncio
+async def test_apply_late_tip_debit_uses_late_tip_debit_type():
+    """Late-tip debits (migration 319, PR #4047) must use a dedup key
+    distinct from ride_debit — reusing 'ride_debit' for a late tip on an
+    already-settled ride would silently collide with the RPC's ride-scoped
+    idempotency check and apply zero additional money movement."""
+    with patch("services.corporate_allowance_service.supabase") as mock_sb:
+        mock_sb.rpc.return_value.execute.return_value = _rpc_ok()
+        from services.corporate_allowance_service import apply_late_tip_debit
+
+        await apply_late_tip_debit(
+            wallet_id="w1",
+            allowance_id="a1",
+            member_id="m1",
+            amount=5,
+            actor_user_id="rider1",
+            notes="ride:r1:late_tip_allowance",
+            floor=0,
+            ride_id="r1",
+        )
+    _, params = mock_sb.rpc.call_args[0]
+    assert params["p_type"] == "late_tip_debit"
+    assert params["p_amount"] == "5"
+    assert params["p_ride_id"] == "r1"
+    assert params["p_floor"] == "0"
+
+
+@pytest.mark.asyncio
+async def test_apply_late_tip_debit_rejects_non_positive():
+    from services.corporate_allowance_service import apply_late_tip_debit
+
+    with pytest.raises(ValueError, match="positive"):
+        await apply_late_tip_debit(wallet_id="w1", allowance_id="a1", member_id="m1", amount=0, ride_id="r1")
+    with pytest.raises(ValueError, match="positive"):
+        await apply_late_tip_debit(wallet_id="w1", allowance_id="a1", member_id="m1", amount=-5, ride_id="r1")
+
+
+@pytest.mark.asyncio
 async def test_apply_raises_when_rpc_returns_no_row():
     """The RPC is defined RETURNS TABLE and always RETURN NEXTs exactly one
     row on success (see migration 258) — an empty response means something

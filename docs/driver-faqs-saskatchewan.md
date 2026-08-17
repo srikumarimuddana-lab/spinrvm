@@ -10,7 +10,7 @@ Driver-facing FAQ content for the Spinr Driver app help section and the in-app A
 
 **Q: How do I sign up to drive with Spinr?**
 
-Download the Spinr Driver app, create your account, and complete the onboarding steps: your profile, vehicle details, and the required documents. Once everything is uploaded and readable, our team reviews your application and you'll be able to go online as soon as you're approved. You can check your status in the app at any time, and I can read it for you here.
+Download the Spinr Driver app, create your account, and complete the onboarding steps: your profile, vehicle details, and the required documents. Once everything is uploaded and readable, our team reviews your application and you'll be able to go online as soon as you're approved. You can check your status in the app at any time, under Account / Onboarding.
 
 _Category: `onboarding`_
 
@@ -52,7 +52,7 @@ _Category: `onboarding`_
 
 **Q: How do I check the status of my application?**
 
-Open the Spinr Driver app and go to your Account / Onboarding section, or just ask me here and I'll read your current application status. Review starts once all required documents are uploaded and readable.
+Open the Spinr Driver app and go to your Account / Onboarding section to see your current application status. Review starts once all required documents are uploaded and readable.
 
 _Category: `onboarding`_
 
@@ -64,7 +64,7 @@ _Category: `onboarding`_
 
 **Q: Can support activate or approve my account faster?**
 
-Approval is done by our review team and can't be skipped or rushed by support. The fastest path is to make sure every required document is uploaded, clear, and unexpired — including your Criminal Record Check and insurance. You'll be able to go online as soon as your account is approved. I can flag anything that's missing or expired.
+Approval is done by our review team and can't be skipped or rushed by support. The fastest path is to make sure every required document is uploaded, clear, and unexpired — including your Criminal Record Check and insurance. You'll be able to go online as soon as your account is approved. Check Account / Onboarding in the app to see anything that's missing or expired.
 
 _Category: `onboarding`_
 
@@ -78,7 +78,7 @@ _Category: `onboarding`_
 
 **Q: Does my vehicle need a safety inspection, and how often?**
 
-Yes — your vehicle must pass a safety inspection to be eligible, and the inspection must stay current (renewed annually). If your inspection expires it will block you from going online until you upload an updated one. I can tell you whether your inspection on file is valid or expired.
+Yes — your vehicle must pass a safety inspection to be eligible, and the inspection must stay current (renewed annually). If your inspection expires it will block you from going online until you upload an updated one. Check your documents section in the app to see whether your inspection on file is valid or expired.
 
 _Category: `documents`_
 
@@ -90,13 +90,13 @@ _Category: `documents`_
 
 **Q: How do I upload or update a document?**
 
-Open the Spinr Driver app, go to your documents section, and upload a clear photo of the original document (not a photocopy of a photocopy). Each document shows a status of pending review, approved, or rejected. Uploads can take a moment to sync. Ask me and I'll list your current documents and their status.
+Open the Spinr Driver app, go to your documents section, and upload a clear photo of the original document (not a photocopy of a photocopy). Each document shows a status of pending review, approved, or rejected. Uploads can take a moment to sync. Your documents section shows the status of each one.
 
 _Category: `documents`_
 
 **Q: My document was rejected — what should I do?**
 
-Open your documents in the app to see the reason it was rejected, then upload a clear, valid, unexpired copy. Common issues are blurry photos, cut-off edges, or an expired document. Once re-uploaded it goes back into review. I can show you which documents need action.
+Open your documents in the app to see the reason it was rejected, then upload a clear, valid, unexpired copy. Common issues are blurry photos, cut-off edges, or an expired document. Once re-uploaded it goes back into review. Your documents section flags which ones still need action.
 
 _Category: `documents`_
 
@@ -114,7 +114,7 @@ _Category: `documents`_
 
 **Q: My Criminal Record Check has expired — what happens?**
 
-An expired Criminal Record Check prevents you from going online. Obtain an updated check from your local police service or RCMP detachment and upload it in the app; once it's approved you can go back online. I can confirm whether the check on file is currently valid or expired.
+An expired Criminal Record Check prevents you from going online. Obtain an updated check from your local police service or RCMP detachment and upload it in the app; once it's approved you can go back online. Check your documents section to see whether the check on file is currently valid or expired.
 
 _Category: `documents`_
 
@@ -150,7 +150,7 @@ _Category: `troubleshooting`_
 
 **Q: Why can't I go online?**
 
-Going online is blocked if your account isn't approved yet or if a required document has expired — most often the Criminal Record Check, driver's licence, insurance, or vehicle inspection. Ask me to check your status and documents and I'll tell you exactly what's blocking you.
+Going online is blocked if your account isn't approved yet or if a required document has expired — most often the Criminal Record Check, driver's licence, insurance, or vehicle inspection. Check your documents section in the app — it flags exactly what's blocking you.
 
 _Category: `troubleshooting`_
 
@@ -174,7 +174,7 @@ _Category: `troubleshooting`_
 
 **Q: How do I contact support?**
 
-You can reach Spinr support from the Help section of the driver app, or ask me here and I'll hand you off for anything I can't resolve from your account. For emergencies, call 911 or use the in-app SOS.
+You can reach Spinr support from the Help section of the driver app, or ask our in-app assistant, which will hand you off for anything it can't resolve. For emergencies, call 911 or use the in-app SOS.
 
 _Category: `troubleshooting`_
 
@@ -188,13 +188,13 @@ _Category: `payments`_
 
 **Q: When and how do I get paid?**
 
-Your completed trips and what you earned on each appear in the Spinr Driver app, and I can summarize your recent trips and earnings here. For bank-deposit timing or a payout you believe is missing, check your payout settings in the app or contact support.
+Your completed trips and what you earned on each appear in the Spinr Driver app's Earnings section. For bank-deposit timing or a payout you believe is missing, check your payout settings in the app or contact support.
 
 _Category: `payments`_
 
 **Q: Where do I see my earnings?**
 
-Open the Earnings section of the Spinr Driver app to see your completed trips and per-trip earnings. You can also ask me for a summary of your recent trips and earnings.
+Open the Earnings section of the Spinr Driver app to see your completed trips and per-trip earnings.
 
 _Category: `payments`_
 

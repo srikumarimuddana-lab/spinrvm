@@ -48,7 +48,7 @@ def _db_unavailable(what: str, table: str, exc: Exception) -> HTTPException:
     if _UNDEFINED_TABLE in text or f'relation "{table}" does not exist' in text:
         detail = (
             f"{what} unavailable: the '{table}' table does not exist in this environment. "
-            "Apply migration 314 (backend/scripts/migrate.py), then reload."
+            "Apply migration 314 (python -m backend.scripts.run_migrations), then reload."
         )
     return HTTPException(status_code=503, detail=detail)
 

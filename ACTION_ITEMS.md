@@ -7,7 +7,14 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-17 — A40 CLOSED (all three questions resolved:
+_Last updated: 2026-08-17 — A39's deferred `migrate.py` decision resolved
+(product owner: reconcile, not just delete). Ported `migrate.py`'s tested
+CONCURRENTLY-safe SQL splitter (B0) into `run_migrations.py` — which
+never had that fix and would have failed on any `CREATE INDEX
+CONCURRENTLY` migration — fixed every living-doc/CI/runtime reference
+across `CLAUDE.md`, `AGENTS.md`, runbooks, CI workflow comments, and a
+real admin-facing error message, then deleted `migrate.py` outright.
+128 directly affected tests pass. Prior same day: A40 CLOSED (all three questions resolved:
 #1 confirmed by the product owner that dual-run — old app still
 processing real Stripe charges on the shared account — is intentional
 right now, not an incident; #2 checked live and found no evidence of
@@ -3706,13 +3713,32 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   `backend/migrations/CLAUDE.md`, `AGENTS.md`, and
   `docs/runbooks/migration-conflict-detection.md` to
   `python -m backend.scripts.run_migrations`, with a note explaining why
-  `migrate.py` is wrong. **Did not delete or fix `migrate.py` itself** — a
-  human should decide whether to reconcile it (update it to match migration
-  24's schema and keep it as an alternative/rewrite path) or delete it
-  outright; it wasn't touched here to avoid a unilateral call on which
-  runner's other behavior (e.g. `migrate.py`'s `--dry-run` flag and
-  autocommit/`CONCURRENTLY` handling) should be considered authoritative
-  going forward.
+  `migrate.py` is wrong.
+- **Follow-up decision (2026-08-17, same day, product owner confirmed):**
+  reconcile, not just delete — `run_migrations.py` had a real gap
+  `migrate.py` didn't (no `CREATE/DROP INDEX CONCURRENTLY` support at all;
+  it wraps every migration in one transaction, which Postgres rejects for
+  `CONCURRENTLY`), and `migrate.py`'s CONCURRENTLY-safe statement splitter
+  (`ACTION_ITEMS.md` B0) was real, tested, working code. Ported
+  `_split_sql_statements` and the autocommit-routing logic from `migrate.py`
+  into `run_migrations.py` (`_apply_one_autocommit`), moved/adapted both
+  regression test files (`test_migration_concurrently_splitting.py`,
+  `test_run_migrations_autocommit_chunks.py`, née
+  `test_migrate_autocommit_chunks.py`) to test the ported functions, fixed
+  every other living-doc/CI/code reference (`CLAUDE.md` ×2 blocks,
+  `AGENTS.md` ×2 blocks, `docs/dev-setup.md`, the migration-conflict-
+  detection runbook, `.github/workflows/migration-check.yml`'s comments,
+  `.claude/commands/migration-check.md`, and a real runtime error message
+  in `routes/admin/auto_payouts.py` that told an admin to run the deleted
+  script), then deleted `backend/scripts/migrate.py` outright. Historical
+  audit/change-log documents that mention `migrate.py` were deliberately
+  left untouched — point-in-time records, not living docs (same convention
+  followed throughout this session). 128 directly affected tests pass
+  (`test_migration_concurrently_splitting.py`,
+  `test_run_migrations_autocommit_chunks.py`,
+  `test_financial_events_ride_id_fk_contract.py`,
+  `test_unbalanced_scoped_migration.py`, `test_auto_payout.py`,
+  `test_migration_ordering.py`, `test_migration_fk_column_types.py`).
 - **What was NOT verified:** whether any deploy pipeline outside
   `.github/workflows/` (e.g. a Fly/Railway post-deploy hook, a manual
   runbook step not checked in this repo) invokes `migrate.py` specifically
@@ -3893,6 +3919,19 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 ## P1 — Fix before launch (code)
 
 ### B0. Migration runner shreds any migration whose text contains "CONCURRENTLY"
+- **Update (2026-08-17, A39 follow-up):** `scripts/migrate.py` has been
+  **deleted** (see A39 above — it targeted a `schema_migrations` shape that
+  was never actually applied to production). This fix's code —
+  `_split_sql_statements` and the autocommit-routing logic — was ported
+  into `scripts/run_migrations.py` (the canonical runner) **before**
+  `migrate.py` was deleted, so nothing was lost; `run_migrations.py` never
+  had this fix applied to it directly until now, since it never had any
+  CONCURRENTLY handling at all before this port (a real, separate gap this
+  same follow-up closed). The description below is preserved as it was
+  written against `migrate.py` at the time; read `scripts/run_migrations.py`
+  and `backend/tests/test_migration_concurrently_splitting.py` /
+  `backend/tests/test_run_migrations_autocommit_chunks.py` for the current,
+  live location of this logic.
 - [x] **Status:** done — `scripts/migrate.py` now has `_split_sql_statements`,
   a lexical scanner (comment/`'...'`-string/`$tag$...$tag$`-dollar-quote
   aware) replacing the naive `sql.split(";")`. `needs_autocommit` routing now

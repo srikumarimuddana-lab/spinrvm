@@ -196,18 +196,6 @@ export default function ActivityView() {
       ? true
       : (statusFilter === 'all' && periodRideTotal > filteredRides.length) || filteredRides.length >= PAGE_SIZE);
 
-  // A30 Finding 3 (docs/audit/2026-08-13-migrated-data-visibility-audit.md):
-  // /drivers/earnings deliberately excludes legacy-imported rides' dollars
-  // (they were already paid out in the previous app; EXCLUDE_LEGACY_RIDES,
-  // backend/utils/legacy_rides.py) but the trip list below does include
-  // them, so a driver counting rows against the earnings total sees a
-  // mismatch with no explanation. Count how many of the currently-visible
-  // rides are legacy so the header above can say why.
-  const legacyRideCountInView = useMemo(
-    () => filteredRides.filter((r: any) => r.legacy_import_metadata && Object.keys(r.legacy_import_metadata).length > 0).length,
-    [filteredRides]
-  );
-
   // #6: render one ride card. Extracted from the inline map so the list can be
   // virtualized by FlatList. Wrapped in the 16px horizontal inset that the old
   // `ridesSection` View used to provide (rideCard has no inset of its own).
@@ -246,12 +234,6 @@ export default function ActivityView() {
               </Text>
             </View>
           </View>
-
-          {ride.legacy_import_metadata && Object.keys(ride.legacy_import_metadata).length > 0 && (
-            <View style={styles.legacyBadge}>
-              <Text style={styles.legacyBadgeText}>Imported from your previous account</Text>
-            </View>
-          )}
 
           {/* Route: pickup → dropoff */}
           <View style={styles.routeContainer}>
@@ -375,13 +357,6 @@ export default function ActivityView() {
               <Text style={styles.totalLabel}>Total Earned</Text>
               <Text style={styles.totalValue}>${toMoney(totalEarnings)}</Text>
             </View>
-            {legacyRideCountInView > 0 && (
-              <Text style={styles.legacyExplainer}>
-                {legacyRideCountInView === 1
-                  ? '1 ride from your previous account is shown below but not counted here — it was already paid out.'
-                  : `${legacyRideCountInView} rides from your previous account are shown below but not counted here — those were already paid out.`}
-              </Text>
-            )}
             {/* Vertical list (icon + label on the left, amount right-aligned).
                 A single row of five columns cramped the dollar values into
                 ~65px each, so amounts like $254.62 wrapped mid-number and the
@@ -814,24 +789,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 16,
-  },
-  legacyBadge: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#f3f4f6',
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    marginBottom: 12,
-  },
-  legacyBadgeText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#6b7280',
-  },
-  legacyExplainer: {
-    fontSize: 12,
-    color: '#6b7280',
-    marginTop: 6,
   },
   statusBadge: {
     flexDirection: 'row',

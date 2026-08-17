@@ -66,8 +66,15 @@ After: any future disable of a `%_no_mutate`/`%_no_delete` trigger is caught wit
 - [x] `ruff check` / `ruff format --check` clean on all new/changed files
 - [x] `python -c "import ast; ast.parse(...)"` syntax check on `core/lifespan.py` after the edit
 - [x] Manual review pass: `spinr-migration-reviewer` (migration conventions, SECURITY DEFINER boilerplate, trigger-scan correctness) + `spinr-regulatory-compliance-checker` (does this actually close A35, eligibility-guard parity with Step H) — see PR comments for verdicts
-- [ ] **Migration NOT applied to production in this session.** Per this repo's migration convention (`python scripts/migrate.py`, not ad-hoc application), the new function does not exist in production yet — the loop will log (not crash on, not false-positive) an RPC-not-found error every 6h until it's applied through the normal deploy/migration process.
-- [ ] Not exercised against a live Supabase project — unit tests mock the module's own bindings; the live `pg_trigger` scan query itself was not run against a real database in this session.
+- [x] **Correction (2026-08-17, later same day): migration WAS subsequently applied to production**, superseding the note directly above (kept, struck through in spirit, not deleted, so this doc stays an honest record of what was true at each point rather than quietly rewritten). Discovering how to apply it surfaced `ACTION_ITEMS.md` **A39**: `scripts/migrate.py` — the runner this repo's own docs pointed at — does not match production's actual `schema_migrations` shape (`filename`/`checksum`/`applied_at`/`applied_by`, migration 24's shape) and would fail immediately if run; `scripts/run_migrations.py` is the one actually live. Docs corrected in commit `0556b85`. Re-verified live, independently, in this review pass:
+  ```sql
+  select proname, prosecdef, proconfig from pg_proc where proname = 'check_disabled_guard_triggers';
+  -- {"proname":"check_disabled_guard_triggers","prosecdef":true,"proconfig":["search_path=public, pg_catalog"]}
+  select * from check_disabled_guard_triggers();
+  -- [] (empty — healthy, no disabled guard triggers currently)
+  ```
+  Function exists, `SECURITY DEFINER` correctly set, `search_path` correctly pinned, callable, and reports the expected healthy (empty) result on today's production trigger set.
+- [ ] Not exercised end-to-end against a live *disabled-trigger* scenario — the query above confirms the healthy/empty path works against real production data, but no test disabled a real trigger and re-ran the query to confirm the alerting path fires correctly outside the unit-test mocks. Deliberately not attempted: intentionally disabling a regulatory guard trigger against production, even briefly, to test the alarm is a bad trade against the risk it's meant to catch.
 
 ## 10. What was NOT verified
 

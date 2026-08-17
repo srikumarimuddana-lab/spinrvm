@@ -120,6 +120,25 @@ export function seedCarFix(fix: CarLatLng): CarLatLng {
   return chosen;
 }
 
+/**
+ * Fixes published since the last read, for measuring whether a location task is
+ * actually delivering.
+ *
+ * This exists because of a specific unknown: when Android refuses a background
+ * foreground-service start, carLocationTask falls back to a plain background
+ * task, and whether Android then throttles it depends on our process importance
+ * while Android Auto has our CarAppService bound. That is not answerable from
+ * source — only from a real head unit. Counting arrivals is how we find out.
+ */
+let publishedSinceRead = 0;
+
+/** Read and reset the counter. Called on carSession's refresh tick. */
+export function consumeFixCount(): number {
+  const n = publishedSinceRead;
+  publishedSinceRead = 0;
+  return n;
+}
+
 /** Subscribers notified when a fix arrives from OUTSIDE the React tree. */
 const fixListeners = new Set<(fix: CarLatLng) => void>();
 
@@ -141,6 +160,7 @@ export function subscribeCarFix(listener: (fix: CarLatLng) => void): () => void 
  * shared AsyncStorage entry, and re-renders any mounted surface.
  */
 export function publishCarFix(fix: CarLatLng): void {
+  publishedSinceRead += 1;
   adoptCarFix(fix);
   persistFix(fix);
   for (const l of fixListeners) {
@@ -196,5 +216,6 @@ export function _resetCarFixChannel(): void {
   lastFixAt = 0;
   lastCacheWriteAt = 0;
   lastCachedPoint = null;
+  publishedSinceRead = 0;
   fixListeners.clear();
 }

@@ -442,6 +442,39 @@ class TestGetDriverBalance:
         assert result["payable_balance"] == "70.00"
         assert result["total_paid_out"] == "30.00"
 
+    def test_balance_excludes_legacy_outstanding_correction_regardless_of_status(self):
+        """payout_type='legacy_outstanding_correction' (2026-08-17 write path,
+        services/legacy_payout_correction_service.py) must never deduct from
+        payable_balance, at ANY status — 'awaiting_stripe_onboarding' and
+        'ready_for_transfer' are not reversed/failed, so the old blanket
+        not-in-{reversed,failed} filter would have wrongly deducted them."""
+        from backend.routes import drivers as drv
+
+        rides = [{"base_fare": 100.0}]
+        payouts = [
+            {"amount": 30.0, "status": "completed", "payout_type": "standard"},  # deduct
+            {"amount": 12.0, "status": "awaiting_stripe_onboarding", "payout_type": "legacy_outstanding_correction"},
+            {"amount": 8.0, "status": "ready_for_transfer", "payout_type": "legacy_outstanding_correction"},
+            {"amount": 5.0, "status": "completed", "payout_type": "legacy_outstanding_correction"},
+        ]
+
+        def get_rows_mock(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                status = (filters or {}).get("status")
+                return rides if status == "completed" else []
+            if table == "payouts":
+                return payouts
+            return []
+
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
+            result = asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
+
+        # 100 - 30 = 70; none of the 3 correction rows deduct, at any status.
+        assert result["payable_balance"] == "70.00"
+        assert result["total_paid_out"] == "30.00"
+
     def test_balance_drops_legacy_import_rides_and_their_offset_together(self):
         """Previous-app rides are history, not Spinr income (utils/legacy_rides).
         The ride query filters them server-side and the paired 'legacy_import'

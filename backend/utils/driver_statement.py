@@ -150,6 +150,12 @@ _PAYOUT_TYPE_LABELS = {
     # "synced from Stripe history" is internal jargon that reads as noise
     # on a statement.
     "stripe_sync": "Previous app payout",
+    # 2026-08-17 write path (services/legacy_payout_correction_service.py):
+    # real earnings the old app itself recorded as never paid. Same
+    # driver-facing era framing as stripe_sync, worded distinctly since
+    # this one can appear with a non-'completed' status (see the
+    # is_unsettled_correction handling above) while stripe_sync never does.
+    "legacy_outstanding_correction": "Previous app payout (outstanding correction)",
 }
 
 
@@ -272,12 +278,20 @@ async def _build(
     payouts_previous_app = _ZERO
     for p in sorted(payout_rows, key=lambda x: x.get("created_at") or ""):
         status = str(p.get("status") or "").lower()
+        payout_type = p.get("payout_type")
         amount = _d(p.get("amount"))
         fee = _d(p.get("fee"))
         net = _d(p.get("net_amount")) if p.get("net_amount") is not None else amount - fee
-        if status not in ("reversed", "failed"):
+        # 'legacy_outstanding_correction' (2026-08-17 write path) starts
+        # 'awaiting_stripe_onboarding' or 'ready_for_transfer' -- neither
+        # reversed nor failed, but also NOT YET real money; unlike
+        # stripe_sync (always 'completed' by construction), only a
+        # 'completed' correction row is an actual settled Transfer. Counting
+        # an unsettled one here would show a driver money before it moved.
+        is_unsettled_correction = payout_type == "legacy_outstanding_correction" and status != "completed"
+        if status not in ("reversed", "failed") and not is_unsettled_correction:
             payouts_total += amount
-            if p.get("payout_type") == "stripe_sync":
+            if payout_type in ("stripe_sync", "legacy_outstanding_correction"):
                 payouts_previous_app += amount
             else:
                 payouts_spinr += amount

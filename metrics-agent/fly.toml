@@ -1,0 +1,44 @@
+# Standalone Fly app for ADR-010's metrics-aggregation MVP (Option B).
+# Deliberately NOT colocated with backend/fly.toml — see
+# metrics-agent/README.md for the Option A vs. B tradeoff (issue #3295).
+#
+# NOT YET DEPLOYED. This app does not exist on Fly yet — a human must run
+# `fly apps create spinr-metrics-agent-yyz` (or via `fly launch`) before
+# `fly deploy` will work. See metrics-agent/README.md "What's blocked".
+#
+# No [http_service] block: this app makes only outbound connections
+# (scrapes the backend over Fly's private 6PN network, remote_writes to
+# Grafana Cloud over the public internet) and serves nothing inbound except
+# Alloy's own local UI/health port, which is intentionally not exposed
+# publicly.
+app = "spinr-metrics-agent-yyz"
+primary_region = "yyz"
+kill_signal = "SIGTERM"
+kill_timeout = "15s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  ENV = "production"
+  # Name of the backend Fly app to discover/scrape. Matches
+  # backend/fly.toml's `app = "spinr-backend-yyz"`.
+  BACKEND_APP_NAME = "spinr-backend-yyz"
+  DISCOVERY_INTERVAL_SECONDS = "30"
+
+# Secrets (set via `fly secrets set -a spinr-metrics-agent-yyz`, never in
+# this file): METRICS_AUTH_TOKEN, GRAFANA_REMOTE_WRITE_URL,
+# GRAFANA_REMOTE_WRITE_USERNAME, GRAFANA_REMOTE_WRITE_API_KEY.
+# See metrics-agent/README.md for the exact commands and where each value
+# comes from.
+
+[[vm]]
+  # Smallest available size — this process only scrapes and forwards, no
+  # request handling, no DB connections. Revisit if Alloy's own memory
+  # footprint (WAL buffering for remote_write) proves tight at this
+  # metric volume; not measured yet (see PR body "What was NOT verified").
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+[[restart]]
+  policy = "always"

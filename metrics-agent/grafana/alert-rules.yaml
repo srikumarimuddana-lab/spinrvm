@@ -1,0 +1,121 @@
+# Grafana Alerting provisioning file (file-based provisioning format:
+# https://grafana.com/docs/grafana/latest/alerting/set-up/provision-alerting-resources/file-provisioning/).
+#
+# Implements the first 2 of ADR-010 §3's alert rules, per §5 step 5 and
+# issue #3295's implementation plan step 6:
+#   1. Dispatch latency breach (P1)
+#   2. Payment failure rate breach (P1)
+#
+# NOT YET LOADED into any Grafana Cloud instance -- no account exists in
+# this session to provision against. A human imports this after account
+# creation, either via file provisioning (copy into Grafana's provisioning
+# directory / point Grafana Cloud's provisioning-as-code at this repo path)
+# or by pasting each rule into the Alerting UI. See metrics-agent/README.md
+# step 5.
+#
+# The contactPoints/uid `<ALERT_WEBHOOK_URL>` below is a placeholder for the
+# same Slack webhook `loop_watchdog` (backend/core/lifespan.py) already
+# pages through -- ADR-010 §5 step 5 says explicitly to reuse it rather than
+# standing up a second paging path. Replace with the real webhook URL when
+# provisioning; never commit the real value to this repo.
+
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: spinr-alert-webhook
+    receivers:
+      - uid: spinr-alert-webhook-1
+        type: webhook
+        settings:
+          url: "<ALERT_WEBHOOK_URL>"
+          httpMethod: POST
+
+policies:
+  - orgId: 1
+    receiver: spinr-alert-webhook
+    group_by: ["alertname"]
+    routes: []
+
+groups:
+  - orgId: 1
+    name: spinr-dispatch-and-payments
+    folder: Spinr Production
+    interval: 1m
+    rules:
+      - uid: spinr-dispatch-latency-p95-breach
+        title: "Dispatch latency P95 breach (>2s, 5m)"
+        condition: C
+        for: 5m
+        labels:
+          severity: P1
+          domain: dispatch
+        annotations:
+          summary: "Dispatch offer->accept P95 (fly) exceeded the 2s SLA for 5+ minutes"
+          description: >-
+            CLAUDE.md SLA: dispatch offer -> driver phone notification P95 < 2s,
+            failure impact "ride abandonment". ADR-010 §3.
+          runbook_url: "docs/runbooks/driver-not-receiving-rides.md"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: "<GRAFANA_CLOUD_PROMETHEUS_DATASOURCE_UID>"
+            model:
+              expr: >-
+                histogram_quantile(0.95,
+                  sum(rate(spinr_dispatch_offer_to_accept_duration_ms_bucket{provider="fly"}[5m])) by (le)
+                )
+              refId: A
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [2000]
+              refId: C
+
+      - uid: spinr-payment-failure-rate-breach
+        title: "Payment failure rate breach (>1%, 10m, >=20 samples)"
+        condition: C
+        for: 10m
+        labels:
+          severity: P1
+          domain: payments
+        annotations:
+          summary: "Payment settlement failure rate (fly) exceeded 1% for 10+ minutes"
+          description: >-
+            CLAUDE.md KPI: payment success rate >= 99%. ADR-010 §3. Requires
+            >=20 samples in-window to avoid alerting on 1-of-1 failures at low
+            volume -- enforce the sample-count guard when wiring this into
+            Grafana Alerting (Grafana's rule condition model does not express
+            a minimum-sample guard as cleanly as PromQL; a human provisioning
+            this should add an additional `count(...) >= 20` reduce/math step,
+            or an `and` clause, before enabling paging in production).
+          runbook_url: "docs/runbooks/on-call.md"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: "<GRAFANA_CLOUD_PROMETHEUS_DATASOURCE_UID>"
+            model:
+              expr: >-
+                sum(rate(spinr_payment_settlement_total{outcome="failed",provider="fly"}[10m]))
+                /
+                sum(rate(spinr_payment_settlement_total{provider="fly"}[10m]))
+              refId: A
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.01]
+              refId: C

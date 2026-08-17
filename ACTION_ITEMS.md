@@ -8283,9 +8283,29 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 
 ### C29. Scheduled-ride notice-window cancellation fee has no rider-facing warning in the cancel UI
 
-- [ ] **Status:** open (filed 2026-08-17, same review as C26). Currently
-  dormant — see below — but becomes a real hidden-fee risk the moment the
-  flag flips on.
+- [x] **Status:** closed 2026-08-17. `GET /rides/scheduled`
+  (`routes/rides/queries.py`) now attaches a read-only
+  `notice_window_fee_amount` to each ride, computed via the existing,
+  unchanged `calculate_scheduled_cancel_notice_fee()` against current
+  `app_settings` — mirrors how `get_ride()` already surfaces the live-ride
+  `cancellation_fee` field. No charging/deduction logic touched. Rider-app's
+  `scheduled-rides.tsx` `handleCancel` reads that field and, when present,
+  appends the fee amount to the cancel confirmation text; otherwise the
+  original generic text is unchanged. Ships dark today —
+  `scheduled_ride_notice_window_fee_enabled` still defaults off in
+  production, so the field is never added and the response/behavior is
+  byte-for-byte unchanged until the flag is enabled. New tests:
+  `backend/tests/test_p2_scheduled_rides.py::TestGetScheduledRidesNoticeWindowFeePreview`
+  (flag on + fee applies, flag off, flag on + outside window) and
+  `rider-app/__tests__/scheduledRidesNoticeWindowFee.test.tsx` (source-
+  contract test, not a rendered-DOM test — this screen's `FlatList`/
+  `VirtualizedList` tree hangs under this repo's Jest/RN setup, consistent
+  with the existing "app screens covered by e2e" policy; noted explicitly
+  in the test file rather than silently skipped).
+  `pytest tests/test_p2_scheduled_rides.py -q` → 23 passed.
+  `npx jest __tests__/scheduledRidesNoticeWindowFee.test.tsx` → 3 passed.
+  **Not verified**: no staging/live-Supabase check (mocked Supabase client
+  only); no visual/snapshot regression tooling exists for rider-app screens.
 - **Issue/gap:** `scheduled_ride_notice_window_fee_enabled`
   (`services/cancellation_service.py:63-91`) defaults `False`, and even if
   a company/service-area turns it on, the rider-app cancel confirmation

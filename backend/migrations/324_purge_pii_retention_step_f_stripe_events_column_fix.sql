@@ -1,8 +1,8 @@
 -- 324_purge_pii_retention_step_f_stripe_events_column_fix.sql
 --
 -- BUGFIX: purge_pii_retention() Step F referenced stripe_events.created_at,
--- but that column does not exist on production. Migration 22's CREATE TABLE
--- defined stripe_events with `received_at` (and `processed_at`), not
+-- but that column does not exist on production. Migration 22's table
+-- definition gave stripe_events `received_at` (and `processed_at`), not
 -- `created_at`. Same root cause and failure mode as migrations 187
 -- (driver_location_history Step C) and 323 (ride_messages Step D, applied
 -- moments before this one, same session) -- confirmed live 2026-08-17 via a

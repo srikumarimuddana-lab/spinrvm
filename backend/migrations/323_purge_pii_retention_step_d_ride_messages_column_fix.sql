@@ -1,17 +1,18 @@
 -- 323_purge_pii_retention_step_d_ride_messages_column_fix.sql
 --
 -- BUGFIX: purge_pii_retention() Step D referenced ride_messages.created_at,
--- but that column does not exist on production. Migration 98's CREATE TABLE
--- defined ride_messages with a `timestamp` column, not `created_at`. Migration
--- 50 (the original purge_pii_retention) assumed the table might not exist yet
--- and its own `CREATE TABLE IF NOT EXISTS ride_messages (... created_at ...)`
--- was a no-op against the already-existing table (98 ran first) -- so
--- `created_at` was never actually added, and Step D's WHERE clause has
--- referenced a nonexistent column since day one. Postgres does not validate
--- column references inside a plpgsql function body at CREATE time, only at
--- execution, so this was invisible until the function actually ran Step D --
--- confirmed live 2026-08-17 via a purge_pii_retention(true) dry-run call,
--- immediately after applying migration 321 (A38):
+-- but that column does not exist on production. Migration 98's table
+-- definition gave ride_messages a `timestamp` column, not `created_at`.
+-- Migration 50 (the original purge_pii_retention) assumed the table might
+-- not exist yet and its own idempotent "IF NOT EXISTS" table-creation
+-- statement for ride_messages (... created_at ...) was a no-op against the
+-- already-existing table (98 ran first) -- so `created_at` was never
+-- actually added, and Step D's WHERE clause has referenced a nonexistent
+-- column since day one. Postgres does not validate column references
+-- inside a plpgsql function body at definition time, only at execution, so
+-- this was invisible until the function actually ran Step D -- confirmed
+-- live 2026-08-17 via a purge_pii_retention(true) dry-run call, immediately
+-- after applying migration 321 (A38):
 --     ERROR: 42703: column "created_at" does not exist
 --     QUERY: SELECT COUNT(*) FROM ride_messages WHERE created_at < ...
 --     CONTEXT: PL/pgSQL function purge_pii_retention(boolean) line 88
@@ -19,7 +20,7 @@
 -- This is the EXACT same bug class migration 187 already found and fixed for
 -- driver_location_history's Step C (`recorded_at` vs `received_at`) -- same
 -- root cause (a table pre-existing under a different column name than a
--- later CREATE TABLE IF NOT EXISTS assumed), same failure mode (every daily
+-- later idempotent table-creation statement assumed), same failure mode (every daily
 -- tick errors out at the first bad column reference and aborts every step
 -- after it), same fix shape (re-fork verbatim, change only the one broken
 -- column reference).

@@ -22,6 +22,13 @@ jest.mock('../../../store/driverStore', () => ({
   useDriverStore: { getState: jest.fn(), subscribe: jest.fn() },
 }));
 jest.mock('../carSurface', () => ({ CarMapSurface: () => null }));
+// Keeps the real module's transitive utils/backgroundLocation import (SQLite
+// recorder, Firebase App Check) out of a suite that only exercises the
+// missing-native-module guard.
+jest.mock('../carLocationTask', () => ({
+  startCarLocationService: jest.fn().mockResolvedValue('started'),
+  stopCarLocationService: jest.fn().mockResolvedValue(undefined),
+}));
 jest.mock('../carMapCamera', () => ({
   useCarMapCamera: { getState: () => ({ reset: jest.fn() }) },
 }));

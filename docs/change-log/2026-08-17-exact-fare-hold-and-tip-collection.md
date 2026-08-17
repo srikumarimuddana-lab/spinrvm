@@ -217,6 +217,46 @@ Ordered least- to most-invasive, none requiring a redeploy except the last:
 captured cancellation fees and incremented authorizations are real Stripe
 movements. Reverting the code does not reverse them; they need refunds.
 
+## 8b. Blockers found in Stripe review, after the rebase
+
+A senior-Stripe-perspective review of the rescoped branch found three blockers,
+all confirmed against the vendored `stripe` 15.1.0 schema in `backend/venv`, and
+all invisible to the test suite because the mocks stopped short of the real
+Stripe param/response shapes.
+
+1. **`request_incremental_authorization_support` is not a valid top-level
+   `PaymentIntent.create` param.** It is `card_present`-only (Terminal). The
+   card-not-present equivalent is
+   `payment_method_options.card.request_incremental_authorization`, a
+   `Literal["if_available","never"]` — different nesting, different spelling,
+   different type. Sending the wrong one risks a 400 on **every card booking
+   authorization**, not just tipped rides, since `authorize_ride` runs before
+   dispatch on every card ride. Fixed.
+2. **The capability read-back checked a field that never exists on a CNP
+   charge.** `payment_method_details.card_present.incremental_authorization_supported`
+   is a Terminal boolean; the CNP charge carries
+   `payment_method_details.card.incremental_authorization.status`. The old read
+   returned `None` unconditionally, so `auth_incrementable` would have been
+   `False` forever and the whole one-fee design silently inert — failing open
+   into the fallback, so nothing would ever have surfaced it. Fixed.
+3. **`cancellation.py` wrote `auth_status="released"` whenever a live hold
+   existed**, regardless of which branch ran. That claimed no money was taken
+   when the fee had actually been captured, and — worse — marked a
+   deliberately-left-open hold as released, hiding it from
+   `orphaned_hold_reconciler` and `card_hold_release`, which both select on
+   `OPEN_AUTH_STATES`. The rider's funds would sit until Stripe's ~7-day expiry
+   with no sweeper able to find them. Now writes `captured` / `released` /
+   leaves it open, matching what actually happened.
+
+Also closed: a successful increment followed by a failed capture abandoned the
+(now larger, fare+tip) hold once `payment_intent_id` was repointed at the fresh
+charge. The hold is now released best-effort before the fallback.
+
+New tests reach the boundaries the old mocks did not:
+`test_authorize_incremental_shape.py` (9) pins the create-param and read-back
+shapes including the Terminal-vs-CNP confusion, and
+`test_cancel_fee_from_hold.py` now asserts `auth_status` in all three branches.
+
 ## 9. Verification performed
 
 - [x] **Automated tests** — full backend suite, after rebasing onto current

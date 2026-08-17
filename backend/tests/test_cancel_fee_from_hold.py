@@ -273,3 +273,79 @@ class TestCancellationFeeCapping:
         key = mock_stripe.PaymentIntent.capture.call_args.kwargs["idempotency_key"]
         assert key == "ride-cancelfee-ride_cap-450"
         assert not key.startswith("ride-capture-")
+
+
+@pytest.mark.e2e
+@pytest.mark.asyncio
+class TestAuthStatusReflectsReality:
+    """`auth_status` is a strict 4-state contract (migration 156) that the
+    orphaned-hold reconciler and card_hold_release both select on. Writing
+    'released' when the hold was actually captured — or when it was left open
+    after a failed capture — either misreports money movement or hides a live
+    hold from the sweepers that exist to find it.
+
+    The original version of this suite asserted payment_status and the fee PI
+    but never auth_status, which is exactly how the bug survived review.
+    """
+
+    async def test_captured_fee_records_captured_not_released(self):
+        update_ride_mock = AsyncMock()
+        with _patch_all(
+            patch("backend.routes.rides._deps.db_supabase.update_ride", update_ride_mock),
+            patch(
+                "backend.routes.rides._deps.capture_cancellation_fee",
+                AsyncMock(
+                    return_value=ChargeOutcome(
+                        status="captured", payment_intent_id="pi_booking_hold", charged_amount=Decimal("4.50")
+                    )
+                ),
+            ),
+            patch("backend.routes.rides._deps.charge_ancillary_fee", AsyncMock()),
+            patch("backend.routes.rides._deps.cancel_authorization", AsyncMock(return_value=True)),
+        ):
+            await _run_cancel()
+
+        written = update_ride_mock.call_args_list[0].args[1]
+        # Money WAS taken from the hold. "released" would claim it wasn't.
+        assert written["auth_status"] == "captured"
+
+    async def test_full_release_records_released(self):
+        update_ride_mock = AsyncMock()
+        with _patch_all(
+            patch("backend.routes.rides._deps.db_supabase.update_ride", update_ride_mock),
+            patch("backend.routes.rides._deps.capture_cancellation_fee", AsyncMock()),
+            patch("backend.routes.rides._deps.charge_ancillary_fee", AsyncMock()),
+            patch("backend.routes.rides._deps.cancel_authorization", AsyncMock(return_value=True)),
+            settings=NO_FEE_SETTINGS,
+        ):
+            await _run_cancel()
+
+        written = update_ride_mock.call_args_list[0].args[1]
+        assert written["auth_status"] == "released"
+
+    async def test_failed_capture_leaves_auth_status_open_for_the_reconciler(self):
+        """The hold is deliberately NOT cancelled when the capture fails, so it
+        must stay in an OPEN_AUTH_STATES value. Marking it released would hide a
+        genuinely open hold from orphaned_hold_reconciler and strand the rider's
+        funds until Stripe's ~7-day expiry."""
+        update_ride_mock = AsyncMock()
+        with _patch_all(
+            patch("backend.routes.rides._deps.db_supabase.update_ride", update_ride_mock),
+            patch(
+                "backend.routes.rides._deps.capture_cancellation_fee",
+                AsyncMock(return_value=ChargeOutcome(status="failed", error_message="hold expired")),
+            ),
+            patch(
+                "backend.routes.rides._deps.charge_ancillary_fee",
+                AsyncMock(
+                    return_value=ChargeOutcome(
+                        status="succeeded", payment_intent_id="pi_fresh", charged_amount=Decimal("4.50")
+                    )
+                ),
+            ),
+            patch("backend.routes.rides._deps.cancel_authorization", AsyncMock(return_value=True)),
+        ):
+            await _run_cancel()
+
+        written = update_ride_mock.call_args_list[0].args[1]
+        assert "auth_status" not in written or written["auth_status"] in ("authorized", "fare_only")

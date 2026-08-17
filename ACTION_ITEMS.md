@@ -8097,8 +8097,70 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   YAML or application-code defect. No `.github/workflows/*.yml` change is
   implicated.
 
-### C22. `scripts/migrate.py`'s tracking table doesn't match what's actually live on the production Supabase project — the runner may never have successfully recorded a migration against it
-- [ ] **Status:** open — found 2026-08-13 while investigating why the
+### C22. `scripts/migrate.py`'s tracking table doesn't match what's actually live on the production Supabase project — the runner may never have successfully recorded a migration against it — PARTIALLY RESOLVED (2026-08-17)
+
+- [ ] **Status:** partially resolved (2026-08-17). `scripts/migrate.py` no
+  longer exists — deleted by A39, which reconciled `run_migrations.py` to
+  the correct (migration 24) `schema_migrations` shape and ported
+  `migrate.py`'s one useful piece (CONCURRENTLY-safe splitting) first. That
+  closes this item's original acceptance (1) and (2): the shape mismatch
+  and the broken runner code are both gone. **Not closed** — acceptance
+  (3), the actual live audit, is now more precisely quantified than before
+  but still not complete:
+  - **Tracking-table coverage, verified live** (Supabase MCP,
+    `soavhtdhefowwvforzwb`): `schema_migrations` records 161 of 407 repo
+    migration files. The table itself was only bootstrapped 2026-08-14
+    (160 `backfill-verified` rows + 1 manual apply) and the bootstrap batch
+    stopped around migration `239` — everything numerically after that
+    (108 files) plus ~138 pre-window files with non-strictly-numeric
+    naming were never recorded. **This is a mix of real gaps, not one
+    cause** — spot-checks found migrations 286 and 297 genuinely live
+    despite being untracked (bookkeeping-only gap), but migration 321
+    (A38's regulatory fix, merged and marked CLOSED) had **never actually
+    been applied** to production until this session (a real application
+    gap, not just a tracking gap). **Applied 2026-08-17** (with explicit
+    user confirmation via `AskUserQuestion`) — `purge_pii_retention()` now
+    has A38's driver-ride guard live.
+  - **A much more serious bug found while verifying 321's apply**: running
+    `purge_pii_retention(true)` immediately after confirmed the function
+    could not execute past **Step D** — `ride_messages.created_at` doesn't
+    exist (the table has `timestamp`, per migration 98). Fixing that
+    (migration 323) surfaced the identical bug one step later at **Step
+    F** — `stripe_events.created_at` doesn't exist either (the table has
+    `received_at`, per migration 22). Same bug class migration 187 already
+    fixed once for `driver_location_history` (Step C) — a table
+    pre-existing under a different column name than a later
+    `CREATE TABLE IF NOT EXISTS` assumed, invisible because Postgres
+    doesn't validate `plpgsql` column references until execution. **This
+    means the entire daily PII/data-retention background loop
+    (`utils/retention_purge.py`, ~03:00 UTC) has likely never completed a
+    single successful run** — GPS anonymization at 3y, ride/DSAR
+    hard-delete at 7y, and every step from D onward were silently failing
+    every tick. Fixed 2026-08-17 (migrations 323, 324, both applied live
+    with explicit user confirmation, both reviewed by
+    `spinr-migration-reviewer` — verdict SAFE TO APPLY). A live
+    column-existence sweep against every other table/column the function
+    references found no further broken references — D and F were the
+    last two. `purge_pii_retention(true)` now completes end-to-end and
+    surfaced a real backlog (189,208 stale `surge_pricing` rows, 51
+    expired `refresh_tokens`) — **no live purge was executed**, that's a
+    separate decision left to the daily loop's next natural tick. Full
+    detail: `docs/change-log/2026-08-17-c22-purge-pii-retention-broken-and-fixed.md`.
+  - **Still open**: the broader `schema_migrations` reconciliation (161/407
+    tracked) itself — this session only individually verified and applied
+    321/323/324, exactly the narrow, high-confidence action the original
+    finding called for ("manually audit at least the highest-risk ones...
+    don't blind-apply ~280 migrations' worth of accumulated drift in one
+    shot"). The full reconciliation remains a substantial, separate,
+    higher-stakes audit, same as originally scoped. Also still unverified:
+    whether `110_settings_resend_email.sql` (the original 2026-08-13
+    finding that started this item) has since landed — not re-checked in
+    this session's narrower pass. Also flagged as a natural follow-up:
+    whether any other `SECURITY DEFINER` function or background loop in
+    this codebase has the same "table pre-existed under a different column
+    name" bug class — not investigated beyond `purge_pii_retention()`.
+- [ ] **Original status (2026-08-13, superseded above but kept for
+  history):** open — found while investigating why the
   corporate-portal OTP email send has been failing since it shipped (see
   `docs/change-log/2026-08-13-corporate-otp-error-detail-and-ses-investigation.md`).
 - **What's wrong:** two migration files define incompatible schemas for the

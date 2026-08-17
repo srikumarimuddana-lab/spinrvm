@@ -319,6 +319,7 @@ async def charge_ancillary_fee(
     payment_method_id: Optional[str],
     stripe_customer_id: Optional[str],
     fee_type: str,
+    extra_metadata: Optional[Dict[str, str]] = None,
 ) -> ChargeOutcome:
     """Charge a rider's saved card for a fee outside normal trip settlement
     (e.g. a rider-initiated cancellation fee).
@@ -387,6 +388,13 @@ async def charge_ancillary_fee(
             "rider_id": rider_id,
             "fee_amount": str(amount_dec),
             "source": fee_type,
+            # extra_metadata lets a caller that charges for MORE than one ride
+            # (a batched tip charge) name every ride it covers. Without it the
+            # Stripe dashboard shows a single anchor ride_id for a charge
+            # spanning several, and a rider asking "what is this?" cannot be
+            # answered from the charge alone. Stripe caps metadata values at
+            # 500 chars, so callers must truncate.
+            **(extra_metadata or {}),
         },
     }
 

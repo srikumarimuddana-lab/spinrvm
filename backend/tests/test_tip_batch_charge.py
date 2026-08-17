@@ -187,3 +187,71 @@ class TestCreditDriver:
         assert written["driver_earnings"] == 22.00
         # Snapshot feeds T4A, so it must move with the earnings.
         assert "driver_earnings_snapshot" in written
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+class TestDisputeReadiness:
+    """One PaymentIntent can cover several rides. A rider asking "what is this
+    $7 charge?" must be answerable from the charge itself — the anchor ride_id
+    alone cannot do that."""
+
+    async def test_charge_metadata_names_every_ride_and_its_split(self):
+        from backend.utils.tip_batch_charge import _charge_rider_batch
+
+        charge = AsyncMock(return_value=_outcome(status="succeeded", payment_intent_id="pi_1"))
+        with ExitStack() as st:
+            st.enter_context(patch(TBC + "db_supabase.update_one", AsyncMock(return_value={"id": "x"})))
+            st.enter_context(
+                patch(
+                    TBC + "db_supabase.get_user_by_id",
+                    AsyncMock(return_value={"stripe_customer_id": "cus_1"}),
+                )
+            )
+            st.enter_context(
+                patch(
+                    TBC + "db_supabase.get_ride",
+                    AsyncMock(return_value={"id": "ride_a", "payment_method_id": "pm_1"}),
+                )
+            )
+            st.enter_context(patch(TBC + "charge_ancillary_fee", charge))
+            st.enter_context(patch(TBC + "_credit_driver_for_tip", AsyncMock()))
+            await _charge_rider_batch(
+                "rider_1",
+                [
+                    _tip("4.00", tip_id="a", ride_id="ride_a"),
+                    _tip("6.00", tip_id="b", ride_id="ride_b"),
+                ],
+            )
+
+        meta = charge.call_args.kwargs["extra_metadata"]
+        assert "ride_a" in meta["tip_ride_ids"] and "ride_b" in meta["tip_ride_ids"]
+        # Per-ride split, so support can explain the total without a DB query.
+        assert "ride_a:4.00" in meta["tip_breakdown"]
+        assert "ride_b:6.00" in meta["tip_breakdown"]
+        assert meta["tip_count"] == "2"
+
+    async def test_metadata_values_stay_within_stripes_500_char_cap(self):
+        from backend.utils.tip_batch_charge import _charge_rider_batch
+
+        charge = AsyncMock(return_value=_outcome(status="succeeded", payment_intent_id="pi_1"))
+        many = [_tip("1.00", tip_id=f"t{i}", ride_id=f"ride_{i:04d}_long_identifier") for i in range(60)]
+        with ExitStack() as st:
+            st.enter_context(patch(TBC + "db_supabase.update_one", AsyncMock(return_value={"id": "x"})))
+            st.enter_context(
+                patch(
+                    TBC + "db_supabase.get_user_by_id",
+                    AsyncMock(return_value={"stripe_customer_id": "cus_1"}),
+                )
+            )
+            st.enter_context(
+                patch(TBC + "db_supabase.get_ride", AsyncMock(return_value={"id": "r", "payment_method_id": "pm_1"}))
+            )
+            st.enter_context(patch(TBC + "charge_ancillary_fee", charge))
+            st.enter_context(patch(TBC + "_credit_driver_for_tip", AsyncMock()))
+            await _charge_rider_batch("rider_1", many)
+
+        meta = charge.call_args.kwargs["extra_metadata"]
+        # Truncated, not rejected — a long batch must not fail the charge.
+        assert len(meta["tip_ride_ids"]) <= 500
+        assert len(meta["tip_breakdown"]) <= 500

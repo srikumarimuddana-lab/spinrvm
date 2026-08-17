@@ -167,9 +167,13 @@ async def _driver_annual_earnings(driver_id: str, year: int) -> Decimal:
     legacy-era income synced from Stripe transfer history.
 
     payout_type='stripe_sync' rows (services/stripe_payout_sync_service.py)
-    record legacy-era income the OLD app actually PAID through Stripe, so the
+    and settled ('completed') 'legacy_outstanding_correction' rows
+    (services/legacy_payout_correction_service.py, 2026-08-17) record
+    legacy-era income the OLD app actually PAID through Stripe, so the
     ≥$500 eligibility check and the notified amount must include them,
-    attributed to the year of the transfer (CRA reports amounts paid).
+    attributed to the year of the transfer (CRA reports amounts paid). An
+    'awaiting_stripe_onboarding'/'ready_for_transfer' correction row is a
+    recorded debt, not yet paid — must not count until it settles.
 
     Rides imported from the previous app (utils/legacy_rides) are EXCLUDED:
     that income belongs to the old app and, where it was paid through Stripe,
@@ -203,7 +207,8 @@ async def _driver_annual_earnings(driver_id: str, year: int) -> Decimal:
         "payouts",
         {
             "driver_id": driver_id,
-            "payout_type": "stripe_sync",
+            "payout_type": {"$in": ["stripe_sync", "legacy_outstanding_correction"]},
+            "status": "completed",
             "created_at": {
                 "$gte": f"{year}-01-01T00:00:00+00:00",
                 "$lt": f"{year + 1}-01-01T00:00:00+00:00",

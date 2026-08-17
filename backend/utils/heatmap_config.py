@@ -147,7 +147,11 @@ def config_fingerprint(config: Mapping[str, Any]) -> str:
     old cell size or — worse — the old k-anonymity floor until the TTL expired.
     """
     canonical = json.dumps({k: config[k] for k in sorted(config)}, separators=(",", ":"))
-    return hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:12]
+    # usedforsecurity=False: this is a cache-key fingerprint, not a security
+    # hash (no password, token, or signature involved) -- silences Bandit's
+    # B324 false positive (CR-2026-(assign), see .github/ISSUE_TEMPLATE
+    # ci_change_request.yml issue) without changing the digest at all.
+    return hashlib.sha1(canonical.encode("utf-8"), usedforsecurity=False).hexdigest()[:12]
 
 
 def describe_overrides(area: Optional[Mapping[str, Any]]) -> Dict[str, Any]:

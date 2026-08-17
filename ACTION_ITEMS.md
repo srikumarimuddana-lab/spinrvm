@@ -9636,6 +9636,36 @@ how much they de-risk a public launch._
   its own dependency-only PR — then this check goes green for any future
   PR that touches `requirements.in`.
 
+### C27. `ci-error-audit.yml` has created 2,483 open issues since 2026-04-28 — no cross-run dedup, no auto-close
+
+- [ ] **Status:** open. Filed via `[CR]` #4112
+  (`.github/ISSUE_TEMPLATE/ci_change_request.yml`), CR-2026-(assign). Found
+  2026-08-17 while auditing the repo's CR backlog for unclosed-but-resolved
+  items (the search that also found and closed #3764/#3765).
+- **Measured, not estimated:** 2,483 of the repo's 2,509 total open issues
+  (~99%) carry the `ci-audit` label. Oldest is **#143, created
+  2026-04-28** — continuous unbroken accumulation since the system
+  shipped, ~22/day sustained.
+- **Root cause**: `scripts/ci-audit/create_github_issue.py`'s own
+  docstring states its actual dedup scope — *"De-duplicates: if an open
+  issue for the same run already exists, updates it"* — keyed on **run
+  ID**, not error signature. The same recurring failure across different
+  runs opens a fresh issue every time. No companion workflow anywhere in
+  `.github/workflows/` closes these when the underlying job later goes
+  green — grepped, confirmed absent.
+- **Concrete harm observed this session**: a plain issue-title search for
+  other open `[CR]`s returned unusable noise — GitHub's semantic search
+  matched "CR" against "CI" and surfaced a page of `[CI Audit]` issues
+  instead. Same "signal drowns in noise, trains people to stop looking"
+  failure shape as C7/C8/C9 (a permanently-red or silently-broken
+  automation becomes the expected state, so nobody notices when something
+  in it actually matters).
+- **Not fixed here** — this is a decision-needing CR (approval gate,
+  `.github/ISSUE_TEMPLATE/ci_change_request.yml`), not implemented
+  unilaterally. See #4112 for the proposed fingerprint-based dedup fix,
+  the separate (larger) question of one-time backlog cleanup, and the
+  auto-close design tradeoffs.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

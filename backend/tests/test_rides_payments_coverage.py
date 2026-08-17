@@ -132,6 +132,124 @@ async def test_add_tip_ws_notify_failure_is_swallowed():
     mock_push.assert_called_once()
 
 
+# ── add_tip: payment_status == 'paid' (docs/proposals/2026-08-17-tip-capture-
+# stripe-cost-minimization-strategy.md, Finding 1) ─────────────────────────
+
+
+async def test_add_tip_after_paid_card_charges_and_credits_on_success():
+    """A tip added once the ride is already 'paid' must actually be charged
+    (a fresh Stripe PaymentIntent — the settlement PI is already captured)
+    before driver_earnings/tip_amount are persisted."""
+    from backend.routes.rides.payments import TipRequest, add_tip
+    from backend.services.payment_service import PaymentResult
+
+    ride = _completed_ride(payment_status="paid", payment_method="card")
+    charge_result = PaymentResult(success=True, charged_amount="5.00")
+
+    with (
+        patch("backend.routes.rides.payments._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.rides.payments._deps.db_supabase.update_ride", AsyncMock(return_value=None)) as mock_upd,
+        patch("backend.routes.rides.payments.charge_late_tip", AsyncMock(return_value=charge_result)) as mock_charge,
+    ):
+        req = TipRequest(amount=Decimal("5.00"))
+        result = await add_tip(RIDE_ID, req, current_user={"id": RIDER_ID})
+
+    mock_charge.assert_awaited_once_with(ride, RIDE_ID, RIDER_ID, Decimal("5.00"))
+    assert result["success"] is True
+    assert Decimal(result["tip_amount"]) == Decimal("5.00")
+    mock_upd.assert_awaited_once()
+
+
+async def test_add_tip_after_paid_card_decline_does_not_credit_driver():
+    """A declined late-tip charge must surface as an error and must NOT
+    write tip_amount/driver_earnings — crediting the driver before the
+    rider is actually charged is exactly the bug this guard closes."""
+    from backend.routes.rides.payments import TipRequest, add_tip
+    from backend.services.payment_service import PaymentResult
+
+    ride = _completed_ride(payment_status="paid", payment_method="card")
+    charge_result = PaymentResult(
+        success=False,
+        error_code="card_declined",
+        error="Your card was declined.",
+        status_code=402,
+        extra={"suggested_action": "change_card"},
+    )
+
+    with (
+        patch("backend.routes.rides.payments._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.rides.payments._deps.db_supabase.update_ride", AsyncMock(return_value=None)) as mock_upd,
+        patch("backend.routes.rides.payments.charge_late_tip", AsyncMock(return_value=charge_result)),
+    ):
+        req = TipRequest(amount=Decimal("5.00"))
+        with pytest.raises(HTTPException) as exc:
+            await add_tip(RIDE_ID, req, current_user={"id": RIDER_ID})
+
+    assert exc.value.status_code == 402
+    assert exc.value.detail["code"] == "card_declined"
+    mock_upd.assert_not_awaited()
+
+
+async def test_add_tip_after_paid_wallet_refused_without_calling_charge():
+    """Wallet rides have no 'charge the delta after the fact' debit path yet
+    — must refuse loudly rather than silently no-op (the original bug), and
+    must never call the card-only charge helper."""
+    from backend.routes.rides.payments import TipRequest, add_tip
+
+    ride = _completed_ride(payment_status="paid", payment_method="wallet")
+
+    with (
+        patch("backend.routes.rides.payments._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.rides.payments._deps.db_supabase.update_ride", AsyncMock(return_value=None)) as mock_upd,
+        patch("backend.routes.rides.payments.charge_late_tip", AsyncMock()) as mock_charge,
+    ):
+        req = TipRequest(amount=Decimal("5.00"))
+        with pytest.raises(HTTPException) as exc:
+            await add_tip(RIDE_ID, req, current_user={"id": RIDER_ID})
+
+    assert exc.value.status_code == 400
+    mock_charge.assert_not_awaited()
+    mock_upd.assert_not_awaited()
+
+
+async def test_add_tip_after_paid_company_allowance_refused_without_calling_charge():
+    from backend.routes.rides.payments import TipRequest, add_tip
+
+    ride = _completed_ride(payment_status="paid", payment_method="company_allowance")
+
+    with (
+        patch("backend.routes.rides.payments._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.rides.payments._deps.db_supabase.update_ride", AsyncMock(return_value=None)) as mock_upd,
+        patch("backend.routes.rides.payments.charge_late_tip", AsyncMock()) as mock_charge,
+    ):
+        req = TipRequest(amount=Decimal("5.00"))
+        with pytest.raises(HTTPException) as exc:
+            await add_tip(RIDE_ID, req, current_user={"id": RIDER_ID})
+
+    assert exc.value.status_code == 400
+    mock_charge.assert_not_awaited()
+    mock_upd.assert_not_awaited()
+
+
+async def test_add_tip_before_paid_unchanged_no_charge_attempted():
+    """Baseline regression: the common path (tip added before settlement)
+    must be completely unaffected by the new guard — no charge helper call."""
+    from backend.routes.rides.payments import TipRequest, add_tip
+
+    ride = _completed_ride(payment_status="pending", payment_method="card")
+
+    with (
+        patch("backend.routes.rides.payments._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.rides.payments._deps.db_supabase.update_ride", AsyncMock(return_value=None)),
+        patch("backend.routes.rides.payments.charge_late_tip", AsyncMock()) as mock_charge,
+    ):
+        req = TipRequest(amount=Decimal("5.00"))
+        result = await add_tip(RIDE_ID, req, current_user={"id": RIDER_ID})
+
+    assert result["success"] is True
+    mock_charge.assert_not_awaited()
+
+
 # ── process_payment ─────────────────────────────────────────────────────
 
 

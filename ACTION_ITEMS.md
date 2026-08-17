@@ -9600,6 +9600,42 @@ how much they de-risk a public launch._
   patched version, close out both #3718 and this item together, bump the
   dependency, and confirm `G4b` goes green on both apps.
 
+### C26. `pip-compile drift check` fails on any PR that touches `backend/requirements.in` — `requirements.txt` has drifted far out of sync with a fresh resolve, unrelated to the touching PR's actual diff
+
+- [ ] **Status:** open, not yet a `[CR]` issue — flagged here per the
+  "CI check red for a reason unrelated to your diff" rule rather than
+  left unexplained.
+- **Where surfaced:** PR #4085 (A39's `migrate.py` reconciliation), whose
+  only change to `backend/requirements.in` was a one-line comment fix
+  (`migrate.py` → `run_migrations.py`, no dependency added/removed/
+  reordered). CI's `pip-compile drift check` job still failed —
+  `.github/workflows/pip-compile-check.yml` only triggers when
+  `backend/requirements.in`/`requirements.txt` changes, so this drift has
+  presumably existed unnoticed for a while and this PR was simply the
+  first to touch the trigger path.
+- **What the failure actually shows:** the job's diff is almost entirely
+  `+` (additions) — a fresh `pip-compile requirements.in --no-upgrade`
+  resolves dozens of transitive packages (`pydantic`, `pytest`, `stripe`,
+  `supabase`, `uvicorn`, etc.) that the checked-in `requirements.txt`
+  doesn't currently pin at all, not just version bumps. That's consistent
+  with `requirements.txt` being stale relative to `requirements.in`
+  rather than a resolver nondeterminism artifact.
+- **Not fixed in PR #4085**: regenerating `requirements.txt` correctly
+  requires running `pip-compile` and reviewing/testing the resulting
+  pinned versions — not something to do as a drive-by inside a
+  comment-only-diff PR. Attempting it blind risks silently changing pins
+  the fare/payment/auth code depends on without any of this repo's
+  version-bump review discipline (see the `dependabot` bump commits
+  throughout this file for the normal, reviewed path).
+- **Next step:** someone with a working `pip-compile` environment should
+  run `pip-compile backend/requirements.in --output-file
+  backend/requirements.txt --strip-extras --no-header
+  --annotation-style line --no-upgrade`, review the diff for anything
+  surprising (should be additions/reorderings only, given `--no-upgrade`),
+  test the backend against the regenerated lockfile, and merge that as
+  its own dependency-only PR — then this check goes green for any future
+  PR that touches `requirements.in`.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

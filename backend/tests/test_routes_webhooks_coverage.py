@@ -248,6 +248,103 @@ class TestStripeWebhookDisputeCreated:
         assert update_mock.await_args.args[2]["payment_status"] == "disputed"
         broadcast_mock.assert_awaited_once()
 
+    def test_dispute_created_captures_evidence_due_by(self):
+        """C23 Action 1: evidence_details.due_by (Unix seconds) must be
+        converted to an ISO timestamp and stored on the stripe_disputes row."""
+        import stripe
+
+        from backend.routes import webhooks as wh
+
+        data_obj = {
+            "id": "dp_due_by",
+            "payment_intent": "pi_due_by",
+            "amount": 5000,
+            "reason": "fraudulent",
+            "status": "needs_response",
+            "evidence_details": {"due_by": 1755302400},  # 2025-08-16T00:00:00Z
+        }
+        event_obj = _event_obj("charge.dispute.created", data_obj, "evt_due_by")
+        insert_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", _settings_fn()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.webhooks.db_supabase.insert_one", insert_mock),
+            patch("backend.socket_manager.manager.broadcast_to_admins", AsyncMock()),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=_mock_req()))
+
+        assert result["received"] is True
+        insert_mock.assert_awaited_once()
+        row = insert_mock.await_args.args[1]
+        assert row["evidence_due_by"] == "2025-08-16T00:00:00+00:00"
+
+    def test_dispute_created_no_evidence_details_leaves_due_by_null(self):
+        import stripe
+
+        from backend.routes import webhooks as wh
+
+        data_obj = {
+            "id": "dp_no_due_by",
+            "payment_intent": "pi_no_due_by",
+            "amount": 100,
+            "reason": "duplicate",
+            "status": "warning_needs_response",
+        }
+        event_obj = _event_obj("charge.dispute.created", data_obj, "evt_no_due_by")
+        insert_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", _settings_fn()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.webhooks.db_supabase.insert_one", insert_mock),
+            patch("backend.socket_manager.manager.broadcast_to_admins", AsyncMock()),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=_mock_req()))
+
+        assert result["received"] is True
+        row = insert_mock.await_args.args[1]
+        assert row["evidence_due_by"] is None
+
+    def test_dispute_created_malformed_due_by_logged_and_left_null(self):
+        """A due_by that fails datetime conversion must not 500 the webhook
+        (CLAUDE.md: never let a defensive path silently swallow -- log it)."""
+        import stripe
+
+        from backend.routes import webhooks as wh
+
+        data_obj = {
+            "id": "dp_bad_due_by",
+            "payment_intent": "pi_bad_due_by",
+            "amount": 100,
+            "reason": "duplicate",
+            "status": "warning_needs_response",
+            "evidence_details": {"due_by": "not-a-timestamp"},
+        }
+        event_obj = _event_obj("charge.dispute.created", data_obj, "evt_bad_due_by")
+        insert_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", _settings_fn()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.webhooks.db_supabase.insert_one", insert_mock),
+            patch("backend.socket_manager.manager.broadcast_to_admins", AsyncMock()),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=_mock_req()))
+
+        assert result["received"] is True
+        row = insert_mock.await_args.args[1]
+        assert row["evidence_due_by"] is None
+
     def test_dispute_created_no_matched_ride_skips_ride_update(self):
         import stripe
 

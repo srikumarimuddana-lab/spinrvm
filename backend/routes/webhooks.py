@@ -1112,6 +1112,25 @@ async def stripe_webhook(request: Request):
         dispute_reason = data_object.get("reason", "unknown")
         dispute_status = data_object.get("status", "")
 
+        # C23 Action 1: capture the evidence-submission deadline. Stripe
+        # sends evidence_details.due_by as a Unix timestamp (seconds); it's
+        # absent for disputes that don't accept evidence (rare) or before
+        # Stripe has determined a deadline -- both cases correctly leave
+        # this NULL rather than guessing one.
+        evidence_due_by = None
+        due_by_epoch = (data_object.get("evidence_details") or {}).get("due_by")
+        if due_by_epoch:
+            try:
+                evidence_due_by = datetime.fromtimestamp(due_by_epoch, tz=timezone.utc).isoformat()
+            except (TypeError, ValueError, OSError) as due_by_err:
+                logger.warning(
+                    "Dispute %s: could not parse evidence_details.due_by=%r: %s",
+                    dispute_id_stripe,
+                    due_by_epoch,
+                    due_by_err,
+                    extra={"domain": "payments", "event_id": event_id},
+                )
+
         ride = None
         ride_id = None
         if payment_intent_id:
@@ -1135,6 +1154,7 @@ async def stripe_webhook(request: Request):
                 "reason": dispute_reason,
                 "status": dispute_status,
                 "stripe_event_id": event_id,
+                "evidence_due_by": evidence_due_by,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             },

@@ -490,6 +490,20 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.opt(exception=True).error(f"Failed to import stale in_progress ride alerter: {e}")
 
+    # Regulatory guard-trigger monitor (A35) — an ad-hoc SQL script once
+    # disabled the append-only triggers on driver_insurance_periods/
+    # financial_events/audit_logs to hard-delete rows they exist to protect.
+    # No application code can prevent a direct DB session from doing this
+    # again; this loop detects it (Sentry + audit_logs row, no mutation) via
+    # the read-only check_disabled_guard_triggers() RPC (migration 317). No
+    # kill switch — this is a security control, not a product alert.
+    try:
+        from utils.retention_guard_monitor import retention_guard_monitor_loop
+
+        _spawn("retention_guard_monitor (6h)", retention_guard_monitor_loop)
+    except Exception as e:
+        logger.opt(exception=True).error(f"Failed to import retention guard monitor: {e}")
+
     # Orphaned card-hold reconciler — releases booking-time authorizations left open
     # on rides that are cancelled and will never be billed. Two populations: the
     # historical backlog from before the stuck-ride sweeper released holds at all
@@ -599,6 +613,7 @@ async def lifespan(app: FastAPI):
             "push_retry (30s)",
             "capacity_watchdog (60s)",
             "auto_payout (1h, Sundays)",
+            "retention_guard_monitor (6h)",
         ]
     )
 

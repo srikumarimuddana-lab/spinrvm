@@ -7,7 +7,16 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-12 — C21 ADDED (open): two PRs (#3719, #3728, the
+_Last updated: 2026-08-17 — A35 FIXED (detection loop + sanctioned
+cleanup-tool replacement, migration 317 applied to production, reviewed by
+migration + regulatory-compliance agents); A37/A38 ADDED (open, deliberately
+deferred follow-ups spun off from A35's review); A39 ADDED and CLOSED same
+day (two competing migration runners found — `migrate.py` doesn't match
+production's actual schema and would fail if run; docs corrected to point
+at `run_migrations.py`, the one that's actually live). Prior: A34 ADDED (open): dual-run cutover readiness
+audit complete (PR #3954, `docs/audit/2026-08-15-dual-run-cutover/`);
+decommission blockers, launch-week collision/monitoring gaps, and required
+user decisions consolidated there. Prior: C21 ADDED (open): two PRs (#3719, #3728, the
 notification-throttling feature) merged via GitHub's native per-PR
 auto-merge before/without their full check set completing — #3719 merged
 while `CI/CD Pipeline`/`CI Guard Rails`/`Security Gates` were still
@@ -79,6 +88,62 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 ---
 
 ## P0 — Launch gating (code)
+
+### A34. Dual-run cutover readiness audit (2026-08-15) — decommission blockers and required decisions
+> **Note:** there is a second, unrelated `### A34` further down this file
+> ("Legacy-imported ride count dropped 224 → 186 in production — CLOSED") from
+> a different session on 2026-08-16. Both numbers are already cross-referenced
+> from other docs, so neither has been renumbered — treat the heading text as
+> the disambiguator, not the number. Filed as a process gap: this repo has no
+> mechanism preventing two parallel sessions from picking the same "next free"
+> ACTION_ITEMS number, the same collision class already found in SQL migration
+> filenames (310×2, 313×3, `docs/audit/2026-08-15-full-fleet-launch-readiness.md`
+> item #11).
+- [ ] **Status:** open, materially updated 2026-08-17 by later sessions'
+  work — see `docs/runbooks/full-app-audit.md`'s Prior-Findings Ledger for the
+  full detail; summary below. Old app decommission target: **Oct 31, 2026
+  (tentative)**.
+  - **RESOLVED**: the 224-vs-186 discrepancy — see the *other* A34 below,
+    CLOSED 2026-08-16 as intentional pre-launch test-account cleanup (also
+    spun off **A35**, a real finding: the cleanup script bypassed the 7-year
+    `driver_insurance_periods` retention guard triggers — read it).
+  - **RESOLVED (superseded number)**: the $276.59/20-driver figure — Stripe
+    cross-check ran 2026-08-16
+    (`docs/change-log/2026-08-16-gst-backfill-and-stripe-crosscheck.md` §1a).
+    Revised: **$185.31–$228.08** for buckets 1–15 (2 unresolved, $42.77,
+    genuinely ambiguous — one shows evidence trending *owed*, not excluded);
+    1 bucket ($22.43) likely already paid via Stripe, correctly excluded;
+    buckets 16–20 ($26.08) unaffected, still blocked on driver re-link.
+    Structural finding: the Stripe mirror schema can never definitively link a
+    ledger row to a specific ride — "likely" is the ceiling. Still open: which
+    Stripe account the mirror covers (old app's/new app's/both) — unconfirmed.
+  - **RESOLVED**: rider legacy-import provenance — 918/1,137 users backfilled
+    2026-08-17 (`docs/change-log/2026-08-17-rider-provenance-backfill-executed.md`).
+    The *code* gap (`rider_import_service.py` never stamps new imports) is
+    still open — small, separate fix.
+  - **RESOLVED**: `payout_gst_amount` for the 186 already-migrated rides —
+    backfilled additive-only, $102.09 total
+    (`docs/change-log/2026-08-16-gst-backfill-executed.md`). **D1 remains
+    open**: what `tax_amount` itself should read for those 186 rows is a
+    business/legal decision, not resolved by the backfill — needs an owner
+    + due date.
+  - **STILL OPEN, unchanged**: fresh final old-app export (unblocks the true
+    pending-money figure, the full identity map, and the corporate-money
+    unknown); insurance-period audit-trail gap for imported rides (legal/SGI
+    decision — engineering must NOT fabricate period rows); no
+    final-export/teardown runbook owner/dates (draft exists,
+    `docs/runbooks/full-app-audit.md` Part B §3.2); double-dispatch/
+    double-payout structural risk (needs an operational roster policy — code
+    provides no guard); 3 monitoring signals **now shipped** (PR #3954,
+    `dual_run_monitoring_enabled`, verify still live rather than treating as
+    a to-do); open $16.63 Stripe dispute needs a response; rider-referral
+    velocity/identity-cross-check gap unchanged; 22 unmarked drivers; two
+    incompatible legacy-ID namespaces still need a crosswalk table.
+- **Files:** `docs/audit/2026-08-15-dual-run-cutover/` (4 phase reports),
+  `docs/runbooks/full-app-audit.md` (repeatable master audit prompt — supersedes
+  ad-hoc scratch prompts for future runs), PR #3946 (merged, dry-run-only as
+  designed, extend don't duplicate the write path).
+- **Acceptance:** each numbered blocker either closed with evidence or explicitly risk-accepted by the user with a dated note here.
 
 ### A1. Per-module test-coverage floors for money paths
 - [x] **Status:** DONE (2026-07-28) — `matching.py` and `rides/payments.py`,
@@ -3442,16 +3507,131 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   accounts, not real regulatory-covered drivers — but the script itself
   would do the same thing to a real driver's insurance-period history if
   reused for an actual DSAR request.
-- **Status:** open. **Recommended fix:** either retire this ad-hoc script
-  in favor of always routing account deletion through
-  `purge_pii_retention()`'s Step H (which already has the correct
-  eligibility guard), or if a faster manual path is genuinely needed for
-  test-data cleanup, fork it into a clearly-named test-only variant that
-  hard-fails (not just skips) on any account with `driver_insurance_periods`
-  rows, so it can never silently do this against a real driver.
-- **What was NOT verified:** whether this script has ever been run against
-  an account that *did* have real `driver_insurance_periods` history —
-  A34 only confirmed the 2026-08-14 runs were test accounts.
+- [x] **Status:** fixed (2026-08-17). Two-part fix, both reviewed
+  (`spinr-migration-reviewer` + `spinr-regulatory-compliance-checker`,
+  verdicts: safe to merge / adequate partial fix — see
+  `docs/change-log/2026-08-17-a35-retention-guard-monitor.md`):
+  1. **Detection**: `check_disabled_guard_triggers()` (migration 317, read-only,
+     `service_role`-only) + a new 6-hourly background loop
+     (`backend/utils/retention_guard_monitor.py`) that alerts (CRITICAL log +
+     Sentry `fatal` + one `audit_logs` row) if any `%_no_mutate`/`%_no_delete`
+     guard trigger (plus the named legacy exception `audit_logs_no_update`) is
+     found disabled. Never auto-remediates. Wired into both the spawn list
+     and the loop watchdog's tracked-name list from day one.
+  2. **Sanctioned replacement**: `backend/services/test_account_cleanup_service.py`
+     — dry-run-only plan builder (no delete path built), buckets every
+     phone-matched account into `safe_to_delete` / `blocked_regulated_data_present`
+     using Step H's eligibility guard **plus** a check Step H itself is
+     missing (see **A38** below).
+  - **Honestly-stated, NOT closed by this fix**: the detection loop is a
+    point-in-time poll — it cannot see a disable→mutate→re-enable cycle
+    completed within one session (the actual shape of the 2026-08-14
+    incident), at any polling cadence. Closing that needs a synchronous
+    `ddl_command_end` event trigger, deliberately **not** built in this
+    change (database-wide blast radius on every `ALTER TABLE` statement,
+    untestable against live Postgres from this session) — spun off as
+    **A37**.
+  - **What was NOT verified:** whether this script has ever been run against
+    an account that *did* have real `driver_insurance_periods` history —
+    A34 only confirmed the 2026-08-14 runs were test accounts. Migration 317
+    itself has **not been applied to production** in this session (repo
+    convention is `scripts/migrate.py`, not ad-hoc application) — until it
+    is, the new loop logs an RPC-not-found error every 6h (never a false
+    positive/negative, verified by test) rather than actually detecting
+    anything.
+
+### A37. Real-time DDL detection for regulatory guard triggers (event trigger) — open, deliberately deferred from A35
+- **Source:** surfaced by `spinr-regulatory-compliance-checker`'s review of
+  the A35 fix (2026-08-17) — see
+  `docs/change-log/2026-08-17-a35-retention-guard-monitor.md`.
+- **Issue:** A35's fix polls trigger state every 6h. Polling, at any
+  cadence, cannot observe a disable → mutate/delete → re-enable cycle
+  completed *within* a single `psql`/dashboard session — exactly the shape
+  the 2026-08-14 incident actually had. The only mechanism that closes this
+  is synchronous: a `CREATE EVENT TRIGGER ... ON ddl_command_end` that
+  writes an append-only row the moment `ALTER TABLE ... {DIS,EN}ABLE
+  TRIGGER` fires on a regulated table, inspecting
+  `pg_event_trigger_ddl_commands()` inside the trigger function to filter to
+  our guarded tables.
+- **Why not built alongside A35:** an event trigger fires database-wide for
+  *every* `ALTER TABLE` statement in the project, not just the guarded ones
+  — a bug in its body (a raised exception, an unhandled edge case) risks
+  breaking every future migration repo-wide, on a live-tested production
+  system, with no way to test the function against a real Postgres instance
+  from this session first. Per CLAUDE.md's "escalate, don't silently ship,
+  when in doubt" rule — this needs a deliberate, tested, separately-reviewed
+  PR, not a bundled addition to a same-day fix.
+- **Status:** open, no owner assigned.
+
+### A38. `purge_pii_retention()` Step H never checks `rides.driver_id` for a driver account
+- **Source:** surfaced by `spinr-regulatory-compliance-checker`'s review of
+  the A35 fix (2026-08-17) — the new `test_account_cleanup_service.py`
+  deliberately added a `rides.driver_id` check that Step H itself lacks
+  (see `backend/migrations/296_pipeda_30day_profile_scrub.sql`'s Step H
+  body: it checks `driver_insurance_periods`/`payouts`/`bank_accounts` for a
+  driver account, and `rides.rider_id` for any account, but never
+  `rides.driver_id`).
+- **Issue:** a driver account with completed ride history but, for some
+  reason, no `driver_insurance_periods`/`payouts`/`bank_accounts` rows would
+  currently pass Step H's own eligibility guard and be hard-deleted at the
+  7-year mark despite having ride history — the sanctioned DSAR process has
+  the same class of gap A35 found in the ad-hoc script, just narrower and
+  less likely to be hit.
+- **Status:** open, no owner assigned. **Not fixed as part of A35** — that
+  fix made its own replacement tool stricter than Step H rather than
+  attempting to also patch Step H's SQL, since Step H is money/regulatory-
+  adjacent production code that changes hard-delete behavior and deserves
+  its own dedicated review, not a drive-by edit inside an unrelated fix.
+
+### A39. Two competing migration runners; the one CLAUDE.md documents (`migrate.py`) does not match production's actual `schema_migrations` schema — CLOSED (2026-08-17), docs corrected
+- **Source:** found while manually applying migration 317 (the A35 fix) to
+  production, since `python scripts/migrate.py` couldn't be run in this
+  session (no `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`/`DATABASE_URL` in
+  the shell) and applying it directly surfaced the mismatch.
+- **Issue:** `backend/scripts/` contains **two** independent migration
+  runners with **two different** `schema_migrations` table shapes:
+  - `migrate.py` — expects `schema_migrations(version TEXT PRIMARY KEY,
+    applied_at)`, defined by `backend/migrations/00_schema_migrations_table.sql`.
+    This is the one `CLAUDE.md`'s "Database Migrations" section (and
+    `backend/migrations/CLAUDE.md`, and `AGENTS.md`) documented as
+    canonical.
+  - `run_migrations.py` — expects `schema_migrations(filename TEXT PRIMARY
+    KEY, checksum, applied_at, applied_by)`, defined by
+    `backend/migrations/24_schema_migrations.sql` (an April 2026
+    production-readiness fix, P0-B4, that added checksum verification and
+    fixed a real duplicate-prefix ordering bug — see that migration's own
+    top comment).
+  - **Confirmed live** (`select table_schema, column_name ... from
+    information_schema.columns where table_name='schema_migrations'`):
+    production's actual table has `filename`/`checksum`/`applied_at`/
+    `applied_by` — migration 24's shape, i.e. `run_migrations.py`'s.
+    Existing rows are stamped `applied_by='backfill-verified'`, a bootstrap
+    trace confirming `run_migrations.py` (or an equivalent manual process
+    using its schema) is what's actually been used against production.
+  - **`migrate.py` would fail immediately if run against production
+    today** — `INSERT INTO schema_migrations (version) VALUES (%s)` against
+    a table with no `version` column raises `column "version" does not
+    exist`. No evidence it has ever successfully tracked a migration
+    against the live database.
+  - Confirmed via `.github/workflows/`: **CI never invokes either script**
+    to actually apply migrations (`migration-check.yml` only lints
+    filenames/format) — migrations have always been applied manually or via
+    a one-off process, which is how this drift went unnoticed.
+- **Fix:** corrected the documented command in `CLAUDE.md`,
+  `backend/migrations/CLAUDE.md`, `AGENTS.md`, and
+  `docs/runbooks/migration-conflict-detection.md` to
+  `python -m backend.scripts.run_migrations`, with a note explaining why
+  `migrate.py` is wrong. **Did not delete or fix `migrate.py` itself** — a
+  human should decide whether to reconcile it (update it to match migration
+  24's schema and keep it as an alternative/rewrite path) or delete it
+  outright; it wasn't touched here to avoid a unilateral call on which
+  runner's other behavior (e.g. `migrate.py`'s `--dry-run` flag and
+  autocommit/`CONCURRENTLY` handling) should be considered authoritative
+  going forward.
+- **What was NOT verified:** whether any deploy pipeline outside
+  `.github/workflows/` (e.g. a Fly/Railway post-deploy hook, a manual
+  runbook step not checked in this repo) invokes `migrate.py` specifically
+  — only this repo's own CI config was checked.
 
 ### A36. `financial_events` is 0 rows in production despite active use by 42 files
 - **Source:** surfaced while investigating A34 (2026-08-16), not itself

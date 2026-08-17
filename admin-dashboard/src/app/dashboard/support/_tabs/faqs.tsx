@@ -18,6 +18,7 @@ import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Search, Plus, Pencil, Trash2, RefreshCw, ExternalLink } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { useToast } from "@/components/ui/use-toast";
+import { FAQ_CATEGORIES } from "@/lib/faq-categories";
 import {
     AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
     AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -159,7 +160,7 @@ export default function FaqsTab() {
                         <div className="space-y-1.5"><Label className="text-xs">Question *</Label><Input placeholder="e.g. How do I cancel a ride?" value={form.question} onChange={(e) => setForm({ ...form, question: e.target.value })} /></div>
                         <div className="space-y-1.5"><Label className="text-xs">Answer *</Label><Textarea placeholder="Plain-text answer shown in the app." value={form.answer} onChange={(e) => setForm({ ...form, answer: e.target.value })} rows={5} /></div>
                         <div className="grid grid-cols-2 gap-3">
-                            <div className="space-y-1.5"><Label className="text-xs">Category</Label><Input placeholder="general" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} /></div>
+                            <div className="space-y-1.5"><Label className="text-xs">Category</Label><Select value={form.category} onValueChange={(v) => setForm({ ...form, category: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{FAQ_CATEGORIES.map((c) => (<SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>))}</SelectContent></Select></div>
                             <div className="space-y-1.5"><Label className="text-xs">Audience</Label><Select value={form.audience} onValueChange={(v) => setForm({ ...form, audience: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="both">Both apps</SelectItem><SelectItem value="rider">Rider only</SelectItem><SelectItem value="driver">Driver only</SelectItem></SelectContent></Select></div>
                         </div>
                         <div className="flex items-center gap-2"><Switch checked={form.is_active} onCheckedChange={(v) => setForm({ ...form, is_active: v })} /><Label className="text-xs">Active (visible in app)</Label></div>

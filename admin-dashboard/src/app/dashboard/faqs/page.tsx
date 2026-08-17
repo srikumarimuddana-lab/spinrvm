@@ -19,6 +19,7 @@ import {
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { HelpCircle, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { getFaqs, createFaq, updateFaq, deleteFaq } from "@/lib/api";
+import { FAQ_CATEGORIES } from "@/lib/faq-categories";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -55,7 +56,7 @@ const AUDIENCE_LABELS: Record<string, string> = {
     driver: "Drivers",
 };
 
-const CATEGORY_OPTIONS = ["general", "payments", "safety", "account", "rides", "drivers", "other"];
+const CATEGORY_OPTIONS: readonly string[] = FAQ_CATEGORIES;
 
 // ── Component ─────────────────────────────────────────────────────────────────
 

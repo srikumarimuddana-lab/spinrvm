@@ -2,7 +2,7 @@
 
 Driver-facing FAQ content for the Spinr Driver app help section and the in-app AI assistant. Topic coverage mirrors the standard rideshare driver help-centre categories (as used by Uber and Lyft), but every answer is original Spinr content tailored to Saskatchewan (SGI, Saskatchewan Transportation Act, PIPEDA) — no third-party text is reused.
 
-**33 entries**, audience `driver`. Seeded by `backend/migrations/212_seed_saskatchewan_driver_faqs.sql`.
+**33 entries**, audience `driver`. Seeded by `backend/migrations/212_seed_saskatchewan_driver_faqs.sql`. One of those 33 (the SOS/safety-features entry) was later deactivated and consolidated into a shared `audience='both'` FAQ — see the note in the Safety & coverage section below — leaving 32 active driver-only entries from this migration.
 
 > Answers are guidance-only and deliberately avoid fabricated approval or payout timelines; personal-status questions ("what is my status", "was I paid") are also answered live from the driver's own record by the assistant's `get_driver_application_status`, `get_document_status`, and `get_driver_earnings_summary` tools.
 
@@ -132,11 +132,7 @@ Coverage depends on what you're doing in the app. When the app is off you're on 
 
 _Category: `safety`_
 
-**Q: What safety features does the driver app have?**
-
-Spinr includes an in-app SOS that notifies your emergency contacts and our safety team and offers one-tap 911. It does not auto-dial and is not a replacement for calling 911 — if anyone is in danger, call 911 first. Trips are logged for safety and regulatory purposes.
-
-_Category: `safety`_
+> `What safety features does the driver app have?` was deactivated by `backend/migrations/322_consolidate_sos_faq.sql` and replaced by a single `audience='both'` FAQ shared with riders ("What safety features does Spinr have?"), so the SOS/911 disclaimer has one canonical source instead of a driver-only and rider-only copy drifting independently. It is not a driver-only entry anymore, so it isn't listed here.
 
 **Q: Do I have to accept service-animal or wheelchair requests?**
 

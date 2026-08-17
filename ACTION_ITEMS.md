@@ -9403,6 +9403,60 @@ how much they de-risk a public launch._
   fabricating them would be actively misleading in an ops document. Linked
   from `docs/incident-response.md`'s Runbook Index. Docs-only, no code.
 
+### C25. Accepted risk: `image-size` HIGH advisories (1138808, 1138809) blocking `G4b · yarn audit` for `rider-app`/`driver-app` — no upstream patch exists
+
+- [ ] **Status:** open, accepted risk — not a bug to fix, a standing gate
+  exception to re-check periodically. Filed via `[CR]` #3718
+  (`.github/ISSUE_TEMPLATE/ci_change_request.yml`), CR-2026-008. This item
+  is the ACTION_ITEMS.md record the CR itself calls for (issue step 3(b))
+  since Yarn Classic (v1) has no built-in per-advisory allowlist for `yarn
+  audit` — there is no `--exclude`/`--ignore <advisory-id>` flag, so the
+  only documented-acceptance path available is recording it here rather
+  than either silently leaving `G4b` red-and-unexplained or weakening the
+  gate itself.
+- **What's accepted:** two HIGH-severity `image-size` advisories —
+  1138808 (ICNS parser infinite-loop DoS) and 1138809 (JXL/HEIF parser
+  infinite-loop DoS) — in both `rider-app/` and `driver-app/`, pulled in
+  transitively via `expo > @expo/cli > @expo/metro > metro > image-size`
+  (and the `metro-config` variant of the same chain). This is the same
+  finding B24 already flagged as "unpatchable, left as-is, documented"
+  when it closed the rest of the JS `yarn audit`/`npm audit` gate on
+  2026-08-11 — B24 named it but didn't carry its own tracking item; this
+  is that item, now that a `[CR]` exists for it.
+- **Why no fix exists:** `image-size`'s latest published version is
+  `2.0.2`, which is itself listed as vulnerable
+  (`vulnerable_versions: <=2.0.2`, `patched_versions: <0.0.0` — the
+  advisory-database convention for "no fix published yet"). There is no
+  newer release to bump to, no `resolutions`/override target that
+  resolves it without either breaking the Metro bundler toolchain or
+  pinning an untested pre-release, and `metro` itself pins the vulnerable
+  version — un-pinning it is not something this repo controls.
+- **Why the risk is low enough to accept rather than block on:**
+  `image-size` is exercised by Metro at local/CI build time only (parsing
+  asset files during bundling) — a devDependency-of-a-devDependency, never
+  shipped in the rider-app/driver-app runtime bundle that reaches
+  end-user devices. The DoS vector requires feeding a malicious
+  ICNS/JXL/HEIF image into the bundler process itself, which is not an
+  externally-reachable attack surface for Spinr's production rider/driver
+  apps.
+- **Re-verified 2026-08-17** (this CR's implementing PR) against
+  `origin/main` — `yarn audit --level high --json` in both `rider-app/`
+  and `driver-app/` confirms the finding is still exactly these two
+  advisories on `image-size` and nothing else has regressed alongside
+  them (both apps: `{module_name: image-size, ids: [1138808, 1138809]}`,
+  no other packages present at HIGH+ severity).
+- **Gate left as-is, on purpose:** `security-gates.yml`'s `G4b` step keeps
+  `continue-on-error: false` — this CR is accept-and-document, not
+  weaken-the-gate. `G4b` will stay red for `rider-app`/`driver-app` until
+  upstream ships a fix; that red is now expected and explained, not a
+  silent failure.
+- **Re-check cadence:** a session-level Claude routine already does a
+  weekly check on issue #3718 itself (the `[CR]` issue tracking this
+  acceptance) — that routine is the re-check mechanism for this item, not
+  a duplicate one. When `image-size` (or `metro`'s pin of it) ships a
+  patched version, close out both #3718 and this item together, bump the
+  dependency, and confirm `G4b` goes green on both apps.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

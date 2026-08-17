@@ -139,7 +139,20 @@ function RideCompletedScreenContent() {
     // Both are stable Animated.Value instances (useAnimatedValue, created once).
   }, [successScale, successOpacity]);
 
-  const tipOptions = [2, 5, 10];
+  // Tip presets scale with the fare rather than being a flat $2/$5/$10 ladder.
+  // A $10 preset on a $5 ride reads as absurd (and flat presets under-suggest on
+  // long trips). Percentages are converted to whole dollars because that is what
+  // actually gets charged — showing "18%" and billing $4.53 invites disputes.
+  const tipOptions = useMemo(() => {
+    const base = toNum((currentRide as any)?.grand_total || currentRide?.total_fare) || 0;
+    const values = [0.15, 0.18, 0.2].map((pct) => Math.max(1, Math.round(base * pct)));
+    // On small fares every percentage rounds to the same dollar, which would
+    // render three identical buttons. Force a strictly increasing ladder.
+    for (let i = 1; i < values.length; i += 1) {
+      if (values[i] <= values[i - 1]) values[i] = values[i - 1] + 1;
+    }
+    return values;
+  }, [currentRide]);
   const fare = toNum((currentRide as any)?.grand_total || currentRide?.total_fare);
   // The lifecycle duration is recorded independently of GPS coverage. A gap in
   // location reporting must never turn a completed 40-minute ride into a
@@ -525,7 +538,7 @@ function RideCompletedScreenContent() {
             </View>
           </View>
           <View style={styles.tipRow}>
-              {tipOptions.map((amt) => (
+              {tipOptions.map((amt, idx) => (
                 <TouchableOpacity
                   key={amt}
                   style={[styles.tipBtn, selectedTip === amt && styles.tipBtnActive]}
@@ -534,8 +547,11 @@ function RideCompletedScreenContent() {
                   accessibilityLabel={`Tip $${amt}`}
                   accessibilityState={{ checked: selectedTip === amt }}
                 >
+                  {/* Keyed on position, not amount: the amounts are fare-derived
+                      now, so a value-based map (2/5/10) would fall through to the
+                      default emoji on almost every ride. */}
                   <Text style={[styles.tipBtnEmoji, selectedTip === amt && styles.tipBtnEmojiActive]}>
-                    {amt === 2 ? '☕' : amt === 5 ? '🍕' : '🎉'}
+                    {idx === 0 ? '☕' : idx === 1 ? '🍕' : '🎉'}
                   </Text>
                   <Text style={[styles.tipBtnText, selectedTip === amt && styles.tipBtnTextActive]}>${amt}</Text>
                 </TouchableOpacity>

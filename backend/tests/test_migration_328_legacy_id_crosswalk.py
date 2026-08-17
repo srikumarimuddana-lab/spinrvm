@@ -1,4 +1,4 @@
-"""Migration-SQL contract tests for backend/migrations/323_legacy_id_crosswalk.sql.
+"""Migration-SQL contract tests for backend/migrations/328_legacy_id_crosswalk.sql.
 
 Same style as test_migration_319_late_tip_types.py: parses the migration
 file directly (no DB involved) so a future edit can't silently drop the
@@ -23,10 +23,10 @@ import pytest
 
 pytestmark = pytest.mark.unit
 
-_MIGRATION = pathlib.Path(__file__).resolve().parents[1] / "migrations" / "323_legacy_id_crosswalk.sql"
+_MIGRATION = pathlib.Path(__file__).resolve().parents[1] / "migrations" / "328_legacy_id_crosswalk.sql"
 
 
-class TestMigration323Contract:
+class TestMigration328Contract:
     @pytest.fixture(autouse=True)
     def _sql(self):
         self.sql = _MIGRATION.read_text()

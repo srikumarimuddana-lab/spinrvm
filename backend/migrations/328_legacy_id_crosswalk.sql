@@ -1,4 +1,4 @@
--- 323_legacy_id_crosswalk.sql
+-- 328_legacy_id_crosswalk.sql
 --
 -- CR-2026-4106 (issue #4106): the old app used TWO incompatible ID
 -- namespaces for the same physical drivers, never cross-referenced against
@@ -120,4 +120,4 @@ ALTER TABLE public.legacy_id_crosswalk ENABLE ROW LEVEL SECURITY;
 -- Intentionally no policies: service-role-only (backend). Locked to anon/auth.
 
 COMMENT ON TABLE public.legacy_id_crosswalk IS
-    'Old-app identity crosswalk: maps the old app''s two incompatible driver-ID namespaces (Mongo ObjectId from the booking export, 10-digit numeric ID from the Saskatoon driver CSV) plus rider Mongo ObjectIds to Spinr''s own users/drivers UUIDs. IDs only, no PII. Schema shipped in migration 323; backfill deferred until a fresh old-app export lands (ACTION_ITEMS.md A34) — see CR #4106. Service-role-only (RLS enabled, no policies).';
+    'Old-app identity crosswalk: maps the old app''s two incompatible driver-ID namespaces (Mongo ObjectId from the booking export, 10-digit numeric ID from the Saskatoon driver CSV) plus rider Mongo ObjectIds to Spinr''s own users/drivers UUIDs. IDs only, no PII. Schema shipped in migration 328; backfill deferred until a fresh old-app export lands (ACTION_ITEMS.md A34) — see CR #4106. Service-role-only (RLS enabled, no policies).';

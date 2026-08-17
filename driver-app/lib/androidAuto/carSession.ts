@@ -42,6 +42,7 @@ import {
   type BackgroundDispatchEvent,
 } from '../../services/backgroundMessaging';
 import { pushDebug, setDebugFact } from './carDebug';
+import { startCarLocationService } from './carLocationTask';
 
 const log = (...args: unknown[]) => {
   if (__DEV__) console.log('[car-session]', ...args);
@@ -290,6 +291,18 @@ export async function startCarSession(): Promise<void> {
   // still leaves the car refreshing on its own afterwards.
   refreshTimer = setInterval(() => {
     refreshCarData('interval').catch(() => {});
+    // Self-heal the location service on the same tick. It is idempotent (three
+    // cheap probes then an early return), and it covers three things the
+    // connect-time start cannot:
+    //   - the driver goes OFFLINE while plugged in. stopBackgroundLocation()
+    //     tears down the dispatch service, and the car task had deferred to it
+    //     ('piggyback'), so without this nothing is left running and the marker
+    //     falls back to the throttled watcher for the rest of the session.
+    //   - Android killed the service under memory pressure.
+    //   - background location permission was granted after connect.
+    // NOT gated on App Check: drawing a map needs no token, and this is the one
+    // thing on the car screen that must keep working when nothing else does.
+    startCarLocationService().catch(() => {});
   }, REFRESH_INTERVAL_MS);
 
   // Subscribed before the awaits below: an offer can land during the bootstrap,

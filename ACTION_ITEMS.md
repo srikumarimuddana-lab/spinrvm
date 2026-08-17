@@ -8146,6 +8146,20 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     expired `refresh_tokens`) — **no live purge was executed**, that's a
     separate decision left to the daily loop's next natural tick. Full
     detail: `docs/change-log/2026-08-17-c22-purge-pii-retention-broken-and-fixed.md`.
+    **Note for future migrations touching `purge_pii_retention()`**:
+    migrations 323/324 merged (PR #4116) without the
+    `-- migration-override-ok: <reason>` marker that
+    `ci-guardrails.yml`'s "redefines the same Postgres object" check
+    requires (321 correctly has it; 323/324 don't) — the PR's Migration
+    Safety Check failed on that and was merged over it anyway. Not fixed
+    retroactively: the check is `pull_request`-only (no `push` trigger on
+    `main`), so there's no standing red gate today, and editing an
+    already-merged migration's content — even a comment-only marker —
+    would violate this repo's explicit append-only convention for a
+    cosmetic fix with zero functional effect. The **next** migration that
+    redefines `purge_pii_retention()` needs its own
+    `migration-override-ok` marker (as every one before 323/324 correctly
+    had) — don't forget it.
   - **Still open**: the broader `schema_migrations` reconciliation (161/407
     tracked) itself — this session only individually verified and applied
     321/323/324, exactly the narrow, high-confidence action the original

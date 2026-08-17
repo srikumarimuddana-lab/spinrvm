@@ -1270,16 +1270,21 @@ async def stripe_webhook(request: Request):
 
         # B27: record the balance-transaction debit(s)/fee Stripe posts on
         # close so docs/runbooks/stripe-reconciliation.md doesn't show an
-        # unexplained delta for every chargeback.
+        # unexplained delta for every chargeback. Guarded on a resolved
+        # rider_id -- financial_events.user_id is NOT NULL REFERENCES
+        # users(id), so a dispute whose ride/rider can't be resolved has
+        # nowhere safe to attribute the ledger row (record_dispute_close_events
+        # would itself skip+log this, but skipping the call/import entirely
+        # here avoids doing the balance_transactions work for nothing).
         balance_transactions = data_object.get("balance_transactions") or []
-        if balance_transactions:
+        if balance_transactions and rider_id:
             try:
                 from ..services.payment_service import record_dispute_close_events
             except ImportError:
                 from services.payment_service import record_dispute_close_events  # type: ignore
             await record_dispute_close_events(
                 dispute_id=dispute_id_stripe,
-                user_id=rider_id or "",
+                user_id=rider_id,
                 ride_id=ride_id,
                 balance_transactions=balance_transactions,
                 dispute_status=dispute_status,

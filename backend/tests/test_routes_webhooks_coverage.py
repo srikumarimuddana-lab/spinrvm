@@ -537,6 +537,41 @@ class TestStripeWebhookDisputeClosed:
         assert result["received"] is True
         ledger_mock.assert_not_awaited()
 
+    def test_balance_transactions_present_but_no_rider_id_skips_ledger_call(self):
+        """B27: financial_events.user_id is NOT NULL REFERENCES users(id) --
+        a dispute whose ride/rider can't be resolved must not even attempt
+        the ledger write (the call/import is skipped at the webhook layer,
+        on top of record_dispute_close_events's own no-op-if-falsy guard)."""
+        import stripe
+
+        from backend.routes import webhooks as wh
+
+        balance_transactions = [{"id": "txn_orphan", "type": "adjustment", "amount": -1000, "fee": 0}]
+        data_obj = {
+            "id": "dp_close_orphan",
+            "payment_intent": "",
+            "status": "lost",
+            "balance_transactions": balance_transactions,
+        }
+        event_obj = _event_obj("charge.dispute.closed", data_obj, "evt_close_orphan")
+        existing = {"id": "disp_row_orphan", "ride_id": None}
+        ledger_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", _settings_fn()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.find_one", AsyncMock(return_value=existing)),
+            patch("backend.routes.webhooks.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.webhooks.db_supabase.update_one", AsyncMock()),
+            patch("backend.services.payment_service.record_dispute_close_events", ledger_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=_mock_req()))
+
+        assert result["received"] is True
+        ledger_mock.assert_not_awaited()
+
 
 # ---------------------------------------------------------------------------
 # charge.dispute.updated — intermediate status transitions mirrored onto the

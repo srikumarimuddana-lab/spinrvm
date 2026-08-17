@@ -267,6 +267,8 @@
     "taxDocuments": "Tax Documents (T4A)",
     "legal": "Legal",
     "morePolicies": "More Policies",
+    "backgroundCheckConsent": "Background Check Consent",
+    "appealAccountStatus": "Appeal Account Status",
     "logout": "Log Out",
     "safety": "Safety",
     "callEmergency": "Call Emergency (911)",

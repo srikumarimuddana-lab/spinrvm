@@ -637,6 +637,19 @@ def serialize_doc(doc):
     return doc
 
 
+async def get_own_driver_row(current_user: Dict) -> Dict:
+    """Look up the authenticated user's own drivers row (user_id ->
+    drivers.id). Previously duplicated inline in referrals.py and
+    crc_consent.py — factored out here so a third self-scoped driver
+    endpoint (appeals.py) doesn't add a fourth copy."""
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+    return driver
+
+
 # Ride-row fields that must NEVER reach the driver client. The pickup OTP is the
 # rider's proof-of-identity handshake at pickup — a driver who can read it can
 # pass verify-pickup-otp without the rider present, defeating the right-car /

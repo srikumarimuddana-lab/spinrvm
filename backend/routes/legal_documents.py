@@ -39,6 +39,7 @@ ALLOWED_TYPES = LEGACY_TYPES | {
     "promotions-referral",
     "insurance-periods",
     "deactivation-appeals",
+    "background-check-consent",
 }
 _TYPE_PATTERN = "^(" + "|".join(sorted(ALLOWED_TYPES)) + ")$"
 

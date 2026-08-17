@@ -8,7 +8,7 @@ import {
     Flame, Building2, LifeBuoy, HelpCircle,
     Menu, X,
     Shield, ShieldAlert, Cloud, Trophy, TrendingUp, Activity,
-    Inbox, Clock, Headphones, BarChart3, Send, Sparkles, Gift, Upload, FileText, Bug, Mail,
+    Inbox, Clock, Headphones, BarChart3, Send, Sparkles, Gift, Upload, FileText, Bug, Mail, Gavel,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState, useEffect } from "react";
@@ -70,6 +70,7 @@ const NAV_GROUPS: NavGroup[] = [
                 module: "drivers",
                 children: [
                     { href: "/dashboard/drivers/queue", label: "Approvals", icon: Inbox, module: "drivers" },
+                    { href: "/dashboard/drivers/appeals", label: "Appeals", icon: Gavel, module: "drivers" },
                     { href: "/dashboard/drivers/expiring", label: "Expiring Docs", icon: Clock, module: "drivers" },
                     { href: "/dashboard/drivers/decals", label: "Welcome Letters", icon: Mail, module: "drivers" },
                     { href: "/dashboard/driver-license-backfill", label: "Licence Backfill", icon: FileText, module: "drivers" },

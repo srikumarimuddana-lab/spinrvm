@@ -100,5 +100,6 @@ def test_allowed_types_includes_every_new_policy_page():
         "promotions-referral",
         "insurance-periods",
         "deactivation-appeals",
+        "background-check-consent",
     }
     assert ALLOWED_TYPES == expected

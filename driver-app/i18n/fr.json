@@ -267,6 +267,8 @@
     "taxDocuments": "Documents fiscaux (T4A)",
     "legal": "Mentions légales",
     "morePolicies": "Plus de politiques",
+    "backgroundCheckConsent": "Consentement à la vérification des antécédents",
+    "appealAccountStatus": "Faire appel du statut du compte",
     "logout": "Déconnexion",
     "safety": "Sécurité",
     "callEmergency": "Appeler les urgences (911)",

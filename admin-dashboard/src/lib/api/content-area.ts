@@ -35,7 +35,8 @@ export type LegalDocType =
     | "cancellation-fees"
     | "promotions-referral"
     | "insurance-periods"
-    | "deactivation-appeals";
+    | "deactivation-appeals"
+    | "background-check-consent";
 
 export const getLegalDocuments = () =>
     request<any[]>("/api/admin/legal-documents");

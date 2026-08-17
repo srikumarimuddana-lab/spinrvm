@@ -83,6 +83,7 @@ from .data_transfer_import import router as data_transfer_import_router
 from .data_transfer_jobs import router as data_transfer_jobs_router
 from .data_transfer_search import router as data_transfer_search_router
 from .documents import router as documents_router
+from .driver_appeals import router as driver_appeals_router
 from .driver_import import router as driver_import_router
 from .driver_statements import router as driver_statements_router
 from .drivers import router as drivers_router
@@ -148,6 +149,7 @@ admin_router.include_router(service_areas_router, dependencies=[Depends(require_
 admin_router.include_router(venues_router, dependencies=[Depends(require_module("service_areas"))])
 admin_router.include_router(vehicle_fleet_router, dependencies=[Depends(require_module("vehicle_types"))])
 admin_router.include_router(drivers_router, dependencies=[Depends(require_module("drivers"))])
+admin_router.include_router(driver_appeals_router, dependencies=[Depends(require_module("drivers"))])
 admin_router.include_router(driver_import_router, dependencies=[Depends(require_module("drivers"))])
 # Driver earnings statements (payout section: date-filter -> download / email
 # to driver). Read-only + driver-addressed email; drivers module grant.

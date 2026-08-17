@@ -26,6 +26,24 @@ export interface CarLatLng {
 
 const LAST_LOCATION_KEY = 'spinr_driver_last_location';
 
+/**
+ * Oldest AsyncStorage seed we will draw.
+ *
+ * That cache is written in exactly two places, neither of them here:
+ * `app/login.tsx` at sign-in, and `useDriverDashboard.ts` while the phone
+ * dashboard is mounted. A driver who signed in at home and has not opened the
+ * dashboard since is carrying a cache that literally holds WHERE THEY LOGGED IN
+ * — which is exactly the "it shows where I started" symptom. There is no
+ * timestamp on the legacy shape, so age is unknowable for those writes; the car
+ * now stamps its own, and anything older than this is not drawn at all. Better a
+ * moment with no marker than a confident marker in the wrong place.
+ */
+const MAX_SEED_AGE_MS = 15 * 60_000;
+
+/** How often the car refreshes the shared cache. Not every fix — that would be
+ *  a disk write every 2s for no benefit. */
+const CACHE_WRITE_INTERVAL_MS = 30_000;
+
 /** A fix older than this is treated as stale and actively refreshed. */
 const STALE_AFTER_MS = 12_000;
 /** How often staleness is checked. Cheap — it usually decides to do nothing. */
@@ -59,6 +77,36 @@ let lastFixAt = 0;
  * blocked on GPS.
  */
 export const getLastCarFix = (): CarLatLng | null => lastFix;
+
+let lastCacheWriteAt = 0;
+
+/**
+ * Refresh the shared last-location cache from the car.
+ *
+ * The car was a pure READER of a cache only the phone ever wrote, so on a
+ * car-only session it could never go stale-proof: whatever login wrote hours ago
+ * was all the next cold start had. Writing here means the cache reflects where
+ * the driver actually is, and the `at` stamp lets the reader reject anything
+ * old. Throttled — a disk write every 2s would be pointless churn.
+ */
+function persistFix(fix: CarLatLng): void {
+  const now = Date.now();
+  if (now - lastCacheWriteAt < CACHE_WRITE_INTERVAL_MS) return;
+  lastCacheWriteAt = now;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+    // `lat`/`lng` keep the exact shape useDriverDashboard.ts:444 and login.tsx
+    // read; `at` is additive and those readers destructure only lat/lng, so it
+    // is invisible to them.
+    AsyncStorage.setItem(
+      LAST_LOCATION_KEY,
+      JSON.stringify({ lat: fix.latitude, lng: fix.longitude, at: now }),
+    ).catch(() => {});
+  } catch {
+    // AsyncStorage absent (tests/web) — the cache simply is not refreshed.
+  }
+}
 
 export function useCarLocation(): CarLatLng | null {
   const [loc, setLoc] = useState<CarLatLng | null>(lastFix);
@@ -158,8 +206,12 @@ export function useCarLocation(): CarLatLng | null {
         const AsyncStorage = require('@react-native-async-storage/async-storage').default;
         const raw = await AsyncStorage.getItem(LAST_LOCATION_KEY);
         if (cancelled || !raw) return;
-        const { lat, lng } = JSON.parse(raw) as { lat?: number; lng?: number };
-        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        const { lat, lng, at } = JSON.parse(raw) as { lat?: number; lng?: number; at?: number };
+        // `at` is absent on the legacy login/dashboard writes. Treat undatable
+        // entries as too old to trust: those are precisely the ones that can be
+        // hours stale. Once the car has written once, this cache is fresh.
+        const ageOk = typeof at === 'number' && Date.now() - at < MAX_SEED_AGE_MS;
+        if (ageOk && Number.isFinite(lat) && Number.isFinite(lng)) {
           // Don't clobber a live fix that may have already landed — including
           // one carried across a surface remount in `lastFix`.
           const seeded = { latitude: lat as number, longitude: lng as number, heading: null };
@@ -199,6 +251,7 @@ export function useCarLocation(): CarLatLng | null {
             lastFix = next; // survives the next surface teardown/rebuild
             lastFixAt = Date.now();
             setLoc(next);
+            persistFix(next);
           },
         );
         if (cancelled) {

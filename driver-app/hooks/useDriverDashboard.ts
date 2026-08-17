@@ -33,6 +33,7 @@ import {
   TRIP_CADENCE,
   IDLE_CADENCE,
 } from '../utils/backgroundLocation';
+import { consumePendingRideOffer } from '../services/pendingRideOffer';
 import { checkLocationIntegrity, resetLocationIntegrity } from '../utils/locationIntegrity';
 import { startSensorMonitoring, stopSensorMonitoring, checkMovementConsistency } from '../utils/sensorIntegrity';
 import { attestDeviceIntegrity } from '../utils/deviceIntegrity';
@@ -1544,23 +1545,15 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // clobber an active ride, and on offer_expires_at so a stale offer is dropped.
   // (Accept/Decline taps clear PENDING_OFFER_KEY in the background handler, so
   // on resume this only fires for a body tap / a still-pending offer.)
-  const consumePendingOffer = useCallback(async () => {
-    try {
-      const raw = await AsyncStorage.getItem('spinr_pending_ride_offer');
-      if (!raw) return;
-      await AsyncStorage.removeItem('spinr_pending_ride_offer');
-      if (useDriverStore.getState().rideState !== 'idle') return;
-      const offer = JSON.parse(raw);
-      const expiresAt = offer.offer_expires_at;
-      const isExpired = expiresAt && new Date(expiresAt) <= new Date();
-      if (!isExpired) {
-        Vibration.vibrate([0, 500, 200, 500]);
-        setIncomingRide(offer);
-      }
-    } catch (e) {
-      console.warn('[Push] Failed to hydrate pending ride offer:', e);
-    }
-  }, [setIncomingRide]);
+  //
+  // The rules themselves now live in services/pendingRideOffer.ts, because the
+  // Android Auto car session needs the identical behaviour on a car-only launch
+  // where this hook never mounts. The buzz stays here: it is the phone's way of
+  // announcing an offer, and the head unit raises its own alert instead.
+  const consumePendingOffer = useCallback(
+    () => consumePendingRideOffer({ onOffer: () => Vibration.vibrate([0, 500, 200, 500]) }),
+    [],
+  );
 
   // ─── Crash recovery + background-push hydration ──────────────────
   // 1. Surface any offer received while backgrounded/killed — on mount AND on

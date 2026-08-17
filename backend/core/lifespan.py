@@ -241,17 +241,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.opt(exception=True).error(f"Failed to import pre-auth capture sweeper: {e}")
 
-    # Tip batch-charge — collects tips that could not ride on the booking hold
-    # (added after capture, or on a card that cannot be incremented) and credits
-    # the driver only once the money lands. Batches per rider to avoid losing
-    # 18% of a $2 tip to Stripe's fixed fee. Every 30 minutes.
-    try:
-        from utils.tip_batch_charge import tip_batch_charge_loop
-
-        _spawn("tip_batch_charge (30min)", tip_batch_charge_loop)
-    except Exception as e:
-        logger.opt(exception=True).error(f"Failed to import tip batch-charge loop: {e}")
-
     # Referral reward payouts — pays referrer/referee rewards once a referee
     # hits the ride threshold. Idempotent via referral_payouts UNIQUE claim.
     # Reward amounts are admin-controlled per service area; a per-area reward of

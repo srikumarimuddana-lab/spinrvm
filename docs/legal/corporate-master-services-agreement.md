@@ -230,10 +230,15 @@ Spinr Legal Ledger review to publish one; until it exists, reference
 `docs/vendor-register.md` internally and provide the list to Company on
 request during procurement review].
 
-7.4. **Data residency.** Spinr's primary datastore is hosted in Canada.
-[CONFIRM THIS STATEMENT AGAINST THE SAME DATA-RESIDENCY ATTESTATION GATING
-THE PRIVACY POLICY DRAFT — `reports/legal/supabase-region-attestation-checklist.md`
-— BEFORE MAKING THIS REPRESENTATION TO A CUSTOMER.]
+7.4. **Data residency.** Spinr's primary datastore is hosted in Canada
+(`ca-central-1`), confirmed 2026-08-17 via direct query against the
+Supabase Management API. **Still open before this representation is fully
+safe to make to a real customer:** a signed DPA between Spinr and Supabase
+itself, and confirmation that `SUPABASE_REGION=ca-central-1` is actually
+set on Railway (unverifiable from this repository — Railway env config is
+dashboard-managed, not committed). See
+`reports/legal/supabase-region-attestation-checklist.md` for the full,
+current status.
 
 ## 8. CONFIDENTIALITY
 

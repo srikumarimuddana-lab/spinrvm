@@ -38,16 +38,37 @@ const LAST_LOCATION_KEY = 'spinr_driver_last_location';
  * now stamps its own, and anything older than this is not drawn at all. Better a
  * moment with no marker than a confident marker in the wrong place.
  */
-const MAX_SEED_AGE_MS = 15 * 60_000;
+// Every threshold below is set against ROAD SPEED, not against I/O cost. At
+// 60 km/h a vehicle covers ~17m per second, so a window measured in tens of
+// seconds is measured in hundreds of metres — which is the difference between
+// "my car is here" and "the app has lost me". Earlier values (15 min seed age,
+// 30s cache write, 12s staleness) were chosen thinking about disk churn and were
+// wrong for a moving car.
+const MAX_SEED_AGE_MS = 60_000; // ~1 km at road speed — the outer limit of useful
 
-/** How often the car refreshes the shared cache. Not every fix — that would be
- *  a disk write every 2s for no benefit. */
-const CACHE_WRITE_INTERVAL_MS = 30_000;
+// DISTANCE leads, time is only a backstop. A moving car trips the distance rule
+// long before the timer — 50m is ~3s at 60 km/h, which is the cadence that
+// matters — while a parked one trips neither often, so the cache stays quiet
+// instead of writing to disk every few seconds at a rank.
+/** Backstop so a stationary driver's timestamp still refreshes occasionally. */
+const CACHE_WRITE_INTERVAL_MS = 15_000;
+/** Primary rule: this far from the last written point writes immediately. */
+const CACHE_WRITE_DISTANCE_M = 50;
 
 /** A fix older than this is treated as stale and actively refreshed. */
-const STALE_AFTER_MS = 12_000;
+const STALE_AFTER_MS = 5_000;
 /** How often staleness is checked. Cheap — it usually decides to do nothing. */
-const WATCHDOG_INTERVAL_MS = 8_000;
+const WATCHDOG_INTERVAL_MS = 3_000;
+
+/** Metres between two coordinates (equirectangular — ample at these distances). */
+function metresBetween(a: CarLatLng, b: CarLatLng): number {
+  const R = 6_371_000;
+  const dLat = ((b.latitude - a.latitude) * Math.PI) / 180;
+  const dLng = ((b.longitude - a.longitude) * Math.PI) / 180;
+  const meanLat = ((a.latitude + b.latitude) / 2) * (Math.PI / 180);
+  const x = dLng * Math.cos(meanLat);
+  return Math.sqrt(dLat * dLat + x * x) * R;
+}
 
 /**
  * Last fix, held at MODULE scope so it outlives the component.
@@ -79,6 +100,7 @@ let lastFixAt = 0;
 export const getLastCarFix = (): CarLatLng | null => lastFix;
 
 let lastCacheWriteAt = 0;
+let lastCachedPoint: CarLatLng | null = null;
 
 /**
  * Refresh the shared last-location cache from the car.
@@ -89,10 +111,17 @@ let lastCacheWriteAt = 0;
  * the driver actually is, and the `at` stamp lets the reader reject anything
  * old. Throttled — a disk write every 2s would be pointless churn.
  */
-function persistFix(fix: CarLatLng): void {
+function persistFix(fix: CarLatLng, force = false): void {
   const now = Date.now();
-  if (now - lastCacheWriteAt < CACHE_WRITE_INTERVAL_MS) return;
+  if (!force) {
+    const elapsed = now - lastCacheWriteAt;
+    const moved = lastCachedPoint ? metresBetween(lastCachedPoint, fix) : Infinity;
+    // Either condition is enough: a driver moving fast trips the distance rule
+    // long before the timer, and one sitting still trips neither.
+    if (elapsed < CACHE_WRITE_INTERVAL_MS && moved < CACHE_WRITE_DISTANCE_M) return;
+  }
   lastCacheWriteAt = now;
+  lastCachedPoint = fix;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const AsyncStorage = require('@react-native-async-storage/async-storage').default;
@@ -193,6 +222,7 @@ export function useCarLocation(): CarLatLng | null {
         lastFix = next;
         lastFixAt = Date.now();
         setLoc(next);
+        persistFix(next, true); // bypass throttle: freshest thing we will have
       } catch {
         // Timed out or unavailable — the cached seeds and the watcher stand.
       }
@@ -296,6 +326,7 @@ export function useCarLocation(): CarLatLng | null {
           lastFix = next;
           lastFixAt = Date.now();
           setLoc(next);
+          persistFix(next);
         } catch {
           // Still unavailable — try again on the next tick.
         }

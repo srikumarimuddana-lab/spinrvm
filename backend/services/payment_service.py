@@ -19,13 +19,18 @@ try:
     from ..services import corporate_allowance_service, corporate_wallet_service, ledger_service
     from ..services.corporate_policy_service import evaluate_policy
     from ..socket_manager import manager
-    from ..utils.stripe_charge import cancel_authorization, capture_ride, charge_ride
+    from ..utils.stripe_charge import cancel_authorization, capture_ride, charge_ride, increment_authorization
 except ImportError:
     import db_supabase  # type: ignore
     from services import corporate_allowance_service, corporate_wallet_service, ledger_service  # type: ignore
     from services.corporate_policy_service import evaluate_policy  # type: ignore
     from socket_manager import manager  # type: ignore
-    from utils.stripe_charge import cancel_authorization, capture_ride, charge_ride  # type: ignore
+    from utils.stripe_charge import (  # type: ignore
+        cancel_authorization,
+        capture_ride,
+        charge_ride,
+        increment_authorization,
+    )
 
 try:
     from ..core.config import settings as app_config
@@ -1630,12 +1635,17 @@ async def _settle_against_hold(
     stripe_customer_id: Optional[str],
     payment_method_id: Optional[str],
 ) -> Optional[PaymentResult]:
-    """Capture a booking-time hold for (fare + tip) in a single Stripe fee.
+    """Capture a booking-time hold for (fare + tip), ideally in one Stripe fee.
 
-    Captures ``min(total_charge, authorized)`` against the manual-capture
-    PaymentIntent placed at booking. When the tip pushes the total OVER the
-    authorized hold (a tip beyond the buffer), the overflow is charged on a
-    fresh PaymentIntent — Stripe forbids capturing more than was authorized.
+    The hold placed at booking is the bare fare — no tip headroom — so any tip
+    pushes the total over it. Two ways to cover that, in order of preference:
+
+    1. INCREMENT the hold to the full total, then capture once. One Stripe fixed
+       fee, one statement line. Requires the card to support incremental
+       authorization, which was recorded at booking as ``auth_incrementable``.
+    2. Capture what IS authorized and charge the difference on a fresh
+       PaymentIntent. Costs a second fixed fee. This is the fallback whenever
+       the card cannot be incremented or the issuer refuses the increase.
 
     Returns:
         PaymentResult — terminal outcome (captured-and-paid, or capture
@@ -1643,6 +1653,35 @@ async def _settle_against_hold(
         ``None`` — the hold is unusable (expired / amount_too_large / Stripe
             ops error); the caller falls back to a fresh full charge.
     """
+    # Try to grow the hold to cover the tip before capturing. Gated on the
+    # capability recorded at booking so we don't burn a doomed Stripe round-trip
+    # on every tipped ride whose card was never eligible.
+    if total_charge > authorized and ride.get("auth_incrementable"):
+        inc = await increment_authorization(
+            ride_id=ride_id,
+            payment_intent_id=held_pi,
+            new_total=total_charge,
+        )
+        if inc.status == "authorized":
+            # The hold now covers fare + tip, so the capture below takes it all
+            # in one go and the overflow branch never runs.
+            authorized = _round(total_charge)
+            logger.info(
+                "[PAYMENT] hold incremented to {} for ride {} — tip settles on one charge",
+                _money_str(authorized),
+                ride_id,
+            )
+        else:
+            # Designed fallback, not a failure: capture what we hold and bill the
+            # tip separately. Info-level — it costs one extra fixed fee, nothing
+            # is lost or stuck. The original hold is untouched by a failed
+            # increment, so the capture below is still valid.
+            logger.info(
+                "[PAYMENT] hold increment unavailable for ride {} ({}) — tip will be a separate charge",
+                ride_id,
+                inc.error_message,
+            )
+
     capture_amount = _round(min(total_charge, authorized))
     cap = await capture_ride(ride_id=ride_id, payment_intent_id=held_pi, amount=capture_amount)
 
@@ -1657,6 +1696,26 @@ async def _settle_against_hold(
             ride_id,
             cap.error_message,
         )
+        # The caller now mints a NEW PaymentIntent for the full amount and
+        # repoints rides.payment_intent_id at it, which is the only durable
+        # reference to this hold — so unless we release it here, nobody can find
+        # it again and the rider's funds stay reserved until Stripe's ~7-day
+        # expiry. That gap predates this code for the fare-only case, but a
+        # successful increment makes the abandoned hold LARGER (fare + tip), so
+        # it is worth closing rather than inheriting.
+        #
+        # Best-effort: if the release fails there is nothing further to do here
+        # (the hold expires on its own), and it must not stop the fresh charge
+        # that actually settles the ride.
+        try:
+            await cancel_authorization(ride_id=ride_id, payment_intent_id=held_pi)
+        except Exception as _rel_exc:  # pragma: no cover — helper never raises
+            logger.error(
+                "[PAYMENT] could not release uncapturable hold pi={} for ride {}: {}",
+                held_pi,
+                ride_id,
+                _rel_exc,
+            )
         return None
 
     if cap.status == "declined":

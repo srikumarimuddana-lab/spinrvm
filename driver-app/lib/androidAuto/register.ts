@@ -573,6 +573,18 @@ export default function registerAutoPlay(): void {
 
   let unsubscribe: (() => void) | null = null;
 
+  // Handle for the cold-start connection poll below. Held here so every path
+  // that makes it redundant — a successful connect, a disconnect — can stop it.
+  // A timer left running past its purpose is a leak, and one that survives a
+  // test run is how you find out.
+  let coldStartPoll: ReturnType<typeof setInterval> | null = null;
+  const stopColdStartPoll = () => {
+    if (coldStartPoll !== null) {
+      clearInterval(coldStartPoll);
+      coldStartPoll = null;
+    }
+  };
+
   const onConnect = () => {
     // Guard: only build the surface for a genuinely connected head unit.
     if (!HybridAutoPlay.isConnected?.()) return;
@@ -618,6 +630,7 @@ export default function registerAutoPlay(): void {
       shownAlertNum = null;
     }
 
+    stopColdStartPoll(); // whatever got us here, the poll has done its job
     apply();
     if (!unsubscribe) {
       unsubscribe = useDriverStore.subscribe(apply);
@@ -635,6 +648,7 @@ export default function registerAutoPlay(): void {
       // Next session re-adopts its leg rather than launching nav on connect.
       handedOffFor = null;
       primed = false;
+      stopColdStartPoll();
     });
     // Cold-launch while a head unit is ALREADY connected: the connect event may
     // have fired during native init before this listener existed, so apply now.
@@ -648,28 +662,30 @@ export default function registerAutoPlay(): void {
     // the car screen sits blank for the whole session with no template ever
     // built. Polling a few times over ~6s closes that window; every attempt
     // after the template exists is a no-op, since onConnect is idempotent.
-    let coldStartAttempts = 0;
-    const coldStartPoll = setInterval(() => {
-      coldStartAttempts += 1;
-      if (template) {
-        clearInterval(coldStartPoll);
-        return;
-      }
-      if (HybridAutoPlay.isConnected?.()) {
-        log('cold-start poll found a connected head unit on attempt', coldStartAttempts);
-        onConnect();
-        clearInterval(coldStartPoll);
-        return;
-      }
-      if (coldStartAttempts >= 12) {
-        // Not connected — the ordinary 'didConnect' listener takes it from here.
-        clearInterval(coldStartPoll);
-      }
-    }, 500);
-
+    // Check synchronously FIRST, and only poll if that came back negative — a
+    // head unit already connected at bundle load needs no timer at all. Ordering
+    // it this way also means the common path leaves nothing running.
     if (HybridAutoPlay.isConnected?.()) {
       onConnect();
-      clearInterval(coldStartPoll);
+    } else {
+      let coldStartAttempts = 0;
+      coldStartPoll = setInterval(() => {
+        coldStartAttempts += 1;
+        if (template) {
+          stopColdStartPoll(); // 'didConnect' beat us to it
+          return;
+        }
+        if (HybridAutoPlay.isConnected?.()) {
+          log('cold-start poll found a connected head unit on attempt', coldStartAttempts);
+          onConnect();
+          stopColdStartPoll();
+          return;
+        }
+        if (coldStartAttempts >= 12) {
+          // Not connected — the ordinary 'didConnect' listener takes it from here.
+          stopColdStartPoll();
+        }
+      }, 500);
     }
   } catch (e) {
     // Was a dev-only log(): in production a listener-registration failure left

@@ -8,7 +8,7 @@
 | Author | Claude (agent), on behalf of vikas@ngitservices.com |
 | Surface(s) | backend |
 | Domain (Sentry tag) | drivers / dispatch / payments |
-| PR / commit link | (filled in on PR creation) |
+| PR / commit link | https://github.com/srikumarimuddana-lab/spinrvm/pull/4134 |
 | Related issue or gap ID | Fixes #4104 (CR-4104, ACTION_ITEMS.md A34) — code-guard half only |
 
 ## 1. Issue / gap identified

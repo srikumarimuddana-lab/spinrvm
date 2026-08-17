@@ -411,6 +411,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to import Stripe reconciliation loop: {e}")
 
+    # Chargeback evidence-deadline reminder — C23 Action 2. Checks every 6h
+    # for open disputes whose evidence_due_by (populated by
+    # charge.dispute.created, C23 Action 1) falls within 3 days, and fires
+    # a Sentry-tagged alert + ERROR log once per dispute (atomic claim via
+    # evidence_reminder_sent_at, migration 327) — miss the deadline and the
+    # dispute is lost automatically with no evidence considered.
+    try:
+        from utils.dispute_evidence_reminder import dispute_evidence_reminder_loop
+
+        _spawn("dispute_evidence_reminder (6h)", dispute_evidence_reminder_loop)
+    except Exception as e:
+        logger.warning(f"Failed to import dispute evidence reminder loop: {e}")
+
     # Double-entry leg projection — derives financial_event_entries rows from
     # financial_events headers (oldest first, via the missing-legs RPC,
     # migration 287). No-op until ledger_double_entry_enabled is on. Replay-safe
@@ -604,6 +617,7 @@ async def lifespan(app: FastAPI):
             "retention_purge (24h)",
             "data_export_purge (1h)",
             "stripe_reconcile (24h)",
+            "dispute_evidence_reminder (6h)",
             "ledger_projection (15min)",
             "t4a_annual_job (yearly Feb 28)",
             "driver_statements (30min)",

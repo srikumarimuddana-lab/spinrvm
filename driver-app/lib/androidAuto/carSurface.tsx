@@ -23,7 +23,6 @@
 import React, { useCallback, useMemo } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
 import { useDriverStore } from '../../store/driverStore';
-import { useAuthStore } from '@shared/store/authStore';
 import { useDemandHeatmapView } from '../../hooks/demandHeatmapShared';
 import type { HeatmapCell } from '../../hooks/useDemandHeatmap';
 import { selectCarRoute } from './carRoute';

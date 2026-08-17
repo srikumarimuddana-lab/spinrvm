@@ -24,7 +24,8 @@ export type LegalDocType =
     | 'cancellation-fees'
     | 'promotions-referral'
     | 'insurance-periods'
-    | 'deactivation-appeals';
+    | 'deactivation-appeals'
+    | 'background-check-consent';
 
 export const LEGAL_DOC_TITLES: Record<LegalDocType, string> = {
     tos: 'Terms of Service',
@@ -36,6 +37,7 @@ export const LEGAL_DOC_TITLES: Record<LegalDocType, string> = {
     'promotions-referral': 'Promotions & Referral Terms',
     'insurance-periods': 'Insurance Coverage Periods',
     'deactivation-appeals': 'Driver Deactivation & Appeals Policy',
+    'background-check-consent': 'Background-Check (CRC/VSC) Consent',
 };
 
 // Applies to both riders and drivers.
@@ -54,6 +56,12 @@ export const SHARED_LEGAL_DOC_TYPES: LegalDocType[] = [
 // driver-only — see docs/legal/driver-deactivation-appeals-policy.md.
 export const DRIVER_ONLY_LEGAL_DOC_TYPES: LegalDocType[] = ['deactivation-appeals'];
 
+// 'background-check-consent' is deliberately absent from both lists below —
+// unlike every other entry, it isn't a plain read-only policy page. It's
+// shown through its own dedicated consent screen (driver-app's
+// crc-consent.tsx, reached from onboarding, not from the general policies
+// hub) because agreeing to it is a required action with its own consent
+// record (backend/services/driver_crc_consent.py), not just reading text.
 export function legalDocTypesForAudience(audience: LegalAudience): LegalDocType[] {
     return audience === 'driver'
         ? [...SHARED_LEGAL_DOC_TYPES, ...DRIVER_ONLY_LEGAL_DOC_TYPES]

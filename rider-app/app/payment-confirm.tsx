@@ -539,9 +539,26 @@ function PaymentConfirmScreenContent() {
         {selectedPayment === 'card' && (
           <View style={styles.holdNote}>
             <Ionicons name="lock-closed-outline" size={15} color={colors.textDim} style={{ marginRight: 8, marginTop: 1 }} />
+            {/*
+              The hold equals the fare shown above — the backend authorizes
+              grand_total exactly (RIDE_AUTH_BUFFER_CAD is 0). This used to read
+              `totalFare + 10` because the hold carried a $10 tip buffer, which
+              made a $5 ride announce a $15 hold. Do NOT reintroduce arithmetic
+              here: the buffer is a server-side decision this screen cannot see,
+              so a hardcoded number can only ever drift out of sync with it.
+            */}
+            {/*
+              Deliberately does NOT promise the hold equals the fare exactly.
+              It normally does (RIDE_AUTH_BUFFER_CAD is 0), but the server adds a
+              proportional buffer whenever app_settings.fare_lock_enabled is off
+              — or whenever that settings lookup fails, which is treated as
+              unlocked. Both are operator/runtime conditions this screen cannot
+              see, so an exact-equivalence claim would quietly become false and
+              recreate the "hold ≠ what I was told" problem this change fixed.
+            */}
             <Text style={styles.holdNoteText}>
-              A temporary hold of ${(totalFare + 10).toFixed(2)} (estimated fare + $10) is placed on your card.
-              You&apos;re only charged the final fare plus any tip you add after the ride.
+              A temporary hold for your fare (${totalFare.toFixed(2)}) is placed on your card. It&apos;s a
+              hold, not a charge — you&apos;re only charged once the ride ends.
             </Text>
           </View>
         )}

@@ -23,7 +23,6 @@
 import React, { useCallback, useMemo } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
 import { useDriverStore } from '../../store/driverStore';
-import { useAuthStore } from '@shared/store/authStore';
 import { useDemandHeatmapView } from '../../hooks/demandHeatmapShared';
 import type { HeatmapCell } from '../../hooks/useDemandHeatmap';
 import { selectCarRoute } from './carRoute';
@@ -33,6 +32,7 @@ import { useCarMapCamera } from './carMapCamera';
 import { useCarLocation } from './useCarLocation';
 import { pushDebug, setDebugFact } from './carDebug';
 import { CarDebugPanel } from './CarDebugPanel';
+import { useCarSurfaceGeneration } from './carSurfaceGeneration';
 import { carColors } from './carTheme';
 // RouteLine / RoutePins hard-import react-native-maps, so they are lazy-required
 // AFTER the maps guard below (never at module scope) — otherwise loading this
@@ -91,6 +91,10 @@ export function CarMapSurface(): React.ReactElement | null {
   const delta = useCarMapCamera((s) => s.delta);
   const offsetLat = useCarMapCamera((s) => s.offsetLat);
   const offsetLng = useCarMapCamera((s) => s.offsetLng);
+  // Bumped by register.ts shortly after connect. Folded into the MapView key so
+  // a map that came up empty on a cold launch remounts once everything is
+  // loaded, instead of the driver having to unplug and replug.
+  const surfaceGeneration = useCarSurfaceGeneration((s) => s.generation);
   const here = useCarLocation();
   const route = selectCarRoute(rideState, activeRide);
   // Cumulative earnings for the completed-trip card. Fetched by the phone, so
@@ -306,7 +310,7 @@ export function CarMapSurface(): React.ReactElement | null {
         // layer fully drops a leftover route overlay; within a leg the camera is
         // driven by `region` (below), not a remount, so live location + zoom
         // updates don't thrash the surface.
-        key={route ? `${route.leg}` : 'idle'}
+        key={`${route ? route.leg : 'idle'}-${surfaceGeneration}`}
         style={styles.fill}
         // Match shared/components/AppMap.tsx rather than relying on the
         // platform default, so the car surface and the phone resolve the

@@ -113,17 +113,19 @@ python -m backend.scripts.run_migrations           # ordered SQL runner over bac
                                                      # show applied vs pending.
 ```
 
-**Use `run_migrations.py`, not `migrate.py`.** Both scripts exist in
-`backend/scripts/`; only `run_migrations.py` matches production's actual
-`schema_migrations` schema (`filename`/`checksum`/`applied_at`/`applied_by`,
-defined by migration 24). `migrate.py` targets an older, different
-`schema_migrations` shape (`version`/`applied_at`, migration 00) that was
-never the one actually applied to production — running it today would fail
-immediately on its own tracking-row `INSERT` (`column "version" does not
-exist`). Found and confirmed 2026-08-17 while manually applying migration
-317 (see `ACTION_ITEMS.md` A39); tracked there for someone to decide whether
-to reconcile/deprecate `migrate.py` or delete it outright — until then,
-`run_migrations.py` is the only one to reach for.
+**Use `run_migrations.py` — `migrate.py` no longer exists.** Two scripts
+used to exist in `backend/scripts/`; only `run_migrations.py` ever matched
+production's actual `schema_migrations` schema (`filename`/`checksum`/
+`applied_at`/`applied_by`, defined by migration 24). `migrate.py` targeted
+an older, different `schema_migrations` shape (`version`/`applied_at`,
+migration 00) that was never the one actually applied to production —
+running it would have failed immediately on its own tracking-row `INSERT`
+(`column "version" does not exist`). Found 2026-08-17 while manually
+applying migration 317 (`ACTION_ITEMS.md` A39); `migrate.py`'s one genuinely
+useful piece — CONCURRENTLY-safe SQL statement splitting (`ACTION_ITEMS.md`
+B0), which `run_migrations.py` never had — was ported into
+`run_migrations.py` before `migrate.py` was deleted, so no functionality
+was lost.
 
 ## Architecture
 
@@ -258,7 +260,7 @@ Rules:
 
 ## Database & Migration Conventions
 
-Migrations live in `backend/migrations/` and are applied in filename order by `backend/scripts/migrate.py`.
+Migrations live in `backend/migrations/` and are applied in filename order by `backend/scripts/run_migrations.py`.
 
 Naming: `NN_short_description.sql` where `NN` is a zero-padded sequence number — check the current highest with `ls backend/migrations | sort -V | tail -1` before picking the next one. Pick the next available number — never reuse or reorder existing numbers. If two PRs conflict on a number, the second one renames to the next free slot before merge. Note: the runner uses the full filename as the idempotency key, so already-applied migrations must never be renamed. Duplicate numeric prefixes exist from history and are handled by full-filename keying — do not introduce new duplicates; a CI prefix-uniqueness check blocks them.
 

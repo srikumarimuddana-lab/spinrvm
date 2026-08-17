@@ -176,7 +176,7 @@ WAV dispatch touches 5+ files and requires a DB migration. Run `/gsd-plan-phase`
 
 | ID | Task | Area |
 |---|---|---|
-| REL-1 | Database migrations applied in order: `python migrate.py --env production` | Backend |
+| REL-1 | Database migrations applied in order: `python -m backend.scripts.run_migrations` | Backend |
 | REL-2 | Backend deployed to Railway from `main` | Infrastructure |
 | REL-3 | Admin dashboard deployed to Vercel from `main` | Infrastructure |
 | REL-4 | Expo EAS production builds for rider + driver apps (`[build]` commit) | Mobile |

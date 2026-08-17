@@ -24,8 +24,6 @@ omit =
     test_dns.py
     tests_smoke_supabase.py
     # Migration runners (tested by migration-safety CI gate, not pytest)
-    migrate.py
-    scripts/migrate.py
     scripts/run_migrations.py
     # Test files themselves
     tests/*

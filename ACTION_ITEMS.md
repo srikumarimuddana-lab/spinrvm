@@ -7,7 +7,18 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-17 — A40 CLOSED (all three questions resolved:
+_Last updated: 2026-08-17 — A39's deferred `migrate.py` decision resolved
+(product owner: reconcile, not just delete). Ported `migrate.py`'s tested
+CONCURRENTLY-safe SQL splitter (B0) into `run_migrations.py` — which
+never had that fix and would have failed on any `CREATE INDEX
+CONCURRENTLY` migration — fixed every living-doc/CI/runtime reference
+across `CLAUDE.md`, `AGENTS.md`, runbooks, CI workflow comments, and a
+real admin-facing error message, then deleted `migrate.py` outright.
+`spinr-migration-reviewer` then found the reference-cleanup was
+incomplete (11 more files); all fixed or explicitly judged out of scope
+(self-declared provenance records, auto-generated build artifacts) — see
+A39.
+128 directly affected tests pass. Prior same day: A40 CLOSED (all three questions resolved:
 #1 confirmed by the product owner that dual-run — old app still
 processing real Stripe charges on the shared account — is intentional
 right now, not an incident; #2 checked live and found no evidence of
@@ -153,8 +164,16 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     Stripe account the mirror covers (old app's/new app's/both) — unconfirmed.
   - **RESOLVED**: rider legacy-import provenance — 918/1,137 users backfilled
     2026-08-17 (`docs/change-log/2026-08-17-rider-provenance-backfill-executed.md`).
-    The *code* gap (`rider_import_service.py` never stamps new imports) is
-    still open — small, separate fix.
+    **Correction (2026-08-17, later same day):** that change-log's claim that
+    "the code gap (`rider_import_service.py` never stamps new imports) is
+    still open" was stale/wrong — `rider_import_service.py` already stamps
+    `legacy_import_metadata` on both create and update as of `a591cf1`
+    (PR #3678, merged 2026-08-11, **before** the backfill even ran), with
+    dedicated coverage in `test_admin_rider_import.py`
+    (`test_commit_stamps_provenance_on_created_user`,
+    `test_commit_stamps_provenance_on_updated_user_without_clobbering_other_metadata`).
+    No code change needed; this note exists only to stop a future session
+    from re-doing already-shipped work off a stale status line.
   - **RESOLVED**: `payout_gst_amount` for the 186 already-migrated rides —
     backfilled additive-only, $102.09 total
     (`docs/change-log/2026-08-16-gst-backfill-executed.md`). **D1 remains
@@ -3706,17 +3725,66 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   `backend/migrations/CLAUDE.md`, `AGENTS.md`, and
   `docs/runbooks/migration-conflict-detection.md` to
   `python -m backend.scripts.run_migrations`, with a note explaining why
-  `migrate.py` is wrong. **Did not delete or fix `migrate.py` itself** — a
-  human should decide whether to reconcile it (update it to match migration
-  24's schema and keep it as an alternative/rewrite path) or delete it
-  outright; it wasn't touched here to avoid a unilateral call on which
-  runner's other behavior (e.g. `migrate.py`'s `--dry-run` flag and
-  autocommit/`CONCURRENTLY` handling) should be considered authoritative
-  going forward.
+  `migrate.py` is wrong.
+- **Follow-up decision (2026-08-17, same day, product owner confirmed):**
+  reconcile, not just delete — `run_migrations.py` had a real gap
+  `migrate.py` didn't (no `CREATE/DROP INDEX CONCURRENTLY` support at all;
+  it wraps every migration in one transaction, which Postgres rejects for
+  `CONCURRENTLY`), and `migrate.py`'s CONCURRENTLY-safe statement splitter
+  (`ACTION_ITEMS.md` B0) was real, tested, working code. Ported
+  `_split_sql_statements` and the autocommit-routing logic from `migrate.py`
+  into `run_migrations.py` (`_apply_one_autocommit`), moved/adapted both
+  regression test files (`test_migration_concurrently_splitting.py`,
+  `test_run_migrations_autocommit_chunks.py`, née
+  `test_migrate_autocommit_chunks.py`) to test the ported functions, fixed
+  every other living-doc/CI/code reference (`CLAUDE.md` ×2 blocks,
+  `AGENTS.md` ×2 blocks, `docs/dev-setup.md`, the migration-conflict-
+  detection runbook, `.github/workflows/migration-check.yml`'s comments,
+  `.claude/commands/migration-check.md`, and a real runtime error message
+  in `routes/admin/auto_payouts.py` that told an admin to run the deleted
+  script), then deleted `backend/scripts/migrate.py` outright. Historical
+  audit/change-log documents that mention `migrate.py` were deliberately
+  left untouched — point-in-time records, not living docs (same convention
+  followed throughout this session). 128 directly affected tests pass
+  (`test_migration_concurrently_splitting.py`,
+  `test_run_migrations_autocommit_chunks.py`,
+  `test_financial_events_ride_id_fk_contract.py`,
+  `test_unbalanced_scoped_migration.py`, `test_auto_payout.py`,
+  `test_migration_ordering.py`, `test_migration_fk_column_types.py`).
 - **What was NOT verified:** whether any deploy pipeline outside
   `.github/workflows/` (e.g. a Fly/Railway post-deploy hook, a manual
   runbook step not checked in this repo) invokes `migrate.py` specifically
   — only this repo's own CI config was checked.
+- **Pre-merge reviewer finding, same day:** `spinr-migration-reviewer`
+  (run per the standing "wait for the review, then open the PR"
+  instruction) confirmed the ported runner code itself was correct,
+  faithfully tested, and safe, but found the "fixed every other living
+  reference" claim above was not actually complete — a full-repo grep
+  turned up 11 more files still referencing `migrate.py`:
+  `backend/requirements.in`, `backend/.coveragerc`, two
+  `verify_migrations_*.sql` scripts, `docs/runbooks/admin-rollback.md`,
+  `docs/runbooks/supabase-region-migration.md`,
+  `docs/runbooks/deploy-migration-64-65.md`,
+  `docs/runbooks/deploy-migration-297.md`, `.planning/ROADMAP.md`,
+  `.planning/REQUIREMENTS.md`, `docs/driver-faqs-saskatchewan.md`.
+  Verdict: "FIX BEFORE MERGE (non-blocking to production safety, blocking
+  to the PR's own completeness claim)." 9 of the 11 are living docs and
+  are now fixed — three of those fixes (`supabase-region-migration.md`,
+  `deploy-migration-64-65.md`, `deploy-migration-297.md`) were substantive,
+  not just a script-name swap: the original text also documented
+  `migrate.py`'s `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` connection
+  interface, which is wrong for `run_migrations.py` (needs `DATABASE_URL`).
+  The other 2 (`verify_migrations_286_291.sql`, `verify_migrations_292_293.sql`)
+  were deliberately left alone — the latter's own header comment states
+  editing it would break the provenance of a result cited in
+  `docs/change-log/2026-08-08-migration-verification-result.md`, i.e. a
+  self-declared point-in-time record, same convention as the historical
+  docs already excluded above. One more file the reviewer's list didn't
+  catch (`docs/runbooks/stripe-identity-drift-manual-test.md`) was found
+  and fixed in an independent final sweep. `.planning/graphs/graph.json`
+  and `.last-build-snapshot.json` also reference `migrate.py` dozens of
+  times but are auto-generated Graphify build outputs per `AGENTS.md`, not
+  hand-authored docs — correctly left untouched.
 
 ### A36. `financial_events` is 0 rows in production despite active use by 42 files — CLOSED (2026-08-17), root cause found: neither hypothesis was right
 
@@ -3893,6 +3961,19 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 ## P1 — Fix before launch (code)
 
 ### B0. Migration runner shreds any migration whose text contains "CONCURRENTLY"
+- **Update (2026-08-17, A39 follow-up):** `scripts/migrate.py` has been
+  **deleted** (see A39 above — it targeted a `schema_migrations` shape that
+  was never actually applied to production). This fix's code —
+  `_split_sql_statements` and the autocommit-routing logic — was ported
+  into `scripts/run_migrations.py` (the canonical runner) **before**
+  `migrate.py` was deleted, so nothing was lost; `run_migrations.py` never
+  had this fix applied to it directly until now, since it never had any
+  CONCURRENTLY handling at all before this port (a real, separate gap this
+  same follow-up closed). The description below is preserved as it was
+  written against `migrate.py` at the time; read `scripts/run_migrations.py`
+  and `backend/tests/test_migration_concurrently_splitting.py` /
+  `backend/tests/test_run_migrations_autocommit_chunks.py` for the current,
+  live location of this logic.
 - [x] **Status:** done — `scripts/migrate.py` now has `_split_sql_statements`,
   a lexical scanner (comment/`'...'`-string/`$tag$...$tag$`-dollar-quote
   aware) replacing the naive `sql.split(";")`. `needs_autocommit` routing now
@@ -5726,11 +5807,26 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   confirmed policy — and whichever way it resolves, that decision is
   written down so this doesn't silently drift a third time.
 
-### B27. `charge.dispute.closed` mis-marks rides and can update the wrong dispute row; dispute fees never reach the ledger
+### B27. `charge.dispute.closed` mis-marks rides and can update the wrong dispute row; dispute fees never reach the ledger — CLOSED (2026-08-17)
 
-- [ ] **Status:** open (found 2026-08-14 while writing
-  `docs/runbooks/payment-dispute-evidence.md`). Real money path, no live
-  chargeback has exercised it yet — which is why it's still latent.
+- [x] **Status:** DONE (2026-08-17, found 2026-08-14 while writing
+  `docs/runbooks/payment-dispute-evidence.md`). All three defects fixed and
+  the `charge.dispute.updated` allowlist gap closed — see
+  `docs/change-log/2026-08-17-b27-dispute-closed-webhook-fixes.md` for the
+  full Change Impact Log. `spinr-money-auditor` reviewed the diff before PR
+  creation (Codex auto-review is off, C7/C9) and found 2 real blockers in
+  the first version of fix 3's ledger write — both fixed before merge:
+  (a) the per-balance-transaction-type `event_type` string violated
+  `financial_events`'s fixed CHECK-constraint enum (migration 58), which
+  would have failed every insert 100% of the time; `event_type` is now
+  always the literal `"stripe_dispute"`, with the Stripe subtype moved into
+  `metadata`; (b) a falsy `user_id` (unresolved rider) risked an FK
+  violation on `financial_events.user_id NOT NULL REFERENCES users(id)`;
+  guarded both in the new `record_dispute_close_events()` function itself
+  and at the webhook call site. 261 tests pass across the affected webhook/
+  dispute/ledger suites, including a new `test_dispute_close_ledger.py`
+  asserting directly on the ledger INSERT payload (the webhook-level tests
+  mock the function and can't see this class of bug).
 - **Issue/gap:** three defects in the `charge.dispute.closed` branch of
   `backend/routes/webhooks.py` (≈ line 1183):
   1. **`warning_closed` is treated as a loss.** Stripe fires
@@ -8001,8 +8097,84 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   YAML or application-code defect. No `.github/workflows/*.yml` change is
   implicated.
 
-### C22. `scripts/migrate.py`'s tracking table doesn't match what's actually live on the production Supabase project — the runner may never have successfully recorded a migration against it
-- [ ] **Status:** open — found 2026-08-13 while investigating why the
+### C22. `scripts/migrate.py`'s tracking table doesn't match what's actually live on the production Supabase project — the runner may never have successfully recorded a migration against it — PARTIALLY RESOLVED (2026-08-17)
+
+- [ ] **Status:** partially resolved (2026-08-17). `scripts/migrate.py` no
+  longer exists — deleted by A39, which reconciled `run_migrations.py` to
+  the correct (migration 24) `schema_migrations` shape and ported
+  `migrate.py`'s one useful piece (CONCURRENTLY-safe splitting) first. That
+  closes this item's original acceptance (1) and (2): the shape mismatch
+  and the broken runner code are both gone. **Not closed** — acceptance
+  (3), the actual live audit, is now more precisely quantified than before
+  but still not complete:
+  - **Tracking-table coverage, verified live** (Supabase MCP,
+    `soavhtdhefowwvforzwb`): `schema_migrations` records 161 of 407 repo
+    migration files. The table itself was only bootstrapped 2026-08-14
+    (160 `backfill-verified` rows + 1 manual apply) and the bootstrap batch
+    stopped around migration `239` — everything numerically after that
+    (108 files) plus ~138 pre-window files with non-strictly-numeric
+    naming were never recorded. **This is a mix of real gaps, not one
+    cause** — spot-checks found migrations 286 and 297 genuinely live
+    despite being untracked (bookkeeping-only gap), but migration 321
+    (A38's regulatory fix, merged and marked CLOSED) had **never actually
+    been applied** to production until this session (a real application
+    gap, not just a tracking gap). **Applied 2026-08-17** (with explicit
+    user confirmation via `AskUserQuestion`) — `purge_pii_retention()` now
+    has A38's driver-ride guard live.
+  - **A much more serious bug found while verifying 321's apply**: running
+    `purge_pii_retention(true)` immediately after confirmed the function
+    could not execute past **Step D** — `ride_messages.created_at` doesn't
+    exist (the table has `timestamp`, per migration 98). Fixing that
+    (migration 323) surfaced the identical bug one step later at **Step
+    F** — `stripe_events.created_at` doesn't exist either (the table has
+    `received_at`, per migration 22). Same bug class migration 187 already
+    fixed once for `driver_location_history` (Step C) — a table
+    pre-existing under a different column name than a later
+    `CREATE TABLE IF NOT EXISTS` assumed, invisible because Postgres
+    doesn't validate `plpgsql` column references until execution. **This
+    means the entire daily PII/data-retention background loop
+    (`utils/retention_purge.py`, ~03:00 UTC) has likely never completed a
+    single successful run** — GPS anonymization at 3y, ride/DSAR
+    hard-delete at 7y, and every step from D onward were silently failing
+    every tick. Fixed 2026-08-17 (migrations 323, 324, both applied live
+    with explicit user confirmation, both reviewed by
+    `spinr-migration-reviewer` — verdict SAFE TO APPLY). A live
+    column-existence sweep against every other table/column the function
+    references found no further broken references — D and F were the
+    last two. `purge_pii_retention(true)` now completes end-to-end and
+    surfaced a real backlog (189,208 stale `surge_pricing` rows, 51
+    expired `refresh_tokens`) — **no live purge was executed**, that's a
+    separate decision left to the daily loop's next natural tick. Full
+    detail: `docs/change-log/2026-08-17-c22-purge-pii-retention-broken-and-fixed.md`.
+    **Note for future migrations touching `purge_pii_retention()`**:
+    migrations 323/324 merged (PR #4116) without the
+    `-- migration-override-ok: <reason>` marker that
+    `ci-guardrails.yml`'s "redefines the same Postgres object" check
+    requires (321 correctly has it; 323/324 don't) — the PR's Migration
+    Safety Check failed on that and was merged over it anyway. Not fixed
+    retroactively: the check is `pull_request`-only (no `push` trigger on
+    `main`), so there's no standing red gate today, and editing an
+    already-merged migration's content — even a comment-only marker —
+    would violate this repo's explicit append-only convention for a
+    cosmetic fix with zero functional effect. The **next** migration that
+    redefines `purge_pii_retention()` needs its own
+    `migration-override-ok` marker (as every one before 323/324 correctly
+    had) — don't forget it.
+  - **Still open**: the broader `schema_migrations` reconciliation (161/407
+    tracked) itself — this session only individually verified and applied
+    321/323/324, exactly the narrow, high-confidence action the original
+    finding called for ("manually audit at least the highest-risk ones...
+    don't blind-apply ~280 migrations' worth of accumulated drift in one
+    shot"). The full reconciliation remains a substantial, separate,
+    higher-stakes audit, same as originally scoped. Also still unverified:
+    whether `110_settings_resend_email.sql` (the original 2026-08-13
+    finding that started this item) has since landed — not re-checked in
+    this session's narrower pass. Also flagged as a natural follow-up:
+    whether any other `SECURITY DEFINER` function or background loop in
+    this codebase has the same "table pre-existed under a different column
+    name" bug class — not investigated beyond `purge_pii_retention()`.
+- [ ] **Original status (2026-08-13, superseded above but kept for
+  history):** open — found while investigating why the
   corporate-portal OTP email send has been failing since it shipped (see
   `docs/change-log/2026-08-13-corporate-otp-error-detail-and-ses-investigation.md`).
 - **What's wrong:** two migration files define incompatible schemas for the
@@ -8126,7 +8298,16 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 
 - [ ] **Status:** open (filed 2026-08-14 alongside
   `docs/runbooks/payment-dispute-evidence.md`, which documents the manual
-  workaround for all three).
+  workaround for all three). **Action item 1 of 5 DONE (2026-08-17)**:
+  migration 326 adds `evidence_due_by`/`evidence_submitted_at`/`fee_cents`
+  to `stripe_disputes` (additive, nullable); `charge.dispute.created` now
+  parses Stripe's `evidence_details.due_by` and stores it, with a logged
+  warning (never a silent drop, never a 500) if a future payload sends a
+  malformed value. `evidence_submitted_at`/`fee_cents` are placeholder
+  columns only — not populated by anything yet. Items 2–5 (alerting, admin
+  UI, evidence-pack endpoint, submission path) remain open, same priority
+  order as originally scoped. Full detail:
+  `docs/change-log/2026-08-17-c23-dispute-evidence-due-by.md`.
 - **Issue/gap:** the webhook records a chargeback and then nothing else
   happens. Specifically:
   1. **No `evidence_due_by`.** Stripe puts
@@ -8178,7 +8359,7 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   deadline; a support agent can produce a complete, PIPEDA-clean evidence
   pack for a ride in one click.
 
-### C26. Scheduled rides: no booking-time check for overlapping/duplicate scheduled trips by the same rider
+### C32. Scheduled rides: no booking-time check for overlapping/duplicate scheduled trips by the same rider
 
 - [x] **Status:** closed 2026-08-17. `create_ride` (`routes/rides/booking.py`)
   now rejects (409, `scheduled_ride_overlap`) a new scheduled-ride request
@@ -8225,9 +8406,11 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   one for the same rider is rejected (or confirmed) at request time, not
   discovered at dispatch time via a constraint collision.
 
-### C27. Scheduled rides: no per-rider cap on pending scheduled trips
+### C33. Scheduled rides: no per-rider cap on pending scheduled trips
 
-- [ ] **Status:** open (filed 2026-08-17, same review as C26).
+- [ ] **Status:** open (filed 2026-08-17, same review as C32; renumbered
+  from C26/C27 on merge with main, which had independently claimed those
+  numbers for unrelated items — see C26/C27 below).
 - **Issue/gap:** nothing in `routes/rides/booking.py`'s create-ride path
   bounds how many `scheduled` rides a single rider can have outstanding at
   once.
@@ -8236,7 +8419,7 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   `utils/scheduled_rides.py:54`) and can trip the tick-cap warning/metric
   (`utils/scheduled_rides.py:732-741`) if enough riders (or a compromised
   account, or the AI booking tool) queue up unbounded scheduled rides. Also
-  compounds C26 — more concurrent scheduled rides per rider means more
+  compounds C32 — more concurrent scheduled rides per rider means more
   chances for an overlap.
 - **Action:** add a small per-rider concurrent-`scheduled`-ride cap (e.g.
   3–5), enforced in `booking.py` alongside the active-ride check, returning
@@ -9776,6 +9959,72 @@ how much they de-risk a public launch._
   `verifyEmailScreen.test.tsx`'s own resend-countdown, per that file's
   existing comment) still prints at the end of a full run — cosmetic,
   doesn't fail the suite, out of scope for this fix.
+
+### C26. `pip-compile drift check` fails on any PR that touches `backend/requirements.in` — `requirements.txt` has drifted far out of sync with a fresh resolve, unrelated to the touching PR's actual diff
+
+- [ ] **Status:** open, not yet a `[CR]` issue — flagged here per the
+  "CI check red for a reason unrelated to your diff" rule rather than
+  left unexplained.
+- **Where surfaced:** PR #4085 (A39's `migrate.py` reconciliation), whose
+  only change to `backend/requirements.in` was a one-line comment fix
+  (`migrate.py` → `run_migrations.py`, no dependency added/removed/
+  reordered). CI's `pip-compile drift check` job still failed —
+  `.github/workflows/pip-compile-check.yml` only triggers when
+  `backend/requirements.in`/`requirements.txt` changes, so this drift has
+  presumably existed unnoticed for a while and this PR was simply the
+  first to touch the trigger path.
+- **What the failure actually shows:** the job's diff is almost entirely
+  `+` (additions) — a fresh `pip-compile requirements.in --no-upgrade`
+  resolves dozens of transitive packages (`pydantic`, `pytest`, `stripe`,
+  `supabase`, `uvicorn`, etc.) that the checked-in `requirements.txt`
+  doesn't currently pin at all, not just version bumps. That's consistent
+  with `requirements.txt` being stale relative to `requirements.in`
+  rather than a resolver nondeterminism artifact.
+- **Not fixed in PR #4085**: regenerating `requirements.txt` correctly
+  requires running `pip-compile` and reviewing/testing the resulting
+  pinned versions — not something to do as a drive-by inside a
+  comment-only-diff PR. Attempting it blind risks silently changing pins
+  the fare/payment/auth code depends on without any of this repo's
+  version-bump review discipline (see the `dependabot` bump commits
+  throughout this file for the normal, reviewed path).
+- **Next step:** someone with a working `pip-compile` environment should
+  run `pip-compile backend/requirements.in --output-file
+  backend/requirements.txt --strip-extras --no-header
+  --annotation-style line --no-upgrade`, review the diff for anything
+  surprising (should be additions/reorderings only, given `--no-upgrade`),
+  test the backend against the regenerated lockfile, and merge that as
+  its own dependency-only PR — then this check goes green for any future
+  PR that touches `requirements.in`.
+
+### C27. `ci-error-audit.yml` has created 2,483 open issues since 2026-04-28 — no cross-run dedup, no auto-close
+
+- [ ] **Status:** open. Filed via `[CR]` #4112
+  (`.github/ISSUE_TEMPLATE/ci_change_request.yml`), CR-2026-(assign). Found
+  2026-08-17 while auditing the repo's CR backlog for unclosed-but-resolved
+  items (the search that also found and closed #3764/#3765).
+- **Measured, not estimated:** 2,483 of the repo's 2,509 total open issues
+  (~99%) carry the `ci-audit` label. Oldest is **#143, created
+  2026-04-28** — continuous unbroken accumulation since the system
+  shipped, ~22/day sustained.
+- **Root cause**: `scripts/ci-audit/create_github_issue.py`'s own
+  docstring states its actual dedup scope — *"De-duplicates: if an open
+  issue for the same run already exists, updates it"* — keyed on **run
+  ID**, not error signature. The same recurring failure across different
+  runs opens a fresh issue every time. No companion workflow anywhere in
+  `.github/workflows/` closes these when the underlying job later goes
+  green — grepped, confirmed absent.
+- **Concrete harm observed this session**: a plain issue-title search for
+  other open `[CR]`s returned unusable noise — GitHub's semantic search
+  matched "CR" against "CI" and surfaced a page of `[CI Audit]` issues
+  instead. Same "signal drowns in noise, trains people to stop looking"
+  failure shape as C7/C8/C9 (a permanently-red or silently-broken
+  automation becomes the expected state, so nobody notices when something
+  in it actually matters).
+- **Not fixed here** — this is a decision-needing CR (approval gate,
+  `.github/ISSUE_TEMPLATE/ci_change_request.yml`), not implemented
+  unilaterally. See #4112 for the proposed fingerprint-based dedup fix,
+  the separate (larger) question of one-time backlog cleanup, and the
+  auto-close design tradeoffs.
 
 ## Recently completed (do not redo)
 

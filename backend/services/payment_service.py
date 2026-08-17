@@ -19,13 +19,18 @@ try:
     from ..services import corporate_allowance_service, corporate_wallet_service, ledger_service
     from ..services.corporate_policy_service import evaluate_policy
     from ..socket_manager import manager
-    from ..utils.stripe_charge import cancel_authorization, capture_ride, charge_ride
+    from ..utils.stripe_charge import cancel_authorization, capture_ride, charge_ride, increment_authorization
 except ImportError:
     import db_supabase  # type: ignore
     from services import corporate_allowance_service, corporate_wallet_service, ledger_service  # type: ignore
     from services.corporate_policy_service import evaluate_policy  # type: ignore
     from socket_manager import manager  # type: ignore
-    from utils.stripe_charge import cancel_authorization, capture_ride, charge_ride  # type: ignore
+    from utils.stripe_charge import (  # type: ignore
+        cancel_authorization,
+        capture_ride,
+        charge_ride,
+        increment_authorization,
+    )
 
 try:
     from ..core.config import settings as app_config
@@ -331,6 +336,68 @@ async def record_refund_event(
         ref=payment_intent_id,
         metadata=meta,
     )
+
+
+async def record_dispute_close_events(
+    dispute_id: str,
+    user_id: str,
+    ride_id: str | None,
+    balance_transactions: list,
+    *,
+    dispute_status: str,
+) -> None:
+    """Append one financial_events row per Stripe balance transaction on
+    ``charge.dispute.closed`` (B27).
+
+    Stripe posts the disputed-amount debit and its own per-dispute fee as
+    separate entries in ``dispute.balance_transactions`` when a dispute
+    closes. Neither was previously recorded, so
+    ``docs/runbooks/stripe-reconciliation.md`` showed an unexplained delta
+    for every chargeback. ``delta_cents`` is taken verbatim from Stripe's own
+    signed ``amount`` (negative = debited from us, positive = reinstated) —
+    no sign inference here, since a `won` dispute can still carry a
+    non-refundable dispute fee that stays negative. Never raises — mirrors
+    ``record_refund_event``'s never-fail posture; the money has already
+    moved by the time this webhook fires.
+
+    ``event_type`` is always the literal ``"stripe_dispute"`` --
+    ``financial_events.event_type`` has a fixed CHECK-constraint enum
+    (migration 58) with no per-subtype dispute values, so a per-balance-
+    transaction-type string (e.g. ``stripe_dispute_adjustment``) would
+    violate the constraint on every insert. The Stripe balance-transaction
+    ``type`` (``adjustment``, ``stripe_fee``, ...) is carried in
+    ``metadata`` instead, where it's still fully queryable.
+
+    Skips silently (no insert, no raise) when ``user_id`` is falsy —
+    ``financial_events.user_id`` is ``NOT NULL REFERENCES users(id)``, so an
+    empty/unresolved id would fail the FK. Callers should already guard on a
+    resolved rider before calling this; the guard is repeated here so a
+    future caller can't reintroduce the FK violation by skipping it.
+    """
+    if not user_id:
+        logger.warning("[B27] Skipping dispute ledger write — no resolvable user_id for dispute {}", dispute_id)
+        return
+    for bt in balance_transactions:
+        if not isinstance(bt, dict):
+            continue
+        amount_cents = int(bt.get("amount", 0) or 0)
+        if amount_cents == 0:
+            continue
+        await ledger_service.record_event(
+            event_type="stripe_dispute",
+            user_id=user_id,
+            ride_id=ride_id,
+            delta_cents=amount_cents,
+            ref=dispute_id,
+            metadata={
+                "stripe_dispute_id": dispute_id,
+                "balance_transaction_id": bt.get("id") or "",
+                "balance_transaction_type": bt.get("type") or "",
+                "fee_cents": int(bt.get("fee", 0) or 0),
+                "dispute_status": dispute_status,
+                "currency": bt.get("currency") or "",
+            },
+        )
 
 
 async def charge_late_tip(
@@ -1630,12 +1697,17 @@ async def _settle_against_hold(
     stripe_customer_id: Optional[str],
     payment_method_id: Optional[str],
 ) -> Optional[PaymentResult]:
-    """Capture a booking-time hold for (fare + tip) in a single Stripe fee.
+    """Capture a booking-time hold for (fare + tip), ideally in one Stripe fee.
 
-    Captures ``min(total_charge, authorized)`` against the manual-capture
-    PaymentIntent placed at booking. When the tip pushes the total OVER the
-    authorized hold (a tip beyond the buffer), the overflow is charged on a
-    fresh PaymentIntent — Stripe forbids capturing more than was authorized.
+    The hold placed at booking is the bare fare — no tip headroom — so any tip
+    pushes the total over it. Two ways to cover that, in order of preference:
+
+    1. INCREMENT the hold to the full total, then capture once. One Stripe fixed
+       fee, one statement line. Requires the card to support incremental
+       authorization, which was recorded at booking as ``auth_incrementable``.
+    2. Capture what IS authorized and charge the difference on a fresh
+       PaymentIntent. Costs a second fixed fee. This is the fallback whenever
+       the card cannot be incremented or the issuer refuses the increase.
 
     Returns:
         PaymentResult — terminal outcome (captured-and-paid, or capture
@@ -1643,6 +1715,35 @@ async def _settle_against_hold(
         ``None`` — the hold is unusable (expired / amount_too_large / Stripe
             ops error); the caller falls back to a fresh full charge.
     """
+    # Try to grow the hold to cover the tip before capturing. Gated on the
+    # capability recorded at booking so we don't burn a doomed Stripe round-trip
+    # on every tipped ride whose card was never eligible.
+    if total_charge > authorized and ride.get("auth_incrementable"):
+        inc = await increment_authorization(
+            ride_id=ride_id,
+            payment_intent_id=held_pi,
+            new_total=total_charge,
+        )
+        if inc.status == "authorized":
+            # The hold now covers fare + tip, so the capture below takes it all
+            # in one go and the overflow branch never runs.
+            authorized = _round(total_charge)
+            logger.info(
+                "[PAYMENT] hold incremented to {} for ride {} — tip settles on one charge",
+                _money_str(authorized),
+                ride_id,
+            )
+        else:
+            # Designed fallback, not a failure: capture what we hold and bill the
+            # tip separately. Info-level — it costs one extra fixed fee, nothing
+            # is lost or stuck. The original hold is untouched by a failed
+            # increment, so the capture below is still valid.
+            logger.info(
+                "[PAYMENT] hold increment unavailable for ride {} ({}) — tip will be a separate charge",
+                ride_id,
+                inc.error_message,
+            )
+
     capture_amount = _round(min(total_charge, authorized))
     cap = await capture_ride(ride_id=ride_id, payment_intent_id=held_pi, amount=capture_amount)
 
@@ -1657,6 +1758,26 @@ async def _settle_against_hold(
             ride_id,
             cap.error_message,
         )
+        # The caller now mints a NEW PaymentIntent for the full amount and
+        # repoints rides.payment_intent_id at it, which is the only durable
+        # reference to this hold — so unless we release it here, nobody can find
+        # it again and the rider's funds stay reserved until Stripe's ~7-day
+        # expiry. That gap predates this code for the fare-only case, but a
+        # successful increment makes the abandoned hold LARGER (fare + tip), so
+        # it is worth closing rather than inheriting.
+        #
+        # Best-effort: if the release fails there is nothing further to do here
+        # (the hold expires on its own), and it must not stop the fresh charge
+        # that actually settles the ride.
+        try:
+            await cancel_authorization(ride_id=ride_id, payment_intent_id=held_pi)
+        except Exception as _rel_exc:  # pragma: no cover — helper never raises
+            logger.error(
+                "[PAYMENT] could not release uncapturable hold pi={} for ride {}: {}",
+                held_pi,
+                ride_id,
+                _rel_exc,
+            )
         return None
 
     if cap.status == "declined":

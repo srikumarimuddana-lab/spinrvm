@@ -7,7 +7,15 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-17 — A36 CLOSED (root cause of the empty
+_Last updated: 2026-08-17 — A38 CLOSED (migration 321 adds the missing
+`rides.driver_id` guard to `purge_pii_retention()`'s Step H, the
+sanctioned DSAR hard-delete path — closes the same class of gap A35
+found in an ad-hoc script, verified byte-identical to migration 296
+except the fix, reviewed clean by both `spinr-migration-reviewer`
+(one numbering-conflict blocker found and fixed) and
+`spinr-regulatory-compliance-checker`; see
+`docs/change-log/2026-08-17-a38-step-h-driver-rides-guard.md`).
+Prior same day: A36 CLOSED (root cause of the empty
 `financial_events` table found via live webhook-payload evidence: no
 native Spinr ride has ever completed a real payment yet — 100% of
 completed card-paid rides in production are legacy-imported, and the
@@ -3608,7 +3616,7 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   here to avoid adding a new always-on process dependency to a
   database-wide DDL hook).
 
-### A38. `purge_pii_retention()` Step H never checks `rides.driver_id` for a driver account
+### A38. `purge_pii_retention()` Step H never checks `rides.driver_id` for a driver account — CLOSED (2026-08-17)
 - **Source:** surfaced by `spinr-regulatory-compliance-checker`'s review of
   the A35 fix (2026-08-17) — the new `test_account_cleanup_service.py`
   deliberately added a `rides.driver_id` check that Step H itself lacks
@@ -3622,11 +3630,34 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   7-year mark despite having ride history — the sanctioned DSAR process has
   the same class of gap A35 found in the ad-hoc script, just narrower and
   less likely to be hit.
-- **Status:** open, no owner assigned. **Not fixed as part of A35** — that
-  fix made its own replacement tool stricter than Step H rather than
-  attempting to also patch Step H's SQL, since Step H is money/regulatory-
-  adjacent production code that changes hard-delete behavior and deserves
-  its own dedicated review, not a drive-by edit inside an unrelated fix.
+- **Not fixed as part of A35** — that fix made its own replacement tool
+  stricter than Step H rather than attempting to also patch Step H's SQL,
+  since Step H is money/regulatory-adjacent production code that changes
+  hard-delete behavior and deserves its own dedicated review, not a
+  drive-by edit inside an unrelated fix.
+- **Fix (migration 321):** re-issues `CREATE OR REPLACE FUNCTION
+  purge_pii_retention()` (same `migration-override-ok` pattern migration
+  296 already established for this function) adding `EXISTS (SELECT 1 FROM
+  rides r2 WHERE r2.driver_id = d.id)` to Step H's driver-side guard, in
+  both the live-delete loop's `WHERE` clause and the dry-run `COUNT` query.
+  Verified by diffing the full function body against migration 296's
+  original: the ONLY substantive differences are the Step H comment and the
+  two added `EXISTS` clauses — every other step (A–G, I–N), the result
+  JSON, `REVOKE`/`GRANT`, and the audit-log insert are byte-identical.
+  Strictly more conservative direction — can only exclude MORE accounts
+  from hard-delete, never fewer; cannot retroactively affect any account
+  already deleted under the old guard.
+- **Manual review** (Codex auto-review off, C7/C9): `spinr-migration-
+  reviewer` found one blocker (the migration was initially numbered 319,
+  which two other PRs claimed on `main` while this branch was in progress
+  — renamed to 321, the actual next-free slot, and every self-reference
+  updated) — fixed. `spinr-regulatory-compliance-checker`: **SAFE TO
+  MERGE**, confirmed the fix correctly serves the SK Transportation Act's
+  7-year retention rule with no DSAR-stuck-forever risk (same convergence
+  behavior as the pre-existing rider-side guard, via Step B's unconditional
+  7-year ride purge).
+- **Status:** closed. Full detail:
+  `docs/change-log/2026-08-17-a38-step-h-driver-rides-guard.md`.
 
 ### A39. Two competing migration runners; the one CLAUDE.md documents (`migrate.py`) does not match production's actual `schema_migrations` schema — CLOSED (2026-08-17), docs corrected
 - **Source:** found while manually applying migration 317 (the A35 fix) to

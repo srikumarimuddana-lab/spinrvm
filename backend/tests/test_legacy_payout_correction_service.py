@@ -8,6 +8,7 @@ is always mocked here, matching the module's own "read-only, no writes" contract
 from __future__ import annotations
 
 import csv
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
@@ -140,7 +141,10 @@ def test_totals_match_sum_of_kept_rows(csv_set):
         plan = svc.build_correction_plan(
             csv_set["payments"], csv_set["bookings"], csv_set["drivers"], csv_set["customers"]
         )
-    assert plan.stats["total_amount"] == pytest.approx(12.50)  # 10.00 + 2.50
+    # Exact Decimal equality, not pytest.approx — plan.stats now carries the
+    # real Decimal (build_correction_plan no longer coerces to float), so
+    # there's no binary-float drift left to tolerate.
+    assert plan.stats["total_amount"] == Decimal("12.50")  # 10.00 + 2.50
 
 
 def test_print_report_makes_no_writes_and_is_human_readable(csv_set):

@@ -148,7 +148,10 @@ def build_backfill_plan(bookings_csv: Path | str) -> BackfillPlan:
         "candidate_rides_missing_field": len(candidates),
         "resolvable_against_source": len(found),
         "unresolvable_no_source_match": len(not_found),
-        "sum_old_payout_gst_amount": float(sum((r.old_payout_gst_amount for r in found), ZERO)),
+        # Kept as Decimal, not float(...) — print_report's ${...:.2f}
+        # formatting works the same on Decimal, and money must never pass
+        # through a float even display-only (CLAUDE.md convention).
+        "sum_old_payout_gst_amount": sum((r.old_payout_gst_amount for r in found), ZERO),
     }
     return plan
 

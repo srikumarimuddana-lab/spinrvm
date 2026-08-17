@@ -214,11 +214,15 @@ def build_correction_plan(
         "kept_after_filters": len(kept),
         "group_a_rows": len(a),
         "group_a_drivers": len({r.spinr_driver_id for r in a if r.spinr_driver_id}),
-        "group_a_amount": float(sum((r.payout_amount for r in a), ZERO)),
+        # Kept as Decimal, not float(...) — this dict feeds print_report's
+        # ${...:.2f} formatting directly (Decimal supports the same format
+        # spec), and money must never pass through a float even display-only
+        # (CLAUDE.md money-arithmetic convention).
+        "group_a_amount": sum((r.payout_amount for r in a), ZERO),
         "group_b_rows": len(b),
         "group_b_old_drivers": len({r.old_driver_id for r in b}),
-        "group_b_amount": float(sum((r.payout_amount for r in b), ZERO)),
-        "total_amount": float(sum((r.payout_amount for r in plan.rows), ZERO)),
+        "group_b_amount": sum((r.payout_amount for r in b), ZERO),
+        "total_amount": sum((r.payout_amount for r in plan.rows), ZERO),
     }
     return plan
 

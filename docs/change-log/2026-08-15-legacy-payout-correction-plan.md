@@ -1,5 +1,17 @@
 # Change Impact & Risk Log
 
+> ⚠️ **SUPERSEDED (2026-08-16)** — the $276.59 / 20-driver headline figure and
+> the per-driver table in this doc were correct at time of writing but were
+> revised the next day by the Stripe cross-check in
+> `docs/change-log/2026-08-16-gst-backfill-and-stripe-crosscheck.md` §1a:
+> revised range for the 15 real-driver buckets is **$185.31–$228.08** (down
+> from $271.24) — 1 bucket ($22.43) has clean Stripe evidence of already
+> being paid and should be **excluded**, and 2 buckets ($42.77 combined) are
+> genuinely ambiguous pending a human call. This doc's filter chain and
+> corrected write-path design (§3a) are still accurate; only the dollar
+> totals are stale. **Do not execute a real payout off the $276.59 figure in
+> this doc — read the crosscheck doc first.**
+
 ## Summary
 
 | Field | Value |
@@ -70,6 +82,21 @@ Transfer settles, for T4A/audit history.
 This applies identically to Group A and Group B — the group split matters
 for figuring out *whether the ride is imported yet*, not for *how the driver
 gets paid*, which is the same mechanism either way.
+
+> **Correction (flagged by money-audit review, 2026-08-17):** the phrase
+> "the same exclusion set `drop_legacy_offset_payouts()` already uses for
+> `legacy_import`/`stripe_sync`" above is imprecise — those two types are
+> **not** excluded via the same code path today. `legacy_import` is dropped
+> by `drop_legacy_offset_payouts()`/`is_legacy_offset_payout()`
+> (`backend/utils/legacy_rides.py`), which removes it from **both**
+> `total_payouts` and `pending_payouts`. `stripe_sync` is excluded only via
+> an inline `payout_type != "stripe_sync"` filter inside `total_payouts`
+> (`routes/drivers/earnings.py`), which does **not** exclude it from
+> `pending_payouts`. The write-path PR that eventually builds
+> `legacy_outstanding_correction` must pick one of these two mechanisms
+> explicitly (most likely: extend `is_legacy_offset_payout()` to cover it,
+> matching `legacy_import`'s stronger exclusion) rather than assuming "same
+> as both" — they are not currently the same as each other.
 
 ## 3b. Current state → future state, all 20 driver buckets (verified)
 

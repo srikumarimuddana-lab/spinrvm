@@ -100,5 +100,5 @@ No Stripe charge, wallet delta, or ride-state transition is created or touched b
 
 ## 10. What was NOT verified
 
-- Whether any future feature that reads `old_payout_gst_amount` will interpret it correctly — no consumer exists yet, so this is unverified by construction; whoever builds one should re-read this doc for the field's meaning (payout-side GST, not commission-side GST — see `2026-08-15-legacy-import-gst-preservation.md`).
+- Whether any future feature that reads `old_payout_gst_amount` will interpret it correctly — no consumer exists yet, so this is unverified by construction; whoever builds one should re-read this doc for the field's meaning (payout-side GST, not commission-side GST — see `2026-08-15-legacy-import-gst-preservation.md`). **Also note (flagged by money-audit review, 2026-08-17):** the value is stored as a bare JSON number inside `legacy_import_metadata` (JSONB), shown as `0.73` in the before/after snippet above — reading it back through `supabase-py` deserializes it as a Python `float`, not `Decimal`. Any future consumer must wrap it as `to_decimal(str(value))` before doing money arithmetic with it, never use the raw deserialized value.
 - The D1 tax-treatment decision remains open; this write does not resolve or presuppose an answer to it.

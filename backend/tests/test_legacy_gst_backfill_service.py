@@ -11,6 +11,7 @@ contract.
 from __future__ import annotations
 
 import csv
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -69,10 +70,13 @@ def test_resolvable_row_gets_the_real_source_value(tmp_path, monkeypatch):
     assert plan.stats["candidate_rides_missing_field"] == 1
     assert plan.stats["resolvable_against_source"] == 1
     assert plan.stats["unresolvable_no_source_match"] == 0
-    assert plan.stats["sum_old_payout_gst_amount"] == pytest.approx(4.50)
+    # Exact Decimal equality, not pytest.approx — plan.stats now carries the
+    # real Decimal (build_backfill_plan no longer coerces to float), so
+    # there's no binary-float drift left to tolerate.
+    assert plan.stats["sum_old_payout_gst_amount"] == Decimal("4.50")
     (row,) = plan.rows
     assert row.ride_id == "ride-1"
-    assert row.old_payout_gst_amount == pytest.approx(4.50)
+    assert row.old_payout_gst_amount == Decimal("4.50")
     assert row.found_in_source is True
 
 

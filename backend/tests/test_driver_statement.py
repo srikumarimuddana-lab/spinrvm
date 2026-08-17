@@ -73,16 +73,49 @@ def _tables(rides=(), cancelled=(), bonuses=(), payouts=(), claims=()):
 @pytest.mark.asyncio
 async def test_build_statement_aggregates_all_income_sources():
     rides = [
-        {"id": "r1", "driver_earnings": "20.00", "tip_amount": "2.00", "tax_amount": "1.10", "distance_km": 5.5, "duration_minutes": 12},
-        {"id": "r2", "driver_earnings": "35.50", "tip_amount": 0, "tax_amount": 0, "distance_km": 10.0, "duration_minutes": 20},
+        {
+            "id": "r1",
+            "driver_earnings": "20.00",
+            "tip_amount": "2.00",
+            "tax_amount": "1.10",
+            "distance_km": 5.5,
+            "duration_minutes": 12,
+        },
+        {
+            "id": "r2",
+            "driver_earnings": "35.50",
+            "tip_amount": 0,
+            "tax_amount": 0,
+            "distance_km": 10.0,
+            "duration_minutes": 20,
+        },
     ]
     cancelled = [{"cancellation_fee_driver": "5.00"}]
     bonuses = [{"amount": "10.00", "kind": "quest"}]
     claims = [{"ride_id": "r1", "bonus_amount": "3.25"}]
     payouts = [
-        {"created_at": "2026-07-21T10:00:00+00:00", "amount": 40.00, "fee": 0, "status": "completed", "payout_type": "standard"},
-        {"created_at": "2026-07-23T10:00:00+00:00", "amount": 20.00, "fee": 0.50, "net_amount": 19.50, "status": "completed", "payout_type": "instant"},
-        {"created_at": "2026-07-24T10:00:00+00:00", "amount": 99.00, "fee": 0, "status": "reversed", "payout_type": "standard"},
+        {
+            "created_at": "2026-07-21T10:00:00+00:00",
+            "amount": 40.00,
+            "fee": 0,
+            "status": "completed",
+            "payout_type": "standard",
+        },
+        {
+            "created_at": "2026-07-23T10:00:00+00:00",
+            "amount": 20.00,
+            "fee": 0.50,
+            "net_amount": 19.50,
+            "status": "completed",
+            "payout_type": "instant",
+        },
+        {
+            "created_at": "2026-07-24T10:00:00+00:00",
+            "amount": 99.00,
+            "fee": 0,
+            "status": "reversed",
+            "payout_type": "standard",
+        },
     ]
     with patch.object(stmt, "db_supabase") as db:
         db.get_rows = _tables(rides, cancelled, bonuses, payouts, claims)
@@ -117,7 +150,9 @@ async def test_build_statement_tax_snapshot_fallback():
             "id": "r1",
             "driver_earnings": "10.00",
             "tax_amount": 0,
-            "fare_breakdown_snapshot": {"lines": [{"type": "gst", "amount": "0.50"}, {"type": "pst", "amount": "0.60"}]},
+            "fare_breakdown_snapshot": {
+                "lines": [{"type": "gst", "amount": "0.50"}, {"type": "pst", "amount": "0.60"}]
+            },
         }
     ]
     with patch.object(stmt, "db_supabase") as db:
@@ -158,7 +193,16 @@ async def test_build_custom_statement_range_validation_and_label():
 async def test_build_statement_legacy_fare_component_fallback():
     """Rows predating driver_earnings fall back to fare components + tip —
     same rule as routes/drivers/_shared._ride_income."""
-    rides = [{"id": "r1", "driver_earnings": None, "base_fare": "5.00", "distance_fare": "3.00", "time_fare": "1.00", "tip_amount": "1.50"}]
+    rides = [
+        {
+            "id": "r1",
+            "driver_earnings": None,
+            "base_fare": "5.00",
+            "distance_fare": "3.00",
+            "time_fare": "1.00",
+            "tip_amount": "1.50",
+        }
+    ]
     with patch.object(stmt, "db_supabase") as db:
         db.get_rows = _tables(rides=rides)
         out = await stmt.build_statement({"id": "d1"}, "weekly", date(2026, 7, 20))
@@ -172,11 +216,38 @@ async def test_build_statement_splits_previous_app_payouts():
     previous-app is flagged so the PDF can explain the $0.00 earnings
     instead of leaving it beside a real paid-out figure."""
     payouts = [
-        {"created_at": "2026-06-07T10:00:00+00:00", "amount": 20.77, "fee": 0, "status": "completed", "payout_type": "stripe_sync"},
-        {"created_at": "2026-06-11T10:00:00+00:00", "amount": 10.00, "fee": 0, "status": "completed", "payout_type": "stripe_sync"},
-        {"created_at": "2026-06-15T10:00:00+00:00", "amount": 12.00, "fee": 0, "status": "completed", "payout_type": "standard"},
+        {
+            "created_at": "2026-06-07T10:00:00+00:00",
+            "amount": 20.77,
+            "fee": 0,
+            "status": "completed",
+            "payout_type": "stripe_sync",
+        },
+        {
+            "created_at": "2026-06-11T10:00:00+00:00",
+            "amount": 10.00,
+            "fee": 0,
+            "status": "completed",
+            "payout_type": "stripe_sync",
+        },
+        {
+            "created_at": "2026-06-15T10:00:00+00:00",
+            "amount": 12.00,
+            "fee": 0,
+            "status": "completed",
+            "payout_type": "standard",
+        },
     ]
-    rides = [{"id": "r1", "driver_earnings": "12.00", "tip_amount": 0, "tax_amount": 0, "distance_km": 1, "duration_minutes": 5}]
+    rides = [
+        {
+            "id": "r1",
+            "driver_earnings": "12.00",
+            "tip_amount": 0,
+            "tax_amount": 0,
+            "distance_km": 1,
+            "duration_minutes": 5,
+        }
+    ]
     with patch.object(stmt, "db_supabase") as db:
         db.get_rows = _tables(rides, (), (), payouts, ())
         out = await stmt.build_statement({"id": "d1"}, "monthly", date(2026, 6, 1))
@@ -193,8 +264,20 @@ async def test_build_statement_flags_previous_app_only_period():
     """The June-2026 production case: two previous-app transfers, zero Spinr
     activity — '$0.00 earned · $30.77 paid out' with no explanation."""
     payouts = [
-        {"created_at": "2026-06-07T10:00:00+00:00", "amount": 20.77, "fee": 0, "status": "completed", "payout_type": "stripe_sync"},
-        {"created_at": "2026-06-11T10:00:00+00:00", "amount": 10.00, "fee": 0, "status": "completed", "payout_type": "stripe_sync"},
+        {
+            "created_at": "2026-06-07T10:00:00+00:00",
+            "amount": 20.77,
+            "fee": 0,
+            "status": "completed",
+            "payout_type": "stripe_sync",
+        },
+        {
+            "created_at": "2026-06-11T10:00:00+00:00",
+            "amount": 10.00,
+            "fee": 0,
+            "status": "completed",
+            "payout_type": "stripe_sync",
+        },
     ]
     with patch.object(stmt, "db_supabase") as db:
         db.get_rows = _tables((), (), (), payouts, ())
@@ -204,3 +287,52 @@ async def test_build_statement_flags_previous_app_only_period():
     assert out["payouts_previous_app_total"] == "30.77"
     assert out["payouts_spinr_total"] == "0.00"
     assert out["previous_app_only"] is True
+
+
+@pytest.mark.asyncio
+async def test_build_statement_settled_correction_counts_as_previous_app():
+    """A completed legacy_outstanding_correction (2026-08-17 write path) is
+    real settled money — grouped with stripe_sync in payouts_previous_app_total,
+    with its own distinct label."""
+    payouts = [
+        {
+            "created_at": "2026-06-07T10:00:00+00:00",
+            "amount": 12.00,
+            "fee": 0,
+            "status": "completed",
+            "payout_type": "legacy_outstanding_correction",
+        },
+    ]
+    with patch.object(stmt, "db_supabase") as db:
+        db.get_rows = _tables((), (), (), payouts, ())
+        out = await stmt.build_statement({"id": "d1"}, "monthly", date(2026, 6, 1))
+
+    assert out["payouts_total"] == "12.00"
+    assert out["payouts_previous_app_total"] == "12.00"
+    assert out["payouts"][0]["label"] == "Previous app payout (outstanding correction)"
+
+
+@pytest.mark.asyncio
+async def test_build_statement_unsettled_correction_excluded_from_totals():
+    """A correction row still awaiting its Stripe Transfer must not appear in
+    any total — the money has not moved yet — but stays visible in the raw
+    payouts list with its real status, not silently dropped."""
+    payouts = [
+        {
+            "created_at": "2026-06-07T10:00:00+00:00",
+            "amount": 12.00,
+            "fee": 0,
+            "status": "awaiting_stripe_onboarding",
+            "payout_type": "legacy_outstanding_correction",
+        },
+    ]
+    with patch.object(stmt, "db_supabase") as db:
+        db.get_rows = _tables((), (), (), payouts, ())
+        out = await stmt.build_statement({"id": "d1"}, "monthly", date(2026, 6, 1))
+
+    assert out["payouts_total"] == "0.00"
+    assert out["payouts_previous_app_total"] == "0.00"
+    assert out["payouts_spinr_total"] == "0.00"
+    # Still listed, real status visible — not silently dropped.
+    assert len(out["payouts"]) == 1
+    assert out["payouts"][0]["status"] == "awaiting_stripe_onboarding"

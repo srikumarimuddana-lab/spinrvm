@@ -86,6 +86,41 @@ class TestBalanceAlwaysReportsPreviousAppMoney:
         assert self._balance()["previous_app_paid_total"] == "200.00"
 
 
+class TestBalanceIncludesCompletedLegacyOutstandingCorrections:
+    """legacy_outstanding_correction rows (2026-08-17 write path) are real
+    previous-app money once — and only once — a real Stripe Transfer has
+    actually settled (status='completed'). Earlier statuses are a promise,
+    not yet money in the driver's account, and must not inflate
+    previous_app_paid_total prematurely."""
+
+    def _balance(self, payouts):
+        from backend.routes import drivers as drv
+
+        def rows(table, filters=None, **kw):
+            if table == "drivers":
+                return [{"id": "drv-1", "user_id": "usr-1"}]
+            if table == "payouts":
+                return payouts
+            return []
+
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=rows)):
+            return asyncio.run(drv.get_driver_balance(current_user=DRIVER_USER))
+
+    def test_completed_correction_counts_alongside_stripe_sync(self):
+        payouts = [
+            {"amount": 100.0, "status": "completed", "payout_type": "stripe_sync"},
+            {"amount": 50.0, "status": "completed", "payout_type": "legacy_outstanding_correction"},
+        ]
+        assert self._balance(payouts)["previous_app_paid_total"] == "150.00"
+
+    def test_not_yet_transferred_correction_does_not_count_yet(self):
+        payouts = [
+            {"amount": 50.0, "status": "ready_for_transfer", "payout_type": "legacy_outstanding_correction"},
+            {"amount": 30.0, "status": "awaiting_stripe_onboarding", "payout_type": "legacy_outstanding_correction"},
+        ]
+        assert self._balance(payouts)["previous_app_paid_total"] == "0.00"
+
+
 class TestStatementFlagAlwaysTrue:
     """build_statement always stamps previous_app_visible=True; the PDF
     renderer (utils/driver_statement_pdf.py) already branches correctly on
@@ -96,7 +131,13 @@ class TestStatementFlagAlwaysTrue:
         from backend.utils import driver_statement as stmt
 
         payouts = [
-            {"created_at": "2026-06-07T10:00:00+00:00", "amount": 20.77, "fee": 0, "status": "completed", "payout_type": "stripe_sync"},
+            {
+                "created_at": "2026-06-07T10:00:00+00:00",
+                "amount": 20.77,
+                "fee": 0,
+                "status": "completed",
+                "payout_type": "stripe_sync",
+            },
         ]
 
         async def _get_rows(table, filters=None, **kw):

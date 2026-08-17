@@ -2786,11 +2786,12 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
     # Two DIFFERENT questions, and conflating them is what made "Total paid
     # out" read $0.00 for migrated drivers right after a Stripe sync:
     #
-    #   "What has this driver been paid?"   -> HISTORY. Includes 'stripe_sync':
-    #       those rows mirror real Stripe Transfers, real money that really
-    #       left the platform to this driver. Reporting $0 paid when Stripe
-    #       shows thousands is simply wrong.
-    #   "What does Spinr still owe them?"   -> BALANCE. Excludes 'stripe_sync':
+    #   "What has this driver been paid?"   -> HISTORY. Includes 'stripe_sync'
+    #       and settled 'legacy_outstanding_correction': those rows mirror
+    #       real Stripe Transfers, real money that really left the platform
+    #       to this driver. Reporting $0 paid when Stripe shows thousands is
+    #       simply wrong.
+    #   "What does Spinr still owe them?"   -> BALANCE. Excludes both types:
     #       those transfers settled earnings from the OLD app which are not in
     #       this DB's rides, so counting them here would drive pending_balance
     #       to zero for every migrated driver.
@@ -2803,14 +2804,29 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
     # understated (recoverable), never overstated into a double payment.
     # ('legacy_import' offsets were dropped from `payouts` entirely above —
     # they are synthetic, never a real transfer.)
+    #
+    # 'legacy_outstanding_correction' (2026-08-17 write path,
+    # services/legacy_payout_correction_service.py) is the one exception to
+    # "an unknown/new status defaults to money-out": unlike every other type,
+    # its 'awaiting_stripe_onboarding'/'ready_for_transfer' statuses are a
+    # RECORDED DEBT, not a transfer that already happened — only 'completed'
+    # is real money out, for either question above.
     _not_money_out = {"reversed", "failed"}
+    _CORRECTION_TYPE = "legacy_outstanding_correction"
 
     def _is_money_out(p: dict) -> bool:
-        return str(p.get("status") or "").lower() not in _not_money_out
+        status = str(p.get("status") or "").lower()
+        if p.get("payout_type") == _CORRECTION_TYPE:
+            return status == "completed"
+        return status not in _not_money_out
 
     gross_money_out = sum((_dec(p.get("amount")) for p in payouts if _is_money_out(p)), Decimal("0"))
     balance_money_out = sum(
-        (_dec(p.get("amount")) for p in payouts if _is_money_out(p) and p.get("payout_type") != "stripe_sync"),
+        (
+            _dec(p.get("amount"))
+            for p in payouts
+            if _is_money_out(p) and p.get("payout_type") not in ("stripe_sync", _CORRECTION_TYPE)
+        ),
         Decimal("0"),
     )
     # stripe_sync rows are always 'completed', so they never land in flight.
@@ -2821,13 +2837,14 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
     on_hold = _sum_by_status("failed")
 
     # The slice of total_paid_out that came from synced Stripe transfer
-    # history — an "of which" breakdown, NOT a separate bucket. Shown so an
-    # operator can tell previous-app money from Spinr-era payouts.
+    # history plus settled legacy-payout corrections — an "of which"
+    # breakdown, NOT a separate bucket. Shown so an operator can tell
+    # previous-app money from Spinr-era payouts.
     legacy_stripe_transfers = sum(
         (
             _dec(p.get("amount"))
             for p in payouts
-            if p.get("payout_type") == "stripe_sync" and p.get("status") == "completed"
+            if p.get("payout_type") in ("stripe_sync", _CORRECTION_TYPE) and p.get("status") == "completed"
         ),
         Decimal("0"),
     )

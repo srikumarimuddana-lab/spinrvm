@@ -5581,6 +5581,44 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   PI-less close updates only its own row; every closed dispute has matching
   `financial_events` rows for the debit and the fee.
 
+### B28. `payouts.amount` is a legacy `FLOAT` column — every writer must `float()` a `Decimal` at the DB boundary
+
+- **Source:** `spinr-money-auditor` review of the 2026-08-17 legacy-payout-
+  correction write path (`docs/change-log/2026-08-17-legacy-payout-
+  correction-writepath.md`) — flagged `legacy_payout_correction_service.py`'s
+  `commit_write_plan` writing `"amount": float(r.amount)`, a literal
+  `float()` on a money value going into a DB write, which CLAUDE.md's
+  Decimal-only rule normally forbids outright.
+- **Not a new violation** — confirmed via `backend/migrations/159_payouts_
+  overview_aggregates_fn.sql`, `162_payout_stats_fn.sql`, and
+  `303_..._ytd_exclude_legacy.sql` (all comment `payouts.amount is FLOAT`)
+  that this is a real, pre-existing legacy column type, not a mistake
+  introduced by any of these callers. Every other `payouts` writer in this
+  repo already does the same thing at the same boundary
+  (`services/stripe_payout_sync_service.py:407`,
+  `services/booking_import_service.py`, `routes/drivers/payouts.py`) — all
+  of them keep every arithmetic step upstream as `Decimal` and only convert
+  to `float` at the literal moment of serializing the insert payload, which
+  is the correct workaround for a `FLOAT` column, not a shortcut around the
+  Decimal rule.
+- **Status:** open, no owner assigned. The actual fix is a migration —
+  `ALTER TABLE payouts ALTER COLUMN amount TYPE NUMERIC(10,2)` — plus
+  auditing every one of the ~6 writers above to drop their `float()` cast
+  once the column itself is exact. Low priority: no observed cent-level
+  drift in production to date (payout amounts are small, few-decimal-place
+  CAD figures well within `float`'s exact-representation range in practice),
+  but it's a standing landmine for a writer that accumulates many small
+  amounts before insert.
+- **Files:** `backend/migrations/` (new `NN_payouts_amount_numeric.sql`),
+  `backend/services/legacy_payout_correction_service.py`,
+  `backend/services/stripe_payout_sync_service.py`,
+  `backend/services/booking_import_service.py`,
+  `backend/routes/drivers/payouts.py`.
+- **Acceptance:** `payouts.amount` is `NUMERIC(10,2)`; every writer passes a
+  `Decimal`/string, not `float()`, into the insert/update payload; a
+  regression test asserting no writer calls `float()` on a `payouts.amount`
+  value.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly

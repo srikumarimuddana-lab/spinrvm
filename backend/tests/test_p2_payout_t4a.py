@@ -347,7 +347,8 @@ class TestGetT4ASummary:
             if table == "drivers":
                 return [driver]
             if table == "payouts":
-                assert query["payout_type"] == "stripe_sync"
+                assert query["payout_type"] == {"$in": ["stripe_sync", "legacy_outstanding_correction"]}
+                assert query["status"] == "completed"
                 assert query["created_at"]["$gte"].startswith("2025-01-01")
                 return [{"amount": 500.10, "payout_type": "stripe_sync"}]
             return []
@@ -362,6 +363,31 @@ class TestGetT4ASummary:
         assert result["net_earnings"] == "520.10"
         assert result["legacy_synced_earnings"] == "500.10"
         assert result["total_trips"] == 1  # synced payouts are not trips
+
+    async def test_t4a_includes_settled_legacy_outstanding_correction(self):
+        """A settled (status='completed') legacy_outstanding_correction row
+        (2026-08-17 write path) reports the same as a stripe_sync row —
+        both are real legacy income actually paid through Stripe."""
+        from backend.routes.drivers import get_t4a_summary
+
+        driver = _driver_row()
+        rides = [_ride_row(20.00)]
+
+        async def _get_rows(table, query=None, **kwargs):
+            if table == "drivers":
+                return [driver]
+            if table == "payouts":
+                return [{"amount": 12.00, "payout_type": "legacy_outstanding_correction", "status": "completed"}]
+            return []
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rides_for_driver", AsyncMock(return_value=rides)),
+        ):
+            result = await get_t4a_summary(year=2025, current_user={"id": DRIVER_USER_ID})
+
+        assert result["total_earnings"] == "32.00"
+        assert result["legacy_synced_earnings"] == "12.00"
 
     async def test_t4a_excludes_previous_app_imported_rides(self):
         """Rides imported from the old app (utils/legacy_rides) are that app's

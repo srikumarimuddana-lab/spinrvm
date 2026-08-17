@@ -287,7 +287,13 @@ export default function AccountScreen() {
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Safety & Privacy</Text>
             <View style={styles.card}>
-              <MenuRow styles={styles} colors={colors} icon="shield-checkmark" iconColor="#EF4444" iconBg="rgba(239, 68, 68, 0.05)" label="Emergency Contacts" onPress={() => router.push('/emergency-contacts' as any)} />
+              {/* Safety Hub sits above the two rows it contains rather than
+                  replacing them: riders who already know where "Emergency
+                  Contacts" lives keep their path, and the hub gives everyone
+                  else one place to check their whole safety setup. */}
+              <MenuRow styles={styles} colors={colors} icon="shield-checkmark" iconColor="#EF4444" iconBg="rgba(239, 68, 68, 0.05)" label="Safety" onPress={() => router.push('/safety-hub' as any)} />
+              <View style={styles.cardDivider} />
+              <MenuRow styles={styles} colors={colors} icon="people" iconColor="#EF4444" iconBg="rgba(239, 68, 68, 0.05)" label="Emergency Contacts" onPress={() => router.push('/emergency-contacts' as any)} />
               <View style={styles.cardDivider} />
               <MenuRow styles={styles} colors={colors} icon="alert-circle" iconColor="#F59E0B" iconBg="rgba(245, 158, 11, 0.1)" label="Report a Safety Issue" onPress={() => router.push('/report-safety' as any)} />
               <View style={styles.cardDivider} />

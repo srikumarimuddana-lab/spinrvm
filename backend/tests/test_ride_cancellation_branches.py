@@ -151,13 +151,22 @@ async def test_preauth_release_failure_is_non_fatal():
 
         result = await cancel_ride_rider(request=req, ride_id=_RIDE_ID, reason="", current_user=_USER)
 
+    # Still non-fatal — that part of this test's purpose is unchanged. A Stripe
+    # failure is logged loudly for reconciliation but must not block the cancel.
     assert result["success"] is True
-    # The release attempt is best-effort: even though cancel_authorization
-    # raised, the ride is still marked auth_status="released" (the hold was
-    # attempted-released; a failed Stripe call is logged loudly for
-    # reconciliation but doesn't block the cancel or the attribution write).
+
+    # ...but the ride must NOT be marked auth_status="released".
+    #
+    # This assertion used to expect "released", reasoning that the hold had been
+    # "attempted-released". That was wrong, and actively harmful: the release
+    # FAILED, so the authorization is still open on the rider's card. Both
+    # orphaned_hold_reconciler and card_hold_release select on OPEN_AUTH_STATES
+    # ("authorized"/"fare_only"), so writing "released" removes the ride from the
+    # only sweepers that could ever find that hold — stranding the rider's funds
+    # until Stripe's ~7-day expiry, which is precisely what those sweepers exist
+    # to prevent. auth_status is a record of what happened, not of what we tried.
     _, attribution_payload = mock_supabase.update_ride.await_args_list[0].args
-    assert attribution_payload["auth_status"] == "released"
+    assert attribution_payload.get("auth_status") != "released"
 
 
 async def test_preauth_release_success_marks_auth_released():

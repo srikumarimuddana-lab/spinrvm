@@ -196,6 +196,7 @@ try:
     from ...services.ledger_service import record_event as record_ledger_event
     from ...services.ledger_service import to_cents as ledger_to_cents
     from ...services.payment_service import (
+        charge_late_tip,
         send_ride_receipt,
         settle_card,
         settle_corporate,
@@ -210,7 +211,13 @@ except ImportError:
     )
     from services.ledger_service import record_event as record_ledger_event  # type: ignore
     from services.ledger_service import to_cents as ledger_to_cents  # type: ignore
-    from services.payment_service import send_ride_receipt, settle_card, settle_corporate, settle_wallet  # type: ignore
+    from services.payment_service import (  # type: ignore
+        charge_late_tip,
+        send_ride_receipt,
+        settle_card,
+        settle_corporate,
+        settle_wallet,
+    )
     from utils.stripe_charge import (  # type: ignore
         authorize_ride,
         cancel_authorization,

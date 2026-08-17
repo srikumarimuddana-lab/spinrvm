@@ -198,13 +198,19 @@ class PaymentResult:
 # ── Ledger ───────────────────────────────────────────────────────────
 
 
-def _charge_event_metadata(ride: dict | None, tip_amount: Decimal | None) -> Dict[str, Any]:
+def _charge_event_metadata(
+    ride: dict | None, tip_amount: Decimal | None, *, source: str = "process_payment"
+) -> Dict[str, Any]:
     """Metadata for a stripe_charge ledger header.
 
     Shared by record_payment_event (legacy two-write path) and the atomic
-    settle RPC path so both write byte-identical metadata.
+    settle RPC path so both write byte-identical metadata. ``source`` defaults
+    to the original ride-settlement label; callers charging money OUTSIDE
+    settlement (e.g. a tip added after the ride is already paid — see
+    charge_late_tip) pass their own so the 7-year ledger doesn't mislabel a
+    tip-only charge as a fare settlement.
     """
-    meta: Dict[str, Any] = {"source": "process_payment"}
+    meta: Dict[str, Any] = {"source": source}
     if ride:
         fare = _round(_d(ride.get("total_fare", 0)))
         meta.update(
@@ -244,6 +250,7 @@ async def record_payment_event(
     *,
     ride: dict | None = None,
     tip_amount: Decimal | None = None,
+    source: str = "process_payment",
 ) -> None:
     """Append a stripe_charge row to the financial_events ledger.
 
@@ -258,7 +265,7 @@ async def record_payment_event(
     ledger_projection background loop derives them from the ride row once
     the ``ledger_double_entry_enabled`` app_settings flag is on.
     """
-    meta = _charge_event_metadata(ride, tip_amount)
+    meta = _charge_event_metadata(ride, tip_amount, source=source)
     # No legs= here by design: double-entry legs are derived asynchronously by
     # the ledger_projection loop (single-writer invariant — only the projection
     # writes financial_event_entries). It decomposes from the ride row AFTER
@@ -324,6 +331,108 @@ async def record_refund_event(
         ref=payment_intent_id,
         metadata=meta,
     )
+
+
+async def charge_late_tip(
+    ride: dict,
+    ride_id: str,
+    rider_id: str,
+    tip_amount: Decimal,
+) -> "PaymentResult":
+    """Charge a tip added to a ride whose fare was already settled — card only.
+
+    ``add_tip`` (routes/rides/payments.py) accepts a tip on any completed ride
+    with no time bound, by design (a rider tipping from ride history days
+    later, or an offline-queued tip replaying after the tip window closed —
+    see ``rider-app/store/rideStore.ts``'s offline action queue and
+    ``utils/driver_statement_job.py``'s late-tip grace window). Both land here
+    once ``ride.payment_status == 'paid'``. The booking-time hold, if any, was
+    already captured at settlement and Stripe forbids capturing it twice, so
+    this is always a fresh, tip-amount-only PaymentIntent — never a reuse of
+    the settlement PaymentIntent.
+
+    Closes the gap documented in
+    docs/proposals/2026-08-17-tip-capture-stripe-cost-minimization-strategy.md
+    (Finding 1): the caller MUST only persist tip_amount/driver_earnings when
+    ``result.success`` is True. Crediting the driver before the rider is
+    actually charged is exactly the bug this function exists to close.
+
+    Wallet / company_allowance rides are not handled here — the caller must
+    refuse those explicitly rather than call this function, since there is no
+    equivalent "charge the delta after the fact" debit path for those payment
+    methods yet.
+    """
+    rider_user = await db_supabase.get_user_by_id(rider_id)
+    stripe_customer_id = (rider_user or {}).get("stripe_customer_id")
+    payment_method_id = ride.get("payment_method_id") or (rider_user or {}).get("default_payment_method")
+
+    outcome = await charge_ride(
+        ride=ride,
+        total_amount=tip_amount,
+        rider_id=rider_id,
+        payment_method_id=payment_method_id,
+        stripe_customer_id=stripe_customer_id,
+    )
+
+    if outcome.status == "unconfigured":
+        # Same production-vs-dev split as _refuse_unconfigured_settlement:
+        # the Stripe key lives in app_settings (no startup fail-fast), so a
+        # blanked key in production must refuse rather than silently credit
+        # the driver for a tip that was never charged.
+        if app_config.ENV.lower() == "production":
+            logger.error(
+                "[PAYMENT] stripe_secret_key is EMPTY in production — refusing to charge "
+                "late tip for ride {} without a real charge.",
+                ride_id,
+            )
+            return PaymentResult(
+                success=False,
+                error_code="stripe_unconfigured",
+                error="Payment processing is temporarily unavailable. Please try again shortly.",
+                status_code=503,
+            )
+        logger.error("Stripe unconfigured (dev/test) — not charging late tip for ride {}", ride_id)
+        return PaymentResult(success=True, charged_amount=_money_str(tip_amount))
+
+    if outcome.status == "requires_action":
+        # Off-session confirm asked for SCA. There is no in-app 3DS challenge
+        # path at this call site either — mirrors the settlement gap already
+        # documented in docs/architecture/payments-rider-stripe.md (Known Gap
+        # 4). The rider must change card, same as a declined settlement.
+        return PaymentResult(
+            success=False,
+            error_code="authentication_required",
+            error="Your card needs to be re-verified before this tip can be charged. Please update your payment method.",
+            status_code=402,
+        )
+
+    if outcome.status != "succeeded":
+        logger.error(
+            "[PAYMENT] late tip charge failed for ride {} rider {} ({})",
+            ride_id,
+            rider_id,
+            outcome.error_message,
+        )
+        return PaymentResult(
+            success=False,
+            error_code="card_declined" if outcome.status == "declined" else "tip_charge_failed",
+            decline_code=outcome.decline_code,
+            error=outcome.error_message or "Your card was declined.",
+            status_code=402,
+            extra={"suggested_action": "change_card"},
+        )
+
+    amount_cents = ledger_service.to_cents(tip_amount)
+    await record_payment_event(
+        ride_id,
+        rider_id,
+        amount_cents,
+        outcome.payment_intent_id,
+        ride=ride,
+        tip_amount=tip_amount,
+        source="late_tip",
+    )
+    return PaymentResult(success=True, charged_amount=_money_str(tip_amount))
 
 
 # ── Wallet settlement ───────────────────────────────────────────────

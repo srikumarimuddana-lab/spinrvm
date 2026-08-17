@@ -3501,16 +3501,81 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   accounts, not real regulatory-covered drivers — but the script itself
   would do the same thing to a real driver's insurance-period history if
   reused for an actual DSAR request.
-- **Status:** open. **Recommended fix:** either retire this ad-hoc script
-  in favor of always routing account deletion through
-  `purge_pii_retention()`'s Step H (which already has the correct
-  eligibility guard), or if a faster manual path is genuinely needed for
-  test-data cleanup, fork it into a clearly-named test-only variant that
-  hard-fails (not just skips) on any account with `driver_insurance_periods`
-  rows, so it can never silently do this against a real driver.
-- **What was NOT verified:** whether this script has ever been run against
-  an account that *did* have real `driver_insurance_periods` history —
-  A34 only confirmed the 2026-08-14 runs were test accounts.
+- [x] **Status:** fixed (2026-08-17). Two-part fix, both reviewed
+  (`spinr-migration-reviewer` + `spinr-regulatory-compliance-checker`,
+  verdicts: safe to merge / adequate partial fix — see
+  `docs/change-log/2026-08-17-a35-retention-guard-monitor.md`):
+  1. **Detection**: `check_disabled_guard_triggers()` (migration 317, read-only,
+     `service_role`-only) + a new 6-hourly background loop
+     (`backend/utils/retention_guard_monitor.py`) that alerts (CRITICAL log +
+     Sentry `fatal` + one `audit_logs` row) if any `%_no_mutate`/`%_no_delete`
+     guard trigger (plus the named legacy exception `audit_logs_no_update`) is
+     found disabled. Never auto-remediates. Wired into both the spawn list
+     and the loop watchdog's tracked-name list from day one.
+  2. **Sanctioned replacement**: `backend/services/test_account_cleanup_service.py`
+     — dry-run-only plan builder (no delete path built), buckets every
+     phone-matched account into `safe_to_delete` / `blocked_regulated_data_present`
+     using Step H's eligibility guard **plus** a check Step H itself is
+     missing (see **A38** below).
+  - **Honestly-stated, NOT closed by this fix**: the detection loop is a
+    point-in-time poll — it cannot see a disable→mutate→re-enable cycle
+    completed within one session (the actual shape of the 2026-08-14
+    incident), at any polling cadence. Closing that needs a synchronous
+    `ddl_command_end` event trigger, deliberately **not** built in this
+    change (database-wide blast radius on every `ALTER TABLE` statement,
+    untestable against live Postgres from this session) — spun off as
+    **A37**.
+  - **What was NOT verified:** whether this script has ever been run against
+    an account that *did* have real `driver_insurance_periods` history —
+    A34 only confirmed the 2026-08-14 runs were test accounts. Migration 317
+    itself has **not been applied to production** in this session (repo
+    convention is `scripts/migrate.py`, not ad-hoc application) — until it
+    is, the new loop logs an RPC-not-found error every 6h (never a false
+    positive/negative, verified by test) rather than actually detecting
+    anything.
+
+### A37. Real-time DDL detection for regulatory guard triggers (event trigger) — open, deliberately deferred from A35
+- **Source:** surfaced by `spinr-regulatory-compliance-checker`'s review of
+  the A35 fix (2026-08-17) — see
+  `docs/change-log/2026-08-17-a35-retention-guard-monitor.md`.
+- **Issue:** A35's fix polls trigger state every 6h. Polling, at any
+  cadence, cannot observe a disable → mutate/delete → re-enable cycle
+  completed *within* a single `psql`/dashboard session — exactly the shape
+  the 2026-08-14 incident actually had. The only mechanism that closes this
+  is synchronous: a `CREATE EVENT TRIGGER ... ON ddl_command_end` that
+  writes an append-only row the moment `ALTER TABLE ... {DIS,EN}ABLE
+  TRIGGER` fires on a regulated table, inspecting
+  `pg_event_trigger_ddl_commands()` inside the trigger function to filter to
+  our guarded tables.
+- **Why not built alongside A35:** an event trigger fires database-wide for
+  *every* `ALTER TABLE` statement in the project, not just the guarded ones
+  — a bug in its body (a raised exception, an unhandled edge case) risks
+  breaking every future migration repo-wide, on a live-tested production
+  system, with no way to test the function against a real Postgres instance
+  from this session first. Per CLAUDE.md's "escalate, don't silently ship,
+  when in doubt" rule — this needs a deliberate, tested, separately-reviewed
+  PR, not a bundled addition to a same-day fix.
+- **Status:** open, no owner assigned.
+
+### A38. `purge_pii_retention()` Step H never checks `rides.driver_id` for a driver account
+- **Source:** surfaced by `spinr-regulatory-compliance-checker`'s review of
+  the A35 fix (2026-08-17) — the new `test_account_cleanup_service.py`
+  deliberately added a `rides.driver_id` check that Step H itself lacks
+  (see `backend/migrations/296_pipeda_30day_profile_scrub.sql`'s Step H
+  body: it checks `driver_insurance_periods`/`payouts`/`bank_accounts` for a
+  driver account, and `rides.rider_id` for any account, but never
+  `rides.driver_id`).
+- **Issue:** a driver account with completed ride history but, for some
+  reason, no `driver_insurance_periods`/`payouts`/`bank_accounts` rows would
+  currently pass Step H's own eligibility guard and be hard-deleted at the
+  7-year mark despite having ride history — the sanctioned DSAR process has
+  the same class of gap A35 found in the ad-hoc script, just narrower and
+  less likely to be hit.
+- **Status:** open, no owner assigned. **Not fixed as part of A35** — that
+  fix made its own replacement tool stricter than Step H rather than
+  attempting to also patch Step H's SQL, since Step H is money/regulatory-
+  adjacent production code that changes hard-delete behavior and deserves
+  its own dedicated review, not a drive-by edit inside an unrelated fix.
 
 ### A36. `financial_events` is 0 rows in production despite active use by 42 files
 - **Source:** surfaced while investigating A34 (2026-08-16), not itself

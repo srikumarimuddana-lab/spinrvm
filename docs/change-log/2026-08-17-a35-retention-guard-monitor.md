@@ -72,5 +72,17 @@ After: any future disable of a `%_no_mutate`/`%_no_delete` trigger is caught wit
 ## 10. What was NOT verified
 
 - Whether the migration, once applied, correctly excludes every legitimate non-guard trigger repo-wide via the `%_no_mutate`/`%_no_delete` name pattern — reasoned from the existing trigger names found via grep (`driver_insurance_periods_no_mutate`, `financial_events_no_mutate`, `audit_logs_no_delete`, `audit_logs_no_mutate`, `disputes_no_delete`, `driver_period_distances_no_mutate`, `compliance_export_events_no_mutate`), not confirmed against a live `pg_trigger` listing.
-- Whether `tgenabled` can legitimately be a non-`'O'` value for a reason unrelated to a security bypass (e.g. `'R'`/replica-only or `'A'`/always triggers set intentionally) for any of these specific tables — not independently confirmed; flagged to the migration reviewer.
 - The test_account_cleanup_service's actual delete-execution path — does not exist, by design, in this change.
+
+## 11. Review findings — verdicts and what was applied
+
+**`spinr-migration-reviewer`: safe to merge**, with two non-blocking notes, both applied before this section was written:
+1. `tgenabled <> 'O'` would false-positive-alert on `'A'` (`ENABLE ALWAYS` — *more* protective than baseline, not a bypass). → Narrowed to `tgenabled = 'D'` specifically, with the reasoning documented in the migration's top comment.
+2. The naming-convention scan misses one pre-existing legacy trigger, `audit_logs_no_update` (migration 51, predates the naming convention) — currently harmless because a redundant, newer trigger (`audit_logs_no_mutate`, migration 57) also blocks UPDATE, but the scan's own claim to be exhaustive wasn't accurate. → Added `audit_logs_no_update` as an explicitly named exception in the `WHERE` clause and documented why.
+
+**`spinr-regulatory-compliance-checker`: adequate partial fix**, with three findings:
+1. **The detection loop cannot catch a disable→act→re-enable cycle completed within one session** (the actual shape of the 2026-08-14 incident) — polling, at any cadence, only observes state at check time. A real fix needs a synchronous `ddl_command_end` event trigger. → Did **not** build the event trigger in this change (database-wide blast radius on every future `ALTER TABLE`, untestable against live Postgres from this session — see CLAUDE.md's "escalate, don't silently ship" rule). Instead: corrected both the migration's and the loop's docstrings to state this limitation plainly rather than imply it's solved, and opened **`ACTION_ITEMS.md` A37** as a dedicated, deliberately-deferred follow-up with the reviewer's own proposed design.
+2. **`test_account_cleanup_service.py` claimed an "exact" match to Step H's eligibility guard; it's actually a superset** — it added a `rides.driver_id` check that Step H itself does not have. → Corrected the module and function docstrings to state this precisely (superset, not exact match), and opened **`ACTION_ITEMS.md` A38** for the latent gap this reveals in Step H itself (not fixed here — Step H is money/regulatory-adjacent production code and deserves its own dedicated review, not a drive-by edit inside this fix).
+3. **`print_report()` prints unmasked phone numbers** — acceptable for its current CLI-only, operator-supplied-the-numbers usage (not a log/Sentry/analytics violation as currently used), but a real risk if ever automated. → Added an explicit docstring warning that any future caller piping this into a log aggregator, CI artifact, or webhook needs its own PIPEDA review first.
+
+Re-verified after applying all of the above: `pytest` still 15/15, `ruff check`/`format --check` still clean.

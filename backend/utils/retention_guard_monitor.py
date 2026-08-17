@@ -15,9 +15,7 @@ regulated history if reused carelessly.
 TRIGGER` is a DDL privilege exercised outside any request path this backend
 controls — no `BEFORE INSERT/UPDATE/DELETE` trigger, no RLS policy, no
 Python guard clause can intercept a direct database session. The only thing
-code *can* do is detect it, loudly, on a short cadence, so a disabled guard
-is caught the same day rather than discovered by the next
-`postgres_logs`-can't-see-DML forensic investigation.
+code *can* do is detect it, loudly.
 
 This loop is deliberately ALERT-ONLY — pure detection, zero mutation. It
 calls the read-only ``check_disabled_guard_triggers()`` RPC (migration 317,
@@ -28,8 +26,31 @@ the repo's append-only-guard naming convention — ``%_no_mutate`` /
 CLAUDE.md's Observability Conventions) plus a CRITICAL log line and a Sentry
 capture so on-call sees it immediately, not from a routine daily digest.
 
-Cadence: every 6 hours — tight enough that a disabled guard is caught the
-same business day, loose enough not to be meaningful load on `pg_trigger`.
+**KNOWN LIMITATION, stated plainly rather than implied away**: this is a
+point-in-time poll of trigger *state*, not an event-based audit of trigger
+*changes*. It can only catch a guard left disabled across a check boundary —
+e.g. forgotten re-enabled after a manual migration. It structurally cannot
+catch a disable → mutate/delete → re-enable cycle completed within a single
+`psql`/dashboard session, which is the exact shape of the incident that
+motivated this fix (per the 2026-08-16 investigation, both real runs were a
+short session, not a guard left off for hours). No polling cadence closes
+that gap — only a synchronous `ddl_command_end` event trigger would (tracked
+as `ACTION_ITEMS.md` A37, deliberately not built alongside this change: an
+event trigger fires database-wide for every `ALTER TABLE`, so a mistake in
+its body risks breaking unrelated migrations repo-wide, and this session has
+no way to test one against a live Postgres instance before it would ship to
+a live-tested production system). What this loop *does* reliably close: a
+guard trigger disabled and left off (intentionally or by mistake) is caught
+within one cadence window, and — via the `test_account_cleanup_service.py`
+plan builder this same fix ships alongside — there is now a sanctioned,
+read-only-eligibility-checked alternative to hand-writing the kind of SQL
+that caused this in the first place, which addresses the *reason* someone
+reached for the ad-hoc script even though it doesn't detect a repeat in
+real time.
+
+Cadence: every 6 hours — a reasonable default for "guard left off," not
+chosen to imply it closes the disable-act-reenable gap (it can't, at any
+cadence — see above).
 
 Replay-safety (CLAUDE.md / ``spinr-background-loop`` skill): pure read + a
 loud side effect (log/Sentry/one audit row), same shape as

@@ -14,8 +14,11 @@ carelessly, the ad-hoc script would do the same thing to a real driver's
 regulated insurance history (`docs/audit/2026-08-16-legacy-ride-count-drop-investigation.md`,
 A35 in `ACTION_ITEMS.md`).
 
-This module exists so nobody needs to hand-write that SQL again. It mirrors
-Step H's exact eligibility guard for a phone-scoped batch:
+This module exists so nobody needs to hand-write that SQL again. Its
+eligibility guard is Step H's, plus one deliberate addition — it is a
+**superset** of Step H's guard, not an exact copy (stated precisely, not
+loosely, because getting this backwards would be the whole bug class A35 is
+about):
 
 - **Never disables a trigger. Never issues a DELETE.** Plan-only, same
   posture as every other legacy-migration tool in this repo
@@ -28,11 +31,17 @@ Step H's exact eligibility guard for a phone-scoped batch:
   omitted from the report; it's the headline of it. Nothing downstream of
   this module can accidentally treat a blocked account as safe — there is no
   code path that merges the two buckets.
-- **Same eligibility guard as the sanctioned process**: an account is
-  BLOCKED if it (or, for a rider, any ride it appears on; for a driver, the
-  driver row) has any row in `rides` (as rider_id or driver_id),
-  `driver_insurance_periods`, `payouts`, or `bank_accounts` — the exact four
-  tables Step H checks.
+- **Guard is Step H's four tables, PLUS a check Step H itself is missing**:
+  BLOCKED if the account has any row in `rides` as rider_id (matches Step H),
+  or — for a driver — `driver_insurance_periods`/`payouts`/`bank_accounts`
+  (matches Step H) *or* `rides` as driver_id (Step H does **not** check this;
+  see `backend/migrations/296_pipeda_30day_profile_scrub.sql`'s Step H body —
+  it only ever checks `rides.rider_id`, never `rides.driver_id`, for a driver
+  account). That gap in the sanctioned process itself is real and is tracked
+  separately, not fixed here (`ACTION_ITEMS.md` A37) — a driver with
+  completed rides but for some reason no insurance-period/payout/bank-account
+  rows would currently pass Step H's own guard. This module errs stricter on
+  purpose; it does not claim Step H is airtight.
 """
 
 from __future__ import annotations
@@ -82,10 +91,11 @@ async def _has_any_rows(table: str, filters: dict[str, Any]) -> bool:
 
 
 async def _blocking_reasons(user_id: str, driver_id: str | None) -> list[str]:
-    """Same eligibility guard as purge_pii_retention() Step H: rides (as
-    either party), driver_insurance_periods, payouts, bank_accounts. Checked
-    independently — every reason present is reported, not just the first
-    one found, so a human reviewing a blocked account sees the full picture."""
+    """Step H's guard (rides as rider, driver_insurance_periods, payouts,
+    bank_accounts) plus one addition Step H itself omits (rides as driver —
+    see module docstring). Checked independently — every reason present is
+    reported, not just the first one found, so a human reviewing a blocked
+    account sees the full picture."""
     reasons: list[str] = []
 
     if await _has_any_rows("rides", {"rider_id": user_id}):
@@ -143,7 +153,17 @@ async def build_cleanup_plan(phones: list[str]) -> CleanupPlan:
 
 def print_report(plan: CleanupPlan) -> str:
     """Human-readable dry-run report. No side effects. Blocked accounts are
-    printed first and can never be mistaken for safe ones."""
+    printed first and can never be mistaken for safe ones.
+
+    The returned report string includes each candidate's full normalized
+    phone digits (not masked to last-4) — this is a CLI-operator review
+    over a phone list the operator themselves supplied, not a log line.
+    Per CLAUDE.md's PIPEDA logging rules, this returned string must never
+    be piped into a log aggregator, CI artifact, or Slack/webhook
+    notification without masking to last-4 first. Any future caller that
+    automates this beyond an interactive CLI needs its own review for that
+    reason (also true of the eventual delete-execution step, if one is
+    ever built)."""
     lines: list[str] = []
     w = lines.append
     w("TEST-ACCOUNT CLEANUP — DRY RUN (no writes performed, no triggers touched)")

@@ -96,7 +96,7 @@ await db_supabase.insert_one(
 - [x] `pytest backend/tests/test_routes_webhooks_coverage.py backend/tests/test_webhooks_main.py backend/tests/test_webhooks_coverage_gap.py backend/tests/test_disputes_admin_coverage.py backend/tests/test_routes_disputes_coverage.py backend/tests/test_dispute_refund_cents.py -q --no-cov` — 186/186 pass.
 - [x] `ruff check` + `ruff format --check` on both touched Python files — clean.
 - [x] Blast-radius grep: `stripe_disputes` has exactly one reader/writer in the backend (`webhooks.py`) — confirmed isolated.
-- [x] `spinr-migration-reviewer` review requested for this migration + handler change before PR creation (Codex auto-review off per CLAUDE.md C7/C9).
+- [x] `spinr-migration-reviewer` review requested for this migration + handler change before PR creation (Codex auto-review off per CLAUDE.md C7/C9). Verdict: SAFE TO APPLY, no blockers. One nitpick fixed before merge: `if due_by_epoch:` would have treated a literal Unix epoch (`0` = 1970-01-01) as "absent" instead of parsing it — changed to `if due_by_epoch is not None:`, with a new regression test (`test_dispute_created_due_by_epoch_zero_is_parsed_not_treated_as_absent`) pinning it.
 - [ ] Not run against a real Stripe test-mode webhook or live Supabase — verified via unit tests with a hand-constructed `evidence_details.due_by` payload matching Stripe's documented shape (Unix seconds).
 
 ## What was NOT verified

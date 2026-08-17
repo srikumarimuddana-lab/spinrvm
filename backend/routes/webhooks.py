@@ -1119,7 +1119,7 @@ async def stripe_webhook(request: Request):
         # this NULL rather than guessing one.
         evidence_due_by = None
         due_by_epoch = (data_object.get("evidence_details") or {}).get("due_by")
-        if due_by_epoch:
+        if due_by_epoch is not None:
             try:
                 evidence_due_by = datetime.fromtimestamp(due_by_epoch, tz=timezone.utc).isoformat()
             except (TypeError, ValueError, OSError) as due_by_err:

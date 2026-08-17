@@ -312,6 +312,39 @@ class TestStripeWebhookDisputeCreated:
         row = insert_mock.await_args.args[1]
         assert row["evidence_due_by"] is None
 
+    def test_dispute_created_due_by_epoch_zero_is_parsed_not_treated_as_absent(self):
+        """Regression pin: `if due_by_epoch:` would wrongly treat a literal
+        Unix epoch (0 = 1970-01-01) as "absent" -- must use `is not None`."""
+        import stripe
+
+        from backend.routes import webhooks as wh
+
+        data_obj = {
+            "id": "dp_epoch_zero",
+            "payment_intent": "pi_epoch_zero",
+            "amount": 100,
+            "reason": "duplicate",
+            "status": "warning_needs_response",
+            "evidence_details": {"due_by": 0},
+        }
+        event_obj = _event_obj("charge.dispute.created", data_obj, "evt_epoch_zero")
+        insert_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", _settings_fn()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.webhooks.db_supabase.insert_one", insert_mock),
+            patch("backend.socket_manager.manager.broadcast_to_admins", AsyncMock()),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=_mock_req()))
+
+        assert result["received"] is True
+        row = insert_mock.await_args.args[1]
+        assert row["evidence_due_by"] == "1970-01-01T00:00:00+00:00"
+
     def test_dispute_created_malformed_due_by_logged_and_left_null(self):
         """A due_by that fails datetime conversion must not 500 the webhook
         (CLAUDE.md: never let a defensive path silently swallow -- log it)."""

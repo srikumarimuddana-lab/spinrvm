@@ -9722,6 +9722,61 @@ how much they de-risk a public launch._
   patched version, close out both #3718 and this item together, bump the
   dependency, and confirm `G4b` goes green on both apps.
 
+### C31. `privacySettingsToggles.test.tsx` leaked an unflushed/unmounted renderer, causing an intermittent `rider-app-test` full-suite failure in an unrelated file
+
+- [x] **Status:** closed 2026-08-17, filed and fixed same session while
+  investigating a `rider-app-test` CI failure on PR #4102 that showed as
+  `verifyEmailScreen.test.tsx` exceeding its 5000ms timeout.
+- **Issue/gap:** `renderScreen()` in `rider-app/__tests__/privacySettingsToggles.test.tsx`
+  rendered `PrivacySettingsScreen` synchronously (`act(() => {...})`, no
+  await) and had **no `afterEach` unmount at all**. The screen's own mount
+  effect fires `api.get('/marketing/preferences').then(...)` (three
+  `setState` calls); since the test never awaited that promise or
+  unmounted the renderer, the resolution could still be pending — with its
+  `active` cleanup flag never flipped — when Jest moved past that test
+  file entirely. Reproduced only under a full-suite run
+  (`npx jest --silent`, 61 files together), never in single-file isolation:
+  `ReferenceError: You are trying to \`import\` a file after the Jest
+  environment has been torn down. From
+  __tests__/privacySettingsToggles.test.tsx.` This corrupted the shared
+  Jest worker process for whatever ran next in it, manifesting as an
+  unrelated timeout in `verifyEmailScreen.test.tsx` (a well-behaved file
+  that already tracks/flushes/unmounts correctly) rather than a failure
+  attributed to the actual leaking file — hence "rider-app-test failing
+  on verifyEmailScreen" reading as an unrelated flake until traced back.
+- **Why it matters:** an intermittent, misattributed CI failure that looks
+  unrelated to any given PR's diff erodes trust in `rider-app-test` and
+  invites exactly the "known flake, ignore it" reflex CLAUDE.md's PR
+  review guidance warns against — except this one was a real, fixable bug,
+  not a false positive.
+- **Fix:** `privacySettingsToggles.test.tsx`'s `renderScreen()` now mirrors
+  `verifyEmailScreen.test.tsx`'s established pattern exactly — async,
+  double `flush()` (one macrotask hop is not enough to drain the API
+  client wrapper's extra microtask layer, matching why the reference file
+  also flushes twice) inside `act`, plus a tracked `mountedRenderer` +
+  `afterEach` unmount so the mount effect's promise resolves and settles
+  before the test (and file) finishes. Zero production code touched —
+  test-file-only change, no behavior change to `privacy-settings.tsx`
+  itself.
+- **Verification:** `npx jest __tests__/privacySettingsToggles.test.tsx` →
+  4 passed. Full suite (`npx jest --silent`) run 3 times consecutively →
+  61 suites / 514 tests passed each time, with the prior
+  `ReferenceError: ...torn down...` gone. A separate, pre-existing,
+  harmless "act warning" on `.unmount()` itself (present in both this file
+  and `verifyEmailScreen.test.tsx` already) remains — that's React Test
+  Renderer's known quirk for calling `.unmount()` outside `act()`, not a
+  leak, and doesn't fail any test.
+- **Blast radius:** isolated to this one test file; no other test file
+  imports or reuses `renderScreen`/`flush`/`mountedRenderer` from it.
+- **Not verified:** did not bisect which specific other test file(s) in
+  the 61-suite run were previously vulnerable to landing right after the
+  leak in worker-assignment order — fixing the leak at its source makes
+  that moot rather than needing to be enumerated. A separate, unrelated
+  "worker process failed to exit gracefully" notice (real 30s timers in
+  `verifyEmailScreen.test.tsx`'s own resend-countdown, per that file's
+  existing comment) still prints at the end of a full run — cosmetic,
+  doesn't fail the suite, out of scope for this fix.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

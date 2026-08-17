@@ -201,16 +201,31 @@ jobs:
               comment_text = "\n".join(comment_lines)
 
               # ── CHECK C: RLS on new tables ────────────────────────────────────
+              # Two shapes both pass: (1) RLS enabled + at least one CREATE POLICY
+              # (the normal case), or (2) RLS enabled + zero policies + an explicit
+              # "service-role-only" marker comment — the deliberately more
+              # restrictive pattern for tables only the backend service role
+              # touches (which bypasses RLS by design; anon/authenticated are
+              # meant to be locked out entirely). That pattern is precedented in
+              # this repo (migrations 190, 319, 320) and was previously a false
+              # positive here — see CR #4051. A CREATE TABLE with RLS enabled,
+              # no policies, and NO marker comment still fails: the marker is
+              # what proves the missing policy is intentional, not forgotten.
               has_create_table = bool(re.search(r'\bCREATE\s+TABLE\b', content, re.IGNORECASE))
               if has_create_table:
-                  has_rls    = bool(re.search(r'\bROW\s+LEVEL\s+SECURITY\b', content, re.IGNORECASE))
-                  has_policy = bool(re.search(r'\bCREATE\s+POLICY\b',         content, re.IGNORECASE))
+                  has_rls          = bool(re.search(r'\bROW\s+LEVEL\s+SECURITY\b', content, re.IGNORECASE))
+                  has_policy       = bool(re.search(r'\bCREATE\s+POLICY\b',         content, re.IGNORECASE))
+                  has_service_only = bool(re.search(r'(?:--|/\*).*service-role-only', content, re.IGNORECASE))
                   if has_rls and has_policy:
                       record(short, "RLS", STATUS_OK, "CREATE TABLE has ROW LEVEL SECURITY + CREATE POLICY")
+                  elif has_rls and not has_policy and has_service_only:
+                      record(short, "RLS", STATUS_OK, "CREATE TABLE has ROW LEVEL SECURITY, zero policies, marked service-role-only")
                   else:
                       missing = []
-                      if not has_rls:    missing.append("ROW LEVEL SECURITY")
-                      if not has_policy: missing.append("CREATE POLICY")
+                      if not has_rls:
+                          missing.append("ROW LEVEL SECURITY")
+                      if not has_policy:
+                          missing.append("CREATE POLICY (or a 'service-role-only' marker comment if this is intentionally policy-less)")
                       msg = f"CREATE TABLE without {' and '.join(missing)}"
                       record(short, "RLS", STATUS_FAIL, msg)
                       errors.append(f"{short}: {msg}")

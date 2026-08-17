@@ -137,7 +137,13 @@ async def derive_driver_onboarding_status(
         return _result("vehicle_required")
 
     # Step 3: suspension shortcut
-    if driver.get("is_suspended"):
+    # `drivers.is_suspended` is a dead column — no code path ever sets it True
+    # (confirmed via grep: only this read exists, no writer). The real signal
+    # is `drivers.status`, which admin_driver_action() actually writes to on
+    # suspend/ban. Checking the dead boolean meant a suspended/banned driver
+    # fell through to the documents/verified checks below and could still be
+    # routed to /driver as if nothing were wrong.
+    if driver.get("status") in ("suspended", "banned"):
         return _result("suspended")
 
     # Step 4: documents

@@ -190,10 +190,12 @@ async def test_add_tip_after_paid_card_decline_does_not_credit_driver():
     mock_upd.assert_not_awaited()
 
 
-async def test_add_tip_after_paid_wallet_refused_without_calling_charge():
-    """Wallet rides have no 'charge the delta after the fact' debit path yet
-    — must refuse loudly rather than silently no-op (the original bug), and
-    must never call the card-only charge helper."""
+async def test_add_tip_after_paid_wallet_absorbed_without_calling_charge():
+    """Wallet rides have no 'charge the delta after the fact' debit path.
+    Per the 2026-08-17 product decision, this must NOT surface a rider-facing
+    rejection — the driver is credited as normal (same as the pre-fix
+    behavior) and Spinr absorbs the uncollected amount, but the card-only
+    charge helper must never be called for a non-card ride."""
     from backend.routes.rides.payments import TipRequest, add_tip
 
     ride = _completed_ride(payment_status="paid", payment_method="wallet")
@@ -204,15 +206,15 @@ async def test_add_tip_after_paid_wallet_refused_without_calling_charge():
         patch("backend.routes.rides.payments.charge_late_tip", AsyncMock()) as mock_charge,
     ):
         req = TipRequest(amount=Decimal("5.00"))
-        with pytest.raises(HTTPException) as exc:
-            await add_tip(RIDE_ID, req, current_user={"id": RIDER_ID})
+        result = await add_tip(RIDE_ID, req, current_user={"id": RIDER_ID})
 
-    assert exc.value.status_code == 400
+    assert result["success"] is True
+    assert Decimal(result["tip_amount"]) == Decimal("5.00")
     mock_charge.assert_not_awaited()
-    mock_upd.assert_not_awaited()
+    mock_upd.assert_awaited_once()
 
 
-async def test_add_tip_after_paid_company_allowance_refused_without_calling_charge():
+async def test_add_tip_after_paid_company_allowance_absorbed_without_calling_charge():
     from backend.routes.rides.payments import TipRequest, add_tip
 
     ride = _completed_ride(payment_status="paid", payment_method="company_allowance")
@@ -223,12 +225,12 @@ async def test_add_tip_after_paid_company_allowance_refused_without_calling_char
         patch("backend.routes.rides.payments.charge_late_tip", AsyncMock()) as mock_charge,
     ):
         req = TipRequest(amount=Decimal("5.00"))
-        with pytest.raises(HTTPException) as exc:
-            await add_tip(RIDE_ID, req, current_user={"id": RIDER_ID})
+        result = await add_tip(RIDE_ID, req, current_user={"id": RIDER_ID})
 
-    assert exc.value.status_code == 400
+    assert result["success"] is True
+    assert Decimal(result["tip_amount"]) == Decimal("5.00")
     mock_charge.assert_not_awaited()
-    mock_upd.assert_not_awaited()
+    mock_upd.assert_awaited_once()
 
 
 async def test_add_tip_before_paid_unchanged_no_charge_attempted():

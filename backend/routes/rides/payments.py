@@ -82,38 +82,51 @@ async def add_tip(
 
     # A tip added after the ride's fare was already settled has no open
     # PaymentIntent to ride on — the settlement hold/charge is already
-    # captured, and Stripe forbids capturing it twice. Collect it for real
-    # (card) or refuse loudly (every other payment method) instead of
-    # silently crediting the driver for money the rider was never charged.
+    # captured, and Stripe forbids capturing it twice. Card rides collect it
+    # for real via a fresh, tip-only charge. A genuine decline there still
+    # surfaces the normal "your card was declined" error — that's an
+    # existing, well-understood failure mode elsewhere in the app already,
+    # not a new one this path introduces.
+    #
+    # Wallet / company_allowance rides have no equivalent "debit the delta
+    # after the fact" mechanism, and per product decision (2026-08-17) a
+    # rider-facing rejection here is worse for trust than the cost of
+    # absorbing it: the driver is credited as normal and Spinr eats the
+    # uncollected amount, mirroring the existing refund policy (driver keeps
+    # the pay, platform absorbs it — see record_refund_event). This is a
+    # deliberate, logged/metered decision, not a silent gap — see
+    # docs/proposals/2026-08-17-tip-capture-stripe-cost-minimization-strategy.md
+    # (Finding 1) and docs/change-log/2026-08-17-add-tip-late-charge-guard.md
+    # for the full history (an earlier version of this guard returned a 400
+    # for non-card methods here; superseded by the absorb-cost decision).
+    #
     # Reachable in production: the rider-app offline action queue replays a
     # queued tip after the 20-minute tip window closes
     # (rider-app/store/rideStore.ts), and tipping from ride history days
     # later is a documented, intentional feature
     # (utils/driver_statement_job.py's grace window exists for exactly this).
-    # See docs/proposals/2026-08-17-tip-capture-stripe-cost-minimization-strategy.md
-    # (Finding 1) for the full analysis.
     if (ride.get("payment_status") or "").lower() == "paid":
         payment_method = (ride.get("payment_method") or "card").lower()
         if payment_method != "card":
-            _metric_inc("spinr_payment_late_tip_total", {"outcome": "unsupported_method"})
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Adding a tip after payment isn't supported yet for this payment method. Please contact support."
-                ),
+            _metric_inc("spinr_payment_late_tip_total", {"outcome": "absorbed"})
+            logger.info(
+                f"[TIP] late tip on already-paid {payment_method} ride {ride_id} — "
+                "no after-the-fact debit path; absorbing per product decision "
+                "(driver credited, rider/company not charged)"
             )
-        charge_result = await charge_late_tip(ride, ride_id, current_user["id"], tip_amount)
-        if not charge_result.success:
-            _metric_inc("spinr_payment_late_tip_total", {"outcome": "failed"})
-            detail = charge_result.error or "Payment failed"
-            if charge_result.error_code:
-                detail = {"code": charge_result.error_code, "message": charge_result.error}
-                if charge_result.decline_code:
-                    detail["decline_code"] = charge_result.decline_code
-                if charge_result.extra:
-                    detail.update(charge_result.extra)
-            raise HTTPException(status_code=charge_result.status_code, detail=detail)
-        _metric_inc("spinr_payment_late_tip_total", {"outcome": "success"})
+        else:
+            charge_result = await charge_late_tip(ride, ride_id, current_user["id"], tip_amount)
+            if not charge_result.success:
+                _metric_inc("spinr_payment_late_tip_total", {"outcome": "failed"})
+                detail = charge_result.error or "Payment failed"
+                if charge_result.error_code:
+                    detail = {"code": charge_result.error_code, "message": charge_result.error}
+                    if charge_result.decline_code:
+                        detail["decline_code"] = charge_result.decline_code
+                    if charge_result.extra:
+                        detail.update(charge_result.extra)
+                raise HTTPException(status_code=charge_result.status_code, detail=detail)
+            _metric_inc("spinr_payment_late_tip_total", {"outcome": "success"})
 
     existing_earnings = _d(ride.get("driver_earnings") or 0)
     new_tip = _round(existing_tip + tip_amount)

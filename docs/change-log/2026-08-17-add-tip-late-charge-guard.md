@@ -11,6 +11,29 @@
 | PR / commit link | (filled in on PR creation) |
 | Related issue or gap ID | Finding 1, `docs/proposals/2026-08-17-tip-capture-stripe-cost-minimization-strategy.md` |
 
+## Update — 2026-08-17 (same day): wallet/corporate refusal superseded by an absorb-cost decision
+
+Product decision: a rider-facing rejection on a wallet/corporate late tip is worse for rider/driver
+trust than the cost of absorbing it, especially given the app's current reputation is already
+under strain from other issues — a *new* error message on an action that used to silently succeed
+is exactly the kind of inconsistency to avoid while rebuilding trust. **§3 and §5 below describe
+the original version of this fix** (refuse with 400); that has been superseded in the shipped code:
+
+- **Wallet / company_allowance, already paid**: no longer refused. Falls through to the same
+  driver-credit path as before this PR ever existed — no rider-facing message at all, success or
+  otherwise. Spinr absorbs the uncollected amount, mirroring the existing refund policy
+  (`record_payment_event`'s sibling `record_refund_event`: driver keeps the pay, platform absorbs
+  it). Logged (`logger.info`, not swallowed) and metered
+  (`spinr_payment_late_tip_total{outcome="absorbed"}`) so finance/ops has visibility into how much
+  is being absorbed this way, even though no rider-facing signal exists.
+- **Card, already paid**: unchanged from §3 — still attempts a real charge. A genuine decline still
+  shows the normal "your card was declined" error, same as everywhere else in the app today; this
+  was explicitly confirmed as *not* in scope for the absorb-cost decision (only the wallet/corporate
+  "no debit path" rejection was).
+- Tests updated: `test_add_tip_after_paid_wallet_refused_without_calling_charge` →
+  `test_add_tip_after_paid_wallet_absorbed_without_calling_charge` (now asserts success, not a 400),
+  same for the company_allowance variant.
+
 ## 1. Issue / gap identified
 
 `POST /rides/{id}/tip` (`add_tip`) can be called on any `status == completed` ride with no
@@ -157,6 +180,10 @@ remediation is required.
 
 - [x] Automated tests run: `pytest tests/test_charge_late_tip.py tests/test_rides_payments_coverage.py -q --no-cov` → **27 passed**. Broader regression sweep `pytest tests/ -k "tip or payment or settle_card or webhooks or ledger" -q --no-cov` → **838 passed, 1 skipped** (the skip is pre-existing and unrelated), **0 failed**.
 - [x] `ruff check` on all 5 changed/added files → clean, no findings.
+- [x] **Re-verified after the absorb-cost update above**: same two commands re-run against the
+  updated code (wallet/corporate branch now falls through instead of raising) — same result, **27
+  passed** in the targeted files, **838 passed / 1 pre-existing skip / 0 failed** in the broader
+  sweep, `ruff check` still clean.
 - [ ] Manual repro in staging — **not performed** (no staging/Supabase access in this session; see "What was NOT verified" below).
 - [x] Blast-radius grep performed: every caller of `record_payment_event`/`_charge_event_metadata` (2 in `payment_service.py`, 2 in `routes/webhooks.py`, 4 in tests), every caller of `add_tip`'s route (rider-app `walletStore.ts`, `rideStore.ts`'s offline queue), and `driver_statement_job.py`'s documented assumption about `add_tip`'s late-tip contract.
 - [x] Reviewed against CLAUDE.md conventions: Decimal-only money arithmetic (all amounts flow through existing `_d`/`_round`/`_f`/`ledger_service.to_cents` helpers, no new float arithmetic), Stripe idempotency (reuses `charge_ride`'s existing idempotency-key scheme, no new Stripe call site bypasses it), "do not silently swallow errors" (every failure branch returns a loud, typed error instead of a generic fallback).

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
+import { computeTipOptions, isTipLadderReady, reconcileSelectedTip } from '../components/tipPresets';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, Modal,
@@ -139,21 +140,30 @@ function RideCompletedScreenContent() {
     // Both are stable Animated.Value instances (useAnimatedValue, created once).
   }, [successScale, successOpacity]);
 
-  // Tip presets scale with the fare rather than being a flat $2/$5/$10 ladder.
-  // A $10 preset on a $5 ride reads as absurd (and flat presets under-suggest on
-  // long trips). Percentages are converted to whole dollars because that is what
-  // actually gets charged — showing "18%" and billing $4.53 invites disputes.
-  const tipOptions = useMemo(() => {
-    const base = toNum((currentRide as any)?.grand_total || currentRide?.total_fare) || 0;
-    const values = [0.15, 0.18, 0.2].map((pct) => Math.max(1, Math.round(base * pct)));
-    // On small fares every percentage rounds to the same dollar, which would
-    // render three identical buttons. Force a strictly increasing ladder.
-    for (let i = 1; i < values.length; i += 1) {
-      if (values[i] <= values[i - 1]) values[i] = values[i - 1] + 1;
-    }
-    return values;
-  }, [currentRide]);
   const fare = toNum((currentRide as any)?.grand_total || currentRide?.total_fare);
+  // Fare-scaled rather than a flat $2/$5/$10 ladder: a $10 preset on a $5 ride
+  // reads as absurd, and flat presets under-suggest on long trips. The rules
+  // that make this correct live in components/tipPresets.ts so they can be
+  // tested directly.
+  //
+  // Depends on `fare`, NOT on `currentRide`: the store hands back a fresh object
+  // on every WS event and on the 3s route-refresh poll, so a `[currentRide]` dep
+  // would recompute the ladder for reasons that have nothing to do with money.
+  const tipOptions = useMemo(() => computeTipOptions(fare), [fare]);
+
+  // The ladder degenerates to [1,2,3] before the fare loads, which looks like a
+  // deliberate low-value ladder rather than a placeholder. This screen is
+  // reachable before that — a push-notification tap cold-starts into it — so the
+  // presets must not be tappable yet.
+  const tipReady = isTipLadderReady(fare);
+
+  // Derived during render, NOT synced via an effect. If the fare resolves after
+  // the rider already tapped, the amounts change underneath them and the stored
+  // selection may match no button. Reading it through reconcile means the
+  // charged amount can never diverge from the highlighted chip — not even for
+  // the one frame an effect would take to catch up. (Also what
+  // react-hooks/set-state-in-effect is asking for.)
+  const effectiveTip = reconcileSelectedTip(selectedTip, tipOptions);
   // The lifecycle duration is recorded independently of GPS coverage. A gap in
   // location reporting must never turn a completed 40-minute ride into a
   // shorter trip in the rider's summary.
@@ -280,7 +290,7 @@ function RideCompletedScreenContent() {
           // Carry the ride + the already-chosen tip + whether we've rated so the
           // re-charge collects the same tip and doesn't re-rate (Codex 62i6).
           ? () => {
-              const _tip = selectedTip || (customTip ? parseFloat(customTip) || 0 : 0);
+              const _tip = effectiveTip || (customTip ? parseFloat(customTip) || 0 : 0);
               router.push(
                 `/manage-cards?rideId=${rideId}&forPayment=1&tip=${_tip}&rated=${hasRatedRef.current ? 1 : 0}` as any,
               );
@@ -307,7 +317,7 @@ function RideCompletedScreenContent() {
     setIsSubmitting(true);
     setSubmitPhase('rating');
     try {
-      const tipAmount = selectedTip || (customTip ? parseFloat(customTip) || 0 : 0);
+      const tipAmount = effectiveTip || (customTip ? parseFloat(customTip) || 0 : 0);
 
       // 1. Rate the driver first — fire-and-forget, and ONLY once across
       //    retries. /rate accumulates tip into driver_earnings on every call,
@@ -383,7 +393,7 @@ function RideCompletedScreenContent() {
     // Routed through handleSubmitRef (already the established pattern in
     // this file for the Retry button, line ~279) instead of calling
     // handleSubmit directly — handleSubmit is a plain async function that
-    // closes over many reactive values (isSubmitting, selectedTip,
+    // closes over many reactive values (isSubmitting, effectiveTip,
     // customTip, alreadyPaid, rating, comment, confirmPayment, currentRide,
     // clearRide, router, …); wrapping all of that in a useCallback with a
     // complete, correct dep list would be high-risk for a payment-path
@@ -400,7 +410,7 @@ function RideCompletedScreenContent() {
   // Android (Apple Pay uses the same sheet on iOS via handleSubmit in future).
   const handleGooglePay = async () => {
     if (isSubmitting || sheetLoading || alreadyPaid) return;
-    const tipAmount = selectedTip || (customTip ? parseFloat(customTip) || 0 : 0);
+    const tipAmount = effectiveTip || (customTip ? parseFloat(customTip) || 0 : 0);
     const result = await presentSheet({
       rideId: rideId as string,
       amount: toNum(currentRide?.total_fare),
@@ -541,19 +551,27 @@ function RideCompletedScreenContent() {
               {tipOptions.map((amt, idx) => (
                 <TouchableOpacity
                   key={amt}
-                  style={[styles.tipBtn, selectedTip === amt && styles.tipBtnActive]}
-                  onPress={() => setSelectedTip(selectedTip === amt ? null : amt)}
+                  style={[
+                    styles.tipBtn,
+                    effectiveTip === amt && styles.tipBtnActive,
+                    !tipReady && styles.tipBtnDisabled,
+                  ]}
+                  // Disabled until the fare loads: these amounts are derived from
+                  // it, so tapping the [1,2,3] placeholder would pick a tip that
+                  // silently changes (or vanishes) a moment later.
+                  disabled={!tipReady}
+                  onPress={() => setSelectedTip(effectiveTip === amt ? null : amt)}
                   accessibilityRole="radio"
                   accessibilityLabel={`Tip $${amt}`}
-                  accessibilityState={{ checked: selectedTip === amt }}
+                  accessibilityState={{ checked: effectiveTip === amt, disabled: !tipReady }}
                 >
                   {/* Keyed on position, not amount: the amounts are fare-derived
                       now, so a value-based map (2/5/10) would fall through to the
                       default emoji on almost every ride. */}
-                  <Text style={[styles.tipBtnEmoji, selectedTip === amt && styles.tipBtnEmojiActive]}>
+                  <Text style={[styles.tipBtnEmoji, effectiveTip === amt && styles.tipBtnEmojiActive]}>
                     {idx === 0 ? '☕' : idx === 1 ? '🍕' : '🎉'}
                   </Text>
-                  <Text style={[styles.tipBtnText, selectedTip === amt && styles.tipBtnTextActive]}>${amt}</Text>
+                  <Text style={[styles.tipBtnText, effectiveTip === amt && styles.tipBtnTextActive]}>${amt}</Text>
                 </TouchableOpacity>
               ))}
               <View style={[styles.tipCustom, customTip ? styles.tipCustomActive : null]}>
@@ -797,7 +815,7 @@ function RideCompletedScreenContent() {
               <Text style={styles.submitBtnText}>
                 {alreadyPaid
                   ? 'Rate & Done'
-                  : `Pay $${(fare + (selectedTip || (customTip ? parseFloat(customTip) || 0 : 0))).toFixed(2)} & Done`
+                  : `Pay $${(fare + (effectiveTip || (customTip ? parseFloat(customTip) || 0 : 0))).toFixed(2)} & Done`
                 }
               </Text>
               <Ionicons name={alreadyPaid ? 'checkmark' : 'card'} size={18} color="#FFF" />
@@ -999,6 +1017,9 @@ function createStyles(colors: ThemeColors) {
     tipBtnActive: {
       backgroundColor: colors.text, borderColor: colors.text,
     },
+    // Reads as "not ready yet" rather than "unavailable" — the fare is still
+    // loading and these amounts are derived from it.
+    tipBtnDisabled: { opacity: 0.4 },
     tipBtnEmoji: { fontSize: 18, marginBottom: 2 },
     tipBtnEmojiActive: {},
     tipBtnText: {

@@ -125,7 +125,7 @@ settlement is unaffected. Rides booked after deploy get the new hold.
 | `backend/utils/tip_batch_charge.py` | **new** — batched collection loop | Collect owed tips; credit on success |
 | `backend/utils/preauth_capture.py` | Window 20 → 5 min; select `auth_incrementable` | Window no longer buys anything |
 | `backend/core/lifespan.py` | Register the new loop | — |
-| `backend/migrations/317_tip_collection.sql` | **new** — `rides.auth_incrementable`, `pending_tips` + RLS | Schema for the above |
+| `backend/migrations/321_tip_collection.sql` | **new** — `rides.auth_incrementable`, `pending_tips` + RLS | Schema for the above |
 | `rider-app/app/payment-confirm.tsx` | Removed hardcoded `+ 10` | Screen was announcing a hold we no longer place |
 | `rider-app/app/ride-completed.tsx` | Fare-scaled tip presets | $10 preset on a $5 ride |
 
@@ -189,7 +189,7 @@ Ordered least- to most-invasive, none requiring a redeploy except the last:
    drivers. Export first:
    `SELECT * FROM public.pending_tips WHERE status IN ('owed','charging','failed');`
 4. **Migration** — rollback SQL is in the header of
-   `backend/migrations/317_tip_collection.sql`.
+   `backend/migrations/321_tip_collection.sql`.
 
 **`git revert` is not sufficient** for anything already applied to live data:
 captured cancellation fees, incremented authorizations, and collected tip

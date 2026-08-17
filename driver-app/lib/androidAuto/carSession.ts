@@ -27,8 +27,14 @@
  * driver should see a working map, just without their data.
  */
 import { AppState, type AppStateStatus } from 'react-native';
+import Constants from 'expo-constants';
 import { useAuthStore } from '@shared/store/authStore';
-import api from '@shared/api/client';
+import api, {
+  isAppCheckTokenReady,
+  setAppCheckTokenProvider,
+  setAppIdentity,
+} from '@shared/api/client';
+import { getAppCheckToken, initFirebaseServices } from '@shared/services/firebase';
 import { useDriverStore } from '../../store/driverStore';
 import { consumePendingRideOffer } from '../../services/pendingRideOffer';
 import {
@@ -62,6 +68,60 @@ const REFRESH_INTERVAL_MS = 60_000;
 
 /** How long to wait for an initialize() already in flight before giving up. */
 const AUTH_WAIT_MS = 8_000;
+
+/**
+ * Wire the API client for a launch where no phone screen ever mounts.
+ *
+ * app/_layout.tsx does this at module scope (lines 78 and 85) — and on a
+ * car-only launch app/_layout.tsx is a route module that never evaluates. The
+ * consequence is not a missing nicety, it is a signed-out driver:
+ *
+ *   _appCheckTokenProvider stays null
+ *     → appCheckHeader() returns {} and X-Firebase-AppCheck is omitted
+ *     → FirebaseAppCheckMiddleware (enforcement_enabled=is_production) 401s
+ *       /api/v1/auth/refresh, which is NOT in _APP_CHECK_EXEMPT_PREFIXES
+ *     → refreshTokens() reads that 401 as "refresh token rejected" and calls
+ *       logout(), deleting the refresh token from SecureStore
+ *     → the driver is signed out of the PHONE app by having plugged into a car.
+ *
+ * Strictly worse than the blank car screen this branch set out to fix, and
+ * invisible in dev because enforcement is off there.
+ *
+ * initFirebaseServices() is idempotent and is called for the same reason by
+ * backgroundMessaging.ts and backgroundLocation.ts — the headless contexts that
+ * already had to solve this for their raw fetches. Setting the provider twice
+ * (phone app also running) is a plain reassignment of the same function.
+ */
+async function wireApiClientForCar(): Promise<void> {
+  // Registered BEFORE the await, and deliberately so. If initFirebaseServices()
+  // throws with the provider still unset, isAppCheckTokenReady() answers `true`
+  // ("App Check not configured here") and the gate below waves everything
+  // through — the exact opposite of what a failed Firebase init should mean.
+  // With the provider set first, that same check actually calls
+  // getAppCheckToken(), gets null, and correctly refuses.
+  setAppCheckTokenProvider(getAppCheckToken);
+  setAppIdentity(
+    'driver',
+    Constants.nativeApplicationVersion || Constants.expoConfig?.version || '0.0.0',
+  );
+  try {
+    await initFirebaseServices();
+  } catch (e) {
+    logError('Firebase init from the car failed:', e);
+  }
+}
+
+/**
+ * Whether it is safe to issue an authenticated request from the car right now.
+ *
+ * Guards EVERY call site, not just the bootstrap: the 60s timer and the
+ * AppState listener fire on their own schedule long after startCarSession has
+ * returned, and each of their requests can reach the same 401 → logout() path.
+ */
+async function canCallApi(): Promise<boolean> {
+  if (!useAuthStore.getState().token) return false;
+  return isAppCheckTokenReady();
+}
 
 /**
  * Ride states in which a cancellation can legitimately arrive.
@@ -183,6 +243,10 @@ function onBackgroundDispatch(event: BackgroundDispatchEvent): void {
 
 /** The reads a connected car wants, issued together and individually caught. */
 async function refreshCarData(reason: string): Promise<void> {
+  if (!(await canCallApi())) {
+    log('skipped refresh —', reason, '— no token or no App Check');
+    return;
+  }
   const store = useDriverStore.getState();
   await Promise.all([
     store.fetchActiveRide().catch((e) => logError('fetchActiveRide failed:', e)),
@@ -199,6 +263,7 @@ async function refreshCarData(reason: string): Promise<void> {
  * from a react-query hook that never runs car-only.
  */
 async function loadDriverConfig(): Promise<void> {
+  if (!(await canCallApi())) return;
   try {
     const res = await api.get('/drivers/config');
     if (res?.data) useDriverStore.getState().applyDriverConfig(res.data);
@@ -240,6 +305,27 @@ export async function startCarSession(): Promise<void> {
   // A stashed offer is time-critical and needs no token, so it goes first.
   const surfaced = await consumePendingRideOffer();
   if (surfaced) log('surfaced a ride offer stashed by the background handler');
+
+  await wireApiClientForCar();
+
+  // THE CAR MUST NEVER BE ABLE TO SIGN A DRIVER OUT.
+  //
+  // Every /api/v1 call below can end in logout(): a 401 on /auth/refresh is
+  // indistinguishable, to refreshTokens(), from a revoked credential, and it
+  // responds by deleting the refresh token. App Check is one way to earn that
+  // 401 without the token being bad at all — Play Integrity can legitimately
+  // fail to mint (device offline at plug-in, Play Services updating, verdict
+  // still pending on a cold boot).
+  //
+  // So: no token, no requests. The driver keeps their session and the car falls
+  // back to map + marker + buttons, which is the same degraded state as being
+  // signed out — and vastly better than actually being signed out. The next
+  // connect, or the next foreground of the phone app, tries again.
+  if (!(await isAppCheckTokenReady())) {
+    setDebugFact('session', 'app check not ready — map only');
+    log('App Check token unavailable — skipping every request rather than risking a 401 sign-out');
+    return;
+  }
 
   const authed = await ensureSession();
   setDebugFact('session', authed ? 'authenticated' : 'no token');

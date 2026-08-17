@@ -21,7 +21,27 @@ jest.mock('@shared/store/authStore', () => ({
 }));
 
 const mockApiGet = jest.fn();
-jest.mock('@shared/api/client', () => ({ __esModule: true, default: { get: (u: string) => mockApiGet(u) } }));
+const mockAppCheckReady = jest.fn<Promise<boolean>, []>();
+const mockSetAppCheckProvider = jest.fn();
+const mockSetAppIdentity = jest.fn();
+jest.mock('@shared/api/client', () => ({
+  __esModule: true,
+  default: { get: (u: string) => mockApiGet(u) },
+  isAppCheckTokenReady: () => mockAppCheckReady(),
+  setAppCheckTokenProvider: (f: unknown) => mockSetAppCheckProvider(f),
+  setAppIdentity: (...a: unknown[]) => mockSetAppIdentity(...a),
+}));
+
+const mockInitFirebase = jest.fn<Promise<void>, []>();
+jest.mock('@shared/services/firebase', () => ({
+  getAppCheckToken: jest.fn(() => Promise.resolve('appcheck-token')),
+  initFirebaseServices: () => mockInitFirebase(),
+}));
+
+jest.mock('expo-constants', () => ({
+  __esModule: true,
+  default: { nativeApplicationVersion: '1.2.3', expoConfig: { version: '1.2.3' } },
+}));
 
 const mockConsumePending = jest.fn<Promise<boolean>, []>();
 jest.mock('../../../services/pendingRideOffer', () => ({
@@ -88,6 +108,8 @@ beforeEach(() => {
   mockDriver.activeRide = null;
   mockDriver.incomingRide = null;
   mockConsumePending.mockResolvedValue(false);
+  mockAppCheckReady.mockResolvedValue(true);
+  mockInitFirebase.mockResolvedValue(undefined);
   mockApiGet.mockResolvedValue({ data: { ride_offer_timeout_seconds: 20 } });
   setAuth({ isInitialized: true, isLoading: false, token: 'tok' });
 });
@@ -144,6 +166,64 @@ describe('bootstrap', () => {
 
     expect(initialize).not.toHaveBeenCalled();
     expect(mockDriver.fetchActiveRide).toHaveBeenCalled();
+  });
+});
+
+describe('App Check — the car must never sign a driver out', () => {
+  it('wires the provider that app/_layout.tsx would have', async () => {
+    // Without this, X-Firebase-AppCheck is omitted, /auth/refresh 401s under
+    // production enforcement, and refreshTokens() deletes the refresh token.
+    await startCarSession();
+    expect(mockSetAppCheckProvider).toHaveBeenCalledWith(expect.any(Function));
+    expect(mockSetAppIdentity).toHaveBeenCalledWith('driver', '1.2.3');
+  });
+
+  it('registers the provider BEFORE awaiting Firebase init', async () => {
+    // Ordering matters: isAppCheckTokenReady() answers `true` when no provider
+    // is registered, so a failed init with the provider unset would wave every
+    // request through instead of blocking it.
+    let providerSetFirst = false;
+    mockInitFirebase.mockImplementation(async () => {
+      providerSetFirst = mockSetAppCheckProvider.mock.calls.length > 0;
+    });
+    await startCarSession();
+    expect(providerSetFirst).toBe(true);
+  });
+
+  it('issues NO request at all when App Check cannot mint a token', async () => {
+    mockAppCheckReady.mockResolvedValue(false);
+
+    await startCarSession();
+
+    expect(mockDriver.fetchActiveRide).not.toHaveBeenCalled();
+    expect(mockDriver.fetchEarnings).not.toHaveBeenCalled();
+    expect(mockApiGet).not.toHaveBeenCalled();
+    expect(mockDriver.hydrateDriverRideState).not.toHaveBeenCalled();
+  });
+
+  it('keeps the interval quiet too, not just the bootstrap', async () => {
+    // The timer fires long after startCarSession returned, and every one of its
+    // requests can reach the same 401 -> logout() path.
+    jest.useFakeTimers();
+    try {
+      await startCarSession();
+      mockDriver.fetchActiveRide.mockClear();
+      mockAppCheckReady.mockResolvedValue(false);
+
+      jest.advanceTimersByTime(60_000);
+      await settle();
+
+      expect(mockDriver.fetchActiveRide).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('a Firebase init failure degrades to map-only, it does not throw', async () => {
+    mockInitFirebase.mockRejectedValue(new Error('Play Services updating'));
+    mockAppCheckReady.mockResolvedValue(false);
+    await expect(startCarSession()).resolves.toBeUndefined();
+    expect(mockApiGet).not.toHaveBeenCalled();
   });
 });
 

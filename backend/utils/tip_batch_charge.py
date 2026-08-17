@@ -222,6 +222,13 @@ async def _charge_rider_batch(rider_id: str, rows: List[Dict[str, Any]]) -> None
         _metric_inc("spinr_payment_tip_batch_total", {"outcome": "no_card"})
         return
 
+    # Dispute readiness: one PaymentIntent can cover several rides, and the
+    # anchor ride_id alone cannot answer "what is this charge?". Name every ride
+    # and the per-ride split on the charge itself, so a dispute can be resolved
+    # from the Stripe dashboard without a DB query. Stripe caps a metadata VALUE
+    # at 500 chars — truncate rather than let the charge fail on a long batch.
+    _ride_ids = ",".join(str(r.get("ride_id")) for r in claimed)
+    _breakdown = ",".join(f"{r.get('ride_id')}:{_round(_d(r.get('amount')))}" for r in claimed)
     outcome = await charge_ancillary_fee(
         ride=ride or {"id": anchor_ride_id},
         rider_id=rider_id,
@@ -229,6 +236,11 @@ async def _charge_rider_batch(rider_id: str, rows: List[Dict[str, Any]]) -> None
         payment_method_id=payment_method_id,
         stripe_customer_id=stripe_customer_id,
         fee_type="tip_batch",
+        extra_metadata={
+            "tip_ride_ids": _ride_ids[:500],
+            "tip_breakdown": _breakdown[:500],
+            "tip_count": str(len(claimed)),
+        },
     )
 
     if outcome.status != "succeeded":

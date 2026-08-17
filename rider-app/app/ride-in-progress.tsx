@@ -29,7 +29,7 @@ import { RideStatus } from '../constants/rideStatus';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import ConfirmSheet from '../components/ConfirmSheet';
-import { SOSButton } from '@shared/components/SOSButton';
+import { RiderSOS } from '../components/RiderSOS';
 import { CarMarker } from '@shared/components/CarMarker';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -560,7 +560,7 @@ function RideInProgressScreenContent() {
           <Text style={styles.actionBtnText}>Live Map</Text>
         </TouchableOpacity>
         <View style={styles.actionBtn}>
-          <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} t={t} />
+          <RiderSOS rideId={rideId as string} onTrigger={triggerEmergency} t={t} />
           <Text style={styles.actionBtnText}>SOS</Text>
         </View>
         <TouchableOpacity style={styles.actionBtn} onPress={() => {
@@ -618,7 +618,7 @@ function RideInProgressScreenContent() {
 
       {/* SOS — floating top-right, always visible even when bottom sheet is collapsed */}
       <SafeAreaView edges={['top']} style={styles.sosOverlay} pointerEvents="box-none">
-        <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} size="small" t={t} />
+        <RiderSOS rideId={rideId as string} onTrigger={triggerEmergency} size="small" t={t} />
       </SafeAreaView>
 
       {/* Map Area */}

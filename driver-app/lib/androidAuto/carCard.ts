@@ -12,11 +12,16 @@
  * request) — it never fetches or derives anything the phone doesn't already have.
  */
 import type { ActiveRide, RideState } from '../../store/driverStore';
+import { carColors } from './carTheme';
 
+// Brand tokens, not hand-picked hex. These were '#ee2b2b' (a muddier red than
+// the brand's) and Google's '#0f9d58' green — close enough to look intentional,
+// wrong enough that the head unit never quite matched the phone. carTheme.ts
+// sources them from shared/theme's dark palette.
 /** Spinr brand red — the card accent + status pill. */
-export const SPINR_RED = '#ee2b2b';
-const NEUTRAL = '#1c1c1e';
-const GO = '#0f9d58';
+export const SPINR_RED = carColors.brand;
+const NEUTRAL = carColors.raised;
+const GO = carColors.success;
 
 /** Which trip leg the card represents — also picks the destination + accent. */
 export type TripCardLeg = 'idle' | 'offer' | 'pickup' | 'dropoff' | 'complete';
@@ -76,6 +81,13 @@ export interface TripCard {
   wav: boolean;
   /** Secondary guidance line, e.g. the phone-only start-trip prompt. */
   hint: string | null;
+  /**
+   * Cumulative earnings context on the completed-trip card, e.g.
+   * "Today · $187.40 · 12 rides". Null unless the store has an earnings
+   * summary — it is fetched by the phone, so a car-only cold launch legitimately
+   * has none and the card simply omits the line.
+   */
+  earningsTodayLabel: string | null;
 }
 
 const firstName = (full?: string): string | null => {
@@ -146,6 +158,7 @@ export function buildOfferCard(offer: OfferLike | null): TripCard {
     surgeLabel: surgeBadge(offer?.surge_multiplier),
     wav: offer?.requires_wav === true,
     hint: 'Accept or decline on the request card',
+    earningsTodayLabel: null,
   };
 }
 
@@ -154,10 +167,31 @@ export function buildOfferCard(offer: OfferLike | null): TripCard {
  * the live offer payload (richer, present on the push path); otherwise it reads
  * the engaged ActiveRide. Returns an idle card when there is nothing to show.
  */
+/** Cumulative earnings the completed-trip card can show, when available. */
+export interface EarningsContext {
+  /** Pre-formatted money string from the store, e.g. "187.40". */
+  total: string;
+  rides: number;
+}
+
+/**
+ * "Today · $187.40 · 12 rides" — or null when there is nothing trustworthy to
+ * show. A zeroed total on a screen that exists to make earnings feel real is
+ * worse than no line at all.
+ */
+function formatEarningsToday(e: EarningsContext | null): string | null {
+  if (!e) return null;
+  const total = Number(e.total);
+  if (!Number.isFinite(total) || total <= 0) return null;
+  const rides = e.rides > 0 ? ` · ${e.rides} ride${e.rides === 1 ? '' : 's'}` : '';
+  return `Today · $${total.toFixed(2)}${rides}`;
+}
+
 export function buildTripCard(
   state: RideState,
   activeRide: ActiveRide | null,
   offer: OfferLike | null = null,
+  earnings: EarningsContext | null = null,
 ): TripCard {
   if (state === 'ride_offered') {
     // Prefer the dispatch offer; fall back to ActiveRide fields when only the
@@ -217,6 +251,7 @@ export function buildTripCard(
         surgeLabel,
         wav,
         hint: null,
+        earningsTodayLabel: null,
       };
 
     case 'arrived_at_pickup':
@@ -238,6 +273,7 @@ export function buildTripCard(
         wav,
         // OTP start-trip is distraction-sensitive — stays on the phone (CLAUDE.md).
         hint: 'Verify the rider’s PIN on your phone to start the trip',
+        earningsTodayLabel: null,
       };
 
     case 'trip_in_progress':
@@ -258,6 +294,7 @@ export function buildTripCard(
         surgeLabel,
         wav,
         hint: null,
+        earningsTodayLabel: null,
       };
 
     case 'trip_completed':
@@ -278,6 +315,11 @@ export function buildTripCard(
         surgeLabel: null,
         wav: false,
         hint: 'Open Spinr on your phone for your next ride',
+        // The one place cumulative earnings belong: right after a driver has
+        // finished a trip, showing what the day has added up to. Omitted
+        // entirely when the store has no summary (a car-only cold launch never
+        // ran the phone's fetch) rather than rendering a misleading "$0.00".
+        earningsTodayLabel: formatEarningsToday(earnings),
       };
 
     case 'idle':
@@ -299,6 +341,7 @@ export function buildTripCard(
         surgeLabel: null,
         wav: false,
         hint: 'Ride requests will appear here',
+        earningsTodayLabel: null,
       };
   }
 }

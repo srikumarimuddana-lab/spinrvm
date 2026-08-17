@@ -36,6 +36,7 @@ from ._deps import (  # noqa: F401
     multi_leg_distance,
     pg_error_code,
     ride_request_limit,
+    timedelta,
     timezone,
     verify_address_matches_coordinate,
     verify_estimate_token,
@@ -56,6 +57,15 @@ from ._shared import (  # noqa: F401
 )
 
 router = APIRouter()
+
+# ACTION_ITEMS.md C26: no known "typical trip duration" constant exists
+# elsewhere in this codebase to reuse (duration_minutes below is computed
+# per-request from haversine distance, not a fixed average) — so this is a
+# new, documented constant. 60 minutes covers the overwhelming majority of
+# Spinr trip durations (Saskatchewan-first, intra-city) with margin, without
+# being so wide that it blocks legitimately back-to-back scheduled rides
+# (e.g. a rider scheduling an airport drop-off and, hours later, a pickup).
+SCHEDULE_OVERLAP_WINDOW_MINUTES = 60
 
 
 # Decline codes where re-authorizing at a LOWER amount (fare without the buffer)
@@ -406,6 +416,54 @@ async def create_ride(
             status_code=409,
             message_key=ErrorKeys.RIDE_INVALID_STATUS,
         )
+
+    # ACTION_ITEMS.md C26: the guard above only covers RideStatus.active_statuses(),
+    # which deliberately excludes `scheduled` (a scheduled ride sits idle until
+    # the scheduled-dispatch loop flips it to `searching` at its scheduled_time —
+    # see utils/scheduled_rides.py). That means nothing previously rejected a
+    # rider booking two `scheduled` rides at the same or overlapping times; the
+    # conflict was only discovered at dispatch time, when the second ride's
+    # scheduled -> searching claim UPDATE collided with the partial unique index
+    # in migrations/53_rides_one_active_per_rider.sql (which also excludes
+    # `scheduled`) — producing a confusing "waiting on your current trip" defer
+    # push and, after ~20-40 min, an admin escalation.
+    #
+    # This only guards NEW scheduled-ride creation: it is skipped entirely for
+    # immediate (non-scheduled) bookings, and does not touch the active-ride
+    # guard above or any other read/write path.
+    if body.scheduled_time is not None:
+        existing_scheduled_rides = await _deps.db_supabase.get_rows(
+            "rides",
+            {"rider_id": current_user["id"], "status": RideStatus.SCHEDULED},
+            limit=200,
+        )
+        overlap_window = timedelta(minutes=SCHEDULE_OVERLAP_WINDOW_MINUTES)
+        for _existing in existing_scheduled_rides or []:
+            _existing_time_raw = _existing.get("scheduled_time")
+            if not _existing_time_raw:
+                continue
+            try:
+                _existing_time = datetime.fromisoformat(str(_existing_time_raw).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if _existing_time.tzinfo is None:
+                _existing_time = _existing_time.replace(tzinfo=timezone.utc)
+            if abs(body.scheduled_time - _existing_time) <= overlap_window:
+                raise SpinrException(
+                    message=(
+                        "You already have a scheduled ride around this time. "
+                        "Please choose a different time or cancel your existing "
+                        "scheduled ride first."
+                    ),
+                    error_code=ErrorCode.RESOURCE_CONFLICT,
+                    status_code=409,
+                    details={
+                        "error_code": "scheduled_ride_overlap",
+                        "existing_ride_id": _existing.get("id"),
+                        "existing_scheduled_time": str(_existing_time_raw),
+                        "overlap_window_minutes": SCHEDULE_OVERLAP_WINDOW_MINUTES,
+                    },
+                )
 
     unpaid_rides = await _deps.db_supabase.get_rows(
         "rides",

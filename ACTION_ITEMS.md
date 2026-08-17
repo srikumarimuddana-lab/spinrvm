@@ -8180,8 +8180,24 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 
 ### C26. Scheduled rides: no booking-time check for overlapping/duplicate scheduled trips by the same rider
 
-- [ ] **Status:** open (filed 2026-08-17, from a functional review of
-  `backend/utils/scheduled_rides.py` / `backend/routes/rides/booking.py`).
+- [x] **Status:** closed 2026-08-17. `create_ride` (`routes/rides/booking.py`)
+  now rejects (409, `scheduled_ride_overlap`) a new scheduled-ride request
+  whose `scheduled_time` falls within a new
+  `SCHEDULE_OVERLAP_WINDOW_MINUTES = 60` constant of any of the same
+  rider's other `scheduled`-status rides, inserted between the existing
+  active-ride guard and the unpaid-ride guard. Additive-only — gated on
+  `body.scheduled_time` being set, so immediate (non-scheduled) bookings
+  are unaffected; no other caller of the active-ride check is touched.
+  "Warn-and-confirm" was deliberately deferred as a rider-app UX/API
+  decision (would need a two-step flow) — reject is the unambiguous,
+  purely-additive option chosen instead, per CLAUDE.md's pre-merge gates.
+  New tests in `backend/tests/test_c26_scheduled_overlap.py`:
+  exact-duplicate rejected, within-window rejected, 3.5h-outside-window
+  succeeds, immediate booking unaffected.
+  `pytest tests/test_c26_scheduled_overlap.py
+  tests/test_create_ride_scheduled_confirmation.py -q` → 6 passed. **Not
+  verified**: no live-Supabase/real-unique-index interaction (mocked
+  `get_rows` only), no >200-existing-scheduled-rides edge case.
 - **Issue/gap:** `booking.py`'s active-ride guard
   (`routes/rides/booking.py:394-408`) only checks
   `RideStatus.active_statuses()`, which deliberately excludes `scheduled` —

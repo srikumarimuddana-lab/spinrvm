@@ -411,18 +411,17 @@ Name / Title: ______________________
 
 ## EXHIBIT B — DATA PROCESSING ADDENDUM
 
-**Not drafted in this pass.** This exhibit needs its own dedicated drafting
-effort — it is a more technical document than the MSA body and should
-cover, at minimum: categories of personal information processed, purposes,
-sub-processor list (cross-referencing `docs/vendor-register.md`), data
-location/residency commitments, security measures, breach notification
-timeline (aligned with PIPEDA's "as soon as feasible" standard and the
-Company's own incident-response needs), audit rights, and data return/
-deletion terms on termination — mirroring, from Spinr's side as processor,
-the same structure `docs/dpa-register.md` already uses to track DPAs Spinr
-signs with its own vendors. Recommend drafting this as a companion file,
-`docs/legal/corporate-data-processing-addendum.md`, once counsel is engaged
-on this MSA, rather than folding it into this document.
+See the companion file `docs/legal/corporate-data-processing-addendum.md`,
+drafted separately from this MSA body since it is a more technical document
+a corporate customer's security/procurement review will scrutinize on its
+own terms — categories of personal information processed, purposes,
+sub-processor list (cross-referencing `docs/legal/subprocessor-list.md` and
+`docs/vendor-register.md`), data location/residency commitments, security
+measures, breach notification timeline, audit rights, and data return/
+deletion terms on termination. It mirrors, from Spinr's side as processor,
+the same structure `docs/dpa-register.md` uses to track DPAs Spinr signs
+with its own vendors. Execute both documents together as one signing
+package once counsel review is complete.
 
 ## END DRAFT
 

@@ -1,4 +1,4 @@
-# Change Impact & Risk Log — exact-fare hold + tip collection rework
+# Change Impact & Risk Log — exact-fare hold + pre-capture tip folding
 
 ## Summary
 
@@ -18,11 +18,15 @@ Two problems, one root:
 1. **The hold was 3× the fare on small rides.** Booking authorized
    `grand_total + RIDE_AUTH_BUFFER_CAD` (flat **$10**), so a $5 ride put a $15
    pending charge on the rider's bank feed. Riders read that as an overcharge.
-2. **Tips arriving after settlement were credited but never charged.**
-   `POST /rides/{id}/tip` had no settled-payment guard (unlike `rating.py`,
-   which had one). It wrote `tip_amount` and `driver_earnings`, returned
-   success, and attempted no charge — so the driver was credited, and T4A
-   reported, money nobody paid. Spinr absorbed it silently.
+2. ~~Tips arriving after settlement were credited but never charged.~~
+   **Withdrawn from this change.** `main` had already fixed it — same root
+   cause, same day — via `charge_late_tip` and, for wallet/corporate rides,
+   `charge_late_wallet_tip` / `charge_late_corporate_tip` with migration 319.
+   This branch was cut from a 6-day-stale base and duplicated the work with a
+   design that was worse (it charged a personal card even for corporate rides)
+   and that contradicted a recorded product decision (main credits the driver
+   immediately and absorbs the shortfall; this branch deferred credit by up to
+   7 days). The duplicate subsystem was removed rather than merged.
 
 ## 2. Root cause
 
@@ -49,10 +53,9 @@ tip POST can replay long after settlement.
   (raise the hold, capture once) where the card supports it, and charged
   separately where it does not.
 - A tip that arrives **after** capture cannot be folded in at all — Stripe
-  cannot increment a captured PaymentIntent — so it is recorded as an
-  uncollected receivable in a new `pending_tips` table and collected by a new
-  batched background charge. **The driver is credited only when a charge
-  succeeds.**
+  cannot increment a captured PaymentIntent. That case is handled by main's
+  existing `charge_late_tip` / `charge_late_wallet_tip` /
+  `charge_late_corporate_tip`; this branch adds nothing there.
 - The **cancellation fee is now a partial capture of the hold** instead of
   cancel-the-hold-then-charge-a-new-PI.
 
@@ -70,8 +73,27 @@ Consumers checked by grep before changing:
 | `ChargeOutcome` | every Stripe helper caller | New field is additive with a default; no positional construction found. |
 | `capture_ride` | `services/payment_service.py`, `utils/preauth_capture.py` | Behaviour unchanged; only its docstring's stale "buffer" wording. |
 | Hold release on cancel | `routes/rides/cancellation.py` (rider), `routes/drivers/ride_cancel.py` (driver), `routes/rides/matching.py` (auto-cancel) | **Only the rider path changed.** Driver-cancel and no-driver auto-cancel still release in full, which is correct — a rider is never charged for those. |
-| `pending_tips` | new table, no existing readers | Additive. |
-| Background loops | now 19, was 18 | New loop follows the replay-safety contract (leader lock + atomic DB claim + Stripe idempotency key). No loop-count assertion exists in the suite. |
+| Background loops | unchanged | No loop added or removed. |
+
+**Corporate rides (this section was missing and the reviewer was right to
+flag it — `payment_service.py` is edited here and `settle_corporate` lives in
+it):** the increment path is card-only and never runs for a
+`company_allowance` ride, because such a ride has no booking-time card hold to
+increment — `settle_corporate` debits the allowance/master wallet instead.
+Nothing in this branch changes corporate settlement, allowance caps,
+`ride_payment_sources`, corporate policy evaluation, or the billing summary /
+PDF statement.
+
+A separate, **pre-existing** issue was found while checking this and is being
+filed on its own rather than fixed here: `process_payment` builds
+`total_charge = grand_total + tip` and hands the combined figure to
+`settle_corporate`, which debits all of it — so a rider's personal gratuity is
+billed to their employer, lands in `ride_payment_sources` (the source for the
+company's invoice), inflates the `final_fare` corporate policy evaluates, and
+can trigger an "allowance used up" notification because of a tip. It behaves
+identically on `main`; this branch neither introduces nor fixes it. Fixing it
+needs a product decision (is a tip on a corporate ride ever company-billable?)
+before code.
 
 Regression risks accepted and mitigated:
 
@@ -86,9 +108,9 @@ Regression risks accepted and mitigated:
 - **A cancellation fee larger than the hold is capped, not chased.** A $5 fee
   on a $4 fare collects $4. Deliberate: a cancel fee exceeding the ride is not
   defensible, and the shortfall is logged.
-- **A tip recorded but not yet collected leaves the driver uncredited until the
-  batch runs** (up to 7 days). This is a deliberate trade against the previous
-  behaviour of crediting money we never took.
+- **A failed increment costs one extra Stripe fixed fee**, nothing more: the
+  original hold is untouched, so the fare still captures and the tip falls to
+  main's existing late-tip path.
 
 ## 5. User-experience effect
 
@@ -99,12 +121,9 @@ Regression risks accepted and mitigated:
   displayed a number the server does not use.
 - Tip presets are now 15/18/20% of fare (whole dollars) instead of flat
   $2/$5/$10 — a $10 preset on a $5 ride was part of the same problem.
-- A rider may now tip after settlement. Previously `/rate` returned a 400.
-- Post-capture tips appear as a **second** charge on the statement.
+- Post-capture tips are unchanged from `main` (see §1.2).
 
-**Driver:** a tip collected via the batch path appears when collected, not when
-the rider taps. Not yet surfaced as "pending" in the driver app — see
-*Not verified* below.
+**Driver:** no change. Tip crediting is `main`'s behaviour, untouched here.
 
 **Mid-session impact:** a rider mid-ride at deploy time already has a hold
 placed under the old rules; nothing re-reads the buffer mid-ride, so their
@@ -119,13 +138,10 @@ settlement is unaffected. Rides booked after deploy get the new hold.
 | `backend/utils/stripe_charge.py` | `+increment_authorization`, `+capture_cancellation_fee`, `_reads_incremental_support`; `ChargeOutcome.incremental_authorization_supported` | Fold tips into the hold; take fees from it |
 | `backend/services/payment_service.py` | Increment-then-capture before the overflow branch | One fee where the card allows |
 | `backend/routes/rides/cancellation.py` | Fee hoisted above hold handling; partial capture | Fee cannot decline |
-| `backend/routes/rides/payments.py` | `add_tip` routes settled tips to `pending_tips` | Fixes the uncharged-tip leak |
-| `backend/routes/rides/rating.py` | 400 replaced with the deferral path | Collect the tip rather than refuse it |
-| `backend/services/pending_tip_service.py` | **new** — record a tip as owed, never credit | Shared by both tip entry points |
-| `backend/utils/tip_batch_charge.py` | **new** — batched collection loop | Collect owed tips; credit on success |
 | `backend/utils/preauth_capture.py` | Window 20 → 5 min; select `auth_incrementable` | Window no longer buys anything |
-| `backend/core/lifespan.py` | Register the new loop | — |
-| `backend/migrations/321_tip_collection.sql` | **new** — `rides.auth_incrementable`, `pending_tips` + RLS | Schema for the above |
+| `backend/migrations/321_tip_collection.sql` | **new** — `rides.auth_incrementable` only | Persist the per-card increment capability |
+| `rider-app/components/tipPresets.ts` | **new** — ladder + selection-reconciliation rules | Testable; see the blocker below |
+| `rider-app/__tests__/tipPresets.test.ts` | **new** — 13 tests | There was no tip coverage at all |
 | `rider-app/app/payment-confirm.tsx` | Removed hardcoded `+ 10` | Screen was announcing a hold we no longer place |
 | `rider-app/app/ride-completed.tsx` | Fare-scaled tip presets | $10 preset on a $5 ride |
 
@@ -159,18 +175,28 @@ _fee_outcome = await _deps.capture_cancellation_fee(
 )
 ```
 
-```python
-# Before — payments.py add_tip: credited the driver, charged nobody
-update_payload = {"tip_amount": _f(new_tip), "driver_earnings": _f(new_driver_earnings)}
-await _deps.db_supabase.update_ride(ride_id, update_payload)
-return {"success": True, ...}          # no charge attempted, ever
+```tsx
+// Before — ride-completed.tsx: selection is a raw number, never reconciled
+const [selectedTip, setSelectedTip] = useState<number | null>(null);
+const tipOptions = useMemo(() => /* fare-derived */, [currentRide]);
+// ...
+{tipOptions.map((amt) => (
+  <TouchableOpacity style={[..., selectedTip === amt && styles.tipBtnActive]} />
+))}
+// handleSubmit charges `selectedTip` even when no chip matches it.
 ```
 
-```python
-# After — record the debt; credit only when the batch charge succeeds
-if payment_is_settled(ride):
-    await record_pending_tip(ride=ride, rider_id=current_user["id"], amount=tip_amount)
-    return {"success": True, "tip_amount": _money_str(tip_amount), "collection": "pending"}
+```tsx
+// After — derived during render, and the placeholder ladder is not tappable
+const tipOptions = useMemo(() => computeTipOptions(fare), [fare]);
+const tipReady = isTipLadderReady(fare);
+const effectiveTip = reconcileSelectedTip(selectedTip, tipOptions);
+// ...
+{tipOptions.map((amt) => (
+  <TouchableOpacity disabled={!tipReady}
+    style={[..., effectiveTip === amt && styles.tipBtnActive]} />
+))}
+// handleSubmit charges `effectiveTip` — it cannot diverge from the highlight.
 ```
 
 ## 8. Rollback plan
@@ -182,27 +208,22 @@ Ordered least- to most-invasive, none requiring a redeploy except the last:
 2. **Increment path** — self-disabling. If `auth_incrementable` is false
    everywhere (e.g. set the column default to `false` and clear it), every ride
    takes the two-charge fallback, which is the pre-existing overflow path.
-3. **Tip batching** — the loop is registered inside its own `try/except` in
-   `lifespan.py`. To drain rather than revert: leave it running until
-   `pending_tips` has no `owed`/`failed` rows, then remove the registration.
-   **Do not force-revert with rows outstanding** — those are debts owed to
-   drivers. Export first:
-   `SELECT * FROM public.pending_tips WHERE status IN ('owed','charging','failed');`
-4. **Migration** — rollback SQL is in the header of
-   `backend/migrations/321_tip_collection.sql`.
+3. **Migration** — rollback SQL is in the header of
+   `backend/migrations/321_tip_collection.sql`. Dropping `auth_incrementable`
+   is safe at any time: its absence reads as "not incrementable", which is the
+   pre-existing behaviour.
 
 **`git revert` is not sufficient** for anything already applied to live data:
-captured cancellation fees, incremented authorizations, and collected tip
-batches are real Stripe movements. Reverting the code does not reverse them;
-they need refunds.
+captured cancellation fees and incremented authorizations are real Stripe
+movements. Reverting the code does not reverse them; they need refunds.
 
 ## 9. Verification performed
 
-- [x] **Automated tests** — full backend suite run (see result below). New:
-      `test_cancel_fee_from_hold.py` (7), `test_pending_tip.py` (16),
-      `test_tip_batch_charge.py` (10). Updated:
+- [x] **Automated tests** — full backend suite, after rebasing onto current
+      `origin/main`. New: `test_cancel_fee_from_hold.py` (7),
+      `rider-app/__tests__/tipPresets.test.ts` (13). Updated:
       `test_ride_preauth_booking.py`, `test_settle_card_capture.py`,
-      `test_preauth_capture.py`, `test_rate_tip_abuse.py`.
+      `test_preauth_capture.py`.
 - [x] **Real production build** of rider-app — `npm run build:web`, exit 0.
       Also `tsc --noEmit`, clean. (CLAUDE.md requires the real build; the
       typecheck alone would not have counted.)
@@ -236,13 +257,15 @@ State this plainly rather than letting the checklist imply full coverage.
   Stripe's docs say the authoritative answer is the Dashboard ("find your user
   category"). **If it turns out unavailable, nothing breaks** — every tip takes
   the two-charge fallback at a cost of $0.30 each.
-- **Not feature-flagged.** The hold size is env-tunable and the increment path
-  self-disables, but the `pending_tips` routing has no kill switch. Adding one
-  behind `app_settings` would be the safer shape if this goes to live traffic
-  before a staging pass.
-- **Driver app not updated.** `pending_tips` rows are invisible to drivers, so
-  a tip collected days later appears with no prior "pending" indication. Left
-  out deliberately to keep this change reviewable; it is a real UX gap.
+- **Not feature-flagged, and it does not need to be.** The hold size is
+  env-tunable (`RIDE_AUTH_BUFFER_CAD`) and the increment path self-disables
+  when `auth_incrementable` is false, so both halves have a runtime off switch
+  without a deploy.
+- **The branch was rebased late.** It was cut from a 6-day-stale base and only
+  discovered during review that `main` had already shipped the late-tip fix.
+  The duplicate subsystem was removed, but the interaction between this
+  branch's pre-capture increment and main's post-capture `charge_late_tip` has
+  been verified only by the test suite, not against real Stripe.
 - **No visual-regression tooling exists for rider-app**, so the copy and
   tip-preset changes were reasoned about and type/build-checked, **not
   screenshotted**. Standing repo gap, not specific to this change.

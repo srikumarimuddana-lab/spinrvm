@@ -171,11 +171,17 @@ async def _reprovision_stripe_customer(
         )
 
     mode = key_mode(stripe_secret)
+    # Read for the email only. This path is rare (mode drift / resource_missing),
+    # so the extra lookup costs nothing on the healthy path — and a replacement
+    # customer must carry the same identity as a first-time one, or a rider
+    # repaired by the test→live cutover would silently lose email findability.
+    user = await db_supabase.get_user_by_id(user_id)
     customer = await asyncio.to_thread(
         lambda: stripe.Customer.create(
-            # PIPEDA (C4): still no email/name to Stripe — only the correlating
-            # user_id, plus the superseded ID so the two can be reconciled
-            # against the old account without a Spinr-side lookup.
+            **_customer_identity_fields(user),
+            # metadata.user_id stays the authoritative join key; the superseded
+            # ID lets the two be reconciled against the old account without a
+            # Spinr-side lookup.
             metadata={"user_id": user_id, "superseded_customer": stale_customer_id},
             api_key=stripe_secret,
             # Deliberately NOT the `cus-create-` key used for a first-time
@@ -237,6 +243,29 @@ def _metrics_inc(name: str, labels: dict) -> None:
         logger.debug("metric %s not recorded", name, exc_info=True)
 
 
+def _customer_identity_fields(user: Optional[dict]) -> dict:
+    """Identity kwargs sent to Stripe when creating/updating a rider customer.
+
+    Email is included so a Stripe customer is findable by the rider's address in
+    the dashboard — the mapping the previous Spinr app used, and what support,
+    dispute, and refund lookups are done by in practice. Before this, rider
+    customers carried only ``metadata.user_id``, so an email search in Stripe
+    returned nothing and every lookup needed a Supabase round-trip first.
+
+    PIPEDA note: this is a deliberate widening of what reaches Stripe (a US
+    processor) beyond the correlating id. Email only — NOT legal name, phone, or
+    address, which Stripe does not need and which stay in the Canadian region.
+    ``metadata.user_id`` remains the authoritative join key: it is immutable,
+    whereas a rider can change their email, and Stripe does not enforce
+    uniqueness on customer email (two customers may share one address).
+
+    Empty/missing email is simply omitted rather than sent as ``None``, so a
+    rider who has not completed their profile still gets a working customer.
+    """
+    email = ((user or {}).get("email") or "").strip()
+    return {"email": email} if email else {}
+
+
 async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
     """Return the user's Stripe customer id, creating it on first use.
 
@@ -261,14 +290,13 @@ async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
             )
         return stripe_customer_id
 
-    # PIPEDA (C4): do NOT send the rider's email or legal name to Stripe (a
-    # US processor). Neither is required to create a customer — only
-    # metadata.user_id is needed to correlate the Stripe customer back to
-    # our user. Avoiding the transfer keeps PII inside the Canadian region;
-    # contact details can be attached later only if a specific Stripe flow
-    # (e.g. a dispute) actually requires them.
+    # Email is sent alongside metadata.user_id so the customer is findable by
+    # address in the Stripe dashboard (see _customer_identity_fields for the
+    # scope of what we do and don't transfer). Legal name, phone, and address
+    # are still withheld.
     customer = await asyncio.to_thread(
         lambda: stripe.Customer.create(
+            **_customer_identity_fields(user),
             metadata={"user_id": user_id},
             api_key=stripe_secret,
             idempotency_key=f"cus-create-{user_id}",
@@ -320,12 +348,63 @@ async def with_customer_repair(user_id: str, stripe_secret: str, op):
     except Exception as e:
         if not is_missing_on_key(e, customer_id):
             raise
-        repaired = await _reprovision_stripe_customer(
-            user_id, customer_id, stripe_secret, reason="resource_missing"
-        )
+        repaired = await _reprovision_stripe_customer(user_id, customer_id, stripe_secret, reason="resource_missing")
         # One retry only. If the fresh customer also 404s, something is wrong
         # with the key or the account, not with this row — let it surface.
         return repaired, await op(repaired)
+
+
+async def sync_stripe_customer_email(user_id: str) -> bool:
+    """Push the rider's current email onto their EXISTING Stripe customer.
+
+    Called after a profile edit changes the address. Without it the email
+    reaches Stripe only at customer-creation time, so a rider who later edits
+    their address drifts back to the state this whole change exists to fix:
+    unfindable in the Stripe dashboard by the address support actually has.
+
+    Deliberately best-effort and never raises. The profile write is already
+    committed by the time this runs, and Stripe being unreachable must not fail
+    a profile edit or roll one back. Failures are logged at ``error`` (not
+    warning) so they surface, and ``scripts/backfill_stripe_customer_emails.py``
+    is the reconciliation net that repairs any sync this drops.
+
+    Does NOT create a customer: a rider with no ``stripe_customer_id`` yet has
+    nothing to sync, and creation already carries the email. Does NOT repair a
+    stranded customer either — re-provisioning is a decision for a real payment
+    path with a rider waiting, not for a background directory sync.
+
+    Returns True when Stripe was updated.
+    """
+    try:
+        settings = await get_app_settings()
+        stripe_secret = settings.get("stripe_secret_key", "")
+        if not stripe_secret:
+            return False
+
+        user = await db_supabase.get_user_by_id(user_id)
+        customer_id = (user or {}).get("stripe_customer_id")
+        identity = _customer_identity_fields(user)
+        if not customer_id or not identity:
+            return False
+
+        await asyncio.to_thread(lambda: stripe.Customer.modify(customer_id, **identity, api_key=stripe_secret))
+        # Stripe IDs are operational identifiers, not PII — safe to log. The
+        # email itself is NOT logged (CLAUDE.md: never log email addresses).
+        logger.info(
+            "Synced rider email to Stripe customer",
+            extra={"user_id": user_id, "stripe_customer_id": customer_id, "domain": "payments"},
+        )
+        _metrics_inc("spinr_payments_stripe_customer_email_synced_total", {"surface": "rider", "outcome": "success"})
+        return True
+    except Exception as e:
+        logger.error(
+            "Failed to sync rider email to Stripe customer: %s",
+            e,
+            exc_info=True,
+            extra={"user_id": user_id, "domain": "payments"},
+        )
+        _metrics_inc("spinr_payments_stripe_customer_email_synced_total", {"surface": "rider", "outcome": "failed"})
+        return False
 
 
 @api_router.post("/create-intent")
@@ -394,6 +473,7 @@ async def create_payment_intent(
             idempotency_key = f"ride-{body.ride_id}-{current_user['id']}-{amount}"
         else:
             idempotency_key = f"intent-{current_user['id']}-{int(_time.time() // 60)}"
+
         # Sync Stripe SDK: threadpool so the round-trip doesn't block the
         # event loop (idempotency key makes retries safe).
         #

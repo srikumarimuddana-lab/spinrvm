@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
@@ -18,12 +18,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
 import { useStripe } from '@stripe/stripe-react-native';
 import { selectDefaultCardId } from '../utils/selectDefaultCard';
+import { shouldApplyWorkModeDefault } from '../utils/workModeDefault';
 import { useWalletStore } from '../store/walletStore';
 import { useWorkProfileStore } from '../store/workProfileStore';
 import { showToast } from '../store/toastStore';
 import type { Ride, RideRequiresAction } from '../store/rideStore';
 import ConfirmSheet from '../components/ConfirmSheet';
-import api, { getApiErrorMessage } from '@shared/api/client';
+import api, { getApiErrorMessage, isEngineError } from '@shared/api/client';
+import { recordNonFatal } from '../utils/crashlytics';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { Analytics } from '@shared/analytics';
@@ -59,6 +61,10 @@ function PaymentConfirmScreenContent() {
     .filter(a => a.id);
   const firstCorporateAccountId = corporateAccounts[0]?.id;
   const [useCorporate, setUseCorporate] = useState(workModeEnabled);
+  // True once the rider picks a payment source by hand. A ref, not state:
+  // it must not itself trigger a render, and the work-mode sync effect reads
+  // it without needing to depend on it.
+  const riderChosePaymentRef = useRef(false);
   const [selectedCorporateId, setSelectedCorporateId] = useState<string | null>(
     workModeEnabled ? (activeCompanyId ?? null) : null,
   );
@@ -118,7 +124,25 @@ function PaymentConfirmScreenContent() {
 
   // Keep corporate toggle in sync when work mode is toggled elsewhere
   useEffect(() => {
-    if (workModeEnabled && corporateAccounts.length > 0) {
+    // `riderChosePaymentRef` is the guard: once the rider has picked a payment
+    // source by hand, this effect must never move it back.
+    //
+    // Without it, work mode re-asserts corporate billing on any later re-run —
+    // and this effect re-runs when activeCompanyId or firstCorporateAccountId
+    // changes, which a late fetchWorkProfiles() resolution does. Sequence:
+    // rider opens this screen, deliberately taps their personal card, the
+    // profile fetch lands a moment later, the toggle silently flips back, and
+    // the COMPANY is billed for a personal trip. Neither the rider nor the
+    // company is told. That is a wrong charge, not a cosmetic glitch.
+    //
+    // Defaulting to corporate for a work-mode rider who hasn't chosen yet is
+    // still correct — that is the point of work mode — so the guard only
+    // suppresses the override, never the initial default.
+    if (shouldApplyWorkModeDefault({
+      workModeEnabled,
+      hasCorporateAccounts: corporateAccounts.length > 0,
+      riderChosePayment: riderChosePaymentRef.current,
+    })) {
       // Keeps the corporate toggle in sync when work mode is enabled
       // elsewhere; neither useCorporate nor selectedCorporateId is a dep of
       // this effect (workModeEnabled/corporateAccounts.length are), so no
@@ -197,6 +221,15 @@ function PaymentConfirmScreenContent() {
         router.replace({ pathname: '/driver-arriving', params: { rideId: bookedRide.id } } as any);
       }
     } catch (error: any) {
+      // Same capture as ride-options' proceedWithBooking: this catch also
+      // swallows client-side crashes (notably confirmPayment() when the
+      // Stripe native module is absent or older than the JS bundle), which
+      // rideStore's recordNonFatal never sees because they happen outside its
+      // try. Without this the only trace was a toast.
+      if (isEngineError(error)) {
+        console.error('[booking] client-side crash during booking', error);
+        recordNonFatal(error, { screen: 'payment-confirm', action: 'handleBookRide' });
+      }
       // Not user-facing: `error.message` here only drives the 409-detection
       // control-flow branch below (routing to the rider's already-active
       // ride instead of retrying booking). The actual user-visible message a
@@ -333,7 +366,7 @@ function PaymentConfirmScreenContent() {
           {savedCards.length === 0 && (
             <TouchableOpacity
               style={styles.paymentOption}
-              onPress={() => { setSelectedPayment('card'); setUseCorporate(false); router.push('/manage-cards' as any); }}
+              onPress={() => { riderChosePaymentRef.current = true; setSelectedPayment('card'); setUseCorporate(false); router.push('/manage-cards' as any); }}
               accessibilityRole="button"
               accessibilityLabel="Add a credit card"
               accessibilityHint="Opens the manage cards screen"
@@ -401,7 +434,7 @@ function PaymentConfirmScreenContent() {
               </View>
               <CustomToggle
                 value={useCorporate}
-                onValueChange={(v) => setUseCorporate(v)}
+                onValueChange={(v) => { riderChosePaymentRef.current = true; setUseCorporate(v); }}
                 trackColor={{ false: colors.border, true: colors.primary }}
                 thumbColor="#FFF"
                 accessibilityLabel="Bill to business"

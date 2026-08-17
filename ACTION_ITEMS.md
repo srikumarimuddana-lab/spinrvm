@@ -3160,6 +3160,172 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   production (only 2 low-ride-count sample accounts were spot-checked
   live, both well under every cap these fixes address).
 
+### A31. `GET /drivers/earnings` zeroed trip-count/distance/duration stats for drivers whose period rides are all legacy-imported (2026-08-13)
+- **Source:** live user report against a real migrated driver's Activity
+  screen ("All Time" showed `Total Earned $0.00` / `0 Total Trips` /
+  `0.0 KM Driven` / `0h Online Time` directly above a rendered list of 17
+  real completed rides).
+- **Root cause:** `get_driver_earnings` (`backend/routes/drivers/earnings.py`)
+  summed `total_rides`/`total_distance_km`/`total_duration_minutes` from the
+  same `EXCLUDE_LEGACY_RIDES`-filtered rides list used for money totals.
+  Those three fields aren't money — `utils/legacy_rides.py`'s own docstring
+  says the exclusion "only governs money math" and imported rides "remain
+  fully visible in ride history" — so a driver with zero non-legacy
+  completed rides in the period got zeroed activity stats alongside the
+  (correctly) zeroed earnings.
+- [x] **Status:** DONE (2026-08-13). Added a second, unfiltered
+  "all completed rides in period" query; the three activity fields now
+  source from it. `average_per_ride` still divides by the money-rides count
+  (now explicit, not reused from `total_rides`) so it isn't diluted by
+  $0-earning legacy trips. 2 new regression tests
+  (`test_earnings_coverage.py::TestGetDriverEarningsLegacyActivityStats`).
+  Full Change Impact Log at
+  `docs/change-log/2026-08-13-driver-earnings-legacy-activity-stats.md`.
+- **Follow-up (not yet done):** `GET /drivers/balance`
+  (`get_driver_balance`, same file) has the identical `total_rides =
+  len(rides)` pattern on its own legacy-excluded query — same latent bug,
+  left unfixed here because its `total_rides` response field has no
+  frontend consumer today (`DriverBalance` TS type in
+  `driver-app/store/driverStore.ts` doesn't include it). Fix opportunistically
+  if/when a frontend surface starts reading `/balance`'s `total_rides`, or
+  proactively for consistency — low priority since no one currently sees
+  the wrong number.
+- **Superseded by A32:** the note above about `average_per_ride` staying
+  divided by the money-rides count "so it isn't diluted by $0-earning
+  legacy trips" described the state as of this entry's date. A32
+  (2026-08-13, same day) reversed that specific call: Avg per Trip is now
+  a deliberately blended `total_earnings / total_rides`, per an explicit
+  product decision that trip-count and dollar figures should use the same
+  denominator everywhere. See A32.
+
+### A32. Blended lifetime earnings — previous-app money is now permanent and unbadged on driver/rider surfaces (2026-08-13)
+- **Source:** direct product decision, same conversation as A31. A31 fixed
+  trip/distance/duration stats reading zero for all-legacy periods; the
+  user asked the natural follow-on question — if a driver's total money
+  earned and average per trip still exclude real, already-paid previous-app
+  money, and read a technical "legacy"/"imported" framing, is that the
+  smartest way to present it? Decision: no. Blend it into one honest
+  number, drop all "legacy"/"imported" language from rider/driver-facing
+  UI, keep the distinction in the backend and admin portal only.
+- **Reverses two prior decisions, both explicitly superseded here:**
+  - **A30 Finding 3/4** (2026-08-13, earlier same day) shipped a "N rides
+    from your previous account are shown below but not counted here"
+    explainer and an "Imported"/"Imported from your previous account"
+    ride-card badge on rider-app, driver-app, and admin-dashboard. Now
+    **removed from rider-app and driver-app** (no more badge, no more
+    explainer — money is blended, so the explainer's premise is false).
+    **Kept on admin-dashboard** — Spinr staff need the distinction for
+    support/audit; that surface was never customer-facing.
+  - **The `PREVIOUS_APP_VISIBLE_UNTIL` sunset** (`utils/legacy_rides.py`,
+    2026-08-31, introduced 2026-08-12/13 as deliberate transition
+    messaging with an end date) is **retired** for all three call sites
+    that used it (`get_driver_balance`, `get_payout_history`,
+    `build_statement`). Hiding a driver's own previous-app money on a
+    calendar date would make their lifetime total look like it shrank —
+    the same trust problem A31 fixed for trip counts, now closed for the
+    dollar figure too. The helper function itself is untouched (still
+    correct, just unused by these three call sites).
+- [x] **Status:** DONE (2026-08-13).
+  - **Backend:** `get_driver_balance`/`get_payout_history`/`build_statement`
+    no longer gate on `previous_app_history_visible()` — previous-app
+    money and payout rows are always included. No new fields; existing
+    `previous_app_paid_total` (`/drivers/balance`) is now unconditional.
+  - **driver-app Activity screen:** "All Time" Total Earned blends Spinr
+    earnings + `previous_app_paid_total` (not blended for Today/Week/Month
+    — no reliable per-period split for old-app transfer dates). New
+    "Previously Paid" breakdown row makes the blend a visible, additive
+    line item (every row sums to the total) rather than a footnote. Avg
+    per Trip is now a simple `total_earnings / total_rides` over the same
+    blended total and the already-all-inclusive trip count (A31). New "Avg
+    Distance/Trip" stat tile. Removed the ride-card badge and the "not
+    counted here" explainer.
+  - **driver-app Payout screen:** "Total Earnings" breakdown item now
+    blends the same way, so the figure matches the Activity screen instead
+    of showing two different "Total Earnings" numbers on two screens.
+    "Previously Paid" added as a 4th breakdown item (additive — only
+    rendered when non-zero, so a driver with none sees the original
+    3-item row unchanged). `AVAILABLE BALANCE` (the real withdrawable
+    figure) is untouched — blending only ever happens in *display*
+    totals, never in `payable_balance` math.
+  - **driver-app Payout History screen:** "Previous app" section's copy no
+    longer promises an Aug 31, 2026 cutoff or says the money "isn't part
+    of your Spinr earnings" (both now false).
+  - **rider-app Activity tab:** badge removed. No total/average change —
+    riders don't have an earnings-exclusion figure to blend.
+  - Full Change Impact Log:
+    `docs/change-log/2026-08-13-blended-lifetime-earnings.md`.
+- **Verification:** backend — `test_previous_app_sunset.py` rewritten to
+  pin "always visible" instead of the two-branch cutoff (5/5 pass); full
+  affected-file run (`test_previous_app_sunset.py`,
+  `test_earnings_coverage.py`, `test_drivers_extended.py`,
+  `test_payouts_coverage.py`, `test_driver_statement.py`,
+  `test_driver_statement_pdf.py`) — 193/193 pass. driver-app —
+  `ActivityView.test.tsx` updated (badge-removal + blended-total/average
+  regression tests), 9/9 pass; `tsc --noEmit` clean. rider-app — `tsc
+  --noEmit` clean (no test infra for `activity.tsx`, consistent with the
+  rest of this app's screen-level files).
+- **What was NOT verified:** not exercised against real Supabase or a real
+  migrated driver account — reasoned from the code and unit-mocked tests
+  only. No screenshot/visual verification (standing gap, no
+  visual-regression tooling in this repo). `payout.tsx`/`payout-history.tsx`
+  have no existing test file to extend (consistent with the rest of this
+  app's screen-level files, not a gap introduced here) — verified by
+  `tsc --noEmit` and manual code review only.
+- **Follow-up, found live the same day (A33):** A32's blend added
+  `driverBalance.previous_app_paid_total` (a Stripe-payout-ledger sum) on
+  top of Spinr-only earnings. A real migrated driver testing the shipped
+  fix still saw `Total Earned $0.00` / `Fare $0.00` / `Avg per Trip $0.00`
+  under a correctly-populated `Total Trips` / `KM Driven` / `Online Time` —
+  because that driver has real legacy RIDES but an incomplete previous-app
+  payout backfill, so the ledger-derived figure was 0. See A33.
+
+### A33. `get_driver_earnings`'s money math still legacy-excluded — A32's payout-ledger blend under-covered (2026-08-13, same day as A32)
+- **Source:** live user report against the just-shipped A32 fix (see A32's
+  follow-up note above) — the same migrated driver still saw all-zero
+  dollar figures.
+- **Root cause:** A32 blended `driverBalance.previous_app_paid_total`
+  (sum of `payouts` rows with `payout_type='stripe_sync'` — a record of
+  Stripe *transfers*) into the Activity screen's Total Earned. That figure
+  depends on the previous-app payout-history backfill having a row for
+  every driver's legacy earnings. `get_driver_earnings` itself still
+  filtered its OWN money query with `EXCLUDE_LEGACY_RIDES`
+  (`utils/legacy_rides.py`) — the same pattern A31 had already fixed for
+  `total_rides`/`total_distance_km`/`total_duration_minutes`, left
+  unfixed for money because A30 Finding 3 deliberately excluded legacy
+  money by design at the time. A32 then tried to patch that exclusion back
+  in from a different, less-complete source (the payout ledger) instead of
+  removing it at the actual source (the ride query).
+- [x] **Status:** DONE (2026-08-13). `get_driver_earnings` now sources
+  BOTH activity stats and money (Fare/Tips/Bonus/Referral/Tax/Total
+  Earned/Avg per Trip) from a single unfiltered ride query — the same
+  `all_completed_rides` list A31 already introduced for activity stats,
+  reused instead of duplicated. Each ride carries its own real
+  `ride_completed_at`, so this stays correctly sliced per calendar period
+  (no precision fabricated to make it work) and doesn't depend on the
+  payout-ledger backfill's completeness. New `elapsed_days` field
+  (fixed for today/week/month, measured from the earliest ride for "all")
+  backs three new driver-app stat tiles: Avg Trips/Day, Avg KM/Day, and
+  Online Time split into Total + Avg/Day (all requested directly by the
+  user alongside this fix).
+  - `driver-app` `ActivityView.tsx`: reads the now-blended
+    `total_earnings`/`average_per_ride` directly; removed the
+    client-side `previous_app_paid_total` addition (would now
+    double-count) and the "Previously Paid" breakdown row it fed (now
+    redundant — Fare/Tips/Bonus/Tax already include legacy money).
+  - `get_driver_balance`/`payable_balance` (the Payout screen's
+    withdrawable-balance math): **untouched** — still legacy-excluded by
+    design, since that money was already paid out by the old app and must
+    never be double-countable as withdrawable. This fix only ever affects
+    the `/drivers/earnings` DISPLAY endpoint.
+  - 2 tests in `TestGetDriverEarningsLegacyActivityStats` rewritten for
+    the new blended-money behavior (full file: 42/42 pass); affected-file
+    backend run 193/193 pass. `ActivityView.test.tsx` updated for the
+    backend-driven blend and new tiles, 8/8 pass. `tsc --noEmit` clean.
+  - Full Change Impact Log:
+    `docs/change-log/2026-08-13-blended-earnings-money-inclusion-fix.md`.
+- **What was NOT verified:** same boundary as A32 — not exercised against
+  real Supabase or a real migrated driver account, no visual verification.
+
 ## P1 — Fix before launch (code)
 
 ### B0. Migration runner shreds any migration whose text contains "CONCURRENTLY"
@@ -4996,6 +5162,56 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   confirmed policy — and whichever way it resolves, that decision is
   written down so this doesn't silently drift a third time.
 
+### B27. `charge.dispute.closed` mis-marks rides and can update the wrong dispute row; dispute fees never reach the ledger
+
+- [ ] **Status:** open (found 2026-08-14 while writing
+  `docs/runbooks/payment-dispute-evidence.md`). Real money path, no live
+  chargeback has exercised it yet — which is why it's still latent.
+- **Issue/gap:** three defects in the `charge.dispute.closed` branch of
+  `backend/routes/webhooks.py` (≈ line 1183):
+  1. **`warning_closed` is treated as a loss.** Stripe fires
+     `charge.dispute.closed` for `won`, `lost` *and* `warning_closed` (an
+     early-fraud-warning/inquiry that resolved without becoming a real
+     chargeback). The code is `new_payment_status = "paid" if
+     dispute_status == "won" else "dispute_lost"` — so an inquiry that
+     closed in our favour permanently marks a fully-paid ride
+     `dispute_lost`, corrupting revenue reporting and the rider's record.
+  2. **The dispute row is looked up by `payment_intent_id`, not by
+     `stripe_dispute_id`.** `find_one("stripe_disputes",
+     {"payment_intent_id": pi})` ignores the table's only unique key
+     (`idx_stripe_disputes_dispute_id`). When the PI is absent Stripe sends
+     `""`, and rows are inserted with `""` too — so a PI-less close can
+     match an arbitrary earlier PI-less row and overwrite *its* status.
+     Two disputes on one PI hit the same bug.
+  3. **The dispute fee never lands in `financial_events`.** Stripe debits
+     the disputed amount *and* a per-dispute fee via
+     `dispute.balance_transactions`; neither is recorded, so
+     `docs/runbooks/stripe-reconciliation.md` will show an unexplained
+     delta for every chargeback.
+- **Also missing:** `charge.dispute.updated` is not in
+  `_STRIPE_HANDLED_EVENTS`, so `needs_response → under_review` transitions
+  are invisible; `charge.dispute.funds_withdrawn` /
+  `funds_reinstated` likewise.
+- **Action:** key the close lookup on `stripe_dispute_id`; map
+  `warning_closed` to a non-loss status (leave `paid`, or add a distinct
+  value — do **not** reuse `dispute_lost`); record the balance-transaction
+  amounts as `financial_events` rows; add `charge.dispute.updated` to the
+  allowlist.
+- **Risk of implementing:** low-moderate — webhook-only, additive on the
+  ledger side. The `warning_closed` fix changes what an existing branch
+  writes to `rides.payment_status`, so it needs a before/after in the
+  Change Impact Log and a check for any consumer that reads
+  `payment_status == 'dispute_lost'`.
+- **Verification:** extend `backend/tests/test_routes_webhooks_coverage.py`
+  — it covers `won`/`lost` but has no `warning_closed` case and no
+  two-disputes-one-PI case.
+- **Files:** `backend/routes/webhooks.py`, `backend/migrations/` (nullable
+  `evidence_due_by`/fee columns if taken with C23),
+  `backend/tests/test_routes_webhooks_coverage.py`
+- **Acceptance:** a `warning_closed` event leaves a paid ride `paid`; a
+  PI-less close updates only its own row; every closed dispute has matching
+  `financial_events` rows for the debit and the fee.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly
@@ -5643,8 +5859,22 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   repo).
 
 ### C12. Codecov uploads on `main` pushes silently fail — no token configured
-- [ ] **Status:** open — partially addressed 2026-08-11 (the "also worth
-  doing alongside" half, not the actual fix — see below). The `CODECOV_TOKEN`
+- [x] **Status:** CLOSED 2026-08-16 — user explicitly chose "remove the
+  step" over "fix the token" (no Codecov account access available in-session
+  to generate one). All 4 `codecov/codecov-action@v6` upload steps removed
+  from `ci.yml` (`backend-test`, the already-dead `frontend-test`,
+  `driver-app-test`, `rider-app-test`) along with their now-orphaned
+  `steps.codecov_upload.outcome == 'failure'` warning-annotation follow-ups.
+  Verified the "Coverage Regression"/"Corporate Coverage Floor" guardrails
+  in `ci-guardrails.yml` never depended on these uploads (they compute
+  PR-branch coverage locally via `pytest --cov`), so this is a pure noise
+  reduction — no gating behavior changed. **Investigating this surfaced a
+  separate, more important gap — see C24.** Re-open (new item, don't reuse
+  this checkbox) if Codecov access is ever obtained and the dashboard/
+  historical-trend value is wanted back.
+- **Prior status before closing:** open — partially addressed 2026-08-11 (the
+  "also worth doing alongside" half, not the actual fix — see below). The
+  `CODECOV_TOKEN`
   secret itself is still missing; do not close this checkbox until it's
   added and `token: ${{ secrets.CODECOV_TOKEN }}` is wired into the 3 steps
   below.
@@ -5702,6 +5932,58 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 - **Not blocking:** actual test pass/fail and coverage-floor enforcement
   (the `--cov-fail-under` gate inside `pytest`) are unaffected — this is
   purely the external Codecov *reporting* path, not CI's own gate.
+
+### C24. "Coverage Regression" guardrail cannot fail while `CODECOV_TOKEN` is unset — every PR auto-passes it
+- [x] **Status:** partially CLOSED 2026-08-16, same day as found. The
+  **honesty half** is fixed: `ci-guardrails.yml`'s "Assert no regression"
+  step now distinguishes `base_pct <= 0` (no baseline — cannot verify
+  anything) from a genuinely verified pass/fail, sets a
+  `baseline_status` job output (`no-baseline` vs `verified`), and
+  `guardrail-summary` renders the PR-facing table row as
+  `⚠️ not verified (no baseline — see ACTION_ITEMS.md C24)` instead of a
+  bare ✅ when there's no baseline — the false "PASS: Coverage within
+  tolerance" message is gone; the step's own log and the PR summary now
+  both say plainly that no regression check happened. **Still open:** this
+  does not add real regression detection back — that still needs a real
+  `CODECOV_TOKEN` (same blocker as C12, no account access available in any
+  session so far). Deliberately did **not** make `base_pct <= 0` a hard
+  `sys.exit(1)` — job-level `continue-on-error: true` was already present
+  before this fix and a missing token isn't any individual PR author's
+  fault; turning it into a blocking failure for every PR until someone
+  adds the token would be a bigger, more disruptive behavior change than
+  this fix's actual goal (truthful reporting), and wasn't asked for.
+- **What's wrong:** `.github/workflows/ci-guardrails.yml`'s "Fetch base
+  branch coverage from Codecov" step (`base_coverage` job step, ~line 82)
+  calls `https://codecov.io/api/v2/github/.../branches/{base}/coverage`
+  with `Authorization: Bearer ${CODECOV_TOKEN}`. With no `CODECOV_TOKEN`
+  secret configured (same root cause as C12), that call fails; the script's
+  own fallback (`... || echo "0"`) sets `BASE_PCT=0`. The next step,
+  "Assert no regression", only fails when `base_pct > 0 and delta <
+  -TOLERANCE` — since `base_pct` is always `0`, that condition can **never**
+  be true. The gate does not degrade gracefully, it **structurally cannot
+  fail**, and has printed "PASS: Coverage within tolerance" on every PR this
+  session regardless of what the PR actually did to coverage.
+- **Impact:** "Coverage Regression: success" in every Guard Rails summary
+  this session (and, per the mechanism, every PR since this workflow was
+  introduced) has been a rubber stamp, not a real check. A PR that
+  genuinely tanked backend coverage would show the same green tick as one
+  that improved it. This is a real gap in the release-quality gate, more
+  consequential than C12's noisy-but-harmless upload failures.
+- **Root cause:** same missing `CODECOV_TOKEN` secret as C12, but this is
+  the half that actually changes gating behavior — C12 only affected
+  external reporting.
+- **Why not fixed here:** same constraint as C12 — no Codecov account
+  access available in this session to generate a real token. Two real
+  fixes, not mutually exclusive: (1) add `CODECOV_TOKEN` so the base-branch
+  fetch actually works; (2) regardless of (1), make the "Assert no
+  regression" step fail loudly (or at minimum warn) when `base_pct == 0`
+  instead of silently treating "no baseline data" as "no regression" —
+  those are different findings and should not share one code path.
+- **Confirmed NOT shared:** checked `corporate-coverage-floor-gate` (the
+  "Corporate Coverage Floor" guardrail) directly — it's a fully separate
+  job that runs its own test suite and calls
+  `scripts/check_corporate_coverage_floor.py` locally, no Codecov API call
+  anywhere in it. Only "Coverage Regression" has this bug.
 
 ### C13. Required `pull_request`-triggered workflows silently never fire on some PRs
 - [ ] **Status:** open — found 2026-08-10 on PR #3494. `CI/CD Pipeline`
@@ -7238,6 +7520,62 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   `admin-dashboard/tsconfig.json` (+ possibly a new `vitest-setup.d.ts` in
   admin-dashboard); no application code.
 
+### C23. Chargeback operations: no deadline tracking, no admin visibility, no evidence tooling
+
+- [ ] **Status:** open (filed 2026-08-14 alongside
+  `docs/runbooks/payment-dispute-evidence.md`, which documents the manual
+  workaround for all three).
+- **Issue/gap:** the webhook records a chargeback and then nothing else
+  happens. Specifically:
+  1. **No `evidence_due_by`.** Stripe puts
+     `dispute.evidence_details.due_by` on the event; we drop it. Miss the
+     date (7–21 days depending on network) and the dispute is lost
+     automatically with no evidence considered. Nothing warns as it
+     approaches.
+  2. **No admin UI over `stripe_disputes` at all.** The Disputes page
+     (`admin-dashboard/src/app/dashboard/disputes`) reads the `disputes`
+     table — rider-raised refund requests, a different thing. Card-network
+     chargebacks are visible only via SQL or the Stripe Dashboard. The
+     `charge_dispute_created` admin WS broadcast fires into a UI that has
+     nowhere to show it.
+  3. **No evidence pack.** Assembling a response is 4–6 endpoints and 3 SQL
+     queries by hand (see the runbook). Everything needed already exists —
+     invoice PDF, `route-map.png`, `location-trail`, ride timeline,
+     `ride_offers`, account history, `ride_messages` — just not in one
+     place.
+  4. **No submission path.** `stripe.Dispute.modify(...)` is never called;
+     evidence is uploaded manually in the Stripe Dashboard.
+- **Action (in priority order):**
+  1. Additive migration: `evidence_due_by timestamptz`,
+     `evidence_submitted_at timestamptz`, `fee_cents integer` on
+     `stripe_disputes`; populate `evidence_due_by` in the
+     `charge.dispute.created` handler.
+  2. Alert on approach — a Sentry rule on the existing `CHARGEBACK:` error
+     log for the open event, plus a T-3-days warning (a replay-safe
+     background loop per `spinr-background-loop`, or a Stripe Dashboard
+     notification if we'd rather not add a 19th loop).
+  3. "Chargebacks" tab on the existing Disputes page reading
+     `stripe_disputes` — ride link, reason, amount, status, due date,
+     days-remaining. Read-only first.
+  4. `GET /api/admin/rides/{ride_id}/dispute-pack` → zip of invoice PDF,
+     route-map PNG, GPS-trail CSV, timeline JSON, account-history summary,
+     draft cover letter. PIPEDA-filtered by construction (driver_code only,
+     never driver phone/plate/address; GPS clipped to
+     `navigating_to_pickup` + `trip_in_progress`, matching what
+     `route-map.png` already does).
+  5. Only then consider submitting from admin via the Stripe Files API —
+     higher risk, and the Dashboard works.
+- **Why it's P2 not P1:** chargeback volume is currently ~zero, and the
+  runbook makes the manual path workable. Items 1–2 should jump to P1 the
+  first time a real dispute lands, because a missed deadline is an
+  unrecoverable loss.
+- **Files:** `backend/routes/webhooks.py`, new `backend/migrations/NN_*.sql`,
+  `backend/routes/admin/rides.py` (pack endpoint),
+  `admin-dashboard/src/app/dashboard/disputes/`
+- **Acceptance:** every open chargeback is visible in admin with its
+  deadline; a support agent can produce a complete, PIPEDA-clean evidence
+  pack for a ride in one click.
+
 ## P3 — Post-launch backlog (tracked, not gating)
 
 ### Notification-channel coverage backlog (2026-08-08 audit, branch `claude/email-alerts-spinr-branding-l12lg2`)
@@ -7595,6 +7933,13 @@ Remaining, roughly in order of user impact:
   additionally now **escapes** admin-authored free text, which the previous
   bare `<h2>`/`<p>` interpolation did not. See
   `docs/change-log/2026-08-09-all-emails-on-shared-branded-shell.md`.
+- [ ] **N18. No light-on-dark variant of the Spinr logo** — `spinr_logo.png` is
+  a charcoal wordmark with a red spiral "o", drawn for a light ground. That
+  constrains the email layout in two places: the header band must stay light
+  even in dark mode, and the dark footer carries the company name as text
+  rather than the mark. A light-on-dark variant would let the email invert
+  fully. Design decision, not a code one — see
+  `docs/change-log/2026-08-09-email-header-uber-format.md`.
 - [x] **N17 closed**: added `company_app_name` (default `"Spinr"`) as a new,
   independent setting alongside `company_name` (the legal entity) —
   `schemas.AppSettings.company_app_name`, wired through

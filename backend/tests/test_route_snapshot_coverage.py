@@ -800,3 +800,49 @@ class TestRenderRideSnapshot:
             dropoff_lng=-104.1,
         )
         assert result is None
+
+
+class TestNormalizePolylinePoints:
+    """Regression: legacy-imported rides stored `planned_route_polyline` as
+    `{"lat": …, "lng": …}` objects instead of the `[[lat, lng], …]` arrays
+    migration 100 defines. Nothing errored — `validCoordinate()` in
+    shared/utils/routeSegments.ts silently rejected every point, so the
+    ride-detail maps drew no route line at all. Migration 313 repairs the
+    stored rows; this normalizer keeps a render correct for either shape so an
+    unconverted row can never blank the route again.
+    """
+
+    def test_array_shape_is_the_contract_and_passes_through(self):
+        assert route_snapshot.normalize_polyline_points(
+            [[52.1, -106.6], [52.2, -106.7]]
+        ) == [[52.1, -106.6], [52.2, -106.7]]
+
+    def test_object_shape_from_legacy_import_is_converted(self):
+        assert route_snapshot.normalize_polyline_points(
+            [{"lat": 52.1, "lng": -106.6}, {"lat": 52.2, "lng": -106.7}]
+        ) == [[52.1, -106.6], [52.2, -106.7]]
+
+    def test_mixed_shapes_and_malformed_points_are_dropped_not_nulled(self):
+        assert route_snapshot.normalize_polyline_points(
+            [
+                [52.1, -106.6],
+                {"lat": 52.2, "lng": -106.7},
+                "not-a-point",
+                [1],                          # too short
+                {"lat": None, "lng": -106.8},  # non-numeric
+                {"lng": -106.9},               # missing lat
+            ]
+        ) == [[52.1, -106.6], [52.2, -106.7]]
+
+    def test_booleans_are_not_accepted_as_coordinates(self):
+        # bool is a subclass of int — guard against True/False slipping through.
+        assert route_snapshot.normalize_polyline_points([[True, False]]) is None
+
+    def test_ints_are_widened_to_float(self):
+        result = route_snapshot.normalize_polyline_points([[52, -106], [53, -107]])
+        assert result == [[52.0, -106.0], [53.0, -107.0]]
+        assert all(isinstance(c, float) for point in result for c in point)
+
+    @pytest.mark.parametrize("value", [None, "nope", 42, {}, [], [{}, "x"]])
+    def test_unusable_input_returns_none(self, value):
+        assert route_snapshot.normalize_polyline_points(value) is None

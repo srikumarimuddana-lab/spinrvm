@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { View, Text, StyleSheet, Platform, Linking, TouchableOpacity, ActivityIndicator, AppState, Modal } from 'react-native';
-import MapView, { Polygon, Heatmap, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { Ionicons } from '@expo/vector-icons';
 import { RouteLine } from '@shared/components/RouteLine';
@@ -16,7 +16,13 @@ import {
   ActiveRidePanel,
   TripCompletedPanel,
   MapControls,
+  DemandLegend,
+  ForecastStrip,
+  HeatmapCells,
+  HotspotChips,
 } from '../../../components/dashboard';
+import { useDemandHeatmap } from '../../../hooks/useDemandHeatmap';
+import { useAirportZones } from '../../../hooks/useAirportZones';
 import { RideOfferPanel } from '../../../components/panels/RideOfferPanel';
 import { useDriverDashboard } from '../../../hooks/useDriverDashboard';
 import { CarMarker, resolveMarkerVariant, type CarMarkerVariant } from '../../../components/CarMarker';
@@ -30,6 +36,7 @@ import { showToast } from '../../../hooks/useToast';
 import api, { isAppCheckTokenReady } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import type { SOSTriggerResult } from '@shared/types/safety';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from '@shared/api/queryClient';
@@ -274,39 +281,29 @@ function DriverDashboard() {
     return () => clearInterval(interval);
   }, [rideState]);
 
-  // Demand heatmap — controlled by admin per service area
-  const [heatmapPoints, setHeatmapPoints] = useState<{ latitude: number; longitude: number; weight: number }[]>([]);
+  // Demand heatmap — aggregated cells with auto-refresh (HM-03/04/05)
+  // v2 adds layer selection (HM-12) and surge mirror (HM-11)
+  const {
+    cells: heatmapCells,
+    status: heatmapStatus,
+    visible: heatmapVisible,
+    surge: heatmapSurge,
+    isV2: heatmapIsV2,
+    layer: heatmapLayer,
+    setLayer: setHeatmapLayer,
+    forecast: heatmapForecast,
+    hotspots: heatmapHotspots,
+    cellLatDeg: heatmapCellLat,
+    cellLngDeg: heatmapCellLng,
+  } = useDemandHeatmap(rideState, isOnline);
 
-  // Fetch heatmap data when idle (backend returns empty if admin disabled it)
-  useEffect(() => {
-    if (rideState !== 'idle') {
-      // Clear stale heatmap points on leaving idle. Doesn't feed back into
-      // rideState, so this can't loop.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setHeatmapPoints([]);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await api.get<{ enabled: boolean; points?: number[][] }>('/drivers/demand-heatmap');
-        if (cancelled) return;
-        if (!res.data.enabled) {
-          setHeatmapPoints([]);
-          return;
-        }
-        const pts = (res.data.points || []).map((p: number[]) => ({
-          latitude: p[0],
-          longitude: p[1],
-          weight: p[2] || 1,
-        }));
-        setHeatmapPoints(pts);
-      } catch (e) {
-        console.log('Heatmap fetch error:', e);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [rideState]);
+  // Airport sub-zones — rendered as blue dashed polygons on idle map (HM-21)
+  const { zones: airportZones, activeZone: activeAirportZone } = useAirportZones(
+    (driverData?.service_area_id as string) ?? null,
+    isOnline,
+    location?.coords?.latitude,
+    location?.coords?.longitude,
+  );
 
   const [countdown, setCountdownState] = useState(countdownSeconds);
 
@@ -750,38 +747,118 @@ function DriverDashboard() {
           );
         })()}
 
-        {/* Service area boundary polygon */}
+        {/* Service area boundary polygon — surge-tinted when active (HM-11) */}
         {(() => {
           const rawPoly: { lat: number; lng: number }[] | null | undefined =
             rideState === 'ride_offered'
               ? (incomingRide as any)?.service_area_polygon
               : (activeRide as any)?.service_area_polygon;
           if (!rawPoly || rawPoly.length < 3) return null;
+
+          const sm = heatmapSurge?.active ? (heatmapSurge?.multiplier ?? surgeMultiplier) : surgeMultiplier;
+          let surgeFill = 'rgba(0,212,170,0.07)';
+          let surgeStroke = 'rgba(0,212,170,0.65)';
+          if (sm >= 1.25) {
+            const rampIdx = sm >= 2.0 ? 4 : sm >= 1.75 ? 3 : sm >= 1.5 ? 2 : 2;
+            const hex = colors.heatmapRamp[rampIdx];
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
+            surgeFill = `rgba(${r},${g},${b},0.12)`;
+            surgeStroke = `rgba(${r},${g},${b},0.55)`;
+          }
+
           return (
             <Polygon
               coordinates={rawPoly.map(p => ({ latitude: p.lat, longitude: p.lng }))}
-              strokeColor="rgba(0,212,170,0.65)"
-              fillColor="rgba(0,212,170,0.07)"
+              strokeColor={surgeStroke}
+              fillColor={surgeFill}
               strokeWidth={2}
             />
           );
         })()}
 
-        {/* Demand heatmap overlay — admin-controlled per service area */}
-        {heatmapPoints.length > 0 && Platform.OS !== 'web' && (
-          <Heatmap
-            points={heatmapPoints}
-            radius={35}
-            opacity={0.65}
-            gradient={{
-              colors: ['#00D4AA', '#FFD700', '#FF6B35', '#FF2D2D'],
-              startPoints: [0.1, 0.4, 0.65, 0.9],
-              colorMapSize: 256,
-            }}
+        {/* Demand heatmap — cross-platform cell polygons (HM-05) */}
+        {heatmapCells.length > 0 && Platform.OS !== 'web' && (
+          <HeatmapCells
+            cells={heatmapCells}
+            region={null}
+            cellLatDeg={heatmapCellLat}
+            cellLngDeg={heatmapCellLng}
           />
         )}
+
+        {/* Airport sub-zone polygons — blue dashed outlines (HM-21) */}
+        {rideState === 'idle' && airportZones.map(zone => (
+          zone.polygon?.length >= 3 && (
+            <Polygon
+              key={`airport-${zone.id}`}
+              coordinates={zone.polygon.map(p => ({ latitude: p.lat, longitude: p.lng }))}
+              strokeColor="#0ea5e9"
+              fillColor="rgba(14,165,233,0.08)"
+              strokeWidth={2}
+              lineDashPattern={[6, 4]}
+            />
+          )
+        ))}
       </MapView>
       </View>
+
+      {/* Airport zone chip — shows when driver is inside an airport polygon (HM-21) */}
+      {rideState === 'idle' && activeAirportZone && (
+        <View style={{ position: 'absolute', bottom: 210, right: 16, zIndex: 55, flexDirection: 'row', alignItems: 'center', backgroundColor: '#0ea5e9', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 5, gap: 4 }}>
+          <Ionicons name="airplane" size={13} color="#FFFFFF" />
+          <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700' }}>{activeAirportZone.name || t('heatmap.airport.zone')}</Text>
+        </View>
+      )}
+
+      {/* Surge multiplier chip — on map when active (HM-11) */}
+      {rideState === 'idle' && surgeMultiplier > 1.0 && (
+        <View style={{ position: 'absolute', bottom: 180, right: 16, zIndex: 55, backgroundColor: colors.primary, borderRadius: 16, paddingHorizontal: 10, paddingVertical: 4 }}>
+          <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: '700' }}>{surgeMultiplier.toFixed(1)}x</Text>
+        </View>
+      )}
+
+      {/* Demand legend pill — above the top bar (HM-04 + HM-12 layer selector) */}
+      {rideState === 'idle' && heatmapVisible && (
+        <View style={{ position: 'absolute', top: insets.top + 4, alignSelf: 'center', zIndex: 60 }}>
+          <DemandLegend
+            status={heatmapStatus}
+            visible={heatmapVisible}
+            isV2={heatmapIsV2}
+            layer={heatmapLayer}
+            onLayerChange={setHeatmapLayer}
+          />
+        </View>
+      )}
+
+      {/* Forecast strip — next 6h demand timeline (HM-23) */}
+      {rideState === 'idle' && heatmapIsV2 && (
+        <View style={{ position: 'absolute', top: insets.top + 68, left: 16, right: 16, zIndex: 55 }}>
+          <ForecastStrip
+            forecast={heatmapForecast}
+            visible={heatmapForecast.length > 0}
+          />
+        </View>
+      )}
+
+      {/* Hotspot chips — top-3 busiest cells (HM-22) */}
+      {rideState === 'idle' && heatmapIsV2 && heatmapHotspots.length > 0 && (
+        <View style={{ position: 'absolute', bottom: 200, left: 16, right: 16, zIndex: 55 }}>
+          <HotspotChips
+            hotspots={heatmapHotspots}
+            visible
+            onPress={(lat, lng) => {
+              mapRef.current?.animateToRegion({
+                latitude: lat,
+                longitude: lng,
+                latitudeDelta: 0.015,
+                longitudeDelta: 0.015,
+              }, 500);
+            }}
+          />
+        </View>
+      )}
 
       {/* Top Bar */}
       <DriverTopBar driverData={driverData ?? undefined} user={user ?? undefined} isOnline={isOnline} connectionState={connectionState} surgeMultiplier={surgeMultiplier} wsLatency={wsLatency} earnings={earnings} unreadNotifCount={unreadNotifCount} />
@@ -811,7 +888,7 @@ function DriverDashboard() {
           <View style={{ position: 'absolute', top: insets.top + 56, right: 16, zIndex: 50 }}>
             <SOSButton
               rideId={activeRide.ride.id}
-              onTrigger={async (rideId, lat, lng) => {
+              onTrigger={async (rideId, lat, lng, idempotencyKey) => {
                 // Bug fix (B16): rethrow instead of swallowing. Previously
                 // this try/catch+console.error meant SOSButton's own
                 // retry/FAILED state could never activate for drivers even
@@ -819,7 +896,19 @@ function DriverDashboard() {
                 // like silent success after one attempt. Pure improvement,
                 // no plausible regression on the happy path: the only
                 // behavior change flag-off drivers see.
-                await api.post(`/rides/${rideId}/emergency`, { latitude: lat, longitude: lng });
+                //
+                // Forwards idempotencyKey and RETURNS the response body. Both
+                // matter and were missed when the rider side was fixed:
+                // without the key, SOSButton's 3 retries can still create 3
+                // incidents and 3x "URGENT" SMS on this (default, live) driver
+                // path; without the return, deriveContactOutcome sees `void`
+                // and every successful driver SOS would show the "we could not
+                // confirm your contacts were reached" copy.
+                const res = await api.post<SOSTriggerResult>(
+                  `/rides/${rideId}/emergency`,
+                  { latitude: lat, longitude: lng, idempotency_key: idempotencyKey },
+                );
+                return res.data;
               }}
               t={t}
             />

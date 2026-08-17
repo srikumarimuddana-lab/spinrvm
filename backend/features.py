@@ -944,10 +944,14 @@ async def calculate_all_fees(
     result["fees_total"] = float(_q2(fees_total))
 
     # Calculate taxes — Decimal end-to-end so the receipt line items
-    # reconcile to the cent. PST DOES apply to Saskatchewan rideshare (6%,
-    # confirmed 2026-08-11 — see docs/change-log/2026-08-11-sk-pst-enable.md;
-    # this comment previously claimed the opposite, which left
-    # Saskatoon/Regina under-collecting PST on every live fare until fixed).
+    # reconcile to the cent. Saskatchewan rideshare is GST-only (5%), no PST
+    # — confirmed 2026-08-14, see docs/change-log/2026-08-14-sk-pst-revert.md.
+    # This flipped once already (enabled 2026-08-11, reverted 2026-08-14) on
+    # conflicting user determinations three days apart — this comment is NOT
+    # a substitute for a legal/tax-authority confirmation. Do not "fix" this
+    # again based on a code comment alone: check .claude/context/regulatory-sk.md
+    # and the change-log history above, and get an explicit, dated
+    # confirmation before touching service_areas.pst_enabled either direction.
     # GST + optional PST, or a combined HST rate — per-area configurable from
     # the admin panel for markets/cohorts with different tax rules. Each tax
     # is quantized independently before summing so the breakdown matches the

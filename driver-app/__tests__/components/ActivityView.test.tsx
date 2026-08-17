@@ -68,12 +68,12 @@ const makeStore = (overrides = {}) => ({
     total_distance_km: 5.2,
     total_duration_minutes: 18,
     average_per_ride: 12,
+    elapsed_days: 1,
   },
   rideHistory: [makeRide()],
   historyTotal: 1,
   fetchEarnings: jest.fn().mockResolvedValue(undefined),
   fetchRideHistory: jest.fn().mockResolvedValue(undefined),
-  fetchDriverBalance: jest.fn().mockResolvedValue(undefined),
   ...overrides,
 });
 
@@ -197,7 +197,12 @@ describe('ActivityView', () => {
     expect(getByText('Load more rides')).toBeTruthy();
   });
 
-  it('badges a legacy-imported ride and explains why it is excluded from earnings (A30)', async () => {
+  // Business decision 2026-08-13 (docs/change-log/2026-08-13-blended-
+  // lifetime-earnings.md): superseded A30 Finding 4's driver/rider-facing
+  // "Imported" badge and Finding 3's "not counted here" explainer. A
+  // migrated ride now renders identically to any other ride in the driver
+  // app; the distinction stays in the backend/admin portal only.
+  it('never shows an imported/legacy badge or explainer on a ride card', async () => {
     mockStore = makeStore({
       rideHistory: [
         makeRide({
@@ -209,21 +214,52 @@ describe('ActivityView', () => {
     });
     mockUseDriverStore.mockReturnValue(mockStore);
 
-    const { getByText } = render(<ActivityView />);
-
-    await waitFor(() => expect(getByText('Old App Pickup')).toBeTruthy());
-    expect(getByText('Imported from your previous account')).toBeTruthy();
-    expect(
-      getByText('1 ride from your previous account is shown below but not counted here — it was already paid out.')
-    ).toBeTruthy();
-  });
-
-  it('does not show the legacy badge or explainer for a normal ride', async () => {
     const { getByText, queryByText } = render(<ActivityView />);
 
-    await waitFor(() => expect(getByText('123 Main St')).toBeTruthy());
+    await waitFor(() => expect(getByText('Old App Pickup')).toBeTruthy());
     expect(queryByText('Imported from your previous account')).toBeNull();
     expect(queryByText(/from your previous account/)).toBeNull();
+    expect(queryByText(/imported/i)).toBeNull();
+  });
+
+  // Business decision 2026-08-13 (A32/A33, docs/change-log/2026-08-13-
+  // blended-lifetime-earnings.md): the blend moved from the frontend
+  // (Spinr total + a separate previous_app_paid_total figure) to the
+  // backend (/drivers/earnings sums every completed ride, legacy included,
+  // per period). The component now just displays whatever total_earnings
+  // and total_rides it's given — no more client-side "Previously Paid" math.
+  it('renders the blended total/average/per-day stats /drivers/earnings now returns', async () => {
+    mockStore = makeStore({
+      earnings: {
+        total_earnings: 150,
+        total_tips: 0,
+        total_incentives: 0,
+        total_tax: 0,
+        total_rides: 5,
+        total_distance_km: 25,
+        total_duration_minutes: 600,
+        average_per_ride: 30,
+        elapsed_days: 10,
+      },
+    });
+    mockUseDriverStore.mockReturnValue(mockStore);
+
+    const { getByText, getAllByText } = render(<ActivityView />);
+    await waitFor(() => expect(getByText('123 Main St')).toBeTruthy());
+
+    // Total Earned is whatever the backend returns — no client-side add-on.
+    // (Fare shows the same $150.00 here since tips/incentives/bonus/tax are
+    // all 0 in this fixture, so both the hero total and the Fare row match.)
+    await waitFor(() => expect(getAllByText('$150.00').length).toBeGreaterThan(0));
+    // Avg per Trip = total_earnings / total_rides = 150 / 5.
+    expect(getByText('$30.00')).toBeTruthy();
+    // Avg Trips/Day = total_rides / elapsed_days = 5 / 10.
+    expect(getByText('0.5')).toBeTruthy();
+    // Avg KM/Day = total_distance_km / elapsed_days = 25 / 10.
+    expect(getByText('2.5 km')).toBeTruthy();
+    // Total/Avg Online Time = total_duration_minutes (600 = 10h) and per-day (60min = 1h).
+    expect(getByText('10h')).toBeTruthy();
+    expect(getByText('1h')).toBeTruthy();
   });
 
   it('refetches only earnings on a period change (list re-filters client-side)', async () => {

@@ -481,6 +481,50 @@ def test_config_no_preview_when_disabled(client, _set_admin, monkeypatch):
     assert data.get("helpdesk_signature_preview", "") == ""
 
 
+def test_reply_uses_custom_signature_header(client, _set_admin, monkeypatch):
+    monkeypatch.setattr(
+        m.db_supabase,
+        "find_one",
+        AsyncMock(
+            return_value={
+                "default_from_email": "support@spinr.ca",
+                "helpdesk_signature_enabled": True,
+                "helpdesk_signature_header": "Spinr Help Desk",
+            }
+        ),
+    )
+    monkeypatch.setattr(m, "load_company_details", AsyncMock(return_value=_mock_company()))
+    send_reply = AsyncMock(return_value={"id": "r1"})
+    monkeypatch.setattr(m.zoho, "send_reply", send_reply)
+    resp = client.post(
+        "/api/admin/support-tickets/tickets/T1/reply",
+        json={"content": "hi", "channel": "EMAIL"},
+    )
+    assert resp.status_code == 200
+    sent_content = send_reply.call_args.kwargs["content"]
+    assert "Spinr Help Desk" in sent_content
+    assert "Spinr Support" not in sent_content
+
+
+def test_config_preview_uses_custom_header(client, _set_admin, monkeypatch):
+    monkeypatch.setattr(
+        m.db_supabase,
+        "find_one",
+        AsyncMock(
+            return_value={
+                "helpdesk_signature_enabled": True,
+                "helpdesk_signature_header": "My Custom Team",
+            }
+        ),
+    )
+    monkeypatch.setattr(m, "load_company_details", AsyncMock(return_value=_mock_company()))
+    resp = client.get("/api/admin/support-tickets/config")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "My Custom Team" in data["helpdesk_signature_preview"]
+    assert data["helpdesk_signature_header"] == "My Custom Team"
+
+
 def test_comment_ticket(client, _set_admin, monkeypatch):
     monkeypatch.setattr(m.zoho, "add_comment", AsyncMock(return_value={"id": "c1"}))
     resp = client.post("/api/admin/support-tickets/tickets/T1/comment", json={"content": "note"})

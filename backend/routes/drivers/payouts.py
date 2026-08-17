@@ -37,11 +37,9 @@ from ._shared import (  # noqa: F401
 
 try:
     from ...services import stripe_kyc_sync as _kyc
-    from ...utils.legacy_rides import previous_app_history_visible
     from ...utils.stripe_mode import is_missing_on_key, key_mode, object_mode
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
     from services import stripe_kyc_sync as _kyc  # type: ignore
-    from utils.legacy_rides import previous_app_history_visible  # type: ignore
     from utils.stripe_mode import is_missing_on_key, key_mode, object_mode  # type: ignore
 
 router = APIRouter()
@@ -817,13 +815,59 @@ def _require_sin_for_payout(driver: dict) -> None:
         )
 
 
+async def _require_instant_payout_enabled(driver: dict) -> None:
+    """Block instant payout when the driver's service area has it disabled.
+
+    Per-service-area kill switch (migration 314). Drivers without a
+    service_area_id are allowed through — the kill switch is opt-out per
+    market, not a global default-off."""
+    sa_id = driver.get("service_area_id")
+    if not sa_id:
+        return
+    sa_rows = await db_supabase.get_rows("service_areas", {"id": sa_id}, limit=1)
+    if sa_rows and sa_rows[0].get("instant_payout_enabled") is False:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Instant payouts are not available in your service area. "
+                "Your earnings are paid out automatically every Sunday."
+            ),
+        )
+
+
 @router.post("/payouts")
-@idempotent_endpoint(scope="driver_payout")
 async def request_payout(
+    current_user: dict = Depends(get_current_user),
+):
+    """Standard cashout is disabled — payouts are now Spinr-controlled and
+    run automatically every Sunday for all eligible drivers (>= $10 balance).
+    Drivers can still use instant payouts (fee-bearing) for early access."""
+    # Old app builds surface this string in a toast that clamps at 140 chars
+    # (shared/utils/toastMessage.ts) — keep it under that, and don't advertise
+    # instant payout while the driver app has no instant-payout UI to tap.
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Cash out has been replaced by automatic weekly payouts — your earnings are sent to your bank every Sunday."
+        ),
+    )
+
+
+# Kept for reference / rollback — the original handler is fully replaced by
+# the auto-payout loop (utils/auto_payout.py). Remove after confirming the
+# weekly batch is stable.
+_STANDARD_CASHOUT_DISABLED = True
+
+
+@router.post("/payouts/_legacy", include_in_schema=False)
+@idempotent_endpoint(scope="driver_payout")
+async def _request_payout_legacy(
     req: PayoutRequest,
     request: Request,
     current_user: dict = Depends(get_current_user),
 ):
+    if _STANDARD_CASHOUT_DISABLED:
+        raise HTTPException(status_code=410, detail="Manual payouts disabled")
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
     )
@@ -1021,6 +1065,10 @@ async def request_instant_payout(
     )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    # Per-service-area kill switch: ops can disable instant payouts in
+    # specific markets without a code deploy (migration 314).
+    await _require_instant_payout_enabled(driver)
 
     # CRA: rideshare drivers must be GST/HST-registered from their first fare.
     _require_gst_for_payout(driver)
@@ -1262,15 +1310,15 @@ async def get_payout_history(
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
     filters: dict = {"driver_id": driver["id"]}
-    # Previous-app transfers (stripe_sync) are transition history with a
-    # sunset (utils/legacy_rides): after the cutoff the driver's history
-    # shows Spinr payouts only. Filtered SERVER-side so pagination stays
-    # honest — dropping rows after a limit/offset fetch would shrink pages
-    # unpredictably. The $or keeps NULL payout_type rows visible: SQL
-    # `payout_type != 'stripe_sync'` is NULL for NULL, and PostgREST neq
-    # would silently hide any pre-backfill row.
-    if not previous_app_history_visible():
-        filters["$or"] = [{"payout_type": {"$ne": "stripe_sync"}}, {"payout_type": None}]
+    # Business decision 2026-08-13 (docs/change-log/2026-08-13-blended-
+    # lifetime-earnings.md): previous-app transfers (payout_type=
+    # 'stripe_sync') stay in a driver's payout history PERMANENTLY — no more
+    # time-limited "transition messaging." Hiding real payout rows after a
+    # date would make the driver's own history look like it lost entries,
+    # which is the same trust problem A31 fixed for trip counts. This used
+    # to filter on utils.legacy_rides.previous_app_history_visible()
+    # (PREVIOUS_APP_VISIBLE_UNTIL, 2026-08-31) — that helper still exists
+    # and is still correct, it's just no longer called here.
     payouts = await db_supabase.get_rows(
         "payouts",
         filters,

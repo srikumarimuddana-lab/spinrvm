@@ -249,9 +249,24 @@ def test_fees_and_tax_land_in_their_own_columns(monkeypatch):
     plan = _plan([_booking()])
     (ride,) = plan.rides_to_insert
     assert ride["tax_amount"] == pytest.approx(0.98)
-    assert ride["tax_breakdown"] == {"GST": {"amount": 0.98}}
+    assert ride["tax_breakdown"] == {"GST": {"rate": 5.0, "amount": 0.98}}
     assert ride["area_fees_total"] == pytest.approx(0.60)
     assert {f["name"] for f in ride["area_fees_breakdown"]} == {"City fee", "Infrastructure fee", "Insurance fee"}
+
+
+def test_payout_gst_amount_preserved_raw_not_merged_into_tax(monkeypatch):
+    """The fare-scaling GST component (payout_gst_amount) is a real number
+    the old export carries separately from the commission-GST this importer
+    writes to tax_amount. It must be preserved for a later reconciliation
+    decision, not silently added into tax_amount (that would be answering a
+    business question -- what the correct historical rider-facing GST was --
+    that the code has no basis to answer). See docs/change-log/
+    2026-08-15-legacy-payout-correction-plan.md."""
+    _install_fake(monkeypatch)
+    plan = _plan([_booking(gst="0.98", payout_gst_amount="4.50")])
+    (ride,) = plan.rides_to_insert
+    assert ride["tax_amount"] == pytest.approx(0.98)  # unchanged -- still commission-GST
+    assert ride["legacy_import_metadata"]["old_payout_gst_amount"] == pytest.approx(4.50)
 
 
 def test_negative_residual_is_an_error_not_a_silent_clamp(monkeypatch):

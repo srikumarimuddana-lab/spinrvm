@@ -642,7 +642,10 @@ async def test_get_surge_status_gates_on_surge_enabled():
     ):
         from utils.surge_engine import get_surge_status
 
-        statuses = await get_surge_status()
+        # use_cache=False: this test is about the gating, and the status cache
+        # is process-wide in the in-memory Redis fallback tests run under — a
+        # cached read would silently assert on some other test's areas.
+        statuses = await get_surge_status(use_cache=False)
 
     by_id = {s["area_id"]: s for s in statuses}
     # Disabled area: toggle state exposed; surge gated to 1.0× / inactive.
@@ -703,3 +706,196 @@ class TestSurgeLoopLeaderLock:
                 await surge_recalculation_loop()
 
         recalc.assert_awaited_once()
+
+
+# ── get_surge_status: batched supply fetch + short cache ────────────────────
+
+
+class TestSurgeStatusFetchBatching:
+    """`GET /admin/surge/status` used to re-read the drivers table once per area.
+
+    The dispatchable-driver set is platform-wide — only the polygon test that
+    follows is per-area — so N areas meant N identical unscoped reads of
+    `drivers`, the same table dispatch and the driver-location write path use.
+    Every open admin tab paid that cost on every poll.
+    """
+
+    @staticmethod
+    def _areas(n: int) -> list[dict]:
+        return [
+            {
+                "id": f"a{i}",
+                "name": f"Area {i}",
+                "is_active": True,
+                "surge_enabled": True,
+                "surge_active": True,
+                "surge_multiplier": 1.5,
+                # Real box over Saskatoon so the point-in-polygon test actually
+                # runs (a 0.0/0.0 fixture is skipped by the lat/lng truthiness
+                # guard in _count_supply_in_area and would fake a pass).
+                "polygon": [
+                    {"lat": 52.0, "lng": -107.0},
+                    {"lat": 52.0, "lng": -106.5},
+                    {"lat": 52.3, "lng": -106.5},
+                    {"lat": 52.3, "lng": -107.0},
+                ],
+            }
+            for i in range(n)
+        ]
+
+    @pytest.mark.asyncio
+    async def test_drivers_are_fetched_once_for_all_areas(self):
+        drivers = [{"id": "d1", "user_id": "u1", "lat": 52.15, "lng": -106.75}]
+
+        async def fake_get_rows(table, filters=None, **kwargs):
+            if table == "service_areas":
+                return self._areas(4)
+            if table == "drivers":
+                return list(drivers)
+            return []
+
+        db_mock = MagicMock()
+        db_mock.get_rows = AsyncMock(side_effect=fake_get_rows)
+
+        with (
+            patch("utils.surge_engine.db", db_mock),
+            patch("utils.surge_engine._SURGE_SPATIAL_COUNT", False),
+            patch("utils.surge_engine._count_demand_in_area", AsyncMock(return_value=3)),
+            patch("utils.surge_engine.present_driver_ids", AsyncMock(return_value=set())),
+        ):
+            from utils.surge_engine import get_surge_status
+
+            statuses = await get_surge_status(use_cache=False)
+
+        driver_reads = [c for c in db_mock.get_rows.await_args_list if c.args and c.args[0] == "drivers"]
+        assert len(driver_reads) == 1, f"expected one batched drivers read, got {len(driver_reads)}"
+        # The batch must still produce a correct per-area count, not a shortcut.
+        assert len(statuses) == 4
+        assert all(s["supply_count"] == 1 for s in statuses)
+
+    @pytest.mark.asyncio
+    async def test_batch_fetch_failure_falls_back_to_per_area(self):
+        """A failed batch must degrade to the original per-area fetch.
+
+        Reporting zero supply instead would read as a fleet-wide outage on the
+        ops dashboard and invite an unnecessary manual surge override.
+        """
+        calls = {"n": 0}
+
+        async def flaky_fetch(context="supply"):
+            calls["n"] += 1
+            if context == "status":
+                raise RuntimeError("boom")
+            return [{"id": "d1", "user_id": "u1", "lat": 52.15, "lng": -106.75}]
+
+        db_mock = MagicMock()
+        db_mock.get_rows = AsyncMock(return_value=self._areas(2))
+
+        with (
+            patch("utils.surge_engine.db", db_mock),
+            patch("utils.surge_engine._SURGE_SPATIAL_COUNT", False),
+            patch("utils.surge_engine._count_demand_in_area", AsyncMock(return_value=1)),
+            patch("utils.surge_engine._fetch_dispatchable_drivers", AsyncMock(side_effect=flaky_fetch)),
+        ):
+            from utils.surge_engine import get_surge_status
+
+            statuses = await get_surge_status(use_cache=False)
+
+        # 1 failed batch attempt + 1 per-area fetch for each of the 2 areas.
+        assert calls["n"] == 3
+        assert all(s["supply_count"] == 1 for s in statuses)
+
+    @pytest.mark.asyncio
+    async def test_spatial_count_path_skips_the_batch_entirely(self):
+        """With the spatial count on, nothing reads the driver list — don't fetch it."""
+        db_mock = MagicMock()
+        db_mock.get_rows = AsyncMock(return_value=self._areas(3))
+        batch = AsyncMock(return_value=[])
+
+        with (
+            patch("utils.surge_engine.db", db_mock),
+            patch("utils.surge_engine._SURGE_SPATIAL_COUNT", True),
+            patch("utils.surge_engine._count_demand_in_area", AsyncMock(return_value=1)),
+            patch("utils.surge_engine._count_supply_spatial", AsyncMock(return_value=7)),
+            patch("utils.surge_engine._fetch_dispatchable_drivers", batch),
+        ):
+            from utils.surge_engine import get_surge_status
+
+            statuses = await get_surge_status(use_cache=False)
+
+        batch.assert_not_awaited()
+        assert all(s["supply_count"] == 7 for s in statuses)
+
+
+class TestSurgeStatusCache:
+    """The status is cached for 30s so concurrent admin tabs collapse onto one
+    computation — but an operator must never see their own surge change late.
+    """
+
+    _AREA = [
+        {
+            "id": "a1",
+            "name": "City",
+            "is_active": True,
+            "surge_enabled": True,
+            "surge_active": True,
+            "surge_multiplier": 1.5,
+        }
+    ]
+
+    @pytest.mark.asyncio
+    async def test_second_call_is_served_from_cache(self, mock_redis):
+        db_mock = MagicMock()
+        db_mock.get_rows = AsyncMock(return_value=self._AREA)
+        demand = AsyncMock(return_value=2)
+
+        with (
+            patch("utils.surge_engine.db", db_mock),
+            patch("utils.surge_engine._count_demand_in_area", demand),
+            patch("utils.surge_engine._count_supply_in_area", AsyncMock(return_value=4)),
+        ):
+            from utils.surge_engine import get_surge_status
+
+            first = await get_surge_status()
+            second = await get_surge_status()
+
+        assert first == second
+        demand.assert_awaited_once()  # the second call recomputed nothing
+
+    @pytest.mark.asyncio
+    async def test_invalidation_forces_a_recompute(self, mock_redis):
+        db_mock = MagicMock()
+        db_mock.get_rows = AsyncMock(return_value=self._AREA)
+        demand = AsyncMock(return_value=2)
+
+        with (
+            patch("utils.surge_engine.db", db_mock),
+            patch("utils.surge_engine._count_demand_in_area", demand),
+            patch("utils.surge_engine._count_supply_in_area", AsyncMock(return_value=4)),
+        ):
+            from utils.surge_engine import get_surge_status, invalidate_surge_status_cache
+
+            await get_surge_status()
+            await invalidate_surge_status_cache()
+            await get_surge_status()
+
+        assert demand.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_cache_read_failure_degrades_to_recompute_not_error(self, mock_redis):
+        """A Redis hiccup must not take down the ops surge dashboard."""
+        db_mock = MagicMock()
+        db_mock.get_rows = AsyncMock(return_value=self._AREA)
+
+        with (
+            patch("utils.surge_engine.db", db_mock),
+            patch("utils.surge_engine.redis_get", AsyncMock(side_effect=RuntimeError("down"))),
+            patch("utils.surge_engine.redis_set", AsyncMock(side_effect=RuntimeError("down"))),
+            patch("utils.surge_engine._count_demand_in_area", AsyncMock(return_value=2)),
+            patch("utils.surge_engine._count_supply_in_area", AsyncMock(return_value=4)),
+        ):
+            from utils.surge_engine import get_surge_status
+
+            statuses = await get_surge_status()
+
+        assert statuses[0]["multiplier"] == 1.5

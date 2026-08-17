@@ -37,6 +37,31 @@ export const createServiceArea = (data: any) =>
         method: "POST",
         body: JSON.stringify(data),
     });
+/** Per-area heatmap tuning: effective values, this area's explicit overrides,
+ *  what it would inherit, and the permitted range per key.
+ *
+ *  Bounds come from the backend rather than being restated here so the form
+ *  and the validator cannot drift — a knob added server-side appears in the
+ *  form with correct limits and no frontend change. */
+export interface AreaHeatmapConfigSpec {
+    kind: "int" | "float";
+    min: number;
+    max: number;
+    default: number;
+    /** null = per-area/default only; this key has no global equivalent. */
+    global_key: string | null;
+}
+export interface AreaHeatmapConfig {
+    area_id: string;
+    area_name: string;
+    effective: Record<string, number>;
+    overrides: Record<string, number>;
+    inherited: Record<string, number>;
+    spec: Record<string, AreaHeatmapConfigSpec>;
+}
+export const getAreaHeatmapConfig = (areaId: string) =>
+    request<AreaHeatmapConfig>(`/api/admin/service-areas/${areaId}/heatmap-config`);
+
 export const updateServiceArea = (id: string, data: any) =>
     request<any>(`/api/admin/service-areas/${id}`, {
         method: "PUT",

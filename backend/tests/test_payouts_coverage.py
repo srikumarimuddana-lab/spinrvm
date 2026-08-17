@@ -440,12 +440,21 @@ class TestDeleteBankAccount:
 
 
 # ============================================================
-# request_payout: the WITH-Stripe branch (untested by test_p2_payout_t4a.py,
-# which only exercises the no-Stripe-key "pending" fallback)
+# _request_payout_legacy: the WITH-Stripe branch (untested by
+# test_p2_payout_t4a.py, which only exercises the no-Stripe-key "pending"
+# fallback). POST /payouts itself is now a 410 stub (weekly auto-payouts);
+# the original logic is preserved at _request_payout_legacy behind
+# _STANDARD_CASHOUT_DISABLED for rollback — these tests pin that preserved
+# path, so the fixture below runs them with the flag off.
 # ============================================================
 
 
 class TestRequestPayoutStripeBranch:
+    @pytest.fixture(autouse=True)
+    def _enable_legacy_cashout(self):
+        with patch("backend.routes.drivers.payouts._STANDARD_CASHOUT_DISABLED", False):
+            yield
+
     def _get_rows(self, driver, account=None):
         def side_effect(table, filters=None, **kw):
             if table == "drivers":
@@ -478,7 +487,7 @@ class TestRequestPayoutStripeBranch:
                 MagicMock(return_value=MagicMock(id="tr_std_1")),
             ),
         ):
-            result = asyncio.run(drv.request_payout(req=req, request=_req(), current_user={"id": USER_ID}))
+            result = asyncio.run(drv._request_payout_legacy(req=req, request=_req(), current_user={"id": USER_ID}))
 
         assert result["success"] is True
         assert result["payout"]["status"] == drv.RideStatus.COMPLETED
@@ -510,7 +519,7 @@ class TestRequestPayoutStripeBranch:
             ),
         ):
             with pytest.raises(HTTPException) as exc:
-                asyncio.run(drv.request_payout(req=req, request=_req(), current_user={"id": USER_ID}))
+                asyncio.run(drv._request_payout_legacy(req=req, request=_req(), current_user={"id": USER_ID}))
 
         assert exc.value.status_code == 500
         update_mock.assert_awaited_once()
@@ -547,7 +556,7 @@ class TestRequestPayoutStripeBranch:
             ),
         ):
             with pytest.raises(HTTPException) as exc:
-                asyncio.run(drv.request_payout(req=req, request=_req(), current_user={"id": USER_ID}))
+                asyncio.run(drv._request_payout_legacy(req=req, request=_req(), current_user={"id": USER_ID}))
 
         assert exc.value.status_code == 500
 
@@ -569,7 +578,7 @@ class TestRequestPayoutStripeBranch:
             patch("backend.settings_loader.get_app_settings", AsyncMock(return_value={})),
         ):
             with pytest.raises(HTTPException) as exc:
-                asyncio.run(drv.request_payout(req=req, request=_req(), current_user={"id": USER_ID}))
+                asyncio.run(drv._request_payout_legacy(req=req, request=_req(), current_user={"id": USER_ID}))
 
         assert exc.value.status_code == 409
         assert "already in progress" in exc.value.detail.lower()
@@ -592,7 +601,7 @@ class TestRequestPayoutStripeBranch:
             patch("backend.settings_loader.get_app_settings", AsyncMock(return_value={})),
         ):
             with pytest.raises(HTTPException) as exc:
-                asyncio.run(drv.request_payout(req=req, request=_req(), current_user={"id": USER_ID}))
+                asyncio.run(drv._request_payout_legacy(req=req, request=_req(), current_user={"id": USER_ID}))
 
         assert exc.value.status_code == 500
 
@@ -629,7 +638,7 @@ class TestRequestPayoutStripeBranch:
             ),
         ):
             with pytest.raises(HTTPException) as exc:
-                asyncio.run(drv.request_payout(req=req, request=_req(), current_user={"id": USER_ID}))
+                asyncio.run(drv._request_payout_legacy(req=req, request=_req(), current_user={"id": USER_ID}))
 
         assert exc.value.status_code == 500
         assert update_mock.await_count == 2
@@ -667,7 +676,7 @@ class TestRequestPayoutStripeBranch:
             ),
         ):
             with pytest.raises(HTTPException) as exc:
-                asyncio.run(drv.request_payout(req=req, request=_req(), current_user={"id": USER_ID}))
+                asyncio.run(drv._request_payout_legacy(req=req, request=_req(), current_user={"id": USER_ID}))
 
         assert exc.value.status_code == 500
         status_call = update_mock.await_args_list[-1]
@@ -697,7 +706,7 @@ class TestRequestPayoutStripeBranch:
             patch("backend.routes.drivers._deps.stripe.Transfer.create_reversal") as reversal_mock,
         ):
             with pytest.raises(HTTPException) as exc:
-                asyncio.run(drv.request_payout(req=req, request=_req(), current_user={"id": USER_ID}))
+                asyncio.run(drv._request_payout_legacy(req=req, request=_req(), current_user={"id": USER_ID}))
 
         assert exc.value.status_code == 500
         reversal_mock.assert_not_called()

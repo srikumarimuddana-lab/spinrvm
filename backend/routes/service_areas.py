@@ -39,11 +39,25 @@ _PUBLIC_FIELDS = (
     "surge_active",
     "surge_enabled",
     "polygon",
+    # Safety panel (migration 316). Rider/driver apps render the local-authority
+    # row from these; all are optional and the row is hidden when name is unset.
+    # Distinct from the regulatory_* columns, which are driver-licensing
+    # metadata and deliberately NOT exposed publicly.
+    "emergency_number",
+    "safety_authority_name",
+    "safety_authority_phone",
+    "safety_authority_url",
+    "safety_authority_hours",
 )
 
 
 def _project_public(r: dict) -> dict:
     out = {k: r[k] for k in _PUBLIC_FIELDS if k in r}
+    # Never hand the apps an empty emergency number: a Safety panel whose 911
+    # button does nothing is worse than one that isn't there. Falls back to 911
+    # for any row predating migration 316 or blanked by an admin.
+    if not out.get("emergency_number"):
+        out["emergency_number"] = "911"
     # Normalize polygon to [{lat, lng}, ...] regardless of storage format
     # (admin dashboard saves GeoJSON dicts; older rows may have plain arrays).
     out["polygon"] = get_service_area_polygon(r)
@@ -81,3 +95,31 @@ async def get_service_areas():
         limit=200,
     )
     return [_project_public(r) for r in (rows or [])]
+
+
+_AIRPORT_FIELDS = ("id", "name", "is_airport", "airport_fee", "polygon")
+
+
+def _project_airport(r: dict) -> dict:
+    out = {k: r[k] for k in _AIRPORT_FIELDS if k in r}
+    out["polygon"] = get_service_area_polygon(r)
+    return out
+
+
+@api_router.get("/service-areas/{area_id}/airport-zones")
+async def get_airport_zones(area_id: str):
+    """Return active airport sub-zones for a parent service area.
+
+    Used by the driver idle map to overlay airport zone polygons (HM-21).
+    """
+    rows = await db_supabase.get_rows(
+        "service_areas",
+        {
+            "parent_service_area_id": area_id,
+            "is_airport": True,
+            "is_active": True,
+        },
+        order="name",
+        limit=20,
+    )
+    return [_project_airport(r) for r in (rows or [])]

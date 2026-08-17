@@ -7,8 +7,8 @@ bundle_zip_builder.py). Had no dedicated test file; only 38.75% coverage.
 
 Dual-import note: this module does
 `try: from ... import db_supabase / except ImportError: import db_supabase`
-(and similarly for documents.ALLOWED_EXTENSIONS/_extract_signed_url/
-_validate_file_type and supabase_client.supabase). Per this session's
+(and similarly for documents._extract_signed_url/_validate_file_type and
+supabase_client.supabase). Per this session's
 established convention, every patch target below is the name AS BOUND on the
 `backend.services.data_transfer.bundle_document_uploader` module object
 (`bundle_document_uploader.db_supabase`, `bundle_document_uploader.supabase`,
@@ -109,9 +109,7 @@ class TestReplayDocuments:
 
         monkeypatch.setattr(bundle_document_uploader, "supabase", None)
 
-        result = await bundle_document_uploader.replay_documents(
-            "driver-1", [{"id": "doc-1"}], {"doc-1": b"content"}
-        )
+        result = await bundle_document_uploader.replay_documents("driver-1", [{"id": "doc-1"}], {"doc-1": b"content"})
         assert result == 0
 
     @pytest.mark.anyio
@@ -142,17 +140,13 @@ class TestReplayDocuments:
 
         monkeypatch.setattr(bundle_document_uploader, "supabase", MagicMock())
         monkeypatch.setattr(bundle_document_uploader, "_validate_file_type", MagicMock(return_value=None))
-        monkeypatch.setattr(
-            bundle_document_uploader, "_upload_bytes", AsyncMock(return_value="https://signed/url")
-        )
+        monkeypatch.setattr(bundle_document_uploader, "_upload_bytes", AsyncMock(return_value="https://signed/url"))
         monkeypatch.setattr(bundle_document_uploader.db_supabase, "insert_one", AsyncMock())
 
         doc = {"id": "doc-1", "_storage_key": "orig/key.png"}
         # Keyed by original filename ("license_doc-1.png") rather than by id —
         # doc_id "doc-1" is a substring of the key, so the fallback matches it.
-        result = await bundle_document_uploader.replay_documents(
-            "driver-1", [doc], {"license_doc-1.png": b"content"}
-        )
+        result = await bundle_document_uploader.replay_documents("driver-1", [doc], {"license_doc-1.png": b"content"})
         assert result == 1
 
     @pytest.mark.anyio
@@ -167,9 +161,9 @@ class TestReplayDocuments:
 
     @pytest.mark.anyio
     async def test_missing_storage_key_defaults_to_bin_and_is_rejected(self, monkeypatch):
-        """No _storage_key -> ext defaults to '.bin', which is not in
-        ALLOWED_EXTENSIONS, so the document is skipped by the extension
-        guard before validation is even attempted."""
+        """No _storage_key -> ext defaults to '.bin', which has no entry in
+        _EXT_TO_MIME_TYPE, so the document is skipped by the extension guard
+        before validation is even attempted."""
         from backend.services.data_transfer import bundle_document_uploader
 
         monkeypatch.setattr(bundle_document_uploader, "supabase", MagicMock())
@@ -219,9 +213,7 @@ class TestReplayDocuments:
 
         monkeypatch.setattr(bundle_document_uploader, "supabase", MagicMock())
         monkeypatch.setattr(bundle_document_uploader, "_validate_file_type", MagicMock(return_value=None))
-        monkeypatch.setattr(
-            bundle_document_uploader, "_upload_bytes", AsyncMock(return_value="https://signed/url")
-        )
+        monkeypatch.setattr(bundle_document_uploader, "_upload_bytes", AsyncMock(return_value="https://signed/url"))
         monkeypatch.setattr(
             bundle_document_uploader.db_supabase, "insert_one", AsyncMock(side_effect=ConnectionError("db down"))
         )
@@ -236,9 +228,7 @@ class TestReplayDocuments:
 
         monkeypatch.setattr(bundle_document_uploader, "supabase", MagicMock())
         monkeypatch.setattr(bundle_document_uploader, "_validate_file_type", MagicMock(return_value=None))
-        monkeypatch.setattr(
-            bundle_document_uploader, "_upload_bytes", AsyncMock(return_value="https://signed/url")
-        )
+        monkeypatch.setattr(bundle_document_uploader, "_upload_bytes", AsyncMock(return_value="https://signed/url"))
         insert_mock = AsyncMock()
         monkeypatch.setattr(bundle_document_uploader.db_supabase, "insert_one", insert_mock)
 
@@ -275,9 +265,7 @@ class TestReplayDocuments:
 
         monkeypatch.setattr(bundle_document_uploader, "supabase", MagicMock())
         monkeypatch.setattr(bundle_document_uploader, "_validate_file_type", MagicMock(return_value=None))
-        monkeypatch.setattr(
-            bundle_document_uploader, "_upload_bytes", AsyncMock(return_value="https://signed/url")
-        )
+        monkeypatch.setattr(bundle_document_uploader, "_upload_bytes", AsyncMock(return_value="https://signed/url"))
         insert_mock = AsyncMock()
         monkeypatch.setattr(bundle_document_uploader.db_supabase, "insert_one", insert_mock)
 
@@ -292,9 +280,7 @@ class TestReplayDocuments:
 
         monkeypatch.setattr(bundle_document_uploader, "supabase", MagicMock())
         monkeypatch.setattr(bundle_document_uploader, "_validate_file_type", MagicMock(return_value=None))
-        monkeypatch.setattr(
-            bundle_document_uploader, "_upload_bytes", AsyncMock(return_value="https://signed/url")
-        )
+        monkeypatch.setattr(bundle_document_uploader, "_upload_bytes", AsyncMock(return_value="https://signed/url"))
         monkeypatch.setattr(bundle_document_uploader.db_supabase, "insert_one", AsyncMock())
 
         docs = [

@@ -290,6 +290,97 @@ class TestGetDriverEarnings:
         assert result["average_per_ride"] == "0.00"
 
 
+class TestGetDriverEarningsLegacyActivityStats:
+    """Regression for two related bugs against a migrated driver's Activity
+    screen, both against the SAME root cause: money math used to be summed
+    over an EXCLUDE_LEGACY_RIDES-filtered `rides` list, separate from the
+    unfiltered `all_completed_rides` list used for trip/distance/duration.
+
+    2026-08-13 (A31): a driver whose completed rides in the period were
+    entirely legacy-imported got 0 Total Trips / 0.0 KM / 0h Online Time
+    despite having real ride history — fixed by sourcing activity stats from
+    the unfiltered list.
+
+    2026-08-13 (A32/A33, later same day): the SAME driver still saw real
+    rides sitting under "Total Earned $0.00 / Avg per Trip $0.00", because
+    money stayed on the filtered list. Fixed by dropping the legacy filter
+    from money too — a single unfiltered query now drives both, per
+    docs/change-log/2026-08-13-blended-lifetime-earnings.md."""
+
+    def _get_rows_legacy_and_real(self, legacy_rides, real_rides):
+        def get_rows(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                if filters and filters.get("status") == "cancelled":
+                    return []
+                return list(legacy_rides) + list(real_rides)
+            return []
+
+        return get_rows
+
+    async def test_all_legacy_rides_report_real_trip_count_and_real_money(self):
+        from backend.routes.drivers import get_driver_earnings
+
+        legacy_rides = [
+            _ride(
+                id=f"legacy-{i}",
+                legacy_import_metadata={"source": "previous_app"},
+                distance_km=5.0,
+                duration_minutes=10,
+                driver_earnings=15.00,
+                tip_amount=0,
+            )
+            for i in range(3)
+        ]
+
+        with patch(
+            "backend.db_supabase.get_rows",
+            AsyncMock(side_effect=self._get_rows_legacy_and_real(legacy_rides, [])),
+        ):
+            result = await get_driver_earnings(period="all", current_user={"id": USER_ID})
+
+        # Activity stats reflect all completed rides, legacy included.
+        assert result["total_rides"] == 3
+        assert result["total_distance_km"] == 15.0
+        assert result["total_duration_minutes"] == 30
+        # Money is now blended too — legacy rides' real driver_earnings count
+        # (A32/A33 closes the gap A31 left open for the dollar fields).
+        assert result["total_earnings"] == "45.00"
+        assert result["average_per_ride"] == "15.00"
+
+    async def test_mixed_legacy_and_real_rides_both_count_toward_money(self):
+        from backend.routes.drivers import get_driver_earnings
+
+        legacy_rides = [
+            _ride(
+                id="legacy-1",
+                legacy_import_metadata={"source": "previous_app"},
+                distance_km=8.0,
+                duration_minutes=20,
+                driver_earnings=20.00,
+                tip_amount=0,
+            )
+        ]
+        real_rides = [_ride(id="real-1", distance_km=4.2, duration_minutes=12, driver_earnings=15.00, tip_amount=3.00)]
+
+        with patch(
+            "backend.db_supabase.get_rows",
+            AsyncMock(side_effect=self._get_rows_legacy_and_real(legacy_rides, real_rides)),
+        ):
+            result = await get_driver_earnings(period="all", current_user={"id": USER_ID})
+
+        # Trip count/distance/duration include the legacy ride.
+        assert result["total_rides"] == 2
+        assert result["total_distance_km"] == pytest.approx(12.2)
+        assert result["total_duration_minutes"] == 32
+        # Money blends both rides: $20 (legacy) + $15 driver_earnings (real,
+        # tip counted separately) = $35 total_earnings; average is over both
+        # trips, not diluted-avoidance over one.
+        assert result["total_earnings"] == "35.00"
+        assert result["average_per_ride"] == "17.50"
+
+
 # ============================================================
 # get_driver_daily_earnings
 # ============================================================

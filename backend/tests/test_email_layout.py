@@ -10,6 +10,7 @@ the admin Settings page rather than from constants, so most of these drive it
 with a stubbed `CompanyDetails` and a few exercise the real loader's fallbacks.
 """
 
+import re
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -64,18 +65,26 @@ async def test_uses_the_documented_brand_red():
 
 
 async def test_footer_uses_the_configured_company_identity():
+    # The footer prints the legal name on its own line with the mailing
+    # address beneath it — the conventional receipt shape. The comma-joined
+    # identity_line reads as a run-on at footer type size, so it lives in the
+    # plain-text alternative instead.
     html = (await _render()).html
-    assert _COMPANY.identity_line in html
+    assert _COMPANY.name in html
+    assert _COMPANY.address in html
     assert _COMPANY.contact_line in html
 
 
 async def test_footer_follows_a_settings_change():
     renamed = _COMPANY._replace(
-        identity_line="Northern Rides Inc. — 9 Rose Ave, Regina, SK",
+        name="Northern Rides Inc.",
+        address_lines=("9 Rose Ave", "Regina SK S4P 1A1"),
         contact_line="help@northern.test",
     )
     html = (await _render(company=renamed)).html
-    assert "Northern Rides Inc. — 9 Rose Ave, Regina, SK" in html
+    assert "Northern Rides Inc." in html
+    assert "9 Rose Ave" in html
+    assert "Regina SK S4P 1A1" in html
     assert "help@northern.test" in html
     assert COMPANY_LINE not in html
 
@@ -85,7 +94,7 @@ async def test_loads_company_details_when_the_caller_passes_none():
     with patch.object(layout, "load_company_details", loader):
         html = (await render_email(heading="x", company=None)).html
     loader.assert_awaited_once()
-    assert _COMPANY.identity_line in html
+    assert _COMPANY.name in html
 
 
 async def test_preloaded_company_skips_the_settings_read():
@@ -235,7 +244,7 @@ async def test_render_from_text_keeps_single_newlines_inside_a_paragraph():
 async def test_render_from_text_carries_the_logo_and_footer():
     rendered = await layout.render_from_text(heading="Hi", body="Body copy.", company=_COMPANY)
     assert _COMPANY.logo_url in rendered.html
-    assert _COMPANY.identity_line in rendered.html
+    assert _COMPANY.name in rendered.html
     assert _COMPANY.identity_line in rendered.text
 
 
@@ -254,7 +263,7 @@ async def test_render_from_text_tolerates_an_empty_body():
     # shell rather than raising inside a best-effort notification path.
     rendered = await layout.render_from_text(heading="Notice", body="", company=_COMPANY)
     assert "Notice" in rendered.html
-    assert _COMPANY.identity_line in rendered.html
+    assert _COMPANY.name in rendered.html
 
 
 async def test_line_breaks_inside_a_paragraph_survive_into_html():
@@ -285,6 +294,73 @@ async def test_column_alignment_survives_into_html():
 
 async def test_a_single_space_is_left_alone():
     # Only runs are preserved — ordinary prose must still wrap normally.
+    # Scoped to the copy: the chrome uses &nbsp; in its spacer cells, which is
+    # not what this is about.
     rendered = await _render(paragraphs=["one two three"])
     assert "one two three" in rendered.html
-    assert "&nbsp;" not in rendered.html
+    assert "one&nbsp;two" not in rendered.html
+
+
+# --- Header structure ------------------------------------------------------
+# The layout was rewritten because the first version put the logo on a
+# brand-red band. spinr_logo.png is a charcoal wordmark whose "o" is a *red*
+# spiral: on red the spiral vanished into the background and the charcoal went
+# muddy. These pin the fix so it cannot be undone by a well-meaning "make it
+# more branded" change.
+
+
+async def test_brand_red_is_a_rule_never_the_band_behind_the_logo():
+    html = (await _render()).html
+    red_backgrounds = re.findall(r"background:" + re.escape(BRAND_RED) + r"[^\"]*", html)
+    assert len(red_backgrounds) == 1, f"full-strength brand red used as a background {len(red_backgrounds)}x"
+    assert "height:4px" in red_backgrounds[0], "brand red must be the thin rule, not a band"
+
+
+async def test_the_logo_sits_on_the_light_header_band():
+    html = (await _render()).html
+    before_logo = html[: html.index("<img")]
+    # The nearest background declared before the logo must be the light band.
+    assert before_logo.rindex(f"background:{layout.HEADER_BG}") > before_logo.rindex(f"background:{BRAND_RED}")
+
+
+async def test_the_headline_renders_in_the_header_not_the_body():
+    # Uber's shape: the email says what it is above the fold, before any copy.
+    # An explicit preheader keeps the hidden preview block — which echoes the
+    # first paragraph by default — out of the comparison.
+    html = (await _render(heading="Your documents expire soon", preheader="Action needed")).html
+    heading_at = html.index("Your documents expire soon")
+    body_at = html.index("You can now go online and accept rides.")
+    assert heading_at < body_at
+
+
+async def test_meta_lines_render_top_right():
+    html = (await _render(meta_lines=("Aug 9, 2026", "8:31 pm"))).html
+    assert "Aug 9, 2026" in html
+    assert "8:31 pm" in html
+
+
+async def test_meta_lines_are_optional():
+    html = (await _render()).html
+    assert 'text-align:right;">' in html  # the cell exists, empty
+
+
+async def test_footer_prints_address_lines_one_per_line():
+    company = _COMPANY._replace(address_lines=("230 22nd St E, Suite 300", "Saskatoon SK S7K 0E9"))
+    html = (await _render(company=company)).html
+    first = html.index("230 22nd St E, Suite 300")
+    second = html.index("Saskatoon SK S7K 0E9")
+    assert first < second
+    # Separate block elements, not one run-on string.
+    assert "230 22nd St E, Suite 300</div>" in html
+
+
+async def test_footer_falls_back_to_the_joined_address_when_lines_are_absent():
+    # CompanyDetails built before address_lines existed still renders.
+    assert _COMPANY.address in (await _render(company=_COMPANY)).html
+
+
+async def test_ships_responsive_and_dark_mode_rules():
+    html = (await _render()).html
+    assert "prefers-color-scheme: dark" in html
+    assert "max-width:620px" in html
+    assert 'name="color-scheme"' in html

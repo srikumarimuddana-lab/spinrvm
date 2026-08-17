@@ -19,6 +19,17 @@ const toMoney = (s: string | number | null | undefined): string => {
 };
 const parseMoney = (s: string | number | null | undefined): number =>
   Math.round((parseFloat(String(s ?? '0')) || 0) * 100) / 100;
+// "5h 30m" / "45m" — used for both Total and Avg Online Time. A whole-hours-
+// only "0h" reads as no time online for a daily average under an hour, which
+// is common and not the same thing as zero.
+const formatDurationMinutes = (totalMinutes: number): string => {
+  const minutes = Math.max(Math.round(totalMinutes), 0);
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  if (hours === 0) return `${remainder}m`;
+  if (remainder === 0) return `${hours}h`;
+  return `${hours}h ${remainder}m`;
+};
 
 type Period = 'today' | 'week' | 'month' | 'all';
 type StatusFilter = 'all' | 'completed' | 'cancelled' | 'scheduled';
@@ -40,7 +51,6 @@ export default function ActivityView() {
     historyTotal,
     fetchEarnings,
     fetchRideHistory,
-    fetchDriverBalance,
   } = useDriverStore();
 
   const [period, setPeriod] = useState<Period>('today');
@@ -87,16 +97,14 @@ export default function ActivityView() {
     try {
       if (isPeriodChange && hasLoadedRef.current) {
         // Pill change (not the first load): only earnings is period-specific.
-        // The ride list re-filters client-side and the balance is
-        // period-independent, so DON'T refetch them — replacing rideHistory
-        // forces the whole FlatList to re-render for no reason, which is the
-        // client-side lag on pill taps.
+        // The ride list re-filters client-side, so DON'T refetch it —
+        // replacing rideHistory forces the whole FlatList to re-render for
+        // no reason, which is the client-side lag on pill taps.
         await fetchEarnings(period);
       } else {
         await Promise.allSettled([
           fetchEarnings(period),
           fetchRideHistory(PAGE_SIZE, 0, false),
-          fetchDriverBalance(),
         ]);
       }
     } catch {}
@@ -104,7 +112,7 @@ export default function ActivityView() {
     shownPeriodRef.current = period;
     lastFocusFetchRef.current = Date.now();
     setLoading(false);
-  }, [period, fetchEarnings, fetchRideHistory, fetchDriverBalance]);
+  }, [period, fetchEarnings, fetchRideHistory]);
 
   useFocusEffect(
     useCallback(() => {
@@ -112,6 +120,15 @@ export default function ActivityView() {
     }, [loadData])
   );
 
+  // Business decision 2026-08-13 (A32/A33, docs/change-log/2026-08-13-
+  // blended-lifetime-earnings.md): /drivers/earnings now sums Fare/Tips/
+  // Bonus/Tax/Total Earned over EVERY completed ride (legacy-imported
+  // included) — not just Spinr-native ones. Money is blended at the
+  // backend, from the ride records themselves, so it's correctly sliced per
+  // period (each ride carries its own real completion date) and doesn't
+  // depend on the previous-app Stripe-payout backfill being complete for
+  // every driver — a driver with real legacy ride history but a payout-sync
+  // gap no longer sees "Total Earned $0.00" under a populated trip list.
   const totalEarnings = parseMoney(shownEarnings?.total_earnings);
   const totalTips = parseMoney(shownEarnings?.total_tips);
   const totalIncentives = parseMoney(shownEarnings?.total_incentives);
@@ -121,6 +138,21 @@ export default function ActivityView() {
   const totalReferralBonuses = parseMoney(shownEarnings?.total_referral_bonuses);
   const totalTax = parseMoney(shownEarnings?.total_tax);
   const fareEarnings = Math.max(totalEarnings - totalTips - totalIncentives - totalBonuses - totalTax, 0);
+  const totalRides = Number(shownEarnings?.total_rides ?? 0);
+  const totalDistanceKm = parseMoney(shownEarnings?.total_distance_km);
+  const totalDurationMinutes = Number(shownEarnings?.total_duration_minutes ?? 0);
+  // Elapsed days for this window (backend-computed: fixed for Today/Week/
+  // Month, measured from the earliest ride in view for All Time) — drives
+  // every "per day" average below.
+  const elapsedDays = Math.max(Number(shownEarnings?.elapsed_days ?? 1), 1);
+  // Simple, honest averages — whatever's in the total above, divided by trip
+  // count (or day count) for the same window. One total, one trip count,
+  // one average — no separate "lifetime vs current" metric.
+  const avgPerTrip = totalRides > 0 ? totalEarnings / totalRides : 0;
+  const avgDistancePerTrip = totalRides > 0 ? totalDistanceKm / totalRides : 0;
+  const avgTripsPerDay = totalRides / elapsedDays;
+  const avgDistancePerDay = totalDistanceKm / elapsedDays;
+  const avgOnlineMinutesPerDay = totalDurationMinutes / elapsedDays;
   const periodRideTotal = period === 'all' ? historyTotal : Number(shownEarnings?.total_rides ?? 0);
   const hasMoreHistory = rideHistory.length < historyTotal;
 
@@ -355,7 +387,11 @@ export default function ActivityView() {
                 ~65px each, so amounts like $254.62 wrapped mid-number and the
                 columns fell out of alignment. A full-width row per category
                 gives every amount room to render on one line and stay uniform
-                regardless of how large it is or how narrow the screen. */}
+                regardless of how large it is or how narrow the screen.
+                Every row here sums to the Total Earned figure above — Total
+                Earned itself already blends every completed ride (legacy
+                included), so there's no separate "previously paid" line to
+                reconcile. */}
             <View style={styles.breakdownList}>
               <View style={styles.breakdownRow}>
                 <Ionicons name="cash-outline" size={18} color="#ef4444" style={styles.breakdownIcon} />
@@ -394,8 +430,17 @@ export default function ActivityView() {
                 <FontAwesome5 name="car" size={16} color="#ef4444" />
               </View>
               <View>
-                <Text style={styles.statValue}>{shownEarnings?.total_rides || 0}</Text>
+                <Text style={styles.statValue}>{totalRides}</Text>
                 <Text style={styles.statLabel}>Total Trips</Text>
+              </View>
+            </View>
+            <View style={styles.statCard}>
+              <View style={[styles.iconWrap, { backgroundColor: 'rgba(239,68,68,0.1)' }]}>
+                <MaterialCommunityIcons name="calendar-today" size={18} color="#ef4444" />
+              </View>
+              <View>
+                <Text style={styles.statValue}>{avgTripsPerDay.toFixed(1)}</Text>
+                <Text style={styles.statLabel}>Avg Trips/Day</Text>
               </View>
             </View>
             <View style={styles.statCard}>
@@ -403,8 +448,17 @@ export default function ActivityView() {
                 <MaterialCommunityIcons name="road-variant" size={18} color="#f59e0b" />
               </View>
               <View>
-                <Text style={styles.statValue}>{parseMoney(shownEarnings?.total_distance_km).toFixed(1)}</Text>
-                <Text style={styles.statLabel}>KM Driven</Text>
+                <Text style={styles.statValue}>{totalDistanceKm.toFixed(1)}</Text>
+                <Text style={styles.statLabel}>Total KM Driven</Text>
+              </View>
+            </View>
+            <View style={styles.statCard}>
+              <View style={[styles.iconWrap, { backgroundColor: 'rgba(245,158,11,0.1)' }]}>
+                <MaterialCommunityIcons name="road-variant" size={18} color="#f59e0b" />
+              </View>
+              <View>
+                <Text style={styles.statValue}>{avgDistancePerDay.toFixed(1)} km</Text>
+                <Text style={styles.statLabel}>Avg KM/Day</Text>
               </View>
             </View>
             <View style={styles.statCard}>
@@ -412,10 +466,17 @@ export default function ActivityView() {
                 <Ionicons name="time" size={18} color="#10b981" />
               </View>
               <View>
-                <Text style={styles.statValue}>
-                  {Math.round((shownEarnings?.total_duration_minutes || 0) / 60)}h
-                </Text>
-                <Text style={styles.statLabel}>Online Time</Text>
+                <Text style={styles.statValue}>{formatDurationMinutes(totalDurationMinutes)}</Text>
+                <Text style={styles.statLabel}>Total Online Time</Text>
+              </View>
+            </View>
+            <View style={styles.statCard}>
+              <View style={[styles.iconWrap, { backgroundColor: 'rgba(16,185,129,0.1)' }]}>
+                <Ionicons name="time-outline" size={18} color="#10b981" />
+              </View>
+              <View>
+                <Text style={styles.statValue}>{formatDurationMinutes(avgOnlineMinutesPerDay)}</Text>
+                <Text style={styles.statLabel}>Avg Online Time/Day</Text>
               </View>
             </View>
             <View style={styles.statCard}>
@@ -423,8 +484,17 @@ export default function ActivityView() {
                 <Ionicons name="trending-up" size={18} color="#38bdf8" />
               </View>
               <View>
-                <Text style={styles.statValue}>${toMoney(shownEarnings?.average_per_ride)}</Text>
+                <Text style={styles.statValue}>${toMoney(avgPerTrip)}</Text>
                 <Text style={styles.statLabel}>Avg per Trip</Text>
+              </View>
+            </View>
+            <View style={styles.statCard}>
+              <View style={[styles.iconWrap, { backgroundColor: 'rgba(139,92,246,0.1)' }]}>
+                <MaterialCommunityIcons name="map-marker-distance" size={18} color="#8b5cf6" />
+              </View>
+              <View>
+                <Text style={styles.statValue}>{avgDistancePerTrip.toFixed(1)} km</Text>
+                <Text style={styles.statLabel}>Avg Distance/Trip</Text>
               </View>
             </View>
           </View>

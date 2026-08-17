@@ -36,8 +36,9 @@ def _entity_folder_name(bundle: dict[str, Any]) -> str:
 # Only the raw bytes and the internal status marker are stripped from the
 # manifest. _storage_key deliberately STAYS: bundle_document_uploader.py
 # derives each document's file extension from it on import (a missing key
-# falls back to ".bin", which fails the ALLOWED_EXTENSIONS check and silently
-# skips every document), so it is part of the export/import contract, not a
+# falls back to ".bin", which has no entry in that module's _EXT_TO_MIME_TYPE
+# and silently skips every document), so it is part of the export/import
+# contract, not a
 # leaked internal. The public bundled_file column below carries the same
 # extension for readers that shouldn't need to know about underscore keys.
 _INTERNAL_DOC_KEYS = ("_content", "_content_status")

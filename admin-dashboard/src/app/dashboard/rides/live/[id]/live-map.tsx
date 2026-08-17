@@ -11,6 +11,7 @@ import {
 } from "@/lib/map/maplibre-base";
 import {
     buildPathGradient,
+    buildStraightRouteGradient,
     ROUTE_PIN_COLORS,
     ROUTE_STROKE_WIDTH,
 } from "@spinr/shared/constants/routeMapStyle";
@@ -90,17 +91,22 @@ export default function LiveRideMap({ pickupLat, pickupLng, dropoffLat, dropoffL
                 .setPopup(new maplibregl.Popup({ closeButton: false, offset: 8 }).setText("Dropoff"))
                 .addTo(map);
 
-            // Planned route (dashed grey line)
+            // Planned route — straight-line orange→red gradient.
+            const straightGradient = buildStraightRouteGradient(
+                [pickupLat, pickupLng],
+                [dropoffLat, dropoffLng],
+            );
+            const plannedFeatures: GeoJSON.Feature[] = straightGradient.map((seg) => ({
+                type: "Feature" as const,
+                properties: { color: seg.color },
+                geometry: {
+                    type: "LineString" as const,
+                    coordinates: seg.coordinates.map(([lat, lng]) => [lng, lat]),
+                },
+            }));
             map.addSource(PLANNED_SOURCE_ID, {
                 type: "geojson",
-                data: {
-                    type: "Feature",
-                    properties: {},
-                    geometry: {
-                        type: "LineString",
-                        coordinates: [[pickupLng, pickupLat], [dropoffLng, dropoffLat]],
-                    },
-                },
+                data: { type: "FeatureCollection", features: plannedFeatures },
             });
             map.addLayer({
                 id: PLANNED_LAYER_ID,
@@ -108,10 +114,9 @@ export default function LiveRideMap({ pickupLat, pickupLng, dropoffLat, dropoffL
                 source: PLANNED_SOURCE_ID,
                 layout: { "line-cap": "round", "line-join": "round" },
                 paint: {
-                    "line-color": "#9ca3af",
-                    "line-width": 2,
+                    "line-color": ["get", "color"],
+                    "line-width": ROUTE_STROKE_WIDTH,
                     "line-opacity": 0.6,
-                    "line-dasharray": ["literal", [2, 2]],
                 },
             });
 

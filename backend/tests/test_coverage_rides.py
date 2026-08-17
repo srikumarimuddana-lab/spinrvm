@@ -19,6 +19,7 @@ All deps mocked; no real Supabase/Stripe calls.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -3896,13 +3897,43 @@ async def test_track_shared_ride_not_found():
 
 @pytest.mark.anyio
 async def test_track_shared_ride_completed():
+    """A completed ride with a VALID (in-window) token still reports that the
+    ride ended.
+
+    Previously this case was exercised with shared_trip_token_created_at=None,
+    which is now rejected -- see the companion test below. A NULL timestamp
+    used to mean "never expires", so an ended ride kept serving its pickup and
+    dropoff addresses to anyone holding the link, forever (finding F3).
+    """
+    from backend.routes.rides import track_shared_ride
+
+    fresh = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    ride = _ride(status="completed", shared_trip_token_created_at=fresh)
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_rows = AsyncMock(return_value=[ride])
+        result = await track_shared_ride(share_token="abc123")
+    assert result["status"] == "completed"
+
+
+@pytest.mark.anyio
+async def test_track_shared_ride_legacy_null_timestamp_expires_once_ride_ends():
+    """Legacy tokens (minted by the GET path before it stamped a timestamp)
+    stop working once the ride is terminal.
+
+    Live rides are deliberately left alone -- see
+    tests/test_share_token_expiry.py -- so a rider mid-trip never loses a link
+    they are actively sharing.
+    """
+    from fastapi import HTTPException
+
     from backend.routes.rides import track_shared_ride
 
     ride = _ride(status="completed", shared_trip_token_created_at=None)
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_rows = AsyncMock(return_value=[ride])
-        result = await track_shared_ride(share_token="abc123")
-    assert result["status"] == "completed"
+        with pytest.raises(HTTPException) as exc:
+            await track_shared_ride(share_token="abc123")
+    assert exc.value.status_code == 404
 
 
 @pytest.mark.anyio

@@ -1,0 +1,34 @@
+{
+  "_comment": "ADR-010 §5 step 4 panel. Import into a Grafana Cloud dashboard once the account/data source exist (metrics-agent/README.md step 5). This is a single Grafana panel definition, not a full dashboard export -- paste into a dashboard's `panels` array, or use Grafana's 'Import panel' JSON paste in the panel editor.",
+  "title": "Dispatch offer -> accept latency (P95, Fly)",
+  "description": "Cross-replica P95 of spinr_dispatch_offer_to_accept_duration_ms, provider=fly only. SLA target: < 2000ms (CLAUDE.md Performance SLAs table). Uses histogram_quantile over summed buckets across replicas -- NOT an average of per-replica P95s (ADR-010 §2 explicitly flags averaging per-replica quantiles as a well-known Prometheus mistake).",
+  "type": "timeseries",
+  "datasource": {
+    "type": "prometheus",
+    "uid": "<GRAFANA_CLOUD_PROMETHEUS_DATASOURCE_UID>"
+  },
+  "targets": [
+    {
+      "expr": "histogram_quantile(0.95, sum(rate(spinr_dispatch_offer_to_accept_duration_ms_bucket{provider=\"fly\"}[5m])) by (le))",
+      "legendFormat": "P95 dispatch offer->accept (fly)",
+      "refId": "A"
+    }
+  ],
+  "fieldConfig": {
+    "defaults": {
+      "unit": "ms",
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          { "color": "green", "value": null },
+          { "color": "orange", "value": 1500 },
+          { "color": "red", "value": 2000 }
+        ]
+      }
+    }
+  },
+  "options": {
+    "legend": { "showLegend": true },
+    "tooltip": { "mode": "single" }
+  }
+}

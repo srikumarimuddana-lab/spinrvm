@@ -8298,7 +8298,16 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 
 - [ ] **Status:** open (filed 2026-08-14 alongside
   `docs/runbooks/payment-dispute-evidence.md`, which documents the manual
-  workaround for all three).
+  workaround for all three). **Action item 1 of 5 DONE (2026-08-17)**:
+  migration 326 adds `evidence_due_by`/`evidence_submitted_at`/`fee_cents`
+  to `stripe_disputes` (additive, nullable); `charge.dispute.created` now
+  parses Stripe's `evidence_details.due_by` and stores it, with a logged
+  warning (never a silent drop, never a 500) if a future payload sends a
+  malformed value. `evidence_submitted_at`/`fee_cents` are placeholder
+  columns only — not populated by anything yet. Items 2–5 (alerting, admin
+  UI, evidence-pack endpoint, submission path) remain open, same priority
+  order as originally scoped. Full detail:
+  `docs/change-log/2026-08-17-c23-dispute-evidence-due-by.md`.
 - **Issue/gap:** the webhook records a chargeback and then nothing else
   happens. Specifically:
   1. **No `evidence_due_by`.** Stripe puts

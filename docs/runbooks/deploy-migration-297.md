@@ -31,10 +31,9 @@ Migration 297 (apply to Supabase)  →  Backend deploy (Fly / Railway)
 ```
 
 ```bash
-export SUPABASE_URL=<target-env-url>
-export SUPABASE_SERVICE_ROLE_KEY=<target-env-service-role-key>
-python backend/scripts/migrate.py --dry-run   # confirm 297 shows as "Would apply"
-python backend/scripts/migrate.py             # apply for real
+export DATABASE_URL=<target-env-pooler-connection-string>
+python -m backend.scripts.run_migrations --dry-run   # confirm 297 shows as pending
+python -m backend.scripts.run_migrations             # apply for real
 ```
 
 Only once this has succeeded against **every environment the backend deploy will reach** (Fly

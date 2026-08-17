@@ -224,7 +224,7 @@ The assistant does **not** hard-code answers — it retrieves them from the `faq
 
 **Two ways to load these FAQs:**
 
-1. **Migration (this set):** run `212_seed_saskatchewan_driver_faqs.sql` — `python migrate.py --env production`. Idempotent (insert-if-not-exists by question+audience).
+1. **Migration (this set):** run `212_seed_saskatchewan_driver_faqs.sql` — `python -m backend.scripts.run_migrations`. Idempotent (insert-if-not-exists by question+audience).
 2. **Admin dashboard:** Admin → FAQs → New (`POST /admin/faqs` with `audience='driver'`). Best for ongoing edits by ops without a deploy.
 
 **Matching quality (all optional, already built):**

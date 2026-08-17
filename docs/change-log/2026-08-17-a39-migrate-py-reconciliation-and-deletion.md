@@ -65,7 +65,25 @@ None rider/driver/corporate-facing. One internal-admin-facing improvement: the `
 | `docs/runbooks/migration-conflict-detection.md` | Reference updated to note deletion | Same |
 | `.github/workflows/migration-check.yml` | Two explanatory comments updated to point at the new location | Same |
 | `.claude/commands/migration-check.md` | Command example fixed | Live slash-command definition, not a historical doc |
+| `backend/requirements.in` | Comment referencing `migrate.py` corrected | Living dependency-rationale comment |
+| `backend/.coveragerc` | Removed two stale `omit` entries (`migrate.py`, `scripts/migrate.py`) for a file that no longer exists | Stale coverage-exclusion entries are silently harmless but misleading during audit |
+| `docs/runbooks/admin-rollback.md` | Command fixed | Living runbook |
+| `docs/runbooks/supabase-region-migration.md` | 5 occurrences fixed — **not just the script name**: the original also documented `migrate.py`'s `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` connection interface, which is wrong for `run_migrations.py` (requires `DATABASE_URL`, a direct Postgres/pooler connection); rewrote the connection example. Also removed a stale "highest migration is 135" reference (repo is now at 321) | A region-migration runbook with a wrong connection interface would have sent an operator down the wrong path during an actual region cutover |
+| `docs/runbooks/deploy-migration-64-65.md` | 3 occurrences fixed, same connection-interface correction | Same |
+| `docs/runbooks/deploy-migration-297.md` | 2 occurrences fixed, same connection-interface correction | Same |
+| `docs/runbooks/stripe-identity-drift-manual-test.md` | 2 occurrences fixed | Living runbook, found in a follow-up sweep |
+| `.planning/ROADMAP.md` | 1 line fixed (`REL-1` deliverable) | Living planning doc |
+| `.planning/REQUIREMENTS.md` | 1 line fixed (`REQ-DEPL-7`) | Same |
+| `docs/driver-faqs-saskatchewan.md` | 1 line fixed | Living doc (driver-facing FAQ seed instructions) |
 | `docs/change-log/2026-08-17-a39-migrate-py-reconciliation-and-deletion.md` | This file | Mandatory Change Impact Log |
+
+### Second-pass correction (2026-08-17, same day)
+
+`spinr-migration-reviewer` reviewed the first commit before PR creation (per standing instruction to wait for review before opening the PR) and found the reference-cleanup claim in §3/§9 above was **not actually complete**: a full-repo grep it ran turned up 11 more files still containing actionable `migrate.py` references that the first pass missed — verdict "FIX BEFORE MERGE (non-blocking to production safety, blocking to this change's own completeness claim)". The reviewer was explicit that the runner code itself (the CONCURRENTLY port) was correct, faithfully tested, and safe — only the reference-cleanup was incomplete.
+
+Of the 11 flagged files, 9 were living docs/config and are now fixed (listed in the table above). 2 (`backend/scripts/verify_migrations_286_291.sql`, `backend/scripts/verify_migrations_292_293.sql`) were deliberately left untouched after inspection: `verify_migrations_292_293.sql`'s own header comment states editing it "would break the provenance of" a result cited in `docs/change-log/2026-08-08-migration-verification-result.md` — both are self-declared point-in-time provenance records, not living documentation, consistent with the historical-record convention already applied elsewhere in this change and this session. One additional file (`docs/runbooks/stripe-identity-drift-manual-test.md`) was found and fixed via an independent final sweep, not on the reviewer's original list.
+
+Also checked and correctly left alone: `.planning/graphs/graph.json` and `.planning/graphs/.last-build-snapshot.json` contain dozens of `migrate.py` path references, but per `AGENTS.md` these are auto-generated Graphify build outputs (regenerated on rebuild from the live codebase), not hand-authored docs — editing them by hand would be overwritten by the next rebuild and is not the intended fix path.
 
 ## 7. Before / after
 
@@ -117,7 +135,7 @@ def _apply_one(conn, path: Path) -> None:
 - [x] `pytest backend/tests/test_migration_concurrently_splitting.py backend/tests/test_run_migrations_autocommit_chunks.py backend/tests/test_financial_events_ride_id_fk_contract.py backend/tests/test_unbalanced_scoped_migration.py backend/tests/test_auto_payout.py backend/tests/test_migration_ordering.py backend/tests/test_migration_fk_column_types.py -q --no-cov` — 128/128 pass.
 - [x] `ruff check` + `ruff format --check` on every touched Python file — clean.
 - [x] Blast-radius grep: confirmed no application code (routes/services/background loops) imports either `run_migrations` or the deleted `migrate` module.
-- [x] Grepped the entire repo for every remaining `migrate.py` reference; fixed all living docs/CI/code, deliberately left historical audit/change-log records untouched (same convention as the rest of this session).
+- [x] Grepped the entire repo for every remaining `migrate.py` reference; fixed all living docs/CI/code, deliberately left historical audit/change-log records untouched (same convention as the rest of this session). This grep was re-verified by `spinr-migration-reviewer`, which found the first pass had actually missed 11 files (see §3's "Second-pass correction") — all now fixed or explicitly judged out of scope.
 - [ ] Not run against a live Postgres instance — same limitation as the original B0 fix and every other change to this tooling in this repo's history; verified via the real function against every CONCURRENTLY-mentioning migration file's actual text (unchanged from B0's original validation) plus unit tests with a mocked connection.
 
 ## What was NOT verified

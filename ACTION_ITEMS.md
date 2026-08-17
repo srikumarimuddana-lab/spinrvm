@@ -14,6 +14,10 @@ never had that fix and would have failed on any `CREATE INDEX
 CONCURRENTLY` migration — fixed every living-doc/CI/runtime reference
 across `CLAUDE.md`, `AGENTS.md`, runbooks, CI workflow comments, and a
 real admin-facing error message, then deleted `migrate.py` outright.
+`spinr-migration-reviewer` then found the reference-cleanup was
+incomplete (11 more files); all fixed or explicitly judged out of scope
+(self-declared provenance records, auto-generated build artifacts) — see
+A39.
 128 directly affected tests pass. Prior same day: A40 CLOSED (all three questions resolved:
 #1 confirmed by the product owner that dual-run — old app still
 processing real Stripe charges on the shared account — is intentional
@@ -3743,6 +3747,36 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   `.github/workflows/` (e.g. a Fly/Railway post-deploy hook, a manual
   runbook step not checked in this repo) invokes `migrate.py` specifically
   — only this repo's own CI config was checked.
+- **Pre-merge reviewer finding, same day:** `spinr-migration-reviewer`
+  (run per the standing "wait for the review, then open the PR"
+  instruction) confirmed the ported runner code itself was correct,
+  faithfully tested, and safe, but found the "fixed every other living
+  reference" claim above was not actually complete — a full-repo grep
+  turned up 11 more files still referencing `migrate.py`:
+  `backend/requirements.in`, `backend/.coveragerc`, two
+  `verify_migrations_*.sql` scripts, `docs/runbooks/admin-rollback.md`,
+  `docs/runbooks/supabase-region-migration.md`,
+  `docs/runbooks/deploy-migration-64-65.md`,
+  `docs/runbooks/deploy-migration-297.md`, `.planning/ROADMAP.md`,
+  `.planning/REQUIREMENTS.md`, `docs/driver-faqs-saskatchewan.md`.
+  Verdict: "FIX BEFORE MERGE (non-blocking to production safety, blocking
+  to the PR's own completeness claim)." 9 of the 11 are living docs and
+  are now fixed — three of those fixes (`supabase-region-migration.md`,
+  `deploy-migration-64-65.md`, `deploy-migration-297.md`) were substantive,
+  not just a script-name swap: the original text also documented
+  `migrate.py`'s `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` connection
+  interface, which is wrong for `run_migrations.py` (needs `DATABASE_URL`).
+  The other 2 (`verify_migrations_286_291.sql`, `verify_migrations_292_293.sql`)
+  were deliberately left alone — the latter's own header comment states
+  editing it would break the provenance of a result cited in
+  `docs/change-log/2026-08-08-migration-verification-result.md`, i.e. a
+  self-declared point-in-time record, same convention as the historical
+  docs already excluded above. One more file the reviewer's list didn't
+  catch (`docs/runbooks/stripe-identity-drift-manual-test.md`) was found
+  and fixed in an independent final sweep. `.planning/graphs/graph.json`
+  and `.last-build-snapshot.json` also reference `migrate.py` dozens of
+  times but are auto-generated Graphify build outputs per `AGENTS.md`, not
+  hand-authored docs — correctly left untouched.
 
 ### A36. `financial_events` is 0 rows in production despite active use by 42 files — CLOSED (2026-08-17), root cause found: neither hypothesis was right
 

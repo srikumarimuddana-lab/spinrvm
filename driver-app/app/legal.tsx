@@ -13,6 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { SpinrConfig } from '@shared/config/spinr.config';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { isValidLegalDocType, legalDocFallbackText, legalDocTitle } from '@shared/config/legalDocs';
 
 // Previously this fallback held hardcoded ToS/Privacy Policy text that was
 // factually wrong for Spinr's actual business (Ontario governing law, a
@@ -31,7 +32,15 @@ export default function LegalScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const params = useLocalSearchParams();
-    const type = params.type as 'tos' | 'privacy' | undefined;
+    const rawType = params.type as string | undefined;
+    const type = rawType as 'tos' | 'privacy' | undefined;
+    // Any doc type beyond tos/privacy/undefined (e.g. reached from
+    // policies.tsx) renders as a single document instead of the combined
+    // Privacy+ToS scroll view below — see shared/config/legalDocs.ts.
+    const singleDocType =
+        rawType && rawType !== 'tos' && rawType !== 'privacy' && isValidLegalDocType(rawType)
+            ? rawType
+            : undefined;
     const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
     const scrollRef = useRef<ScrollView>(null);
@@ -40,6 +49,7 @@ export default function LegalScreen() {
 
     const [privacyText, setPrivacyText] = useState('');
     const [tosText, setTosText] = useState('');
+    const [singleDocContent, setSingleDocContent] = useState('');
     const [loading, setLoading] = useState(true);
 
     // Declared before the `useEffect` below (react-hooks/immutability /
@@ -55,6 +65,14 @@ export default function LegalScreen() {
     // once the admin dashboard publishes per-audience rows.
     const fetchLegalContent = async () => {
         try {
+            if (singleDocType) {
+                const res = await fetch(
+                    `${SpinrConfig.backendUrl}/legal-documents?audience=driver&type=${singleDocType}`
+                );
+                const data = await res.json();
+                setSingleDocContent(data.content || legalDocFallbackText(singleDocType));
+                return;
+            }
             // Public endpoint — no auth, no /api/v1 prefix (mounted at root).
             const [privacyRes, tosRes] = await Promise.all([
                 fetch(`${SpinrConfig.backendUrl}/legal-documents?audience=driver&type=privacy`),
@@ -64,20 +82,26 @@ export default function LegalScreen() {
             setPrivacyText(privacyData.content || FALLBACK_PRIVACY_POLICY);
             setTosText(tosData.content || FALLBACK_TERMS_OF_SERVICE);
         } catch {
-            setPrivacyText(FALLBACK_PRIVACY_POLICY);
-            setTosText(FALLBACK_TERMS_OF_SERVICE);
+            if (singleDocType) {
+                setSingleDocContent(legalDocFallbackText(singleDocType));
+            } else {
+                setPrivacyText(FALLBACK_PRIVACY_POLICY);
+                setTosText(FALLBACK_TERMS_OF_SERVICE);
+            }
         } finally {
             setLoading(false);
         }
     };
 
     useEffect(() => {
-        // Mount-only fetch; fetchLegalContent sets state after its own await
-        // (or in its catch fallback), not synchronously at the top of the
-        // effect. Empty deps, runs once.
+        // Re-fetches if the route param switches between single-doc mode
+        // and the combined view (e.g. navigating from one policies.tsx link
+        // to another without unmounting). fetchLegalContent sets state
+        // after its own await (or in its catch fallback), not synchronously
+        // at the top of the effect.
         // eslint-disable-next-line react-hooks/set-state-in-effect
         fetchLegalContent();
-    }, []);
+    }, [singleDocType]);
 
     useEffect(() => {
         if (!loading && type && scrollRef.current) {
@@ -99,7 +123,7 @@ export default function LegalScreen() {
                 <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
                     <Ionicons name="arrow-back" size={24} color={colors.text} />
                 </TouchableOpacity>
-                <Text style={styles.headerTitle}>Legal</Text>
+                <Text style={styles.headerTitle}>{singleDocType ? legalDocTitle(singleDocType) : 'Legal'}</Text>
                 <View style={styles.headerRight} />
             </View>
 
@@ -107,6 +131,14 @@ export default function LegalScreen() {
                 <View style={styles.loadingContainer}>
                     <ActivityIndicator size="large" color={colors.primary} />
                 </View>
+            ) : singleDocType ? (
+                <ScrollView
+                    style={styles.container}
+                    contentContainerStyle={styles.contentContainer}
+                    showsVerticalScrollIndicator={false}
+                >
+                    <Text style={styles.textContent}>{singleDocContent}</Text>
+                </ScrollView>
             ) : (
                 <ScrollView
                     ref={scrollRef}

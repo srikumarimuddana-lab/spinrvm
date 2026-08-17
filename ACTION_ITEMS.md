@@ -8231,7 +8231,16 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 
 ### C28. Scheduled-ride dispatch-arrival push failure mislogs as a full dispatch failure
 
-- [ ] **Status:** open (filed 2026-08-17, same review as C26).
+- [x] **Status:** closed 2026-08-17. The final rider confirmation push in
+  `_dispatch_scheduled_ride` (`utils/scheduled_rides.py`) is now wrapped in
+  its own try/except, mirroring `_send_reminder`'s existing pattern. A
+  failure there now logs distinctly (`"scheduled dispatch: final
+  confirmation push failed for ride {ride_id}"`, `logger.error`,
+  `exc_info=True`) instead of falling through to the outer handler's
+  `"Failed to dispatch scheduled ride"` log. New regression test in
+  `backend/tests/test_scheduled_dispatch_cr.py` asserts the distinct
+  message fires and the dispatch-failure message does not.
+  `pytest tests/test_scheduled_dispatch_cr.py -q` → 40 passed.
 - **Issue/gap:** `_dispatch_scheduled_ride` sends the rider's "Your
   scheduled ride is starting!" push with no local try/except
   (`utils/scheduled_rides.py:589-600`), unlike every other push call in this

@@ -23,6 +23,7 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: spinr_test
+          PGUSER: postgres
         ports:
           - 5432:5432
         options: >-

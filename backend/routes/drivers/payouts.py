@@ -10,12 +10,14 @@ from ._deps import (  # noqa: F401
     BaseModel,
     Decimal,
     Depends,
+    ErrorCode,
     Field,
     HTMLResponse,
     HTTPException,
     Query,
     Request,
     RideStatus,
+    SpinrException,
     asyncio,
     datetime,
     db_supabase,
@@ -37,9 +39,11 @@ from ._shared import (  # noqa: F401
 
 try:
     from ...services import stripe_kyc_sync as _kyc
+    from ...utils.error_keys import ErrorKeys
     from ...utils.stripe_mode import is_missing_on_key, key_mode, object_mode
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
     from services import stripe_kyc_sync as _kyc  # type: ignore
+    from utils.error_keys import ErrorKeys  # type: ignore
     from utils.stripe_mode import is_missing_on_key, key_mode, object_mode  # type: ignore
 
 router = APIRouter()
@@ -842,6 +846,34 @@ async def request_payout(
     """Standard cashout is disabled — payouts are now Spinr-controlled and
     run automatically every Sunday for all eligible drivers (>= $10 balance).
     Drivers can still use instant payouts (fee-bearing) for early access."""
+    # CR-4104 / A34 dual-run cutover guard: block payout for a
+    # legacy-imported driver an operator has confirmed is still active on
+    # the old app (drivers.dual_run_hold, migration 327). Checked first so
+    # a held driver gets a specific, actionable error instead of the
+    # generic "cash out disabled" message below. Scoped to
+    # legacy_import_metadata-bearing drivers only, matching the go-online
+    # guard in routes/drivers/status.py — see that file for the full
+    # rationale. dual_run_hold defaults to False everywhere and nothing
+    # sets it automatically; this is a no-op until an operator flips it.
+    #
+    # Note (deliberate scope note, see PR description): this endpoint is
+    # already unconditionally disabled below (410) for every caller — the
+    # live payout paths are request_instant_payout (this file) and the
+    # weekly auto_payout.py background loop, neither of which this guard
+    # touches. This check is added here because it is the exact location
+    # named by CR-4104 and keeps the guard's presence consistent and
+    # future-proof if standard cashout is ever re-enabled.
+    _driver_row = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
+    )
+    if _driver_row and _driver_row.get("dual_run_hold") and _driver_row.get("legacy_import_metadata"):
+        raise SpinrException(
+            message="Your account is on hold while active on the previous app. Please contact support.",
+            error_code=ErrorCode.DRIVER_NOT_AVAILABLE,
+            status_code=403,
+            message_key=ErrorKeys.DRIVER_DUAL_RUN_HOLD,
+            action_hint="Contact support",
+        )
     # Old app builds surface this string in a toast that clamps at 140 chars
     # (shared/utils/toastMessage.ts) — keep it under that, and don't advertise
     # instant payout while the driver app has no instant-payout UI to tap.

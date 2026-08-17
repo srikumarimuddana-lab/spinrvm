@@ -148,6 +148,27 @@ async def update_driver_status(
     if driver.get("user_id") != current_user["id"]:
         raise HTTPException(status_code=403, detail="Not authorized")
 
+    # CR-4104 / A34 dual-run cutover guard: block go-online for a
+    # legacy-imported driver an operator has confirmed is still active on
+    # the old app (drivers.dual_run_hold, migration 327). Scoped to
+    # legacy_import_metadata-bearing drivers only (per the CR's own risk
+    # mitigation) so a natively-onboarded driver — the vast majority of the
+    # fleet — can never be blocked by this check, even if the boolean were
+    # ever mistakenly set. dual_run_hold defaults to False everywhere and
+    # nothing in this codebase sets it automatically; this is a no-op until
+    # an operator flips it for a specific driver via the admin dashboard/DB.
+    # Blocking here (rather than only at dispatch-claim time) keeps a held
+    # driver out of the dispatch pool entirely, since is_available can only
+    # ever become True through this endpoint.
+    if is_online and driver.get("dual_run_hold") and driver.get("legacy_import_metadata"):
+        raise SpinrException(
+            message="Your account is on hold while active on the previous app. Please contact support.",
+            error_code=ErrorCode.DRIVER_NOT_AVAILABLE,
+            status_code=403,
+            message_key=ErrorKeys.DRIVER_DUAL_RUN_HOLD,
+            action_hint="Contact support",
+        )
+
     # Ban check: prevent banned drivers from going online
     if is_online and driver.get("status") == "banned":
         raise AccountDisabledException(

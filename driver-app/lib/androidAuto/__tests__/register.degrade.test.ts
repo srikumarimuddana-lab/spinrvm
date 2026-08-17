@@ -29,6 +29,10 @@ jest.mock('../carLocationTask', () => ({
   startCarLocationService: jest.fn().mockResolvedValue('started'),
   stopCarLocationService: jest.fn().mockResolvedValue(undefined),
 }));
+jest.mock('../carSession', () => ({
+  startCarSession: jest.fn().mockResolvedValue(undefined),
+  stopCarSession: jest.fn(),
+}));
 jest.mock('../carMapCamera', () => ({
   useCarMapCamera: { getState: () => ({ reset: jest.fn() }) },
 }));

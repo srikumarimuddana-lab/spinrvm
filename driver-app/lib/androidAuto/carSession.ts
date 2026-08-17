@@ -1,0 +1,212 @@
+/**
+ * The car's own bootstrap — what useDriverDashboard does on mount, without React.
+ *
+ * ─── Why this has to exist ──────────────────────────────────────────────────
+ * Android Auto starts the app's JS CONTEXT, not its phone UI. index.js runs, so
+ * registerAutoPlay() and the FCM background handler both execute — but
+ * app/_layout.tsx and app/driver/(tabs)/index.tsx never mount. Everything that
+ * loads a driver's data lives in that unmounted tree:
+ *
+ *   authStore.initialize()   called from app/index.tsx and app/_layout.tsx
+ *   useDriverDashboard()     mounted only in app/driver/(tabs)/index.tsx
+ *
+ * So on a car-only launch there was no token, and therefore no active ride, no
+ * earnings, no driver config — not because the requests failed, but because
+ * nothing ever issued them. That is the whole of "the icons and screen are not
+ * loaded properly… not refreshing or storing any data".
+ *
+ * Launching the phone Activity from the car is NOT the alternative: Android 10+
+ * blocks background activity starts, and Play's Car App Quality guidelines
+ * forbid an app driving the phone UI from the head unit. A headless bootstrap is
+ * how Google Maps does it, and it is what this is.
+ *
+ * ─── Contract ───────────────────────────────────────────────────────────────
+ * Every step is best-effort and independently caught. The map, the car marker
+ * and the template buttons need no session, no store and no network beyond map
+ * tiles, and they must keep rendering when all of this fails — a signed-out
+ * driver should see a working map, just without their data.
+ */
+import { AppState, type AppStateStatus } from 'react-native';
+import { useAuthStore } from '@shared/store/authStore';
+import api from '@shared/api/client';
+import { useDriverStore } from '../../store/driverStore';
+import { consumePendingRideOffer } from '../../services/pendingRideOffer';
+import { pushDebug, setDebugFact } from './carDebug';
+
+const log = (...args: unknown[]) => {
+  if (__DEV__) console.log('[car-session]', ...args);
+  pushDebug('info', ...args);
+};
+const logError = (...args: unknown[]) => {
+  console.error('[car-session]', ...args);
+  pushDebug('error', ...args);
+};
+
+/**
+ * Backstop refresh while a head unit is connected.
+ *
+ * Without a WebSocket the car cannot be TOLD that a ride changed underneath it,
+ * so it asks. 60s is chosen against what it is actually covering: FCM already
+ * delivers the events that matter within seconds (offer, cancellation), and this
+ * exists for the cases push misses entirely — a notification permission revoked,
+ * a dropped FCM connection, a state change with no push at all. A tighter poll
+ * would spend a driver's battery and data on a duplicate of a channel that
+ * usually works. The real fix is a headless socket, which is deliberately not
+ * part of this change.
+ */
+const REFRESH_INTERVAL_MS = 60_000;
+
+/** How long to wait for an initialize() already in flight before giving up. */
+const AUTH_WAIT_MS = 8_000;
+
+let refreshTimer: ReturnType<typeof setInterval> | null = null;
+let appStateSub: { remove: () => void } | null = null;
+let started = false;
+
+/**
+ * Restore the session from the car, because nothing else will.
+ *
+ * `initialize()` reads the stored refresh token and rehydrates the session. It
+ * is safe to call from here: it performs no navigation, and a transient failure
+ * deliberately KEEPS the refresh token and flags the session recoverable rather
+ * than logging the driver out (authStore.ts — "Do NOT delete it — the next app
+ * launch should retry"). Only a genuine 401, where the server has already
+ * revoked the token, clears anything.
+ *
+ * Resolves to whether a usable token exists afterwards. Unlike the previous
+ * fire-and-forget version in register.ts this is AWAITED, because everything
+ * below it is a request that would otherwise race the token into existence and
+ * 401.
+ */
+async function ensureSession(): Promise<boolean> {
+  try {
+    const auth = useAuthStore.getState();
+    if (!auth.isInitialized) {
+      if (auth.isLoading) {
+        // The phone app is starting up concurrently. Joining its initialize is
+        // right; starting a second one would race two refresh-token rotations,
+        // and that credential is single-use.
+        await waitForInitialized();
+      } else {
+        log('car-only launch — initialising session from the car');
+        await auth.initialize?.();
+      }
+    }
+    return !!useAuthStore.getState().token;
+  } catch (e) {
+    logError('session init from car failed:', e);
+    return false;
+  }
+}
+
+function waitForInitialized(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (useAuthStore.getState().isInitialized) {
+      resolve();
+      return;
+    }
+    let unsub: (() => void) | null = null;
+    const finish = () => {
+      clearTimeout(timer);
+      unsub?.();
+      resolve();
+    };
+    // Bounded: an initialize that never settles must not hold the car's
+    // bootstrap open forever. On timeout we proceed token-less, which simply
+    // means the data-backed extras stay absent this session.
+    const timer = setTimeout(finish, AUTH_WAIT_MS);
+    unsub = useAuthStore.subscribe((s: { isInitialized?: boolean }) => {
+      if (s?.isInitialized) finish();
+    });
+  });
+}
+
+/** The reads a connected car wants, issued together and individually caught. */
+async function refreshCarData(reason: string): Promise<void> {
+  const store = useDriverStore.getState();
+  await Promise.all([
+    store.fetchActiveRide().catch((e) => logError('fetchActiveRide failed:', e)),
+    // Feeds the earnings pill. Absent is an accepted outcome — the pill hides
+    // itself — so this must never be the reason the rest of a refresh fails.
+    store.fetchEarnings('today').catch((e) => logError('fetchEarnings failed:', e)),
+  ]);
+  log('refreshed:', reason);
+}
+
+/**
+ * Fetch the server's dispatch config so the head unit's offer alert counts down
+ * for the real offer window rather than the 15s fallback. The phone gets this
+ * from a react-query hook that never runs car-only.
+ */
+async function loadDriverConfig(): Promise<void> {
+  try {
+    const res = await api.get('/drivers/config');
+    if (res?.data) useDriverStore.getState().applyDriverConfig(res.data);
+  } catch (e) {
+    // Falls back to FALLBACK_COUNTDOWN in the store — degraded, not broken.
+    logError('driver config fetch failed:', e);
+  }
+}
+
+/**
+ * Bring the car session up. Idempotent: a head unit that swaps to the reversing
+ * camera and back re-fires didConnect without a disconnect, and that must not
+ * stack a second refresh timer or re-run the bootstrap.
+ */
+export async function startCarSession(): Promise<void> {
+  if (started) {
+    log('session already started — refreshing instead');
+    await refreshCarData('reconnect');
+    return;
+  }
+  started = true;
+
+  // Armed before the awaits below so a bootstrap that stalls on a slow network
+  // still leaves the car refreshing on its own afterwards.
+  refreshTimer = setInterval(() => {
+    refreshCarData('interval').catch(() => {});
+  }, REFRESH_INTERVAL_MS);
+
+  appStateSub = AppState.addEventListener('change', (next: AppStateStatus) => {
+    // The phone app coming to the foreground is the cheapest signal that
+    // something may have changed while the car was the only thing running.
+    if (next === 'active') refreshCarData('app-active').catch(() => {});
+  });
+
+  // A stashed offer is time-critical and needs no token, so it goes first.
+  const surfaced = await consumePendingRideOffer();
+  if (surfaced) log('surfaced a ride offer stashed by the background handler');
+
+  const authed = await ensureSession();
+  setDebugFact('session', authed ? 'authenticated' : 'no token');
+  if (!authed) {
+    // Signed out, or the refresh token is gone. The map, marker and buttons
+    // still work; this is the "logged out is fine, just show the map" case.
+    log('no session — car runs map-only');
+    return;
+  }
+
+  // Order matters and mirrors useDriverDashboard.ts:1552: the cached ride state
+  // paints something immediately, then the server correction overrides it.
+  await useDriverStore
+    .getState()
+    .hydrateDriverRideState()
+    .catch((e) => logError('hydrateDriverRideState failed:', e));
+
+  await Promise.all([refreshCarData('bootstrap'), loadDriverConfig()]);
+}
+
+/** Tear down. Safe to call when nothing was started. */
+export function stopCarSession(): void {
+  started = false;
+  if (refreshTimer !== null) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+  try {
+    appStateSub?.remove();
+  } catch {
+    /* already removed */
+  }
+  appStateSub = null;
+}

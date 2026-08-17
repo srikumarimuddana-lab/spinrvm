@@ -47,6 +47,8 @@ const mockPan = jest.fn();
 
 const mockStartCarLocation = jest.fn().mockResolvedValue('started');
 const mockStopCarLocation = jest.fn().mockResolvedValue(undefined);
+const mockStartCarSession = jest.fn().mockResolvedValue(undefined);
+const mockStopCarSession = jest.fn();
 
 jest.mock('../../../store/driverStore', () => ({
   useDriverStore: {
@@ -63,6 +65,14 @@ jest.mock('../carSurface', () => ({ CarMapSurface: () => null }));
 jest.mock('../carLocationTask', () => ({
   startCarLocationService: (...a: unknown[]) => mockStartCarLocation(...a),
   stopCarLocationService: (...a: unknown[]) => mockStopCarLocation(...a),
+}));
+
+// Its own suite covers the bootstrap; here we only care that register wires the
+// start/stop to connect/disconnect, and that a failing bootstrap cannot take
+// the template down with it.
+jest.mock('../carSession', () => ({
+  startCarSession: (...a: unknown[]) => mockStartCarSession(...a),
+  stopCarSession: (...a: unknown[]) => mockStopCarSession(...a),
 }));
 
 jest.mock('../carMapCamera', () => ({
@@ -148,6 +158,8 @@ beforeEach(() => {
   mockCompleteRide.mockClear();
   mockStartCarLocation.mockClear();
   mockStopCarLocation.mockClear();
+  mockStartCarSession.mockClear();
+  mockStopCarSession.mockClear();
   mockConnected = true;
   mockState.rideState = 'idle';
   mockState.activeRide = null;
@@ -359,6 +371,34 @@ describe('display-only location service', () => {
     registerAutoPlay();
     mockListeners.didConnect?.();
     expect(mockStartCarLocation).not.toHaveBeenCalled();
+  });
+});
+
+describe('headless car session', () => {
+  it('bootstraps on connect — no phone screen mounts to load this data', () => {
+    registerAutoPlay();
+    mockListeners.didConnect();
+    expect(mockStartCarSession).toHaveBeenCalled();
+  });
+
+  it('tears down on disconnect', () => {
+    registerAutoPlay();
+    mockListeners.didConnect();
+    mockListeners.didDisconnect();
+    expect(mockStopCarSession).toHaveBeenCalled();
+  });
+
+  it('a failing bootstrap still leaves a working map and buttons', async () => {
+    // The whole premise is that the baseline needs no session: a signed-out or
+    // offline driver must still get a map, a marker and a header.
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    mockStartCarSession.mockRejectedValueOnce(new Error('no network'));
+    registerAutoPlay();
+    expect(() => mockListeners.didConnect()).not.toThrow();
+    await Promise.resolve();
+    expect(mockTemplates).toHaveLength(1);
+    expect(lastTpl().setMapButtons).toHaveBeenCalled();
+    errSpy.mockRestore();
   });
 
   it('a rejected start cannot take the car screen down with it', async () => {

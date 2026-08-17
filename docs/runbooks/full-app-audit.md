@@ -49,7 +49,7 @@ audits the app's general surfaces.
    loses work; two-layer reporting everywhere (plain-English summary up top,
    technical detail with `file:line`/filter chains underneath).
 
-## Prior-Findings Ledger (as of 2026-08-15 — read these, don't re-derive)
+## Prior-Findings Ledger (as of 2026-08-17 — read these, don't re-derive)
 
 | Topic | Status | Where |
 |---|---|---|
@@ -57,6 +57,14 @@ audits the app's general surfaces.
 | Whole-app fleet audit, 21 reviewers, 17 ranked blockers + decision list | Reported | `docs/audit/2026-08-15-full-fleet-launch-readiness.md` |
 | Consolidated blocker/decision index | Live | `ACTION_ITEMS.md` **A34** |
 | Dual-run monitoring signals (first-go-online audit row + 2 labeled counters, all payout paths incl. auto-payout) | **Shipped**, flag `app_settings.dual_run_monitoring_enabled` | PR #3954, `backend/utils/dual_run_monitor.py`, change-log `2026-08-15-dual-run-monitoring-signals.md` |
+| **§0.0 Stripe-mirror cross-check — RUN.** $276.59/20-driver figure **superseded**: buckets 1–15 revised to **$185.31–$228.08** (2 of 15 unresolved — one has a payment with no matching payout, evidence trends *owed*; one has two equally clean same-amount pairs, ambiguous). 1 bucket ($22.43) likely already paid via Stripe, excluded. Buckets 16–20 ($26.08) unaffected, still blocked on driver re-link. **Confirmed structural limit**: `driver_stripe_ledger` has no field that can ever link a row to a specific ride — "likely" is the ceiling, "confirmed" is unreachable with this schema. Mirror account provenance still unconfirmed (all observed dates are post-migration, so it structurally can't hold old-app-era evidence) | Run, PR #3946 merged in its documented **dry-run-only** form (no write path) | `docs/change-log/2026-08-16-gst-backfill-and-stripe-crosscheck.md` §1a |
+| `old_payout_gst_amount` — backfilled onto all 186 already-migrated rides ($102.09 total), additive-only, verified 186/186. **Trap for any future reader**: JSONB→`supabase-py` deserializes it as Python `float`; wrap `to_decimal(str(value))` before any money arithmetic, never use the raw value | **Executed** (data write only, no code change) | `docs/change-log/2026-08-16-gst-backfill-executed.md` |
+| Rider legacy-import provenance — **1.1's "0/1,134 users legacy-marked" finding is now stale.** 918 of 1,137 `users` (role=rider) stamped `legacy_import_metadata->'rider_csv_import'` via phone-match against `customers.csv`, additive-only, PII-protected-status guard honored (0 hit it). 131 unmatched-anywhere + 66 matched-non-rider phones deliberately left unstamped. **`rider_import_service.py`'s underlying code gap is still open** — this closed the data gap for existing rows only; the next real rider-import batch will still land unstamped without a small code fix | **Executed** (data write only) | `docs/change-log/2026-08-17-rider-provenance-backfill-executed.md` |
+| D1 (what `tax_amount` should read for the 186 pre-fix rows) | Still open — decision, not code | needs owner + due date in A34 |
+| 224-vs-186 ride-count discrepancy | **CLOSED** 2026-08-16 — intentional pre-launch test-account cleanup (owner-confirmed) | ACTION_ITEMS.md, second `### A34` heading |
+| **NEW**: ad-hoc account-deletion script(s) found in `pg_stat_statements` bypass the 7-year `driver_insurance_periods` retention guard triggers to hard-delete regulated rows | Open, spun off from the 224-vs-186 investigation | ACTION_ITEMS.md **A35** |
+| **NEW**: `financial_events` is 0 rows in production despite active use by 42 files | Open, same investigation | ACTION_ITEMS.md **A36** |
+| **NEW process gap**: ACTION_ITEMS.md now has two unrelated `### A34` entries — no mechanism stops parallel sessions colliding on "next free" item number, same class as the migration-filename duplicates (310×2, 313×3) | Open — disambiguated by heading text, not renumbered (cross-referenced elsewhere) | ACTION_ITEMS.md, both A34 headings |
 | $276.59/20-driver payout correction (dry-run only; corrected `legacy_outstanding_correction` design; 5 buckets blocked on re-link) | Parked — extend, don't duplicate. **Note: its plan doc lives only on PR #3946's unmerged branch**, not `main` | PR #3946 |
 | Legacy tax split (`tax_amount` = commission-GST only; `payout_gst_amount` never imported, $105.17; now preserved raw on new imports) | Confirmed; historical-GST figure for the 186 migrated rows is a **business/legal decision**, not a code fix | `docs/audit/2026-08-14-mongodb-legacy-extract-audit.md`, importer fix same-day |
 
@@ -162,6 +170,14 @@ Work phases in order. Do not start P2 before P0 is fully reported.
 ### 0.0 — Stripe-mirror cross-check FIRST (highest priority in this prompt)
 **Agent: `spinr-financial-migration-auditor`**, live Supabase read
 
+**RUN as of 2026-08-16 — verify-delta only, do not re-derive.** Result: the
+$276.59 figure is superseded ($185.31–$228.08 for buckets 1–15; see ledger).
+Task for a fresh run: (a) confirm the 2 unresolved buckets ($42.77) are still
+unresolved or have moved, (b) confirm whether Stripe-account provenance has
+been resolved (still open as of the ledger date), (c) re-run only if a newer
+production cut or Stripe access has landed since. Do not repeat the full
+15-driver cross-check from scratch.
+
 Before trusting any "owed" figure — the standing lesson from the near-miss where
 this plan almost recommended a real second Stripe transfer to an already-paid
 driver.
@@ -238,11 +254,14 @@ delta — each with its cut-date boundary.
 
 ### 1.1 — Identity mapping, old ↔ new
 **Agent: `spinr-financial-migration-auditor`**
-Full-population map is **blocked without the old export** (the two ID
-namespaces can't be joined inside Supabase — see Facts). Do what's possible:
-per-cut delta of unmatched ride→driver links (3 known, $20.73), the 22
-unmarked drivers, rider-marker absence. State the export as the unblocking
-prerequisite every time.
+Full-population map is **still blocked without the old export** (the two ID
+namespaces can't be joined inside Supabase — see Facts). **Rider-marker
+absence is RESOLVED, not open** — 918/1,137 users backfilled 2026-08-17 (see
+ledger); verify-delta only (still-918, or has a real import batch run since).
+Remaining open: per-cut delta of unmatched ride→driver links (3 known,
+$20.73), the 22 unmarked drivers, and the underlying `rider_import_service.py`
+code gap (data fixed, code still doesn't stamp new imports). State the export
+as the unblocking prerequisite for the full map every time.
 
 ### 1.2 — Corporate account continuity
 **Agents: `spinr-corporate-billing-reviewer` + `spinr-corporate-reporting-reviewer`**

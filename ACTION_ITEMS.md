@@ -84,30 +84,59 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 ## P0 — Launch gating (code)
 
 ### A34. Dual-run cutover readiness audit (2026-08-15) — decommission blockers and required decisions
-- [ ] **Status:** open — audit complete (all 4 phases reported, audit-only, PR #3954,
-  `docs/audit/2026-08-15-dual-run-cutover/P0…P3`), remediation NOT started. Old app
-  decommission target: **Oct 31, 2026 (tentative)**. Blockers before decommission:
-  (1) fresh final old-app export — true pending-money figure unknowable without it
-  ($276.59/20-driver floor from PR #3946 is stale by construction; 108 further 'due'
-  rows unresolved); (2) 224-vs-186 imported-ride discrepancy unexplained (prior audits
-  say 224, live prod holds 186 + 1 organic, zero soft-deletes); (3) insurance-period
-  audit trail structurally absent for all imported rides — legal/SGI decision needed
-  (reconstructed-and-flagged vs documented exception), engineering must NOT fabricate
-  period rows; (4) no final-export/teardown runbook existed — draft now in P3 report,
-  needs owner + dates. Launch-window items (this week): double-dispatch/double-payout
-  structurally possible (zero cross-system awareness; 150 imported drivers approved to
-  go online, 104 with Stripe accounts possibly shared with the old app's payer) —
-  needs an operational roster policy, code provides no guard; no live collision
-  monitoring exists — 3 cheapest additive signals identified in P1 report §P3.1;
-  open $16.63 Stripe dispute (`stripe_disputes.needs_response`) needs a response;
-  rider-referral program (1 ride → $5+$5) has no velocity cap or identity cross-check.
-  Deferred: Stripe-side reconciliation (7-item checklist in P0 report §0.3) — run the
-  day Stripe access is granted. Also recorded: rider importer stamped no
-  `legacy_import_metadata` on any of 1,134 users; 22 drivers unmarked; two
-  incompatible old-ID namespaces require a `legacy_id_crosswalk` before final
-  migration; `payout_gst_amount` ($105.17) must be mapped in the final import or
-  T4A understatement recurs.
-- **Files:** `docs/audit/2026-08-15-dual-run-cutover/` (4 phase reports), PR #3946 (parked dry-run, extend don't duplicate)
+> **Note:** there is a second, unrelated `### A34` further down this file
+> ("Legacy-imported ride count dropped 224 → 186 in production — CLOSED") from
+> a different session on 2026-08-16. Both numbers are already cross-referenced
+> from other docs, so neither has been renumbered — treat the heading text as
+> the disambiguator, not the number. Filed as a process gap: this repo has no
+> mechanism preventing two parallel sessions from picking the same "next free"
+> ACTION_ITEMS number, the same collision class already found in SQL migration
+> filenames (310×2, 313×3, `docs/audit/2026-08-15-full-fleet-launch-readiness.md`
+> item #11).
+- [ ] **Status:** open, materially updated 2026-08-17 by later sessions'
+  work — see `docs/runbooks/full-app-audit.md`'s Prior-Findings Ledger for the
+  full detail; summary below. Old app decommission target: **Oct 31, 2026
+  (tentative)**.
+  - **RESOLVED**: the 224-vs-186 discrepancy — see the *other* A34 below,
+    CLOSED 2026-08-16 as intentional pre-launch test-account cleanup (also
+    spun off **A35**, a real finding: the cleanup script bypassed the 7-year
+    `driver_insurance_periods` retention guard triggers — read it).
+  - **RESOLVED (superseded number)**: the $276.59/20-driver figure — Stripe
+    cross-check ran 2026-08-16
+    (`docs/change-log/2026-08-16-gst-backfill-and-stripe-crosscheck.md` §1a).
+    Revised: **$185.31–$228.08** for buckets 1–15 (2 unresolved, $42.77,
+    genuinely ambiguous — one shows evidence trending *owed*, not excluded);
+    1 bucket ($22.43) likely already paid via Stripe, correctly excluded;
+    buckets 16–20 ($26.08) unaffected, still blocked on driver re-link.
+    Structural finding: the Stripe mirror schema can never definitively link a
+    ledger row to a specific ride — "likely" is the ceiling. Still open: which
+    Stripe account the mirror covers (old app's/new app's/both) — unconfirmed.
+  - **RESOLVED**: rider legacy-import provenance — 918/1,137 users backfilled
+    2026-08-17 (`docs/change-log/2026-08-17-rider-provenance-backfill-executed.md`).
+    The *code* gap (`rider_import_service.py` never stamps new imports) is
+    still open — small, separate fix.
+  - **RESOLVED**: `payout_gst_amount` for the 186 already-migrated rides —
+    backfilled additive-only, $102.09 total
+    (`docs/change-log/2026-08-16-gst-backfill-executed.md`). **D1 remains
+    open**: what `tax_amount` itself should read for those 186 rows is a
+    business/legal decision, not resolved by the backfill — needs an owner
+    + due date.
+  - **STILL OPEN, unchanged**: fresh final old-app export (unblocks the true
+    pending-money figure, the full identity map, and the corporate-money
+    unknown); insurance-period audit-trail gap for imported rides (legal/SGI
+    decision — engineering must NOT fabricate period rows); no
+    final-export/teardown runbook owner/dates (draft exists,
+    `docs/runbooks/full-app-audit.md` Part B §3.2); double-dispatch/
+    double-payout structural risk (needs an operational roster policy — code
+    provides no guard); 3 monitoring signals **now shipped** (PR #3954,
+    `dual_run_monitoring_enabled`, verify still live rather than treating as
+    a to-do); open $16.63 Stripe dispute needs a response; rider-referral
+    velocity/identity-cross-check gap unchanged; 22 unmarked drivers; two
+    incompatible legacy-ID namespaces still need a crosswalk table.
+- **Files:** `docs/audit/2026-08-15-dual-run-cutover/` (4 phase reports),
+  `docs/runbooks/full-app-audit.md` (repeatable master audit prompt — supersedes
+  ad-hoc scratch prompts for future runs), PR #3946 (merged, dry-run-only as
+  designed, extend don't duplicate the write path).
 - **Acceptance:** each numbered blocker either closed with evidence or explicitly risk-accepted by the user with a dated note here.
 
 ### A1. Per-module test-coverage floors for money paths

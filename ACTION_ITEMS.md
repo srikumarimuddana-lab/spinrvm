@@ -9,8 +9,12 @@
 
 _Last updated: 2026-08-17 — A37 FIXED (real-time `ddl_command_end` event
 trigger, migration 318, closing the poll-interval gap A35 deliberately
-deferred; verified against a real isolated Supabase branch, not a mock —
-see `docs/change-log/2026-08-17-a37-guard-trigger-ddl-realtime-audit.md`).
+deferred; verified against a real isolated Supabase branch, not a mock;
+`spinr-migration-reviewer` + `spinr-regulatory-compliance-checker` manual
+passes run, one blocker found and fixed — missing `(action, created_at)`
+index for the new `audit_logs` query pattern, added via `CREATE INDEX
+CONCURRENTLY` — see
+`docs/change-log/2026-08-17-a37-guard-trigger-ddl-realtime-audit.md`).
 Prior same day: A35 FIXED (detection loop + sanctioned
 cleanup-tool replacement, migration 317 applied to production, reviewed by
 migration + regulatory-compliance agents); A38 ADDED (open, deliberately

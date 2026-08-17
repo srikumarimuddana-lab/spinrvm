@@ -89,9 +89,14 @@ driver, or corporate-admin-visible surface.
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/migrations/318_guard_trigger_ddl_realtime_audit.sql` | New migration: `_audit_guard_trigger_ddl()` function + `guard_trigger_ddl_audit` event trigger on `ddl_command_end` | Synchronous detection to close the poll-interval gap A35 left open |
+| `backend/migrations/318_guard_trigger_ddl_realtime_audit.sql` | New migration: `_audit_guard_trigger_ddl()` function + `guard_trigger_ddl_audit` event trigger on `ddl_command_end`, plus `idx_audit_logs_action_created` compound index | Synchronous detection to close the poll-interval gap A35 left open; index added after `spinr-migration-reviewer` flagged the new `(action, created_at)` query pattern as unindexed |
 | `backend/utils/retention_guard_monitor.py` | Added `_fetch_realtime_events()`; rewrote `_check()` to merge state-poll + realtime-event rows through one dedupe/escalation path; updated module docstring | Surface migration 318's realtime audit rows to the existing 6h alerting loop |
 | `backend/tests/test_retention_guard_monitor.py` | Extended `patched` fixture with `db.get_rows` mock; added 5 tests for the realtime-event merge/dedupe/failure-isolation behavior | Regression coverage for the new merge logic |
+
+### Manual review pass (CLAUDE.md — Codex review currently off, see C7/C9)
+
+- **`spinr-migration-reviewer`**: one blocker (missing compound index for `_fetch_realtime_events()`'s `WHERE action = ? AND created_at >= ? ORDER BY created_at DESC` query pattern against the always-growing `audit_logs` table) — **fixed**, `idx_audit_logs_action_created (action, created_at DESC)` added to migration 318 via `CREATE INDEX CONCURRENTLY`. Two warnings, both accepted/documented rather than fixed: (1) the event trigger's `WHEN TAG IN ('ALTER TABLE')` can't be schema-scoped at the `WHEN`-clause level, so it fires on every `ALTER TABLE` database-wide including Supabase-managed schemas, not just `public` — mitigated by the `EXCEPTION WHEN OTHERS` wrapper, left as a documented follow-up rather than expanding this migration's tested surface post-review; (2) this migration is a coordinated companion to the Python change — a partial revert of only one side (SQL or Python) silently disables half of A37's detection guarantee with no error, called out explicitly here rather than relying on the generic rollback template.
+- **`spinr-regulatory-compliance-checker`**: **SAFE TO MERGE**, no blockers. Confirmed the `audit_logs` payload this migration writes contains only schema metadata (table/trigger names, `tgenabled`) — no raw GPS, phone, name, email, or government ID; confirmed detect-only scope (no mutation of `driver_insurance_periods`/`financial_events`, no re-enabling of triggers); confirmed `SECURITY DEFINER` + `REVOKE EXECUTE FROM PUBLIC, anon, authenticated` matches migration 317's existing pattern.
 
 ## 7. Before / after
 
@@ -149,6 +154,13 @@ async def _check() -> dict[str, int]:
   being invoked for subsequent statements).
 - No feature flag needed: this is a detect-only, append-only-audit-row
   mechanism with no user-facing behavior to gate.
+- **Rollback is coordinated, not independent** (flagged by
+  `spinr-migration-reviewer`): the SQL side (event trigger) and the Python
+  side (`_fetch_realtime_events()`) can each technically be reverted alone
+  without erroring — but a partial revert (only one side) silently disables
+  half of A37's detection guarantee with no error surfaced anywhere. Revert
+  both together, or explicitly document which half is intentionally being
+  left in place and why.
 
 ## 9. Verification performed
 
@@ -162,6 +174,7 @@ async def _check() -> dict[str, int]:
   5. `ALTER TABLE ... ENABLE TRIGGER <guard>` immediately after produced no error and no spurious row.
   6. Deliberately dropped `check_disabled_guard_triggers()` (the function's dependency) on the branch, then ran another `ALTER TABLE` — confirmed the `EXCEPTION WHEN OTHERS` path fired (`RAISE WARNING`, visible in branch logs) and the `ALTER TABLE` still completed successfully, proving the "can never block DDL" guarantee holds even under real internal failure, not just under inspection.
 - [x] Blast-radius grep performed: searched for all callers of `_check()`, `retention_guard_monitor_loop()`, and all readers/writers of `audit_logs` filtering on `action` — only `core/lifespan.py`'s background-loop registration and the new `_fetch_realtime_events()` itself.
+- [x] Manual `spinr-migration-reviewer` + `spinr-regulatory-compliance-checker` passes run (CLAUDE.md's mandatory-review substitute while Codex auto-review is off) — see the "Manual review pass" subsection under §6. The one blocker raised (missing index) was fixed before this log was finalized.
 - [x] Reviewed against relevant CLAUDE.md conventions: append-only guard pattern, `SECURITY DEFINER` + pinned `search_path`, observability convention (security-relevant event → audit table + info log, escalation → Sentry/CRITICAL), background-loop replay-safety (idempotent — inserts a fresh timestamped row per detection, no state mutated by the read side).
 - [ ] Not run: manual staging repro against the real production Supabase project (see §10 — intentionally scoped to the isolated branch instead, to avoid touching live-tested infrastructure for a database-wide DDL hook).
 

@@ -76,8 +76,20 @@
 -- nothing that adds a new always-on network/process dependency to a
 -- database-wide DDL hook.
 --
+-- Known limitation (spinr-migration-reviewer, 2026-08-17), accepted, not
+-- fixed here: `WHEN TAG IN ('ALTER TABLE')` scopes by DDL command type only
+-- -- Postgres event trigger WHEN clauses can't filter by schema, so this
+-- fires on every ALTER TABLE anywhere in the database (Supabase-managed
+-- schemas included), not just `public`. The EXCEPTION WHEN OTHERS wrapper
+-- keeps this correctness-safe (empirically verified, see below), but every
+-- out-of-scope ALTER TABLE still pays the no-op function-call cost. A
+-- `pg_event_trigger_ddl_commands()` early-exit on `schema_name <> 'public'`
+-- would trim that; deliberately left as a follow-up rather than added here
+-- to keep this migration's tested surface area unchanged after review.
+--
 -- rollback: DROP EVENT TRIGGER IF EXISTS guard_trigger_ddl_audit;
 --           DROP FUNCTION IF EXISTS _audit_guard_trigger_ddl();
+--           DROP INDEX CONCURRENTLY IF EXISTS idx_audit_logs_action_created;
 
 CREATE OR REPLACE FUNCTION _audit_guard_trigger_ddl()
 RETURNS event_trigger
@@ -161,3 +173,27 @@ COMMENT ON EVENT TRIGGER guard_trigger_ddl_audit IS
     'A37: real-time detection companion to migration 317. Scoped to ALTER TABLE '
     'only (not every DDL command type) to minimize blast radius. See '
     '_audit_guard_trigger_ddl() for the guarantee that this can never block DDL.';
+
+-- retention_guard_monitor.py's _fetch_realtime_events() queries this table
+-- every 6h with `WHERE action = ? AND created_at >= ? ORDER BY created_at
+-- DESC` (spinr-migration-reviewer finding, 2026-08-17). audit_logs already
+-- has idx_audit_logs_created (created_at DESC alone) and
+-- idx_audit_logs_actor_created ((actor_id, created_at DESC)) from earlier
+-- migrations, but nothing covering `action` -- on a live, always-growing,
+-- every-admin-action audit table, that means either a seq-scan filtered on
+-- `action` or an index scan on created_at re-filtering every row in the
+-- lookback window. Add the compound index this query pattern actually needs.
+--
+-- CONCURRENTLY (matches precedent in migration 114) so this never takes a
+-- blocking lock on a live table. NOTE, same operational caveat as migration
+-- 317 (see its own top-of-file comment): `CREATE INDEX CONCURRENTLY` cannot
+-- run inside a transaction block, and backend/scripts/run_migrations.py
+-- wraps every migration file in one transaction (autocommit=False) -- so
+-- this statement (and this migration as a whole, since it must stay one
+-- file) needs to be applied with an out-of-band autocommit connection, not
+-- via the standard runner. Document this for whoever applies it; it is the
+-- same manual-apply path 317 already required.
+--
+-- rollback: DROP INDEX CONCURRENTLY IF EXISTS idx_audit_logs_action_created;
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_audit_logs_action_created
+    ON audit_logs (action, created_at DESC);

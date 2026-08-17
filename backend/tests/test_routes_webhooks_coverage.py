@@ -311,17 +311,22 @@ class TestStripeWebhookDisputeClosed:
 
         from backend.routes import webhooks as wh
 
-        data_obj = {"payment_intent": "pi_close_1", "status": "won"}
+        data_obj = {"id": "dp_close_1", "payment_intent": "pi_close_1", "status": "won"}
         event_obj = _event_obj("charge.dispute.closed", data_obj, "evt_close_1")
         existing = {"id": "disp_row_1", "ride_id": "ride_close_1"}
         update_mock = AsyncMock()
+        find_one_mock = AsyncMock(return_value=existing)
 
         with (
             patch("backend.routes.webhooks.get_app_settings", _settings_fn()),
             patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
             patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
             patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
-            patch("backend.routes.webhooks.db_supabase.find_one", AsyncMock(return_value=existing)),
+            patch("backend.routes.webhooks.db_supabase.find_one", find_one_mock),
+            patch(
+                "backend.routes.webhooks.db_supabase.get_rows",
+                AsyncMock(return_value=[{"id": "ride_close_1", "rider_id": "rider_close_1"}]),
+            ),
             patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
         ):
             result = asyncio.run(wh.stripe_webhook(request=_mock_req()))
@@ -330,13 +335,17 @@ class TestStripeWebhookDisputeClosed:
         calls = update_mock.await_args_list
         assert any(c.args[0] == "stripe_disputes" and c.args[2]["status"] == "won" for c in calls)
         assert any(c.args[0] == "rides" and c.args[2]["payment_status"] == "paid" for c in calls)
+        # B27: lookup must be keyed on the dispute's own id, not payment_intent_id.
+        find_one_call = find_one_mock.await_args
+        assert find_one_call.args[0] == "stripe_disputes"
+        assert find_one_call.args[1] == {"stripe_dispute_id": "dp_close_1"}
 
     def test_dispute_lost_marks_ride_dispute_lost(self):
         import stripe
 
         from backend.routes import webhooks as wh
 
-        data_obj = {"payment_intent": "pi_close_2", "status": "lost"}
+        data_obj = {"id": "dp_close_2", "payment_intent": "pi_close_2", "status": "lost"}
         event_obj = _event_obj("charge.dispute.closed", data_obj, "evt_close_2")
         existing = {"id": "disp_row_2", "ride_id": "ride_close_2"}
         update_mock = AsyncMock()
@@ -347,6 +356,10 @@ class TestStripeWebhookDisputeClosed:
             patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
             patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
             patch("backend.routes.webhooks.db_supabase.find_one", AsyncMock(return_value=existing)),
+            patch(
+                "backend.routes.webhooks.db_supabase.get_rows",
+                AsyncMock(return_value=[{"id": "ride_close_2", "rider_id": "rider_close_2"}]),
+            ),
             patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
         ):
             result = asyncio.run(wh.stripe_webhook(request=_mock_req()))
@@ -355,12 +368,45 @@ class TestStripeWebhookDisputeClosed:
         calls = update_mock.await_args_list
         assert any(c.args[0] == "rides" and c.args[2]["payment_status"] == "dispute_lost" for c in calls)
 
+    def test_warning_closed_restores_paid_not_lost(self):
+        """B27 regression pin: `warning_closed` is an inquiry that resolved
+        without becoming a real chargeback — the charge stands, same as
+        `won`. Must NOT fall into the `dispute_lost` branch."""
+        import stripe
+
+        from backend.routes import webhooks as wh
+
+        data_obj = {"id": "dp_close_warn", "payment_intent": "pi_close_warn", "status": "warning_closed"}
+        event_obj = _event_obj("charge.dispute.closed", data_obj, "evt_close_warn")
+        existing = {"id": "disp_row_warn", "ride_id": "ride_close_warn"}
+        update_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", _settings_fn()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.find_one", AsyncMock(return_value=existing)),
+            patch(
+                "backend.routes.webhooks.db_supabase.get_rows",
+                AsyncMock(return_value=[{"id": "ride_close_warn", "rider_id": "rider_close_warn"}]),
+            ),
+            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=_mock_req()))
+
+        assert result["received"] is True
+        calls = update_mock.await_args_list
+        ride_calls = [c for c in calls if c.args[0] == "rides"]
+        assert len(ride_calls) == 1
+        assert ride_calls[0].args[2]["payment_status"] == "paid"
+
     def test_no_existing_dispute_row_falls_back_to_ride_lookup(self):
         import stripe
 
         from backend.routes import webhooks as wh
 
-        data_obj = {"payment_intent": "pi_close_3", "status": "won"}
+        data_obj = {"id": "dp_close_3", "payment_intent": "pi_close_3", "status": "won"}
         event_obj = _event_obj("charge.dispute.closed", data_obj, "evt_close_3")
         update_mock = AsyncMock()
 
@@ -383,6 +429,204 @@ class TestStripeWebhookDisputeClosed:
         update_mock.assert_awaited_once()
         assert update_mock.await_args.args[0] == "rides"
         assert update_mock.await_args.args[1] == {"id": "ride_close_3"}
+
+    def test_pi_less_close_updates_only_its_own_dispute_row(self):
+        """B27: two disputes with no payment_intent (Stripe sends "" for a
+        PI-less charge) must not collide via a payment_intent_id lookup —
+        keying on stripe_dispute_id (the table's real unique index) means
+        each closes independently."""
+        import stripe
+
+        from backend.routes import webhooks as wh
+
+        data_obj = {"id": "dp_close_no_pi", "payment_intent": "", "status": "lost"}
+        event_obj = _event_obj("charge.dispute.closed", data_obj, "evt_close_no_pi")
+        existing = {"id": "disp_row_no_pi", "ride_id": None}
+        update_mock = AsyncMock()
+        find_one_mock = AsyncMock(return_value=existing)
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", _settings_fn()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.find_one", find_one_mock),
+            patch("backend.routes.webhooks.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=_mock_req()))
+
+        assert result["received"] is True
+        find_one_call = find_one_mock.await_args
+        assert find_one_call.args[1] == {"stripe_dispute_id": "dp_close_no_pi"}
+        # No ride linked (ride_id None, PI empty) → only the dispute row updates.
+        update_mock.assert_awaited_once()
+        assert update_mock.await_args.args[0] == "stripe_disputes"
+        assert update_mock.await_args.args[1] == {"id": "disp_row_no_pi"}
+
+    def test_balance_transactions_recorded_as_financial_events(self):
+        """B27: the disputed-amount debit and Stripe's own dispute fee must
+        reach the ledger — previously neither did."""
+        import stripe
+
+        from backend.routes import webhooks as wh
+
+        balance_transactions = [
+            {"id": "txn_1", "type": "adjustment", "amount": -2500, "fee": 0, "currency": "cad"},
+            {"id": "txn_2", "type": "stripe_fee", "amount": -1500, "fee": 1500, "currency": "cad"},
+        ]
+        data_obj = {
+            "id": "dp_close_bt",
+            "payment_intent": "pi_close_bt",
+            "status": "lost",
+            "balance_transactions": balance_transactions,
+        }
+        event_obj = _event_obj("charge.dispute.closed", data_obj, "evt_close_bt")
+        existing = {"id": "disp_row_bt", "ride_id": "ride_close_bt"}
+        ledger_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", _settings_fn()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.find_one", AsyncMock(return_value=existing)),
+            patch(
+                "backend.routes.webhooks.db_supabase.get_rows",
+                AsyncMock(return_value=[{"id": "ride_close_bt", "rider_id": "rider_close_bt"}]),
+            ),
+            patch("backend.routes.webhooks.db_supabase.update_one", AsyncMock()),
+            patch("backend.services.payment_service.record_dispute_close_events", ledger_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=_mock_req()))
+
+        assert result["received"] is True
+        ledger_mock.assert_awaited_once()
+        kwargs = ledger_mock.await_args.kwargs
+        assert kwargs["dispute_id"] == "dp_close_bt"
+        assert kwargs["ride_id"] == "ride_close_bt"
+        assert kwargs["user_id"] == "rider_close_bt"
+        assert kwargs["balance_transactions"] == balance_transactions
+        assert kwargs["dispute_status"] == "lost"
+
+    def test_no_balance_transactions_skips_ledger_call(self):
+        import stripe
+
+        from backend.routes import webhooks as wh
+
+        data_obj = {"id": "dp_close_no_bt", "payment_intent": "pi_close_no_bt", "status": "won"}
+        event_obj = _event_obj("charge.dispute.closed", data_obj, "evt_close_no_bt")
+        existing = {"id": "disp_row_no_bt", "ride_id": "ride_close_no_bt"}
+        ledger_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", _settings_fn()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.find_one", AsyncMock(return_value=existing)),
+            patch(
+                "backend.routes.webhooks.db_supabase.get_rows",
+                AsyncMock(return_value=[{"id": "ride_close_no_bt", "rider_id": "rider_x"}]),
+            ),
+            patch("backend.routes.webhooks.db_supabase.update_one", AsyncMock()),
+            patch("backend.services.payment_service.record_dispute_close_events", ledger_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=_mock_req()))
+
+        assert result["received"] is True
+        ledger_mock.assert_not_awaited()
+
+    def test_balance_transactions_present_but_no_rider_id_skips_ledger_call(self):
+        """B27: financial_events.user_id is NOT NULL REFERENCES users(id) --
+        a dispute whose ride/rider can't be resolved must not even attempt
+        the ledger write (the call/import is skipped at the webhook layer,
+        on top of record_dispute_close_events's own no-op-if-falsy guard)."""
+        import stripe
+
+        from backend.routes import webhooks as wh
+
+        balance_transactions = [{"id": "txn_orphan", "type": "adjustment", "amount": -1000, "fee": 0}]
+        data_obj = {
+            "id": "dp_close_orphan",
+            "payment_intent": "",
+            "status": "lost",
+            "balance_transactions": balance_transactions,
+        }
+        event_obj = _event_obj("charge.dispute.closed", data_obj, "evt_close_orphan")
+        existing = {"id": "disp_row_orphan", "ride_id": None}
+        ledger_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", _settings_fn()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.find_one", AsyncMock(return_value=existing)),
+            patch("backend.routes.webhooks.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.webhooks.db_supabase.update_one", AsyncMock()),
+            patch("backend.services.payment_service.record_dispute_close_events", ledger_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=_mock_req()))
+
+        assert result["received"] is True
+        ledger_mock.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# charge.dispute.updated — intermediate status transitions mirrored onto the
+# stripe_disputes row (B27); no ride/ledger side effects.
+# ---------------------------------------------------------------------------
+
+
+class TestStripeWebhookDisputeUpdated:
+    def test_status_mirrored_onto_existing_row(self):
+        import stripe
+
+        from backend.routes import webhooks as wh
+
+        data_obj = {"id": "dp_updated_1", "status": "under_review"}
+        event_obj = _event_obj("charge.dispute.updated", data_obj, "evt_updated_1")
+        existing = {"id": "disp_row_updated_1"}
+        update_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", _settings_fn()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.find_one", AsyncMock(return_value=existing)),
+            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=_mock_req()))
+
+        assert result["received"] is True
+        update_mock.assert_awaited_once()
+        assert update_mock.await_args.args[0] == "stripe_disputes"
+        assert update_mock.await_args.args[1] == {"id": "disp_row_updated_1"}
+        assert update_mock.await_args.args[2]["status"] == "under_review"
+
+    def test_no_matching_row_is_a_noop(self):
+        import stripe
+
+        from backend.routes import webhooks as wh
+
+        data_obj = {"id": "dp_updated_2", "status": "under_review"}
+        event_obj = _event_obj("charge.dispute.updated", data_obj, "evt_updated_2")
+        update_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", _settings_fn()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.find_one", AsyncMock(return_value=None)),
+            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=_mock_req()))
+
+        assert result["received"] is True
+        update_mock.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

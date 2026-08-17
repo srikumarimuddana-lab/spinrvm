@@ -53,6 +53,7 @@ _STRIPE_HANDLED_EVENTS = frozenset(
         "checkout.session.completed",
         "charge.refunded",
         "charge.dispute.created",
+        "charge.dispute.updated",
         "charge.dispute.closed",
         # Recurring Spinr Pass (mode="subscription" plans): renewal succeeded,
         # renewal failed (dunning), and status changes (past_due → canceled).
@@ -1180,14 +1181,50 @@ async def stripe_webhook(request: Request):
             },
         )
 
+    elif event_type == "charge.dispute.updated":
+        # B27: intermediate status transitions (needs_response → under_review,
+        # a new evidence deadline, etc.) previously landed nowhere — the type
+        # wasn't in _STRIPE_HANDLED_EVENTS, so Stripe's own status trail was
+        # invisible between `created` and `closed`. Status-mirror only; the
+        # money-moving/ride-status logic lives in `closed`.
+        dispute_id_stripe = data_object.get("id", "")
+        dispute_status = data_object.get("status", "")
+        if dispute_id_stripe:
+            existing = await db_supabase.find_one(
+                "stripe_disputes",
+                {"stripe_dispute_id": dispute_id_stripe},
+            )
+            if existing:
+                await db_supabase.update_one(
+                    "stripe_disputes",
+                    {"id": existing["id"]},
+                    {
+                        "status": dispute_status,
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+        logger.info(
+            "Dispute updated: status=%s dispute=%s",
+            dispute_status,
+            dispute_id_stripe,
+            extra={"domain": "payments", "event_id": event_id},
+        )
+
     elif event_type == "charge.dispute.closed":
+        dispute_id_stripe = data_object.get("id", "")
         payment_intent_id = data_object.get("payment_intent") or ""
         dispute_status = data_object.get("status", "")
 
-        existing = await db_supabase.find_one(
-            "stripe_disputes",
-            {"payment_intent_id": payment_intent_id},
-        )
+        # B27: key on stripe_dispute_id, the table's own unique index —
+        # payment_intent_id is absent ("") on some events and non-unique, so
+        # looking up by it could match (and overwrite) an unrelated dispute's
+        # row when either PI is missing or a PI has more than one dispute.
+        existing = None
+        if dispute_id_stripe:
+            existing = await db_supabase.find_one(
+                "stripe_disputes",
+                {"stripe_dispute_id": dispute_id_stripe},
+            )
         if existing:
             await db_supabase.update_one(
                 "stripe_disputes",
@@ -1199,6 +1236,7 @@ async def stripe_webhook(request: Request):
             )
 
         ride_id = existing.get("ride_id") if existing else None
+        rider_id = None
         if not ride_id and payment_intent_id:
             rides = await db_supabase.get_rows(
                 "rides",
@@ -1207,9 +1245,20 @@ async def stripe_webhook(request: Request):
             )
             if rides:
                 ride_id = rides[0]["id"]
+                rider_id = rides[0].get("rider_id")
 
         if ride_id:
-            new_payment_status = "paid" if dispute_status == "won" else "dispute_lost"
+            # B27: `charge.dispute.closed` fires for `won`, `lost`, AND
+            # `warning_closed` (an early-fraud-warning/inquiry that resolved
+            # without becoming a real chargeback). Only an actual loss should
+            # ever mark the ride `dispute_lost` — `warning_closed` means the
+            # charge stands, same as `won`. Never reuse `dispute_lost` for a
+            # non-loss outcome.
+            new_payment_status = "dispute_lost" if dispute_status == "lost" else "paid"
+            if rider_id is None:
+                ride_rows = await db_supabase.get_rows("rides", {"id": ride_id}, limit=1)
+                if ride_rows:
+                    rider_id = ride_rows[0].get("rider_id")
             await db_supabase.update_one(
                 "rides",
                 {"id": ride_id},
@@ -1219,11 +1268,34 @@ async def stripe_webhook(request: Request):
                 },
             )
 
+        # B27: record the balance-transaction debit(s)/fee Stripe posts on
+        # close so docs/runbooks/stripe-reconciliation.md doesn't show an
+        # unexplained delta for every chargeback. Guarded on a resolved
+        # rider_id -- financial_events.user_id is NOT NULL REFERENCES
+        # users(id), so a dispute whose ride/rider can't be resolved has
+        # nowhere safe to attribute the ledger row (record_dispute_close_events
+        # would itself skip+log this, but skipping the call/import entirely
+        # here avoids doing the balance_transactions work for nothing).
+        balance_transactions = data_object.get("balance_transactions") or []
+        if balance_transactions and rider_id:
+            try:
+                from ..services.payment_service import record_dispute_close_events
+            except ImportError:
+                from services.payment_service import record_dispute_close_events  # type: ignore
+            await record_dispute_close_events(
+                dispute_id=dispute_id_stripe,
+                user_id=rider_id,
+                ride_id=ride_id,
+                balance_transactions=balance_transactions,
+                dispute_status=dispute_status,
+            )
+
         logger.info(
-            "Dispute closed: status=%s ride=%s pi=%s",
+            "Dispute closed: status=%s ride=%s pi=%s dispute=%s",
             dispute_status,
             ride_id,
             payment_intent_id,
+            dispute_id_stripe,
             extra={"domain": "payments", "event_id": event_id},
         )
 

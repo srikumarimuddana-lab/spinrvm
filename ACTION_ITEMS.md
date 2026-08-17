@@ -5807,11 +5807,26 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   confirmed policy — and whichever way it resolves, that decision is
   written down so this doesn't silently drift a third time.
 
-### B27. `charge.dispute.closed` mis-marks rides and can update the wrong dispute row; dispute fees never reach the ledger
+### B27. `charge.dispute.closed` mis-marks rides and can update the wrong dispute row; dispute fees never reach the ledger — CLOSED (2026-08-17)
 
-- [ ] **Status:** open (found 2026-08-14 while writing
-  `docs/runbooks/payment-dispute-evidence.md`). Real money path, no live
-  chargeback has exercised it yet — which is why it's still latent.
+- [x] **Status:** DONE (2026-08-17, found 2026-08-14 while writing
+  `docs/runbooks/payment-dispute-evidence.md`). All three defects fixed and
+  the `charge.dispute.updated` allowlist gap closed — see
+  `docs/change-log/2026-08-17-b27-dispute-closed-webhook-fixes.md` for the
+  full Change Impact Log. `spinr-money-auditor` reviewed the diff before PR
+  creation (Codex auto-review is off, C7/C9) and found 2 real blockers in
+  the first version of fix 3's ledger write — both fixed before merge:
+  (a) the per-balance-transaction-type `event_type` string violated
+  `financial_events`'s fixed CHECK-constraint enum (migration 58), which
+  would have failed every insert 100% of the time; `event_type` is now
+  always the literal `"stripe_dispute"`, with the Stripe subtype moved into
+  `metadata`; (b) a falsy `user_id` (unresolved rider) risked an FK
+  violation on `financial_events.user_id NOT NULL REFERENCES users(id)`;
+  guarded both in the new `record_dispute_close_events()` function itself
+  and at the webhook call site. 261 tests pass across the affected webhook/
+  dispute/ledger suites, including a new `test_dispute_close_ledger.py`
+  asserting directly on the ledger INSERT payload (the webhook-level tests
+  mock the function and can't see this class of bug).
 - **Issue/gap:** three defects in the `charge.dispute.closed` branch of
   `backend/routes/webhooks.py` (≈ line 1183):
   1. **`warning_closed` is treated as a loss.** Stripe fires

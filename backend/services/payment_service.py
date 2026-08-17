@@ -338,6 +338,68 @@ async def record_refund_event(
     )
 
 
+async def record_dispute_close_events(
+    dispute_id: str,
+    user_id: str,
+    ride_id: str | None,
+    balance_transactions: list,
+    *,
+    dispute_status: str,
+) -> None:
+    """Append one financial_events row per Stripe balance transaction on
+    ``charge.dispute.closed`` (B27).
+
+    Stripe posts the disputed-amount debit and its own per-dispute fee as
+    separate entries in ``dispute.balance_transactions`` when a dispute
+    closes. Neither was previously recorded, so
+    ``docs/runbooks/stripe-reconciliation.md`` showed an unexplained delta
+    for every chargeback. ``delta_cents`` is taken verbatim from Stripe's own
+    signed ``amount`` (negative = debited from us, positive = reinstated) —
+    no sign inference here, since a `won` dispute can still carry a
+    non-refundable dispute fee that stays negative. Never raises — mirrors
+    ``record_refund_event``'s never-fail posture; the money has already
+    moved by the time this webhook fires.
+
+    ``event_type`` is always the literal ``"stripe_dispute"`` --
+    ``financial_events.event_type`` has a fixed CHECK-constraint enum
+    (migration 58) with no per-subtype dispute values, so a per-balance-
+    transaction-type string (e.g. ``stripe_dispute_adjustment``) would
+    violate the constraint on every insert. The Stripe balance-transaction
+    ``type`` (``adjustment``, ``stripe_fee``, ...) is carried in
+    ``metadata`` instead, where it's still fully queryable.
+
+    Skips silently (no insert, no raise) when ``user_id`` is falsy —
+    ``financial_events.user_id`` is ``NOT NULL REFERENCES users(id)``, so an
+    empty/unresolved id would fail the FK. Callers should already guard on a
+    resolved rider before calling this; the guard is repeated here so a
+    future caller can't reintroduce the FK violation by skipping it.
+    """
+    if not user_id:
+        logger.warning("[B27] Skipping dispute ledger write — no resolvable user_id for dispute {}", dispute_id)
+        return
+    for bt in balance_transactions:
+        if not isinstance(bt, dict):
+            continue
+        amount_cents = int(bt.get("amount", 0) or 0)
+        if amount_cents == 0:
+            continue
+        await ledger_service.record_event(
+            event_type="stripe_dispute",
+            user_id=user_id,
+            ride_id=ride_id,
+            delta_cents=amount_cents,
+            ref=dispute_id,
+            metadata={
+                "stripe_dispute_id": dispute_id,
+                "balance_transaction_id": bt.get("id") or "",
+                "balance_transaction_type": bt.get("type") or "",
+                "fee_cents": int(bt.get("fee", 0) or 0),
+                "dispute_status": dispute_status,
+                "currency": bt.get("currency") or "",
+            },
+        )
+
+
 async def charge_late_tip(
     ride: dict,
     ride_id: str,

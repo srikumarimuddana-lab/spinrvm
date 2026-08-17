@@ -128,12 +128,16 @@ an on-site audit, unless the Parties agree otherwise.
 
 ## 10. DATA LOCATION
 
-Spinr's primary datastore is hosted in Canada. [CONFIRM AGAINST THE SAME
-DATA-RESIDENCY ATTESTATION GATING THE PRIVACY POLICY AND MSA DRAFTS —
-`reports/legal/supabase-region-attestation-checklist.md` — BEFORE MAKING
-THIS REPRESENTATION IN A SIGNED DPA.] Some sub-processors listed in the
-Subprocessor List process data outside Canada, principally in the United
-States, as disclosed there.
+Spinr's primary datastore is hosted in Canada (`ca-central-1`), confirmed
+2026-08-17 via direct query against the Supabase Management API — see
+`reports/legal/supabase-region-attestation-checklist.md` for the
+verification note. **Do not sign this DPA with a real corporate customer
+until that checklist's remaining open items are also closed** — specifically
+a signed DPA between Spinr and Supabase itself (a Legal/contractual action,
+not yet complete), and confirmation that `SUPABASE_REGION=ca-central-1` is
+actually set on Railway, which is unverifiable from this repository. Some
+sub-processors listed in the Subprocessor List process data outside Canada,
+principally in the United States, as disclosed there.
 
 ## 11. GENERAL
 

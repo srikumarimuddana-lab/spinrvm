@@ -80,9 +80,19 @@ affected.
    of this review. This draft is written as a target/commitment, not a
    conformance claim — keep it that way, or get the audit done first.
 2. **`accessibility@spinr.ca` must be live and monitored before this
-   publishes** — it's listed as "to be provisioned" in
-   `docs/accessibility-plan.md`. A public page pointing to a dead inbox is
-   worse than no page.
+   publishes** — checked again 2026-08-17: still "to be provisioned." No
+   email/domain administration tool is available to an engineering/agent
+   session (this repo's support stack is Zoho Desk —
+   `backend/services/zoho_desk_integration.py`,
+   `admin-dashboard/.../zoho-config-card.tsx` — but creating a new mailbox
+   alias or DNS-level address requires a human with Zoho Mail/Google
+   Workspace admin access, not a code change). Concretely, someone with
+   that access needs to: (1) create the `accessibility@spinr.ca` mailbox or
+   alias, (2) route it to whichever team handles accessibility reports —
+   likely the same Zoho Desk queue Support already uses, as a new
+   department, given the pattern in `zoho-config-card.tsx` — and (3) confirm
+   it's actually monitored (someone reads it) before this page cites it. A
+   public page pointing to a dead inbox is worse than no page.
 3. Fill in "What we've built so far" only with features actually verified,
    not aspirational ones — check `docs/ACCESSIBILITY.md`'s current state
    before writing this section, and have the

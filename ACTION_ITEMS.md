@@ -7,16 +7,16 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-17 — A40 question #2 CLOSED (checked live
-whether OLD-app Connect/payout webhook events could cross-match a
-NEW-app driver's Stripe account: `transfer.created` has no handler at
-all, structurally inert; `account.updated` is matched by
-`stripe_account_id`, but zero of the 15 observed events match any
-current driver's account — no evidence the shared-account risk has
-actually manifested. Questions #1 and #3 (whether the old app's
-continued live Stripe activity is sanctioned, and whether the webhook
-endpoint should eventually split) remain open — operational/business
-questions, not answerable from code). Prior same day: A38 CLOSED (migration 321 adds the missing
+_Last updated: 2026-08-17 — A40 CLOSED (all three questions resolved:
+#1 confirmed by the product owner that dual-run — old app still
+processing real Stripe charges on the shared account — is intentional
+right now, not an incident; #2 checked live and found no evidence of
+Connect-account overlap, `transfer.created` has no handler at all and
+zero of the 15 observed `account.updated` events match any current
+driver's Stripe account; #3 downgraded to a low-priority hygiene item
+— split the webhook endpoint before the Oct 31 decommission, not
+urgent since current handling is already confirmed safe). Prior same
+day: A38 CLOSED (migration 321 adds the missing
 `rides.driver_id` guard to `purge_pii_retention()`'s Step H, the
 sanctioned DSAR hard-delete path — closes the same class of gap A35
 found in an ad-hoc script, verified byte-identical to migration 296
@@ -3805,7 +3805,7 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   traffic — only `payment_intent.succeeded` payloads were inspected
   directly.
 
-### A40. Old app confirmed still live, issuing real Stripe charges on the shared Stripe account (webhook-payload evidence, 2026-08-17)
+### A40. Old app confirmed still live, issuing real Stripe charges on the shared Stripe account (webhook-payload evidence, 2026-08-17) — CLOSED, dual-run confirmed intentional
 
 - **Source:** surfaced while closing A36 (above) — inspecting real
   `stripe_events` payloads to explain why `financial_events` was empty.
@@ -3839,8 +3839,10 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 - **Open questions this raises:**
   1. Is the old app's continued live Stripe activity expected/sanctioned
      for the current migration phase, or should it have stopped by now?
-     **Still open — a business/operational question, not answerable from
-     code or the database.**
+     **CLOSED (2026-08-17) — confirmed by the product owner: dual-run is
+     intentional right now.** Both apps coexisting and processing real
+     payments during this transition period is the expected state, not an
+     incident.
   2. Are OLD-app Connect/payout-side webhook events (`transfer.created`,
      `account.updated`, etc. — also present in the `stripe_events` type
      breakdown) similarly falling through unprocessed, or could any of
@@ -3866,16 +3868,20 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
      from either app's trigger is not itself a bug.)
   3. Should the webhook endpoint eventually be split (old app → its own
      endpoint) before the Oct 31 decommission, or does it not matter
-     since old-app events are already inert here? **Still open** —
-     depends on the answer to #1.
-- **Status:** open (questions #1 and #3), no owner assigned — these are
-  operational/business questions (is old-app Stripe activity still
-  sanctioned right now, and does it need its own webhook endpoint before
-  decommission) that cannot be answered from code or the database.
-  Question #2 is closed with live evidence, above. **Recommended next
-  step:** confirm with whoever owns the old app's operational status
-  whether its continued live payment processing is expected; if not,
-  that's the actual incident, not a code bug in this repo.
+     since old-app events are already inert here? **Downgraded to a
+     low-priority nice-to-have, not closed** — now that #1 confirms
+     dual-run is intentional and #2 confirms current handling is safe
+     (no Connect-account collision observed, ride/payment events correctly
+     no-op), splitting the endpoint is cleanup/hygiene rather than a risk
+     mitigation. Worth doing before the Oct 31 decommission so the old
+     app's traffic naturally stops arriving here rather than needing to be
+     manually confirmed silent, but not urgent.
+- **Status:** CLOSED. All three questions resolved: #1 confirmed
+  intentional by the product owner (2026-08-17); #2 closed with live
+  evidence (no Connect-account overlap observed); #3 downgraded to a
+  low-priority hygiene item, not a risk. No code change was needed —
+  `routes/webhooks.py`'s existing metadata-gated handling was already
+  correct for this traffic shape.
 - **What was NOT verified:** whether this predates 2026-06-16
   (`stripe_events`'s observed floor, not necessarily when old-app traffic
   started); event types other than `payment_intent.succeeded`,

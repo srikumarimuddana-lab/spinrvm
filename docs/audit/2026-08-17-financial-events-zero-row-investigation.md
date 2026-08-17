@@ -134,16 +134,18 @@ syncing `account.updated` regardless of triggering app would be *correct*
 behavior, not a bug — Stripe Connect account state is a property of the
 account itself, not of which app caused the change.
 
-Questions #1 (is the old app's continued activity sanctioned) and #3
-(should the webhook endpoint eventually split) remain open — genuine
-operational/business questions, not answerable from code or the database.
+**Update, same day: question #1 confirmed by the product owner** — dual-run
+(both apps live, old app still processing real Stripe charges on the shared
+account) is intentional for the current migration phase, not an incident.
+Question #3 (splitting the webhook endpoint) is downgraded to a
+low-priority hygiene item — worth doing before the Oct 31 decommission so
+old-app traffic naturally stops arriving here, but not urgent, since current
+handling is already confirmed safe (no ride/payment side effects, no
+Connect-account collision). A40 is closed with all three questions
+resolved; no code change was needed anywhere in this investigation.
 
 ## What was NOT verified
 
-- Whether the old app's continued live Stripe activity is expected/
-  sanctioned for the current migration phase — a business question for
-  whoever owns the old app's operational status, not something this
-  investigation can answer from the code or database alone.
 - Event types other than `payment_intent.succeeded`, `transfer.created`, and
   `account.updated` were not individually traced — though the general
   pattern (ride/booking-scoped handlers gate on `metadata.ride_id`,

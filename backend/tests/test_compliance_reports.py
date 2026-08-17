@@ -43,12 +43,17 @@ class TestGstPstRows:
             ]
 
         with _patch_get_rows(get_rows_side):
-            rows, gst_total, pst_total, hst_total, truncated = asyncio.run(compliance._gst_pst_rows(_START, _END))
+            rows, gst_total, pst_total, hst_total, truncated, legacy_gst_total = asyncio.run(
+                compliance._gst_pst_rows(_START, _END)
+            )
 
         assert gst_total == Decimal("5.0")
         assert pst_total == Decimal("6.0")
         assert hst_total == Decimal("0")
         assert not truncated
+        # Not a legacy-imported ride (no legacy_import_metadata) — the
+        # CR-4108 relabel column stays at zero and tax_amount is untouched.
+        assert legacy_gst_total == Decimal("0")
         assert rows == [
             {
                 "month": "2026-07",
@@ -57,6 +62,7 @@ class TestGstPstRows:
                 "hst": "0.00",
                 "unrecognized_tax": "0.00",
                 "total_tax": "11.00",
+                "legacy_commission_gst_included": "0.00",
             }
         ]
 
@@ -77,7 +83,9 @@ class TestGstPstRows:
             ]
 
         with _patch_get_rows(get_rows_side):
-            rows, gst_total, pst_total, hst_total, truncated = asyncio.run(compliance._gst_pst_rows(_START, _END))
+            rows, gst_total, pst_total, hst_total, truncated, _legacy_gst_total = asyncio.run(
+                compliance._gst_pst_rows(_START, _END)
+            )
 
         assert hst_total == Decimal("13.0")
         assert gst_total == Decimal("0")
@@ -96,7 +104,9 @@ class TestGstPstRows:
             ]
 
         with _patch_get_rows(get_rows_side):
-            rows, gst_total, pst_total, hst_total, truncated = asyncio.run(compliance._gst_pst_rows(_START, _END))
+            rows, gst_total, pst_total, hst_total, truncated, _legacy_gst_total = asyncio.run(
+                compliance._gst_pst_rows(_START, _END)
+            )
 
         # Not counted toward any named tax total (would misstate a filing)...
         assert gst_total == Decimal("0")
@@ -130,7 +140,7 @@ class TestGstPstRows:
             return fake_rides
 
         with _patch_get_rows(get_rows_side):
-            *_rest, truncated = asyncio.run(compliance._gst_pst_rows(_START, _END))
+            _rows, _gst, _pst, _hst, truncated, _legacy_gst_total = asyncio.run(compliance._gst_pst_rows(_START, _END))
 
         assert truncated is True
 
@@ -153,6 +163,48 @@ class TestGstPstRows:
 
         assert gst_total == Decimal("0.3")
         assert isinstance(gst_total, Decimal)
+
+    def test_legacy_imported_row_flags_commission_gst_without_changing_gst_total(self):
+        """CR-4108 (issue #4108, D1): a legacy-imported ride's tax_breakdown
+        'GST' amount is real commission-GST, not fare-GST, but the
+        product-owner's decision is to leave tax_amount's value exactly as
+        stored and only ADD a computed label. gst_total (what the report
+        remits) must be numerically identical to a report with no legacy
+        rows at all -- this test proves that arithmetic is untouched, while
+        `legacy_commission_gst_included` surfaces the composition."""
+
+        async def get_rows_side(table, filters=None, **kw):
+            return [
+                {
+                    "id": "legacy-1",
+                    "ride_completed_at": "2026-07-05T10:00:00Z",
+                    "tax_breakdown": {"GST": {"amount": 0.73, "rate": 5.0}},
+                    "legacy_import_metadata": {
+                        "source": "legacy_mongo_booking_import",
+                        "old_booking_id": "6a023ea1173f9129709e2a64",
+                    },
+                },
+                {
+                    "id": "normal-1",
+                    "ride_completed_at": "2026-07-06T10:00:00Z",
+                    "tax_breakdown": {"GST": {"amount": 2.0, "rate": 5.0}},
+                },
+            ]
+
+        with _patch_get_rows(get_rows_side):
+            rows, gst_total, pst_total, hst_total, truncated, legacy_gst_total = asyncio.run(
+                compliance._gst_pst_rows(_START, _END)
+            )
+
+        # tax_amount/tax_breakdown were never touched by this feature -- the
+        # legacy row's $0.73 is summed into gst_total exactly as it always
+        # was (option (a): re-label, don't rewrite).
+        assert gst_total == Decimal("2.73")
+        assert not truncated
+        assert legacy_gst_total == Decimal("0.73")
+        by_month = {r["month"]: r for r in rows}
+        assert by_month["2026-07"]["gst"] == "2.73"
+        assert by_month["2026-07"]["legacy_commission_gst_included"] == "0.73"
 
 
 class TestInsuranceBillingDetailRows:

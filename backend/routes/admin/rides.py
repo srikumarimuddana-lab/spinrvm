@@ -27,7 +27,7 @@ try:
         places_new_headers,
     )
     from ...utils.insurance_periods import record_period_transition
-    from ...utils.legacy_rides import drop_legacy_rides
+    from ...utils.legacy_rides import drop_legacy_rides, legacy_tax_note_for_ride, tax_basis_for_ride
     from ...utils.money import dollars_to_cents
     from ...utils.rate_limiter import default_limiter as limiter
 except ImportError:
@@ -49,7 +49,7 @@ except ImportError:
         places_new_headers,
     )
     from utils.insurance_periods import record_period_transition
-    from utils.legacy_rides import drop_legacy_rides
+    from utils.legacy_rides import drop_legacy_rides, legacy_tax_note_for_ride, tax_basis_for_ride
     from utils.money import dollars_to_cents
     from utils.rate_limiter import default_limiter as limiter
 
@@ -1426,6 +1426,13 @@ async def admin_get_ride_invoice(ride_id: str):
         # Tax + area-fee breakdowns (migration 46) so the invoice PDF can render
         # GST/PST as separate line items — a Saskatchewan regulatory requirement.
         "tax_breakdown": ride.get("tax_breakdown") or {},
+        # CR-4108 (issue #4108, D1): for one of the 186 legacy-imported
+        # rides, ride["tax_breakdown"]/["tax_amount"] above is Spinr's
+        # commission-GST, not fare-GST (see utils/legacy_rides.py) — flag it
+        # so the client-side invoice PDF can render the footnote. Computed
+        # at serialization time; tax_amount itself is unchanged.
+        "tax_basis": tax_basis_for_ride(ride),
+        "tax_note": legacy_tax_note_for_ride(ride),
         "area_fees_breakdown": ride.get("area_fees_breakdown") or [],
     }
 

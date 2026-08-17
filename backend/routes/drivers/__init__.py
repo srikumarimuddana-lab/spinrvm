@@ -11,6 +11,7 @@ motion — no behaviour changes. See docs/refactors/god-file-split.md.
 # ruff: noqa: F401
 
 from . import (  # noqa: E402
+    appeals,
     crc_consent,
     earnings,
     location,
@@ -288,6 +289,7 @@ for _sub in (
     referrals,
     subscriptions,
     crc_consent,
+    appeals,
     status,
 ):
     api_router.include_router(_sub.router, prefix="/drivers")

@@ -20,7 +20,7 @@ import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import ConfirmSheet from '../components/ConfirmSheet';
 import CancelReasonSheet from '../components/CancelReasonSheet';
-import { SOSButton } from '@shared/components/SOSButton';
+import { RiderSOS } from '../components/RiderSOS';
 import { FreeCancelTimer } from '../components/FreeCancelTimer';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -248,7 +248,7 @@ function DriverArrivedScreenContent() {
             <View style={styles.pulseGreen} />
             <Text style={styles.arrivedChipText} allowFontScaling={false}>Driver has arrived</Text>
           </View>
-          <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} t={t} />
+          <RiderSOS rideId={rideId as string} onTrigger={triggerEmergency} t={t} />
         </View>
       </SafeAreaView>
 

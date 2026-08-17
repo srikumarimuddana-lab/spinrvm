@@ -33,7 +33,7 @@ def test_index_is_on_bare_created_at() -> None:
 def test_index_is_concurrent_and_reversible() -> None:
     sql = INDEX_SQL.read_text()
     # CONCURRENTLY: the table is populated wherever the double-entry flag has
-    # been on, and migrate.py runs such files outside a transaction.
+    # been on, and run_migrations.py runs such files outside a transaction.
     assert "CONCURRENTLY" in sql
     assert "-- Rollback:" in sql
     assert "DROP INDEX CONCURRENTLY IF EXISTS financial_event_entries_created_at" in sql

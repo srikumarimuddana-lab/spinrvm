@@ -86,7 +86,7 @@ confirm that before deleting the US project, or ship an app update first. *(Pre-
 no installed builds in the wild — non-issue.)*
 
 **4. Don't truncate `schema_migrations` (Path B).** It dumps with the data, so
-`backend/scripts/migrate.py` (full-filename idempotency key, highest is `135`) won't
+`backend/scripts/run_migrations.py` (full-filename idempotency key) won't
 re-run every migration. Preserve it.
 
 **5. `ride-snapshots` URLs are absolute *and* are route-PII (Path B).** `rides.route_snapshot_url`
@@ -114,15 +114,15 @@ A clean Canadian project; the US test data is discarded.
       is on by default for projects created after 2023-06.
 
 ### 2. Schema + RPCs + PII key
-- [ ] Set the connection via env vars and run the ordered migrations. The runner reads
-      `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` from the environment (or `backend/.env`)
-      and takes **no `--env` flag** — its only argument is `--dry-run`:
+- [ ] Set the connection and run the ordered migrations. The runner reads
+      `DATABASE_URL` (a direct Postgres/pooler connection — see the new
+      project's Session pooler URL under Settings → Database) and takes
+      `--dry-run` to preview or `--status` to show applied vs pending:
       ```bash
       cd backend
-      export SUPABASE_URL=https://<new-project-ref>.supabase.co
-      export SUPABASE_SERVICE_ROLE_KEY=<service-role-key>   # Settings → API → service_role
-      python scripts/migrate.py --dry-run    # preview
-      python scripts/migrate.py              # apply, in filename order
+      export DATABASE_URL=<new-project-pooler-connection-string>   # Session pooler URL, Settings → Database
+      python -m backend.scripts.run_migrations --dry-run    # preview
+      python -m backend.scripts.run_migrations              # apply, in filename order
       ```
       This creates `schema_migrations`, applies every migration in order, and — via
       migration `32` — creates the `drivers_pii_key` pgsodium key and the
@@ -149,7 +149,7 @@ Use a maintenance window (dump/restore) or logical replication for near-zero dow
 ### 1. Provision + extensions
 - [ ] New `ca-central-1` project; enable `pgsodium`, `pgcrypto` **before** restore.
 - [ ] **Create the `drivers_pii_key` on the target.** Step 2 preserves `schema_migrations`,
-      so `migrate.py` will **not** re-run migration 32's key-creation block — and pgsodium
+      so `run_migrations.py` will **not** re-run migration 32's key-creation block — and pgsodium
       keys are project-scoped, so `pg_dump` doesn't carry them. Without this, `encrypt_driver_pii()`
       in step 3 raises `drivers_pii_key not found`. Run migration 32's key block (or
       `SELECT pgsodium.create_key(name => 'drivers_pii_key');`). The `encrypt_driver_pii` /
@@ -159,7 +159,7 @@ Use a maintenance window (dump/restore) or logical replication for near-zero dow
 ### 2. Schema + data (everything except encrypted PII)
 - [ ] `supabase db dump` (or `pg_dump`) the source; restore into the target. For large
       data, dump schema and data separately and parallelize `pg_restore`.
-- [ ] **Preserve `schema_migrations`** so `migrate.py` does not re-run migrations.
+- [ ] **Preserve `schema_migrations`** so `run_migrations.py` does not re-run migrations.
 - [ ] Null out / skip the encrypted columns in this pass — they are handled in step 3.
 
 ### 3. Re-encrypt PII across projects (the landmine)

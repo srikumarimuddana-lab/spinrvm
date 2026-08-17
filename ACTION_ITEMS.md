@@ -7,7 +7,18 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-17 — A40 CLOSED (all three questions resolved:
+_Last updated: 2026-08-17 — A39's deferred `migrate.py` decision resolved
+(product owner: reconcile, not just delete). Ported `migrate.py`'s tested
+CONCURRENTLY-safe SQL splitter (B0) into `run_migrations.py` — which
+never had that fix and would have failed on any `CREATE INDEX
+CONCURRENTLY` migration — fixed every living-doc/CI/runtime reference
+across `CLAUDE.md`, `AGENTS.md`, runbooks, CI workflow comments, and a
+real admin-facing error message, then deleted `migrate.py` outright.
+`spinr-migration-reviewer` then found the reference-cleanup was
+incomplete (11 more files); all fixed or explicitly judged out of scope
+(self-declared provenance records, auto-generated build artifacts) — see
+A39.
+128 directly affected tests pass. Prior same day: A40 CLOSED (all three questions resolved:
 #1 confirmed by the product owner that dual-run — old app still
 processing real Stripe charges on the shared account — is intentional
 right now, not an incident; #2 checked live and found no evidence of
@@ -3706,17 +3717,66 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   `backend/migrations/CLAUDE.md`, `AGENTS.md`, and
   `docs/runbooks/migration-conflict-detection.md` to
   `python -m backend.scripts.run_migrations`, with a note explaining why
-  `migrate.py` is wrong. **Did not delete or fix `migrate.py` itself** — a
-  human should decide whether to reconcile it (update it to match migration
-  24's schema and keep it as an alternative/rewrite path) or delete it
-  outright; it wasn't touched here to avoid a unilateral call on which
-  runner's other behavior (e.g. `migrate.py`'s `--dry-run` flag and
-  autocommit/`CONCURRENTLY` handling) should be considered authoritative
-  going forward.
+  `migrate.py` is wrong.
+- **Follow-up decision (2026-08-17, same day, product owner confirmed):**
+  reconcile, not just delete — `run_migrations.py` had a real gap
+  `migrate.py` didn't (no `CREATE/DROP INDEX CONCURRENTLY` support at all;
+  it wraps every migration in one transaction, which Postgres rejects for
+  `CONCURRENTLY`), and `migrate.py`'s CONCURRENTLY-safe statement splitter
+  (`ACTION_ITEMS.md` B0) was real, tested, working code. Ported
+  `_split_sql_statements` and the autocommit-routing logic from `migrate.py`
+  into `run_migrations.py` (`_apply_one_autocommit`), moved/adapted both
+  regression test files (`test_migration_concurrently_splitting.py`,
+  `test_run_migrations_autocommit_chunks.py`, née
+  `test_migrate_autocommit_chunks.py`) to test the ported functions, fixed
+  every other living-doc/CI/code reference (`CLAUDE.md` ×2 blocks,
+  `AGENTS.md` ×2 blocks, `docs/dev-setup.md`, the migration-conflict-
+  detection runbook, `.github/workflows/migration-check.yml`'s comments,
+  `.claude/commands/migration-check.md`, and a real runtime error message
+  in `routes/admin/auto_payouts.py` that told an admin to run the deleted
+  script), then deleted `backend/scripts/migrate.py` outright. Historical
+  audit/change-log documents that mention `migrate.py` were deliberately
+  left untouched — point-in-time records, not living docs (same convention
+  followed throughout this session). 128 directly affected tests pass
+  (`test_migration_concurrently_splitting.py`,
+  `test_run_migrations_autocommit_chunks.py`,
+  `test_financial_events_ride_id_fk_contract.py`,
+  `test_unbalanced_scoped_migration.py`, `test_auto_payout.py`,
+  `test_migration_ordering.py`, `test_migration_fk_column_types.py`).
 - **What was NOT verified:** whether any deploy pipeline outside
   `.github/workflows/` (e.g. a Fly/Railway post-deploy hook, a manual
   runbook step not checked in this repo) invokes `migrate.py` specifically
   — only this repo's own CI config was checked.
+- **Pre-merge reviewer finding, same day:** `spinr-migration-reviewer`
+  (run per the standing "wait for the review, then open the PR"
+  instruction) confirmed the ported runner code itself was correct,
+  faithfully tested, and safe, but found the "fixed every other living
+  reference" claim above was not actually complete — a full-repo grep
+  turned up 11 more files still referencing `migrate.py`:
+  `backend/requirements.in`, `backend/.coveragerc`, two
+  `verify_migrations_*.sql` scripts, `docs/runbooks/admin-rollback.md`,
+  `docs/runbooks/supabase-region-migration.md`,
+  `docs/runbooks/deploy-migration-64-65.md`,
+  `docs/runbooks/deploy-migration-297.md`, `.planning/ROADMAP.md`,
+  `.planning/REQUIREMENTS.md`, `docs/driver-faqs-saskatchewan.md`.
+  Verdict: "FIX BEFORE MERGE (non-blocking to production safety, blocking
+  to the PR's own completeness claim)." 9 of the 11 are living docs and
+  are now fixed — three of those fixes (`supabase-region-migration.md`,
+  `deploy-migration-64-65.md`, `deploy-migration-297.md`) were substantive,
+  not just a script-name swap: the original text also documented
+  `migrate.py`'s `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` connection
+  interface, which is wrong for `run_migrations.py` (needs `DATABASE_URL`).
+  The other 2 (`verify_migrations_286_291.sql`, `verify_migrations_292_293.sql`)
+  were deliberately left alone — the latter's own header comment states
+  editing it would break the provenance of a result cited in
+  `docs/change-log/2026-08-08-migration-verification-result.md`, i.e. a
+  self-declared point-in-time record, same convention as the historical
+  docs already excluded above. One more file the reviewer's list didn't
+  catch (`docs/runbooks/stripe-identity-drift-manual-test.md`) was found
+  and fixed in an independent final sweep. `.planning/graphs/graph.json`
+  and `.last-build-snapshot.json` also reference `migrate.py` dozens of
+  times but are auto-generated Graphify build outputs per `AGENTS.md`, not
+  hand-authored docs — correctly left untouched.
 
 ### A36. `financial_events` is 0 rows in production despite active use by 42 files — CLOSED (2026-08-17), root cause found: neither hypothesis was right
 
@@ -3893,6 +3953,19 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 ## P1 — Fix before launch (code)
 
 ### B0. Migration runner shreds any migration whose text contains "CONCURRENTLY"
+- **Update (2026-08-17, A39 follow-up):** `scripts/migrate.py` has been
+  **deleted** (see A39 above — it targeted a `schema_migrations` shape that
+  was never actually applied to production). This fix's code —
+  `_split_sql_statements` and the autocommit-routing logic — was ported
+  into `scripts/run_migrations.py` (the canonical runner) **before**
+  `migrate.py` was deleted, so nothing was lost; `run_migrations.py` never
+  had this fix applied to it directly until now, since it never had any
+  CONCURRENTLY handling at all before this port (a real, separate gap this
+  same follow-up closed). The description below is preserved as it was
+  written against `migrate.py` at the time; read `scripts/run_migrations.py`
+  and `backend/tests/test_migration_concurrently_splitting.py` /
+  `backend/tests/test_run_migrations_autocommit_chunks.py` for the current,
+  live location of this logic.
 - [x] **Status:** done — `scripts/migrate.py` now has `_split_sql_statements`,
   a lexical scanner (comment/`'...'`-string/`$tag$...$tag$`-dollar-quote
   aware) replacing the naive `sql.split(";")`. `needs_autocommit` routing now
@@ -9526,6 +9599,42 @@ how much they de-risk a public launch._
   a duplicate one. When `image-size` (or `metro`'s pin of it) ships a
   patched version, close out both #3718 and this item together, bump the
   dependency, and confirm `G4b` goes green on both apps.
+
+### C26. `pip-compile drift check` fails on any PR that touches `backend/requirements.in` — `requirements.txt` has drifted far out of sync with a fresh resolve, unrelated to the touching PR's actual diff
+
+- [ ] **Status:** open, not yet a `[CR]` issue — flagged here per the
+  "CI check red for a reason unrelated to your diff" rule rather than
+  left unexplained.
+- **Where surfaced:** PR #4085 (A39's `migrate.py` reconciliation), whose
+  only change to `backend/requirements.in` was a one-line comment fix
+  (`migrate.py` → `run_migrations.py`, no dependency added/removed/
+  reordered). CI's `pip-compile drift check` job still failed —
+  `.github/workflows/pip-compile-check.yml` only triggers when
+  `backend/requirements.in`/`requirements.txt` changes, so this drift has
+  presumably existed unnoticed for a while and this PR was simply the
+  first to touch the trigger path.
+- **What the failure actually shows:** the job's diff is almost entirely
+  `+` (additions) — a fresh `pip-compile requirements.in --no-upgrade`
+  resolves dozens of transitive packages (`pydantic`, `pytest`, `stripe`,
+  `supabase`, `uvicorn`, etc.) that the checked-in `requirements.txt`
+  doesn't currently pin at all, not just version bumps. That's consistent
+  with `requirements.txt` being stale relative to `requirements.in`
+  rather than a resolver nondeterminism artifact.
+- **Not fixed in PR #4085**: regenerating `requirements.txt` correctly
+  requires running `pip-compile` and reviewing/testing the resulting
+  pinned versions — not something to do as a drive-by inside a
+  comment-only-diff PR. Attempting it blind risks silently changing pins
+  the fare/payment/auth code depends on without any of this repo's
+  version-bump review discipline (see the `dependabot` bump commits
+  throughout this file for the normal, reviewed path).
+- **Next step:** someone with a working `pip-compile` environment should
+  run `pip-compile backend/requirements.in --output-file
+  backend/requirements.txt --strip-extras --no-header
+  --annotation-style line --no-upgrade`, review the diff for anything
+  surprising (should be additions/reorderings only, given `--no-upgrade`),
+  test the backend against the regenerated lockfile, and merge that as
+  its own dependency-only PR — then this check goes green for any future
+  PR that touches `requirements.in`.
 
 ## Recently completed (do not redo)
 

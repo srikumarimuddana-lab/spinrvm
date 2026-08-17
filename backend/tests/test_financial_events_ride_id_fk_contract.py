@@ -30,8 +30,8 @@ _ORIGINAL_SQL = _ORIGINAL_MIGRATION.read_text()
 
 def test_migration_294_exists_and_is_next_available_number():
     """Guards against a future collision silently reusing 294 for something
-    else — migrate.py keys idempotency off the full filename, so a rename
-    would re-run this migration under a new name."""
+    else — run_migrations.py keys idempotency off the full filename, so a
+    rename would re-run this migration under a new name."""
     assert _MIGRATION.exists()
 
 
@@ -41,9 +41,7 @@ def test_original_migration_58_fk_has_no_delete_action():
     unmodified (append-only convention) while 294 supersedes it via ALTER."""
     assert "ride_id" in _ORIGINAL_SQL
     assert "REFERENCES rides(id)" in _ORIGINAL_SQL
-    fk_line = next(
-        line for line in _ORIGINAL_SQL.splitlines() if "REFERENCES rides(id)" in line
-    )
+    fk_line = next(line for line in _ORIGINAL_SQL.splitlines() if "REFERENCES rides(id)" in line)
     assert "ON DELETE" not in fk_line.upper()
 
 

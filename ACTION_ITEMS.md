@@ -8295,8 +8295,20 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 
 ### C30. Scheduled-ride DST guard is opt-in per request, not enforced server-side
 
-- [ ] **Status:** open (filed 2026-08-17, same review as C26). Currently
-  low-risk — see below.
+- [x] **Status:** closed 2026-08-17 — additive half only. Added an `else`
+  branch to `validate_scheduled_time`'s `tz_name` gate
+  (`backend/schemas.py`): when `scheduled_time` is present but
+  `scheduled_timezone` is absent, it now logs a warning (no PII — no
+  lat/lng, no rider identity) so the gap is observable instead of silent.
+  Zero change to acceptance/rejection — the value still passes through
+  exactly as before. Deliberately did **not** make `scheduled_timezone`
+  required / reject requests that omit it — that's a breaking-change risk
+  to a live-tested booking flow and needs a product decision, not a code
+  fix in this pass; left open as a follow-up if the warning signal shows
+  real-world callers omitting it. New regression test in
+  `backend/tests/test_p2_scheduled_rides.py` asserts the value is
+  unchanged and the warning fires. `pytest tests/test_p2_scheduled_rides.py
+  -q` → 20 passed.
 - **Issue/gap:** the DST-gap/DST-ambiguity validation in
   `CreateRideRequest.validate_scheduled_time` only runs `if tz_name:`
   (`backend/schemas.py:840-934`, gate at line 853). When

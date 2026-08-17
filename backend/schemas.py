@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -5,6 +6,8 @@ from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from pydantic.functional_serializers import PlainSerializer
+
+logger = logging.getLogger(__name__)
 
 try:
     from .validators import validate_license_plate, validate_vehicle_year, validate_vin
@@ -914,6 +917,24 @@ class CreateRideRequest(BaseModel):
                 # time. The window checks below must run against this
                 # corrected value too, not the mislabeled one.
                 v_utc = converted_utc
+            else:
+                # No scheduled_timezone supplied — scheduled_time is trusted
+                # as-is as a true UTC instant with no DST-gap/ambiguity
+                # protection (see comment above). This is a known,
+                # intentional trade-off for existing callers (rider-app
+                # always sends scheduled_timezone today), but it means the
+                # guard's effectiveness silently depends on every future
+                # caller remembering to set the field. Log so an omission by
+                # a future caller (third-party integration, older app
+                # build, AI booking tool) is observable instead of silent.
+                # No PII: this validator only has the ride time value, and
+                # we don't log lat/lng or any address/identity field.
+                logger.warning(
+                    "Scheduled ride request received without scheduled_timezone; "
+                    "DST-gap/ambiguity validation skipped, scheduled_time trusted "
+                    "as-is as a UTC instant",
+                    extra={"has_scheduled_timezone": False},
+                )
 
             now_utc = datetime.now(timezone.utc)
             if v_utc < now_utc + timedelta(minutes=SCHEDULE_MIN_LEAD_MINUTES):

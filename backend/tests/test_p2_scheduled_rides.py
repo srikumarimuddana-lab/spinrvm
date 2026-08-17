@@ -503,6 +503,36 @@ class TestDSTBoundary:
             )
         assert ride_req.scheduled_time is not None
 
+    def test_missing_scheduled_timezone_logs_warning_but_still_accepted(self, caplog):
+        """C30: omitting scheduled_timezone must NOT change acceptance
+        behavior (scheduled_time is still trusted as-is, exactly as before)
+        but must now emit a warning so a future caller's omission is
+        observable instead of silent."""
+        import logging as _logging
+
+        from backend.schemas import CreateRideRequest
+
+        frozen_now = datetime(2026, 10, 28, tzinfo=timezone.utc)
+        scheduled_time = datetime(2026, 11, 1, 5, 30, tzinfo=timezone.utc)
+        with _patch_schemas_now(frozen_now), caplog.at_level(_logging.WARNING):
+            ride_req = CreateRideRequest(
+                vehicle_type_id="standard",
+                pickup_address="123 Main St",
+                pickup_lat=52.1,
+                pickup_lng=-106.0,
+                dropoff_address="456 Broadway",
+                dropoff_lat=52.2,
+                dropoff_lng=-106.1,
+                is_scheduled=True,
+                scheduled_time=scheduled_time,
+            )
+
+        # Value unchanged -- purely additive, zero functional change.
+        assert ride_req.scheduled_time == scheduled_time
+
+        warnings = [r for r in caplog.records if r.levelno == _logging.WARNING]
+        assert any("scheduled_timezone" in r.message for r in warnings)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Max advance-booking window (Finding #02, scheduled-rides gap review)

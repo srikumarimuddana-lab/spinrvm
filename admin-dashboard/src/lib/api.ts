@@ -352,6 +352,7 @@ export type {
     SafetyIncidentListResponse,
     SafetyIncidentDetail,
 } from "./api/safety-disputes";
+export type { LegalDocType } from "./api/content-area";
 export {
     getFaqs,
     createFaq,

@@ -7,7 +7,16 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-17 — A38 CLOSED (migration 321 adds the missing
+_Last updated: 2026-08-17 — A40 question #2 CLOSED (checked live
+whether OLD-app Connect/payout webhook events could cross-match a
+NEW-app driver's Stripe account: `transfer.created` has no handler at
+all, structurally inert; `account.updated` is matched by
+`stripe_account_id`, but zero of the 15 observed events match any
+current driver's account — no evidence the shared-account risk has
+actually manifested. Questions #1 and #3 (whether the old app's
+continued live Stripe activity is sanctioned, and whether the webhook
+endpoint should eventually split) remain open — operational/business
+questions, not answerable from code). Prior same day: A38 CLOSED (migration 321 adds the missing
 `rides.driver_id` guard to `purge_pii_retention()`'s Step H, the
 sanctioned DSAR hard-delete path — closes the same class of gap A35
 found in an ad-hoc script, verified byte-identical to migration 296
@@ -3827,9 +3836,11 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   processing) — see A36. The one minor side effect (a wasted, silently
   swallowed push-notification attempt against an old-app user_id) is
   low-severity and not itself a data-integrity risk.
-- **Open questions this raises, none answered here:**
+- **Open questions this raises:**
   1. Is the old app's continued live Stripe activity expected/sanctioned
      for the current migration phase, or should it have stopped by now?
+     **Still open — a business/operational question, not answerable from
+     code or the database.**
   2. Are OLD-app Connect/payout-side webhook events (`transfer.created`,
      `account.updated`, etc. — also present in the `stripe_events` type
      breakdown) similarly falling through unprocessed, or could any of
@@ -3837,19 +3848,41 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
      Stripe account is shared across both apps (per P0 finding #2's "104
      of them already have Stripe payout accounts on file — possibly the
      *same* Stripe accounts the old app pays into")?
+     **CLOSED (2026-08-17), reassuring answer:** `transfer.created` has
+     **no handler at all** in `routes/webhooks.py` — it falls to the
+     generic unhandled branch regardless of account, structurally inert.
+     `account.updated` **is** looked up by connected-account ID
+     (`services/stripe_kyc_sync.py::apply_account_update`, matched against
+     `drivers.stripe_account_id`) — the one event type that genuinely
+     could cross-match if an account were shared. Checked live: **zero**
+     of the 15 `account.updated` events observed in `stripe_events` match
+     any current driver's `stripe_account_id` **or**
+     `stripe_account_id_superseded`. No evidence the shared-account risk
+     has actually manifested at the Connect/webhook layer, even though it
+     remains structurally possible per the original P0 finding. (Syncing
+     `account.updated` regardless of which app triggered it would in any
+     case be *correct* behavior if it ever did match — Stripe Connect
+     account state is account-level truth, not app-level, so mirroring it
+     from either app's trigger is not itself a bug.)
   3. Should the webhook endpoint eventually be split (old app → its own
      endpoint) before the Oct 31 decommission, or does it not matter
-     since old-app events are already inert here?
-- **Status:** open, no owner assigned — this is an operational/business
-  question (is old-app Stripe activity still sanctioned right now) more
-  than a code question. **Recommended next step:** confirm with whoever
-  owns the old app's operational status whether its continued live
-  payment processing is expected; if not, that's the actual incident, not
-  a code bug in this repo.
-- **What was NOT verified:** whether any old-app event type interacts
-  unsafely with new-app data (only `payment_intent.succeeded` was traced
-  end-to-end); whether this predates 2026-06-16 (`stripe_events`'
-  observed floor, not necessarily when old-app traffic started).
+     since old-app events are already inert here? **Still open** —
+     depends on the answer to #1.
+- **Status:** open (questions #1 and #3), no owner assigned — these are
+  operational/business questions (is old-app Stripe activity still
+  sanctioned right now, and does it need its own webhook endpoint before
+  decommission) that cannot be answered from code or the database.
+  Question #2 is closed with live evidence, above. **Recommended next
+  step:** confirm with whoever owns the old app's operational status
+  whether its continued live payment processing is expected; if not,
+  that's the actual incident, not a code bug in this repo.
+- **What was NOT verified:** whether this predates 2026-06-16
+  (`stripe_events`'s observed floor, not necessarily when old-app traffic
+  started); event types other than `payment_intent.succeeded`,
+  `transfer.created`, and `account.updated` were not individually traced
+  (though the general pattern — ride/booking-scoped handlers gate on
+  `metadata.ride_id`, Connect-scoped handlers gate on `stripe_account_id`
+  match — covers the two structurally distinct risk shapes).
 
 ## P1 — Fix before launch (code)
 

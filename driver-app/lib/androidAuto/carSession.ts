@@ -31,6 +31,10 @@ import { useAuthStore } from '@shared/store/authStore';
 import api from '@shared/api/client';
 import { useDriverStore } from '../../store/driverStore';
 import { consumePendingRideOffer } from '../../services/pendingRideOffer';
+import {
+  subscribeBackgroundDispatch,
+  type BackgroundDispatchEvent,
+} from '../../services/backgroundMessaging';
 import { pushDebug, setDebugFact } from './carDebug';
 
 const log = (...args: unknown[]) => {
@@ -59,8 +63,20 @@ const REFRESH_INTERVAL_MS = 60_000;
 /** How long to wait for an initialize() already in flight before giving up. */
 const AUTH_WAIT_MS = 8_000;
 
+/**
+ * Ride states in which a cancellation can legitimately arrive.
+ *
+ * CLAUDE.md's state machine is explicit that the only transition out of
+ * `in_progress` is `completed` — "Never `cancelled` after trip start" — so a
+ * cancellation push naming a trip already under way is a contract violation, not
+ * an instruction. It is dropped rather than applied, because acting on it would
+ * strand a driver mid-trip with an idle car screen.
+ */
+const CANCELLABLE_STATES = new Set(['ride_offered', 'navigating_to_pickup', 'arrived_at_pickup']);
+
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 let appStateSub: { remove: () => void } | null = null;
+let unsubscribeDispatch: (() => void) | null = null;
 let started = false;
 
 /**
@@ -121,6 +137,50 @@ function waitForInitialized(): Promise<void> {
   });
 }
 
+/**
+ * Put a dispatch event the headless FCM handler saw in front of the driver.
+ *
+ * This is the piece that makes offers work on a car-only launch. The handler has
+ * always persisted the offer to AsyncStorage, but on that launch nothing reads it
+ * back — useDriverDashboard is what does that on the phone, and it never mounts.
+ * Writing straight into the shared store means register.ts's existing
+ * `useDriverStore.subscribe(apply)` raises the head unit's Accept/Decline alert
+ * with no further wiring.
+ */
+function onBackgroundDispatch(event: BackgroundDispatchEvent): void {
+  try {
+    const store = useDriverStore.getState();
+    if (event.type === 'new_ride_assignment') {
+      // setIncomingRide has its own guard against overwriting a non-idle state,
+      // so a duplicate (push racing the phone's own hydration) is a no-op.
+      store.setIncomingRide(event.offer as never);
+      log('offer from background handler →', event.ride_id);
+      return;
+    }
+
+    // ride_cancelled. Narrow deliberately: only for the ride the car is
+    // actually showing, and only from a state a cancellation can reach.
+    const activeId = (store.activeRide as { ride?: { id?: string } } | null)?.ride?.id;
+    const offeredId = (store.incomingRide as { ride_id?: string } | null)?.ride_id;
+    if (event.ride_id !== activeId && event.ride_id !== offeredId) {
+      log('ignoring cancellation for a ride this car is not showing');
+      return;
+    }
+    if (!CANCELLABLE_STATES.has(store.rideState)) {
+      logError(
+        'cancellation push for a ride in state',
+        store.rideState,
+        '— dropped (in_progress can only go to completed)',
+      );
+      return;
+    }
+    store.resetRideState();
+    log('ride cancelled from background handler →', event.ride_id);
+  } catch (e) {
+    logError('background dispatch handling failed:', e);
+  }
+}
+
 /** The reads a connected car wants, issued together and individually caught. */
 async function refreshCarData(reason: string): Promise<void> {
   const store = useDriverStore.getState();
@@ -167,6 +227,10 @@ export async function startCarSession(): Promise<void> {
     refreshCarData('interval').catch(() => {});
   }, REFRESH_INTERVAL_MS);
 
+  // Subscribed before the awaits below: an offer can land during the bootstrap,
+  // and with no subscriber it would only reach AsyncStorage.
+  unsubscribeDispatch = subscribeBackgroundDispatch(onBackgroundDispatch);
+
   appStateSub = AppState.addEventListener('change', (next: AppStateStatus) => {
     // The phone app coming to the foreground is the cheapest signal that
     // something may have changed while the car was the only thing running.
@@ -209,4 +273,8 @@ export function stopCarSession(): void {
     /* already removed */
   }
   appStateSub = null;
+  // With no car connected the FCM channel must have no subscriber at all, so the
+  // phone's own path is exactly what it was before any of this existed.
+  unsubscribeDispatch?.();
+  unsubscribeDispatch = null;
 }

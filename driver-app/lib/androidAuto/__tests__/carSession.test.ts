@@ -28,8 +28,22 @@ jest.mock('../../../services/pendingRideOffer', () => ({
   consumePendingRideOffer: () => mockConsumePending(),
 }));
 
+let mockDispatchCb: ((e: unknown) => void) | null = null;
+const mockUnsubDispatch = jest.fn();
+jest.mock('../../../services/backgroundMessaging', () => ({
+  subscribeBackgroundDispatch: (cb: (e: unknown) => void) => {
+    mockDispatchCb = cb;
+    return mockUnsubDispatch;
+  },
+}));
+
 const calls: string[] = [];
 const mockDriver = {
+  rideState: 'idle' as string,
+  activeRide: null as unknown,
+  incomingRide: null as unknown,
+  setIncomingRide: jest.fn(),
+  resetRideState: jest.fn(),
   fetchActiveRide: jest.fn(() => { calls.push('fetchActiveRide'); return Promise.resolve(); }),
   fetchEarnings: jest.fn(() => { calls.push('fetchEarnings'); return Promise.resolve(); }),
   hydrateDriverRideState: jest.fn(() => { calls.push('hydrate'); return Promise.resolve(); }),
@@ -69,6 +83,10 @@ beforeEach(() => {
   calls.length = 0;
   mockAuthListeners.clear();
   mockAppStateCb = null;
+  mockDispatchCb = null;
+  mockDriver.rideState = 'idle';
+  mockDriver.activeRide = null;
+  mockDriver.incomingRide = null;
   mockConsumePending.mockResolvedValue(false);
   mockApiGet.mockResolvedValue({ data: { ride_offer_timeout_seconds: 20 } });
   setAuth({ isInitialized: true, isLoading: false, token: 'tok' });
@@ -239,5 +257,85 @@ describe('lifecycle', () => {
 
   it('stopCarSession is safe when nothing was started', () => {
     expect(() => stopCarSession()).not.toThrow();
+  });
+
+  it('unsubscribes from the FCM channel on disconnect', async () => {
+    // With no car connected the channel must have NO subscriber, so the phone's
+    // own offer path is exactly what it was before any of this existed.
+    await startCarSession();
+    stopCarSession();
+    expect(mockUnsubDispatch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('offers on a car-only launch', () => {
+  const offer = { ride_id: 'r1', pickup_address: '1 Main St' };
+
+  it('puts an offer straight into the store — nothing else reads it back', async () => {
+    await startCarSession();
+    mockDispatchCb?.({ type: 'new_ride_assignment', ride_id: 'r1', offer });
+    expect(mockDriver.setIncomingRide).toHaveBeenCalledWith(offer);
+  });
+
+  it('subscribes before the bootstrap awaits, so an offer mid-bootstrap lands', async () => {
+    mockConsumePending.mockImplementation(async () => {
+      // An offer arriving while the session is still coming up.
+      mockDispatchCb?.({ type: 'new_ride_assignment', ride_id: 'r1', offer });
+      return false;
+    });
+    await startCarSession();
+    expect(mockDriver.setIncomingRide).toHaveBeenCalledWith(offer);
+  });
+
+  it('cancels the ride the car is showing', async () => {
+    mockDriver.rideState = 'navigating_to_pickup';
+    mockDriver.activeRide = { ride: { id: 'r1' } };
+    await startCarSession();
+
+    mockDispatchCb?.({ type: 'ride_cancelled', ride_id: 'r1' });
+
+    expect(mockDriver.resetRideState).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels an offer the driver has not accepted yet', async () => {
+    mockDriver.rideState = 'ride_offered';
+    mockDriver.incomingRide = { ride_id: 'r2' };
+    await startCarSession();
+
+    mockDispatchCb?.({ type: 'ride_cancelled', ride_id: 'r2' });
+
+    expect(mockDriver.resetRideState).toHaveBeenCalled();
+  });
+
+  it('ignores a cancellation for some other ride', async () => {
+    mockDriver.rideState = 'navigating_to_pickup';
+    mockDriver.activeRide = { ride: { id: 'r1' } };
+    await startCarSession();
+
+    mockDispatchCb?.({ type: 'ride_cancelled', ride_id: 'someone-elses-ride' });
+
+    expect(mockDriver.resetRideState).not.toHaveBeenCalled();
+  });
+
+  it('REFUSES to cancel a trip already under way', async () => {
+    // CLAUDE.md: the only transition out of in_progress is completed. Acting on
+    // this would strand a driver mid-trip with an idle car screen.
+    mockDriver.rideState = 'trip_in_progress';
+    mockDriver.activeRide = { ride: { id: 'r1' } };
+    await startCarSession();
+
+    mockDispatchCb?.({ type: 'ride_cancelled', ride_id: 'r1' });
+
+    expect(mockDriver.resetRideState).not.toHaveBeenCalled();
+  });
+
+  it('a throwing store action cannot break the channel', async () => {
+    mockDriver.setIncomingRide.mockImplementationOnce(() => {
+      throw new Error('store blew up');
+    });
+    await startCarSession();
+    expect(() =>
+      mockDispatchCb?.({ type: 'new_ride_assignment', ride_id: 'r1', offer }),
+    ).not.toThrow();
   });
 });

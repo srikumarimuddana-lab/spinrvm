@@ -17,40 +17,45 @@ controls — no `BEFORE INSERT/UPDATE/DELETE` trigger, no RLS policy, no
 Python guard clause can intercept a direct database session. The only thing
 code *can* do is detect it, loudly.
 
-This loop is deliberately ALERT-ONLY — pure detection, zero mutation. It
-calls the read-only ``check_disabled_guard_triggers()`` RPC (migration 317,
-a dynamic scan over ``pg_trigger`` for every non-internal trigger matching
-the repo's append-only-guard naming convention — ``%_no_mutate`` /
-``%_no_delete``) and, if anything comes back disabled, writes one
+This loop is deliberately ALERT-ONLY — pure detection, zero mutation. It now
+merges TWO independent sources every tick:
+
+1. The read-only ``check_disabled_guard_triggers()`` RPC (migration 317, a
+   dynamic scan over ``pg_trigger`` for every non-internal trigger matching
+   the repo's append-only-guard naming convention — ``%_no_mutate`` /
+   ``%_no_delete``) — catches a guard left disabled *right now*, at
+   whatever moment this loop happens to run.
+2. Recent rows written by the ``guard_trigger_ddl_audit`` event trigger
+   (migration 318, ACTION_ITEMS.md A37) — catches a guard that was disabled
+   and already re-enabled again *between* ticks, the gap described below
+   that (1) alone structurally cannot see.
+
+Either source finding a disabled/recently-disabled guard writes one
 ``audit_logs`` row (security-relevant event → audit table + log, per
 CLAUDE.md's Observability Conventions) plus a CRITICAL log line and a Sentry
-capture so on-call sees it immediately, not from a routine daily digest.
+capture so on-call sees it, not from a routine daily digest.
 
-**KNOWN LIMITATION, stated plainly rather than implied away**: this is a
-point-in-time poll of trigger *state*, not an event-based audit of trigger
-*changes*. It can only catch a guard left disabled across a check boundary —
-e.g. forgotten re-enabled after a manual migration. It structurally cannot
-catch a disable → mutate/delete → re-enable cycle completed within a single
-`psql`/dashboard session, which is the exact shape of the incident that
-motivated this fix (per the 2026-08-16 investigation, both real runs were a
-short session, not a guard left off for hours). No polling cadence closes
-that gap — only a synchronous `ddl_command_end` event trigger would (tracked
-as `ACTION_ITEMS.md` A37, deliberately not built alongside this change: an
-event trigger fires database-wide for every `ALTER TABLE`, so a mistake in
-its body risks breaking unrelated migrations repo-wide, and this session has
-no way to test one against a live Postgres instance before it would ship to
-a live-tested production system). What this loop *does* reliably close: a
-guard trigger disabled and left off (intentionally or by mistake) is caught
-within one cadence window, and — via the `test_account_cleanup_service.py`
-plan builder this same fix ships alongside — there is now a sanctioned,
-read-only-eligibility-checked alternative to hand-writing the kind of SQL
-that caused this in the first place, which addresses the *reason* someone
-reached for the ad-hoc script even though it doesn't detect a repeat in
-real time.
+**Formerly a known limitation, closed by A37 (2026-08-17)**: this loop used
+to be a pure point-in-time poll of trigger *state*, not an event-based audit
+of trigger *changes* — it could only catch a guard left disabled across a
+check boundary, and structurally could not catch a disable →
+mutate/delete → re-enable cycle completed within a single `psql`/dashboard
+session (the exact shape of the incident that motivated A35). Migration
+318's `ddl_command_end` event trigger closes that: it fires synchronously
+the instant any `ALTER TABLE` finishes, so a same-session disable/re-enable
+now leaves a permanent, timestamped `audit_logs` row the moment it happens,
+which `_fetch_realtime_events()` below picks up on this loop's very next
+tick. **What's still bounded by this loop's 6h cadence**: the actual
+Sentry page / CRITICAL log. The *record* is now real-time; the *page* is
+still worst-case ~6h behind, because this loop (not the event trigger
+itself) is what calls Sentry — see migration 318's own comment for why a
+synchronous page directly from SQL (`pg_notify` + a listener, or Supabase
+Realtime) was deliberately not built in the same change. A future
+enhancement could shrink that further; not done here to keep each change's
+blast radius small and separately reviewable.
 
-Cadence: every 6 hours — a reasonable default for "guard left off," not
-chosen to imply it closes the disable-act-reenable gap (it can't, at any
-cadence — see above).
+Cadence: every 6 hours — reasonable for how quickly a page needs to reach a
+human once the underlying record is already real-time (see above).
 
 Replay-safety (CLAUDE.md / ``spinr-background-loop`` skill): pure read + a
 loud side effect (log/Sentry/one audit row), same shape as
@@ -70,9 +75,10 @@ its own errors, so there is no operational reason to add an off switch.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 try:
     from utils.loop_monitor import record_heartbeat as _record_heartbeat
@@ -160,22 +166,96 @@ async def _escalate(disabled: list[dict]) -> None:
     _metric_inc("spinr_admin_disabled_guard_trigger_total", by=len(disabled))
 
 
+_REALTIME_EVENT_ACTION = "regulatory_guard_trigger_disabled_realtime"
+# How far back to look for A37 event-trigger rows each tick. Deliberately
+# wider than CHECK_INTERVAL_SECONDS (not exactly equal to it) so a tick that
+# runs late (jitter, a missed cycle, a restart) can't let a row silently age
+# out of the lookback window before any tick ever sees it. Duplicate reads
+# across overlapping windows are expected and harmless -- the same
+# per-(table, trigger) Redis dedupe key used for the state-poll path below
+# also covers rows surfaced this way, so a trigger already escalated this
+# window doesn't re-page just because its audit_logs row is read twice.
+_REALTIME_LOOKBACK_SECONDS = CHECK_INTERVAL_SECONDS * 2
+
+
+async def _fetch_realtime_events() -> list[dict]:
+    """Rows written synchronously by migration 318's ddl_command_end event
+    trigger (ACTION_ITEMS.md A37) -- the disable/re-enable-within-one-session
+    case the state poll above structurally cannot see, because by the time
+    this poll runs the trigger may already be back to enabled. Returns the
+    same {table_name, trigger_name, tgenabled} shape the RPC path uses, so
+    both feed one escalation pipeline. Never raises -- a failure here must
+    not prevent the state-poll half of this tick from still alerting.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=_REALTIME_LOOKBACK_SECONDS)).isoformat()
+    try:
+        rows = await db.get_rows(
+            "audit_logs",
+            filters={"action": _REALTIME_EVENT_ACTION, "created_at": {"$gte": cutoff}},
+            order="created_at",
+            desc=True,
+            limit=200,
+        )
+    except Exception as exc:
+        logger.error(f"retention_guard_monitor: realtime-event fetch failed: {exc}", exc_info=True)
+        return []
+
+    out: list[dict] = []
+    for row in rows or []:
+        raw_details = row.get("details")
+        try:
+            # audit_logs.details is TEXT (production schema) holding a JSON
+            # string, not a native JSONB column -- see migration 318's own
+            # comment on why this can't be assumed to deserialize for free.
+            details = json.loads(raw_details) if isinstance(raw_details, str) else (raw_details or {})
+        except (TypeError, ValueError) as exc:
+            logger.warning(f"retention_guard_monitor: unparseable realtime-event details, skipping row: {exc}")
+            continue
+        for t in details.get("disabled_triggers") or []:
+            out.append(
+                {
+                    "table_name": t.get("table_name") or "unknown",
+                    "trigger_name": t.get("trigger_name") or "unknown",
+                    "tgenabled": t.get("tgenabled"),
+                    "source": "realtime_event",
+                    "detected_at": details.get("detected_at"),
+                }
+            )
+    return out
+
+
 async def _check() -> dict[str, int]:
-    """One tick. Returns counters for logging/tests."""
-    stats = {"disabled": 0, "alerted": 0, "deduped": 0}
+    """One tick. Returns counters for logging/tests.
+
+    Two independent sources feed one escalation pipeline:
+    - the state poll (RPC `check_disabled_guard_triggers`) -- catches a
+      guard left disabled *right now*, at whatever cadence this loop runs.
+    - the A37 realtime-event log (`_fetch_realtime_events`) -- catches a
+      guard that was disabled and already re-enabled again *between* ticks,
+      which the state poll alone cannot see (that's the entire reason A37
+      exists; see migration 318 and its Change Impact Log).
+    Both share the same per-(table, trigger) dedupe, so a trigger caught by
+    both sources in the same window pages once, not twice.
+    """
+    stats = {"disabled": 0, "alerted": 0, "deduped": 0, "realtime_events": 0}
 
     try:
-        rows = await db.rpc("check_disabled_guard_triggers", {}) or []
+        state_rows = await db.rpc("check_disabled_guard_triggers", {}) or []
     except Exception as exc:
         logger.error(f"retention_guard_monitor: RPC check failed: {exc}", exc_info=True)
-        return stats
+        state_rows = []
 
-    stats["disabled"] = len(rows)
-    if not rows:
+    realtime_rows = await _fetch_realtime_events()
+    stats["realtime_events"] = len(realtime_rows)
+
+    all_rows = list(state_rows) + realtime_rows
+    stats["disabled"] = len(all_rows)
+    if not all_rows:
+        logger.info(f"retention_guard_monitor: {stats}")
         return stats
 
     to_alert = []
-    for row in rows:
+    for row in all_rows:
         table_name = row.get("table_name") or "unknown"
         trigger_name = row.get("trigger_name") or "unknown"
         if await _already_alerted_recently(table_name, trigger_name):

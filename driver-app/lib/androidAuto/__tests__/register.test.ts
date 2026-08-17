@@ -42,6 +42,8 @@ const mockTemplates: MockTpl[] = [];
 const mockZoomIn = jest.fn();
 const mockZoomOut = jest.fn();
 const mockReset = jest.fn();
+const mockRecenter = jest.fn();
+const mockPan = jest.fn();
 
 jest.mock('../../../store/driverStore', () => ({
   useDriverStore: {
@@ -54,7 +56,13 @@ jest.mock('../carSurface', () => ({ CarMapSurface: () => null }));
 
 jest.mock('../carMapCamera', () => ({
   useCarMapCamera: {
-    getState: () => ({ zoomIn: mockZoomIn, zoomOut: mockZoomOut, reset: mockReset }),
+    getState: () => ({
+      zoomIn: mockZoomIn,
+      zoomOut: mockZoomOut,
+      reset: mockReset,
+      recenter: mockRecenter,
+      pan: mockPan,
+    }),
   },
 }));
 
@@ -150,9 +158,13 @@ it('creates ONE live MapTemplate with zoom-only buttons and no header action whe
   expect(t.setRootTemplate).toHaveBeenCalled();
 
   const buttons = lastMapButtons(t);
-  expect(buttons).toHaveLength(2); // zoom out + zoom in only
-  buttons[0].onPress();
-  buttons[1].onPress();
+  // Recenter is always present — once the head unit can pan (onDidPan), a
+  // driver who has dragged away needs a way back regardless of ride state.
+  expect(buttons).toHaveLength(3); // recenter + zoom out + zoom in
+  buttons[0].onPress(); // recenter
+  buttons[1].onPress(); // zoom out
+  buttons[2].onPress(); // zoom in
+  expect(mockRecenter).toHaveBeenCalledTimes(1);
   expect(mockZoomOut).toHaveBeenCalledTimes(1);
   expect(mockZoomIn).toHaveBeenCalledTimes(1);
 
@@ -169,7 +181,9 @@ it('adds a single Navigate hand-off (before zoom) and a Complete action while in
 
   const t = lastTpl();
   const buttons = lastMapButtons(t);
-  expect(buttons).toHaveLength(3); // navigate, zoom out, zoom in
+  // Exactly Android Auto's action-strip cap. If this ever needs a fifth entry,
+  // something has to be dropped rather than appended.
+  expect(buttons).toHaveLength(4); // navigate, recenter, zoom out, zoom in
 
   buttons[0].onPress(); // Navigate → Google hand-off (platform default)
   expect(Linking.openURL).toHaveBeenCalledWith(

@@ -190,12 +190,11 @@ async def test_add_tip_after_paid_card_decline_does_not_credit_driver():
     mock_upd.assert_not_awaited()
 
 
-async def test_add_tip_after_paid_wallet_absorbed_without_calling_charge():
-    """Wallet rides have no 'charge the delta after the fact' debit path.
-    Per the 2026-08-17 product decision, this must NOT surface a rider-facing
-    rejection — the driver is credited as normal (same as the pre-fix
-    behavior) and Spinr absorbs the uncollected amount, but the card-only
-    charge helper must never be called for a non-card ride."""
+async def test_add_tip_after_paid_wallet_fully_collected():
+    """Wallet rides now attempt a REAL debit (charge_late_wallet_tip,
+    migration 319) before falling back to absorbing. Full collection: the
+    driver is credited as normal, no rider-facing rejection, and the
+    card-only charge helper is never called for a non-card ride."""
     from backend.routes.rides.payments import TipRequest, add_tip
 
     ride = _completed_ride(payment_status="paid", payment_method="wallet")
@@ -203,18 +202,61 @@ async def test_add_tip_after_paid_wallet_absorbed_without_calling_charge():
     with (
         patch("backend.routes.rides.payments._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
         patch("backend.routes.rides.payments._deps.db_supabase.update_ride", AsyncMock(return_value=None)) as mock_upd,
-        patch("backend.routes.rides.payments.charge_late_tip", AsyncMock()) as mock_charge,
+        patch("backend.routes.rides.payments.charge_late_tip", AsyncMock()) as mock_card_charge,
+        patch(
+            "backend.routes.rides.payments.charge_late_wallet_tip", AsyncMock(return_value=Decimal("5.00"))
+        ) as mock_wallet,
     ):
         req = TipRequest(amount=Decimal("5.00"))
         result = await add_tip(RIDE_ID, req, current_user={"id": RIDER_ID})
 
     assert result["success"] is True
     assert Decimal(result["tip_amount"]) == Decimal("5.00")
-    mock_charge.assert_not_awaited()
+    mock_wallet.assert_awaited_once_with(ride, RIDE_ID, RIDER_ID, Decimal("5.00"))
+    mock_card_charge.assert_not_awaited()
     mock_upd.assert_awaited_once()
 
 
-async def test_add_tip_after_paid_company_allowance_absorbed_without_calling_charge():
+async def test_add_tip_after_paid_wallet_partial_collection_absorbs_rest():
+    """Insufficient wallet balance: driver is still credited the FULL tip
+    (never a partial credit) — only Spinr's collected-vs-absorbed split
+    differs, never anything rider/driver-visible."""
+    from backend.routes.rides.payments import TipRequest, add_tip
+
+    ride = _completed_ride(payment_status="paid", payment_method="wallet")
+
+    with (
+        patch("backend.routes.rides.payments._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.rides.payments._deps.db_supabase.update_ride", AsyncMock(return_value=None)),
+        patch(
+            "backend.routes.rides.payments.charge_late_wallet_tip", AsyncMock(return_value=Decimal("1.50"))
+        ),
+    ):
+        req = TipRequest(amount=Decimal("5.00"))
+        result = await add_tip(RIDE_ID, req, current_user={"id": RIDER_ID})
+
+    assert result["success"] is True
+    assert Decimal(result["tip_amount"]) == Decimal("5.00")
+
+
+async def test_add_tip_after_paid_wallet_zero_collected_still_absorbs_no_rejection():
+    from backend.routes.rides.payments import TipRequest, add_tip
+
+    ride = _completed_ride(payment_status="paid", payment_method="wallet")
+
+    with (
+        patch("backend.routes.rides.payments._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.rides.payments._deps.db_supabase.update_ride", AsyncMock(return_value=None)),
+        patch("backend.routes.rides.payments.charge_late_wallet_tip", AsyncMock(return_value=Decimal("0"))),
+    ):
+        req = TipRequest(amount=Decimal("5.00"))
+        result = await add_tip(RIDE_ID, req, current_user={"id": RIDER_ID})
+
+    assert result["success"] is True
+    assert Decimal(result["tip_amount"]) == Decimal("5.00")
+
+
+async def test_add_tip_after_paid_company_allowance_fully_collected():
     from backend.routes.rides.payments import TipRequest, add_tip
 
     ride = _completed_ride(payment_status="paid", payment_method="company_allowance")
@@ -222,15 +264,38 @@ async def test_add_tip_after_paid_company_allowance_absorbed_without_calling_cha
     with (
         patch("backend.routes.rides.payments._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
         patch("backend.routes.rides.payments._deps.db_supabase.update_ride", AsyncMock(return_value=None)) as mock_upd,
-        patch("backend.routes.rides.payments.charge_late_tip", AsyncMock()) as mock_charge,
+        patch("backend.routes.rides.payments.charge_late_tip", AsyncMock()) as mock_card_charge,
+        patch(
+            "backend.routes.rides.payments.charge_late_corporate_tip", AsyncMock(return_value=Decimal("5.00"))
+        ) as mock_corp,
     ):
         req = TipRequest(amount=Decimal("5.00"))
         result = await add_tip(RIDE_ID, req, current_user={"id": RIDER_ID})
 
     assert result["success"] is True
     assert Decimal(result["tip_amount"]) == Decimal("5.00")
-    mock_charge.assert_not_awaited()
+    mock_corp.assert_awaited_once_with(ride, RIDE_ID, Decimal("5.00"))
+    mock_card_charge.assert_not_awaited()
     mock_upd.assert_awaited_once()
+
+
+async def test_add_tip_after_paid_company_allowance_partial_collection_absorbs_rest():
+    from backend.routes.rides.payments import TipRequest, add_tip
+
+    ride = _completed_ride(payment_status="paid", payment_method="company_allowance")
+
+    with (
+        patch("backend.routes.rides.payments._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.rides.payments._deps.db_supabase.update_ride", AsyncMock(return_value=None)),
+        patch(
+            "backend.routes.rides.payments.charge_late_corporate_tip", AsyncMock(return_value=Decimal("3.00"))
+        ),
+    ):
+        req = TipRequest(amount=Decimal("5.00"))
+        result = await add_tip(RIDE_ID, req, current_user={"id": RIDER_ID})
+
+    assert result["success"] is True
+    assert Decimal(result["tip_amount"]) == Decimal("5.00")
 
 
 async def test_add_tip_before_paid_unchanged_no_charge_attempted():

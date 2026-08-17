@@ -119,6 +119,43 @@ async def apply_adjustment(
     )
 
 
+async def apply_late_tip_master_debit(
+    *,
+    wallet_id: str,
+    amount: _Numeric,
+    ride_id: str,
+    actor_user_id: Optional[str] = None,
+    notes: Optional[str] = None,
+    floor: Optional[_Numeric] = None,
+) -> Dict[str, Any]:
+    """Master-wallet fallback debit for the portion of a late tip the
+    employee's allowance couldn't cover — mirrors settle_corporate's own
+    master-fallback debit (apply_adjustment), but uses
+    ``type_="late_tip_adjustment"`` (migration 319), a distinct dedup key
+    from the original settlement's ``"adjustment"`` for the same ride_id.
+    Reusing ``"adjustment"`` here would silently deduplicate against the
+    original settlement's master-fallback row (if the ride had one) and
+    apply zero additional debit.
+
+    ``ride_id`` is required (unlike apply_adjustment, where it's optional
+    for ad-hoc admin use) — this function only exists for the late-tip
+    call site, where the dedup protection depends on it always being set.
+    """
+    delta = Decimal(str(amount))
+    if delta <= 0:
+        raise ValueError("late tip master debit amount must be positive")
+    return await _apply(
+        wallet_id=wallet_id,
+        scope="master",
+        type_="late_tip_adjustment",
+        delta=-delta,
+        ride_id=ride_id,
+        actor_user_id=actor_user_id,
+        notes=notes,
+        floor=Decimal(str(floor)) if floor is not None else None,
+    )
+
+
 async def apply_refund(
     *,
     wallet_id: str,

@@ -103,46 +103,138 @@ async def cancel_ride_rider(
 
     driver_id = ride.get("driver_id")
 
-    # WS-8 (finding 11): release the booking-time pre-auth hold so the
-    # rider's card isn't blocked for up to 7 days. Must happen BEFORE
-    # we overwrite any payment fields. Best-effort: if the hold is already
-    # captured/expired, cancel_authorization returns False and we carry on.
-    _booking_pi = ride.get("payment_intent_id")
-    _auth = (ride.get("auth_status") or "").lower()
-    if _booking_pi and _auth in ("authorized", "fare_only"):
-        try:
-            _released = await _deps.cancel_authorization(ride_id=ride_id, payment_intent_id=_booking_pi)
-            if _released:
-                logger.info("[CANCEL] released pre-auth hold ride_id=%s pi=%s", ride_id, _booking_pi)
-        except Exception as _rel_exc:
-            logger.error("[CANCEL] pre-auth release failed ride_id=%s: %s", ride_id, _rel_exc, exc_info=True)
-
-    # The cancel is already persisted by the atomic claim above, so the
-    # assigned driver MUST be released, transitioned back to Period 1, and
-    # notified regardless of what happens while computing or charging the fee.
-    # EVERYTHING from the settings/area lookup through the fee writes is
-    # best-effort after the claim: the settings read, the service-area read,
-    # the fee calculation, and the wallet/driver-payout writes can each raise,
-    # and if any does we must not exit before the set_driver_available /
-    # insurance / notification cleanup below — that would strand the driver as
-    # unavailable and uninformed on a ride that is already cancelled. Surface
-    # failures loudly (error + traceback, per repo policy) for reconciliation,
-    # then fall through to driver cleanup. charged_* default to 0 so a failed
-    # fee computation records no fee rather than a stale/partial one.
+    # Fee computation is hoisted ABOVE the hold handling because the hold can now
+    # PAY the fee rather than being released and replaced by a fresh charge — so
+    # what we do with the hold depends on whether a fee is owed. Safe to hoist:
+    # this block only reads settings/service-area and runs a pure calculation, no
+    # writes. Failures default the fee to 0 (no fee) rather than a partial one,
+    # matching the pre-existing best-effort contract described below.
     charged_admin = charged_driver = Decimal("0")
-    cancel_fee_payment_status: Optional[str] = None
-    cancel_fee_payment_intent_id: Optional[str] = None
-    cancel_fee_charge_attempted = False
+    total_cancel_fee = Decimal("0")
+    settings = None
+    area = None
     try:
         settings = await _deps.get_app_settings()
-        area = None
         if ride.get("service_area_id"):
             area = await _deps.db_supabase.find_one("service_areas", {"id": ride["service_area_id"]})
         charged_admin, charged_driver = calculate_cancellation_fee(ride, settings, area)
         total_cancel_fee = _round(charged_admin + charged_driver)
+    except Exception as _fee_exc:
+        logger.error("[CANCEL] cancellation fee computation failed ride_id=%s: %s", ride_id, _fee_exc, exc_info=True)
+        charged_admin = charged_driver = Decimal("0")
+        total_cancel_fee = Decimal("0")
 
+    cancel_fee_payment_status: Optional[str] = None
+    cancel_fee_payment_intent_id: Optional[str] = None
+    cancel_fee_charge_attempted = False
+    # How much of the fee was taken straight out of the booking hold. Non-zero
+    # means the fee is already collected and the card-charge path below must be
+    # skipped, or the rider is billed twice.
+    fee_taken_from_hold = Decimal("0")
+
+    # WS-8 (finding 11): the booking-time hold must not sit on the rider's card
+    # for up to 7 days after a cancel. Two ways out, and which one we take
+    # depends on whether a fee is owed:
+    #
+    #   fee owed, card ride -> PARTIAL CAPTURE. Take the fee from the hold and
+    #     let Stripe release the remainder. Strictly better than the old
+    #     cancel-then-charge-a-fresh-PI flow, because the funds are already
+    #     reserved: this fee cannot be declined for insufficient funds, whereas
+    #     a new charge against the same card can, and did whenever a rider's
+    #     balance moved between booking and cancelling.
+    #
+    #   no fee, or a non-card ride -> FULL RELEASE, exactly as before.
+    #
+    # Either way this happens BEFORE any payment field is overwritten.
+    _booking_pi = ride.get("payment_intent_id")
+    _auth = (ride.get("auth_status") or "").lower()
+    _held_amount = _round(_d(ride.get("authorized_amount") or 0))
+    _hold_is_live = bool(_booking_pi) and _auth in ("authorized", "fare_only")
+    _is_card_ride = (ride.get("payment_method") or "card").lower() == "card"
+
+    if _hold_is_live:
+        if total_cancel_fee > 0 and _is_card_ride and _held_amount > 0:
+            try:
+                _fee_outcome = await _deps.capture_cancellation_fee(
+                    ride_id=ride_id,
+                    payment_intent_id=_booking_pi,
+                    fee=total_cancel_fee,
+                    authorized_amount=_held_amount,
+                )
+            except Exception as _cap_exc:  # pragma: no cover — helper never raises
+                logger.error("[CANCEL] fee capture raised ride_id=%s: %s", ride_id, _cap_exc, exc_info=True)
+                _fee_outcome = None
+
+            if _fee_outcome is not None and _fee_outcome.status == "captured":
+                fee_taken_from_hold = _round(_d(_fee_outcome.charged_amount))
+                cancel_fee_charge_attempted = True
+                cancel_fee_payment_status = "paid"
+                cancel_fee_payment_intent_id = _fee_outcome.payment_intent_id
+                logger.info(
+                    "[CANCEL] fee taken from hold ride_id=%s captured=%s of fee=%s (remainder released)",
+                    ride_id,
+                    fee_taken_from_hold,
+                    total_cancel_fee,
+                )
+                # Durable ledger write, mirroring the fresh-charge path below.
+                # delta is what was ACTUALLY captured, not the computed fee —
+                # a capped capture must not book revenue we never took.
+                # Never raises; the money has already moved either way.
+                await _deps.record_ledger_event(
+                    event_type="stripe_charge",
+                    user_id=current_user["id"],
+                    ride_id=ride_id,
+                    delta_cents=_deps.ledger_to_cents(fee_taken_from_hold),
+                    ref=_fee_outcome.payment_intent_id,
+                    metadata={
+                        "source": "cancellation_fee",
+                        "collection": "hold_partial_capture",
+                        "driver_id": driver_id or "",
+                        "fee_admin": str(_round(charged_admin)),
+                        "fee_driver": str(_round(charged_driver)),
+                    },
+                )
+            else:
+                # Do NOT cancel the hold here. The fee is still owed, and the
+                # fallback below charges a fresh PaymentIntent — releasing now
+                # would drop our only reserved funds before knowing whether that
+                # fallback succeeds. An uncaptured hold expires on its own, and
+                # the orphaned-hold reconciler sweeps it.
+                logger.error(
+                    "[CANCEL] fee capture from hold failed ride_id=%s status=%s — falling back to a fresh charge",
+                    ride_id,
+                    getattr(_fee_outcome, "status", "raised"),
+                )
+        else:
+            try:
+                _released = await _deps.cancel_authorization(ride_id=ride_id, payment_intent_id=_booking_pi)
+                if _released:
+                    logger.info("[CANCEL] released pre-auth hold ride_id=%s pi=%s", ride_id, _booking_pi)
+            except Exception as _rel_exc:
+                logger.error("[CANCEL] pre-auth release failed ride_id=%s: %s", ride_id, _rel_exc, exc_info=True)
+
+    # The cancel is already persisted by the atomic claim above, so the
+    # assigned driver MUST be released, transitioned back to Period 1, and
+    # notified regardless of what happens while computing or charging the fee.
+    # EVERYTHING from the fee computation through the fee writes is best-effort
+    # after the claim: the settings read, the service-area read, the fee
+    # calculation (all hoisted above the hold handling now, with their own
+    # try/except), and the wallet/driver-payout writes can each raise, and if any
+    # does we must not exit before the set_driver_available /
+    # insurance / notification cleanup below — that would strand the driver as
+    # unavailable and uninformed on a ride that is already cancelled. Surface
+    # failures loudly (error + traceback, per repo policy) for reconciliation,
+    # then fall through to driver cleanup. charged_* default to 0 so a failed
+    # fee computation records no fee rather than a stale/partial one — see the
+    # hoisted computation above, which owns that defaulting now.
+    try:
         # Charge the rider the cancellation fee before paying the driver.
-        if total_cancel_fee > 0:
+        # ``fee_taken_from_hold > 0`` means the partial capture above already
+        # collected it, so this whole block is skipped — charging again here
+        # would bill the rider twice for one cancellation. That also covers the
+        # capped case (fee larger than the hold): the shortfall is deliberately
+        # written off rather than chased with a second charge.
+        if total_cancel_fee > 0 and fee_taken_from_hold <= 0:
             payment_method = (ride.get("payment_method") or "card").lower()
             if payment_method == "wallet":
                 rider_wallet = await _deps.db_supabase.find_one("wallets", {"user_id": current_user["id"]})

@@ -8178,6 +8178,144 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   deadline; a support agent can produce a complete, PIPEDA-clean evidence
   pack for a ride in one click.
 
+### C26. Scheduled rides: no booking-time check for overlapping/duplicate scheduled trips by the same rider
+
+- [ ] **Status:** open (filed 2026-08-17, from a functional review of
+  `backend/utils/scheduled_rides.py` / `backend/routes/rides/booking.py`).
+- **Issue/gap:** `booking.py`'s active-ride guard
+  (`routes/rides/booking.py:394-408`) only checks
+  `RideStatus.active_statuses()`, which deliberately excludes `scheduled` —
+  and the DB-level uniqueness guard (`migrations/53_rides_one_active_per_rider.sql`)
+  is a partial unique index over the same active-status set, also excluding
+  `scheduled`. Nothing rejects a rider booking two scheduled rides at the
+  same or overlapping times.
+- **Why it matters:** the conflict is invisible until dispatch time, when
+  the second ride's `scheduled → searching` claim UPDATE
+  (`utils/scheduled_rides.py:447-477`) collides with the same unique index.
+  The rider then gets a "waiting on your current trip" defer push
+  (`_notify_schedule_delayed`, `utils/scheduled_rides.py:101-108`), which is
+  confusing — there is no "current trip," just their other still-stuck
+  scheduled ride — and can escalate all the way to admin paging after
+  `_SCHEDULE_DEFER_ESCALATE_AFTER` (20 ticks, ~20-40 min,
+  `utils/scheduled_rides.py:134-151`) before anyone understands why.
+- **Action:** at booking time, reject (or warn-and-confirm) a new
+  `scheduled_time` that falls within an estimated-trip-duration window of an
+  existing `scheduled` ride for the same rider; at minimum, reject an
+  exact-duplicate `scheduled_time`.
+- **Files:** `backend/routes/rides/booking.py` (validation), possibly a new
+  partial-unique or app-level check alongside
+  `migrations/53_rides_one_active_per_rider.sql`.
+- **Acceptance:** booking a second scheduled ride that overlaps an existing
+  one for the same rider is rejected (or confirmed) at request time, not
+  discovered at dispatch time via a constraint collision.
+
+### C27. Scheduled rides: no per-rider cap on pending scheduled trips
+
+- [ ] **Status:** open (filed 2026-08-17, same review as C26).
+- **Issue/gap:** nothing in `routes/rides/booking.py`'s create-ride path
+  bounds how many `scheduled` rides a single rider can have outstanding at
+  once.
+- **Why it matters:** each pending scheduled ride costs a row scanned by the
+  dispatcher every tick (`_SCHEDULED_RIDES_TICK_LIMIT = 100`,
+  `utils/scheduled_rides.py:54`) and can trip the tick-cap warning/metric
+  (`utils/scheduled_rides.py:732-741`) if enough riders (or a compromised
+  account, or the AI booking tool) queue up unbounded scheduled rides. Also
+  compounds C26 — more concurrent scheduled rides per rider means more
+  chances for an overlap.
+- **Action:** add a small per-rider concurrent-`scheduled`-ride cap (e.g.
+  3–5), enforced in `booking.py` alongside the active-ride check, returning
+  a clear 4xx rather than silently accepting unlimited bookings.
+- **Files:** `backend/routes/rides/booking.py`.
+- **Acceptance:** a rider attempting to exceed the cap gets a clear
+  rejection at booking time; dispatcher tick load stays bounded per rider.
+
+### C28. Scheduled-ride dispatch-arrival push failure mislogs as a full dispatch failure
+
+- [ ] **Status:** open (filed 2026-08-17, same review as C26).
+- **Issue/gap:** `_dispatch_scheduled_ride` sends the rider's "Your
+  scheduled ride is starting!" push with no local try/except
+  (`utils/scheduled_rides.py:589-600`), unlike every other push call in this
+  file (e.g. `_send_reminder`, which has its own try/except and
+  Redis-based retry/dedupe). If that call raises, it falls through to the
+  outer handler and is logged as `"Failed to dispatch scheduled ride
+  {ride_id}"` — even though the claim already succeeded, the driver match
+  already ran (with its own try/except at lines 574-582), the 5-minute
+  offer timeout is already armed, and the WS broadcast
+  (`broadcast_ride_status`, lines 528-535) already fired. The ride is fine;
+  only a non-critical confirmation push was lost.
+- **Why it matters:** wrong on-call signal. This log line reads as a
+  dispatch failure (chase a phantom dispatch bug) or, worse, engineers
+  learn to discount it and later miss a real dispatch failure logged the
+  same way.
+- **Action:** wrap the final rider push in its own try/except (mirroring
+  `_send_reminder`'s pattern), log distinctly (e.g. `"scheduled dispatch:
+  final confirmation push failed"`), and don't let it flow into the
+  `"Failed to dispatch"` branch.
+- **Files:** `backend/utils/scheduled_rides.py` (~line 589-600).
+- **Acceptance:** a push-send failure at this point logs as a push failure,
+  not a dispatch failure; the existing dispatch-failure log/metric only
+  fires for genuine dispatch failures.
+
+### C29. Scheduled-ride notice-window cancellation fee has no rider-facing warning in the cancel UI
+
+- [ ] **Status:** open (filed 2026-08-17, same review as C26). Currently
+  dormant — see below — but becomes a real hidden-fee risk the moment the
+  flag flips on.
+- **Issue/gap:** `scheduled_ride_notice_window_fee_enabled`
+  (`services/cancellation_service.py:63-91`) defaults `False`, and even if
+  a company/service-area turns it on, the rider-app cancel confirmation
+  sheet (`rider-app/app/scheduled-rides.tsx:52-70`, `handleCancel`) shows
+  only a generic "Are you sure you want to cancel this scheduled ride?"
+  with no mention that a fee (`scheduled_ride_notice_window_fee_amount`,
+  default $3.00) may be charged. The fee is deducted only after the fact.
+- **Why it matters:** charging money the rider wasn't warned about at the
+  point of the cancel action is a hidden-fee UX risk, out of step with how
+  carefully this codebase avoids retroactive/undisclosed charges elsewhere
+  (surge lock-at-booking, receipt line-item transparency in CLAUDE.md's "Not
+  a hidden-fee operator" guardrail).
+- **Action:** have the cancel confirmation sheet fetch/display the
+  applicable notice-window fee (or a generic "a late-cancellation fee may
+  apply" line) whenever the flag is on for that rider/service area,
+  mirroring how live-ride cancellation fees are already surfaced elsewhere
+  in the rider app.
+- **Files:** `rider-app/app/scheduled-rides.tsx` (`handleCancel` /
+  confirmation UI), `backend/services/cancellation_service.py` (fee
+  lookup/exposure).
+- **Acceptance:** with the flag on, the rider sees the potential fee before
+  confirming cancellation, not only after.
+
+### C30. Scheduled-ride DST guard is opt-in per request, not enforced server-side
+
+- [ ] **Status:** open (filed 2026-08-17, same review as C26). Currently
+  low-risk — see below.
+- **Issue/gap:** the DST-gap/DST-ambiguity validation in
+  `CreateRideRequest.validate_scheduled_time` only runs `if tz_name:`
+  (`backend/schemas.py:840-934`, gate at line 853). When
+  `scheduled_timezone` is omitted, the incoming `scheduled_time` is trusted
+  as a true UTC instant with zero DST protection — documented as an
+  intentional trade-off for existing callers that already send true UTC
+  (schemas.py:928-932), but it means the guard's effectiveness depends on
+  every caller remembering to set the field. The current rider-app build
+  always sends it (`rider-app/store/rideStore.ts:769-776`), so there is no
+  live exposure today; the gap is any *future* caller — a third-party
+  integration, an older app version, or the AI booking tool
+  (`backend/ai/tools_booking.py`) — sending a naive local time without it.
+- **Why it matters:** a caller that ever passes a naive local time without
+  `scheduled_timezone` would get a ride dispatched at the wrong wall-clock
+  hour, silently — exactly the failure mode the DST guard exists to
+  prevent, but the guard doesn't force itself on.
+- **Action:** consider requiring `scheduled_timezone` on any
+  client-controlled surface (reject the request if absent), or at minimum
+  log a warning when `scheduled_timezone` is absent so a future caller's
+  omission is visible rather than silent. Saskatchewan itself doesn't
+  observe DST, so this is not an active regulatory risk today — it's about
+  protecting future callers/markets.
+- **Files:** `backend/schemas.py` (`validate_scheduled_time`), any new
+  caller of scheduled-ride creation.
+- **Acceptance:** either `scheduled_timezone` is required for
+  client-originated scheduled-ride requests, or its absence is logged so
+  the gap is observable instead of silent.
+
 ## P3 — Post-launch backlog (tracked, not gating)
 
 ### Notification-channel coverage backlog (2026-08-08 audit, branch `claude/email-alerts-spinr-branding-l12lg2`)

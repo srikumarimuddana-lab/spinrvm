@@ -83,6 +83,13 @@ interface SOSButtonProps {
    * `useLanguageStore().t` (driver-app). Omit to keep English strings.
    */
   t?: (key: string) => string;
+  /**
+   * Optional. When supplied, a short TAP (release before the 1.2s hold
+   * elapses) fires this — used to open the Safety panel. The hold gesture is
+   * unchanged and still sends the alert directly, so this is purely additive:
+   * omit it and the button behaves exactly as it always has.
+   */
+  onTap?: () => void;
 }
 
 /**
@@ -101,11 +108,14 @@ const SOS_HOLD_MS = 1200;
 const SOS_MAX_ATTEMPTS = 3;
 const SOS_RETRY_DELAYS_MS = [1000, 2000];
 
-export function SOSButton({ rideId, onTrigger, size = 'small', t }: SOSButtonProps) {
+export function SOSButton({ rideId, onTrigger, size = 'small', t, onTap }: SOSButtonProps) {
   const translate = t ?? defaultT;
   const [triggered, setTriggered] = useState(false);
   const [sending, setSending] = useState(false);
   const [pressing, setPressing] = useState(false);
+  // Tracks whether the 1.2s hold actually elapsed, so a release can tell a tap
+  // apart from a completed hold. Only consulted when onTap is supplied.
+  const holdFired = useRef(false);
   // Persistent failure flag: stays true until the backend confirms the alert.
   // Dismissing the failure dialog does NOT clear it — the button stays amber
   // so the driver always has a visible reminder that the alert was NOT sent.
@@ -115,6 +125,7 @@ export function SOSButton({ rideId, onTrigger, size = 'small', t }: SOSButtonPro
 
   const startPress = () => {
     setPressing(true);
+    holdFired.current = false;
     Animated.loop(
       Animated.sequence([
         Animated.timing(pulseAnim, { toValue: 1.15, duration: 400, useNativeDriver: true }),
@@ -122,17 +133,28 @@ export function SOSButton({ rideId, onTrigger, size = 'small', t }: SOSButtonPro
       ])
     ).start();
     pressTimer.current = setTimeout(() => {
+      holdFired.current = true;
       triggerSOS();
     }, SOS_HOLD_MS);
   };
 
   const endPress = () => {
+    const wasPressing = pressing;
     setPressing(false);
     pulseAnim.stopAnimation();
     pulseAnim.setValue(1);
     if (pressTimer.current) {
       clearTimeout(pressTimer.current);
       pressTimer.current = null;
+    }
+    // A release BEFORE the hold elapsed is a tap -> open the Safety panel.
+    // Strictly additive: callers that pass no onTap keep byte-identical
+    // behavior, and the hold path is untouched either way, so a rider who
+    // already knows "hold SOS" loses nothing. Guarded on wasPressing so a
+    // stray release (e.g. after the hold already fired) can't open the panel
+    // on top of an in-flight alert.
+    if (onTap && wasPressing && !holdFired.current) {
+      onTap();
     }
   };
 

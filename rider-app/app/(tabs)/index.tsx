@@ -27,7 +27,7 @@ import AppMap from '@shared/components/AppMap';
 import { CarMarker, resolveMarkerVariant } from '@shared/components/CarMarker';
 import { useVehicleTypeStore } from '@shared/store/vehicleTypeStore';
 import { showToast } from '../../store/toastStore';
-import { SOSButton } from '@shared/components/SOSButton';
+import { RiderSOS } from '../../components/RiderSOS';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import {
@@ -565,7 +565,7 @@ export default function HomeScreen() {
               rideless-SOS work (ACTION_ITEMS.md B15(c)). domain-safety.md's
               hardest rule is "Never auto-dial 911" (wrong-PSAP routing wastes
               seconds), so the branch is removed rather than left as a trap. */}
-          <SOSButton
+          <RiderSOS
             rideId={currentRide?.id}
             onTrigger={triggerEmergency}
             size="small"

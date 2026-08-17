@@ -2,7 +2,7 @@
 
 Driver-facing FAQ content for the Spinr Driver app help section and the in-app AI assistant. Topic coverage mirrors the standard rideshare driver help-centre categories (as used by Uber and Lyft), but every answer is original Spinr content tailored to Saskatchewan (SGI, Saskatchewan Transportation Act, PIPEDA) — no third-party text is reused.
 
-**33 entries**, audience `driver`. Seeded by `backend/migrations/212_seed_saskatchewan_driver_faqs.sql`. One of those 33 (the SOS/safety-features entry) was later deactivated and consolidated into a shared `audience='both'` FAQ — see the note in the Safety & coverage section below — leaving 32 active driver-only entries from this migration.
+**33 entries**, audience `driver`. Seeded by `backend/migrations/212_seed_saskatchewan_driver_faqs.sql`. Three of those 33 were later deactivated: the SOS/safety-features entry, consolidated into a shared `audience='both'` FAQ (see the note in the Safety & coverage section below), and two near-duplicate onboarding-status entries, merged into their migration-210 equivalents by `backend/migrations/326_merge_duplicate_onboarding_faqs.sql` (see the notes in this section below) — leaving 30 active driver-only entries from this migration.
 
 > Answers are guidance-only and deliberately avoid fabricated approval or payout timelines; personal-status questions ("what is my status", "was I paid") are also answered live from the driver's own record by the assistant's `get_driver_application_status`, `get_document_status`, and `get_driver_earnings_summary` tools.
 
@@ -50,17 +50,7 @@ Yes. Spinr supports wheelchair-accessible vehicles and riders can request them w
 
 _Category: `onboarding`_
 
-**Q: How do I check the status of my application?**
-
-Open the Spinr Driver app and go to your Account / Onboarding section to see your current application status. Review starts once all required documents are uploaded and readable.
-
-_Category: `onboarding`_
-
-**Q: How long does approval take?**
-
-Review begins once every required document is uploaded and clear, and how long it takes depends on volume and whether anything needs to be re-submitted. Check your status in the app — if a document was rejected you'll see the reason so you can fix it quickly. Contact support if you've been waiting longer than expected.
-
-_Category: `onboarding`_
+> `How do I check the status of my application?` and `How long does approval take?` were deactivated by `backend/migrations/326_merge_duplicate_onboarding_faqs.sql` — each was a near-duplicate of a migration-210 question worded slightly differently ("How do I check the status of my driver application?" and "How long does document review and approval take?"), which now carries the merged answer instead. Not driver-onboarding-only entries anymore, so they aren't listed here.
 
 **Q: Can support activate or approve my account faster?**
 

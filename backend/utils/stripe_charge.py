@@ -747,6 +747,96 @@ async def verify_authorization(
     )
 
 
+async def increment_authorization(
+    *,
+    ride_id: str,
+    payment_intent_id: str,
+    new_total: Union[Decimal, int],
+) -> ChargeOutcome:
+    """Raise an existing hold to ``new_total`` so a tip rides on the same charge.
+
+    This is the whole reason the booking hold no longer carries a tip buffer. We
+    hold exactly the quoted fare, and if the rider tips we ask the issuer for the
+    difference on the SAME PaymentIntent, then capture once — one Stripe fixed
+    fee, one line on the rider's statement, and no money reserved "just in case".
+
+    Only works BEFORE capture. Stripe: "After it's captured, a PaymentIntent can
+    no longer be incremented." A tip that arrives after settlement must be a
+    separate charge — callers must not reach for this to fix that case.
+
+    Eligibility was recorded at authorization time (``rides.auth_incrementable``)
+    from the card's own capability flag, so callers should gate on that rather
+    than calling this speculatively. It is still safe if they don't: an ineligible
+    PI comes back "failed", not an exception.
+
+    ``ChargeOutcome.status``:
+        "authorized"    hold raised; ``charged_amount`` is the new total
+        "declined"      issuer refused the extra amount (e.g. the rider's
+                        available balance moved since booking). The original
+                        hold survives untouched — capture it and charge the tip
+                        separately.
+        "failed"        not incrementable / already captured / Stripe-ops error
+        "unconfigured"  Stripe not installed/configured (dev/test)
+
+    Never raises — callers switch on ``outcome.status``.
+    """
+    if not payment_intent_id:
+        return ChargeOutcome(status="failed", error_message="No authorization PaymentIntent to increment")
+
+    secret = await _resolve_stripe_secret(ride_id)
+    if secret is None:
+        return ChargeOutcome(status="unconfigured", error_message="Payment processing is not configured")
+
+    amount_cents = dollars_to_cents(new_total)
+    try:
+        intent = await asyncio.to_thread(
+            lambda: stripe.PaymentIntent.increment_authorization(
+                payment_intent_id,
+                amount=amount_cents,
+                api_key=secret,
+                # Keyed on the target total: two replicas racing to add the same
+                # tip dedupe, but a genuinely different total (a corrected tip)
+                # gets its own key rather than silently returning the old result.
+                idempotency_key=f"ride-increment-{ride_id}-{amount_cents}",
+            )
+        )
+    except _StripeCardError as e:
+        err = getattr(e, "error", None)
+        decline_code = getattr(err, "decline_code", None) or getattr(err, "code", None)
+        logger.info("Increment declined for ride=%s pi=%s code=%s", ride_id, payment_intent_id, decline_code)
+        return ChargeOutcome(
+            status="declined",
+            payment_intent_id=payment_intent_id,
+            decline_code=decline_code,
+            error_message=str(getattr(err, "message", None) or e),
+        )
+    except _StripeBaseError as e:
+        # Not incrementable, already captured, or a Stripe-ops problem. Info, not
+        # error: the caller's fallback (capture + separate tip charge) is a
+        # designed path, not a failure — it just costs one extra fixed fee.
+        logger.info("Increment unavailable for ride=%s pi=%s: %s", ride_id, payment_intent_id, e)
+        return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id, error_message=str(e))
+    except Exception as e:  # pragma: no cover — defence-in-depth
+        logger.exception("Unexpected error incrementing ride=%s: %s", ride_id, e)
+        return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id, error_message=str(e))
+
+    status = getattr(intent, "status", "") or ""
+    pi_id = getattr(intent, "id", None) or payment_intent_id
+    if status == "requires_capture":
+        return ChargeOutcome(
+            status="authorized",
+            payment_intent_id=pi_id,
+            charged_amount=to_decimal(new_total),
+        )
+
+    logger.error("Unhandled increment PI status=%s for ride=%s pi=%s", status, ride_id, pi_id)
+    return ChargeOutcome(
+        status="failed",
+        payment_intent_id=pi_id,
+        error_message=f"Unhandled increment PaymentIntent status: {status}",
+    )
+
+
 async def capture_ride(
     *,
     ride_id: str,
@@ -756,9 +846,10 @@ async def capture_ride(
     """Capture a previously-authorized hold for ``amount`` (fare + tip).
 
     Captures against the manual-capture PaymentIntent created by
-    ``authorize_ride``. ``amount`` MUST be ≤ the originally authorized hold —
-    Stripe rejects a capture larger than the authorization, which is why a tip
-    beyond the buffer is charged separately rather than folded into this call.
+    ``authorize_ride``. ``amount`` MUST be ≤ the currently authorized hold —
+    Stripe rejects a capture larger than the authorization. To fold a tip in,
+    raise the hold first with ``increment_authorization``; a tip that cannot be
+    covered that way is charged separately rather than folded into this call.
 
     ``ChargeOutcome.status``:
         "captured"      funds captured (terminal success)

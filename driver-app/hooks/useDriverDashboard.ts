@@ -1460,6 +1460,25 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         } else if (status === 403 && errCode === 5006) {
           // Daily Spinr Pass ride allowance used up — resets at local midnight.
           showToast('info', "Daily ride limit reached", reason || "You've used today's Spinr Pass rides. They reset at midnight.");
+        } else if (status === 403 && errCode === 1006) {
+          // ErrorCode.AUTH_ACCOUNT_DISABLED (backend utils/error_handling.py) —
+          // raised by routes/drivers/status.py for both 'suspended' and
+          // 'banned' driver status. This is the authoritative, reliable
+          // detection point: the client-side onboardingStatus === 'suspended'
+          // pre-check earlier in this function is keyed off drivers.is_suspended,
+          // which admin_driver_action never actually sets (it sets
+          // drivers.status instead) — so that pre-check does not reliably
+          // fire for a real admin suspension/ban. This catch block reflects
+          // the real backend rejection, so it does.
+          showToast('error', "Account disabled", reason || "Your account is currently suspended or banned.");
+          showAlert(
+            "Account Disabled",
+            reason || "Your account has been suspended or banned. You can submit an appeal for review.",
+            [
+              { text: "Appeal", onPress: () => router.push('/appeal' as any) },
+              { text: "Cancel", style: "cancel" },
+            ]
+          );
         } else {
           showToast('error', "Cannot Go Online", reason || "Failed to update status. Please try again.");
         }

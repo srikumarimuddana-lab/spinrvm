@@ -19,7 +19,7 @@
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.1.23",
     "@radix-ui/react-slot": "^1.2.4",
-    "@radix-ui/react-toast": "^1.2.4",
+    "@radix-ui/react-toast": "^1.2.23",
     "@sentry/nextjs": "^10.51.0",
     "@spinr/shared": "file:../shared",
     "@vercel/analytics": "^2.0.1",

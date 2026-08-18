@@ -326,6 +326,56 @@ async def admin_review_driver_document(
     if not existing:
         raise HTTPException(status_code=404, detail="Document not found")
 
+    # Derive a requirement name for keyword-based legacy-field mapping.
+    # Service-area uploads store the slug in requirement_key and the human
+    # label in document_type; requirement_id is NULL. Fall back through
+    # those so the license/insurance/inspection/background keywords in
+    # _legacy_expiry_field_for_requirement still match. Computed up-front
+    # (not only inside the propagation block below) so the B14 license-data
+    # gate right after can reuse it too, before anything is written.
+    req_name: Optional[str] = None
+    if status == "approved":
+        existing_req_id = existing.get("requirement_id")
+        if existing_req_id:
+            try:
+                req_row = (lambda _r: _r[0] if _r else None)(
+                    await db_supabase.get_rows("document_requirements", {"id": existing_req_id}, limit=1)
+                )
+                if req_row:
+                    req_name = req_row.get("name")
+            except Exception:
+                logger.error(
+                    "document requirement lookup failed — expiry won't propagate to legacy field",
+                    extra={"req_id": existing_req_id, "doc_id": document_id},
+                    exc_info=True,
+                )
+                req_name = None
+        if not req_name:
+            req_name = existing.get("document_type") or existing.get("requirement_key")
+
+    # ACTION_ITEMS.md B14 gate: a driver's licence document cannot be
+    # approved unless the structured license_number/license_class columns
+    # are already populated on the driver row. Those are optional
+    # self-serve profile fields that were never required at signup or at
+    # this approval step, which is exactly how the 22-driver backfill gap
+    # accumulated silently (see B14). This only blocks the licence-document
+    # requirement itself (the same keyword match
+    # `_legacy_expiry_field_for_requirement` already uses to propagate
+    # licence expiry) — approving any other document type, or a licence
+    # document for a driver who already has both fields on file (the
+    # common case), is unaffected.
+    if status == "approved" and _legacy_expiry_field_for_requirement(req_name) == "license_expiry_date":
+        driver_id_for_gate = existing.get("driver_id")
+        driver_for_gate = await db_supabase.get_driver_by_id(driver_id_for_gate) if driver_id_for_gate else None
+        if not driver_for_gate or not driver_for_gate.get("license_number") or not driver_for_gate.get("license_class"):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Driver's licence number/class must be on file before approval — "
+                    "use the driver-license-backfill queue or edit the driver record first."
+                ),
+            )
+
     # Parse incoming expiry (accept ISO string or None).
     new_expiry_iso: Optional[str] = None
     if expiry_raw:
@@ -372,30 +422,8 @@ async def admin_review_driver_document(
     if status == "approved":
         effective_expiry_iso = new_expiry_iso
 
-        # Derive a requirement name for keyword-based legacy-field mapping.
-        # Service-area uploads store the slug in requirement_key and the human
-        # label in document_type; requirement_id is NULL. Fall back through
-        # those so the license/insurance/inspection/background keywords in
-        # _legacy_expiry_field_for_requirement still match.
-        req_name: Optional[str] = None
-        existing_req_id = existing.get("requirement_id")
-        if existing_req_id:
-            try:
-                req_row = (lambda _r: _r[0] if _r else None)(
-                    await db_supabase.get_rows("document_requirements", {"id": existing_req_id}, limit=1)
-                )
-                if req_row:
-                    req_name = req_row.get("name")
-            except Exception as _req_err:
-                logger.error(
-                    "document requirement lookup failed — expiry won't propagate to legacy field",
-                    extra={"req_id": existing_req_id, "doc_id": document_id},
-                    exc_info=True,
-                )
-                req_name = None
-        if not req_name:
-            req_name = existing.get("document_type") or existing.get("requirement_key")
-
+        # req_name was already derived above (and used by the B14 licence
+        # gate) — reused here rather than re-querying document_requirements.
         legacy_field = _legacy_expiry_field_for_requirement(req_name)
         if legacy_field:
             # If admin did not supply a new expiry, clear the stale legacy

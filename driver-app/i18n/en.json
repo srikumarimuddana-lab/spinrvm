@@ -193,7 +193,10 @@
     "noNotifications": "No notifications",
     "allCaughtUp": "You're all caught up!",
     "markReadError": "Could not update notification",
-    "markReadErrorBody": "Please check your connection and try again."
+    "markReadErrorBody": "Please check your connection and try again.",
+    "loadFailed": "Couldn't load notifications",
+    "loadFailedBody": "Check your connection and try again.",
+    "retry": "Retry"
   },
   "emergencyContacts": {
     "title": "Emergency Contacts",
@@ -320,7 +323,7 @@
     "exportRequestedMsg": "Your data export is on its way — check your email.",
     "exportFailedTitle": "Export Failed",
     "exportFailedMsg": "Failed to request data export. Please try again.",
-    "deleteAccountConfirmMsg": "Your account will be scheduled for deletion with a 30-day recovery window.\n\nYou can reactivate any time within 30 days by signing in again; after that, all your data, earnings history, and ride records are permanently deleted.",
+    "deleteAccountConfirmMsg": "Your account will be locked right away.\n\nYou can reactivate it any time by signing in again, before all your data, earnings history, and ride records are permanently deleted after the 7-year retention period Saskatchewan's Transportation Act requires.",
     "deleteContinue": "Yes, Continue",
     "confirmDeletionTitle": "Confirm Deletion",
     "confirmDeletionMsg": "Type \"DELETE\" below to permanently delete your account.",

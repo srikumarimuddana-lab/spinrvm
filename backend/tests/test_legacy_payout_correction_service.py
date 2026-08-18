@@ -306,8 +306,9 @@ def test_commit_write_plan_inserts_ready_and_hold_rows_with_correct_status():
     assert by_id["id-ready"]["status"] == "ready_for_transfer"
     assert by_id["id-ready"]["payout_type"] == svc.PAYOUT_TYPE
     assert by_id["id-hold"]["status"] == "awaiting_stripe_onboarding"
-    # float only at the serialization boundary; the input Decimal is exact.
-    assert by_id["id-ready"]["amount"] == 10.00
+    # str(Decimal) only at the serialization boundary (payouts.amount is
+    # NUMERIC as of migration 331); the input Decimal is exact.
+    assert by_id["id-ready"]["amount"] == "10.00"
 
 
 def test_commit_write_plan_is_idempotent_on_rerun():

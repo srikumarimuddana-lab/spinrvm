@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, fireEvent } from '@testing-library/react-native';
+import { act, render, fireEvent } from '@testing-library/react-native';
 import { RideOfferPanel, DECLINE_REASON_SERVICE_ANIMAL } from '../../components/panels/RideOfferPanel';
 
 jest.mock('../../components/AlertDialog', () => ({
@@ -79,8 +79,22 @@ describe('RideOfferPanel', () => {
     jest.useFakeTimers();
   });
 
+  // ACTION_ITEMS.md C37: @testing-library/react-native's own afterEach(cleanup)
+  // is registered at import time (top of this file), so it runs -- and
+  // unmounts the tree -- BEFORE this afterEach. Flushing pending timers here
+  // then fires the component's still-pending Animated callback against an
+  // already-unmounted renderer, scheduling a React state update outside any
+  // act() (the "update ... was not wrapped in act(...)" warning). That leaked,
+  // unguarded update isn't fully discharged before this test file's teardown
+  // returns, and can bleed into whichever test file the Jest worker runs next
+  // -- this was root-caused as the cause of the intermittent
+  // ActivityView.test.tsx timeout (same failure class as C31's leaked-renderer
+  // fix, different trigger). Wrapping the flush in act() forces React to
+  // process and fully discharge the update synchronously, right here.
   afterEach(() => {
-    jest.runOnlyPendingTimers();
+    act(() => {
+      jest.runOnlyPendingTimers();
+    });
     jest.useRealTimers();
   });
 

@@ -1,58 +1,43 @@
 /**
- * The Spinr card drawn over the Android Auto map surface.
+ * The Spinr status bar drawn over the Android Auto map surface.
  *
  * Display-only — Android Auto forbids in-surface touch, so this never holds a
  * touchable; all interaction goes through the template's header actions, map
  * buttons, and the ride-offer alert (see register.ts).
  *
- * ─── Why it looks the way it does ────────────────────────────────────────────
- * Google's Car app quality guidelines forbid animated elements on a connected
- * head unit, and Play enforces it at review before a public release. So none of
- * the sense of quality here can come from motion. It has to come from static
- * properties only: hierarchy, type scale, contrast, spacing, restraint.
+ * ─── Why it is a BAR and not a card ──────────────────────────────────────────
+ * It used to be a full-width stacked sheet: status pill, brand logo, hero fare,
+ * avatar row, chips, destination, footer. On a phone that reads well. On a head
+ * unit it does not — those screens are wide and SHORT (the test unit is roughly
+ * 2.6:1), so six stacked rows consumed about 70% of the display and squeezed the
+ * map, the one thing a driver actually needs, into a letterbox strip.
  *
- * The organising decision is that MONEY IS THE HERO. On the offer and completed
- * cards the fare is the largest element on the screen — larger than the rider
- * name, larger than the destination — because it is what the driver is deciding
- * on and what the work is for. Previously it sat at 24px in a footer row,
- * visually equal to an ETA. Everything else is deliberately subordinate.
+ * So: one row, ~10% of the height, full width — which is the axis a wide screen
+ * has to spare. The map keeps its height, which is what you need to see the road
+ * ahead along a route.
  *
- * Colour comes from carTheme.ts, which sources shared/theme's dark palette —
- * the same tokens the phone renders with, so the head unit reads as the same
- * product rather than a companion built by someone else.
+ * What was removed and why:
+ *   - status pill    already rendered top-left by carSurface; it was duplicated
+ *   - Spinr logo     invisible against the dark card, and pure decoration on a
+ *                    surface where every pixel is competing with the map
+ *   - rider avatar   a 42px circle is a lot of height to spend on decoration
+ *   - hero fare      en route, the destination matters more than the number;
+ *                    the fare is still present, just not 46px tall
  *
- * Every size here is floored well above its phone equivalent: this is read at
- * arm's length, in a moving vehicle, in one glance.
+ * WAV and surge survive as chips. WAV is a Saskatchewan accessibility
+ * obligation, and surge changes what the driver is paid — neither is decoration.
+ *
+ * Nothing is shown at all during an offer: the Android Auto alert already
+ * carries rider, fare, bonus, ETA and the Accept/Decline buttons, and drawing
+ * this underneath it produced two overlapping panels with no clear target.
+ * See carSurface.tsx.
  */
 import React from 'react';
-import { Image, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import type { TripCard } from './carCard';
 import { carColors, carSpace, carType } from './carTheme';
 
-const LOGO = require('../../assets/images/spinr-logo.png');
-
-/** Round rider avatar — photo when present, else a coloured initial. */
-function Avatar({
-  photo,
-  name,
-  accent,
-}: {
-  photo: string | null;
-  name: string | null;
-  accent: string;
-}): React.ReactElement {
-  if (photo) {
-    return <Image source={{ uri: photo }} style={styles.avatar} />;
-  }
-  const initial = (name?.trim()?.[0] ?? '?').toUpperCase();
-  return (
-    <View style={[styles.avatar, styles.avatarFallback, { backgroundColor: accent }]}>
-      <Text style={styles.avatarInitial}>{initial}</Text>
-    </View>
-  );
-}
-
-/** A small rounded chip (rating, WAV, surge, bonus). */
+/** A small rounded chip (WAV, surge). */
 function Chip({
   label,
   bg,
@@ -63,8 +48,8 @@ function Chip({
   color?: string;
 }): React.ReactElement {
   return (
-    <View style={[styles.chip, { backgroundColor: bg }]}>
-      <Text style={[styles.chipText, { color }]} numberOfLines={1}>
+    <View style={styles.chip}>
+      <Text style={[styles.chipText, { backgroundColor: bg, color }]} numberOfLines={1}>
         {label}
       </Text>
     </View>
@@ -72,120 +57,58 @@ function Chip({
 }
 
 export function CarTripCard({ card }: { card: TripCard }): React.ReactElement {
-  const showDest = !!card.destinationLabel;
   const meta = [card.etaLabel, card.distanceLabel].filter(Boolean).join(' · ');
-  // The two legs where the driver's attention is on money: deciding whether to
-  // take a ride, and seeing what one paid. En route, the destination matters
-  // more than the fare, so the hero treatment would be misplaced.
-  const moneyIsHero = card.leg === 'offer' || card.leg === 'complete';
+  // The one leg where the number genuinely leads: the trip is over and what it
+  // paid is the whole message. Everywhere else the destination leads.
+  const moneyLeads = card.leg === 'complete';
+  // Caption line doubles as the rider identifier so the name costs no extra row.
+  const caption = [card.destinationCaption, card.riderName].filter(Boolean).join(' · ');
 
   return (
     <View style={styles.wrap} pointerEvents="none">
-      <View style={styles.card}>
+      <View style={styles.bar}>
         {/* Hairline top edge. Reads as elevation without a shadow — cheap to
-            rasterise on a projected surface, and static. */}
+            rasterise on a projected surface, and static (Car app quality
+            guidelines forbid animation on a connected head unit). */}
         <View style={styles.edge} />
 
-        {/* Status pill + brand */}
-        <View style={styles.headerRow}>
-          <View style={[styles.pill, { backgroundColor: card.accent }]}>
-            <Text style={styles.pillText} numberOfLines={1}>
-              {card.statusLabel}
+        <View style={styles.row}>
+          <View style={[styles.dot, { backgroundColor: card.accent }]} />
+
+          <View style={styles.textCol}>
+            {caption.length > 0 && (
+              <View style={styles.captionRow}>
+                <Text style={styles.caption} numberOfLines={1}>
+                  {caption}
+                </Text>
+                {card.wav && <Chip label="WAV" bg={carColors.info} />}
+                {card.surgeLabel && <Chip label={card.surgeLabel} bg={carColors.surge} />}
+              </View>
+            )}
+            <Text style={styles.dest} numberOfLines={1}>
+              {card.destinationLabel ?? card.statusLabel}
             </Text>
           </View>
-          <Image source={LOGO} style={styles.logo} resizeMode="contain" />
-        </View>
 
-        {/* Hero earnings. Micro-label above so the number needs no unit of
-            explanation, then the figure at display size. */}
-        {moneyIsHero && card.fareLabel && (
-          <View style={styles.heroBlock}>
-            <Text style={styles.heroLabel}>
-              {card.leg === 'complete' ? 'YOU EARNED' : 'YOU’LL EARN'}
-            </Text>
-            <View style={styles.heroRow}>
-              <Text style={styles.hero} numberOfLines={1}>
+          <View style={styles.moneyCol}>
+            {card.fareLabel && (
+              <Text style={moneyLeads ? styles.fareLead : styles.fare} numberOfLines={1}>
                 {card.fareLabel}
               </Text>
-              {card.surgeLabel && <Chip label={card.surgeLabel} bg={carColors.surge} />}
-            </View>
-            {card.earningsTodayLabel && (
-              <Text style={styles.earningsToday} numberOfLines={1}>
-                {card.earningsTodayLabel}
-              </Text>
             )}
-          </View>
-        )}
-
-        {/* Rider row — avatar (photo or initial) + name + rating/WAV chips */}
-        {(card.riderName || card.riderRating || card.riderPhoto) && (
-          <View style={styles.row}>
-            <Avatar photo={card.riderPhoto} name={card.riderName} accent={card.accent} />
-            {card.riderName && (
-              <Text style={styles.rider} numberOfLines={1}>
-                {card.riderName}
-              </Text>
-            )}
-            {card.riderRating && (
-              <Chip label={`★ ${card.riderRating}`} bg={carColors.raised} color={carColors.gold} />
-            )}
-            {card.wav && <Chip label="WAV" bg={carColors.info} />}
-            {/* Surge already rides with the hero figure when money leads. */}
-            {!moneyIsHero && card.surgeLabel && <Chip label={card.surgeLabel} bg={carColors.surge} />}
-          </View>
-        )}
-
-        {/* Earnings perks — bonus + active incentive/quest. Gold, because this
-            is the "you made extra" signal and should feel distinct from fare. */}
-        {(card.bonusLabel || card.perkLabel) && (
-          <View style={styles.row}>
-            {card.bonusLabel && <Chip label={card.bonusLabel} bg={carColors.gold} color="#1A1A1A" />}
-            {card.perkLabel && (
-              <Text style={styles.perk} numberOfLines={1}>
-                {card.perkLabel}
-              </Text>
-            )}
-          </View>
-        )}
-
-        {/* Destination row */}
-        {showDest && (
-          <View style={styles.destRow}>
-            <View style={[styles.dot, { backgroundColor: card.accent }]} />
-            <View style={styles.destText}>
-              {card.destinationCaption && (
-                <Text style={styles.caption} numberOfLines={1}>
-                  {card.destinationCaption}
-                </Text>
-              )}
-              <Text style={styles.dest} numberOfLines={1}>
-                {card.destinationLabel}
-              </Text>
-            </View>
-          </View>
-        )}
-
-        {/* En-route footer: fare stays present but subordinate to the destination. */}
-        {!moneyIsHero && (card.fareLabel || meta) && (
-          <View style={styles.footerRow}>
-            {card.fareLabel && <Text style={styles.fare}>{card.fareLabel}</Text>}
             {meta.length > 0 && (
               <Text style={styles.meta} numberOfLines={1}>
                 {meta}
               </Text>
             )}
           </View>
-        )}
-        {/* When money leads, ETA/distance still belong — just quietly. */}
-        {moneyIsHero && meta.length > 0 && (
-          <Text style={styles.meta} numberOfLines={1}>
-            {meta}
-          </Text>
-        )}
+        </View>
 
-        {/* Guidance hint (e.g. phone-only start-trip prompt) */}
+        {/* Guidance hint (e.g. the phone-only PIN prompt at pickup). Its own
+            line only when there is one — at `arrived_at_pickup` it is the most
+            important thing on the screen, and everywhere else it costs nothing. */}
         {card.hint && (
-          <Text style={styles.hint} numberOfLines={2}>
+          <Text style={styles.hint} numberOfLines={1}>
             {card.hint}
           </Text>
         )}
@@ -200,14 +123,22 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    padding: 12,
+    padding: 10,
   },
-  card: {
+  bar: {
     backgroundColor: carColors.cardBg,
     borderRadius: carSpace.cardRadius,
+    // Bordered on ALL sides, not just the top edge. The bar is near-black, and
+    // Android Auto switches the map to a dark style at night — without an
+    // outline it dissolves into its own background exactly when a driver is
+    // most reliant on glanceability.
+    borderWidth: 1,
+    borderColor: carColors.cardEdge,
     paddingHorizontal: carSpace.cardPadX,
-    paddingVertical: carSpace.cardPadY,
-    gap: carSpace.gap,
+    // Tight on purpose. Every vertical pixel here is one the map does not get,
+    // and the map is what the driver is looking at.
+    paddingVertical: 10,
+    gap: 4,
     overflow: 'hidden',
   },
   edge: {
@@ -218,59 +149,32 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: carColors.cardEdge,
   },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  pill: {
-    borderRadius: 999,
-    paddingHorizontal: 13,
-    paddingVertical: 6,
-    maxWidth: '78%',
-  },
-  pillText: { color: carColors.text, fontSize: carType.label, fontWeight: '700', letterSpacing: 0.2 },
-  logo: { width: 60, height: 21, opacity: 0.92 },
-
-  heroBlock: { gap: 2 },
-  heroLabel: {
-    color: carColors.textMuted,
-    fontSize: carType.micro,
-    fontWeight: '700',
-    letterSpacing: 1.1,
-  },
-  heroRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  hero: {
-    color: carColors.text,
-    fontSize: carType.hero,
-    fontWeight: '800',
-    letterSpacing: -1,
-  },
-  earningsToday: { color: carColors.textDim, fontSize: carType.label, fontWeight: '600' },
-
-  row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  avatar: { width: 42, height: 42, borderRadius: 21, backgroundColor: carColors.raised },
-  avatarFallback: { alignItems: 'center', justifyContent: 'center' },
-  avatarInitial: { color: carColors.text, fontSize: 21, fontWeight: '800' },
-  rider: { color: carColors.text, fontSize: carType.title, fontWeight: '700', flexShrink: 1 },
-  perk: { color: carColors.success, fontSize: carType.label, fontWeight: '600', flexShrink: 1 },
-  chip: { borderRadius: 9, paddingHorizontal: 9, paddingVertical: 4 },
-  chipText: { fontSize: carType.micro, fontWeight: '700' },
-
-  destRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  dot: { width: 12, height: 12, borderRadius: 6 },
-  destText: { flexShrink: 1 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  dot: { width: 10, height: 10, borderRadius: 5 },
+  textCol: { flex: 1, gap: 1 },
+  captionRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   caption: {
     color: carColors.textMuted,
     fontSize: carType.micro,
     fontWeight: '700',
     letterSpacing: 0.6,
     textTransform: 'uppercase',
+    flexShrink: 1,
   },
   dest: { color: carColors.text, fontSize: carType.body, fontWeight: '600' },
 
-  footerRow: { flexDirection: 'row', alignItems: 'baseline', gap: 12 },
+  moneyCol: { alignItems: 'flex-end' },
   fare: { color: carColors.text, fontSize: carType.title, fontWeight: '800' },
-  meta: { color: carColors.textDim, fontSize: carType.label, fontWeight: '600' },
-  hint: { color: carColors.gold, fontSize: carType.label, fontWeight: '600' },
+  // Completed trips get one size up — still nothing like the old 46px hero.
+  fareLead: { color: carColors.gold, fontSize: carType.title + 6, fontWeight: '800' },
+  meta: { color: carColors.textDim, fontSize: carType.micro, fontWeight: '600' },
+
+  chip: { borderRadius: 7, overflow: 'hidden' },
+  chipText: {
+    fontSize: carType.micro - 1,
+    fontWeight: '800',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  hint: { color: carColors.gold, fontSize: carType.micro, fontWeight: '700' },
 });

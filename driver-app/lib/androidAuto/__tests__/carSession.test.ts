@@ -97,6 +97,7 @@ jest.mock('react-native', () => ({
   },
 }));
 
+// eslint-disable-next-line import/first -- must follow the jest.mock() calls above
 import { startCarSession, stopCarSession } from '../carSession';
 
 const setAuth = (next: Record<string, unknown>) => {

@@ -193,10 +193,24 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     open**: what `tax_amount` itself should read for those 186 rows is a
     business/legal decision, not resolved by the backfill — needs an owner
     + due date.
+  - **RESOLVED (2026-08-18)**: insurance-period audit-trail gap for the 186
+    legacy-imported rides — **CR #4081**, decision: reconstruct-and-flag,
+    approved by this session's user (confirmed to hold the SGI-facing
+    legal/regulatory authority CLAUDE.md requires for this call). Backfilled
+    182/186 rides via migration `332_backfill_legacy_ride_insurance_periods.sql`
+    (Period 2 + Period 3 rows, each marked `is_reconstructed = true` — a new,
+    structurally-unmissable column, not a notes field). 4/186 rides
+    deliberately excluded and documented in the migration's own header (3
+    with no `driver_id`; 1 with no arrival/start timestamps, only a ~14.8hr
+    created_at→completed_at gap that would require fabricating a Period-3
+    boundary rather than reconstructing one). Known, disclosed limitation
+    inherited from the source data (same as migration 65's own precedent):
+    Period 2 starts from `driver_arrived_at`, not the true (never-captured)
+    `driver_assigned` moment, so the true Period-1→2 boundary is understated
+    for these 182 rows.
   - **STILL OPEN, unchanged**: fresh final old-app export (unblocks the true
     pending-money figure, the full identity map, and the corporate-money
-    unknown); insurance-period audit-trail gap for imported rides (legal/SGI
-    decision — engineering must NOT fabricate period rows); no
+    unknown); no
     final-export/teardown runbook owner/dates (draft exists,
     `docs/runbooks/full-app-audit.md` Part B §3.2); double-dispatch/
     double-payout structural risk (needs an operational roster policy — code
@@ -5885,7 +5899,7 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   PI-less close updates only its own row; every closed dispute has matching
   `financial_events` rows for the debit and the fee.
 
-### B28. `payouts.amount` is a legacy `FLOAT` column — every writer must `float()` a `Decimal` at the DB boundary
+### B28. `payouts.amount` is a legacy `FLOAT` column — every writer must `float()` a `Decimal` at the DB boundary — CLOSED (2026-08-18)
 
 - **Source:** `spinr-money-auditor` review of the 2026-08-17 legacy-payout-
   correction write path (`docs/change-log/2026-08-17-legacy-payout-
@@ -5905,23 +5919,82 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   to `float` at the literal moment of serializing the insert payload, which
   is the correct workaround for a `FLOAT` column, not a shortcut around the
   Decimal rule.
-- **Status:** open, no owner assigned. The actual fix is a migration —
-  `ALTER TABLE payouts ALTER COLUMN amount TYPE NUMERIC(10,2)` — plus
-  auditing every one of the ~6 writers above to drop their `float()` cast
-  once the column itself is exact. Low priority: no observed cent-level
-  drift in production to date (payout amounts are small, few-decimal-place
-  CAD figures well within `float`'s exact-representation range in practice),
-  but it's a standing landmine for a writer that accumulates many small
-  amounts before insert.
-- **Files:** `backend/migrations/` (new `NN_payouts_amount_numeric.sql`),
+- **Status: DONE (2026-08-18).** Migration 331
+  (`ALTER TABLE payouts ALTER COLUMN amount TYPE NUMERIC(10,2) USING
+  amount::numeric(10,2)`), applied against a live table of ~222 rows
+  (sub-second rewrite, verified via direct Supabase query before writing the
+  migration). All three real writers that bypass `db_supabase.insert_one`
+  (`legacy_payout_correction_service.py`, `stripe_payout_sync_service.py`,
+  `booking_import_service.py`) now serialize via `str(Decimal)` instead of
+  `float()`. `routes/drivers/payouts.py` needed no change — confirmed it
+  already goes through `db_supabase.insert_one`/`update_one`, whose
+  `_serialize_for_api` already does `str(Decimal)` on every write, so it
+  never had the bug. The three read-side SQL functions (159/162/303) that
+  already worked around the FLOAT column via `amount::text::numeric` were
+  deliberately left unedited per the append-only migration convention —
+  that cast is a harmless no-op once the column is already NUMERIC.
+  `spinr-migration-reviewer` (SAFE TO APPLY) and `spinr-money-auditor`
+  (SAFE TO MERGE) both reviewed before merge; no blockers from either.
+  New static-source-text regression test
+  (`test_payouts_amount_no_float_cast.py`) pins the fix — verified it
+  actually catches the regression by temporarily reverting one fix and
+  confirming the test fails before restoring it. Full detail:
+  `docs/change-log/2026-08-18-b28-payouts-amount-numeric.md`.
+- **Spun off (money-auditor finding during this review, NOT fixed here —
+  see B29 below):** several other `float()` calls in
+  `booking_import_service.py` (near `rides.base_fare`, `distance_km`,
+  `total_fare`, `tip_amount`, `grand_total`, `tax_amount`,
+  `area_fees_total`, `discount_amount`, `driver_earnings`,
+  `admin_earnings`, `old_payout_gst_amount`) write into `rides` columns that
+  are *already* `NUMERIC`/`DECIMAL` (migrations 46, 82) — the same landmine
+  class this item just fixed for `payouts.amount`, but on a different table,
+  pre-existing, and out of scope for this diff.
+- **Files:** `backend/migrations/331_payouts_amount_numeric.sql`,
   `backend/services/legacy_payout_correction_service.py`,
   `backend/services/stripe_payout_sync_service.py`,
   `backend/services/booking_import_service.py`,
-  `backend/routes/drivers/payouts.py`.
-- **Acceptance:** `payouts.amount` is `NUMERIC(10,2)`; every writer passes a
-  `Decimal`/string, not `float()`, into the insert/update payload; a
-  regression test asserting no writer calls `float()` on a `payouts.amount`
-  value.
+  `backend/tests/test_payouts_amount_no_float_cast.py`.
+- **Acceptance:** `payouts.amount` is `NUMERIC(10,2)` — met; every writer
+  passes a `Decimal`/string, not `float()`, into the insert/update payload —
+  met; a regression test asserting no writer calls `float()` on a
+  `payouts.amount` value — met.
+
+### B29. `booking_import_service.py` calls `float()` on several `rides` columns that are already `NUMERIC`/`DECIMAL` — same landmine class as B28, different table
+
+- **Source:** `spinr-money-auditor`'s review of B28 (2026-08-18) — flagged
+  while confirming B28's own scoping claim that its untouched `float()`
+  calls in `booking_import_service.py` all targeted a jsonb column. That
+  claim was only partially correct: most of the untouched calls
+  (`"amount": float(...)` near `base_fare`, `distance_km`, `total_fare`,
+  `tip_amount`, `grand_total`, `tax_amount`, `area_fees_total`,
+  `discount_amount`, `driver_earnings`, `admin_earnings`,
+  `old_payout_gst_amount`) actually write to **scalar `rides` columns**, not
+  the jsonb `fare_breakdown_snapshot`/`tax_breakdown`/`area_fees_breakdown`
+  fields (only those three are genuinely jsonb). Several of the scalar
+  targets are already `NUMERIC`/`DECIMAL(10,2)` per migration 46
+  (`area_fees_total`, `tax_amount`, `grand_total`) and migration 82
+  (`discount_amount`) — meaning `float()` is applied immediately before a
+  value lands in a real NUMERIC column, reintroducing binary rounding error
+  Postgres would otherwise never see. `rides.driver_earnings` is confirmed
+  genuinely `FLOAT8` (same migration 159/303 comments B28 relied on), so
+  that one at least matches its column type, but still violates the
+  Decimal-only rule in spirit.
+- **Status:** open, no owner assigned, not investigated further than the
+  money-auditor's flag above — needs the same treatment as B28: confirm
+  each target column's actual current type (some may already be safe, some
+  may need the same `float()` → `str()` swap this item's sibling made), and
+  whether any of these particular columns have ever accumulated multiple
+  additions before their final `float()` cast (which is the actual
+  precision-loss trigger — a single value round-tripped through `float()`
+  once is usually fine; the risk is arithmetic *done in float* before the
+  cast, not the cast itself. this needs the same file-by-file read B28 did,
+  not assumed from the finding alone).
+- **Files:** `backend/services/booking_import_service.py`.
+- **Acceptance:** every `rides` column written by `booking_import_service.py`
+  that is `NUMERIC`/`DECIMAL` at the DB level receives a `str(Decimal)` (or
+  equivalent Decimal-exact) value, not `float()`, at the write boundary; a
+  regression test extending `test_payouts_amount_no_float_cast.py`'s pattern
+  (or a new sibling file) to cover the `rides` writes this item closes.
 
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
@@ -6518,9 +6591,18 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   query-failure never raises).
 
 ### C11. Metrics aggregation & alerting not yet implemented — SLA/KPI table still unmeasured
-- [ ] **Status:** open — design accepted (ADR-010, PR #3255, merged 2026-08-02);
-  implementation not started. Tracked as **CR-2026-008**, issue
-  [#3295](https://github.com/srikumarimuddana-lab/spinrvm/issues/3295).
+- [ ] **Status:** open — design accepted (ADR-010, PR #3255, merged
+  2026-08-02, status field corrected to "Accepted" 2026-08-18); **config
+  scaffolding merged** (PR #4055, 2026-08-17 — standalone `metrics-agent/`
+  Fly app running Grafana Alloy, scrape config, dashboard panel, and the
+  first 2 ADR-010 §3 alert rules, all committed as inert/undeployed
+  config). **Not yet live** — nothing scrapes or alerts in production until
+  a human completes the 8 steps `metrics-agent/README.md` lists (Grafana
+  Cloud account, `fly apps create`/`fly deploy` for the new app, 4 Fly
+  secrets, image-digest pin, Grafana rule import, smoke test). Tracked as
+  **CR-2026-008**, issue
+  [#3295](https://github.com/srikumarimuddana-lab/spinrvm/issues/3295)
+  (left open by design — see issue comments 2026-08-17).
 - **What's wrong:** `backend/utils/metrics.py` is per-process only (its own
   docstring says so — no cross-replica aggregation, no exporter sidecar).
   `CLAUDE.md`'s P95 SLA table (dispatch offer→accept < 2s, fare calc < 300ms,
@@ -6534,23 +6616,27 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   Cloud), with a concrete <1-day MVP: one dashboard panel + 2 alert rules
   (dispatch-latency breach, payment-failure-rate breach) wired to the
   existing `ALERT_WEBHOOK_URL` Slack channel `loop_watchdog` already uses.
-- **Why not done yet:** requires infra/vendor provisioning (a Grafana Cloud
-  account, a real Fly deploy) that no dev session/sandbox environment can do
-  — genuinely needs an operator with Fly + Grafana Cloud access, not just
-  code.
-- **Open decision before implementing:** agent placement — colocate the
-  scrape agent in `backend/Dockerfile`/`fly.toml` (touches the recently
-  hardened, digest-pinned, Trivy-scanned runtime image — see C6/CR-2026-002
-  — and could reopen that scan surface) vs. a standalone Fly app scraping
-  over the private network (avoids touching the hardened image, but needs
-  Fly Machines-API-based per-replica discovery glue since Fly's `.internal`
-  DNS load-balances rather than fanning out to all replicas). Full tradeoff
-  in ADR-010 §1 and issue #3295.
-- **Constraints:** implementation needs real source changes
-  (`Dockerfile`/`fly.toml`, or a new small standalone app) and a new
-  dependency (the agent binary) — **not** purely docs/design past this
-  point. Also needs a new Fly production secret (Grafana Cloud remote-write
-  API key).
+- **Why still not live:** the remaining steps are infra/vendor provisioning
+  (a real Grafana Cloud account, a real `fly deploy`, real Fly/Grafana
+  secrets) that no dev session/sandbox environment can do — genuinely needs
+  an operator with Fly + Grafana Cloud access, not more code. PR #4055
+  already carried every statically-verifiable piece (config syntax checks,
+  JSON/YAML/TOML validation, shell lint) as far as a sandboxed session can.
+- **Agent-placement decision: resolved.** Standalone Fly app (Option B) —
+  avoids touching the hardened, digest-pinned, Trivy-scanned backend runtime
+  image (C6/CR-2026-002) at the cost of Fly per-machine DNS discovery glue
+  (`metrics-agent/discover-targets.sh`, resolving `vms.<app>.internal`'s
+  multi-AAAA-record fan-out — no Fly Machines API token needed). Full
+  tradeoff in ADR-010 §1, issue #3295, and `metrics-agent/README.md`.
+- **Constraints:** the merged config still needs, before it does anything in
+  production: (1) a Grafana Cloud account + remote-write API key, (2) `fly
+  apps create`/`fly deploy` for the new `spinr-metrics-agent-yyz` app
+  (doesn't exist on Fly yet), (3) 4 Fly secrets on that new app, (4) the
+  `grafana/alloy` image's real digest pin (currently tag-only —
+  `metrics-agent/Dockerfile` has no registry access to resolve it from a
+  sandboxed session), (5) importing `metrics-agent/grafana/*.{json,yaml}`
+  into the real Grafana Cloud account and pointing its alert contact point
+  at the real `ALERT_WEBHOOK_URL`, (6) a smoke test against real traffic.
 - **Risk if left undone:** none of `CLAUDE.md`'s SLA/KPI numbers are
   verified; a real dispatch-latency or payment-failure regression during
   live app testing would only surface via user complaints/support tickets,
@@ -6559,15 +6645,19 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   payment/auth business logic — but see the Dockerfile/Trivy risk above if
   the colocated-agent option is chosen; otherwise routine additive-deploy
   risk only.
-- **Effort estimate:** ~4–8 hours active engineering time (half a day to a
-  full day) per ADR-010 §5, plus Grafana Cloud account lead time.
+- **Effort estimate:** config/code is done (PR #4055); remaining work is
+  account/deploy steps a human executes directly against Fly + Grafana
+  Cloud — likely under an hour of hands-on time once access exists, plus
+  Grafana Cloud account lead time and a smoke-test observation window.
 - **Verification once implemented:** confirm the Grafana dashboard panel
   populates from real production traffic, confirm the 2 alert rules don't
-  false-fire against normal load, and confirm `docker-image-scan` (Trivy)
-  is still green if the colocated-agent option was chosen.
-- **Files (once implemented):** `backend/fly.toml`, `backend/Dockerfile`
-  (or a new standalone app) + Grafana Cloud config (external, not in this
-  repo).
+  false-fire against normal load. `docker-image-scan` (Trivy) is
+  unaffected either way — Option B (chosen) never touches
+  `backend/Dockerfile`.
+- **Files:** `metrics-agent/` (Fly app, Alloy config, discovery script,
+  Dockerfile, fly.toml — merged, PR #4055) + `metrics-agent/grafana/*`
+  (dashboard panel + alert rules, importable, not yet imported) + Grafana
+  Cloud config (external, not in this repo, not yet created).
 
 ### C12. Codecov uploads on `main` pushes silently fail — no token configured
 - [x] **Status:** CLOSED 2026-08-16 — user explicitly chose "remove the
@@ -7136,6 +7226,30 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   that's already fully pinned — not individually enumerated here; run the
   grep in this entry's own investigation to get the current list.
 
+### C18b. `superfly/flyctl-actions/setup-flyctl@master` — a mutable branch reference C18's sweep missed, repo-wide
+- [x] **Status:** CLOSED (2026-08-18). Found via a GHAS/Semgrep
+  `github-actions-mutable-action-tag` finding on PR #4221's new
+  `deploy-backend-staging.yml` (E1 scaffolding). C18's 2026-08-12 closure
+  claimed all 176 `uses:` references repo-wide were pinned, but this one
+  wasn't caught — 4 files used `superfly/flyctl-actions/setup-flyctl@master`,
+  a literal branch reference (worse than an unpinned version tag, which at
+  least targets a fixed release): `bootstrap-fly.yml`,
+  `bootstrap-metrics-agent.yml`, `deploy-fly.yml`, and (fixed directly in
+  #4221 itself) `deploy-backend-staging.yml`.
+- **Fix:** all 4 pinned to `ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1`
+  (master's tip as of 2026-08-18, resolved via `git ls-remote
+  https://github.com/superfly/flyctl-actions.git refs/heads/master` — the
+  same anonymous read-only proxy channel C18 itself used to resolve verified
+  SHAs). `flyctl-actions` has no tagged releases (confirmed via the same
+  `git ls-remote --tags`, which returns nothing), so the trailing comment
+  names "master" rather than a version, unlike every other C18 pin.
+- **Blast radius:** CI/deploy config only, not a live-tested app surface
+  (rides/dispatch/payments/auth/corporate/safety) — no Change Impact Log
+  entry required per CLAUDE.md's own trigger list. Grepped
+  `.github/workflows/*.yml` for every other `flyctl-actions` reference to
+  confirm these 4 (3 here + the one already fixed in #4221) are the complete
+  set; no other file references this action.
+
 ### C19. `eas update` is still 100% broken on `main` today — a second, different bug downstream of the C17/RNGH fix, in `eas update`'s fingerprint-computation step
 - [x] **Status:** DURABLY CLOSED (2026-08-11, same day, follow-up pass) —
   the actual `yarn.lock` resolution bug is now fixed at the source in both
@@ -7410,8 +7524,8 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       before suppressing — grepped each file for `.current =` and confirmed
       zero reassignment after creation — before adding a narrow
       `eslint-disable-next-line react-hooks/refs` at each read site (not a
-      blanket file/rule-level disable). **2 remaining, deliberately NOT
-      fixed**: `app/driver/(tabs)/index.tsx:696` (a `lastDirectionsFetchRef.current
+      blanket file/rule-level disable). **2 remaining — FIXED 2026-08-18**
+      (see below): `app/driver/(tabs)/index.tsx:696` (a `lastDirectionsFetchRef.current
       = {...}` **write**) and `:701` (a `mapRef.current` read), both inside
       the same `<MapViewDirections onReady={...}>` callback, itself nested
       in an IIFE embedded directly in JSX
@@ -7422,11 +7536,9 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       discrepancy, flag it") — round 1's #3778 fixed exactly 2 write findings,
       both in `ActiveRidePanel.tsx`; this is a third, different write finding
       in a different file that round 1 never touched and this round was
-      scoped not to touch either. Flagging for a future round: the write
-      likely isn't a real render-time mutation (it's inside an async
-      `onReady` completion callback, not the synchronous render pass) but
-      that needs the same kind of verification the other 53 got, not an
-      assumption.
+      scoped not to touch either. **Follow-up verification done, confirmed
+      false positive, fixed with the standard narrow-suppression pattern**
+      — see the dedicated write-up below the Round 2 bullets.
   - **Deliberately deferred, not fixed** (documented reasons, not silent;
     numbers below are post-round-2 for both apps — `react-hooks/refs`
     read-during-render, `purity`, `immutability`, and
@@ -7526,15 +7638,7 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       including the `panResponder.panHandlers` case in `ActiveRidePanel.tsx`)
       — each verified via grep for `.current =` reassignment before
       suppressing, narrow per-site `eslint-disable-next-line`, not a blanket
-      disable. **2 remaining, deliberately NOT fixed**:
-      `app/driver/(tabs)/index.tsx:696` (a ref **write**,
-      `lastDirectionsFetchRef.current = {...}`) and `:701` (a ref **read**,
-      `mapRef.current`), both inside a `<MapViewDirections onReady={...}>`
-      callback nested in an IIFE embedded in JSX — this round was scoped to
-      reads only, and this write is a *third*, different write finding from
-      the 2 round 1 (#3778) already closed in `ActiveRidePanel.tsx`; flagged
-      per this round's task instructions rather than silently re-fixed.
-      Needs the same kind of verification the other 53 got before closing.
+      disable. **2 remaining at the time — FIXED 2026-08-18, see below.**
     - **Side effect worth flagging** (same phenomenon as rider's round 2):
       fixing 10 of the 15 immutability findings surfaced 10 previously
       linter-invisible `react-hooks/set-state-in-effect` findings in the
@@ -7542,6 +7646,31 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       not new behavior. Left untouched (out of scope this round).
     - Full Change Impact Log:
       `docs/change-log/2026-08-12-c20-lint-tier2-driver-app.md`.
+  - **`app/driver/(tabs)/index.tsx:696`/`:701` write+read finding — FIXED
+    2026-08-18** (the "needs the same kind of verification the other 53
+    got before closing" follow-up called for above). Did that verification
+    against the actual `react-native-maps-directions` library source
+    (`node_modules/react-native-maps-directions/src/MapViewDirections.js`)
+    rather than assuming: `onReady` is invoked at line 219, inside the
+    callback argument to `this.setState(...)` (React's setState-with-
+    callback form, guaranteed to run only after the re-render it triggers
+    has committed), itself inside a `Promise.all(...).then(...)` chain
+    kicked off from `fetchAndRenderRoute`, which is only ever called from
+    `componentDidMount`/`componentDidUpdate` — i.e. `onReady` fires from
+    an async network-completion callback strictly after React's commit
+    phase, structurally identical to `onError` (called from the same
+    promise chain's `.catch`, one line below in `index.tsx`, which the
+    linter does **not** flag) — confirming this is the same class of
+    linter false positive as the 53 already-closed sibling findings, not
+    a real render-time mutation. Fixed with the identical narrow-
+    suppression pattern: a justification comment (citing the library
+    source and the `onError` comparison) plus one
+    `eslint-disable-next-line react-hooks/refs` at each of the two sites,
+    not a blanket file/rule disable. **Verification**: `npx eslint
+    "app/driver/(tabs)/index.tsx"` → 0 problems (was 2 errors); full
+    `yarn jest --silent` → 63 suites / 534 tests passing (unchanged count,
+    comment-and-suppression-only diff); `npx tsc --noEmit` → clean.
+    **Files**: `driver-app/app/driver/(tabs)/index.tsx` only.
     - `@typescript-eslint/no-require-imports` remaining (23 rider / 11
       driver) — all in `__tests__/`/`e2e/` files, where a dynamic
       `require()` mid-test-body is the idiomatic way to grab a
@@ -8110,9 +8239,10 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   YAML or application-code defect. No `.github/workflows/*.yml` change is
   implicated.
 
-### C22. `scripts/migrate.py`'s tracking table doesn't match what's actually live on the production Supabase project — the runner may never have successfully recorded a migration against it — PARTIALLY RESOLVED (2026-08-17)
+### C22. `scripts/migrate.py`'s tracking table doesn't match what's actually live on the production Supabase project — the runner may never have successfully recorded a migration against it — PARTIALLY RESOLVED (2026-08-17, follow-up 2026-08-18)
 
-- [ ] **Status:** partially resolved (2026-08-17). `scripts/migrate.py` no
+- [ ] **Status:** partially resolved (2026-08-17, follow-up 2026-08-18).
+  `scripts/migrate.py` no
   longer exists — deleted by A39, which reconciled `run_migrations.py` to
   the correct (migration 24) `schema_migrations` shape and ported
   `migrate.py`'s one useful piece (CONCURRENTLY-safe splitting) first. That
@@ -8173,19 +8303,60 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     redefines `purge_pii_retention()` needs its own
     `migration-override-ok` marker (as every one before 323/324 correctly
     had) — don't forget it.
+  - **2026-08-18 follow-up pass** (both open sub-questions from the prior
+    pass, closed):
+    - **`110_settings_resend_email.sql` — confirmed landed.** Live query
+      (`information_schema.columns`, project `soavhtdhefowwvforzwb`):
+      `settings.resend_api_key` and `settings.resend_from_email` both
+      exist. Also tracked in `schema_migrations`
+      (`applied_by='backfill-verified'`, 2026-08-14) — a bookkeeping gap
+      that's since been backfilled, not a real application gap. (Side
+      note, not itself a problem: three unrelated migration files all
+      share the numeric prefix `110` —
+      `110_drivers_device_attestation.sql`,
+      `110_settings_resend_email.sql`,
+      `110_wallet_pay_for_ride_tip_atomic.sql` — pre-dates C36's hard-fail
+      collision check and is handled the same way as the documented
+      319/321/327 dupes: full-filename keying, not touched.)
+    - **Other `SECURITY DEFINER` functions/background loops audited for
+      the same bug class — none found.** Cross-referenced the 37
+      background loops in `core/lifespan.py` against their source files
+      for actual `.rpc(...)` calls (a plain Python/PostgREST table query
+      would fail loudly and immediately on a missing column — only a
+      `plpgsql`/`sql`-language function body can hide a bad column
+      reference until executed, exactly how `purge_pii_retention()`'s
+      bug went unnoticed). Found 4 other loop→RPC pairs (excluding
+      `purge_pii_retention` itself, already fixed):
+      `surge_engine.py`→`drivers_available_in_polygon` (flag-gated OFF by
+      default, `SURGE_SPATIAL_COUNT`), `driver_onboarding_reminders.py`→
+      `driver_onboarding_reminder_counts`, `ledger_projection.py`→
+      `financial_events_missing_legs`, `retention_guard_monitor.py`→
+      `check_disabled_guard_triggers` (pure `pg_catalog` introspection,
+      structurally immune to this bug class — no application table
+      referenced at all). Read each function's SQL body from its defining
+      migration, cross-checked every referenced `table.column` against
+      live `information_schema.columns` (all present), then actually
+      **executed** all four (all `STABLE`/read-only, safe) against the
+      live project rather than stopping at a column-existence check —
+      all four ran end-to-end with no SQL error.
+      `financial_events_missing_legs(5)` returned one genuine pending row
+      (real backlog for `ledger_projection_loop`'s next 15-min tick, not
+      an error). **Conclusion: no instance of this bug class exists
+      beyond the two already fixed in `purge_pii_retention()`
+      (migrations 323/324).**
   - **Still open**: the broader `schema_migrations` reconciliation (161/407
-    tracked) itself — this session only individually verified and applied
-    321/323/324, exactly the narrow, high-confidence action the original
+    tracked) itself — this session (and the 2026-08-18 follow-up above)
+    only individually verified and applied 321/323/324 plus the two
+    checks above, exactly the narrow, high-confidence action the original
     finding called for ("manually audit at least the highest-risk ones...
     don't blind-apply ~280 migrations' worth of accumulated drift in one
     shot"). The full reconciliation remains a substantial, separate,
-    higher-stakes audit, same as originally scoped. Also still unverified:
-    whether `110_settings_resend_email.sql` (the original 2026-08-13
-    finding that started this item) has since landed — not re-checked in
-    this session's narrower pass. Also flagged as a natural follow-up:
-    whether any other `SECURITY DEFINER` function or background loop in
-    this codebase has the same "table pre-existed under a different column
-    name" bug class — not investigated beyond `purge_pii_retention()`.
+    higher-stakes audit, same as originally scoped — not attempted here;
+    doing it for real means either (a) fixing `run_migrations.py`'s own
+    dry-run path to talk to the live table and diffing its output against
+    the 407 repo files, or (b) a manual file-by-file live-schema
+    cross-check same as this session's targeted checks, at ~2.5x this
+    session's scope. Neither started.
 - [ ] **Original status (2026-08-13, superseded above but kept for
   history):** open — found while investigating why the
   corporate-portal OTP email send has been failing since it shipped (see
@@ -8240,8 +8411,47 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   ~280 migrations' worth of accumulated drift in one shot.
 - **Files:** `backend/scripts/migrate.py`, `backend/migrations/00_schema_migrations_table.sql`, `backend/migrations/24_schema_migrations.sql`.
 
-### C13. `tsc --noEmit` false-positives across all three frontend surfaces (pre-existing, not caused by any recent PR)
-- [ ] **Status:** open — found 2026-08-03 while verifying PR #3382 (full-suite
+### C13. `tsc --noEmit` false-positives across all three frontend surfaces (pre-existing, not caused by any recent PR) [duplicate item number — see the other C13 above at "Required `pull_request`-triggered workflows silently never fire"; kept as-is rather than renumbered to avoid breaking either item's cross-references]
+- [x] **Status:** CLOSED — already fixed by a different session/PR before
+  this one got to it (found 2026-08-18 while dispatching a fix agent for
+  this item in parallel with C26; the agent's own investigation found
+  both root causes below already resolved in the current `tsconfig.json`
+  files, with zero diff needed). Re-verified independently in this
+  session, not just trusted the agent's report:
+  `npx tsc --noEmit` run directly in all three surfaces — **0 errors in
+  rider-app, driver-app, and admin-dashboard.**
+- **What's actually fixing it now**, confirmed present in the current
+  files:
+  1. `rider-app/tsconfig.json` and `driver-app/tsconfig.json` both carry
+     an explicit `compilerOptions.paths` entry —
+     `"expo-router": ["./node_modules/expo-router"]` — which resolves
+     `expo-router/react-navigation`'s type declarations for `tsc`.
+  2. `admin-dashboard/tsconfig.json` carries
+     `"types": ["vitest/globals", "@testing-library/jest-dom"]`, which
+     registers both ambient global types for a standalone `tsc` run.
+  The fix agent confirmed these aren't false negatives (stale
+  `tsconfig.tsbuildinfo`, skipped files) by deleting the buildinfo cache
+  and rerunning (still 0), confirming via `tsc --listFiles` that the
+  specific files originally reported as erroring are actually in the
+  compiled set, and temporarily reverting each fix one at a time to
+  confirm the original error counts (3, 4, 61) reappear and disappear
+  again on restore.
+- **No regressions**: `npx jest ...` for the two specifically-named
+  previously-failing suites (`useBottomSheetGuard.test.tsx`,
+  `ActivityView.test.tsx`) both load and pass; full suites: rider-app
+  526/527 (1 pre-existing unrelated flaky timeout in
+  `verifyEmailScreen.test.tsx` under full-suite parallel load — already
+  a known, separately-tracked flake, not caused by or related to this
+  item), driver-app 534/534, admin-dashboard (vitest) 327/327.
+- **Not identified**: which PR/session actually landed this fix, or
+  when — it predates this session's own restarted branch (based on
+  latest `main` as of 2026-08-18), so somewhere between 2026-08-03 (when
+  this item was filed) and now. Not chased down further since the item
+  is resolved either way; if it matters later, `git log -p --
+  rider-app/tsconfig.json driver-app/tsconfig.json
+  admin-dashboard/tsconfig.json` on `main` would find it.
+- [historical, pre-fix diagnosis below, kept for record]
+- ~~[ ] **Status:** open~~ — found 2026-08-03 while verifying PR #3382 (full-suite
   pass at that time: backend pytest 8742 passed/0 failed, rider-app jest
   434/434, driver-app jest 337/337, admin-dashboard vitest 157/157 — all
   green). Running a bare `npx tsc --noEmit` per surface afterward surfaced
@@ -8309,9 +8519,12 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 
 ### C23. Chargeback operations: no deadline tracking, no admin visibility, no evidence tooling
 
-- [ ] **Status:** open (filed 2026-08-14 alongside
+- [x] **Status:** CLOSED (2026-08-18) — all 5 action items done (the one
+  carved-out exception, a Sentry-dashboard alert rule under item 2, is
+  ops config outside engineering-session reach, noted where it appears
+  below). Filed 2026-08-14 alongside
   `docs/runbooks/payment-dispute-evidence.md`, which documents the manual
-  workaround for all three). **Action item 1 of 5 DONE (2026-08-17)**:
+  workaround this entire item replaced. **Action item 1 of 5 DONE (2026-08-17)**:
   migration 326 adds `evidence_due_by`/`evidence_submitted_at`/`fee_cents`
   to `stripe_disputes` (additive, nullable); `charge.dispute.created` now
   parses Stripe's `evidence_details.due_by` and stores it, with a logged
@@ -8384,12 +8597,29 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   idempotency claim on `evidence_submitted_at` was taken *after* the live
   Stripe call rather than before — fixed so a lost claim race 409s before
   any Stripe call happens, with rollback on Stripe failure so a genuine
-  retry isn't permanently blocked. **Not done**: the admin-dashboard UI
-  wiring (a "Download evidence pack" button and a "Submit to Stripe"
-  confirmation flow on the Chargebacks tab) is deferred until PR #4165
-  (item 3) merges, since the tab component it would extend doesn't exist on
-  `main` yet. Full detail:
+  retry isn't permanently blocked. Full detail:
   `docs/change-log/2026-08-18-c23-dispute-evidence-pack-and-submission.md`.
+  **Frontend UI wiring DONE (2026-08-18)**: a "Download evidence pack"
+  icon button (any admin who can see the tab) and a super_admin-only
+  "Submit to Stripe" icon button (with a confirmation dialog leading with
+  "This immediately submits evidence to Stripe and cannot be undone.", an
+  optional cover-letter-text override, and a visible "Submitted" badge
+  once `evidence_submitted_at` is set) were added to the Chargebacks tab.
+  `spinr-design-consistency-reviewer` found no blockers; two warnings
+  (irreversibility warning buried mid-paragraph, submitted-state relying
+  only on a hover tooltip) both fixed. **C23 is now fully closed — all 5
+  action items done.** Full detail:
+  `docs/change-log/2026-08-18-c23-dispute-pack-ui-wiring.md`.
+  **Accessibility follow-up DONE (2026-08-18)**: the deferred
+  `spinr-accessibility-reviewer` pass on the Chargebacks tab found two real
+  blockers — the fetch-failure and download-failure banners had no
+  `role="alert"`, so a screen-reader user with focus elsewhere would never
+  be told either appeared. Fixed. Three lower-severity WARNING items
+  (a speculative dialog-focus-return race on successful submit, no
+  `DialogDescription` on the confirmation dialog, disabled-download-button
+  reason not announced) remain genuinely unverified — need a manual
+  screen-reader/keyboard pass, not silently assumed clean. Full detail:
+  `docs/change-log/2026-08-18-c23-chargebacks-tab-a11y-alert-fix.md`.
 - **Issue/gap:** the webhook records a chargeback and then nothing else
   happens. Specifically:
   1. **No `evidence_due_by`.** Stripe puts
@@ -9909,6 +10139,21 @@ how much they de-risk a public launch._
   (Fly + Railway) with no intermediate environment. Stand up a staging Fly app +
   throwaway Supabase project with synthetic data; point a `staging` branch or
   manual workflow at it. Prereq for E2, E4, and safe migration rehearsal.
+  **Scaffolding added 2026-08-18** (inert, no real infra provisioned):
+  `backend/fly.staging.toml` (placeholder app `spinr-backend-staging`, scaled
+  down vs. prod — 1 machine, scale-to-zero, 512mb), a new
+  `.github/workflows/deploy-backend-staging.yml` triggered only on a
+  `staging` branch push or manual `workflow_dispatch` (never `main`, never
+  reads a production secret name), and
+  `docs/runbooks/staging-environment.md` documenting the one-time manual
+  setup. **Still blocked** on a human with real access completing three
+  things the scaffolding cannot do itself: (1) `fly apps create
+  spinr-backend-staging`, (2) creating a throwaway Supabase project in
+  `ca-central-1` per the PIPEDA data-residency rule and seeding it with
+  synthetic data only, (3) registering `FLY_API_TOKEN_STAGING`,
+  `SUPABASE_STAGING_URL`, `SUPABASE_STAGING_SERVICE_ROLE_KEY` as new GitHub
+  secrets. Until then the new workflow fails fast at its "Verify required
+  secrets" step on every run — by design, and harmlessly.
 - [ ] **E2. Marketplace load/simulation testing** — harness BUILT on branch
   `claude/eager-franklin-69ta0w` (`loadtest/locustfile.py` + runbook with
   breaking-point register): rider+driver bots, real dispatch matchmaking, WS
@@ -9937,7 +10182,18 @@ how much they de-risk a public launch._
   platform; a total outage is currently discovered by users. Add an external
   monitor (Checkly/UptimeRobot/Grafana synthetic) hitting `/health`, auth, and
   fare-estimate every minute from outside, alerting to PagerDuty. Tie alert
-  thresholds to the CLAUDE.md SLA table (SLO + error budget).
+  thresholds to the CLAUDE.md SLA table (SLO + error budget). **Scaffolding
+  landed 2026-08-18** (docs/spec only, vendor-agnostic, no real account or
+  external probe created): `docs/runbooks/synthetic-monitoring.md` specifies
+  the three probes (`GET /health`, `POST /api/v1/auth/refresh` expecting 401,
+  `GET /api/v1/fares?lat=...&lng=...`), their down/degraded semantics, and the
+  exact SLA thresholds cited from CLAUDE.md's Performance SLAs / KPI Targets
+  tables (fare estimate P95 < 300 ms, auth refresh P95 < 200 ms);
+  `monitoring/synthetic-checks.yaml` is the declarative check spec a human
+  translates into whichever vendor config is chosen. Still needed before this
+  is real monitoring: a human picks a vendor, creates the account, wires the
+  actual checks, and creates a real PagerDuty service (the integration key in
+  the YAML is a placeholder string, never a real credential).
 - [x] **E5. Kill switches / feature flags** — CLOSED (2026-08-11). Correction
   found while scoping this: the "no documented kill switches" premise was only
   3/4 true — `scheduled_dispatch_enabled` already existed and gated
@@ -9991,10 +10247,46 @@ how much they de-risk a public launch._
   nothing exercises the running app (OWASP ZAP baseline scan against staging on a
   schedule), and a payments+PII platform should have one external penetration
   test before public launch. Budget item; book it.
+  (2026-08-18): scaffolding added, item stays open —
+  `.github/workflows/dast-zap-baseline.yml` (OWASP ZAP baseline scan via
+  `zaproxy/action-baseline`, SHA-pinned per C18) and
+  `docs/runbooks/dast-and-pentest.md`. Manual (`workflow_dispatch`) + weekly
+  schedule only, never a PR gate. Stays inert — first step detects a missing
+  `STAGING_URL` and no-ops with exit 0 — until E1 (staging environment) lands
+  and `STAGING_URL` is configured; that's the remaining blocker for the DAST
+  half. The third-party pentest half remains a pure human/procurement action
+  (booking a firm, budget approval) — no workflow attempts it. See
+  `docs/change-log/2026-08-18-e6-dast-scaffolding.md`.
 - [ ] **E7. Backup-restore drill** — `docs/runbooks/pitr-restore.md` exists but
   (like the failover runbook) has never been exercised. Restore a Supabase PITR
   snapshot into a scratch project, verify row counts + a sample ride lifecycle,
   record actual RTO in the runbook. A backup is only real after a restore.
+  **2026-08-18: scaffolding done, drill itself still not run.** Added
+  `backend/scripts/verify_restore.py` — a standalone, read-only, opt-in tool a
+  human runs against a restored branch's connection string. It reports row
+  counts for `users`/`drivers`/`rides`/`payouts`/`stripe_disputes`/
+  `driver_insurance_periods`/`financial_events` (checked against
+  `backend/migrations/`, not guessed), walks one sample `status='completed'`
+  ride's full lifecycle (ride row → `driver_insurance_periods` →
+  `financial_events`), prints elapsed wall-clock time (feeds the RTO
+  measurement), and exits non-zero on any check failure. It requires
+  `--database-url` or `RESTORE_BRANCH_DATABASE_URL` explicitly — never reads a
+  bare `DATABASE_URL` — and refuses to run if the resolved URL matches this
+  shell's `DATABASE_URL` (the production-URL guard). Covered by
+  `backend/tests/test_verify_restore_script.py` (21 tests: guard
+  true/false/env-var/trailing-slash paths, row-count pass/empty/query-error,
+  ride-lifecycle found/missing/wrong-status/missing-related-rows). Reviewed
+  by `spinr-money-auditor` (no Decimal violations found; delta_cents is
+  correctly treated as an integer, not summed). `docs/runbooks/pitr-restore.md`'s
+  "Verify branch data" step and Quarterly DR Drill section now name this
+  script instead of the old vague "Run validation query" bullet.
+  **Still blocked / not done in this session:** the actual drill — creating a
+  scratch Supabase project, triggering a real PITR branch restore, running
+  this script against it for real, and recording the actual measured RTO in
+  the runbook — requires a human with Supabase org/billing access. This
+  session deliberately did not create any real scratch Supabase project or
+  touch production data; `verify_restore.py` has been exercised only against
+  a mocked connection in tests, never against a real restored branch.
 - [ ] **E8. CODEOWNERS + review routing** — partially done. Added
   `.github/CODEOWNERS` routing payments/corporate/wallet/surge, migrations,
   auth/security-sensitive files, dispatch, and safety paths to distinct
@@ -10083,13 +10375,18 @@ how much they de-risk a public launch._
 
 - [ ] **Status:** open, accepted risk — not a bug to fix, a standing gate
   exception to re-check periodically. Filed via `[CR]` #3718
-  (`.github/ISSUE_TEMPLATE/ci_change_request.yml`), CR-2026-008. This item
-  is the ACTION_ITEMS.md record the CR itself calls for (issue step 3(b))
-  since Yarn Classic (v1) has no built-in per-advisory allowlist for `yarn
-  audit` — there is no `--exclude`/`--ignore <advisory-id>` flag, so the
-  only documented-acceptance path available is recording it here rather
-  than either silently leaving `G4b` red-and-unexplained or weakening the
-  gate itself.
+  (`.github/ISSUE_TEMPLATE/ci_change_request.yml`), CR-2026-008 —
+  **approved and formally closed 2026-08-17** via the implementing PR
+  #4049 (`docs: accept risk for unpatchable image-size advisories`,
+  merged). This item is the ACTION_ITEMS.md record the CR itself calls
+  for (issue step 3(b)) since Yarn Classic (v1) has no built-in
+  per-advisory allowlist for `yarn audit` — there is no
+  `--exclude`/`--ignore <advisory-id>` flag, so the only
+  documented-acceptance path available is recording it here rather than
+  either silently leaving `G4b` red-and-unexplained or weakening the gate
+  itself. Stays open/unchecked here on purpose — this is a living risk
+  entry, not a task to mark done; it only gets checked off if a real
+  upstream patch ships and the dependency is bumped.
 - **What's accepted:** two HIGH-severity `image-size` advisories —
   1138808 (ICNS parser infinite-loop DoS) and 1138809 (JXL/HEIF parser
   infinite-loop DoS) — in both `rider-app/` and `driver-app/`, pulled in
@@ -10121,17 +10418,42 @@ how much they de-risk a public launch._
   advisories on `image-size` and nothing else has regressed alongside
   them (both apps: `{module_name: image-size, ids: [1138808, 1138809]}`,
   no other packages present at HIGH+ severity).
+- **Re-verified again 2026-08-18** against `origin/main` (post-#4102
+  merge): `npm view image-size versions` still tops out at `2.0.2` — no
+  new release since the last check. `yarn audit --level high --json` in
+  both apps still reports exactly the same two advisory IDs
+  (`vulnerable_versions: <=2.0.2`, `patched_versions: <0.0.0`
+  unchanged — GitHub's advisory record itself hasn't been updated with a
+  fix either). Additionally checked what's actually on disk, not just
+  the advisory's claimed range: `yarn why image-size` in both apps
+  resolves to the *installed* `image-size@1.2.1` (hoisted via
+  `expo > @expo/cli > @expo/metro > metro`), not `2.0.2` — `yarn.lock`
+  only ever pins `image-size@^1.0.2` → `1.2.1`, confirmed via
+  `grep -A3 "^image-size" yarn.lock`. Verified the affected parser code
+  (`icns.js`, `heif.js`, `jxl.js`) exists in this 1.2.1 build (the
+  advisory's broad `<=2.0.2` range is not a stale/inflated artifact —
+  the vulnerable code path is genuinely present in the version actually
+  shipped), so the accepted-risk reasoning below applies unchanged
+  regardless of which sub-version within the advisory's range is
+  installed.
 - **Gate left as-is, on purpose:** `security-gates.yml`'s `G4b` step keeps
   `continue-on-error: false` — this CR is accept-and-document, not
   weaken-the-gate. `G4b` will stay red for `rider-app`/`driver-app` until
   upstream ships a fix; that red is now expected and explained, not a
   silent failure.
-- **Re-check cadence:** a session-level Claude routine already does a
-  weekly check on issue #3718 itself (the `[CR]` issue tracking this
-  acceptance) — that routine is the re-check mechanism for this item, not
-  a duplicate one. When `image-size` (or `metro`'s pin of it) ships a
-  patched version, close out both #3718 and this item together, bump the
-  dependency, and confirm `G4b` goes green on both apps.
+- **Re-check cadence:** the weekly Routine that checked issue #3718
+  (`trig_01Eqxfe3uCFWfubz1bUgRzQu`) deleted itself 2026-08-18 per its own
+  built-in resolution-check step, now that #3718 is formally closed
+  (approved via PR #4049) — its job was to watch for either a human
+  decision on the CR or an upstream patch, and the CR side is now
+  resolved. **No automated re-check remains for the upstream-patch side**
+  — the next re-verification of "has `image-size` shipped a fix yet" is
+  manual/on-demand (as this 2026-08-18 pass was) until someone sets up a
+  replacement routine or it's caught during a routine dependency-bump
+  pass. When `image-size` (or `metro`'s pin of it) ships a patched
+  version, bump the dependency and confirm `G4b` goes green on both
+  apps — at that point this item's checkbox above should finally be
+  ticked.
 
 ### C31. `privacySettingsToggles.test.tsx` leaked an unflushed/unmounted renderer, causing an intermittent `rider-app-test` full-suite failure in an unrelated file
 
@@ -10203,9 +10525,49 @@ how much they de-risk a public launch._
 
 ### C26. `pip-compile drift check` fails on any PR that touches `backend/requirements.in` — `requirements.txt` has drifted far out of sync with a fresh resolve, unrelated to the touching PR's actual diff
 
-- [ ] **Status:** open, not yet a `[CR]` issue — flagged here per the
-  "CI check red for a reason unrelated to your diff" rule rather than
-  left unexplained.
+- [x] **Status:** CLOSED (2026-08-18) — regenerated `backend/requirements.txt`.
+  First attempt (agent-run, from the repo root) actually left PR #4211's
+  own `requirements.txt up to date` CI job still failing — the drift
+  check runs `pip-compile` with the working directory set to `backend/`,
+  so `-r requirements.in` is what lands in the `# via` annotation
+  comments; running the same command from the repo root instead
+  (`pip-compile backend/requirements.in ...`) produces `-r
+  backend/requirements.in` in those comments, a cosmetic but real diff
+  CI's byte-for-byte comparison correctly flagged. Caught by actually
+  watching this PR's own CI (not just trusting a clean local run) and
+  reading the job's raw diff output, which pointed straight at the
+  `-r backend/requirements.in` vs `-r requirements.in` mismatch.
+  Re-ran `pip-compile requirements.in --output-file requirements.txt
+  --strip-extras --no-header --annotation-style line --no-upgrade` from
+  *inside* `backend/`, matching CI's actual working directory
+  (pip-tools 7.6.1).
+- **Correction to the original diagnosis below**: the "dozens of unpinned
+  transitive deps" read on PR #4085's CI diff was a misread of the raw
+  line-count diff, not the actual drift. Normalizing both the old and
+  regenerated files down to plain `package==version` pairs and diffing
+  those showed **zero differences** — all 149 resolved pins were already
+  correct. The actual drift was purely annotation-style: the checked-in
+  file used pip-tools' default multi-line `# via` comments with extras
+  kept in brackets (e.g. `httpx[http2]==0.28.1`); a fresh compile with
+  this repo's own `--strip-extras --annotation-style line` flags
+  produces single-line `package==version  # via ...` output instead — a
+  524-line-removed/149-line-added diff that *looked* like missing pins
+  but wasn't. No pinned package's resolved version actually changed.
+- **Verification**: installed the regenerated lockfile into a fresh venv
+  (`pip install -r backend/requirements.txt`, clean exit) and ran
+  `pytest -m unit backend/tests` — **2831 passed, 2 failed, 1 skipped**.
+  Both failures are pre-existing and unrelated (confirmed by the
+  byte-identical resolved-pin diff above, so no library version changed):
+  `test_dual_import_parity.py::test_fallback_import_branches_mirror_try_branches`
+  (a real latent bug in `routes/lost_and_found.py`'s except-ImportError
+  branch missing a `DuplicateRecordError` binding the try-branch has —
+  worth its own ACTION_ITEMS entry, not filed here to keep this item
+  scoped) and a mock-assertion mismatch in
+  `test_scheduled_rides_coverage.py::test_lock_not_acquired_still_proceeds_to_fetch`.
+- **Not run**: the full test suite (integration/E2E tiers need live
+  Supabase/Redis, unavailable in the sandbox) — `pytest -m unit` is this
+  repo's own documented fast-local-loop subset (CLAUDE.md Testing
+  Conventions), covering 2831 tests.
 - **Where surfaced:** PR #4085 (A39's `migrate.py` reconciliation), whose
   only change to `backend/requirements.in` was a one-line comment fix
   (`migrate.py` → `run_migrations.py`, no dependency added/removed/
@@ -10239,62 +10601,178 @@ how much they de-risk a public launch._
 
 ### C27. `ci-error-audit.yml` has created 2,483 open issues since 2026-04-28 — no cross-run dedup, no auto-close
 
-- [ ] **Status:** open. Filed via `[CR]` #4112
-  (`.github/ISSUE_TEMPLATE/ci_change_request.yml`), CR-2026-(assign). Found
-  2026-08-17 while auditing the repo's CR backlog for unclosed-but-resolved
-  items (the search that also found and closed #3764/#3765).
-- **Measured, not estimated:** 2,483 of the repo's 2,509 total open issues
-  (~99%) carry the `ci-audit` label. Oldest is **#143, created
-  2026-04-28** — continuous unbroken accumulation since the system
-  shipped, ~22/day sustained.
-- **Root cause**: `scripts/ci-audit/create_github_issue.py`'s own
-  docstring states its actual dedup scope — *"De-duplicates: if an open
-  issue for the same run already exists, updates it"* — keyed on **run
-  ID**, not error signature. The same recurring failure across different
-  runs opens a fresh issue every time. No companion workflow anywhere in
-  `.github/workflows/` closes these when the underlying job later goes
-  green — grepped, confirmed absent.
-- **Concrete harm observed this session**: a plain issue-title search for
-  other open `[CR]`s returned unusable noise — GitHub's semantic search
-  matched "CR" against "CI" and surfaced a page of `[CI Audit]` issues
-  instead. Same "signal drowns in noise, trains people to stop looking"
-  failure shape as C7/C8/C9 (a permanently-red or silently-broken
-  automation becomes the expected state, so nobody notices when something
-  in it actually matters).
-- **Not fixed here** — this is a decision-needing CR (approval gate,
-  `.github/ISSUE_TEMPLATE/ci_change_request.yml`), not implemented
-  unilaterally. See #4112 for the proposed fingerprint-based dedup fix,
-  the separate (larger) question of one-time backlog cleanup, and the
-  auto-close design tradeoffs.
+- [x] **Status:** CLOSED — fixed via `[CR]` #4112, approved and merged as
+  PR #4130 (`fix(ci-audit): cross-run fingerprint dedup for
+  ci-error-audit issue creation`, 2026-08-18). This entry was still
+  showing `[ ]` open on `main` because the fix landed from a different
+  session/PR than the one that filed it — caught 2026-08-18 while
+  scanning for the next open CR to pick up, before duplicating the work.
+- **What shipped**: `scripts/ci-audit/create_github_issue.py` now
+  fingerprints on `(workflow name, sorted failing job names, classified
+  error category+description from `error_classifier.py`)` — explicitly
+  not run ID and not raw log text — and embeds it as a hidden
+  HTML-comment marker in the issue body. Before creating a new issue, an
+  open `ci-audit`-labeled issue with a matching marker is searched for
+  first; on a match, a comment is added to the existing issue instead of
+  opening a duplicate. 4 new tests in
+  `scripts/ci-audit/test_create_github_issue.py`.
+- **Explicitly deferred, per the CR's own scoping** (not gaps in this
+  fix): auto-closing resolved issues, and one-time cleanup of the
+  existing ~2,483-issue backlog — both flagged in #4112 as separate
+  decisions needing their own sign-off, not attempted in PR #4130.
 
 ### C36. Migration numeric-prefix collision check is warning-only and per-PR-scoped — a cross-PR race can (and did) land two migrations with the same number on `main`
 
-- [ ] **Status:** open. Filed via `[CR]` #4187
-  (`.github/ISSUE_TEMPLATE/ci_change_request.yml`), CR-2026-(assign). Found
-  2026-08-18 while re-checking PR #4133's migration-numbering neighborhood
-  at the user's request.
-- **What was found**: `main` now carries two different migrations both
-  prefixed `327` — `327_merge_duplicate_onboarding_faqs.sql` (PR #4126)
-  and `327_stripe_disputes_evidence_reminder_claim_flag.sql` (PR #4129).
-  Neither PR is from this session; neither saw the other's file because
-  each PR's `migration-check.yml` run only diffs against its own
-  merge-base snapshot of `main`.
-- **Root cause**: `migration-check.yml`'s `CHECK B` (sequence gap /
-  collision) only ever appends to `warnings`, never `errors` — a numeric
-  collision cannot block a merge today, contradicting this file's own
-  earlier claim ("a CI prefix-uniqueness check blocks them"). Confirmed
-  by reading the check's source directly.
-- **This session hit the same race twice, live**: PR #4133 had to be
-  renumbered 323→328 mid-session after discovering a pre-existing
-  collision with `323_purge_pii_retention_step_d_ride_messages_column_fix.sql`;
-  PR #4134's migration was renumbered again 327→329 after `main` picked up
-  the *first* of the two 327s above while #4134's branch was in flight.
-  Both catches were manual (re-checking fresh `main`), not CI-driven.
-- **Not fixed here** — proposed fix (make true collisions a hard failure,
-  keep sequence gaps as warnings) is a decision-needing CR, not
-  implemented unilaterally. See #4187 for the full proposal, including a
-  documented-but-deferred option (b): a post-merge check to catch the
-  narrower true-race window a per-PR check structurally cannot.
+- [x] **Status:** CLOSED — fixed via `[CR]` #4187, approved and merged as
+  PR #4192 (`fix(ci): make migration prefix collision a hard CI failure`,
+  2026-08-18). Same as C27 above — this entry was still showing `[ ]`
+  open on `main` because the fix landed from a different session/PR;
+  caught 2026-08-18 while scanning for the next open CR, before
+  duplicating the work.
+- **What shipped**: `migration-check.yml`'s `CHECK B` collision branch
+  now appends to `errors` (hard failure) instead of `warnings` when a
+  new file's numeric prefix collides with or precedes a number already
+  on the PR's merge-base — blocks the merge instead of just flagging it.
+  The sequence-*gap* case (missing numbers, no collision) is unchanged
+  and still only warns, per the CR's own recommendation (gaps are
+  cosmetic and an accepted historical pattern). `CLAUDE.md`'s Database &
+  Migration Conventions section was also corrected to state this
+  accurately (see the file's own "As of CR #4187" note).
+- **Verified not to retroactively fail** on the 3 pre-existing historical
+  duplicates (319, 321, 327×2) — `CHECK B` only evaluates files in a PR's
+  own diff, never the full existing migrations directory, so untouched
+  historical dupes sitting on `main` are structurally unreachable by the
+  new hard-fail path.
+- **Explicitly deferred, per the CR's own scoping**: option (b), a
+  post-merge/`push`-to-`main` check for the narrower true cross-PR race
+  window (both PRs' branches predate each other's merge) that a per-PR
+  check structurally can't catch — recommended to defer unless option
+  (a) alone proves insufficient in practice. Not implemented in PR #4192.
+
+### C37. `driver-app-test`: leaked Animated-timer update in `RideOfferPanel.test.tsx` corrupted the shared Jest worker, intermittently timing out `ActivityView.test.tsx`
+
+- [x] **Status:** fixed 2026-08-18. Root-caused by pulling the failing job's
+  raw log (not just the summary) for the actual failing run (commit
+  `09146188`, PR #4191) and reading the stack trace immediately preceding
+  `FAIL ActivityView.test.tsx`, rather than re-guessing from the C31
+  pattern:
+  ```
+  console.error
+    An update to Animated(View) inside a test was not wrapped in act(...).
+    ...
+    at ... createAnimatedPropsHook.js:131:20
+    at AnimatedProps._callback (createAnimatedPropsHook.js:71:36)
+    ...
+    at Object.runOnlyPendingTimers (__tests__/components/RideOfferPanel.test.tsx:83:10)
+
+  FAIL __tests__/components/ActivityView.test.tsx (7.216 s)
+    ● ActivityView › keeps ride history visible when earnings loading fails
+      thrown: "Exceeded timeout of 5000 ms for a test.
+  ```
+- **Root cause:** `RideOfferPanel.test.tsx`'s own comment already documented
+  that the component "starts Animated.spring/timing loops on mount with no
+  cleanup on unmount" and used fake timers so Jest could safely discard
+  them at teardown. But `@testing-library/react-native` registers its own
+  `afterEach(cleanup)` at **import time** (top of the file, before any
+  `describe`/`beforeEach`/`afterEach` in the file body runs), and Jest runs
+  `afterEach` hooks in registration order — so RTL's cleanup unmounted the
+  tree *first*, and only then did this file's own `afterEach` call
+  `jest.runOnlyPendingTimers()`, flushing the component's still-pending
+  Animated callback **against an already-unmounted renderer, outside any
+  `act()`**. That produced the "not wrapped in act(...)" warning and left
+  an unguarded React scheduler update not fully discharged before the test
+  file's teardown returned — which then bled into whichever test file the
+  same Jest worker happened to pick up next (`ActivityView.test.tsx` on the
+  failing run), same underlying failure class as C31 (leaked async work
+  escaping a file's boundary and corrupting the next file in the shared
+  worker), different trigger (a fake-timer-driven Animated callback instead
+  of a raw unmounted `act()` render).
+- **Fix:** `driver-app/__tests__/components/RideOfferPanel.test.tsx` — wrap
+  the pending-timer flush in `act()` so React processes and fully
+  discharges the update synchronously, before this file's own teardown
+  completes, instead of leaving it to fire asynchronously post-unmount:
+  ```diff
+  -import { render, fireEvent } from '@testing-library/react-native';
+  +import { act, render, fireEvent } from '@testing-library/react-native';
+   ...
+   afterEach(() => {
+  -  jest.runOnlyPendingTimers();
+  +  act(() => {
+  +    jest.runOnlyPendingTimers();
+  +  });
+     jest.useRealTimers();
+   });
+  ```
+- **Blast radius:** isolated to this one test file. `RideOfferPanel.tsx`
+  (the component under test) is untouched — this is a test-only fix, no
+  production code changed. No other `driver-app/__tests__/*` file matches
+  this exact pattern (fake timers + `runOnlyPendingTimers()` in `afterEach`
+  on a component with uncleaned-up mount-time Animated loops) — grepped for
+  `runOnlyPendingTimers` across `driver-app/__tests__/`, only this file
+  uses it in an `afterEach`.
+- **Verification performed:** `yarn jest __tests__/components/RideOfferPanel.test.tsx __tests__/components/ActivityView.test.tsx --verbose`
+  — both suites green, zero "not wrapped in act(...)" console.error output
+  (previously present). Full local suite: `yarn jest --silent` → 63 suites,
+  534/534 tests passing (same count as before the fix — no regressions,
+  no coverage change since this only reorders/wraps an existing
+  `afterEach` call). Not run against the actual CI runner under worker
+  contention (the condition that made this intermittent rather than
+  deterministic locally) — will confirm via the PR's own `driver-app-test`
+  job.
+- **Not verified:** whether this was the *only* leak source for this
+  failure shape — if `ActivityView.test.tsx` times out again on a future
+  CI run with a *different* preceding-file stack trace, that's a separate
+  leak to root-cause the same way (read the actual job log, don't
+  re-assume the same cause).
+- **Files:** likely `driver-app/__tests__/components/ActivityView.test.tsx`
+  plus whichever earlier-running test file in the same Jest worker is the
+  actual source, per the same investigative pattern used for C31.
+
+### C38. `routes/lost_and_found.py`'s except-ImportError fallback branch was missing a `DuplicateRecordError` binding present in the try branch — latent `NameError` if the dual-import ever took the fallback path
+
+- [x] **Status:** FIXED (2026-08-18) — found on PR #4211's own `backend-test`
+  CI run (unrelated PR, only `backend/requirements.txt` +
+  `ACTION_ITEMS.md` touched — confirmed via `git diff origin/main..HEAD
+  --stat`), surfaced by `test_dual_import_parity.py`'s own regression
+  test: `AssertionError: Names bound in the try branch but missing from
+  the except ImportError fallback ... assert not
+  {'routes/lost_and_found.py': ['DuplicateRecordError']}`.
+- **Root cause**: the file's dual-import block (CLAUDE.md's documented
+  `try: from .routes.X import ... / except ImportError: from routes.X
+  import ...` pattern) imports `DuplicateRecordError` in the try branch
+  (`from ..utils.error_handling import DuplicateRecordError`) but the
+  except-ImportError fallback branch never imported it — a latent bug
+  that would only surface as a real `NameError` at the `except
+  (DuplicateRecordError, Exception) as exc:` handler (line 217) on a
+  request that hit an actual `DuplicateRecordError`, and only when the
+  process was running under the fallback import path (`python -m
+  backend.server` vs top-level, per CLAUDE.md's dual-import convention)
+  — never exercised in this repo's own test/CI environment, which is why
+  it went undetected until the dedicated parity test caught it
+  structurally instead of by triggering the actual `NameError`.
+- **Fix**: added the missing import to the fallback branch, mirroring
+  the try branch exactly:
+  ```diff
+   except ImportError:
+       import db_supabase  # type: ignore
+       from dependencies import get_current_user  # type: ignore
+       from features import send_push_notification  # type: ignore
+       from services.zoho_desk_integration import create_ticket_for_lost_and_found  # type: ignore
+  +    from utils.error_handling import DuplicateRecordError  # type: ignore
+  ```
+- **Blast radius**: isolated — one import line in one file's fallback
+  branch, adding a name that already exists at that scope via the try
+  branch on the normal (non-fallback) import path. No other file reads
+  or imports from this except-branch's names.
+- **Verification performed**: `pytest tests/test_dual_import_parity.py`
+  → 3 passed (was 1 failed before). `pytest tests/ -k lost_and_found` →
+  43 passed, 1 skipped (unaffected, confirming no behavior change on the
+  normal import path).
+- **Not verified**: the actual fallback-import code path itself (running
+  the app via top-level `import routes.lost_and_found` instead of
+  `backend.routes.lost_and_found`) — the parity test verifies the two
+  branches bind the same names statically via AST inspection, not by
+  actually exercising both import paths at runtime.
 
 ## Recently completed (do not redo)
 

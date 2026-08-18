@@ -1,0 +1,142 @@
+name: Deploy Backend to Fly.io (Staging)
+
+# Scaffolding for ACTION_ITEMS.md E1 ("Staging environment"). See
+# docs/runbooks/staging-environment.md for the full picture.
+#
+# ############################################################################
+# # THIS WORKFLOW WILL FAIL UNTIL A HUMAN COMPLETES MANUAL SETUP.           #
+# #                                                                          #
+# # The secrets it references — FLY_API_TOKEN_STAGING, SUPABASE_STAGING_URL,#
+# # SUPABASE_STAGING_SERVICE_ROLE_KEY — do not exist in this repo yet, and  #
+# # the Fly app (spinr-backend-staging) and the staging Supabase project    #
+# # have not been created either. Every run of this workflow before that    #
+# # setup happens will fail fast at the "Verify required secrets" step and  #
+# # exit non-zero. That is the intended, safe failure mode: it fails LOUD   #
+# # and it never touches production — this workflow never reads or writes  #
+# # any production secret (FLY_API_TOKEN, SUPABASE_URL,                    #
+# # SUPABASE_SERVICE_ROLE_KEY, etc. are not referenced anywhere below).     #
+# ############################################################################
+#
+# Trigger is deliberately narrow: pushes to a `staging` branch (which does
+# not exist yet either) or manual dispatch. Never triggers on `main` — main
+# continues to deploy only to production via deploy-fly.yml / deploy-backend.yml.
+
+on:
+  push:
+    branches:
+      - staging
+    paths:
+      - 'backend/**'
+      - 'backend/fly.staging.toml'
+      - '.github/workflows/deploy-backend-staging.yml'
+  workflow_dispatch: {}
+
+# Serialize deploys the same way deploy-fly.yml does for production — queue,
+# never cancel an in-flight rollout.
+concurrency:
+  group: deploy-fly-staging-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to Fly.io (staging)
+    runs-on: ubuntu-latest
+    # Never run this job from a fork PR — workflow_dispatch and the staging
+    # branch push are both same-repo triggers, but this belt-and-suspenders
+    # check keeps a future copy-paste from accidentally wiring pull_request
+    # in without also gating it.
+    if: github.repository == 'srikumarimuddana-lab/spinrvm'
+    env:
+      FLY_APP: spinr-backend-staging
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Verify required secrets are set
+        run: |
+          missing=0
+          if [ -z "${FLY_API_TOKEN_STAGING}" ]; then
+            echo "::error title=Missing secret::FLY_API_TOKEN_STAGING is not set."
+            missing=1
+          fi
+          if [ -z "${SUPABASE_STAGING_URL}" ]; then
+            echo "::error title=Missing secret::SUPABASE_STAGING_URL is not set."
+            missing=1
+          fi
+          if [ -z "${SUPABASE_STAGING_SERVICE_ROLE_KEY}" ]; then
+            echo "::error title=Missing secret::SUPABASE_STAGING_SERVICE_ROLE_KEY is not set."
+            missing=1
+          fi
+          if [ "$missing" = "1" ]; then
+            echo ""
+            echo "These are staging-only secrets and must NOT be copies of the"
+            echo "production FLY_API_TOKEN / SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY."
+            echo "See docs/runbooks/staging-environment.md for one-time setup steps:"
+            echo "  1. A human with Fly access creates the app:"
+            echo "       fly apps create spinr-backend-staging"
+            echo "     then a deploy token:"
+            echo "       fly tokens create deploy -a spinr-backend-staging"
+            echo "     -> GitHub → repo → Settings → Secrets → Actions → FLY_API_TOKEN_STAGING"
+            echo "  2. A human with Supabase access creates a throwaway project"
+            echo "     in the ca-central-1 region (never reuse the production project)"
+            echo "     and seeds it with synthetic data only."
+            echo "     -> GitHub → repo → Settings → Secrets → Actions →"
+            echo "        SUPABASE_STAGING_URL, SUPABASE_STAGING_SERVICE_ROLE_KEY"
+            exit 1
+          fi
+          echo "All three staging secrets are present."
+        env:
+          FLY_API_TOKEN_STAGING: ${{ secrets.FLY_API_TOKEN_STAGING }}
+          SUPABASE_STAGING_URL: ${{ secrets.SUPABASE_STAGING_URL }}
+          SUPABASE_STAGING_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_STAGING_SERVICE_ROLE_KEY }}
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master (2026-08-18)
+
+      - name: Show flyctl version
+        run: flyctl version
+
+      # Stage the staging Supabase credentials as Fly runtime secrets on the
+      # staging app only. FLY_API_TOKEN_STAGING is scoped to
+      # spinr-backend-staging (per the deploy-token command above), so even a
+      # misconfigured token cannot reach the production app.
+      - name: Stage staging Supabase credentials in Fly secrets
+        run: |
+          url="${SUPABASE_STAGING_URL}"
+          key="${SUPABASE_STAGING_SERVICE_ROLE_KEY}"
+          flyctl secrets set \
+            SUPABASE_URL="$url" \
+            SUPABASE_SERVICE_ROLE_KEY="$key" \
+            --stage -a "${FLY_APP}"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
+          SUPABASE_STAGING_URL: ${{ secrets.SUPABASE_STAGING_URL }}
+          SUPABASE_STAGING_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_STAGING_SERVICE_ROLE_KEY }}
+
+      - name: Deploy to Fly.io (staging)
+        working-directory: backend
+        run: flyctl deploy --remote-only --config fly.staging.toml
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
+
+      # Optional health probe, same pattern as deploy-fly.yml. Set
+      # FLY_HEALTH_URL_STAGING (e.g. https://spinr-backend-staging.fly.dev)
+      # once the app exists; skipped until then.
+      - name: Health check
+        id: health
+        if: ${{ env.FLY_HEALTH_URL_STAGING != '' }}
+        env:
+          FLY_HEALTH_URL_STAGING: ${{ secrets.FLY_HEALTH_URL_STAGING }}
+        run: |
+          echo "Polling ${FLY_HEALTH_URL_STAGING}/health …"
+          for i in $(seq 1 18); do
+            STATUS=$(curl -sf --max-time 5 "${FLY_HEALTH_URL_STAGING}/health" \
+              -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
+            echo "  attempt ${i}/18 → HTTP ${STATUS}"
+            if [ "$STATUS" = "200" ]; then
+              echo "Staging service is healthy."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::Health check timed out after 3 minutes."
+          exit 1

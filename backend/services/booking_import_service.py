@@ -640,7 +640,10 @@ def build_plan(
             {
                 "id": pid,
                 "driver_id": driver_id,
-                "amount": float(amount),
+                # str() only at the serialization boundary (payouts.amount is
+                # NUMERIC as of migration 331 -- str(Decimal) round-trips
+                # exact, unlike float()). All arithmetic above stays Decimal.
+                "amount": str(amount),
                 # 'completed' deducts from payable_balance and is inert to the
                 # payout retry loop, the Stripe reconciler, and the migration
                 # 250 reservation guard (all of which key off other statuses).

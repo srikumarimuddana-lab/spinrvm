@@ -1,0 +1,80 @@
+name: DAST · ZAP Baseline Scan
+
+# ACTION_ITEMS.md E6 ("Pre-launch DAST + third-party pentest") — scaffolding
+# half of that item. SAST (Semgrep/Bandit/ESLint-security/etc.) already runs
+# in .github/workflows/security-gates.yml on every PR; this workflow is the
+# complementary DAST leg — it exercises the *running* application instead of
+# static source. It intentionally does NOT run on pull_request: a DAST scan
+# needs a live target to hit, and this repo has no staging environment yet
+# (blocked on ACTION_ITEMS.md E1). Running it as a PR gate would either be a
+# permanent no-op or, worse, someone eventually pointing it at production.
+#
+# Trigger is manual (workflow_dispatch) and a weekly schedule only.
+#
+# STAGING_URL (repo variable or secret) does not exist yet. Until E1 stands
+# up a staging environment and that value is configured, the scan step
+# no-ops with a clear message and exits 0 — this workflow is inert scaffolding,
+# not a promise that a scan is actually running today.
+#
+# The third-party penetration test referenced in E6 is a separate
+# budget/procurement action for a human to book — this workflow does not
+# and cannot address that half of the item.
+#
+# See docs/runbooks/dast-and-pentest.md for what this scan covers, its
+# limitations (baseline scan only — not a full active scan), and the
+# pentest procurement note.
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Weekly, Monday 03:00 UTC.
+    - cron: '0 3 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dast-zap-baseline
+  cancel-in-progress: true
+
+jobs:
+  zap-baseline:
+    name: ZAP baseline scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check STAGING_URL is configured
+        id: check-target
+        # Secrets are passed via env:, not interpolated directly into the
+        # run: script, to avoid GitHub Actions script-injection risk.
+        env:
+          STAGING_URL_VAR: ${{ vars.STAGING_URL }}
+          STAGING_URL_SECRET: ${{ secrets.STAGING_URL }}
+        run: |
+          if [ -z "$STAGING_URL_VAR$STAGING_URL_SECRET" ]; then
+            echo "STAGING_URL not configured, skipping — see ACTION_ITEMS.md E1/E6 and docs/runbooks/dast-and-pentest.md."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: steps.check-target.outputs.configured == 'true'
+
+      - name: ZAP baseline scan
+        if: steps.check-target.outputs.configured == 'true'
+        uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
+        with:
+          target: ${{ vars.STAGING_URL || secrets.STAGING_URL }}
+          # Baseline scan only (passive + spidering) — no active attack
+          # payloads are sent. See docs/runbooks/dast-and-pentest.md for why
+          # a full active scan is not automated here.
+          cmd_options: '-a'
+          allow_issue_writing: false
+          fail_action: false
+          artifact_name: zap-baseline-report
+
+      - name: No-op (STAGING_URL not configured)
+        if: steps.check-target.outputs.configured == 'false'
+        run: |
+          echo "No staging target configured — nothing to scan. This is expected until ACTION_ITEMS.md E1 lands."
+          exit 0

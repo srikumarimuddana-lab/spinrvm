@@ -80,10 +80,13 @@ const fix = (lat: number, heading: number | null = 90) => ({
   coords: { latitude: lat, longitude: -106.67, heading },
 });
 
-beforeEach(async () => {
+beforeEach(() => {
   jest.clearAllMocks();
+  // Resets refusalReported, the session-check throttle AND currentMode. Calling
+  // the real stopCarLocationService() here instead would leave one
+  // stopLocationUpdatesAsync call on the mock before every test body — a trap
+  // for any future call-count assertion.
   _resetCarLocationTelemetry();
-  await stopCarLocationService(); // resets the module's mode between cases
   jest.spyOn(console, 'warn').mockImplementation(() => {});
   jest.spyOn(console, 'log').mockImplementation(() => {});
   mockIntegrity.mockReturnValue({ trusted: true });
@@ -247,6 +250,22 @@ describe('Android refusing a background foreground-service start', () => {
     expect(_carLocationMode()).toBe('foreground-service');
   });
 
+  it('stops a degraded task instead of leaking it when the driver goes online', async () => {
+    // A degraded task deliberately falls past the already-running check to look
+    // for an upgrade. If the driver went online in the meantime it lands on the
+    // piggyback branch — which must not return while our task is still live, or
+    // two location subscriptions run at once.
+    arrangeRefusal();
+    await startCarLocationService();
+    expect(_carLocationMode()).toBe('no-notification');
+
+    mockLocation.hasStartedLocationUpdatesAsync.mockResolvedValue(true);
+    mockIsBgRunning.mockResolvedValue(true);
+
+    await expect(startCarLocationService()).resolves.toBe('piggyback');
+    expect(mockLocation.stopLocationUpdatesAsync).toHaveBeenCalledWith(CAR_LOCATION_TASK);
+  });
+
   it('does not re-attempt once the foreground service is actually running', async () => {
     await expect(startCarLocationService()).resolves.toBe('started');
     mockLocation.hasStartedLocationUpdatesAsync.mockResolvedValue(true);
@@ -265,6 +284,47 @@ describe('Android refusing a background foreground-service start', () => {
     await expect(startCarLocationService()).resolves.toBe('unavailable');
     expect(mockLocation.startLocationUpdatesAsync).toHaveBeenCalledTimes(1);
     expect(mockRecordNonFatal).not.toHaveBeenCalled();
+  });
+});
+
+describe('sign-out', () => {
+  it('the handler stops the task when the session has ended', async () => {
+    // The registration is persisted by expo-task-manager and restored on process
+    // start, so a headless relaunch after sign-out would otherwise keep
+    // publishing a signed-out driver's position — with no notification to show
+    // for it on the fallback path.
+    mockIsSessionEnded.mockResolvedValue(true);
+
+    await handleCarLocationTask({ data: { locations: [fix(1)] as never } });
+
+    expect(mockPublishCarFix).not.toHaveBeenCalled();
+    expect(mockLocation.stopLocationUpdatesAsync).toHaveBeenCalledWith(CAR_LOCATION_TASK);
+  });
+
+  it('the handler throttles the session check rather than reading per fix', async () => {
+    // ~2s cadence: an unthrottled check would be ~30 encrypted SecureStore
+    // reads a minute, making the privacy gate its own battery cost.
+    await handleCarLocationTask({ data: { locations: [fix(1)] as never } });
+    await handleCarLocationTask({ data: { locations: [fix(2)] as never } });
+    await handleCarLocationTask({ data: { locations: [fix(3)] as never } });
+
+    expect(mockIsSessionEnded).toHaveBeenCalledTimes(1);
+    expect(mockPublishCarFix).toHaveBeenCalledTimes(3);
+  });
+
+  it('reaps an orphaned task left by a sign-out that happened while plugged in', async () => {
+    mockLocation.hasStartedLocationUpdatesAsync.mockResolvedValue(true);
+    mockIsSessionEnded.mockResolvedValue(true);
+
+    await expect(startCarLocationService()).resolves.toBe('session-ended');
+
+    expect(mockLocation.stopLocationUpdatesAsync).toHaveBeenCalledWith(CAR_LOCATION_TASK);
+  });
+
+  it('does not try to stop a task that was never started', async () => {
+    mockIsSessionEnded.mockResolvedValue(true);
+    await expect(startCarLocationService()).resolves.toBe('session-ended');
+    expect(mockLocation.stopLocationUpdatesAsync).not.toHaveBeenCalled();
   });
 });
 

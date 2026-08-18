@@ -2734,6 +2734,49 @@ async def test_get_ride_receipt_success():
         result = await get_ride_receipt(ride_id=_RIDE_ID, current_user=_USER)
     assert result["success"] is True
     assert result["receipt"]["driver_name"] == "Bob Smith"
+    # CR-4108 (issue #4108, D1): a normal ride's tax_basis is "fare_gst"
+    # (the correct, default meaning) and it carries no legacy footnote.
+    assert result["receipt"]["tax_basis"] == "fare_gst"
+    assert result["receipt"]["tax_note"] is None
+
+
+@pytest.mark.anyio
+async def test_get_ride_receipt_legacy_imported_ride_flags_commission_gst():
+    """CR-4108 (issue #4108, D1 decision, option (a) "re-label, don't
+    rewrite"): for one of the 186 legacy-imported rides, tax_amount is
+    real money but the wrong base (commission-GST, not fare-GST) — the
+    receipt must label it, without the numeric tax_amount value changing
+    at all."""
+    from backend.routes.rides import get_ride_receipt
+
+    ride = _ride(
+        status="completed",
+        rider_id=_RIDER_ID,
+        driver_id=_DRIVER_ID,
+        tax_amount=0.73,
+        vehicle_type_id=None,
+        corporate_account_id=None,
+        legacy_import_metadata={
+            "source": "legacy_mongo_booking_import",
+            "old_booking_id": "6a023ea1173f9129709e2a64",
+        },
+    )
+    driver_row = {"id": _DRIVER_ID, "user_id": "drv-user"}
+    driver_user = {"first_name": "Bob", "last_name": "Smith"}
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_driver_by_id = AsyncMock(return_value=driver_row)
+        mock_db.get_user_by_id = AsyncMock(return_value=driver_user)
+        mock_db.get_rows = AsyncMock(return_value=[])
+        result = await get_ride_receipt(ride_id=_RIDE_ID, current_user=_USER)
+
+    receipt = result["receipt"]
+    # The number itself is untouched -- exactly the stored value, byte for
+    # byte, before and after this feature.
+    assert receipt["tax_amount"] == 0.73
+    assert receipt["tax_basis"] == "commission_gst_legacy_import"
+    assert receipt["tax_note"] is not None
+    assert "commission-GST" in receipt["tax_note"]
 
 
 @pytest.mark.anyio

@@ -8308,6 +8308,23 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   UI, evidence-pack endpoint, submission path) remain open, same priority
   order as originally scoped. Full detail:
   `docs/change-log/2026-08-17-c23-dispute-evidence-due-by.md`.
+  **Action item 2 of 5 partially DONE (2026-08-17, background-loop half)**:
+  new `dispute_evidence_reminder (6h)` background loop (`utils/
+  dispute_evidence_reminder.py`, migration 327 adds the
+  `evidence_reminder_sent_at` claim-flag column) checks every 6h for open
+  disputes whose `evidence_due_by` falls within 3 days, atomically claims
+  each one (same idempotency shape as `driver_subscriptions`'
+  `expiry_warned_3d`), and fires a Sentry-tagged alert (`spinr_alert=
+  dispute_evidence_due_soon`) + ERROR log exactly once per dispute.
+  `spinr-realtime-reliability-reviewer` caught a real gap before merge — the
+  loop wasn't watchdog-covered (no heartbeat, missing from
+  `_WATCHDOG_LOOP_NAMES`) — fixed in the same change. **Not done**: the
+  Sentry-rule half of item 2 ("a Sentry rule on the existing `CHARGEBACK:`
+  error log for the open event") is a Sentry-dashboard config action outside
+  engineering-session reach — someone with Sentry admin access should wire
+  an alert rule on the `spinr_alert=dispute_evidence_due_soon` tag (or the
+  pre-existing `CHARGEBACK:` log line) to page on-call. Full detail:
+  `docs/change-log/2026-08-17-c23-dispute-evidence-reminder-loop.md`.
 - **Issue/gap:** the webhook records a chargeback and then nothing else
   happens. Specifically:
   1. **No `evidence_due_by`.** Stripe puts

@@ -8326,9 +8326,12 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 
 ### C23. Chargeback operations: no deadline tracking, no admin visibility, no evidence tooling
 
-- [ ] **Status:** open (filed 2026-08-14 alongside
+- [x] **Status:** CLOSED (2026-08-18) — all 5 action items done (the one
+  carved-out exception, a Sentry-dashboard alert rule under item 2, is
+  ops config outside engineering-session reach, noted where it appears
+  below). Filed 2026-08-14 alongside
   `docs/runbooks/payment-dispute-evidence.md`, which documents the manual
-  workaround for all three). **Action item 1 of 5 DONE (2026-08-17)**:
+  workaround this entire item replaced. **Action item 1 of 5 DONE (2026-08-17)**:
   migration 326 adds `evidence_due_by`/`evidence_submitted_at`/`fee_cents`
   to `stripe_disputes` (additive, nullable); `charge.dispute.created` now
   parses Stripe's `evidence_details.due_by` and stores it, with a logged
@@ -8401,12 +8404,19 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   idempotency claim on `evidence_submitted_at` was taken *after* the live
   Stripe call rather than before — fixed so a lost claim race 409s before
   any Stripe call happens, with rollback on Stripe failure so a genuine
-  retry isn't permanently blocked. **Not done**: the admin-dashboard UI
-  wiring (a "Download evidence pack" button and a "Submit to Stripe"
-  confirmation flow on the Chargebacks tab) is deferred until PR #4165
-  (item 3) merges, since the tab component it would extend doesn't exist on
-  `main` yet. Full detail:
+  retry isn't permanently blocked. Full detail:
   `docs/change-log/2026-08-18-c23-dispute-evidence-pack-and-submission.md`.
+  **Frontend UI wiring DONE (2026-08-18)**: a "Download evidence pack"
+  icon button (any admin who can see the tab) and a super_admin-only
+  "Submit to Stripe" icon button (with a confirmation dialog leading with
+  "This immediately submits evidence to Stripe and cannot be undone.", an
+  optional cover-letter-text override, and a visible "Submitted" badge
+  once `evidence_submitted_at` is set) were added to the Chargebacks tab.
+  `spinr-design-consistency-reviewer` found no blockers; two warnings
+  (irreversibility warning buried mid-paragraph, submitted-state relying
+  only on a hover tooltip) both fixed. **C23 is now fully closed — all 5
+  action items done.** Full detail:
+  `docs/change-log/2026-08-18-c23-dispute-pack-ui-wiring.md`.
 - **Issue/gap:** the webhook records a chargeback and then nothing else
   happens. Specifically:
   1. **No `evidence_due_by`.** Stripe puts

@@ -16,9 +16,27 @@ import {
 } from "@/components/ui/table";
 import { Pagination } from "@/components/ui/pagination";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
-import { AlertTriangle, RefreshCw } from "lucide-react";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { AlertTriangle, RefreshCw, Download, Send } from "lucide-react";
 import { formatDate } from "@/lib/utils";
-import { getChargebacks, type Chargeback } from "@/lib/api";
+import {
+  getChargebacks, downloadDisputeEvidencePack, submitDisputeEvidence, type Chargeback,
+} from "@/lib/api";
+import { useAuthStore } from "@/store/authStore";
+
+function triggerBrowserDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
 const STATUS_COLORS: Record<string, string> = {
   needs_response: "bg-red-100 text-red-700",
@@ -50,6 +68,7 @@ function daysRemainingColor(days: number | null, status: string): string {
 }
 
 export default function ChargebacksTab() {
+  const isSuperAdmin = useAuthStore((s) => s.user?.role === "super_admin");
   const [chargebacks, setChargebacks] = useState<Chargeback[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -57,6 +76,20 @@ export default function ChargebacksTab() {
   const [page, setPage] = useState(0);
   const [hasNextPage, setHasNextPage] = useState(false);
   const reqIdRef = useRef(0);
+
+  // Per-row "downloading the pack" state, keyed by chargeback id -- several
+  // rows can be mid-download at once, each independent.
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
+  // Submit-to-Stripe confirmation dialog (item 5) -- super_admin only,
+  // ships dark behind an app_settings flag the backend enforces; this UI
+  // doesn't need to know the flag's state, it just surfaces whatever the
+  // endpoint returns (a clean 503 if the flag is off).
+  const [submitTarget, setSubmitTarget] = useState<Chargeback | null>(null);
+  const [submitText, setSubmitText] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const fetchChargebacks = async () => {
     setLoading(true);
@@ -83,6 +116,43 @@ export default function ChargebacksTab() {
       setError(true);
     } finally {
       if (reqId === reqIdRef.current) setLoading(false);
+    }
+  };
+
+  const handleDownloadPack = async (c: Chargeback) => {
+    if (!c.ride_id) return;
+    setDownloadError(null);
+    setDownloadingId(c.id);
+    try {
+      const { blob, filename } = await downloadDisputeEvidencePack(c.ride_id, c.ride_code);
+      triggerBrowserDownload(blob, filename);
+    } catch (err) {
+      console.error("Failed to download dispute evidence pack:", err);
+      setDownloadError(err instanceof Error ? err.message : "Could not download the evidence pack");
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
+  const openSubmitDialog = (c: Chargeback) => {
+    setSubmitError(null);
+    setSubmitText("");
+    setSubmitTarget(c);
+  };
+
+  const handleSubmitEvidence = async () => {
+    if (!submitTarget) return;
+    setSubmitError(null);
+    setSubmitting(true);
+    try {
+      await submitDisputeEvidence(submitTarget.id, submitText.trim() || undefined);
+      setSubmitTarget(null);
+      fetchChargebacks();
+    } catch (err) {
+      console.error("Failed to submit dispute evidence to Stripe:", err);
+      setSubmitError(err instanceof Error ? err.message : "Stripe rejected the submission");
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -149,6 +219,17 @@ export default function ChargebacksTab() {
                   </Button>
                 </div>
               )}
+              {downloadError && (
+                <div className="flex items-center justify-between gap-3 border-b bg-red-50 dark:bg-red-950/30 px-4 py-3 text-sm text-red-700 dark:text-red-400">
+                  <span className="flex items-center gap-2">
+                    <AlertTriangle className="h-4 w-4" />
+                    {downloadError}
+                  </span>
+                  <Button variant="outline" size="sm" onClick={() => setDownloadError(null)}>
+                    Dismiss
+                  </Button>
+                </div>
+              )}
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -159,12 +240,13 @@ export default function ChargebacksTab() {
                     <SortableHead column="evidence_due_by" sort={sort} onSort={toggle}>Evidence Due</SortableHead>
                     <TableHead>Days Remaining</TableHead>
                     <SortableHead column="created_at" sort={sort} onSort={toggle}>Filed</SortableHead>
+                    <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {sortedChargebacks.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                      <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
                         No chargebacks found
                       </TableCell>
                     </TableRow>
@@ -197,6 +279,35 @@ export default function ChargebacksTab() {
                         <TableCell className="text-xs text-muted-foreground">
                           {formatDate(c.created_at)}
                         </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={!c.ride_id || downloadingId === c.id}
+                              onClick={() => handleDownloadPack(c)}
+                              title="Download evidence pack (invoice, route map, timeline, GPS trail, draft cover letter)"
+                              aria-label={`Download evidence pack for ${c.ride_code || "this ride"}`}
+                            >
+                              <Download className={`h-3.5 w-3.5 ${downloadingId === c.id ? "animate-pulse" : ""}`} />
+                            </Button>
+                            {isSuperAdmin && OPEN_STATUSES.has(c.status) && (
+                              c.evidence_submitted_at ? (
+                                <Badge variant="outline" className="text-xs">Submitted</Badge>
+                              ) : (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => openSubmitDialog(c)}
+                                  title="Submit evidence to Stripe"
+                                  aria-label={`Submit evidence to Stripe for ${c.ride_code || "this ride"}`}
+                                >
+                                  <Send className="h-3.5 w-3.5" />
+                                </Button>
+                              )
+                            )}
+                          </div>
+                        </TableCell>
                       </TableRow>
                     ))
                   )}
@@ -209,6 +320,61 @@ export default function ChargebacksTab() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={!!submitTarget} onOpenChange={(open) => { if (!open && !submitting) setSubmitTarget(null); }}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Send className="h-5 w-5 text-amber-500" />
+              Submit Evidence to Stripe
+            </DialogTitle>
+          </DialogHeader>
+          {submitTarget && (
+            <div className="space-y-4">
+              <div className="bg-amber-50 dark:bg-amber-950/30 rounded-lg p-3 text-sm text-amber-800 dark:text-amber-300">
+                <p className="font-semibold">
+                  This immediately submits evidence to Stripe and cannot be undone.
+                </p>
+                <p className="mt-1">
+                  Dispute <span className="font-mono">{submitTarget.stripe_dispute_id}</span> (ride{" "}
+                  {submitTarget.ride_code || submitTarget.ride_id}) — evidence can be updated again
+                  before the deadline, but this submission itself can&apos;t be un-sent. Download the
+                  evidence pack first if you haven&apos;t reviewed the auto-drafted cover letter yet.
+                </p>
+              </div>
+              <div>
+                <label htmlFor="evidence-text" className="text-sm font-medium">
+                  Cover letter text (optional — leave blank to use the auto-drafted version)
+                </label>
+                <Textarea
+                  id="evidence-text"
+                  value={submitText}
+                  onChange={(e) => setSubmitText(e.target.value)}
+                  rows={6}
+                  placeholder="Leave blank to submit the auto-drafted cover letter from the evidence pack."
+                  className="mt-1"
+                />
+              </div>
+              {submitError && (
+                <p className="text-sm text-destructive" role="alert">{submitError}</p>
+              )}
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => setSubmitTarget(null)}
+                  disabled={submitting}
+                >
+                  Cancel
+                </Button>
+                <Button className="flex-1" onClick={handleSubmitEvidence} disabled={submitting}>
+                  {submitting ? "Submitting…" : "Submit to Stripe"}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -8430,8 +8430,33 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 
 ### C34. Corporate company-portal guest booking bypasses all scheduled-ride validation (lead-time, max-advance, DST, overlap)
 
-- [ ] **Status:** open (filed 2026-08-17, from a corporate/driver-scoped
-  follow-up to the C26-C33 scheduled-rides review).
+- [x] **Status:** closed 2026-08-17. `CreateRideRequest.validate_scheduled_time`'s
+  body is now extracted into a standalone, importable
+  `validate_scheduled_time_value(value, tz_name)` in `backend/schemas.py`
+  — both `CreateRideRequest` and the new `CompanyGuestBookingRequest`
+  field validator call the same logic, so the two paths can't drift out
+  of sync again. `CompanyGuestBookingRequest` gained a `scheduled_timezone`
+  field and the shared validator wired onto `scheduled_time`.
+  `create_company_guest_booking` (`backend/services/company_booking_service.py`)
+  gained an overlap-window guard, keyed on the guest's user id (not the
+  booker/admin's), reusing the same `SpinrException`/
+  `ErrorCode.RESOURCE_CONFLICT`/`scheduled_ride_overlap` 409 shape as C32,
+  gated on `scheduled_time is not None` so immediate guest bookings never
+  touch the new lookup. Confirmed the refactor left `CreateRideRequest`'s
+  own behavior byte-for-byte unchanged: `pytest tests/test_p2_scheduled_rides.py`
+  → 23 passed (same count as before the refactor). New tests in
+  `backend/tests/test_company_guest_booking.py` (8 cases: lead-time,
+  max-advance, DST-ambiguous, valid-in-window, immediate-unaffected at
+  the schema level; overlap-rejected, non-overlap-accepted,
+  immediate-skips-lookup at the service level).
+  `pytest tests/test_company_guest_booking.py tests/test_p2_scheduled_rides.py
+  tests/test_corporate_company_bookings_coverage.py
+  tests/test_corporate_company_bookings_routes.py -q` → 101 passed.
+  **Blast radius:** grepped `CompanyGuestBookingRequest` and
+  `create_company_guest_booking` across `backend/` — the only production
+  caller of each is `POST /company/{company_id}/bookings`; all other hits
+  are test files. Isolated, no other callers. **Not verified:** no live
+  Supabase instance (mocks only).
 - **Issue/gap:** there are three independent paths that create a corporate
   scheduled ride, not two. `company_allowance` and `work_profile` bookings
   both go through `CreateRideRequest`/`create_ride`

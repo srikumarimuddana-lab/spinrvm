@@ -24,27 +24,33 @@ from __future__ import annotations
 
 import logging
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
 
 try:
+    from .. import db_supabase
     from ..dependencies import generate_pickup_otp
     from ..features import compute_fare_estimate
+    from ..models.ride_status import RideStatus
     from ..schemas import Ride
     from ..services.corporate_policy_service import evaluate_policy_for_ride
     from ..services.guest_user_service import find_or_create_guest_by_phone
     from ..utils.background import spawn
+    from ..utils.error_handling import ErrorCode, SpinrException
     from ..utils.money import to_decimal as _d
 except ImportError:
+    import db_supabase  # type: ignore
     from dependencies import generate_pickup_otp  # type: ignore
     from features import compute_fare_estimate  # type: ignore
+    from models.ride_status import RideStatus  # type: ignore
     from schemas import Ride  # type: ignore
     from services.corporate_policy_service import evaluate_policy_for_ride  # type: ignore
     from services.guest_user_service import find_or_create_guest_by_phone  # type: ignore
     from utils.background import spawn  # type: ignore
+    from utils.error_handling import ErrorCode, SpinrException  # type: ignore
     from utils.money import to_decimal as _d  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -53,6 +59,15 @@ logger = logging.getLogger(__name__)
 # imported lazily below to avoid a service→routes import at module load).
 _STATUS_SEARCHING = "searching"
 _STATUS_SCHEDULED = "scheduled"
+
+# ACTION_ITEMS.md C34: how close two of the same guest's scheduled rides may
+# sit before booking a second one is rejected as a likely double-book. This
+# repo does not (yet) have an equivalent rider-side scheduled-overlap guard
+# in routes/rides/booking.py to import the constant from, so it's defined
+# here for the guest-booking path; if/when a rider-facing overlap guard is
+# added to booking.py, prefer importing a single shared constant over a
+# second copy of this number.
+SCHEDULE_OVERLAP_WINDOW_MINUTES = 60
 
 
 def _round2(v: Decimal) -> Decimal:
@@ -113,6 +128,46 @@ async def create_company_guest_booking(
         _master_permitted = _policy.get("allowed_payment_source", "both") in ("master_only", "both")
         if _remaining < _round2(grand_total * _d("1.5")) and not _master_permitted:
             raise HTTPException(status_code=403, detail={"reason": "allowance_low"})
+
+    # ACTION_ITEMS.md C34: reject an overlapping scheduled_time for the same
+    # GUEST (guest_user["id"], not the booker/admin -- the conflict is the
+    # guest having two overlapping scheduled rides), so a scheduled guest
+    # booking can't collide at dispatch the way an unguarded double-booked
+    # scheduled ride would. Gated on is_deferred: an immediate (ASAP) guest
+    # booking is completely unaffected.
+    if is_deferred:
+        existing_scheduled_rides = await db_supabase.get_rows(
+            "rides",
+            {"rider_id": guest_user["id"], "status": RideStatus.SCHEDULED},
+            limit=200,
+        )
+        overlap_window = timedelta(minutes=SCHEDULE_OVERLAP_WINDOW_MINUTES)
+        for _existing in existing_scheduled_rides or []:
+            _existing_time_raw = _existing.get("scheduled_time")
+            if not _existing_time_raw:
+                continue
+            try:
+                _existing_time = datetime.fromisoformat(str(_existing_time_raw).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if _existing_time.tzinfo is None:
+                _existing_time = _existing_time.replace(tzinfo=timezone.utc)
+            if abs(payload.scheduled_time - _existing_time) <= overlap_window:
+                raise SpinrException(
+                    message=(
+                        "This customer already has a scheduled ride around this time. "
+                        "Please choose a different time or cancel the existing scheduled "
+                        "ride first."
+                    ),
+                    error_code=ErrorCode.RESOURCE_CONFLICT,
+                    status_code=409,
+                    details={
+                        "error_code": "scheduled_ride_overlap",
+                        "existing_ride_id": _existing.get("id"),
+                        "existing_scheduled_time": str(_existing_time_raw),
+                        "overlap_window_minutes": SCHEDULE_OVERLAP_WINDOW_MINUTES,
+                    },
+                )
 
     pickup_otp_plain = generate_pickup_otp()
     ride = Ride(

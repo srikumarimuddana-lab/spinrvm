@@ -362,13 +362,18 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
     # and reach the rider, instead of being served a stale empty list.
     await invalidate_active_rides_cache(driver["id"])
 
-    # Insurance Period 2 (en route to pickup — TNC primary commercial coverage).
-    # In the batch-offer dispatch model the driver becomes obligated to the ride
-    # at acceptance (searching/driver_assigned → driver_accepted), so Period 2
-    # begins here, not at a separate driver_assigned step. It stays open through
-    # driver_arrived until verify-otp/start flips the driver to Period 3
-    # (passenger aboard). record_period_transition is compliance-grade — it logs
-    # at ERROR and swallows on failure so it never blocks acceptance.
+    # Insurance Period 2 (en route to pickup — TNC primary commercial coverage)
+    # was already opened for this driver+ride at claim/offer time, in
+    # match_driver_to_ride (routes/rides/matching.py) — the driver becomes
+    # obligated to the ride the instant claim_driver_atomic succeeds and the
+    # offer is live, not only once they tap Accept. This call is now a
+    # redundant safety net: record_period_transition no-ops if Period 2 with
+    # this ride_id is already open (the normal case), and re-confirms it's open
+    # with the right ride_id if anything closed it between claim and accept.
+    # It stays open through driver_arrived until verify-otp/start flips the
+    # driver to Period 3 (passenger aboard). record_period_transition is
+    # compliance-grade — it logs at ERROR and swallows on failure so it never
+    # blocks acceptance.
     await _deps.record_period_transition(driver["id"], 2, ride_id=ride_id)
 
     # ── Batch dispatch: resolve offers for this ride ──────────────
@@ -602,9 +607,17 @@ async def decline_ride(
 
     await update_acceptance_rate(driver["id"], accepted=False)
 
-    # Release this driver back to available
-    await db_supabase.set_driver_available(driver["id"], True)
-    await _deps.record_period_transition(driver["id"], 1)
+    # Release this driver back to available. Only record Period 1 (online, no
+    # ride) if the release actually made the driver available — if they went
+    # offline between the offer being sent and this decline, set_driver_available
+    # clamps is_available->False and their go-offline already logged Period 0;
+    # recording Period 1 here would falsely reopen a commercial-insurance window
+    # for an offline driver. Mirrors the same guard in process_expired_offer
+    # (routes/rides/matching.py) — both close out the Period 2 that opened at
+    # claim/offer time in match_driver_to_ride.
+    released = await db_supabase.set_driver_available(driver["id"], True)
+    if isinstance(released, dict) and released.get("is_available"):
+        await _deps.record_period_transition(driver["id"], 1)
     await reset_miss_streak(driver["id"])
 
     # Record the decline in audit_logs so daily stats can count it. `reason`

@@ -711,6 +711,42 @@ class TestDeclineRideSuccessBranches:
             result = await decline_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
         assert result == {"success": True}
 
+    async def test_period_1_recorded_when_release_leaves_driver_available(self):
+        """Insurance Period 2 opens at claim/offer time (matching.py); decline
+        must close it back to Period 1 — but only when the driver is actually
+        still online. Mirrors process_expired_offer's guard."""
+        from backend.routes.drivers.ride_flow import decline_ride
+
+        ride = _ride(status="driver_assigned")
+        patches = list(self._base_patches(ride, run_sync_side_effect=RuntimeError("no offer row")))
+        patches[4] = patch(
+            "backend.routes.drivers._deps.db_supabase.set_driver_available",
+            AsyncMock(return_value={"id": _DRIVER_ID, "is_available": True, "is_online": True}),
+        )
+        with _Patches(*patches) as mocks:
+            period_transition = mocks[5]
+            result = await decline_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+        assert result == {"success": True}
+        period_transition.assert_awaited_once_with(_DRIVER_ID, 1)
+
+    async def test_period_1_skipped_when_driver_went_offline_before_decline(self):
+        """A driver who toggled offline between the offer being sent and this
+        decline must NOT get a Period 1 row falsely reopened — they're
+        already Period 0 from their own go-offline call."""
+        from backend.routes.drivers.ride_flow import decline_ride
+
+        ride = _ride(status="driver_assigned")
+        patches = list(self._base_patches(ride, run_sync_side_effect=RuntimeError("no offer row")))
+        patches[4] = patch(
+            "backend.routes.drivers._deps.db_supabase.set_driver_available",
+            AsyncMock(return_value={"id": _DRIVER_ID, "is_available": False, "is_online": False}),
+        )
+        with _Patches(*patches) as mocks:
+            period_transition = mocks[5]
+            result = await decline_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+        assert result == {"success": True}
+        period_transition.assert_not_awaited()
+
 
 # ============================================================
 # arrive_at_pickup

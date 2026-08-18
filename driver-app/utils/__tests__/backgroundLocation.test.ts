@@ -177,6 +177,9 @@ describe('background durable trip recording', () => {
       json: () => Promise.resolve({ recording_session_id: 'session-1', acked_through: 0, rejected: [] }),
     }));
     resetLocationIntegrity();
+    // The singleton recorder carries flush-backoff state across tests; a
+    // failure test would otherwise make every later flush silently skip.
+    tripLocationRecorder._resetUploadBackoff();
     await tripLocationRecorder.startRide('ride-1');
   });
 

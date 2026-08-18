@@ -78,9 +78,17 @@ trip, contact support@spinr.ca.
 
 1. Keep this page consistent with `docs/legal/terms-of-service.md` §6
    (rider) and §13 (driver) — if either changes, check this page for drift.
-2. Confirm the "Period 2 starts on driver_assigned, not driver_accepted"
-   explanation matches current dispatch behavior — this is called out as an
-   explicit rule in CLAUDE.md ("Period 2 starts on driver_assigned... because
-   the driver is already obligated to the ride") and should be sanity-checked
-   by the `spinr-insurance-period-auditor` agent against the live code before
-   publication.
+2. ~~Confirm the "Period 2 starts on driver_assigned, not driver_accepted"
+   explanation matches current dispatch behavior~~ — **RESOLVED 2026-08-18**.
+   The 2026-08-18 whole-app fleet audit
+   (`docs/audit/2026-08-18-full-fleet-whole-app-audit.md`, ranked blocker #1/#2)
+   found this page's own rule did NOT match the code: the batch-offer dispatch
+   model never writes a `driver_assigned` ride status, so Period 2 was opening
+   at `driver_accepted` instead — after this page's promised moment, not at it.
+   Fixed same-day: `match_driver_to_ride` (`backend/routes/rides/matching.py`)
+   now opens Period 2 for every claimed driver immediately after their offer is
+   persisted — the moment `claim_driver_atomic` succeeds and the driver is
+   obligated/unavailable for any other ride, before they've tapped Accept.
+   This page's wording is now accurate as written; no copy change needed. See
+   `docs/change-log/2026-08-18-period-2-insurance-timing-fix.md` for the
+   verification detail.

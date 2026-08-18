@@ -16,6 +16,13 @@ up top, `file:line` technical detail underneath.
 **Standing non-agent-shaped gaps** (tracked, never silently absorbed): load/chaos testing (E2),
 DAST/pentest (E6), backup-restore drills (E7), real screen-reader/visual-regression passes (N12).
 
+> **Post-audit update (2026-08-18, same day):** ranked blocker #1/#2 (Period 2 insurance timing +
+> the legal-doc contradiction) was fixed same-day, after this audit ran — see the ranked blocker
+> register and `docs/change-log/2026-08-18-period-2-insurance-timing-fix.md` for detail. The
+> narrative below (executive summary, baseline reconciliation table) reflects the audit's original
+> findings as run; the item's row is annotated FIXED rather than rewritten, per the ledger
+> convention this repo already uses elsewhere.
+
 ```
 SPINR FULL-FLEET AUDIT — whole app, 3-day drift check
 ========================================================
@@ -107,7 +114,7 @@ does not implement, and it must not go live without a legal/SGI decision one way
 
 | # | 08-15 Finding | Status 08-18 | Evidence this pass |
 |---|---|---|---|
-| 1 | Period 2 insurance opens at accept, not claim | **STILL-OPEN, escalated** | insurance-period + dispatch agents independently re-confirmed `assign_driver_to_ride` is dead code (zero callers outside tests); **NEW**: `docs/legal/insurance-coverage-periods.md` promises the opposite rule to riders/drivers |
+| 1 | Period 2 insurance opens at accept, not claim | **FIXED 2026-08-18** | `backend/routes/rides/matching.py`'s `match_driver_to_ride` now opens Period 2 for every claimed driver immediately after the `ride_offers` insert succeeds — the claim/offer moment, not acceptance. `backend/routes/drivers/ride_flow.py`'s `decline_ride` now guards its Period-1 close on `set_driver_available`'s actual result (mirroring `process_expired_offer`'s existing guard) so a driver who went offline mid-offer doesn't get a false Period-1 reopen. `docs/legal/insurance-coverage-periods.md` and `terms-of-service.md` §13's existing "assigned... even before they've accepted" wording is now accurate as written — no copy change needed. See `docs/change-log/2026-08-18-period-2-insurance-timing-fix.md`. `assign_driver_to_ride` remains confirmed dead code (unrelated cleanup, not touched by this fix). |
 | 2 | Driver can accept a ride while offline | **STILL-OPEN** | `routes/drivers/ride_flow.py:46-350` — no `is_online` reference anywhere in the file, confirmed by dispatch, edge-case, and security agents independently |
 | 3 | Go-online never re-checks SK eligibility | **STILL-OPEN** | `routes/drivers/status.py` — document expiry re-checked correctly every call; license class/vehicle age/experience never read |
 | 4 | `planned_route_polyline` escapes 3-yr GPS purge | **STILL-OPEN** | confirmed absent from all `purge_pii_retention()` revisions through migration 333 |
@@ -137,7 +144,7 @@ does not implement, and it must not go live without a legal/SGI decision one way
 
 | # | Finding | Agent | Where | Severity |
 |---|---|---|---|---|
-| N1 | Legal draft doc contradicts insurance-period code (see above) | insurance-period | `docs/legal/insurance-coverage-periods.md:40-45` | High — must resolve before publication |
+| N1 | Legal draft doc contradicts insurance-period code (see above) | insurance-period | `docs/legal/insurance-coverage-periods.md:40-45` | **FIXED 2026-08-18** — code now matches the doc, see ranked blocker #1 above |
 | N2 | `$0`-cost `first_ride_only` promo ride still satisfies rider-referral qualification — real wallet money farmable via throwaway phone numbers, no velocity cap | fraud | `routes/users.py:846-848`, `routes/promotions.py:224-227`, `utils/referral_payout.py:298-311` | Medium — real-money leak |
 | N3 | `deploy-metrics-agent.yml` unpinned `checkout@v7` + `flyctl-actions@master` with `FLY_API_TOKEN` in scope — missed by the C18b sweep | cicd-infra | `.github/workflows/deploy-metrics-agent.yml:36,49` | High — deploy-secret exposure |
 | N4 | 2 more unpinned-action instances (`claude-audit.yml` literal `@master`; `bootstrap-metrics-agent.yml` partial fix) | cicd-infra | `.github/workflows/claude-audit.yml:84`, `bootstrap-metrics-agent.yml:57` | Low–Medium |
@@ -167,8 +174,8 @@ does not implement, and it must not go live without a legal/SGI decision one way
 
 | # | Finding | Agent(s) | Owner (suggested) | Due (suggested) |
 |---|---|---|---|---|
-| 1 | Legal draft doc contradicts insurance-period code — must not publish as-is | insurance-period | Legal/Compliance + Eng — Insurance | Before `docs/legal/insurance-coverage-periods.md` leaves Draft |
-| 2 | Period 2 insurance coverage opens at accept, not claim | insurance-period, dispatch | Eng — Dispatch/Insurance | 2026-08-25 or explicit SGI/legal acceptance |
+| 1 | ~~Legal draft doc contradicts insurance-period code~~ | insurance-period | Legal/Compliance + Eng — Insurance | **RESOLVED 2026-08-18** (code fixed, doc already accurate) |
+| 2 | ~~Period 2 insurance coverage opens at accept, not claim~~ | insurance-period, dispatch | Eng — Dispatch/Insurance | **RESOLVED 2026-08-18** — see `docs/change-log/2026-08-18-period-2-insurance-timing-fix.md` |
 | 3 | `deploy-metrics-agent.yml` unpinned actions with live `FLY_API_TOKEN` (regression) | cicd-infra | Eng — Platform/CI | 2026-08-20 (small, 1-file) |
 | 4 | Driver can accept a ride while offline | dispatch, edge-case, security | Eng — Dispatch | 2026-08-22 |
 | 5 | AI tool-result PII scrub gap (structural) — driver name to LLM + `/mcp` | ai-guardrail | Eng — AI | 2026-08-22 |
@@ -204,7 +211,7 @@ does not implement, and it must not go live without a legal/SGI decision one way
 
 | Decision | Context | Owner | Due |
 |---|---|---|---|
-| Period 2 timing: fix code to open at offer/claim, or get SGI/legal to accept "opens at accept" — **and correct or hold the legal draft doc that currently promises the opposite** | insurance-period, dispatch | Legal/Compliance | 2026-08-25 |
+| ~~Period 2 timing: fix code to open at offer/claim, or get SGI/legal to accept "opens at accept"~~ — **RESOLVED 2026-08-18**: fixed code to open at offer/claim, matching the already-published `terms-of-service.md` §13 wording, so no legal/SGI decision was needed | insurance-period, dispatch | Legal/Compliance | Closed 2026-08-18 |
 | Emergency-contact encryption: implement pgcrypto vs. accept plaintext (doc already corrected to state actual behavior) | safety-sos, security | Privacy/Legal | 2026-08-25 |
 | `compliance` admin module: add to `AVAILABLE_MODULES` or switch to `require_super_admin` explicitly | admin-rbac (carried from 08-15) | Eng lead / Admin owner | 2026-08-29 |
 | Inert `surge`/`pricing` grantable module strings — retire or wire up | admin-rbac (carried from 08-15) | Eng lead / Admin owner | 2026-08-29 |

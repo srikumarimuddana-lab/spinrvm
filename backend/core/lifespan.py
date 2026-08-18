@@ -628,6 +628,13 @@ async def lifespan(app: FastAPI):
             "capacity_watchdog (60s)",
             "auto_payout (1h, Sundays)",
             "retention_guard_monitor (6h)",
+            # Route/GPS pipeline loops — a wedged finalizer or gap monitor
+            # means routes silently stop being produced (SPR-PE7TTB class),
+            # so their staleness must page like every other loop.
+            "route_finalizer (15s)",
+            "route_gap_monitor (15s)",
+            "period1_distance_finalizer (5min)",
+            "distance_reconciliation (daily 04:00 UTC)",
         ]
     )
 

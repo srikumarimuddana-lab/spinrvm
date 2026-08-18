@@ -27,11 +27,13 @@ try:
     from .. import db_supabase
     from ..settings_loader import get_app_settings
     from ..utils.breadcrumbs import resolve_active_ride
+    from ..utils.loop_monitor import record_heartbeat as _record_heartbeat
     from ..utils.redis_client import redis_set_nx
 except ImportError:  # pragma: no cover - dual import path
     import db_supabase  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
     from utils.breadcrumbs import resolve_active_ride  # type: ignore
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat  # type: ignore
     from utils.redis_client import redis_set_nx  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -152,4 +154,8 @@ async def period1_distance_finalizer_loop() -> None:
                 await _tick()
         except Exception:
             logger.error("period1_distance_finalizer tick failed", exc_info=True)
+        # Every iteration, lock or not — the watchdog is per-replica, so a
+        # non-leader replica must still show its loop alive (same pattern as
+        # retention_purge).
+        _record_heartbeat("period1_distance_finalizer (5min)")
         await asyncio.sleep(INTERVAL_SECONDS)

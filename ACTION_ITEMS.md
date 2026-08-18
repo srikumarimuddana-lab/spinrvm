@@ -3330,15 +3330,22 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   (`test_earnings_coverage.py::TestGetDriverEarningsLegacyActivityStats`).
   Full Change Impact Log at
   `docs/change-log/2026-08-13-driver-earnings-legacy-activity-stats.md`.
-- **Follow-up (not yet done):** `GET /drivers/balance`
-  (`get_driver_balance`, same file) has the identical `total_rides =
+- [x] **Follow-up: DONE (2026-08-18).** `GET /drivers/balance`
+  (`get_driver_balance`, same file) had the identical `total_rides =
   len(rides)` pattern on its own legacy-excluded query — same latent bug,
-  left unfixed here because its `total_rides` response field has no
-  frontend consumer today (`DriverBalance` TS type in
-  `driver-app/store/driverStore.ts` doesn't include it). Fix opportunistically
-  if/when a frontend surface starts reading `/balance`'s `total_rides`, or
-  proactively for consistency — low priority since no one currently sees
-  the wrong number.
+  left unfixed at first because its `total_rides` response field had no
+  frontend consumer (`DriverBalance` TS type in `driver-app/store/
+  driverStore.ts` still doesn't include it — re-confirmed 2026-08-18, no
+  regression in fixing it now). Fixed for consistency: added a second,
+  unfiltered "all completed rides" query; `total_rides` now sources from
+  it. Every money figure (`payable_balance`, `total_earnings`, etc.) is
+  untouched and stays on the `EXCLUDE_LEGACY_RIDES`-filtered query, per
+  A32's explicit decision that `/balance` (unlike `/earnings`) keeps money
+  legacy-excluded. 2 new regression tests
+  (`test_earnings_coverage.py::TestGetDriverBalanceLegacyActivityStats`).
+  Purely preventative — no visible behavior change today, since no
+  frontend reads the field. Full Change Impact Log at
+  `docs/change-log/2026-08-18-a31-driver-balance-legacy-total-rides.md`.
 - **Superseded by A32:** the note above about `average_per_ride` staying
   divided by the money-rides count "so it isn't diluted by $0-earning
   legacy trips" described the state as of this entry's date. A32

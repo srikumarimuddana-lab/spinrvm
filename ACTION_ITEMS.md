@@ -5885,7 +5885,7 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   PI-less close updates only its own row; every closed dispute has matching
   `financial_events` rows for the debit and the fee.
 
-### B28. `payouts.amount` is a legacy `FLOAT` column — every writer must `float()` a `Decimal` at the DB boundary
+### B28. `payouts.amount` is a legacy `FLOAT` column — every writer must `float()` a `Decimal` at the DB boundary — CLOSED (2026-08-18)
 
 - **Source:** `spinr-money-auditor` review of the 2026-08-17 legacy-payout-
   correction write path (`docs/change-log/2026-08-17-legacy-payout-
@@ -5905,23 +5905,82 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   to `float` at the literal moment of serializing the insert payload, which
   is the correct workaround for a `FLOAT` column, not a shortcut around the
   Decimal rule.
-- **Status:** open, no owner assigned. The actual fix is a migration —
-  `ALTER TABLE payouts ALTER COLUMN amount TYPE NUMERIC(10,2)` — plus
-  auditing every one of the ~6 writers above to drop their `float()` cast
-  once the column itself is exact. Low priority: no observed cent-level
-  drift in production to date (payout amounts are small, few-decimal-place
-  CAD figures well within `float`'s exact-representation range in practice),
-  but it's a standing landmine for a writer that accumulates many small
-  amounts before insert.
-- **Files:** `backend/migrations/` (new `NN_payouts_amount_numeric.sql`),
+- **Status: DONE (2026-08-18).** Migration 331
+  (`ALTER TABLE payouts ALTER COLUMN amount TYPE NUMERIC(10,2) USING
+  amount::numeric(10,2)`), applied against a live table of ~222 rows
+  (sub-second rewrite, verified via direct Supabase query before writing the
+  migration). All three real writers that bypass `db_supabase.insert_one`
+  (`legacy_payout_correction_service.py`, `stripe_payout_sync_service.py`,
+  `booking_import_service.py`) now serialize via `str(Decimal)` instead of
+  `float()`. `routes/drivers/payouts.py` needed no change — confirmed it
+  already goes through `db_supabase.insert_one`/`update_one`, whose
+  `_serialize_for_api` already does `str(Decimal)` on every write, so it
+  never had the bug. The three read-side SQL functions (159/162/303) that
+  already worked around the FLOAT column via `amount::text::numeric` were
+  deliberately left unedited per the append-only migration convention —
+  that cast is a harmless no-op once the column is already NUMERIC.
+  `spinr-migration-reviewer` (SAFE TO APPLY) and `spinr-money-auditor`
+  (SAFE TO MERGE) both reviewed before merge; no blockers from either.
+  New static-source-text regression test
+  (`test_payouts_amount_no_float_cast.py`) pins the fix — verified it
+  actually catches the regression by temporarily reverting one fix and
+  confirming the test fails before restoring it. Full detail:
+  `docs/change-log/2026-08-18-b28-payouts-amount-numeric.md`.
+- **Spun off (money-auditor finding during this review, NOT fixed here —
+  see B29 below):** several other `float()` calls in
+  `booking_import_service.py` (near `rides.base_fare`, `distance_km`,
+  `total_fare`, `tip_amount`, `grand_total`, `tax_amount`,
+  `area_fees_total`, `discount_amount`, `driver_earnings`,
+  `admin_earnings`, `old_payout_gst_amount`) write into `rides` columns that
+  are *already* `NUMERIC`/`DECIMAL` (migrations 46, 82) — the same landmine
+  class this item just fixed for `payouts.amount`, but on a different table,
+  pre-existing, and out of scope for this diff.
+- **Files:** `backend/migrations/331_payouts_amount_numeric.sql`,
   `backend/services/legacy_payout_correction_service.py`,
   `backend/services/stripe_payout_sync_service.py`,
   `backend/services/booking_import_service.py`,
-  `backend/routes/drivers/payouts.py`.
-- **Acceptance:** `payouts.amount` is `NUMERIC(10,2)`; every writer passes a
-  `Decimal`/string, not `float()`, into the insert/update payload; a
-  regression test asserting no writer calls `float()` on a `payouts.amount`
-  value.
+  `backend/tests/test_payouts_amount_no_float_cast.py`.
+- **Acceptance:** `payouts.amount` is `NUMERIC(10,2)` — met; every writer
+  passes a `Decimal`/string, not `float()`, into the insert/update payload —
+  met; a regression test asserting no writer calls `float()` on a
+  `payouts.amount` value — met.
+
+### B29. `booking_import_service.py` calls `float()` on several `rides` columns that are already `NUMERIC`/`DECIMAL` — same landmine class as B28, different table
+
+- **Source:** `spinr-money-auditor`'s review of B28 (2026-08-18) — flagged
+  while confirming B28's own scoping claim that its untouched `float()`
+  calls in `booking_import_service.py` all targeted a jsonb column. That
+  claim was only partially correct: most of the untouched calls
+  (`"amount": float(...)` near `base_fare`, `distance_km`, `total_fare`,
+  `tip_amount`, `grand_total`, `tax_amount`, `area_fees_total`,
+  `discount_amount`, `driver_earnings`, `admin_earnings`,
+  `old_payout_gst_amount`) actually write to **scalar `rides` columns**, not
+  the jsonb `fare_breakdown_snapshot`/`tax_breakdown`/`area_fees_breakdown`
+  fields (only those three are genuinely jsonb). Several of the scalar
+  targets are already `NUMERIC`/`DECIMAL(10,2)` per migration 46
+  (`area_fees_total`, `tax_amount`, `grand_total`) and migration 82
+  (`discount_amount`) — meaning `float()` is applied immediately before a
+  value lands in a real NUMERIC column, reintroducing binary rounding error
+  Postgres would otherwise never see. `rides.driver_earnings` is confirmed
+  genuinely `FLOAT8` (same migration 159/303 comments B28 relied on), so
+  that one at least matches its column type, but still violates the
+  Decimal-only rule in spirit.
+- **Status:** open, no owner assigned, not investigated further than the
+  money-auditor's flag above — needs the same treatment as B28: confirm
+  each target column's actual current type (some may already be safe, some
+  may need the same `float()` → `str()` swap this item's sibling made), and
+  whether any of these particular columns have ever accumulated multiple
+  additions before their final `float()` cast (which is the actual
+  precision-loss trigger — a single value round-tripped through `float()`
+  once is usually fine; the risk is arithmetic *done in float* before the
+  cast, not the cast itself. this needs the same file-by-file read B28 did,
+  not assumed from the finding alone).
+- **Files:** `backend/services/booking_import_service.py`.
+- **Acceptance:** every `rides` column written by `booking_import_service.py`
+  that is `NUMERIC`/`DECIMAL` at the DB level receives a `str(Decimal)` (or
+  equivalent Decimal-exact) value, not `float()`, at the write boundary; a
+  regression test extending `test_payouts_amount_no_float_cast.py`'s pattern
+  (or a new sibling file) to cover the `rides` writes this item closes.
 
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 

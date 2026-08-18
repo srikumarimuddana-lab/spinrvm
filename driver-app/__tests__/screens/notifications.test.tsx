@@ -72,4 +72,39 @@ describe('Driver notifications inbox', () => {
     expect(list.props.removeClippedSubviews).not.toBe(true);
     expect(list.props.getItemLayout).toBeUndefined();
   });
+
+  // A failed fetch and an empty inbox both yield zero rows. Rendering the
+  // same "all caught up" state for both is what let a 401'd inbox (App Check
+  // token not yet minted, global retry:false) look empty while the dashboard
+  // bell badge still read "N unread".
+  it('shows a retryable error state — not "all caught up" — when the fetch fails', () => {
+    mockUseNotifications.mockReturnValue({
+      data: undefined,
+      isFetching: false,
+      isPending: false,
+      isError: true,
+      refetch: jest.fn(),
+    });
+
+    const screen = render(<NotificationsScreen />);
+
+    expect(screen.getByText('notifications.loadFailed')).toBeTruthy();
+    expect(screen.getByText('notifications.retry')).toBeTruthy();
+    expect(screen.queryByText('notifications.allCaughtUp')).toBeNull();
+  });
+
+  it('shows the empty state when the inbox loaded successfully with no rows', () => {
+    mockUseNotifications.mockReturnValue({
+      data: { unread_count: 0, notifications: [] },
+      isFetching: false,
+      isPending: false,
+      isError: false,
+      refetch: jest.fn(),
+    });
+
+    const screen = render(<NotificationsScreen />);
+
+    expect(screen.getByText('notifications.allCaughtUp')).toBeTruthy();
+    expect(screen.queryByText('notifications.loadFailed')).toBeNull();
+  });
 });

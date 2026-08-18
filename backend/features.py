@@ -384,10 +384,14 @@ async def get_faqs(
 ):
     """Get active FAQs, optionally filtered by category, audience and location.
 
-    This is the live GET /faqs handler (registered before routes/faqs.py). It
-    MUST filter by audience — without it, driver-only FAQs surface in the rider
-    app. Location (service_area_id or lat+lng) scopes to global FAQs plus those
-    tagged for the caller's area or an ancestor area.
+    This is the only GET /faqs handler. (A second, near-identical
+    implementation used to live at routes/faqs.py — it was registered after
+    this one in server.py, so Starlette's first-match-wins routing made it
+    permanently dead code; removed 2026-08-18 rather than left as a shadowed
+    duplicate. See docs/change-log/2026-08-18-retire-duplicate-faqs-route.md.)
+    This handler MUST filter by audience — without it, driver-only FAQs
+    surface in the rider app. Location (service_area_id or lat+lng) scopes to
+    global FAQs plus those tagged for the caller's area or an ancestor area.
     """
     query: Dict[str, Any] = {"is_active": True}
     if category:
@@ -419,13 +423,19 @@ async def get_faqs(
     except ImportError:
         from .routes.fares import resolve_area_scope, resolve_service_area_for_point
     area_id = service_area_id
-    if not area_id and lat is not None and lng is not None:
-        try:
+    try:
+        if not area_id and lat is not None and lng is not None:
             area = await resolve_service_area_for_point(float(lat), float(lng))
             area_id = area.get("id") if area else None
-        except Exception:
-            logger.opt(exception=True).error("public faq service-area resolve failed")
-    scope = await resolve_area_scope(area_id)
+        scope = await resolve_area_scope(area_id)
+    except Exception:
+        # Must never 500 an unauthenticated public endpoint on a service-area
+        # lookup failure (DB blip, malformed row) — degrade to global-FAQs-only
+        # instead. Covers both the lat/lng resolution step and the final
+        # resolve_area_scope call; the latter used to be outside this guard,
+        # so a failure there raised straight through this handler.
+        logger.opt(exception=True).error("public faq service-area resolve failed")
+        scope = set()
     return [f for f in faqs if not f.get("service_area_ids") or (set(f["service_area_ids"]) & scope)]
 
 

@@ -10,7 +10,8 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
 /**
- * Self-serve reactivation inside the 30-day deletion grace window (PIPEDA).
+ * Self-serve reactivation any time before the 7-year deletion retention
+ * ceiling (Saskatchewan Transportation Act / PIPEDA lawful-retention carve-out).
  * Reached from the OTP screen when /auth/verify-otp returns requires_reactivation
  * for a pending_deletion account. Confirming calls /auth/reactivate, which clears
  * the pending deletion and logs the driver back in.

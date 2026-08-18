@@ -196,11 +196,12 @@ export default function SettingsScreen() {
             return;
         }
         try {
-            // PIPEDA-compliant 30-day grace window: DELETE /users/account
-            // schedules the deletion rather than executing it immediately, so
-            // drivers can recover the account by contacting support within 30
-            // days. DELETE /users/profile (immediate, irreversible) is reserved
-            // for internal admin tooling.
+            // PIPEDA-compliant soft delete: DELETE /users/account locks the
+            // account immediately but schedules the actual data deletion for
+            // the 7-year Saskatchewan Transportation Act retention ceiling —
+            // drivers can reactivate by signing back in any time before then.
+            // DELETE /users/profile (immediate, irreversible) is reserved for
+            // internal admin tooling.
             await api.delete('/users/account');
             setShowDeleteStep2(false);
             await logout();

@@ -10183,6 +10183,16 @@ how much they de-risk a public launch._
   nothing exercises the running app (OWASP ZAP baseline scan against staging on a
   schedule), and a payments+PII platform should have one external penetration
   test before public launch. Budget item; book it.
+  (2026-08-18): scaffolding added, item stays open —
+  `.github/workflows/dast-zap-baseline.yml` (OWASP ZAP baseline scan via
+  `zaproxy/action-baseline`, SHA-pinned per C18) and
+  `docs/runbooks/dast-and-pentest.md`. Manual (`workflow_dispatch`) + weekly
+  schedule only, never a PR gate. Stays inert — first step detects a missing
+  `STAGING_URL` and no-ops with exit 0 — until E1 (staging environment) lands
+  and `STAGING_URL` is configured; that's the remaining blocker for the DAST
+  half. The third-party pentest half remains a pure human/procurement action
+  (booking a firm, budget approval) — no workflow attempts it. See
+  `docs/change-log/2026-08-18-e6-dast-scaffolding.md`.
 - [ ] **E7. Backup-restore drill** — `docs/runbooks/pitr-restore.md` exists but
   (like the failover runbook) has never been exercised. Restore a Supabase PITR
   snapshot into a scratch project, verify row counts + a sample ride lifecycle,

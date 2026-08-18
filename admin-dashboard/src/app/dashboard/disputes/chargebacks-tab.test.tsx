@@ -102,6 +102,25 @@ describe("ChargebacksTab", () => {
     expect(await screen.findByText("network down")).toBeInTheDocument();
   });
 
+  it("announces the download-failure banner to screen readers (role=alert)", async () => {
+    // accessibility-reviewer finding: this deadline-monitoring surface must
+    // announce a failed download, not just render it silently for sighted
+    // users only.
+    downloadDisputeEvidencePack.mockRejectedValue(new Error("network down"));
+    render(<ChargebacksTab />);
+    await screen.findByText("SPN-1");
+    fireEvent.click(screen.getByRole("button", { name: /Download evidence pack for SPN-1/ }));
+    const alertEl = await screen.findByRole("alert");
+    expect(alertEl).toHaveTextContent("network down");
+  });
+
+  it("announces the list-fetch-failure banner to screen readers (role=alert)", async () => {
+    getChargebacks.mockRejectedValue(new Error("db down"));
+    render(<ChargebacksTab />);
+    const alertEl = await screen.findByRole("alert");
+    expect(alertEl).toHaveTextContent("Failed to load chargebacks");
+  });
+
   it("hides the Submit-to-Stripe action for a non-super_admin", async () => {
     mockRole = "support_admin";
     render(<ChargebacksTab />);

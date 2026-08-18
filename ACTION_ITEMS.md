@@ -10270,9 +10270,39 @@ how much they de-risk a public launch._
 
 ### C26. `pip-compile drift check` fails on any PR that touches `backend/requirements.in` — `requirements.txt` has drifted far out of sync with a fresh resolve, unrelated to the touching PR's actual diff
 
-- [ ] **Status:** open, not yet a `[CR]` issue — flagged here per the
-  "CI check red for a reason unrelated to your diff" rule rather than
-  left unexplained.
+- [x] **Status:** CLOSED (2026-08-18) — regenerated `backend/requirements.txt`
+  by running the exact command CI itself uses (verified against
+  `.github/workflows/pip-compile-check.yml`'s own invocation):
+  `pip-compile backend/requirements.in --output-file
+  backend/requirements.txt --strip-extras --no-header --annotation-style
+  line --no-upgrade` (pip-tools 7.6.1, Python 3.11.15).
+- **Correction to the original diagnosis below**: the "dozens of unpinned
+  transitive deps" read on PR #4085's CI diff was a misread of the raw
+  line-count diff, not the actual drift. Normalizing both the old and
+  regenerated files down to plain `package==version` pairs and diffing
+  those showed **zero differences** — all 149 resolved pins were already
+  correct. The actual drift was purely annotation-style: the checked-in
+  file used pip-tools' default multi-line `# via` comments with extras
+  kept in brackets (e.g. `httpx[http2]==0.28.1`); a fresh compile with
+  this repo's own `--strip-extras --annotation-style line` flags
+  produces single-line `package==version  # via ...` output instead — a
+  524-line-removed/149-line-added diff that *looked* like missing pins
+  but wasn't. No pinned package's resolved version actually changed.
+- **Verification**: installed the regenerated lockfile into a fresh venv
+  (`pip install -r backend/requirements.txt`, clean exit) and ran
+  `pytest -m unit backend/tests` — **2831 passed, 2 failed, 1 skipped**.
+  Both failures are pre-existing and unrelated (confirmed by the
+  byte-identical resolved-pin diff above, so no library version changed):
+  `test_dual_import_parity.py::test_fallback_import_branches_mirror_try_branches`
+  (a real latent bug in `routes/lost_and_found.py`'s except-ImportError
+  branch missing a `DuplicateRecordError` binding the try-branch has —
+  worth its own ACTION_ITEMS entry, not filed here to keep this item
+  scoped) and a mock-assertion mismatch in
+  `test_scheduled_rides_coverage.py::test_lock_not_acquired_still_proceeds_to_fetch`.
+- **Not run**: the full test suite (integration/E2E tiers need live
+  Supabase/Redis, unavailable in the sandbox) — `pytest -m unit` is this
+  repo's own documented fast-local-loop subset (CLAUDE.md Testing
+  Conventions), covering 2831 tests.
 - **Where surfaced:** PR #4085 (A39's `migrate.py` reconciliation), whose
   only change to `backend/requirements.in` was a one-line comment fix
   (`migrate.py` → `run_migrations.py`, no dependency added/removed/

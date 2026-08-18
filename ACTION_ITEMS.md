@@ -5959,7 +5959,7 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   met; a regression test asserting no writer calls `float()` on a
   `payouts.amount` value — met.
 
-### B29. `booking_import_service.py` calls `float()` on several `rides` columns that are already `NUMERIC`/`DECIMAL` — same landmine class as B28, different table
+### B29. `booking_import_service.py` calls `float()` on several `rides` columns that are already `NUMERIC`/`DECIMAL` — same landmine class as B28, different table — CLOSED (2026-08-18)
 
 - **Source:** `spinr-money-auditor`'s review of B28 (2026-08-18) — flagged
   while confirming B28's own scoping claim that its untouched `float()`
@@ -5970,31 +5970,87 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   `discount_amount`, `driver_earnings`, `admin_earnings`,
   `old_payout_gst_amount`) actually write to **scalar `rides` columns**, not
   the jsonb `fare_breakdown_snapshot`/`tax_breakdown`/`area_fees_breakdown`
-  fields (only those three are genuinely jsonb). Several of the scalar
-  targets are already `NUMERIC`/`DECIMAL(10,2)` per migration 46
-  (`area_fees_total`, `tax_amount`, `grand_total`) and migration 82
-  (`discount_amount`) — meaning `float()` is applied immediately before a
-  value lands in a real NUMERIC column, reintroducing binary rounding error
-  Postgres would otherwise never see. `rides.driver_earnings` is confirmed
-  genuinely `FLOAT8` (same migration 159/303 comments B28 relied on), so
-  that one at least matches its column type, but still violates the
-  Decimal-only rule in spirit.
-- **Status:** open, no owner assigned, not investigated further than the
-  money-auditor's flag above — needs the same treatment as B28: confirm
-  each target column's actual current type (some may already be safe, some
-  may need the same `float()` → `str()` swap this item's sibling made), and
-  whether any of these particular columns have ever accumulated multiple
-  additions before their final `float()` cast (which is the actual
-  precision-loss trigger — a single value round-tripped through `float()`
-  once is usually fine; the risk is arithmetic *done in float* before the
-  cast, not the cast itself. this needs the same file-by-file read B28 did,
-  not assumed from the finding alone).
-- **Files:** `backend/services/booking_import_service.py`.
+  fields (only those three are genuinely jsonb).
+- **Status: DONE (2026-08-18).** Verified every candidate column's real type
+  against `information_schema.columns` (project `soavhtdhefowwvforzwb`)
+  before touching anything, per B28's precedent — the money-auditor's
+  original candidate list turned out to be only partially right. Confirmed
+  NUMERIC and fixed (`float()` → `str()`): `grand_total` (`numeric(10,2)`),
+  `tax_amount` (`numeric(8,2)`), `area_fees_total` (`numeric(8,2)`),
+  `discount_amount` (`numeric(10,2)`). Confirmed genuinely `double
+  precision` (FLOAT8) and correctly left unchanged: `base_fare`,
+  `distance_km`, `total_fare`, `tip_amount`, `driver_earnings`,
+  `admin_earnings`, `distance_fare`, `time_fare`, `booking_fee`,
+  `airport_fee`, `surge_multiplier` — five of these
+  (`base_fare`/`distance_km`/`total_fare`/`tip_amount`/`driver_earnings`)
+  were on the original candidate list but are NOT NUMERIC, so this item's
+  own acceptance criteria ("that is `NUMERIC`/`DECIMAL` at the DB level")
+  correctly excludes them. `old_payout_gst_amount` is a key inside the
+  jsonb `legacy_import_metadata` column, not a scalar `rides` column at
+  all — out of scope, same category as the three jsonb fields B28 already
+  carved out. No arithmetic changed: every fixed value was already
+  `Decimal` end-to-end; only the final serialization moved from `float()`
+  to `str()`. New regression test
+  (`backend/tests/test_booking_import_rides_numeric_no_float_cast.py`,
+  sibling of B28's `test_payouts_amount_no_float_cast.py`) — depth-aware
+  static scan of the `ride` insert dict (needed because it has a nested,
+  differently-scoped `"grand_total"` key inside its own
+  `fare_breakdown_snapshot` jsonb sub-dict, which a naive scan would
+  false-positive on) plus a negative control asserting the FLOAT8 columns
+  are never wrapped in `str()`. Verified the test catches the regression:
+  reverted one fix, confirmed failure, restored it. Three existing
+  `test_booking_import_service.py` assertions updated from
+  `pytest.approx(float)` to string/`Decimal` comparisons to match. Money-
+  auditor review was **self-performed**, not run via a spawned subagent —
+  this session had no Agent/Task tool available to invoke
+  `spinr-money-auditor` (confirmed via `ToolSearch`); reasoned through
+  Decimal-only discipline, no float reintroduction, and no pre-cast
+  summation in float directly instead, and said so explicitly rather than
+  silently skipping the step. Full detail: `docs/change-log/
+  2026-08-18-b29-booking-import-rides-numeric.md`.
+- **Spun off (found during this fix, NOT fixed here — see B30 below):**
+  `backend/routes/rides/_shared.py` independently builds these same four
+  column names (`grand_total`, `tax_amount`, `area_fees_total`,
+  `discount_amount`) via `float(_round(...))` in its own fare-snapshot
+  builder — the identical bug class, on the live booking path rather than
+  the offline legacy importer, and out of scope for this diff per its file
+  boundary.
+- **Files:** `backend/services/booking_import_service.py`,
+  `backend/tests/test_booking_import_rides_numeric_no_float_cast.py`,
+  `backend/tests/test_booking_import_service.py`.
 - **Acceptance:** every `rides` column written by `booking_import_service.py`
   that is `NUMERIC`/`DECIMAL` at the DB level receives a `str(Decimal)` (or
-  equivalent Decimal-exact) value, not `float()`, at the write boundary; a
-  regression test extending `test_payouts_amount_no_float_cast.py`'s pattern
-  (or a new sibling file) to cover the `rides` writes this item closes.
+  equivalent Decimal-exact) value, not `float()`, at the write boundary —
+  met; a regression test covering the `rides` writes this item closes —
+  met.
+
+### B30. `routes/rides/_shared.py` casts `grand_total`/`tax_amount`/`area_fees_total`/`discount_amount` with `float(_round(...))` into the same `NUMERIC` `rides` columns B29 just fixed
+
+- **Source:** found while fixing B29 (2026-08-18) — the blast-radius grep
+  for other writers of these four column names surfaced this file as a
+  second, independent instance of the same bug class, this time on the
+  **live** ride-booking path (`routes/rides/_shared.py` is the shared
+  fare-snapshot builder used by booking/estimates/stops, not an offline
+  import script), which raises the stakes relative to B29's legacy-importer
+  scope.
+- **Status:** open, no owner assigned, not investigated beyond the grep hit
+  (`backend/routes/rides/_shared.py:424,426,436`) that found it. Needs the
+  same treatment as B28/B29: confirm the values being cast are `Decimal`
+  all the way through `_round()` (this repo's `_round`/`_d`/`_f` helpers
+  suggest yes, but verify rather than assume), then swap `float()` → `str()`
+  at the write boundary, then extend the regression-test pattern to cover
+  this file too. Given this is a live-booking-path file (not an offline
+  import), this needs the full pre-merge release gate treatment (dry run
+  against `mock_supabase_client`, before/after scenario) per CLAUDE.md's
+  "State-machine and money changes need a dry run" rule — do not treat it
+  as a copy-paste of B28/B29's diff without that.
+- **Files:** `backend/routes/rides/_shared.py`.
+- **Acceptance:** `grand_total`/`tax_amount`/`area_fees_total`/
+  `discount_amount` in `_shared.py`'s fare-snapshot builder are serialized
+  via `str(Decimal)`, not `float()`, at the write boundary; a regression
+  test (extending B28/B29's static-scan pattern, or a new one) covers it;
+  a dry-run scenario against `mock_supabase_client` is described in the
+  closing Change Impact Log, not just "tests pass."
 
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 

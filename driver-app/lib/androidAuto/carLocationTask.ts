@@ -104,9 +104,20 @@ function isForegroundServiceRefusal(e: unknown): boolean {
  */
 let refusalReported = false;
 
-/** @internal Test-only. */
+/**
+ * SecureStore is not free and this handler runs every ~2s, so the sign-out check
+ * is throttled rather than run per fix. 30s of residual tracking for a driver who
+ * just signed out is an acceptable trade against ~30 encrypted reads a minute;
+ * running it per fix would make the privacy gate itself the battery cost.
+ */
+const SESSION_CHECK_INTERVAL_MS = 30_000;
+let lastSessionCheckAt = 0;
+
+/** @internal Test-only — resets every module-scope flag this file keeps. */
 export function _resetCarLocationTelemetry(): void {
   refusalReported = false;
+  lastSessionCheckAt = 0;
+  currentMode = 'none';
 }
 
 export async function handleCarLocationTask({
@@ -122,6 +133,26 @@ export async function handleCarLocationTask({
     console.warn('[CarLocation] task error:', error.message);
     return;
   }
+  // Sign-out gate, mirroring handleBackgroundLocationTask.
+  //
+  // This is not belt-and-braces. The task registration is persisted by
+  // expo-task-manager and restored on process start, so a device that signs out
+  // while plugged in can be relaunched headlessly by a location broadcast with
+  // no car connected and nobody to call stopCarLocationService() — and on the
+  // fallback path there is no notification to make that visible. Without this
+  // gate a signed-out driver's coordinates keep reaching the shared
+  // last-location cache indefinitely. Self-heal by stopping: reaching here after
+  // a sign-out means no teardown ran, so nothing else is going to stop it.
+  const now = Date.now();
+  if (now - lastSessionCheckAt >= SESSION_CHECK_INTERVAL_MS) {
+    lastSessionCheckAt = now;
+    if (await isSessionEnded()) {
+      console.log('[CarLocation] session ended — stopping');
+      await stopCarLocationService().catch(() => {});
+      return;
+    }
+  }
+
   const locations = data?.locations ?? [];
   // Only the newest sample matters. This drives a map marker, not a route
   // history — replaying a deferred batch would rewind the marker across
@@ -147,14 +178,6 @@ export async function handleCarLocationTask({
 
 TaskManager.defineTask<CarLocationTaskData>(CAR_LOCATION_TASK, handleCarLocationTask);
 
-/**
- * Start the display-only service. Safe to call repeatedly; never throws.
- *
- * Deliberately silent about failure at the call site — every negative outcome
- * leaves the driver exactly where they were before (the in-hook foreground
- * watcher plus its staleness watchdog), which is today's behaviour. Losing the
- * upgrade is not worth an alert on a screen someone is driving in front of.
- */
 /**
  * The location request itself. Shared by both start modes so the ONLY difference
  * between them is the `foregroundService` block — nothing about accuracy or
@@ -188,6 +211,13 @@ const FOREGROUND_SERVICE_OPTIONS: Location.LocationTaskOptions = {
 /**
  * How the task is currently registered, so the 60s re-assert can tell
  * "nothing to do" from "running, but degraded and worth upgrading".
+ *
+ * Deliberately NOT persisted. After a headless process relaunch this reads
+ * 'none' while the task may still be registered in either mode, so a degraded
+ * task started before the restart is reported 'already-running' and never
+ * upgraded. That is bounded — the next disconnect stops the task and the next
+ * connect starts clean — and persisting it would mean a disk read on the
+ * bundle-load path to buy back one upgrade attempt.
  */
 let currentMode: 'none' | 'foreground-service' | 'no-notification' = 'none';
 
@@ -206,10 +236,16 @@ export function _carLocationMode(): typeof currentMode {
  */
 export async function startCarLocationService(): Promise<CarLocationStart> {
   try {
-    // A signed-out device must not run a location service at all, for any reason.
-    if (await isSessionEnded()) return 'session-ended';
-
     const alreadyRunning = await Location.hasStartedLocationUpdatesAsync(CAR_LOCATION_TASK);
+
+    // A signed-out device must not run a location service at all, for any reason.
+    // Checked AFTER the liveness probe on purpose: an orphaned task left by a
+    // sign-out that happened while plugged in can then be reaped here, on the
+    // 60s tick. Checking first would return 'session-ended' and stop nothing.
+    if (await isSessionEnded()) {
+      if (alreadyRunning) await stopCarLocationService();
+      return 'session-ended';
+    }
     // Running WITH a notification is finished business. Running without one is
     // not: Android refuses a background foreground-service start, but it stops
     // refusing the moment the phone app is foregrounded, so every re-assert is
@@ -220,7 +256,15 @@ export async function startCarLocationService(): Promise<CarLocationStart> {
 
     // The online driver's dispatch service is already up and already publishing
     // to carFixChannel — a second service would only add a second notification.
-    if (await isBackgroundLocationRunning()) return 'piggyback';
+    if (await isBackgroundLocationRunning()) {
+      // …and if OUR task is somehow still registered, stop it. Reachable since
+      // a degraded ('no-notification') task deliberately falls past the
+      // already-running check above to look for an upgrade: if the driver went
+      // online in the meantime, this is where it lands, and returning without
+      // stopping would leave two live location subscriptions.
+      if (alreadyRunning) await stopCarLocationService();
+      return 'piggyback';
+    }
 
     // NEVER request. See the file header.
     const { status } = await Location.getBackgroundPermissionsAsync();

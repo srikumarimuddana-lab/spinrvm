@@ -27,6 +27,17 @@ jest.mock('../tripLocationRecorder', () => ({
 
 jest.mock('../crashlytics', () => ({ recordNonFatal: jest.fn() }));
 
+// Android-only tree, lazily required by sessionTeardown; mocked here so this
+// suite never pulls expo-location/expo-task-manager in.
+jest.mock('../../lib/androidAuto/carLocationTask', () => ({
+  stopCarLocationService: jest.fn(() => Promise.resolve()),
+}));
+
+jest.mock('@react-native-async-storage/async-storage', () => ({
+  __esModule: true,
+  default: { removeItem: jest.fn(() => Promise.resolve()) },
+}));
+
 import {
   teardownDriverLocationSession,
   registerDriverSessionTeardown,
@@ -35,6 +46,8 @@ import {
 import { stopBackgroundLocation, stopGeofenceRecovery } from '../backgroundLocation';
 import { tripLocationRecorder } from '../tripLocationRecorder';
 import { recordNonFatal } from '../crashlytics';
+import { stopCarLocationService } from '../../lib/androidAuto/carLocationTask';
+import { LAST_LOCATION_KEY } from '../../lib/androidAuto/carFixChannel';
 
 const mockRegisterLogoutCallback = (
   jest.requireMock('@shared/store/authStore') as { registerLogoutCallback: jest.Mock }
@@ -43,9 +56,14 @@ const mockStopBg = stopBackgroundLocation as jest.Mock;
 const mockStopGeofence = stopGeofenceRecovery as jest.Mock;
 const mockPurge = tripLocationRecorder.purgeAll as jest.Mock;
 const mockRecordNonFatal = recordNonFatal as jest.Mock;
+const mockStopCarLocation = stopCarLocationService as jest.Mock;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const mockRemoveItem = require('@react-native-async-storage/async-storage').default
+  .removeItem as jest.Mock;
 
 beforeEach(() => {
-  [mockStopBg, mockStopGeofence, mockPurge, mockRecordNonFatal, mockRegisterLogoutCallback].forEach((m) => {
+  [mockStopBg, mockStopGeofence, mockPurge, mockRecordNonFatal, mockRegisterLogoutCallback,
+   mockStopCarLocation, mockRemoveItem].forEach((m) => {
     m.mockClear();
     m.mockImplementation(() => Promise.resolve());
   });
@@ -135,5 +153,48 @@ describe('registerDriverSessionTeardown', () => {
     expect(mockStopBg).toHaveBeenCalledTimes(1);
     expect(mockStopGeofence).toHaveBeenCalledTimes(1);
     expect(mockPurge).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Android Auto display-only task', () => {
+  it('is stopped on sign-out', async () => {
+    // Its registration is persisted by expo-task-manager and restored on process
+    // start, so leaving it running lets a location broadcast relaunch the app
+    // headlessly and resume tracking a signed-out driver — and on the
+    // no-foreground-service fallback path there is no notification to show it.
+    await teardownDriverLocationSession();
+    expect(mockStopCarLocation).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the shared last-known position', async () => {
+    // The SQLite purge does not cover this — different store. It is the one
+    // coordinate pair that survives sign-out precisely because it is a display
+    // cache rather than trip data.
+    await teardownDriverLocationSession();
+    expect(mockRemoveItem).toHaveBeenCalledWith(LAST_LOCATION_KEY);
+  });
+
+  it('a failure to stop it does not skip the purge that follows', async () => {
+    mockStopCarLocation.mockRejectedValueOnce(new Error('native module absent'));
+
+    await expect(teardownDriverLocationSession()).resolves.toBeUndefined();
+
+    expect(mockPurge).toHaveBeenCalledTimes(1);
+    expect(mockRemoveItem).toHaveBeenCalledWith(LAST_LOCATION_KEY);
+    expect(mockRecordNonFatal).toHaveBeenCalledWith(expect.any(Error), {
+      domain: 'drivers',
+      surface: 'driver-app',
+      teardown: 'stop_car_location',
+    });
+  });
+
+  it('a failure to clear the cache is reported, not swallowed', async () => {
+    mockRemoveItem.mockRejectedValueOnce(new Error('storage unavailable'));
+    await expect(teardownDriverLocationSession()).resolves.toBeUndefined();
+    expect(mockRecordNonFatal).toHaveBeenCalledWith(expect.any(Error), {
+      domain: 'drivers',
+      surface: 'driver-app',
+      teardown: 'clear_last_location',
+    });
   });
 });

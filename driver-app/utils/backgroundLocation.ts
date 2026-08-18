@@ -382,7 +382,10 @@ export async function startBackgroundLocation(config?: BgLocationConfig): Promis
   // running; going online replaces it with this one. Stop it here or they end up
   // with two permanent notifications for the rest of the shift. Lazily required
   // to keep the module cycle (carLocationTask imports this file) from resolving
-  // at load time, and on iOS/Expo Go the require simply no-ops.
+  // at load time. It does NOT no-op on iOS, as this comment used to claim — the
+  // require loads carLocationTask and runs its module-scope defineTask there
+  // too. Harmless, since nothing ever starts that task off Android, but worth
+  // stating plainly rather than asserting a guard that does not exist.
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     await require('../lib/androidAuto/carLocationTask').stopCarLocationService();

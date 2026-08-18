@@ -20,7 +20,7 @@
  * UNPROVEN ON HARDWARE: validated at the JS level only. The on-surface render
  * must still be confirmed on an EAS dev build + Android Auto DHU.
  */
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
 import { useDriverStore } from '../../store/driverStore';
 import { useDemandHeatmapView } from '../../hooks/demandHeatmapShared';
@@ -33,6 +33,12 @@ import { useCarLocation } from './useCarLocation';
 import { pushDebug, setDebugFact } from './carDebug';
 import { CarDebugPanel } from './CarDebugPanel';
 import { useCarSurfaceGeneration } from './carSurfaceGeneration';
+import {
+  NIGHT_MAP_STYLE,
+  setCarColorScheme,
+  useCarColorScheme,
+  type CarColorScheme,
+} from './carColorScheme';
 import { carColors } from './carTheme';
 // RouteLine / RoutePins hard-import react-native-maps, so they are lazy-required
 // AFTER the maps guard below (never at module scope) — otherwise loading this
@@ -83,7 +89,13 @@ function rampColor(weight: number, max: number): { fill: string; stroke: string;
   };
 }
 
-export function CarMapSurface(): React.ReactElement | null {
+/**
+ * Props the car host hands the React root. iternio's VirtualRenderer.kt:248 puts
+ * `colorScheme` in the initial-properties bundle and MapTemplate.ts:199 passes
+ * props straight through to this component — we simply never read them before.
+ */
+export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } = {}):
+  React.ReactElement | null {
   // Hooks first — unconditional, before any early return (rules-of-hooks).
   const rideState = useDriverStore((s) => s.rideState);
   const activeRide = useDriverStore((s) => s.activeRide);
@@ -96,6 +108,15 @@ export function CarMapSurface(): React.ReactElement | null {
   // loaded, instead of the driver having to unplug and replug.
   const surfaceGeneration = useCarSurfaceGeneration((s) => s.generation);
   const here = useCarLocation();
+  // Seed the store from the initial prop, then let register.ts's
+  // onAppearanceDidChange drive it for the rest of the session. Without the
+  // seed the first render guesses; without the store a driver who set off in
+  // daylight keeps a white map at 10pm.
+  const scheme = useCarColorScheme((s) => s.scheme);
+  useEffect(() => {
+    if (colorScheme) setCarColorScheme(colorScheme);
+  }, [colorScheme]);
+  const isNight = scheme === 'dark';
   const route = selectCarRoute(rideState, activeRide);
   // Cumulative earnings for the completed-trip card. Fetched by the phone, so
   // a car-only cold launch legitimately has none — buildTripCard omits the line
@@ -336,6 +357,10 @@ export function CarMapSurface(): React.ReactElement | null {
         // controlled region lets the zoom buttons + follow-me drive the camera.
         pointerEvents="none"
         showsUserLocation={false}
+        // Android Auto flips this at dusk from the car's own ambient state. A
+        // daylight map at night on a dashboard is genuinely dangerous, not just
+        // ugly — it is the brightest object in the cabin and it is at eye level.
+        customMapStyle={isNight ? NIGHT_MAP_STYLE : undefined}
         region={{
           latitude: center.latitude,
           longitude: center.longitude,
@@ -377,11 +402,17 @@ export function CarMapSurface(): React.ReactElement | null {
           />
         )}
       </MapView>
-      {/* Branded trip card overlay (display-only; interaction is via template
-          header actions / map buttons / the ride-offer alert). Hidden on the
-          bare idle map so the screen stays an uncluttered live map until there
-          is something to show. */}
-      {card.leg !== 'idle' && <CarTripCard card={card} />}
+      {/* Slim status bar (display-only; interaction is via template header
+          actions / map buttons / the ride-offer alert).
+
+          Hidden in TWO states, for different reasons:
+          - `idle`  — nothing to say, so the screen stays an uncluttered map.
+          - `offer` — the Android Auto alert is on screen and already carries
+            rider, fare, bonus, ETA and the Accept/Decline buttons. Drawing this
+            underneath it produced two overlapping panels with no clear target,
+            which is exactly what a driver must not have to work out while
+            deciding on a ride. The alert owns that moment; we get out of it. */}
+      {card.leg !== 'idle' && card.leg !== 'offer' && <CarTripCard card={card} />}
       {/* Always-on status pill. Two jobs:
           - UX: the idle car screen is otherwise a bare map with no indication
             the app is alive or connected, which is what Uber/Lyft put here.

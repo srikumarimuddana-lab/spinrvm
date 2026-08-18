@@ -83,3 +83,32 @@ regexes = [
 description = "jsPDF API.f2 helper misread as an API key assignment"
 regexTarget = "match"
 regexes = ['''API\.f2\s*=''']
+
+# Cloudflare D1/Durable Objects metering field names, reached through a
+# server edge-runtime sourcemap. The CI scan runs with --redact, so the
+# report only ever shows the secret as the literal string "REDACTED" —
+# do not allowlist on that placeholder text, it is not the real content.
+# Rebuilt admin-dashboard locally and ran gitleaks WITHOUT --redact to see
+# the real captured value: `CLOUDFLARE_DURABLE_OBJECT_QUERY_BINDINGS`, an
+# all-caps enum-shaped field-name constant (paired with the field name
+# `CLOUDFLARE_D1_ROWS_WRITTEN` immediately before it), consistent with a
+# Cloudflare D1/Durable-Objects telemetry field list bundled by Vercel's
+# edge-runtime instrumentation — not a live credential. First seen
+# 2026-08-18, blocking every `deploy-admin` run on `main` since (identical
+# match across 3 consecutive runs — 15:46, 17:04, 18:04 UTC — same file,
+# same line, same value).
+#
+# Deliberately NO `paths` key here, unlike the other `condition = "AND"`
+# entry above. Verified empirically (planting a real 40-char high-entropy
+# canary secret in this same directory, `.next/server/edge/chunks/`) that
+# gitleaks 8.27.2 treats an allowlist's `paths` list as a full pre-scan
+# file exclusion REGARDLESS of `condition`/`regexes` — a canary secret in
+# an otherwise-untouched file under that path was silently skipped
+# entirely ("scanned ~0 bytes"), even though it matched neither this
+# entry's regex nor its own content. Scoping by regex alone (below) still
+# suppresses only this exact literal match — verified the same canary is
+# still caught with this narrower entry in place.
+[[allowlists]]
+description = "Cloudflare D1/Durable Objects telemetry field-name pair misread as an API key"
+regexTarget = "match"
+regexes = ['''CLOUDFLARE_D1_ROWS_WRITTEN","CLOUDFLARE_DURABLE_OBJECT_QUERY_BINDINGS''']

@@ -10115,6 +10115,21 @@ how much they de-risk a public launch._
   (Fly + Railway) with no intermediate environment. Stand up a staging Fly app +
   throwaway Supabase project with synthetic data; point a `staging` branch or
   manual workflow at it. Prereq for E2, E4, and safe migration rehearsal.
+  **Scaffolding added 2026-08-18** (inert, no real infra provisioned):
+  `backend/fly.staging.toml` (placeholder app `spinr-backend-staging`, scaled
+  down vs. prod — 1 machine, scale-to-zero, 512mb), a new
+  `.github/workflows/deploy-backend-staging.yml` triggered only on a
+  `staging` branch push or manual `workflow_dispatch` (never `main`, never
+  reads a production secret name), and
+  `docs/runbooks/staging-environment.md` documenting the one-time manual
+  setup. **Still blocked** on a human with real access completing three
+  things the scaffolding cannot do itself: (1) `fly apps create
+  spinr-backend-staging`, (2) creating a throwaway Supabase project in
+  `ca-central-1` per the PIPEDA data-residency rule and seeding it with
+  synthetic data only, (3) registering `FLY_API_TOKEN_STAGING`,
+  `SUPABASE_STAGING_URL`, `SUPABASE_STAGING_SERVICE_ROLE_KEY` as new GitHub
+  secrets. Until then the new workflow fails fast at its "Verify required
+  secrets" step on every run — by design, and harmlessly.
 - [ ] **E2. Marketplace load/simulation testing** — harness BUILT on branch
   `claude/eager-franklin-69ta0w` (`loadtest/locustfile.py` + runbook with
   breaking-point register): rider+driver bots, real dispatch matchmaking, WS

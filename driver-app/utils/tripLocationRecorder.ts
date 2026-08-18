@@ -53,7 +53,22 @@ export function drainTerminalAck(request: TripLocationBatchRequest): TripLocatio
 
 export interface FlushPendingOptions {
   force?: boolean;
+  /**
+   * Skip the failure backoff window. ONLY the ride-completion flush may pass
+   * this — the GPS tail must reach settlement immediately even mid-outage.
+   * Every periodic/forced flush respects backoff: without it, the background
+   * task retried every ~4s for the whole duration of a backend outage.
+   */
+  bypassBackoff?: boolean;
 }
+
+// Exponential backoff after a failed upload: 5s, 10s, 20s … capped at 5min,
+// ±20% jitter so a fleet-wide outage doesn't synchronize retries. Per-JS-
+// context state (headless task and foreground app each keep their own clock);
+// worst case a fresh context retries once immediately, then backs off.
+const FLUSH_BACKOFF_BASE_MS = 5_000;
+const FLUSH_BACKOFF_MAX_MS = 300_000;
+const FLUSH_BACKOFF_JITTER = 0.2;
 
 export interface FlushPendingResult {
   uploaded_points: number;
@@ -124,6 +139,8 @@ export class TripLocationRecorder {
   private lastFlushAttemptAt: number | null = null;
   private lastUploadFailureAt: number | null = null;
   private flushPromise: Promise<FlushPendingResult> | null = null;
+  private nextFlushNotBefore = 0;
+  private consecutiveFlushFailures = 0;
 
   constructor(options: TripLocationRecorderOptions = {}) {
     this.outbox = options.outbox ?? tripLocationOutbox;
@@ -205,7 +222,7 @@ export class TripLocationRecorder {
     transport: TripLocationTransport | undefined,
     timeoutMs: number,
   ): Promise<BoundedFlushResult> {
-    const flush = this.flushPending(transport, { force: true });
+    const flush = this.flushPending(transport, { force: true, bypassBackoff: true });
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<null>((resolve) => {
       timer = setTimeout(() => resolve(null), timeoutMs);
@@ -291,8 +308,12 @@ export class TripLocationRecorder {
       ? (this.activeRideStartedAt === null ? 0 : now - this.activeRideStartedAt)
       : now - this.lastCaptureAt;
     const noRecentFix = activeRideId !== null && captureAge >= ACTIVE_TRIP_WATCHDOG_MS;
-    const uploadFailure = this.lastUploadFailureAt !== null
-      && now - this.lastUploadFailureAt < ACTIVE_TRIP_WATCHDOG_MS;
+    // A live backoff window counts as upload failure: without the second
+    // clause the degradation banner would flicker off during a 5-minute
+    // backoff while uploads are provably failing.
+    const uploadFailure = (this.lastUploadFailureAt !== null
+      && now - this.lastUploadFailureAt < ACTIVE_TRIP_WATCHDOG_MS)
+      || now < this.nextFlushNotBefore;
 
     return {
       activeRideId,
@@ -324,6 +345,8 @@ export class TripLocationRecorder {
     this.lastFlushAt = null;
     this.lastFlushAttemptAt = null;
     this.lastUploadFailureAt = null;
+    this.nextFlushNotBefore = 0;
+    this.consecutiveFlushFailures = 0;
     try {
       await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
     } catch {
@@ -346,6 +369,12 @@ export class TripLocationRecorder {
     transport: TripLocationTransport,
     options: FlushPendingOptions,
   ): Promise<FlushPendingResult> {
+    // Failure backoff — checked before any SQLite work. `force` does NOT
+    // bypass this (the background task forces every native callback); only
+    // the completion flush passes bypassBackoff.
+    if (!options.bypassBackoff && this.now() < this.nextFlushNotBefore) {
+      return { uploaded_points: 0, acknowledged_points: 0, skipped: true };
+    }
     const sessions = await this.outbox.listPendingSessions();
     if (!sessions.length) return { uploaded_points: 0, acknowledged_points: 0, skipped: true };
 
@@ -373,6 +402,11 @@ export class TripLocationRecorder {
             points,
           });
           uploadedPoints += points.length;
+          // The transport resolved — the network path works. Clear backoff
+          // even before validating the ack shape (a malformed ack is a server
+          // bug, not an outage to back off from).
+          this.consecutiveFlushFailures = 0;
+          this.nextFlushNotBefore = 0;
           if (acknowledgement.recording_session_id !== session.recording_session_id) {
             throw new Error('Trip location server acknowledgement referenced a different recording session.');
           }
@@ -398,8 +432,22 @@ export class TripLocationRecorder {
       return { uploaded_points: uploadedPoints, acknowledged_points: acknowledgedPoints, skipped: false };
     } catch (error) {
       this.lastUploadFailureAt = this.now();
+      this.consecutiveFlushFailures += 1;
+      const backoff = Math.min(
+        FLUSH_BACKOFF_BASE_MS * 2 ** (this.consecutiveFlushFailures - 1),
+        FLUSH_BACKOFF_MAX_MS,
+      );
+      const jitter = 1 + FLUSH_BACKOFF_JITTER * (2 * Math.random() - 1);
+      this.nextFlushNotBefore = this.now() + Math.round(backoff * jitter);
       throw error;
     }
+  }
+
+  /** @internal Test-only — clear backoff state on the singleton between cases. */
+  _resetUploadBackoff(): void {
+    this.nextFlushNotBefore = 0;
+    this.consecutiveFlushFailures = 0;
+    this.lastUploadFailureAt = null;
   }
 
   private async resolveActiveRideId(): Promise<string | null> {

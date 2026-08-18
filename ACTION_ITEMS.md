@@ -3227,9 +3227,13 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     accounts active, offsetting `legacy_import` payout rows present and
     correctly amounted) — the visibility mechanism works correctly for
     matched records.
-  - **Follow-up (not yet done):** backfill a short change-log note
-    recording when/how the real production commit happened, since nothing
-    in the repo currently documents it.
+  - **Follow-up: DONE (2026-08-18).** Recovered the exact commit record
+    from `audit_logs` itself (the only source that had it): `action:
+    legacy_booking_import`, `2026-07-29 18:48:11 UTC`, `admin-001`
+    (super_admin), 224 rides imported, 60 offsetting payout rows
+    ($2,179.66 total) — matches the original importer doc's documented
+    scope exactly. Written up at
+    `docs/change-log/2026-08-18-a30-legacy-import-production-commit-note.md`.
 - **Finding 1 — real phone-match rate.**
   - [x] **Status:** measured (2026-08-13, live query). **100% of legacy
     rides have a matched rider** (0/224 NULL), **94.2% have a matched

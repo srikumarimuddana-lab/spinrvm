@@ -6,6 +6,8 @@ withdrawable driver balance, the hazard fields that keep imported rides out of
 the live background loops, and the resume/idempotency semantics.
 """
 
+from decimal import Decimal
+
 import pytest
 
 from backend.services import booking_import_service as svc
@@ -240,19 +242,28 @@ def test_grand_total_is_bill_excluding_tip(monkeypatch):
     _install_fake(monkeypatch)
     plan = _plan([_booking(tip_driver="3.00", total_amount="23.53")], earnings=[_earning(amount="19.72")])
     (ride,) = plan.rides_to_insert
-    assert ride["grand_total"] == pytest.approx(20.53)
+    # grand_total/area_fees_total/tax_amount/discount_amount are NUMERIC rides
+    # columns (verified via information_schema, 2026-08-18) -- serialized as
+    # str(Decimal), not float(), so they round-trip exact into Postgres. See
+    # ACTION_ITEMS.md B29.
+    assert ride["grand_total"] == "20.53"
     # grand_total == total_fare + area_fees + tax − discount
-    rebuilt = ride["total_fare"] + ride["area_fees_total"] + ride["tax_amount"] - ride["discount_amount"]
-    assert rebuilt == pytest.approx(ride["grand_total"])
+    rebuilt = (
+        Decimal(str(ride["total_fare"]))
+        + Decimal(ride["area_fees_total"])
+        + Decimal(ride["tax_amount"])
+        - Decimal(ride["discount_amount"])
+    )
+    assert rebuilt == Decimal(ride["grand_total"])
 
 
 def test_fees_and_tax_land_in_their_own_columns(monkeypatch):
     _install_fake(monkeypatch)
     plan = _plan([_booking()])
     (ride,) = plan.rides_to_insert
-    assert ride["tax_amount"] == pytest.approx(0.98)
+    assert ride["tax_amount"] == "0.98"
     assert ride["tax_breakdown"] == {"GST": {"rate": 5.0, "amount": 0.98}}
-    assert ride["area_fees_total"] == pytest.approx(0.60)
+    assert ride["area_fees_total"] == "0.60"
     assert {f["name"] for f in ride["area_fees_breakdown"]} == {"City fee", "Infrastructure fee", "Insurance fee"}
 
 
@@ -267,7 +278,7 @@ def test_payout_gst_amount_preserved_raw_not_merged_into_tax(monkeypatch):
     _install_fake(monkeypatch)
     plan = _plan([_booking(gst="0.98", payout_gst_amount="4.50")])
     (ride,) = plan.rides_to_insert
-    assert ride["tax_amount"] == pytest.approx(0.98)  # unchanged -- still commission-GST
+    assert ride["tax_amount"] == "0.98"  # unchanged -- still commission-GST
     assert ride["legacy_import_metadata"]["old_payout_gst_amount"] == pytest.approx(4.50)
 
 

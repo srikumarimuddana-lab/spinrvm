@@ -83,6 +83,7 @@ from .data_transfer_import import router as data_transfer_import_router
 from .data_transfer_jobs import router as data_transfer_jobs_router
 from .data_transfer_search import router as data_transfer_search_router
 from .dispute_evidence_submission import router as dispute_evidence_submission_router
+from .dispute_pack_download import router as dispute_pack_download_router
 from .documents import router as documents_router
 from .driver_appeals import router as driver_appeals_router
 from .driver_import import router as driver_import_router
@@ -217,6 +218,11 @@ admin_router.include_router(users_router, dependencies=[Depends(require_module("
 admin_router.include_router(rider_import_router, dependencies=[Depends(require_module("users"))])
 admin_router.include_router(promotions_router, dependencies=[Depends(require_module("promotions"))])
 admin_router.include_router(support_router, dependencies=[Depends(require_module("support"))])
+# Dispute-evidence-pack download (C23 item 4) -- same "support" gate as the
+# Chargebacks tab above, not require_module("rides"). Kept as its own
+# router rather than folded into rides_router specifically so it doesn't
+# inherit that broader ops/dispatch grant (security-auditor finding).
+admin_router.include_router(dispute_pack_download_router, dependencies=[Depends(require_module("support"))])
 # support_tickets sub-router enforces require_module("support_tickets") per-handler
 # (the dashboard/trends/ticket routes carry it explicitly); config routes use
 # get_admin_user so any admin can connect the integration.

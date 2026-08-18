@@ -20,8 +20,11 @@ non-trivial, user-visible+external changes, this endpoint:
      gate.
   4. Is idempotent: an atomic claim on `evidence_submitted_at IS NULL`
      (same claim-flag shape as utils/dispute_evidence_reminder.py's
-     evidence_reminder_sent_at) means a retried/duplicate request cannot
-     double-submit.
+     evidence_reminder_sent_at) is taken BEFORE the Stripe call, not after
+     -- two concurrent requests can't both pass the claim and both call
+     Stripe. If the Stripe call then fails, the claim is rolled back
+     (evidence_submitted_at cleared) so a retry isn't permanently blocked
+     by a submission that never actually reached Stripe.
   5. Logs to the admin-action audit table (security-relevant event per
      CLAUDE.md's observability conventions) whether the flag was off,
      the claim was lost to another request, or the submission succeeded.
@@ -98,6 +101,18 @@ async def admin_submit_dispute_evidence(
     if dispute.get("evidence_submitted_at"):
         raise HTTPException(status_code=409, detail="Evidence was already submitted for this dispute")
 
+    # Atomic claim BEFORE the Stripe call, not after -- two concurrent
+    # requests for the same dispute can't both pass the plain read above
+    # and both reach Stripe. update_one returns None (0 rows matched) if
+    # another request already claimed it between the read and here.
+    claimed = await db_supabase.update_one(
+        "stripe_disputes",
+        {"id": dispute_id, "evidence_submitted_at": None},
+        {"$set": {"evidence_submitted_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if claimed is None:
+        raise HTTPException(status_code=409, detail="Evidence submission already in progress or completed")
+
     ride_id = dispute.get("ride_id")
     ride = await db_supabase.get_ride_details_enriched(ride_id) if ride_id else None
 
@@ -112,12 +127,19 @@ async def admin_submit_dispute_evidence(
     stripe_secret = (settings or {}).get("stripe_secret_key", "")
     if not stripe_secret:
         logger.error("dispute-evidence-submit: no Stripe secret key configured")
+        await _release_claim(dispute_id)
         raise HTTPException(status_code=503, detail="Stripe not configured")
 
     stripe_dispute_id = dispute.get("stripe_dispute_id")
     try:
         import stripe
 
+        # No idempotency_key: Dispute.modify() is an overwrite, not a
+        # charge-creation call -- Stripe has no duplicate-request concept
+        # for it the way it does for PaymentIntents, so this repo's usual
+        # blanket idempotency-key convention doesn't apply here. The claim
+        # above is what prevents a double *logical* submission from this
+        # endpoint.
         stripe.Dispute.modify(
             stripe_dispute_id,
             evidence={"uncategorized_text": evidence_text},
@@ -130,6 +152,9 @@ async def admin_submit_dispute_evidence(
             exc,
             exc_info=True,
         )
+        # Release the claim -- the submission never actually reached
+        # Stripe, so a retry must not be permanently blocked by it.
+        await _release_claim(dispute_id)
         await log_admin_action(
             admin_user,
             "dispute_evidence_submit_stripe_error",
@@ -139,23 +164,12 @@ async def admin_submit_dispute_evidence(
         )
         raise HTTPException(status_code=502, detail="Stripe rejected the evidence submission") from exc
 
-    # Atomic claim AFTER the Stripe call succeeds -- if two requests race
-    # past the evidence_submitted_at check above, Stripe's own dispute
-    # object is the actual source of truth (the second call just re-submits
-    # the same evidence, which Stripe allows before due_by); the claim here
-    # only prevents this endpoint's own response/audit-log from double-firing.
-    claimed = await db_supabase.update_one(
-        "stripe_disputes",
-        {"id": dispute_id, "evidence_submitted_at": None},
-        {"$set": {"evidence_submitted_at": datetime.now(timezone.utc).isoformat()}},
-    )
-
     await log_admin_action(
         admin_user,
         "dispute_evidence_submitted",
         "stripe_dispute",
         dispute_id,
-        {"stripe_dispute_id": stripe_dispute_id, "claim_won": claimed is not None},
+        {"stripe_dispute_id": stripe_dispute_id},
     )
 
     return {
@@ -163,3 +177,17 @@ async def admin_submit_dispute_evidence(
         "stripe_dispute_id": stripe_dispute_id,
         "dispute_id": dispute_id,
     }
+
+
+async def _release_claim(dispute_id: str) -> None:
+    """Roll back the evidence_submitted_at claim after a failure upstream
+    of the actual Stripe submission -- lets a retry through instead of
+    permanently 409-ing a dispute that never really got submitted."""
+    try:
+        await db_supabase.update_one(
+            "stripe_disputes",
+            {"id": dispute_id},
+            {"$set": {"evidence_submitted_at": None}},
+        )
+    except Exception:
+        logger.error("dispute-evidence-submit: failed to release claim for dispute %s", dispute_id, exc_info=True)

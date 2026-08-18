@@ -1,6 +1,9 @@
 """C23 item 4: GET /api/admin/rides/{ride_id}/dispute-pack (routes/admin/
-rides.py's admin_get_dispute_evidence_pack). Mirrors test_admin_rides_read_
-endpoints_coverage.py's fixture pattern (client / as_super_admin)."""
+dispute_pack_download.py's admin_get_dispute_evidence_pack -- its own
+router, gated by require_module("support") rather than rides_router's
+"rides", per the security-auditor finding on the first version of this
+endpoint). Mirrors test_admin_rides_read_endpoints_coverage.py's fixture
+pattern (client / as_super_admin)."""
 
 from __future__ import annotations
 
@@ -90,7 +93,7 @@ class TestDisputeEvidencePack:
             patch("db_supabase.get_ride_details_enriched", AsyncMock(return_value=_RIDE)),
             patch("db_supabase.get_rows", AsyncMock(return_value=[_DISPUTE_ROW])),
             patch("routes.admin.rides.get_app_settings", AsyncMock(return_value={})),
-            patch("routes.admin.rides.log_admin_action", _no_op_admin_log()),
+            patch("routes.admin.dispute_pack_download.log_admin_action", _no_op_admin_log()),
         ):
             resp = client.get("/api/admin/rides/ride-1/dispute-pack")
         assert resp.status_code == 200
@@ -116,7 +119,7 @@ class TestDisputeEvidencePack:
             patch("db_supabase.get_ride_details_enriched", AsyncMock(return_value=_RIDE)),
             patch("db_supabase.get_rows", AsyncMock(return_value=[])),
             patch("routes.admin.rides.get_app_settings", AsyncMock(return_value={})),
-            patch("routes.admin.rides.log_admin_action", _no_op_admin_log()),
+            patch("routes.admin.dispute_pack_download.log_admin_action", _no_op_admin_log()),
         ):
             resp = client.get("/api/admin/rides/ride-1/dispute-pack")
         assert resp.status_code == 200
@@ -138,7 +141,7 @@ class TestDisputeEvidencePack:
             patch("db_supabase.get_ride_details_enriched", AsyncMock(return_value=ride_with_coords)),
             patch("db_supabase.get_rows", AsyncMock(return_value=[_DISPUTE_ROW])),
             patch("routes.admin.rides.get_app_settings", AsyncMock(return_value={})),  # no API key
-            patch("routes.admin.rides.log_admin_action", _no_op_admin_log()),
+            patch("routes.admin.dispute_pack_download.log_admin_action", _no_op_admin_log()),
         ):
             resp = client.get("/api/admin/rides/ride-1/dispute-pack")
         assert resp.status_code == 200

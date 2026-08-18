@@ -138,6 +138,71 @@ class TestDisputeLookup:
         assert resp.status_code == 409
 
 
+class TestClaimRace:
+    """Money-auditor finding: the claim must be taken BEFORE the Stripe
+    call (not after), and released if the Stripe call then fails, so a
+    losing request 409s instead of both requests reaching Stripe, and a
+    request that failed before Stripe isn't permanently blocked."""
+
+    def test_lost_claim_race_returns_409_before_any_stripe_call(self, client, as_super_admin):
+        modify_mock = MagicMock()
+        with (
+            patch(
+                "routes.admin.dispute_evidence_submission.get_app_settings",
+                AsyncMock(return_value=_flag_on_settings()),
+            ),
+            patch("db_supabase.get_rows", AsyncMock(return_value=[_DISPUTE_ROW])),
+            patch("db_supabase.update_one", AsyncMock(return_value=None)),  # another request won the claim
+            patch("stripe.Dispute.modify", modify_mock),
+        ):
+            resp = _post(client, confirm=True)
+        assert resp.status_code == 409
+        modify_mock.assert_not_called()
+
+    def test_claim_taken_before_stripe_call_not_after(self, client, as_super_admin):
+        call_order = []
+        update_mock = AsyncMock(side_effect=lambda *a, **k: call_order.append("claim") or {"id": "sd-1"})
+        modify_mock = MagicMock(side_effect=lambda *a, **k: call_order.append("stripe") or {"id": "dp_1"})
+        with (
+            patch(
+                "routes.admin.dispute_evidence_submission.get_app_settings",
+                AsyncMock(return_value=_flag_on_settings()),
+            ),
+            patch("db_supabase.get_rows", AsyncMock(return_value=[_DISPUTE_ROW])),
+            patch("db_supabase.get_ride_details_enriched", AsyncMock(return_value=_RIDE)),
+            patch("db_supabase.update_one", update_mock),
+            patch("routes.admin.dispute_evidence_submission.log_admin_action", AsyncMock()),
+            patch("stripe.Dispute.modify", modify_mock),
+        ):
+            resp = _post(client, confirm=True)
+        assert resp.status_code == 200
+        assert call_order == ["claim", "stripe"]
+
+    def test_stripe_failure_releases_claim_for_retry(self, client, as_super_admin):
+        update_calls = []
+        update_mock = AsyncMock(
+            side_effect=lambda table, filters, update, **k: update_calls.append(filters) or {"id": "sd-1"}
+        )
+        with (
+            patch(
+                "routes.admin.dispute_evidence_submission.get_app_settings",
+                AsyncMock(return_value=_flag_on_settings()),
+            ),
+            patch("db_supabase.get_rows", AsyncMock(return_value=[_DISPUTE_ROW])),
+            patch("db_supabase.get_ride_details_enriched", AsyncMock(return_value=_RIDE)),
+            patch("db_supabase.update_one", update_mock),
+            patch("routes.admin.dispute_evidence_submission.log_admin_action", AsyncMock()),
+            patch("stripe.Dispute.modify", MagicMock(side_effect=Exception("stripe down"))),
+        ):
+            resp = _post(client, confirm=True)
+        assert resp.status_code == 502
+        # First call claims (filters include evidence_submitted_at: None),
+        # second call releases it (filters is just {"id": ...}).
+        assert len(update_calls) == 2
+        assert update_calls[0] == {"id": "sd-1", "evidence_submitted_at": None}
+        assert update_calls[1] == {"id": "sd-1"}
+
+
 class TestStripeCall:
     def test_stripe_error_surfaces_502_not_swallowed(self, client, as_super_admin):
         with (

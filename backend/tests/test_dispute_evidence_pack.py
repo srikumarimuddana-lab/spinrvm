@@ -45,13 +45,11 @@ class TestBuildRideTimeline:
             "created_at": "2026-01-01T10:00:00+00:00",
             "offers": [
                 {
-                    "driver_name": "D1",
                     "status": "declined",
                     "offered_at": "2026-01-01T10:01:00+00:00",
                     "responded_at": "2026-01-01T10:01:05+00:00",
                 },
                 {
-                    "driver_name": "D2",
                     "status": "accepted",
                     "offered_at": "2026-01-01T10:02:00+00:00",
                     "responded_at": "2026-01-01T10:02:05+00:00",
@@ -72,12 +70,15 @@ class TestBuildRideTimeline:
         ride = {"created_at": None, "offers": []}
         assert pack.build_ride_timeline(ride) == []
 
-    def test_offer_events_labeled_with_driver_name(self):
+    def test_offer_events_carry_no_driver_identifier(self):
+        """PIPEDA: offered-but-not-assigned drivers get no name/id label at
+        all in the timeline -- security-auditor finding, C23 items 4-5."""
         ride = {
             "created_at": "2026-01-01T10:00:00+00:00",
             "offers": [
                 {
-                    "driver_name": "Alex",
+                    "driver_name": "Alex Real Name",
+                    "driver_id": "driver-uuid-123",
                     "status": "accepted",
                     "offered_at": "2026-01-01T10:01:00+00:00",
                     "responded_at": "2026-01-01T10:01:30+00:00",
@@ -86,8 +87,11 @@ class TestBuildRideTimeline:
         }
         events = pack.build_ride_timeline(ride)
         labels = [e["event"] for e in events]
-        assert any("offer_sent (driver Alex)" == label for label in labels)
-        assert any("offer_accepted (driver Alex)" == label for label in labels)
+        assert any(label.startswith("offer_1_sent") for label in labels)
+        assert any(label.startswith("offer_1_accepted") for label in labels)
+        for label in labels:
+            assert "Alex" not in label
+            assert "driver-uuid-123" not in label
 
 
 class TestBuildAccountHistorySummary:

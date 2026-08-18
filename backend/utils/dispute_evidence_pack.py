@@ -10,12 +10,13 @@ letter. This module builds that once so the two endpoints don't duplicate
 
 PIPEDA data minimization (matches routes/admin/rides.py's existing
 route-map.png and invoice endpoints):
-- Driver identified by `driver_code` only -- never phone, plate, or address.
+- The assigned driver is identified by `driver_code` only -- never phone,
+  plate, or address. Offered-but-not-assigned drivers get no identifier at
+  all in the timeline (see build_ride_timeline).
 - GPS points limited to `navigating_to_pickup` + `trip_in_progress` phases
   (the ride-relevant window), never the driver's full location history.
-- Rider identified by name/email as already shown on their own invoice --
-  this is being sent back to the SAME payment processor handling their own
-  charge, not to a third party.
+- No rider name or email appears anywhere in this module's output -- the
+  cover letter and timeline reference the ride by ride_code/id only.
 """
 
 from __future__ import annotations
@@ -80,15 +81,17 @@ def build_ride_timeline(ride: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     _add("ride_requested", ride.get("created_at"))
     # Offer-funnel rows (repositories.ride_repo.get_ride_details_enriched
-    # attaches driver_name per offer): "driver_id,status,eta_seconds,
-    # offered_at,responded_at" -- no created_at/accepted_at on this table.
-    for offer in ride.get("offers") or []:
-        driver_label = offer.get("driver_name") if isinstance(offer, dict) else None
-        suffix = f" (driver {driver_label})" if driver_label else ""
-        _add(f"offer_sent{suffix}", offer.get("offered_at"))
+    # attaches driver_name/driver_rating per offer for the admin UI, but
+    # this module's own PIPEDA rule is driver_code-only -- and offers don't
+    # even carry driver_code (only the ride's eventually-assigned driver
+    # does). Rather than plumb a second driver_code lookup through just for
+    # a label, offer events stay unlabeled: which specific driver was
+    # offered isn't evidence-relevant, only that the dispatch funnel ran.
+    for i, offer in enumerate(ride.get("offers") or [], start=1):
+        _add(f"offer_{i}_sent", offer.get("offered_at"))
         status = offer.get("status")
         if offer.get("responded_at") and status:
-            _add(f"offer_{status}{suffix}", offer.get("responded_at"))
+            _add(f"offer_{i}_{status}", offer.get("responded_at"))
     _add("driver_accepted", ride.get("driver_accepted_at"))
     _add("driver_arrived", ride.get("driver_arrived_at"))
     _add("trip_started", ride.get("ride_started_at"))

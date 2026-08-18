@@ -1,7 +1,11 @@
 # ADR-010: Cross-replica metrics aggregation and production alerting
 
 **Date:** 2026-08-02
-**Status:** Proposed
+**Status:** Accepted (PR #3255, merged 2026-08-02 — status field was left
+unstamped at merge time; corrected 2026-08-18 while progressing CR-2026-008
+/ issue #3295, which implements §5's MVP against this design. No other
+section of this ADR was edited — decisions stay immutable per
+`docs/adr/README.md`.)
 
 ---
 

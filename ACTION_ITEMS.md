@@ -7226,6 +7226,30 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   that's already fully pinned — not individually enumerated here; run the
   grep in this entry's own investigation to get the current list.
 
+### C18b. `superfly/flyctl-actions/setup-flyctl@master` — a mutable branch reference C18's sweep missed, repo-wide
+- [x] **Status:** CLOSED (2026-08-18). Found via a GHAS/Semgrep
+  `github-actions-mutable-action-tag` finding on PR #4221's new
+  `deploy-backend-staging.yml` (E1 scaffolding). C18's 2026-08-12 closure
+  claimed all 176 `uses:` references repo-wide were pinned, but this one
+  wasn't caught — 4 files used `superfly/flyctl-actions/setup-flyctl@master`,
+  a literal branch reference (worse than an unpinned version tag, which at
+  least targets a fixed release): `bootstrap-fly.yml`,
+  `bootstrap-metrics-agent.yml`, `deploy-fly.yml`, and (fixed directly in
+  #4221 itself) `deploy-backend-staging.yml`.
+- **Fix:** all 4 pinned to `ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1`
+  (master's tip as of 2026-08-18, resolved via `git ls-remote
+  https://github.com/superfly/flyctl-actions.git refs/heads/master` — the
+  same anonymous read-only proxy channel C18 itself used to resolve verified
+  SHAs). `flyctl-actions` has no tagged releases (confirmed via the same
+  `git ls-remote --tags`, which returns nothing), so the trailing comment
+  names "master" rather than a version, unlike every other C18 pin.
+- **Blast radius:** CI/deploy config only, not a live-tested app surface
+  (rides/dispatch/payments/auth/corporate/safety) — no Change Impact Log
+  entry required per CLAUDE.md's own trigger list. Grepped
+  `.github/workflows/*.yml` for every other `flyctl-actions` reference to
+  confirm these 4 (3 here + the one already fixed in #4221) are the complete
+  set; no other file references this action.
+
 ### C19. `eas update` is still 100% broken on `main` today — a second, different bug downstream of the C17/RNGH fix, in `eas update`'s fingerprint-computation step
 - [x] **Status:** DURABLY CLOSED (2026-08-11, same day, follow-up pass) —
   the actual `yarn.lock` resolution bug is now fixed at the source in both

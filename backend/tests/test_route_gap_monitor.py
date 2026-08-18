@@ -80,6 +80,8 @@ def test_gap_monitor_tick_opens_one_idempotent_event_without_coordinates(monkeyp
             ]
         if table == "driver_location_history":
             return [{"captured_at": (NOW - timedelta(seconds=45)).isoformat()}]
+        if table == "ride_location_gap_events":
+            return []  # no open events for the orphan-closure pass
         raise AssertionError(f"unexpected table {table}")
 
     async def insert_many_ignore_conflicts(_table, rows, _on_conflict):
@@ -99,7 +101,7 @@ def test_gap_monitor_tick_opens_one_idempotent_event_without_coordinates(monkeyp
 
     result = _run(route_gap_monitor.route_gap_monitor_tick())
 
-    assert result == {"scanned": 1, "opened": 1, "resolved": 0, "unknown": 0}
+    assert result == {"scanned": 1, "opened": 1, "resolved": 0, "unknown": 0, "orphaned_closed": 0}
     assert inserted == [
         {
             "ride_id": "ride_1",
@@ -125,6 +127,8 @@ def test_gap_monitor_tick_resolves_an_open_event_after_capture_resumes(monkeypat
             ]
         if table == "driver_location_history":
             return [{"captured_at": (NOW - timedelta(seconds=5)).isoformat()}]
+        if table == "ride_location_gap_events":
+            return []  # no open events for the orphan-closure pass
         raise AssertionError(f"unexpected table {table}")
 
     async def update_one(*args, **kwargs):
@@ -143,7 +147,7 @@ def test_gap_monitor_tick_resolves_an_open_event_after_capture_resumes(monkeypat
 
     result = _run(route_gap_monitor.route_gap_monitor_tick())
 
-    assert result == {"scanned": 1, "opened": 0, "resolved": 1, "unknown": 0}
+    assert result == {"scanned": 1, "opened": 0, "resolved": 1, "unknown": 0, "orphaned_closed": 0}
     assert updates[0][0] == (
         "ride_location_gap_events",
         {"ride_id": "ride_1", "status": "open"},
@@ -245,3 +249,78 @@ def test_nudge_swallows_send_failure():
     ):
         # Must not raise — a nudge failure can never break the monitor tick.
         _run(_notify_driver_location_health(ride, _gap_decision(), 30))
+
+
+# --- NULL captured_at blindness + orphaned open events (SPR-PE7TTB) -----------
+
+
+def test_latest_capture_ignores_null_captured_at_rows():
+    """ORDER BY captured_at DESC puts NULLs first in Postgres. One legacy WS
+    breadcrumb row (captured_at NULL) blinded the monitor for the whole ride:
+    every tick saw None, opened a phantom gap-since-trip-start, and the real
+    mid-trip blackout was never distinguishable (ride SPR-PE7TTB)."""
+    calls: list[dict] = []
+
+    async def get_rows(table, filters, **_kwargs):
+        assert table == "driver_location_history"
+        calls.append(filters)
+        return [{"captured_at": (NOW - timedelta(seconds=5)).isoformat()}]
+
+    with patch.object(route_gap_monitor.db_supabase, "get_rows", get_rows):
+        result = _run(route_gap_monitor._latest_capture_time("ride_1"))
+
+    assert result == NOW - timedelta(seconds=5)
+    assert calls[0]["captured_at"] == {"$notnull": True}
+
+
+def test_latest_capture_falls_back_to_legacy_timestamp_column():
+    async def get_rows(_table, filters, **_kwargs):
+        if "captured_at" in filters:
+            return []  # all rows are v1-shaped: captured_at NULL everywhere
+        assert filters["timestamp"] == {"$notnull": True}
+        return [{"timestamp": (NOW - timedelta(seconds=8)).isoformat()}]
+
+    with patch.object(route_gap_monitor.db_supabase, "get_rows", get_rows):
+        result = _run(route_gap_monitor._latest_capture_time("ride_1"))
+
+    assert result == NOW - timedelta(seconds=8)
+
+
+def test_orphaned_open_events_close_terminally_when_ride_no_longer_active():
+    """An event left 'open' past ride completion is closed with a distinct
+    terminal status (never 'resolved' — capture did not actually resume), so
+    'open' always means an active ride is silent right now."""
+    updates: list[tuple] = []
+
+    async def get_rows(table, filters, **_kwargs):
+        if table == "ride_location_gap_events":
+            return [
+                {"id": "evt_done", "ride_id": "ride_done"},
+                {"id": "evt_live", "ride_id": "ride_live"},
+            ]
+        if table == "rides":
+            assert set(filters["id"]["$in"]) == {"ride_done", "ride_live"}
+            return [
+                {"id": "ride_done", "status": "completed"},
+                {"id": "ride_live", "status": "in_progress"},
+            ]
+        raise AssertionError(f"unexpected table {table}")
+
+    async def update_one(*args, **kwargs):
+        updates.append(args)
+        return {"id": args[1]["id"]}
+
+    with (
+        patch.object(route_gap_monitor.db_supabase, "get_rows", get_rows),
+        patch.object(route_gap_monitor.db_supabase, "update_one", update_one),
+    ):
+        closed = _run(route_gap_monitor._close_orphaned_open_events(NOW))
+
+    assert closed == 1
+    assert updates == [
+        (
+            "ride_location_gap_events",
+            {"id": "evt_done", "status": "open"},
+            {"status": "unresolved_at_completion"},
+        )
+    ]

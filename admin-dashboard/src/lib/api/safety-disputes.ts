@@ -85,6 +85,45 @@ export const getChargebacks = (opts: { limit?: number; offset?: number; status?:
     return request<Chargeback[]>(`/api/admin/disputes/chargebacks${qs ? `?${qs}` : ""}`);
 };
 
+// GET /api/admin/rides/{ride_id}/dispute-pack (C23 item 4) returns a binary
+// zip, not JSON -- can't go through request<T>(), same reason
+// downloadDriverStatement (api/drivers.ts) fetches directly with a manual
+// Authorization header instead.
+export async function downloadDisputeEvidencePack(
+    rideId: string,
+    rideCode: string | null,
+): Promise<{ blob: Blob; filename: string }> {
+    const { useAuthStore } = await import("@/store/authStore");
+    const token = useAuthStore.getState().token;
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const res = await fetch(`/api/admin/rides/${rideId}/dispute-pack`, { headers });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Could not generate evidence pack (${res.status})`);
+    }
+    return { blob: await res.blob(), filename: `dispute_evidence_${rideCode || rideId}.zip` };
+}
+
+// POST /api/admin/disputes/{dispute_id}/submit-evidence (C23 item 5) --
+// ships dark behind an app_settings flag and requires confirm:true; see
+// routes/admin/dispute_evidence_submission.py's module docstring for the
+// full safety-gate rationale. super_admin only.
+export interface SubmitDisputeEvidenceResult {
+    submitted: boolean;
+    stripe_dispute_id: string;
+    dispute_id: string;
+}
+
+export const submitDisputeEvidence = (disputeId: string, uncategorizedText?: string) =>
+    request<SubmitDisputeEvidenceResult>(`/api/admin/disputes/${disputeId}/submit-evidence`, {
+        method: "POST",
+        body: JSON.stringify({
+            confirm: true,
+            ...(uncategorizedText ? { uncategorized_text: uncategorizedText } : {}),
+        }),
+    });
+
 export const createDispute = (data: any) =>
     request<any>("/api/admin/disputes", {
         method: "POST",

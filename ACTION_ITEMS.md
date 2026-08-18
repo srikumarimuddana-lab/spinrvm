@@ -174,6 +174,19 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     `test_commit_stamps_provenance_on_updated_user_without_clobbering_other_metadata`).
     No code change needed; this note exists only to stop a future session
     from re-doing already-shipped work off a stale status line.
+    **Second, separate finding (2026-08-17, CR-4105 — the provenance
+    stamping above was never the real bug):** `rider_import_service.py:315`
+    stamps `created_at = now()` on every net-new imported rider (the source
+    CSV has no signup-date column to recover a real value from), which let
+    `routes/promotions.py`'s `new_user_days` promo-eligibility check treat
+    old-app customers as brand-new signups. Fixed in PR #4132 by excluding
+    riders carrying `legacy_import_metadata->'rider_csv_import'` from
+    `new_user_days` eligibility regardless of `created_at` age —
+    `created_at` itself deliberately left unchanged/un-backdated (see
+    `docs/change-log/2026-08-17-rider-import-promo-eligibility-fix.md` for
+    why). **Open follow-up:** whether any of the 918 already-backfilled
+    riders need retroactive correction is unconfirmed without a live DB
+    query — flagged, not resolved, in the same change-log entry.
   - **RESOLVED**: `payout_gst_amount` for the 186 already-migrated rides —
     backfilled additive-only, $102.09 total
     (`docs/change-log/2026-08-16-gst-backfill-executed.md`). **D1 remains

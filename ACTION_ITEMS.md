@@ -10129,7 +10129,18 @@ how much they de-risk a public launch._
   platform; a total outage is currently discovered by users. Add an external
   monitor (Checkly/UptimeRobot/Grafana synthetic) hitting `/health`, auth, and
   fare-estimate every minute from outside, alerting to PagerDuty. Tie alert
-  thresholds to the CLAUDE.md SLA table (SLO + error budget).
+  thresholds to the CLAUDE.md SLA table (SLO + error budget). **Scaffolding
+  landed 2026-08-18** (docs/spec only, vendor-agnostic, no real account or
+  external probe created): `docs/runbooks/synthetic-monitoring.md` specifies
+  the three probes (`GET /health`, `POST /api/v1/auth/refresh` expecting 401,
+  `GET /api/v1/fares?lat=...&lng=...`), their down/degraded semantics, and the
+  exact SLA thresholds cited from CLAUDE.md's Performance SLAs / KPI Targets
+  tables (fare estimate P95 < 300 ms, auth refresh P95 < 200 ms);
+  `monitoring/synthetic-checks.yaml` is the declarative check spec a human
+  translates into whichever vendor config is chosen. Still needed before this
+  is real monitoring: a human picks a vendor, creates the account, wires the
+  actual checks, and creates a real PagerDuty service (the integration key in
+  the YAML is a placeholder string, never a real credential).
 - [x] **E5. Kill switches / feature flags** — CLOSED (2026-08-11). Correction
   found while scoping this: the "no documented kill switches" premise was only
   3/4 true — `scheduled_dispatch_enabled` already existed and gated

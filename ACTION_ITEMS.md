@@ -8428,6 +8428,92 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 - **Acceptance:** a rider attempting to exceed the cap gets a clear
   rejection at booking time; dispatcher tick load stays bounded per rider.
 
+### C34. Corporate company-portal guest booking bypasses all scheduled-ride validation (lead-time, max-advance, DST, overlap)
+
+- [ ] **Status:** open (filed 2026-08-17, from a corporate/driver-scoped
+  follow-up to the C26-C33 scheduled-rides review).
+- **Issue/gap:** there are three independent paths that create a corporate
+  scheduled ride, not two. `company_allowance` and `work_profile` bookings
+  both go through `CreateRideRequest`/`create_ride`
+  (`backend/routes/rides/booking.py`), so both correctly inherit
+  `validate_scheduled_time`'s 15-minute minimum lead time
+  (`SCHEDULE_MIN_LEAD_MINUTES`), 7-day max advance
+  (`SCHEDULE_MAX_ADVANCE_DAYS`), DST spring-forward-gap/fall-back-ambiguity
+  guard (`backend/schemas.py`), and the C32 scheduled-overlap guard
+  (`booking.py:496-525`). The third path — **company-portal guest
+  booking**, `POST /company/{company_id}/bookings`
+  (`backend/routes/corporate_company_bookings.py:119-139` →
+  `backend/services/company_booking_service.py:62-231`) — does not call
+  `create_ride` at all. It builds the `Ride` row directly from
+  `CompanyGuestBookingRequest`, whose `scheduled_time` field is a bare
+  `Optional[datetime] = None` with only a phone-format validator on a
+  sibling field — no min-lead-time, no max-advance, no DST guard, no
+  `scheduled_timezone` field, and it never runs the C32 overlap check
+  (that block lives only inside `create_ride` in `booking.py`, gated on
+  `body.scheduled_time is not None`).
+- **Why it matters:** a company booker/admin can schedule a guest ride
+  seconds in the past or years in the future, submit a DST-ambiguous local
+  wall-clock time with no timezone context (the exact failure mode
+  `schemas.py`'s guard was written to close for the rider path — unfixed
+  here), or double-book two overlapping scheduled rides for the same guest
+  phone. Overlapping guest bookings sit outside the
+  `rides_one_active_per_rider` partial unique index (same gap C32 closed
+  for personal riders) and can collide at dispatch — the "confusing
+  waiting on your current trip" defer loop
+  (`utils/scheduled_rides.py:462-477`, `_track_defer_and_maybe_escalate`)
+  that C32 exists to prevent, just unguarded for this one booking path.
+  Confirmed the money side is unaffected — `_corporate_policy_still_allows_dispatch`
+  (`utils/scheduled_rides.py:235-380`) still re-verifies company/policy/
+  membership state fresh at dispatch for every path including this one, so
+  this is a booking-time UX/data-integrity gap, not a billing gap.
+- **Action:** port the same `field_validator` logic (or import
+  `SCHEDULE_MIN_LEAD_MINUTES`/`SCHEDULE_MAX_ADVANCE_DAYS`/the DST-gap
+  check) onto `CompanyGuestBookingRequest.scheduled_time`
+  (`backend/routes/corporate_company_bookings.py`), and add the same
+  overlap-window guard (mirroring `booking.py`'s block, keyed on
+  `guest_user["id"]`) inside `create_company_guest_booking`
+  (`backend/services/company_booking_service.py`) before the `Ride(...)`
+  construction.
+- **Files:** `backend/routes/corporate_company_bookings.py`,
+  `backend/services/company_booking_service.py`.
+- **Acceptance:** a company-portal guest booking with an invalid lead
+  time, an out-of-window advance date, a DST-ambiguous local time, or an
+  overlapping `scheduled_time` for the same guest is rejected the same way
+  a personal rider's equivalent request already is.
+
+### C35. Driver-app scheduled-ride offers carry no signal distinguishing them from on-demand offers
+
+- [ ] **Status:** open (filed 2026-08-17, same corporate/driver-scoped
+  follow-up as C34). Cosmetic/UX-only — confirmed functionally harmless.
+- **Issue/gap:** a scheduled ride dispatches to drivers via the identical
+  offer/accept/timeout mechanism as an immediate ride — confirmed sound,
+  `_dispatch_scheduled_ride` (`utils/scheduled_rides.py:424-611`) calls the
+  same `match_driver_to_ride`/`_match_driver_to_ride_attempt`
+  (`backend/routes/rides/matching.py`) with no scheduled-specific branch
+  anywhere in that file. But the dispatch/offer payload assembled in
+  `matching.py` never includes `is_scheduled` (or any equivalent flag) at
+  all, so `driver-app/components/panels/RideOfferPanel.tsx` has no data to
+  distinguish a pre-booked scheduled dispatch from an on-demand one even if
+  it wanted to — grepped `driver-app/` for any scheduled-ride handling:
+  zero hits outside unrelated matches (activity labels, demand heatmap, a
+  payout page, an OTP screen).
+- **Why it matters:** purely a missed-context UX gap for drivers — a
+  driver has no way to know "this ride was booked in advance" vs. "this is
+  happening right now," which could matter for trip-planning (e.g. a
+  driver who just accepted an immediate ride has no signal that a
+  scheduled one is coming up soon in the same area). Functionally
+  harmless: the driver still receives, accepts, and completes the ride
+  correctly regardless.
+- **Action:** add `is_scheduled` (or `scheduled_dispatched`) to the offer
+  payload assembled in `matching.py`, and have `RideOfferPanel.tsx` render
+  a small "Pre-booked" badge when present. No backend state-machine or
+  dispatch-timing change needed — this is additive metadata only.
+- **Files:** `backend/routes/rides/matching.py`,
+  `driver-app/components/panels/RideOfferPanel.tsx`.
+- **Acceptance:** a driver receiving an offer for a ride that was
+  originally scheduled sees a visual indicator distinguishing it from an
+  on-demand offer.
+
 ### C28. Scheduled-ride dispatch-arrival push failure mislogs as a full dispatch failure
 
 - [x] **Status:** closed 2026-08-17. The final rider confirmation push in

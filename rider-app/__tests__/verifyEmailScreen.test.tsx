@@ -108,16 +108,73 @@ function apiError(opts: { message: string; messageKey?: string; code?: number })
   return { name: 'SpinrApiError', ...opts };
 }
 
-// Flushes both microtasks (promise chains inside the mocked api calls) and
-// any timer-scheduled work, so the mount effect's async request call has
-// fully settled before assertions run.
-const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+// CR-4138 root cause: a successful /users/verify-email/request response
+// makes app/verify-email.tsx call setCountdown(30), which starts a real
+// `setTimeout(..., 1000)` resend-countdown chain (verify-email.tsx's
+// `[countdown]` effect). This file used to run under REAL timers, so that
+// was a genuine OS-level timer handle — and `flush` below used to wait on
+// one too (`new Promise((resolve) => setTimeout(resolve, 0))`) purely to
+// let the mocked request's promise chain settle. Under full-suite Jest
+// parallelism (many worker processes contending for a handful of CPUs —
+// this repo's CI, and this box: `nproc` vs. a 61-file suite), a single
+// test's wall-clock cost can stretch past that real timer's 1000ms mark
+// before `afterEach`'s `unmount()` gets a chance to run its cleanup
+// (`clearTimeout`) — a genuine race, not mere slowness. Losing that race
+// let the countdown timer's callback fire on a component mid-unmount,
+// `setState` outside `act()`, and reschedule *another* real 1s timer —
+// reproduced locally: every `beforeEach`/`afterEach` in this file logged
+// "not wrapped in act(...)" against `Root`/`VerifyEmailScreen` even in a
+// single-file, non-parallel run. Those zombie real timers are exactly what
+// full-suite runs report as "A worker process has failed to exit
+// gracefully... tests leaking due to improper teardown" (also reproduced
+// locally under `--maxWorkers` oversubscription) — and under enough CI
+// contention, enough of them piled up mid-run to blow even the widened
+// 20000ms per-test timeout the prior CR-4102/C31 follow-up commit applied
+// here (see git history: that fix legitimately closed a *different* leak
+// in privacySettingsToggles.test.tsx, but only papered over this file's
+// own residual with more timeout headroom — which is exactly why CR-4138
+// kept recurring afterward on unrelated PRs).
+//
+// The actual fix: `jest.useFakeTimers()` for this file (below, scoped to
+// just setTimeout/clearTimeout — see that comment for why) makes
+// `setTimeout` a purely in-memory, Jest-tracked construct — no real OS
+// timer handle is ever created, so there is nothing left for the wall
+// clock to race against, and nothing that can outlive a test's
+// `unmount()` or the Jest environment itself. `flush()` no longer needs
+// to *wait* on a real timer either — it only needs to let the mocked API
+// call's promise chain (a real microtask, unaffected by fake timers)
+// settle, so it now awaits a microtask tick directly.
+const flush = async () => {
+  await Promise.resolve();
+  jest.advanceTimersByTime(0);
+};
 
-// Tracked so afterEach can unmount it: a successful request starts a real
-// 30s resend-countdown timer chain (1s ticks), and a mounted-but-unmounted
-// renderer left over from a prior test keeps that chain alive into later
-// tests, firing state updates outside `act` and eventually outliving the
-// Jest environment itself.
+beforeEach(() => {
+  // Scoped to setTimeout/clearTimeout only — that's the entire real-timer
+  // surface the countdown effect uses. Leaving requestAnimationFrame real
+  // matters: the shake-on-error tests below drive a real
+  // `Animated.timing(..., { useNativeDriver: true }).start()`, whose
+  // native-driver wiring (AnimatedProps.__makeNative -> RAF) breaks if RAF
+  // is faked too — confirmed locally (faking every timer type turned 4
+  // passing shake tests into "Unable to find node on an unmounted
+  // component" failures).
+  jest.useFakeTimers({
+    doNotFake: [
+      'nextTick', 'queueMicrotask',
+      'requestAnimationFrame', 'cancelAnimationFrame',
+      'requestIdleCallback', 'cancelIdleCallback',
+      'setImmediate', 'clearImmediate',
+      'setInterval', 'clearInterval',
+      'Date', 'hrtime', 'performance',
+    ],
+  });
+});
+
+// Tracked so afterEach can unmount it: unmounting runs the countdown
+// effect's cleanup (`clearTimeout`), which under fake timers just removes
+// a bookkeeping entry from Jest's timer queue — never a real handle that
+// could survive into a later test or keep the Jest environment alive past
+// this file.
 let mountedRenderer: TestRenderer.ReactTestRenderer | null = null;
 
 async function renderScreen() {
@@ -153,6 +210,11 @@ async function tapVerify(renderer: TestRenderer.ReactTestRenderer) {
 afterEach(() => {
   mountedRenderer?.unmount();
   mountedRenderer = null;
+  // Restore real timers only after unmount's cleanup has run (still under
+  // fake timers above), so `clearTimeout` in the countdown effect's
+  // cleanup clears the actual fake-timer entry it scheduled, rather than
+  // racing a timer-implementation swap mid-teardown.
+  jest.useRealTimers();
 });
 
 beforeEach(() => {
@@ -170,15 +232,14 @@ describe('VerifyEmailScreen — request on entry', () => {
   it('fires POST /users/verify-email/request on mount', async () => {
     await renderScreen();
     expect(mockApiPost).toHaveBeenCalledWith('/users/verify-email/request');
-    // Pragmatic timeout headroom: hung against the 5000ms default on CI's
-    // runners specifically (never reproduced locally across 3+ full-suite
-    // runs, including with the exact CI invocation) even after fixing a
-    // real, independently-confirmed leak in privacySettingsToggles.test.tsx
-    // (ACTION_ITEMS.md C31) that was corrupting this file's shared Jest
-    // worker. Same class of CI-only, non-reproducible residual documented
-    // in searchDestinationPinIntegrity.test.tsx — widening the budget
-    // rather than continuing to guess at a cause invisible outside CI.
-  }, 20000);
+    // CR-4138: this test previously carried a widened 20000ms timeout as
+    // a CR-4102/C31-follow-up band-aid for a flake under full-suite
+    // parallelism (see the `flush`/fake-timers comment above for the real
+    // root cause — a real 1s countdown timer racing `unmount()`). Fake
+    // timers remove the wall-clock dependency entirely, so this reverts
+    // to Jest's default per-test timeout; if this test is ever genuinely
+    // slow again it should show up as an honest failure, not more slack.
+  });
 
   it('short-circuits to the already-verified screen when the response says already_verified', async () => {
     mockApiPost.mockImplementation((url: string) => {

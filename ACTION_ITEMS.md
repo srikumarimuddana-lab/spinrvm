@@ -4851,17 +4851,30 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   PIPEDA violation per that module's own docstring. Fixed before building
   anything on top of that endpoint, with a regression test asserting the
   raw value never reaches the DB write.
-- **Immediate remediation — tooling DONE, data entry still open:** (1)
-  `/dashboard/driver-license-backfill` (new admin page) lists exactly the
-  drivers missing licence data via a new `missing_license` filter on
-  `GET /admin/drivers`, lets an admin open the existing `DocumentReviewer`
-  to view each driver's already-uploaded licence photo, and save via the
-  now-fixed encrypting update path — an admin still needs to actually work
-  through the queue (this session cannot reliably read government ID
-  photos); (2) make licence-number/class entry a required part of the
-  admin document-review "approve" action going forward, so this gap can't
-  grow — small scoped change, still open, own PR + Change Impact Log (it
-  changes an existing live admin workflow).
+- **Immediate remediation — tooling DONE, gate DONE, data entry still
+  open:** (1) `/dashboard/driver-license-backfill` (new admin page) lists
+  exactly the drivers missing licence data via a new `missing_license`
+  filter on `GET /admin/drivers`, lets an admin open the existing
+  `DocumentReviewer` to view each driver's already-uploaded licence photo,
+  and save via the now-fixed encrypting update path — an admin still needs
+  to actually work through the queue (this session cannot reliably read
+  government ID photos); (2) **DONE (2026-08-18):** `POST
+  /api/admin/documents/{document_id}/review` (`backend/routes/admin/
+  documents.py::admin_review_driver_document` — the endpoint behind the
+  `DocumentReviewer` component's Approve action, used from both the main
+  drivers screen and the backfill queue) now rejects approving a driver's
+  licence document (422, before any write) unless `license_number` and
+  `license_class` are both already on the driver row. Approving any other
+  document type, or a licence document for a driver who already has both
+  fields on file (the common case — 187 of 209 drivers), is unaffected.
+  No UI code changed — the existing generic error-toast plumbing in
+  `document-reviewer.tsx` already surfaces the backend's 422 `detail`
+  verbatim, so a proactive client-side check was judged unnecessary
+  duplication rather than skipped for being too large. Tests:
+  `backend/tests/test_admin_document_review_license_gate.py`. Full
+  Change Impact Log:
+  `docs/change-log/2026-08-18-b14-require-license-at-approve.md`. Data
+  entry itself (the 22 drivers) remains open, unchanged by this.
 - **Larger proposal (not started, needs a decision):** OCR-assisted
   document intake with client-side capture guidance (Expo camera +
   quality gate), a purpose-built ID-OCR vendor (buy, not build — see

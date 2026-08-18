@@ -192,6 +192,67 @@ class TestValidatePromoRemainingRules:
             result = await _validate_promo_for_user(code=promo["code"], user_id=USER_ID, ride_fare=Decimal("20.00"))
         assert result["valid"] is True
 
+    async def test_new_user_only_rejects_legacy_imported_rider_despite_todays_created_at(self):
+        """CR-4105 regression: rider_import_service.py stamps created_at =
+        now() on every net-new imported rider (the source CSV has no
+        original-signup-date column), so a rider imported today would
+        otherwise pass the new_user_days age check despite being an old-app
+        customer. The legacy_import_metadata->'rider_csv_import' marker
+        (stamped by build_plan) must exclude them regardless of created_at
+        age."""
+        promo = _promo(new_user_days=365)
+        stamped_today = datetime.now(timezone.utc).isoformat()
+        with (
+            patch(
+                "backend.routes.promotions.db_supabase.get_rows",
+                AsyncMock(return_value=[promo]),
+            ),
+            patch("backend.routes.promotions.db_supabase.count_documents", AsyncMock(return_value=0)),
+            patch(
+                "backend.routes.promotions.db_supabase.get_user_by_id",
+                AsyncMock(
+                    return_value={
+                        "id": USER_ID,
+                        "created_at": stamped_today,
+                        "legacy_import_metadata": {
+                            "rider_csv_import": {
+                                "batch": "20260817023332",
+                                "source": "legacy_rider_csv_import",
+                                "imported_at": stamped_today,
+                            }
+                        },
+                    }
+                ),
+            ),
+        ):
+            from backend.routes.promotions import _validate_promo_for_user
+
+            with pytest.raises(HTTPException) as exc:
+                await _validate_promo_for_user(code=promo["code"], user_id=USER_ID, ride_fare=Decimal("20.00"))
+        assert exc.value.status_code == 400
+        assert "new users" in exc.value.detail.lower()
+
+    async def test_new_user_only_allows_native_signup_with_todays_created_at(self):
+        """Control case: a genuinely new native signup (no legacy_import_metadata
+        at all) with today's created_at still qualifies."""
+        promo = _promo(new_user_days=365)
+        today = datetime.now(timezone.utc).isoformat()
+        with (
+            patch(
+                "backend.routes.promotions.db_supabase.get_rows",
+                AsyncMock(return_value=[promo]),
+            ),
+            patch("backend.routes.promotions.db_supabase.count_documents", AsyncMock(return_value=0)),
+            patch(
+                "backend.routes.promotions.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"id": USER_ID, "created_at": today, "legacy_import_metadata": {}}),
+            ),
+        ):
+            from backend.routes.promotions import _validate_promo_for_user
+
+            result = await _validate_promo_for_user(code=promo["code"], user_id=USER_ID, ride_fare=Decimal("20.00"))
+        assert result["valid"] is True
+
     async def test_inactive_user_targeting_rejects_recently_active_rider(self):
         promo = _promo(inactive_days=30)
         with (
@@ -461,6 +522,52 @@ class TestListAvailablePromos:
         promos = [_promo(total_budget=100, budget_used=100)]
         result = await self._run(promos, ride_fare=20.0)
         assert result == []
+
+    async def test_new_user_promo_hidden_for_legacy_imported_rider_despite_todays_created_at(self):
+        """CR-4105 regression, list_available_promos path: a legacy-imported
+        rider must not see a new_user_days promo even with a today's-date
+        created_at (the value rider_import_service.py stamps on net-new
+        imports)."""
+        promos = [_promo(new_user_days=365)]
+        stamped_today = datetime.now(timezone.utc).isoformat()
+        with (
+            patch("backend.routes.promotions.db_supabase.get_rows", AsyncMock(side_effect=self._get_rows(promos))),
+            patch(
+                "backend.routes.promotions.db_supabase.get_user_by_id",
+                AsyncMock(
+                    return_value={
+                        "id": USER_ID,
+                        "created_at": stamped_today,
+                        "legacy_import_metadata": {
+                            "rider_csv_import": {"batch": "b1", "source": "legacy_rider_csv_import"}
+                        },
+                    }
+                ),
+            ),
+            patch("backend.routes.promotions.db_supabase.count_documents", AsyncMock(return_value=0)),
+        ):
+            from backend.routes.promotions import list_available_promos
+
+            result = await list_available_promos(USER_ID, ride_fare=20.0)
+        assert result == []
+
+    async def test_new_user_promo_shown_for_native_signup_with_todays_created_at(self):
+        """Control case: a genuinely new native signup still sees the promo."""
+        promos = [_promo(new_user_days=365)]
+        today = datetime.now(timezone.utc).isoformat()
+        with (
+            patch("backend.routes.promotions.db_supabase.get_rows", AsyncMock(side_effect=self._get_rows(promos))),
+            patch(
+                "backend.routes.promotions.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"id": USER_ID, "created_at": today, "legacy_import_metadata": {}}),
+            ),
+            patch("backend.routes.promotions.db_supabase.count_documents", AsyncMock(return_value=0)),
+        ):
+            from backend.routes.promotions import list_available_promos
+
+            result = await list_available_promos(USER_ID, ride_fare=20.0)
+        assert len(result) == 1
+        assert result[0]["eligible"] is True
 
     async def test_error_processing_single_promo_is_skipped_not_fatal(self):
         good = _promo(code="GOOD", discount_value=5)

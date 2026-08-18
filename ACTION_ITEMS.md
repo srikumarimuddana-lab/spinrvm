@@ -10306,62 +10306,53 @@ how much they de-risk a public launch._
 
 ### C27. `ci-error-audit.yml` has created 2,483 open issues since 2026-04-28 — no cross-run dedup, no auto-close
 
-- [ ] **Status:** open. Filed via `[CR]` #4112
-  (`.github/ISSUE_TEMPLATE/ci_change_request.yml`), CR-2026-(assign). Found
-  2026-08-17 while auditing the repo's CR backlog for unclosed-but-resolved
-  items (the search that also found and closed #3764/#3765).
-- **Measured, not estimated:** 2,483 of the repo's 2,509 total open issues
-  (~99%) carry the `ci-audit` label. Oldest is **#143, created
-  2026-04-28** — continuous unbroken accumulation since the system
-  shipped, ~22/day sustained.
-- **Root cause**: `scripts/ci-audit/create_github_issue.py`'s own
-  docstring states its actual dedup scope — *"De-duplicates: if an open
-  issue for the same run already exists, updates it"* — keyed on **run
-  ID**, not error signature. The same recurring failure across different
-  runs opens a fresh issue every time. No companion workflow anywhere in
-  `.github/workflows/` closes these when the underlying job later goes
-  green — grepped, confirmed absent.
-- **Concrete harm observed this session**: a plain issue-title search for
-  other open `[CR]`s returned unusable noise — GitHub's semantic search
-  matched "CR" against "CI" and surfaced a page of `[CI Audit]` issues
-  instead. Same "signal drowns in noise, trains people to stop looking"
-  failure shape as C7/C8/C9 (a permanently-red or silently-broken
-  automation becomes the expected state, so nobody notices when something
-  in it actually matters).
-- **Not fixed here** — this is a decision-needing CR (approval gate,
-  `.github/ISSUE_TEMPLATE/ci_change_request.yml`), not implemented
-  unilaterally. See #4112 for the proposed fingerprint-based dedup fix,
-  the separate (larger) question of one-time backlog cleanup, and the
-  auto-close design tradeoffs.
+- [x] **Status:** CLOSED — fixed via `[CR]` #4112, approved and merged as
+  PR #4130 (`fix(ci-audit): cross-run fingerprint dedup for
+  ci-error-audit issue creation`, 2026-08-18). This entry was still
+  showing `[ ]` open on `main` because the fix landed from a different
+  session/PR than the one that filed it — caught 2026-08-18 while
+  scanning for the next open CR to pick up, before duplicating the work.
+- **What shipped**: `scripts/ci-audit/create_github_issue.py` now
+  fingerprints on `(workflow name, sorted failing job names, classified
+  error category+description from `error_classifier.py`)` — explicitly
+  not run ID and not raw log text — and embeds it as a hidden
+  HTML-comment marker in the issue body. Before creating a new issue, an
+  open `ci-audit`-labeled issue with a matching marker is searched for
+  first; on a match, a comment is added to the existing issue instead of
+  opening a duplicate. 4 new tests in
+  `scripts/ci-audit/test_create_github_issue.py`.
+- **Explicitly deferred, per the CR's own scoping** (not gaps in this
+  fix): auto-closing resolved issues, and one-time cleanup of the
+  existing ~2,483-issue backlog — both flagged in #4112 as separate
+  decisions needing their own sign-off, not attempted in PR #4130.
 
 ### C36. Migration numeric-prefix collision check is warning-only and per-PR-scoped — a cross-PR race can (and did) land two migrations with the same number on `main`
 
-- [ ] **Status:** open. Filed via `[CR]` #4187
-  (`.github/ISSUE_TEMPLATE/ci_change_request.yml`), CR-2026-(assign). Found
-  2026-08-18 while re-checking PR #4133's migration-numbering neighborhood
-  at the user's request.
-- **What was found**: `main` now carries two different migrations both
-  prefixed `327` — `327_merge_duplicate_onboarding_faqs.sql` (PR #4126)
-  and `327_stripe_disputes_evidence_reminder_claim_flag.sql` (PR #4129).
-  Neither PR is from this session; neither saw the other's file because
-  each PR's `migration-check.yml` run only diffs against its own
-  merge-base snapshot of `main`.
-- **Root cause**: `migration-check.yml`'s `CHECK B` (sequence gap /
-  collision) only ever appends to `warnings`, never `errors` — a numeric
-  collision cannot block a merge today, contradicting this file's own
-  earlier claim ("a CI prefix-uniqueness check blocks them"). Confirmed
-  by reading the check's source directly.
-- **This session hit the same race twice, live**: PR #4133 had to be
-  renumbered 323→328 mid-session after discovering a pre-existing
-  collision with `323_purge_pii_retention_step_d_ride_messages_column_fix.sql`;
-  PR #4134's migration was renumbered again 327→329 after `main` picked up
-  the *first* of the two 327s above while #4134's branch was in flight.
-  Both catches were manual (re-checking fresh `main`), not CI-driven.
-- **Not fixed here** — proposed fix (make true collisions a hard failure,
-  keep sequence gaps as warnings) is a decision-needing CR, not
-  implemented unilaterally. See #4187 for the full proposal, including a
-  documented-but-deferred option (b): a post-merge check to catch the
-  narrower true-race window a per-PR check structurally cannot.
+- [x] **Status:** CLOSED — fixed via `[CR]` #4187, approved and merged as
+  PR #4192 (`fix(ci): make migration prefix collision a hard CI failure`,
+  2026-08-18). Same as C27 above — this entry was still showing `[ ]`
+  open on `main` because the fix landed from a different session/PR;
+  caught 2026-08-18 while scanning for the next open CR, before
+  duplicating the work.
+- **What shipped**: `migration-check.yml`'s `CHECK B` collision branch
+  now appends to `errors` (hard failure) instead of `warnings` when a
+  new file's numeric prefix collides with or precedes a number already
+  on the PR's merge-base — blocks the merge instead of just flagging it.
+  The sequence-*gap* case (missing numbers, no collision) is unchanged
+  and still only warns, per the CR's own recommendation (gaps are
+  cosmetic and an accepted historical pattern). `CLAUDE.md`'s Database &
+  Migration Conventions section was also corrected to state this
+  accurately (see the file's own "As of CR #4187" note).
+- **Verified not to retroactively fail** on the 3 pre-existing historical
+  duplicates (319, 321, 327×2) — `CHECK B` only evaluates files in a PR's
+  own diff, never the full existing migrations directory, so untouched
+  historical dupes sitting on `main` are structurally unreachable by the
+  new hard-fail path.
+- **Explicitly deferred, per the CR's own scoping**: option (b), a
+  post-merge/`push`-to-`main` check for the narrower true cross-PR race
+  window (both PRs' branches predate each other's merge) that a per-PR
+  check structurally can't catch — recommended to defer unless option
+  (a) alone proves insufficient in practice. Not implemented in PR #4192.
 
 ### C37. `driver-app-test`: leaked Animated-timer update in `RideOfferPanel.test.tsx` corrupted the shared Jest worker, intermittently timing out `ActivityView.test.tsx`
 

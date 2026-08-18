@@ -10245,6 +10245,35 @@ how much they de-risk a public launch._
   the separate (larger) question of one-time backlog cleanup, and the
   auto-close design tradeoffs.
 
+### C36. Migration numeric-prefix collision check is warning-only and per-PR-scoped — a cross-PR race can (and did) land two migrations with the same number on `main`
+
+- [ ] **Status:** open. Filed via `[CR]` #4187
+  (`.github/ISSUE_TEMPLATE/ci_change_request.yml`), CR-2026-(assign). Found
+  2026-08-18 while re-checking PR #4133's migration-numbering neighborhood
+  at the user's request.
+- **What was found**: `main` now carries two different migrations both
+  prefixed `327` — `327_merge_duplicate_onboarding_faqs.sql` (PR #4126)
+  and `327_stripe_disputes_evidence_reminder_claim_flag.sql` (PR #4129).
+  Neither PR is from this session; neither saw the other's file because
+  each PR's `migration-check.yml` run only diffs against its own
+  merge-base snapshot of `main`.
+- **Root cause**: `migration-check.yml`'s `CHECK B` (sequence gap /
+  collision) only ever appends to `warnings`, never `errors` — a numeric
+  collision cannot block a merge today, contradicting this file's own
+  earlier claim ("a CI prefix-uniqueness check blocks them"). Confirmed
+  by reading the check's source directly.
+- **This session hit the same race twice, live**: PR #4133 had to be
+  renumbered 323→328 mid-session after discovering a pre-existing
+  collision with `323_purge_pii_retention_step_d_ride_messages_column_fix.sql`;
+  PR #4134's migration was renumbered again 327→329 after `main` picked up
+  the *first* of the two 327s above while #4134's branch was in flight.
+  Both catches were manual (re-checking fresh `main`), not CI-driven.
+- **Not fixed here** — proposed fix (make true collisions a hard failure,
+  keep sequence gaps as warnings) is a decision-needing CR, not
+  implemented unilaterally. See #4187 for the full proposal, including a
+  documented-but-deferred option (b): a post-merge check to catch the
+  narrower true-race window a per-PR check structurally cannot.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

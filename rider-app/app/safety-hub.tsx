@@ -22,6 +22,38 @@ import { useSafetyPanelConfig } from '@shared/hooks/useSafetyPanelConfig';
 import { useEmergencyContacts } from '@shared/hooks/useEmergencyContacts';
 import { getSOSLocation } from '@shared/utils/sosLocation';
 
+// Hoisted out of SafetyHubScreen (react-hooks/static-components) — was
+// redeclared on every render, resetting any implicit state each time.
+// Takes `styles`/`chevronColor` as props instead of closing over them.
+function Row({
+  icon,
+  color,
+  title,
+  subtitle,
+  onPress,
+  styles,
+  chevronColor,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  color: string;
+  title: string;
+  subtitle: string;
+  onPress: () => void;
+  styles: ReturnType<typeof createStyles>;
+  chevronColor: string;
+}) {
+  return (
+    <Pressable style={styles.row} onPress={onPress} accessibilityRole="button" accessibilityLabel={title}>
+      <Ionicons name={icon} size={20} color={color} />
+      <View style={styles.rowText}>
+        <Text style={styles.rowTitle}>{title}</Text>
+        <Text style={styles.rowSub}>{subtitle}</Text>
+      </View>
+      <Ionicons name="chevron-forward" size={16} color={chevronColor} />
+    </Pressable>
+  );
+}
+
 export default function SafetyHubScreen() {
   const router = useRouter();
   const { colors } = useTheme();
@@ -43,29 +75,6 @@ export default function SafetyHubScreen() {
     };
   }, []);
 
-  const Row = ({
-    icon,
-    color,
-    title,
-    subtitle,
-    onPress,
-  }: {
-    icon: keyof typeof Ionicons.glyphMap;
-    color: string;
-    title: string;
-    subtitle: string;
-    onPress: () => void;
-  }) => (
-    <Pressable style={styles.row} onPress={onPress} accessibilityRole="button" accessibilityLabel={title}>
-      <Ionicons name={icon} size={20} color={color} />
-      <View style={styles.rowText}>
-        <Text style={styles.rowTitle}>{title}</Text>
-        <Text style={styles.rowSub}>{subtitle}</Text>
-      </View>
-      <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
-    </Pressable>
-  );
-
   return (
     <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
       <View style={styles.header}>
@@ -85,6 +94,8 @@ export default function SafetyHubScreen() {
             title={`Call ${cfg.emergencyNumber}`}
             subtitle="Opens your dialer — Spinr never calls for you"
             onPress={() => Linking.openURL(`tel:${cfg.emergencyNumber}`)}
+            styles={styles}
+            chevronColor={colors.textDim}
           />
         </View>
         <Text style={styles.hint}>
@@ -104,6 +115,8 @@ export default function SafetyHubScreen() {
                 : 'None saved — nobody will be texted if you send an alert'
             }
             onPress={() => router.push('/emergency-contacts' as any)}
+            styles={styles}
+            chevronColor={colors.textDim}
           />
           <View style={styles.divider} />
           <Row
@@ -112,6 +125,8 @@ export default function SafetyHubScreen() {
             title="Report a safety issue"
             subtitle="Tell our team about something that happened"
             onPress={() => router.push('/report-safety' as any)}
+            styles={styles}
+            chevronColor={colors.textDim}
           />
         </View>
 
@@ -133,6 +148,8 @@ export default function SafetyHubScreen() {
                     ? Linking.openURL(cfg.authority.url)
                     : undefined
                 }
+                styles={styles}
+                chevronColor={colors.textDim}
               />
             </View>
           </>
@@ -148,6 +165,8 @@ export default function SafetyHubScreen() {
                 title="Email Spinr Safety"
                 subtitle={cfg.safetyTeamEmail}
                 onPress={() => Linking.openURL(`mailto:${cfg.safetyTeamEmail}`)}
+                styles={styles}
+                chevronColor={colors.textDim}
               />
             </View>
           </>

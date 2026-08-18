@@ -8152,6 +8152,32 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       this round's explicit instruction, given the risk profile).
     - Full Change Impact Log:
       `docs/change-log/2026-08-12-c20-lint-tier4-rider-app.md`.
+  - **Round 5 (2026-08-18, both apps)**: rounds 1–4 above closed the
+    *original* backlog to near-zero; this round confirmed that with a
+    fresh `eslint --no-cache` (not trusted from this document) and found
+    the debt had **regrown from new code shipped after 2026-08-12**, not
+    from any of rounds 1–4 being wrong. Every flagged file was confirmed
+    via `git log` to be new or modified after the rounds above closed:
+    `rider-app/app/safety-hub.tsx` (new 2026-08-17, F2 Safety Hub — 5
+    `react-hooks/static-components`, a rule the earlier rounds never
+    encountered since this screen didn't exist yet), `driver-app/
+    components/dashboard/HeatmapCells.tsx` (new 2026-08-13 — 1
+    `react/display-name`), `driver-app/app/legal.tsx` (modified
+    2026-08-17, #4042 — 1 `exhaustive-deps` on a new closure), `driver-app/
+    app/appeal.tsx` (new 2026-08-17, #4050 — 2
+    `react/no-unescaped-entities`), and 2 stale `eslint-disable` comments
+    in `rider-app/app/payment-confirm.tsx` / `ride-options.tsx` (both
+    touched 2026-08-16/17 by unrelated payment fixes, leaving the
+    suppression orphaned). Fixed all of the above; re-verified
+    `rider-app/app/work-profile.tsx`'s 2 pre-existing deferred findings
+    still need the same human decision documented in round 3/4 and left
+    them untouched. `eslint --no-cache`: rider-app 9→2 (both deferred),
+    driver-app 4→0. `tsc --noEmit` clean both apps. Real production build
+    (`yarn build:web`) run on both apps (not just dev/tsc). Full Change
+    Impact Log: `docs/change-log/2026-08-18-c20-lint-round5-post-round4-regrowth.md`.
+  - **Takeaway for future rounds**: mobile lint is still not a CI gate
+    (noted above), so debt will keep regrowing between manual sweeps —
+    this is expected, not evidence the tracking here is unreliable.
 - [ ] **LogRocket major-version split**: rider `@logrocket/react-native`
   ^2.3.1 vs driver ^3.7.0 — two different native binaries of the same vendor
   SDK across the fleet, both still gated OFF on Android (hidden-API hang, see

@@ -154,9 +154,18 @@ jobs:
                       if file_num == expected:
                           record(short, "sequence", STATUS_OK, f"prefix {file_num} is next after {max(others)}")
                       elif file_num < expected:
+                          # True collision: this prefix already belongs to (or precedes)
+                          # a migration that exists elsewhere in the repo. This is a hard
+                          # failure, not a warning — CR #4187: two unrelated PRs (#4126,
+                          # #4129) both landed migration 327_*.sql on main because this
+                          # branch only ever appended to `warnings`, so it could never
+                          # actually block a merge even on a same-PR-visible collision.
+                          # The sequence-*gap* case below (missing numbers, no collision)
+                          # deliberately stays a warning — gaps are cosmetic and this repo
+                          # already carries accepted historical duplicates (319, 321, 327).
                           msg = f"prefix {file_num} collides with or precedes existing max {max(others)} (expected {expected})"
-                          record(short, "sequence", STATUS_WARN, msg)
-                          warnings.append(f"{short}: {msg}")
+                          record(short, "sequence", STATUS_FAIL, msg)
+                          errors.append(f"{short}: {msg}")
                       else:
                           msg = f"sequence gap — expected {expected}, got {file_num} (missing numbers in between)"
                           record(short, "sequence", STATUS_WARN, msg)

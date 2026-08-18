@@ -1,0 +1,186 @@
+# Synthetic monitoring check spec (ACTION_ITEMS.md E4)
+#
+# WHAT THIS FILE IS
+# ------------------
+# A vendor-agnostic, declarative source of truth for the external ("outside
+# the platform") synthetic checks Spinr needs. It is NOT a config file any
+# monitoring vendor consumes directly — nothing in this repo talks to
+# Checkly / UptimeRobot / Grafana Synthetic Monitoring / PagerDuty, and this
+# file does not create, call, or authenticate against any of them.
+#
+# It exists so that once a human has picked a vendor and created an account,
+# each entry below translates 1:1 into that vendor's check definition
+# without re-deriving the endpoints or thresholds from scratch. See
+# docs/runbooks/synthetic-monitoring.md for the full runbook this file is
+# referenced from.
+#
+# SCHEMA (flat, one entry per probe)
+# -----------------------------------
+# name:              short unique id, kebab-case
+# description:       one line — what this probe verifies and why
+# method:             HTTP method (GET | POST)
+# url_path:           path only, relative to the production base URL
+#                      (api-spinr.spinr.ca) — do NOT hardcode a base URL here,
+#                      the vendor config supplies environment/base URL
+# request_body:       null, or a fixed literal JSON body/query used on every
+#                      run (never real user data — see notes per check)
+# expected_status:    the HTTP status code that means "the probe passed"
+#                      (may be a non-2xx status — see auth-flow-liveness)
+# timeout_ms:         probe must fail if no response within this window
+# frequency_minutes:  how often the probe runs (every minute per E4's own
+#                      text — "Add ... hitting ... every minute from outside")
+# sla_threshold_ms:   latency ceiling this probe is graded against, taken
+#                      verbatim from CLAUDE.md's Performance SLAs / KPI
+#                      Targets tables (see the "sla_source" field for the
+#                      exact table row cited)
+# sla_source:         which CLAUDE.md table + row this threshold was pulled
+#                      from — never invent a number that isn't traceable
+#                      back to CLAUDE.md
+# down_if:            condition(s) that constitute the probe being "down"
+# degraded_if:        condition(s) that constitute "degraded" (up, but
+#                      breaching SLA) — distinct from down; see runbook for
+#                      the down vs degraded alerting policy
+# alert_route:        placeholder only — see docs/runbooks/synthetic-monitoring.md
+#                      for how this maps to a real PagerDuty service once one
+#                      exists. Never a real integration key.
+# regions:            recommended external probe locations (vendor picks
+#                      exact PoPs) — at minimum one in Canada, given
+#                      Supabase data residency in ca-central-1 and SK-first
+#                      user base
+# notes:              anything a human translating this into a vendor config
+#                      needs to know (side effects, cost, auth requirements)
+
+version: 1
+target_service: spinr-backend-api
+production_base_url_placeholder: "https://api-spinr.spinr.ca"  # DNS CNAME, see docs/runbooks/railway-fly-failover.md
+
+checks:
+  - name: health-readiness
+    description: >
+      Platform liveness + DB readiness probe. Mirrors the same endpoint
+      Fly.io/Railway/Docker HEALTHCHECK gates already use internally, but
+      probed from OUTSIDE the platform so a full external outage (DNS,
+      Cloudflare routing, both Fly+Railway down) is caught even when every
+      internal health gate looks fine to itself.
+    method: GET
+    url_path: /health
+    request_body: null
+    expected_status: 200
+    timeout_ms: 5000
+    frequency_minutes: 1
+    sla_threshold_ms: null
+    sla_source: >
+      No numeric P95 SLA target exists for /health specifically in
+      CLAUDE.md's Performance SLAs table; treat this purely as an
+      up/down (200 vs non-200) probe, not a latency-graded one. If a
+      latency SLO is wanted for this endpoint later, it must be added to
+      CLAUDE.md's Performance SLAs table first, not invented here.
+    down_if: >
+      Non-200 response, timeout, or connection failure on 3 consecutive
+      1-minute checks from the probe region.
+    degraded_if: >
+      Not applicable (no latency SLA defined for this check).
+    alert_route: pagerduty-placeholder-integration-key
+    regions:
+      - ca-central (primary — closest to Supabase ca-central-1 + Fly yyz)
+      - us-east (secondary, to distinguish a CA-region network issue from
+        a true platform-wide outage)
+    notes: >
+      /health returns 503 (not 200) when the DB ping fails — see
+      backend/server.py's _db_ready(). A 503 here means the backend
+      process is up but Supabase is unreachable; alert copy should say
+      "DB unreachable", not "backend down", to route the on-call
+      responder correctly (see docs/runbooks/supabase-down.md).
+
+  - name: auth-flow-liveness
+    description: >
+      Exercises the auth subsystem end-to-end (JWT/refresh-token lookup
+      path, DB read) WITHOUT creating a real session, sending a real SMS,
+      or costing money. Calling /auth/refresh with no refresh token
+      deterministically returns 401 "Missing refresh token" when the auth
+      code path and its DB dependency are healthy; a timeout, 5xx, or any
+      status other than 401 means the auth flow itself is broken, not just
+      that the caller is unauthenticated.
+    method: POST
+    url_path: /api/v1/auth/refresh
+    request_body: null
+    expected_status: 401
+    timeout_ms: 5000
+    frequency_minutes: 1
+    sla_threshold_ms: 200
+    sla_source: >
+      CLAUDE.md "Performance SLAs" table, row "Auth token refresh" —
+      target P95 < 200 ms (failure impact: "UX stutter").
+    down_if: >
+      Response status is anything other than 401 (e.g. 5xx, timeout, or
+      an unexpected 200), on 3 consecutive 1-minute checks.
+    degraded_if: >
+      Status is the expected 401 but response latency exceeds the 200 ms
+      P95 SLA threshold above, sustained over a rolling 5-minute window
+      (do not page on a single slow sample — see runbook alerting policy).
+    alert_route: pagerduty-placeholder-integration-key
+    regions:
+      - ca-central
+      - us-east
+    notes: >
+      Deliberately does NOT probe /auth/send-otp or /auth/verify-otp —
+      those trigger a real Twilio SMS send (real cost, real rate-limit
+      consumption at 6/minute per CLAUDE.md's OTP handler) or require a
+      live OTP code that a synthetic probe cannot obtain. /auth/refresh
+      with an absent token was chosen specifically because it fails fast,
+      deterministically, and for free while still exercising the same
+      JWT + DB code path. Do not swap this for an endpoint that mutates
+      state or sends real communications.
+
+  - name: fare-estimate-liveness
+    description: >
+      The rider-facing fare estimate endpoint — the literal "rider tap ->
+      price shown" path from CLAUDE.md's Performance SLAs table. Probed
+      with a fixed, known-good lat/lng inside an active Spinr service area
+      (Saskatoon) so the response is a real fare quote, not a 404 for an
+      unserved area.
+    method: GET
+    url_path: "/api/v1/fares?lat=52.1332&lng=-106.6700"
+    request_body: null
+    expected_status: 200
+    timeout_ms: 3000
+    frequency_minutes: 1
+    sla_threshold_ms: 300
+    sla_source: >
+      CLAUDE.md "Performance SLAs" table, row "Fare estimate (rider tap ->
+      price shown)" — target P95 < 300 ms (failure impact: "Booking
+      friction"). Cross-referenced against "P95 fare calc latency" in the
+      KPI Targets table, same < 300 ms target (below-target signal:
+      "Upstream (Google Maps) or logic bloat").
+    down_if: >
+      Non-200 response, timeout, or connection failure on 3 consecutive
+      1-minute checks.
+    degraded_if: >
+      Status is 200 but response latency exceeds the 300 ms P95 SLA
+      threshold above, sustained over a rolling 5-minute window.
+    alert_route: pagerduty-placeholder-integration-key
+    regions:
+      - ca-central
+      - us-east
+    notes: >
+      The lat/lng pin (52.1332, -106.6700) is central Saskatoon and must
+      be re-verified against whatever service areas exist in app_settings
+      at the time a human wires this up — if Saskatoon's service-area
+      polygon or launch status changes, update this coordinate (see
+      docs/runbooks/saskatoon-launch.md) rather than letting the probe
+      silently start returning "no service area" errors that look like a
+      false positive outage. This endpoint reads Redis-cached fare data
+      (backend/routes/fares.py) — a probe failure here can also indicate
+      Redis degradation rather than a full outage; check
+      docs/runbooks/redis-down.md before paging as a P0.
+
+# NOT covered by this spec (deliberately, scaffolding scope only):
+#   - Ride booking / dispatch flow (creates a real ride row; needs a
+#     synthetic test account + cleanup job before it's safe to automate)
+#   - Payment / Stripe flows (real money; out of scope for a synthetic
+#     uptime probe regardless of vendor)
+#   - WebSocket fan-out latency (most vendors' synthetic HTTP checks don't
+#     support this well; would need a small custom script check)
+# These are candidates for a follow-up ACTION_ITEMS entry once E4's basic
+# three-probe scaffold is live and a vendor is chosen — not blocking this
+# scaffolding task.

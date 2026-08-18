@@ -85,20 +85,18 @@ export default function NotificationsScreen() {
     loadNotifications(true);
   };
 
-  const handleNotificationPress = async (item: AppNotification) => {
+  const handleNotificationPress = (item: AppNotification) => {
     if (!item.is_read) {
       setNotifications(prev =>
         prev.map(n => n.id === item.id ? { ...n, is_read: true } : n)
       );
       setUnreadCount(prev => Math.max(0, prev - 1));
-      try {
-        await api.put(`/notifications/${item.id}/read`);
-      } catch {
+      api.put(`/notifications/${item.id}/read`).catch(() => {
         setNotifications(prev =>
           prev.map(n => n.id === item.id ? { ...n, is_read: false } : n)
         );
         setUnreadCount(prev => prev + 1);
-      }
+      });
     }
 
     const caseId = item.data?.case_id;

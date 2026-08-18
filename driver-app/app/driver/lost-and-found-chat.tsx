@@ -124,7 +124,8 @@ export default function DriverLostAndFoundChatScreen() {
         }
       })();
     }
-  }, [rideId, caseId, lostCase, loadCase]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rideId, caseId, loadCase]);
 
   useEffect(() => {
     if (messages.length > 0) {
@@ -132,13 +133,13 @@ export default function DriverLostAndFoundChatScreen() {
     }
   }, [messages.length]);
 
+  const activeCaseId = lostCase?.id ?? null;
   useFocusEffect(
     useCallback(() => {
-      if (!lostCase) return;
-      const id = lostCase.id;
+      if (!activeCaseId) return;
       const interval = setInterval(() => {
         if (AppState.currentState === 'active') {
-          api.get<{ messages: Message[] }>(`/lost-and-found/${id}/messages`)
+          api.get<{ messages: Message[] }>(`/lost-and-found/${activeCaseId}/messages`)
             .then(res => {
               const fresh = res.data?.messages ?? [];
               setMessages(prev => {
@@ -152,7 +153,7 @@ export default function DriverLostAndFoundChatScreen() {
         }
       }, 10_000);
       return () => clearInterval(interval);
-    }, [lostCase]),
+    }, [activeCaseId]),
   );
 
   // Submit a new driver-found case

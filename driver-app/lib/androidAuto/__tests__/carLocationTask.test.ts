@@ -48,7 +48,10 @@ const mockIntegrity = jest.fn<{ trusted: boolean; reason?: string }, [unknown]>(
   trusted: true,
 }));
 jest.mock('../../../utils/locationIntegrity', () => ({
-  checkLocationIntegrity: (l: unknown) => mockIntegrity(l),
+  createLocationIntegrityChecker: () => ({
+    check: (l: unknown) => mockIntegrity(l),
+    reset: jest.fn(),
+  }),
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports

@@ -46,7 +46,14 @@
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import { recordNonFatal } from '../../utils/crashlytics';
-import { checkLocationIntegrity } from '../../utils/locationIntegrity';
+import { createLocationIntegrityChecker } from '../../utils/locationIntegrity';
+
+// This producer's own anti-spoof state. The 2s car watcher used to share one
+// module-global last-location with the trip recorders — its dense cadence
+// stomped their teleport baseline and could falsely reject legitimate trip
+// fixes (see locationIntegrity.ts). Display-only gate: this task never
+// persists or uploads, so filtering here is correct (unlike capture paths).
+const carIntegrity = createLocationIntegrityChecker();
 import {
   FOREGROUND_NOTIFICATION_COLOR,
   isBackgroundLocationRunning,
@@ -160,10 +167,11 @@ export async function handleCarLocationTask({
   const latest = locations[locations.length - 1];
   if (!latest?.coords) return;
 
-  // Same trust gate as the dispatch watcher. Display-only or not, a mock-location
-  // app should not be able to drive where Spinr says the driver is — including in
-  // the shared last-location cache that the phone dashboard reads back.
-  const integrity = checkLocationIntegrity(latest);
+  // Display trust gate: a mock-location app must not be able to drive where
+  // Spinr says the driver is — including in the shared last-location cache
+  // that the phone dashboard reads back. Filtering is CORRECT here (display
+  // only, nothing durable) — the capture paths persist first instead.
+  const integrity = carIntegrity.check(latest);
   if (!integrity.trusted) {
     console.warn(`[CarLocation] dropped untrusted sample: ${integrity.reason}`);
     return;

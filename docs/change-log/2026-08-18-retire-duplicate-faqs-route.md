@@ -112,7 +112,7 @@ v1_api_router.include_router(legal_documents_router)
 - [x] **`pytest --collect-only`** across the full backend test tree: 12,058 tests collected with zero import errors — confirms nothing else imports the deleted module.
 - [x] **`ruff check`** on all 4 touched Python files: all checks passed.
 - [x] **Blast-radius grep**: confirmed the only remaining `routes.faqs`/`faqs_router` hits are the unrelated admin-CRUD module and historical (correctly-unedited) migration/change-log prose.
-- [ ] Full backend suite (`pytest -q`) run in background alongside writing this log — see the accompanying PR comment/description for the result once it completes.
+- [x] **Full backend suite** (`pytest -q --no-cov -x`): 5487 passed, 4 skipped, 1 failure. The failure (`test_dual_import_parity.py::test_fallback_import_branches_mirror_try_branches`, re: `routes/lost_and_found.py`'s `DuplicateRecordError` fallback import) is pre-existing and unrelated — reproduced identically on `origin/main` via a clean worktree checkout before this PR's changes, confirming it isn't caused by this diff.
 - [ ] Not run against a real/throwaway Supabase schema — pure code deletion/refactor with mocked-DB unit tests, no schema touched.
 
 **What was NOT verified**: whether any external caller outside the two shipped apps (a web widget, a partner integration, manual QA) depends on any response-shape difference between the two implementations (there wasn't one that mattered — both returned the same list shape — but this wasn't independently re-verified against a live client beyond the source-level comparison already done when the two files were first compared during this session's earlier FAQ audit).

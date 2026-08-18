@@ -67,6 +67,13 @@ router = APIRouter()
 # (e.g. a rider scheduling an airport drop-off and, hours later, a pickup).
 SCHEDULE_OVERLAP_WINDOW_MINUTES = 60
 
+# ACTION_ITEMS.md C33: bounds how many `scheduled` rides a single rider can
+# have outstanding at once. 5 comfortably covers a legitimate frequent
+# scheduler (e.g. a week of daily airport-style bookings) while keeping the
+# scheduled-dispatch loop's per-rider tick load bounded and reducing the
+# surface for the C32 overlap check to ever need to fire.
+SCHEDULE_MAX_PENDING_RIDES = 5
+
 
 # Decline codes where re-authorizing at a LOWER amount (fare without the buffer)
 # can still succeed — the card is fundable, the buffer just tipped a thin balance
@@ -499,6 +506,31 @@ async def create_ride(
             {"rider_id": current_user["id"], "status": RideStatus.SCHEDULED},
             limit=200,
         )
+
+        # ACTION_ITEMS.md C33: nothing previously bounded how many `scheduled`
+        # rides a single rider can have outstanding at once. Each one costs a
+        # row scanned by the dispatcher every tick
+        # (utils/scheduled_rides.py's _SCHEDULED_RIDES_TICK_LIMIT), and more
+        # concurrent scheduled rides per rider means more chances for the C32
+        # overlap check above to fire (support-load compounding, not a
+        # security issue). Reuses the same fetch as the overlap check below —
+        # no extra query.
+        if len(existing_scheduled_rides or []) >= SCHEDULE_MAX_PENDING_RIDES:
+            raise SpinrException(
+                message=(
+                    f"You can have at most {SCHEDULE_MAX_PENDING_RIDES} scheduled rides "
+                    "pending at once. Please cancel an existing scheduled ride before "
+                    "booking another."
+                ),
+                error_code=ErrorCode.RESOURCE_CONFLICT,
+                status_code=409,
+                details={
+                    "error_code": "scheduled_ride_cap_exceeded",
+                    "max_pending_scheduled_rides": SCHEDULE_MAX_PENDING_RIDES,
+                    "current_pending_scheduled_rides": len(existing_scheduled_rides or []),
+                },
+            )
+
         overlap_window = timedelta(minutes=SCHEDULE_OVERLAP_WINDOW_MINUTES)
         for _existing in existing_scheduled_rides or []:
             _existing_time_raw = _existing.get("scheduled_time")

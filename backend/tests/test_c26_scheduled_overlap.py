@@ -206,3 +206,69 @@ class TestScheduledRideOverlapGuard:
         )
 
         assert result is not None
+
+
+def _spaced_existing_rides(count: int, base_hours: int = 3, spacing_hours: int = 4):
+    """Builds `count` existing scheduled rides, each `spacing_hours` apart --
+    well outside SCHEDULE_OVERLAP_WINDOW_MINUTES (60) so the C33 cap tests
+    below exercise only the cap guard, never the C26/C32 overlap guard."""
+    base = datetime.now(timezone.utc) + timedelta(hours=base_hours)
+    return [
+        {
+            "id": f"ride-cap-existing-{i}",
+            "scheduled_time": (base + timedelta(hours=spacing_hours * i)).isoformat(),
+        }
+        for i in range(count)
+    ]
+
+
+class TestScheduledRideCapGuard:
+    """ACTION_ITEMS.md C33: bound how many `scheduled` rides a single rider
+    can have outstanding at once."""
+
+    async def test_at_cap_rejected(self):
+        from backend.routes.rides.booking import SCHEDULE_MAX_PENDING_RIDES
+
+        existing = _spaced_existing_rides(SCHEDULE_MAX_PENDING_RIDES)
+        new_time = datetime.now(timezone.utc) + timedelta(hours=100)  # far from all existing
+
+        with pytest.raises(Exception) as exc_info:
+            await _run_booking(
+                body_kwargs={"scheduled_time": new_time},
+                existing_scheduled_rides=existing,
+            )
+
+        err = exc_info.value
+        assert getattr(err, "status_code", None) == 409
+        details = getattr(err, "details", {}) or {}
+        assert details.get("error_code") == "scheduled_ride_cap_exceeded"
+        assert details.get("max_pending_scheduled_rides") == SCHEDULE_MAX_PENDING_RIDES
+        assert details.get("current_pending_scheduled_rides") == SCHEDULE_MAX_PENDING_RIDES
+
+    async def test_under_cap_succeeds(self):
+        from backend.routes.rides.booking import SCHEDULE_MAX_PENDING_RIDES
+
+        existing = _spaced_existing_rides(SCHEDULE_MAX_PENDING_RIDES - 1)
+        new_time = datetime.now(timezone.utc) + timedelta(hours=100)
+
+        result = await _run_booking(
+            body_kwargs={"scheduled_time": new_time},
+            existing_scheduled_rides=existing,
+        )
+
+        assert result is not None
+
+    async def test_immediate_booking_unaffected_by_cap(self):
+        """The cap only guards NEW scheduled-ride creation -- an immediate
+        booking must succeed regardless of how many scheduled rides the
+        rider already has pending."""
+        from backend.routes.rides.booking import SCHEDULE_MAX_PENDING_RIDES
+
+        existing = _spaced_existing_rides(SCHEDULE_MAX_PENDING_RIDES + 5)
+
+        result = await _run_booking(
+            body_kwargs={"scheduled_time": None},
+            existing_scheduled_rides=existing,
+        )
+
+        assert result is not None

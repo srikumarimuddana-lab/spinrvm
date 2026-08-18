@@ -8408,9 +8408,26 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 
 ### C33. Scheduled rides: no per-rider cap on pending scheduled trips
 
-- [ ] **Status:** open (filed 2026-08-17, same review as C32; renumbered
-  from C26/C27 on merge with main, which had independently claimed those
-  numbers for unrelated items — see C26/C27 below).
+- [x] **Status:** closed 2026-08-18. Added `SCHEDULE_MAX_PENDING_RIDES = 5`
+  next to `SCHEDULE_OVERLAP_WINDOW_MINUTES` in `routes/rides/booking.py`,
+  and a cap check in `create_ride` right before the C32 overlap loop —
+  reuses the same `existing_scheduled_rides` fetch already made for that
+  loop, no extra query. A rider at or above the cap gets a 409
+  (`error_code: "scheduled_ride_cap_exceeded"`, same `SpinrException`/
+  `ErrorCode.RESOURCE_CONFLICT` shape as the overlap guard) instead of
+  being silently allowed to queue more. Gated on `body.scheduled_time`
+  being set, same as the overlap guard — immediate bookings are
+  completely unaffected regardless of how many scheduled rides the rider
+  already has. New tests in `test_c26_scheduled_overlap.py`
+  (`TestScheduledRideCapGuard`): at-cap rejected, one-under-cap succeeds,
+  immediate booking unaffected by the cap — all using existing rides
+  spaced 4h apart so only the cap guard (not the overlap guard) is
+  exercised. `pytest tests/test_c26_scheduled_overlap.py
+  tests/test_create_ride_scheduled_confirmation.py
+  tests/test_p2_scheduled_rides.py tests/test_company_guest_booking.py -q`
+  → 49 passed. **Blast radius:** isolated to `create_ride`'s scheduled-time
+  branch, same as C32 — no other caller of the active-ride guard touched.
+  **Not verified:** no live-Supabase check (mocked `get_rows` only).
 - **Issue/gap:** nothing in `routes/rides/booking.py`'s create-ride path
   bounds how many `scheduled` rides a single rider can have outstanding at
   once.

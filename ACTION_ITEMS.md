@@ -6518,9 +6518,18 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   query-failure never raises).
 
 ### C11. Metrics aggregation & alerting not yet implemented — SLA/KPI table still unmeasured
-- [ ] **Status:** open — design accepted (ADR-010, PR #3255, merged 2026-08-02);
-  implementation not started. Tracked as **CR-2026-008**, issue
-  [#3295](https://github.com/srikumarimuddana-lab/spinrvm/issues/3295).
+- [ ] **Status:** open — design accepted (ADR-010, PR #3255, merged
+  2026-08-02, status field corrected to "Accepted" 2026-08-18); **config
+  scaffolding merged** (PR #4055, 2026-08-17 — standalone `metrics-agent/`
+  Fly app running Grafana Alloy, scrape config, dashboard panel, and the
+  first 2 ADR-010 §3 alert rules, all committed as inert/undeployed
+  config). **Not yet live** — nothing scrapes or alerts in production until
+  a human completes the 8 steps `metrics-agent/README.md` lists (Grafana
+  Cloud account, `fly apps create`/`fly deploy` for the new app, 4 Fly
+  secrets, image-digest pin, Grafana rule import, smoke test). Tracked as
+  **CR-2026-008**, issue
+  [#3295](https://github.com/srikumarimuddana-lab/spinrvm/issues/3295)
+  (left open by design — see issue comments 2026-08-17).
 - **What's wrong:** `backend/utils/metrics.py` is per-process only (its own
   docstring says so — no cross-replica aggregation, no exporter sidecar).
   `CLAUDE.md`'s P95 SLA table (dispatch offer→accept < 2s, fare calc < 300ms,
@@ -6534,23 +6543,27 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   Cloud), with a concrete <1-day MVP: one dashboard panel + 2 alert rules
   (dispatch-latency breach, payment-failure-rate breach) wired to the
   existing `ALERT_WEBHOOK_URL` Slack channel `loop_watchdog` already uses.
-- **Why not done yet:** requires infra/vendor provisioning (a Grafana Cloud
-  account, a real Fly deploy) that no dev session/sandbox environment can do
-  — genuinely needs an operator with Fly + Grafana Cloud access, not just
-  code.
-- **Open decision before implementing:** agent placement — colocate the
-  scrape agent in `backend/Dockerfile`/`fly.toml` (touches the recently
-  hardened, digest-pinned, Trivy-scanned runtime image — see C6/CR-2026-002
-  — and could reopen that scan surface) vs. a standalone Fly app scraping
-  over the private network (avoids touching the hardened image, but needs
-  Fly Machines-API-based per-replica discovery glue since Fly's `.internal`
-  DNS load-balances rather than fanning out to all replicas). Full tradeoff
-  in ADR-010 §1 and issue #3295.
-- **Constraints:** implementation needs real source changes
-  (`Dockerfile`/`fly.toml`, or a new small standalone app) and a new
-  dependency (the agent binary) — **not** purely docs/design past this
-  point. Also needs a new Fly production secret (Grafana Cloud remote-write
-  API key).
+- **Why still not live:** the remaining steps are infra/vendor provisioning
+  (a real Grafana Cloud account, a real `fly deploy`, real Fly/Grafana
+  secrets) that no dev session/sandbox environment can do — genuinely needs
+  an operator with Fly + Grafana Cloud access, not more code. PR #4055
+  already carried every statically-verifiable piece (config syntax checks,
+  JSON/YAML/TOML validation, shell lint) as far as a sandboxed session can.
+- **Agent-placement decision: resolved.** Standalone Fly app (Option B) —
+  avoids touching the hardened, digest-pinned, Trivy-scanned backend runtime
+  image (C6/CR-2026-002) at the cost of Fly per-machine DNS discovery glue
+  (`metrics-agent/discover-targets.sh`, resolving `vms.<app>.internal`'s
+  multi-AAAA-record fan-out — no Fly Machines API token needed). Full
+  tradeoff in ADR-010 §1, issue #3295, and `metrics-agent/README.md`.
+- **Constraints:** the merged config still needs, before it does anything in
+  production: (1) a Grafana Cloud account + remote-write API key, (2) `fly
+  apps create`/`fly deploy` for the new `spinr-metrics-agent-yyz` app
+  (doesn't exist on Fly yet), (3) 4 Fly secrets on that new app, (4) the
+  `grafana/alloy` image's real digest pin (currently tag-only —
+  `metrics-agent/Dockerfile` has no registry access to resolve it from a
+  sandboxed session), (5) importing `metrics-agent/grafana/*.{json,yaml}`
+  into the real Grafana Cloud account and pointing its alert contact point
+  at the real `ALERT_WEBHOOK_URL`, (6) a smoke test against real traffic.
 - **Risk if left undone:** none of `CLAUDE.md`'s SLA/KPI numbers are
   verified; a real dispatch-latency or payment-failure regression during
   live app testing would only surface via user complaints/support tickets,
@@ -6559,15 +6572,19 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   payment/auth business logic — but see the Dockerfile/Trivy risk above if
   the colocated-agent option is chosen; otherwise routine additive-deploy
   risk only.
-- **Effort estimate:** ~4–8 hours active engineering time (half a day to a
-  full day) per ADR-010 §5, plus Grafana Cloud account lead time.
+- **Effort estimate:** config/code is done (PR #4055); remaining work is
+  account/deploy steps a human executes directly against Fly + Grafana
+  Cloud — likely under an hour of hands-on time once access exists, plus
+  Grafana Cloud account lead time and a smoke-test observation window.
 - **Verification once implemented:** confirm the Grafana dashboard panel
   populates from real production traffic, confirm the 2 alert rules don't
-  false-fire against normal load, and confirm `docker-image-scan` (Trivy)
-  is still green if the colocated-agent option was chosen.
-- **Files (once implemented):** `backend/fly.toml`, `backend/Dockerfile`
-  (or a new standalone app) + Grafana Cloud config (external, not in this
-  repo).
+  false-fire against normal load. `docker-image-scan` (Trivy) is
+  unaffected either way — Option B (chosen) never touches
+  `backend/Dockerfile`.
+- **Files:** `metrics-agent/` (Fly app, Alloy config, discovery script,
+  Dockerfile, fly.toml — merged, PR #4055) + `metrics-agent/grafana/*`
+  (dashboard panel + alert rules, importable, not yet imported) + Grafana
+  Cloud config (external, not in this repo, not yet created).
 
 ### C12. Codecov uploads on `main` pushes silently fail — no token configured
 - [x] **Status:** CLOSED 2026-08-16 — user explicitly chose "remove the

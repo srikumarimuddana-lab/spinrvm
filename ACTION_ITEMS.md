@@ -8316,8 +8316,47 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   ~280 migrations' worth of accumulated drift in one shot.
 - **Files:** `backend/scripts/migrate.py`, `backend/migrations/00_schema_migrations_table.sql`, `backend/migrations/24_schema_migrations.sql`.
 
-### C13. `tsc --noEmit` false-positives across all three frontend surfaces (pre-existing, not caused by any recent PR)
-- [ ] **Status:** open — found 2026-08-03 while verifying PR #3382 (full-suite
+### C13. `tsc --noEmit` false-positives across all three frontend surfaces (pre-existing, not caused by any recent PR) [duplicate item number — see the other C13 above at "Required `pull_request`-triggered workflows silently never fire"; kept as-is rather than renumbered to avoid breaking either item's cross-references]
+- [x] **Status:** CLOSED — already fixed by a different session/PR before
+  this one got to it (found 2026-08-18 while dispatching a fix agent for
+  this item in parallel with C26; the agent's own investigation found
+  both root causes below already resolved in the current `tsconfig.json`
+  files, with zero diff needed). Re-verified independently in this
+  session, not just trusted the agent's report:
+  `npx tsc --noEmit` run directly in all three surfaces — **0 errors in
+  rider-app, driver-app, and admin-dashboard.**
+- **What's actually fixing it now**, confirmed present in the current
+  files:
+  1. `rider-app/tsconfig.json` and `driver-app/tsconfig.json` both carry
+     an explicit `compilerOptions.paths` entry —
+     `"expo-router": ["./node_modules/expo-router"]` — which resolves
+     `expo-router/react-navigation`'s type declarations for `tsc`.
+  2. `admin-dashboard/tsconfig.json` carries
+     `"types": ["vitest/globals", "@testing-library/jest-dom"]`, which
+     registers both ambient global types for a standalone `tsc` run.
+  The fix agent confirmed these aren't false negatives (stale
+  `tsconfig.tsbuildinfo`, skipped files) by deleting the buildinfo cache
+  and rerunning (still 0), confirming via `tsc --listFiles` that the
+  specific files originally reported as erroring are actually in the
+  compiled set, and temporarily reverting each fix one at a time to
+  confirm the original error counts (3, 4, 61) reappear and disappear
+  again on restore.
+- **No regressions**: `npx jest ...` for the two specifically-named
+  previously-failing suites (`useBottomSheetGuard.test.tsx`,
+  `ActivityView.test.tsx`) both load and pass; full suites: rider-app
+  526/527 (1 pre-existing unrelated flaky timeout in
+  `verifyEmailScreen.test.tsx` under full-suite parallel load — already
+  a known, separately-tracked flake, not caused by or related to this
+  item), driver-app 534/534, admin-dashboard (vitest) 327/327.
+- **Not identified**: which PR/session actually landed this fix, or
+  when — it predates this session's own restarted branch (based on
+  latest `main` as of 2026-08-18), so somewhere between 2026-08-03 (when
+  this item was filed) and now. Not chased down further since the item
+  is resolved either way; if it matters later, `git log -p --
+  rider-app/tsconfig.json driver-app/tsconfig.json
+  admin-dashboard/tsconfig.json` on `main` would find it.
+- [historical, pre-fix diagnosis below, kept for record]
+- ~~[ ] **Status:** open~~ — found 2026-08-03 while verifying PR #3382 (full-suite
   pass at that time: backend pytest 8742 passed/0 failed, rider-app jest
   434/434, driver-app jest 337/337, admin-dashboard vitest 157/157 — all
   green). Running a bare `npx tsc --noEmit` per surface afterward surfaced
@@ -10329,9 +10368,49 @@ how much they de-risk a public launch._
 
 ### C26. `pip-compile drift check` fails on any PR that touches `backend/requirements.in` — `requirements.txt` has drifted far out of sync with a fresh resolve, unrelated to the touching PR's actual diff
 
-- [ ] **Status:** open, not yet a `[CR]` issue — flagged here per the
-  "CI check red for a reason unrelated to your diff" rule rather than
-  left unexplained.
+- [x] **Status:** CLOSED (2026-08-18) — regenerated `backend/requirements.txt`.
+  First attempt (agent-run, from the repo root) actually left PR #4211's
+  own `requirements.txt up to date` CI job still failing — the drift
+  check runs `pip-compile` with the working directory set to `backend/`,
+  so `-r requirements.in` is what lands in the `# via` annotation
+  comments; running the same command from the repo root instead
+  (`pip-compile backend/requirements.in ...`) produces `-r
+  backend/requirements.in` in those comments, a cosmetic but real diff
+  CI's byte-for-byte comparison correctly flagged. Caught by actually
+  watching this PR's own CI (not just trusting a clean local run) and
+  reading the job's raw diff output, which pointed straight at the
+  `-r backend/requirements.in` vs `-r requirements.in` mismatch.
+  Re-ran `pip-compile requirements.in --output-file requirements.txt
+  --strip-extras --no-header --annotation-style line --no-upgrade` from
+  *inside* `backend/`, matching CI's actual working directory
+  (pip-tools 7.6.1).
+- **Correction to the original diagnosis below**: the "dozens of unpinned
+  transitive deps" read on PR #4085's CI diff was a misread of the raw
+  line-count diff, not the actual drift. Normalizing both the old and
+  regenerated files down to plain `package==version` pairs and diffing
+  those showed **zero differences** — all 149 resolved pins were already
+  correct. The actual drift was purely annotation-style: the checked-in
+  file used pip-tools' default multi-line `# via` comments with extras
+  kept in brackets (e.g. `httpx[http2]==0.28.1`); a fresh compile with
+  this repo's own `--strip-extras --annotation-style line` flags
+  produces single-line `package==version  # via ...` output instead — a
+  524-line-removed/149-line-added diff that *looked* like missing pins
+  but wasn't. No pinned package's resolved version actually changed.
+- **Verification**: installed the regenerated lockfile into a fresh venv
+  (`pip install -r backend/requirements.txt`, clean exit) and ran
+  `pytest -m unit backend/tests` — **2831 passed, 2 failed, 1 skipped**.
+  Both failures are pre-existing and unrelated (confirmed by the
+  byte-identical resolved-pin diff above, so no library version changed):
+  `test_dual_import_parity.py::test_fallback_import_branches_mirror_try_branches`
+  (a real latent bug in `routes/lost_and_found.py`'s except-ImportError
+  branch missing a `DuplicateRecordError` binding the try-branch has —
+  worth its own ACTION_ITEMS entry, not filed here to keep this item
+  scoped) and a mock-assertion mismatch in
+  `test_scheduled_rides_coverage.py::test_lock_not_acquired_still_proceeds_to_fetch`.
+- **Not run**: the full test suite (integration/E2E tiers need live
+  Supabase/Redis, unavailable in the sandbox) — `pytest -m unit` is this
+  repo's own documented fast-local-loop subset (CLAUDE.md Testing
+  Conventions), covering 2831 tests.
 - **Where surfaced:** PR #4085 (A39's `migrate.py` reconciliation), whose
   only change to `backend/requirements.in` was a one-line comment fix
   (`migrate.py` → `run_migrations.py`, no dependency added/removed/
@@ -10365,62 +10444,53 @@ how much they de-risk a public launch._
 
 ### C27. `ci-error-audit.yml` has created 2,483 open issues since 2026-04-28 — no cross-run dedup, no auto-close
 
-- [ ] **Status:** open. Filed via `[CR]` #4112
-  (`.github/ISSUE_TEMPLATE/ci_change_request.yml`), CR-2026-(assign). Found
-  2026-08-17 while auditing the repo's CR backlog for unclosed-but-resolved
-  items (the search that also found and closed #3764/#3765).
-- **Measured, not estimated:** 2,483 of the repo's 2,509 total open issues
-  (~99%) carry the `ci-audit` label. Oldest is **#143, created
-  2026-04-28** — continuous unbroken accumulation since the system
-  shipped, ~22/day sustained.
-- **Root cause**: `scripts/ci-audit/create_github_issue.py`'s own
-  docstring states its actual dedup scope — *"De-duplicates: if an open
-  issue for the same run already exists, updates it"* — keyed on **run
-  ID**, not error signature. The same recurring failure across different
-  runs opens a fresh issue every time. No companion workflow anywhere in
-  `.github/workflows/` closes these when the underlying job later goes
-  green — grepped, confirmed absent.
-- **Concrete harm observed this session**: a plain issue-title search for
-  other open `[CR]`s returned unusable noise — GitHub's semantic search
-  matched "CR" against "CI" and surfaced a page of `[CI Audit]` issues
-  instead. Same "signal drowns in noise, trains people to stop looking"
-  failure shape as C7/C8/C9 (a permanently-red or silently-broken
-  automation becomes the expected state, so nobody notices when something
-  in it actually matters).
-- **Not fixed here** — this is a decision-needing CR (approval gate,
-  `.github/ISSUE_TEMPLATE/ci_change_request.yml`), not implemented
-  unilaterally. See #4112 for the proposed fingerprint-based dedup fix,
-  the separate (larger) question of one-time backlog cleanup, and the
-  auto-close design tradeoffs.
+- [x] **Status:** CLOSED — fixed via `[CR]` #4112, approved and merged as
+  PR #4130 (`fix(ci-audit): cross-run fingerprint dedup for
+  ci-error-audit issue creation`, 2026-08-18). This entry was still
+  showing `[ ]` open on `main` because the fix landed from a different
+  session/PR than the one that filed it — caught 2026-08-18 while
+  scanning for the next open CR to pick up, before duplicating the work.
+- **What shipped**: `scripts/ci-audit/create_github_issue.py` now
+  fingerprints on `(workflow name, sorted failing job names, classified
+  error category+description from `error_classifier.py`)` — explicitly
+  not run ID and not raw log text — and embeds it as a hidden
+  HTML-comment marker in the issue body. Before creating a new issue, an
+  open `ci-audit`-labeled issue with a matching marker is searched for
+  first; on a match, a comment is added to the existing issue instead of
+  opening a duplicate. 4 new tests in
+  `scripts/ci-audit/test_create_github_issue.py`.
+- **Explicitly deferred, per the CR's own scoping** (not gaps in this
+  fix): auto-closing resolved issues, and one-time cleanup of the
+  existing ~2,483-issue backlog — both flagged in #4112 as separate
+  decisions needing their own sign-off, not attempted in PR #4130.
 
 ### C36. Migration numeric-prefix collision check is warning-only and per-PR-scoped — a cross-PR race can (and did) land two migrations with the same number on `main`
 
-- [ ] **Status:** open. Filed via `[CR]` #4187
-  (`.github/ISSUE_TEMPLATE/ci_change_request.yml`), CR-2026-(assign). Found
-  2026-08-18 while re-checking PR #4133's migration-numbering neighborhood
-  at the user's request.
-- **What was found**: `main` now carries two different migrations both
-  prefixed `327` — `327_merge_duplicate_onboarding_faqs.sql` (PR #4126)
-  and `327_stripe_disputes_evidence_reminder_claim_flag.sql` (PR #4129).
-  Neither PR is from this session; neither saw the other's file because
-  each PR's `migration-check.yml` run only diffs against its own
-  merge-base snapshot of `main`.
-- **Root cause**: `migration-check.yml`'s `CHECK B` (sequence gap /
-  collision) only ever appends to `warnings`, never `errors` — a numeric
-  collision cannot block a merge today, contradicting this file's own
-  earlier claim ("a CI prefix-uniqueness check blocks them"). Confirmed
-  by reading the check's source directly.
-- **This session hit the same race twice, live**: PR #4133 had to be
-  renumbered 323→328 mid-session after discovering a pre-existing
-  collision with `323_purge_pii_retention_step_d_ride_messages_column_fix.sql`;
-  PR #4134's migration was renumbered again 327→329 after `main` picked up
-  the *first* of the two 327s above while #4134's branch was in flight.
-  Both catches were manual (re-checking fresh `main`), not CI-driven.
-- **Not fixed here** — proposed fix (make true collisions a hard failure,
-  keep sequence gaps as warnings) is a decision-needing CR, not
-  implemented unilaterally. See #4187 for the full proposal, including a
-  documented-but-deferred option (b): a post-merge check to catch the
-  narrower true-race window a per-PR check structurally cannot.
+- [x] **Status:** CLOSED — fixed via `[CR]` #4187, approved and merged as
+  PR #4192 (`fix(ci): make migration prefix collision a hard CI failure`,
+  2026-08-18). Same as C27 above — this entry was still showing `[ ]`
+  open on `main` because the fix landed from a different session/PR;
+  caught 2026-08-18 while scanning for the next open CR, before
+  duplicating the work.
+- **What shipped**: `migration-check.yml`'s `CHECK B` collision branch
+  now appends to `errors` (hard failure) instead of `warnings` when a
+  new file's numeric prefix collides with or precedes a number already
+  on the PR's merge-base — blocks the merge instead of just flagging it.
+  The sequence-*gap* case (missing numbers, no collision) is unchanged
+  and still only warns, per the CR's own recommendation (gaps are
+  cosmetic and an accepted historical pattern). `CLAUDE.md`'s Database &
+  Migration Conventions section was also corrected to state this
+  accurately (see the file's own "As of CR #4187" note).
+- **Verified not to retroactively fail** on the 3 pre-existing historical
+  duplicates (319, 321, 327×2) — `CHECK B` only evaluates files in a PR's
+  own diff, never the full existing migrations directory, so untouched
+  historical dupes sitting on `main` are structurally unreachable by the
+  new hard-fail path.
+- **Explicitly deferred, per the CR's own scoping**: option (b), a
+  post-merge/`push`-to-`main` check for the narrower true cross-PR race
+  window (both PRs' branches predate each other's merge) that a per-PR
+  check structurally can't catch — recommended to defer unless option
+  (a) alone proves insufficient in practice. Not implemented in PR #4192.
 
 ### C37. `driver-app-test`: leaked Animated-timer update in `RideOfferPanel.test.tsx` corrupted the shared Jest worker, intermittently timing out `ActivityView.test.tsx`
 
@@ -10500,6 +10570,52 @@ how much they de-risk a public launch._
 - **Files:** likely `driver-app/__tests__/components/ActivityView.test.tsx`
   plus whichever earlier-running test file in the same Jest worker is the
   actual source, per the same investigative pattern used for C31.
+
+### C38. `routes/lost_and_found.py`'s except-ImportError fallback branch was missing a `DuplicateRecordError` binding present in the try branch — latent `NameError` if the dual-import ever took the fallback path
+
+- [x] **Status:** FIXED (2026-08-18) — found on PR #4211's own `backend-test`
+  CI run (unrelated PR, only `backend/requirements.txt` +
+  `ACTION_ITEMS.md` touched — confirmed via `git diff origin/main..HEAD
+  --stat`), surfaced by `test_dual_import_parity.py`'s own regression
+  test: `AssertionError: Names bound in the try branch but missing from
+  the except ImportError fallback ... assert not
+  {'routes/lost_and_found.py': ['DuplicateRecordError']}`.
+- **Root cause**: the file's dual-import block (CLAUDE.md's documented
+  `try: from .routes.X import ... / except ImportError: from routes.X
+  import ...` pattern) imports `DuplicateRecordError` in the try branch
+  (`from ..utils.error_handling import DuplicateRecordError`) but the
+  except-ImportError fallback branch never imported it — a latent bug
+  that would only surface as a real `NameError` at the `except
+  (DuplicateRecordError, Exception) as exc:` handler (line 217) on a
+  request that hit an actual `DuplicateRecordError`, and only when the
+  process was running under the fallback import path (`python -m
+  backend.server` vs top-level, per CLAUDE.md's dual-import convention)
+  — never exercised in this repo's own test/CI environment, which is why
+  it went undetected until the dedicated parity test caught it
+  structurally instead of by triggering the actual `NameError`.
+- **Fix**: added the missing import to the fallback branch, mirroring
+  the try branch exactly:
+  ```diff
+   except ImportError:
+       import db_supabase  # type: ignore
+       from dependencies import get_current_user  # type: ignore
+       from features import send_push_notification  # type: ignore
+       from services.zoho_desk_integration import create_ticket_for_lost_and_found  # type: ignore
+  +    from utils.error_handling import DuplicateRecordError  # type: ignore
+  ```
+- **Blast radius**: isolated — one import line in one file's fallback
+  branch, adding a name that already exists at that scope via the try
+  branch on the normal (non-fallback) import path. No other file reads
+  or imports from this except-branch's names.
+- **Verification performed**: `pytest tests/test_dual_import_parity.py`
+  → 3 passed (was 1 failed before). `pytest tests/ -k lost_and_found` →
+  43 passed, 1 skipped (unaffected, confirming no behavior change on the
+  normal import path).
+- **Not verified**: the actual fallback-import code path itself (running
+  the app via top-level `import routes.lost_and_found` instead of
+  `backend.routes.lost_and_found`) — the parity test verifies the two
+  branches bind the same names statically via AST inspection, not by
+  actually exercising both import paths at runtime.
 
 ## Recently completed (do not redo)
 

@@ -32,6 +32,7 @@ except ImportError:
     from dependencies import get_current_user  # type: ignore
     from features import send_push_notification  # type: ignore
     from services.zoho_desk_integration import create_ticket_for_lost_and_found  # type: ignore
+    from utils.error_handling import DuplicateRecordError  # type: ignore
 
 api_router = APIRouter(prefix="/lost-and-found", tags=["Lost & Found"])
 

@@ -9,7 +9,7 @@ import {
   tripLocationRecorder,
   type TripLocationBatchRequest,
 } from './tripLocationRecorder';
-import { checkLocationIntegrity, haversineKm } from './locationIntegrity';
+import { createLocationIntegrityChecker, haversineKm } from './locationIntegrity';
 import { recordNonFatal } from './crashlytics';
 import { publishCarFix } from '../lib/androidAuto/carFixChannel';
 import { SESSION_ENDED_KEY } from '@shared/auth/sessionMarker';
@@ -22,6 +22,11 @@ import { SESSION_ENDED_KEY } from '@shared/auth/sessionMarker';
 const API_URL = spinrConfig.backendUrl;
 
 const TASK_NAME = 'spinr-background-location';
+
+// This producer's own anti-spoof state — the teleport comparison is only
+// meaningful between consecutive fixes from the SAME watcher (see
+// locationIntegrity.ts). Gates DISPLAY (the car marker) only, never capture.
+const bgIntegrity = createLocationIntegrityChecker();
 
 /**
  * Accent for BOTH Spinr foreground-service notifications — this one and the
@@ -236,12 +241,27 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
   }
 
   for (const location of data?.locations ?? []) {
-    // Same trust gate as the foreground watcher (useDriverDashboard): a
-    // mocked/teleporting/impossibly-fast sample must not enter the durable
-    // route history from either path. Reason string only — never coordinates.
-    const integrity = checkLocationIntegrity(location);
+    // CAPTURE BEFORE FILTER. Durable persistence comes first, unconditionally:
+    // a fix that never reaches the outbox is route history lost forever
+    // (SPR-PE7TTB lost 83% of a trip to silent client-side drops). The v2
+    // point carries the `mocked` flag to the server, and settlement filtering
+    // (backend utils/trip_distance.py spike/speed/gap caps) owns billing
+    // quality — the client integrity check below gates DISPLAY only.
+    try {
+      // Durable persistence is deliberately before auth/network work. The
+      // recorder keeps every native sample across process restarts.
+      await tripLocationRecorder.recordNativeFix(location, 'background');
+    } catch (e) {
+      // No raw coordinates in logs; a later native callback can still queue.
+      console.warn('[BgLocation] Failed to persist a native location sample');
+      recordNonFatal(e, { domain: 'drivers', surface: 'driver-app' });
+    }
+
+    // Display trust gate — a mocked/teleporting/impossibly-fast sample must
+    // not move the car marker. Reason string only, never coordinates.
+    const integrity = bgIntegrity.check(location);
     if (!integrity.trusted) {
-      console.warn(`[BgLocation] Dropped untrusted sample: ${integrity.reason}`);
+      console.warn(`[BgLocation] Untrusted sample kept for audit, hidden from display: ${integrity.reason}`);
       continue;
     }
     // Feed the Android Auto map. This service already holds a foreground-service
@@ -249,23 +269,11 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
     // carLocationTask.startCarLocationService() defers to it for exactly this
     // reason. Device-local only: publishCarFix updates the in-memory marker and
     // the existing `spinr_driver_last_location` cache, and sends nothing.
-    // Placed after the integrity gate above so an untrusted sample can no more
-    // move the car marker than it can enter the durable route history.
     publishCarFix({
       latitude: location.coords.latitude,
       longitude: location.coords.longitude,
       heading: location.coords.heading ?? null,
     });
-
-    try {
-      // Durable persistence is deliberately before auth/network work. The
-      // recorder keeps every accepted native sample across process restarts.
-      await tripLocationRecorder.recordNativeFix(location, 'background');
-    } catch (e) {
-      // No raw coordinates in logs; a later native callback can still queue.
-      console.warn('[BgLocation] Failed to persist a native location sample');
-      recordNonFatal(e, { domain: 'drivers', surface: 'driver-app' });
-    }
   }
 
   const token = await getBackgroundAuthToken();

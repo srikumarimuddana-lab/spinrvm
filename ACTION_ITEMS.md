@@ -10187,6 +10187,32 @@ how much they de-risk a public launch._
   (like the failover runbook) has never been exercised. Restore a Supabase PITR
   snapshot into a scratch project, verify row counts + a sample ride lifecycle,
   record actual RTO in the runbook. A backup is only real after a restore.
+  **2026-08-18: scaffolding done, drill itself still not run.** Added
+  `backend/scripts/verify_restore.py` — a standalone, read-only, opt-in tool a
+  human runs against a restored branch's connection string. It reports row
+  counts for `users`/`drivers`/`rides`/`payouts`/`stripe_disputes`/
+  `driver_insurance_periods`/`financial_events` (checked against
+  `backend/migrations/`, not guessed), walks one sample `status='completed'`
+  ride's full lifecycle (ride row → `driver_insurance_periods` →
+  `financial_events`), prints elapsed wall-clock time (feeds the RTO
+  measurement), and exits non-zero on any check failure. It requires
+  `--database-url` or `RESTORE_BRANCH_DATABASE_URL` explicitly — never reads a
+  bare `DATABASE_URL` — and refuses to run if the resolved URL matches this
+  shell's `DATABASE_URL` (the production-URL guard). Covered by
+  `backend/tests/test_verify_restore_script.py` (21 tests: guard
+  true/false/env-var/trailing-slash paths, row-count pass/empty/query-error,
+  ride-lifecycle found/missing/wrong-status/missing-related-rows). Reviewed
+  by `spinr-money-auditor` (no Decimal violations found; delta_cents is
+  correctly treated as an integer, not summed). `docs/runbooks/pitr-restore.md`'s
+  "Verify branch data" step and Quarterly DR Drill section now name this
+  script instead of the old vague "Run validation query" bullet.
+  **Still blocked / not done in this session:** the actual drill — creating a
+  scratch Supabase project, triggering a real PITR branch restore, running
+  this script against it for real, and recording the actual measured RTO in
+  the runbook — requires a human with Supabase org/billing access. This
+  session deliberately did not create any real scratch Supabase project or
+  touch production data; `verify_restore.py` has been exercised only against
+  a mocked connection in tests, never against a real restored branch.
 - [ ] **E8. CODEOWNERS + review routing** — partially done. Added
   `.github/CODEOWNERS` routing payments/corporate/wallet/surge, migrations,
   auth/security-sensitive files, dispatch, and safety paths to distinct

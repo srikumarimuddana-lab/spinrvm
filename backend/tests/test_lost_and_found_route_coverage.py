@@ -271,7 +271,7 @@ class TestDriverReportFoundItem:
         patches = _start(
             _patches(
                 **{
-                    "backend.routes.lost_and_found.db_supabase.get_rows": AsyncMock(return_value=[_DRIVER_ROW]),
+                    "backend.routes.lost_and_found.db_supabase.get_rows": AsyncMock(side_effect=[[_DRIVER_ROW], []]),
                     "backend.routes.lost_and_found.db_supabase.get_ride": AsyncMock(return_value=ride),
                     "backend.routes.lost_and_found.db_supabase.insert_one": insert_one,
                     "backend.routes.lost_and_found.send_push_notification": push,
@@ -299,7 +299,7 @@ class TestDriverReportFoundItem:
         patches = _start(
             _patches(
                 **{
-                    "backend.routes.lost_and_found.db_supabase.get_rows": AsyncMock(return_value=[_DRIVER_ROW]),
+                    "backend.routes.lost_and_found.db_supabase.get_rows": AsyncMock(side_effect=[[_DRIVER_ROW], []]),
                     "backend.routes.lost_and_found.db_supabase.get_ride": AsyncMock(return_value=ride),
                     "backend.routes.lost_and_found.db_supabase.insert_one": insert_one,
                 }

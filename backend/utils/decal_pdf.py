@@ -25,7 +25,18 @@ from docx import Document  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
 
-_TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "static" / "branding" / "driver_welcome_letter_template.docx"
+_BRANDING_DIR = Path(__file__).resolve().parent.parent / "static" / "branding"
+
+_PROVINCE_TEMPLATES: dict[str, str] = {
+    "SK": "driver_welcome_letter_template.docx",
+    "AB": "driver_welcome_letter_template_ab.docx",
+}
+_DEFAULT_PROVINCE = "SK"
+
+
+def _template_path(province: str) -> Path:
+    filename = _PROVINCE_TEMPLATES.get(province.upper(), _PROVINCE_TEMPLATES[_DEFAULT_PROVINCE])
+    return _BRANDING_DIR / filename
 
 
 def _driver_name(driver: dict[str, Any]) -> str:
@@ -87,6 +98,7 @@ def _replace_in_table_cells(table, old: str, new: str) -> None:
 def _fill_template(
     driver: dict[str, Any],
     company: dict[str, Any] | None = None,
+    province: str = "SK",
 ) -> bytes:
     """Fill the DOCX template for one driver and return raw DOCX bytes."""
     company = company or {}
@@ -104,7 +116,7 @@ def _fill_template(
     name = _driver_name(driver)
     address = _driver_address(driver)
 
-    doc = Document(str(_TEMPLATE_PATH))
+    doc = Document(str(_template_path(province)))
 
     replacements = {
         "«Name»": name,
@@ -166,16 +178,18 @@ def generate_decal_pdf(
     drivers: list[dict[str, Any]],
     *,
     company: dict[str, Any] | None = None,
+    province: str = "SK",
 ) -> bytes:
     """Generate a multi-page PDF with one welcome letter per driver.
 
     Returns the raw PDF bytes suitable for a Response(content=...,
     media_type="application/pdf").
 
-    Each driver's letter is produced by filling the DOCX marketing
-    template with their name/address, then converting to PDF via
-    LibreOffice. Multiple drivers are merged into a single PDF using
-    pypdf.
+    Each driver's letter is produced by filling the province-specific
+    DOCX marketing template with their name/address, then converting to
+    PDF via LibreOffice. Multiple drivers are merged into a single PDF
+    using pypdf. ``province`` selects the template: "SK" for
+    Saskatchewan (default), "AB" for Alberta.
     """
     from pypdf import PdfReader, PdfWriter  # type: ignore[import-untyped]
 
@@ -184,7 +198,7 @@ def generate_decal_pdf(
     for driver in drivers:
         work_dir = tempfile.mkdtemp(prefix="spinr_decal_")
         try:
-            docx_bytes = _fill_template(driver, company=company)
+            docx_bytes = _fill_template(driver, company=company, province=province)
             pdf_bytes = _docx_to_pdf(docx_bytes, work_dir)
             reader = PdfReader(BytesIO(pdf_bytes))
             for page in reader.pages:

@@ -3859,6 +3859,7 @@ async def admin_driver_daily_activity(
 
 class DecalGenerateRequest(BaseModel):
     driver_ids: List[str] = Field(..., min_length=1, max_length=200)
+    province: str = Field("SK", pattern=r"^(SK|AB)$")
 
 
 @router.post("/drivers/decals/generate-pdf")
@@ -3898,7 +3899,7 @@ async def generate_decal_pdf_endpoint(
         from settings_loader import get_app_settings  # type: ignore[no-redef]
 
     settings = await get_app_settings()
-    pdf_bytes = generate_decal_pdf(drivers, company=settings)
+    pdf_bytes = generate_decal_pdf(drivers, company=settings, province=body.province)
 
     await log_admin_action(
         admin,

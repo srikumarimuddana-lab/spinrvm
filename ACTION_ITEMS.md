@@ -144,10 +144,10 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 > same duplicate-number pattern as the two `A34`s above; not renumbered
 > because this one had already merged. Treat the heading text as the
 > disambiguator.
-- [ ] **Status:** open, 1 of 17 baseline blockers fixed 2026-08-18 (same day,
-  later session) — see below. Of the baseline's 17 ranked blockers as
-  originally reported: 14 STILL-OPEN unchanged (no commits touching them
-  since 08-15), 1 now FIXED (below), 1
+- [ ] **Status:** open, 2 of 17 baseline blockers fixed 2026-08-18 (same day,
+  later sessions) — see below. Of the baseline's 17 ranked blockers as
+  originally reported: 13 STILL-OPEN unchanged (no commits touching them
+  since 08-15), 2 now FIXED (below), 1
   REGRESSED (`deploy-metrics-agent.yml` unpinned actions with a live
   `FLY_API_TOKEN` — missed by the C18b sweep that claimed this class fixed),
   2 partially mitigated but not resolved (corporate PDF tax-line fallback now
@@ -171,6 +171,19 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   (unrelated cleanup, not touched). See
   `docs/change-log/2026-08-18-period-2-insurance-timing-fix.md` for tests and
   verification detail.
+  **FIXED 2026-08-18**: ranked blocker #4 — `accept_ride`
+  (`backend/routes/drivers/ride_flow.py`) never re-checked `is_online`, so a
+  driver who went offline (via `POST /drivers/status` or otherwise) after
+  being claimed for an offer could still accept it via a stale queued
+  push-notification tap or a plain retry, stranding the rider. Fixed by
+  raising `DriverOfflineException` (already defined in
+  `backend/utils/error_handling.py`/`ErrorCode.DRIVER_OFFLINE` for exactly
+  this case, but never previously raised anywhere in the codebase) when the
+  already-fetched driver row shows `is_online=False` — no extra DB round-trip.
+  `is_available` was deliberately NOT used for this check (it's already False
+  for every driver mid-offer by design; checking it would reject every
+  legitimate accept). See
+  `docs/change-log/2026-08-18-driver-accept-while-offline-fix.md`.
   Two structural (not one-off) findings remain open: no AI tool RESULT is
   ever PII-scrubbed anywhere in the codebase (the driver-name-to-LLM leak is
   just the first live instance — fix the choke point in

@@ -27,6 +27,7 @@ class ErrorKeys:
     DRIVER_QUOTA_EXHAUSTED: Final[str] = "errors.driver.quota_exhausted"
     DRIVER_NOT_AVAILABLE: Final[str] = "errors.driver.not_available"
     DRIVER_OFFLINE: Final[str] = "errors.driver.offline"
+    DRIVER_DUAL_RUN_HOLD: Final[str] = "errors.driver.dual_run_hold"
 
     # Ride
     RIDE_NOT_FOUND: Final[str] = "errors.ride.not_found"

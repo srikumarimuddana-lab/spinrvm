@@ -485,7 +485,8 @@
       "subscription_required": "Activate Spinr Pass to start accepting rides.",
       "quota_exhausted": "You've used all of today's Spinr Pass rides. Your allowance resets at midnight — enjoy the rest of your day!",
       "not_available": "You aren't available to accept this ride right now.",
-      "offline": "You are currently offline. Go online to receive ride offers."
+      "offline": "You are currently offline. Go online to receive ride offers.",
+      "dual_run_hold": "Your account is on hold while active on the previous app. Please contact support."
     },
     "ride": {
       "not_found": "We couldn't find that ride. It may have been removed.",

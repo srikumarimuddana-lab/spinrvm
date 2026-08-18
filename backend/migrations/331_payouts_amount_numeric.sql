@@ -1,0 +1,45 @@
+-- ============================================================
+-- Migration 331: payouts.amount FLOAT8 -> NUMERIC(10,2)
+--
+-- ACTION_ITEMS.md B28 (spinr-money-auditor finding, 2026-08-17): payouts.amount
+-- has always been a legacy `double precision` column, so every writer in the
+-- codebase (legacy_payout_correction_service.py, stripe_payout_sync_service.py,
+-- booking_import_service.py, routes/drivers/payouts.py) has to keep every
+-- arithmetic step upstream as Decimal and cast to float() at the literal
+-- moment of serializing the insert/update payload -- the correct workaround
+-- for a FLOAT column, but a standing landmine: a writer that ever sums many
+-- small amounts before that final cast (rather than casting each row
+-- individually, as every current writer already does) would silently
+-- accumulate binary floating-point drift into a real money column.
+--
+-- Three read-side SQL functions already work around the same FLOAT column by
+-- casting `amount::text::numeric` before summing (159_payouts_overview_
+-- aggregates_fn.sql, 162_payout_stats_fn.sql, 303_payouts_overview_ytd_
+-- exclude_legacy.sql) -- that ::text::numeric idiom becomes a harmless no-op
+-- once the column is already NUMERIC (numeric::text::numeric round-trips
+-- exactly), so those three merged migrations are deliberately NOT edited here
+-- per this repo's append-only migration convention -- they keep working
+-- unchanged.
+--
+-- Safe under live traffic: `payouts` has ~222 rows in production (2026-08-18
+-- count) -- a single ALTER COLUMN TYPE on a table this size takes an ACCESS
+-- EXCLUSIVE lock for a sub-second rewrite, well under any migration-window
+-- concern. NUMERIC(10,2) comfortably covers every real payout amount (CAD
+-- driver payouts, five-to-low-six-figure range at most) with 2 decimal
+-- places, matching every other money column in this schema
+-- (rides.total_fare, wallet balances, etc).
+--
+-- USING amount::numeric(10,2) rounds any pre-existing float binary-imprecision
+-- to the cent on migration -- e.g. a value that printed as 45.230000000000004
+-- due to float storage becomes exactly 45.23. This is the one-time cleanup
+-- the FLOAT column has needed since it was created; every writer already
+-- computes in Decimal and only turns into float() at the last moment, so no
+-- production value should actually differ from its intended cent-exact
+-- amount after this cast.
+--
+-- Rollback:
+--   ALTER TABLE payouts ALTER COLUMN amount TYPE FLOAT8 USING amount::float8;
+-- ============================================================
+
+ALTER TABLE payouts
+    ALTER COLUMN amount TYPE NUMERIC(10, 2) USING amount::numeric(10, 2);

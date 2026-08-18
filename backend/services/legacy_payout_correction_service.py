@@ -477,10 +477,12 @@ def commit_write_plan(write_plan: WritePlan) -> dict[str, Any]:
         {
             "id": r.payout_id,
             "driver_id": r.driver_id,
-            # float only at the serialization boundary, matching every other
-            # importer/sync service in this repo -- all arithmetic above
-            # stayed Decimal.
-            "amount": float(r.amount),
+            # str() only at the serialization boundary (payouts.amount is
+            # NUMERIC as of migration 331 -- str(Decimal) round-trips exact,
+            # unlike float() which reintroduces binary rounding error before
+            # Postgres ever sees the value). All arithmetic above stayed
+            # Decimal.
+            "amount": str(r.amount),
             "status": r.status,
             "payout_type": PAYOUT_TYPE,
             "bank_name": "Legacy outstanding-earnings correction",

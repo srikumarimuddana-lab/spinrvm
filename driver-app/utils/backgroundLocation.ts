@@ -29,6 +29,15 @@ const TASK_NAME = 'spinr-background-location';
 // locationIntegrity.ts). Gates DISPLAY (the car marker) only, never capture.
 const bgIntegrity = createLocationIntegrityChecker();
 
+// In-handler self-heal cadence (see the block in handleBackgroundLocationTask).
+const ENSURE_PROMOTION_INTERVAL_MS = 60_000;
+let lastEnsureAt = 0;
+
+/** @internal Test-only — reset the self-heal throttle between cases. */
+export function _resetBackgroundSelfHeal(): void {
+  lastEnsureAt = 0;
+}
+
 /**
  * Accent for BOTH Spinr foreground-service notifications — this one and the
  * Android Auto display service (lib/androidAuto/carLocationTask.ts). Shared so
@@ -275,6 +284,18 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
       longitude: location.coords.longitude,
       heading: location.coords.heading ?? null,
     });
+  }
+
+  // Periodic self-heal: re-assert this task's options (~1/min) so a demoted
+  // shared service re-promotes even with no Android Auto events and no live
+  // WebSocket — the cross-context repair the per-JS-context arbiter cannot
+  // provide. Runs only on the live-session path (the session-ended gate above
+  // returned already). Cost when healthy: one native probe + one SecureStore
+  // read + one setOptions per minute — the same budget as the AA 60s tick.
+  const ensureNow = Date.now();
+  if (ensureNow - lastEnsureAt >= ENSURE_PROMOTION_INTERVAL_MS) {
+    lastEnsureAt = ensureNow;
+    await reassertDispatchTask().catch(() => {});
   }
 
   const token = await getBackgroundAuthToken();

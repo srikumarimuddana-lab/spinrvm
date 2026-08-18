@@ -756,3 +756,43 @@ describe('session gating', () => {
     expect(deleted).toContain('bg_access_token');
   });
 });
+
+describe('in-handler self-heal (shared-service re-promotion)', () => {
+  const { _resetBackgroundSelfHeal } = require('../backgroundLocation');
+
+  beforeEach(async () => {
+    mockQueuedPoints.splice(0, mockQueuedPoints.length);
+    mockSequence = 0;
+    configureOutbox();
+    tripLocationRecorder._resetUploadBackoff();
+    _resetBackgroundSelfHeal();
+    mockHasStartedLocationUpdates.mockResolvedValue(true);
+    (global as any).fetch = jest.fn(() => Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ recording_session_id: 'session-1', acked_through: 0, rejected: [] }),
+    }));
+    await tripLocationRecorder.startRide('ride-1');
+  });
+
+  it('re-asserts the dispatch task options at most once per minute', async () => {
+    mockStartUpdates.mockClear();
+    await handleBackgroundLocationTask({ data: { locations: [makeLocation(0)] } as any });
+    // First callback after reset: one options re-assert (startLocationUpdatesAsync
+    // on a live task replaces options in place, re-promoting the shared service).
+    const firstCount = mockStartUpdates.mock.calls.length;
+    expect(firstCount).toBeGreaterThanOrEqual(1);
+
+    // A second callback inside the same minute must NOT re-assert again.
+    await handleBackgroundLocationTask({ data: { locations: [makeLocation(1)] } as any });
+    expect(mockStartUpdates.mock.calls.length).toBe(firstCount);
+  });
+
+  it('does not run the self-heal on the session-ended path', async () => {
+    mockSignedIn = false;
+    mockStartUpdates.mockClear();
+    await handleBackgroundLocationTask({ data: { locations: [makeLocation(0)] } as any });
+    expect(mockStartUpdates).not.toHaveBeenCalled();
+    mockSignedIn = true;
+  });
+});

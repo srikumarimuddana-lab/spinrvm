@@ -8257,8 +8257,47 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   ~280 migrations' worth of accumulated drift in one shot.
 - **Files:** `backend/scripts/migrate.py`, `backend/migrations/00_schema_migrations_table.sql`, `backend/migrations/24_schema_migrations.sql`.
 
-### C13. `tsc --noEmit` false-positives across all three frontend surfaces (pre-existing, not caused by any recent PR)
-- [ ] **Status:** open — found 2026-08-03 while verifying PR #3382 (full-suite
+### C13. `tsc --noEmit` false-positives across all three frontend surfaces (pre-existing, not caused by any recent PR) [duplicate item number — see the other C13 above at "Required `pull_request`-triggered workflows silently never fire"; kept as-is rather than renumbered to avoid breaking either item's cross-references]
+- [x] **Status:** CLOSED — already fixed by a different session/PR before
+  this one got to it (found 2026-08-18 while dispatching a fix agent for
+  this item in parallel with C26; the agent's own investigation found
+  both root causes below already resolved in the current `tsconfig.json`
+  files, with zero diff needed). Re-verified independently in this
+  session, not just trusted the agent's report:
+  `npx tsc --noEmit` run directly in all three surfaces — **0 errors in
+  rider-app, driver-app, and admin-dashboard.**
+- **What's actually fixing it now**, confirmed present in the current
+  files:
+  1. `rider-app/tsconfig.json` and `driver-app/tsconfig.json` both carry
+     an explicit `compilerOptions.paths` entry —
+     `"expo-router": ["./node_modules/expo-router"]` — which resolves
+     `expo-router/react-navigation`'s type declarations for `tsc`.
+  2. `admin-dashboard/tsconfig.json` carries
+     `"types": ["vitest/globals", "@testing-library/jest-dom"]`, which
+     registers both ambient global types for a standalone `tsc` run.
+  The fix agent confirmed these aren't false negatives (stale
+  `tsconfig.tsbuildinfo`, skipped files) by deleting the buildinfo cache
+  and rerunning (still 0), confirming via `tsc --listFiles` that the
+  specific files originally reported as erroring are actually in the
+  compiled set, and temporarily reverting each fix one at a time to
+  confirm the original error counts (3, 4, 61) reappear and disappear
+  again on restore.
+- **No regressions**: `npx jest ...` for the two specifically-named
+  previously-failing suites (`useBottomSheetGuard.test.tsx`,
+  `ActivityView.test.tsx`) both load and pass; full suites: rider-app
+  526/527 (1 pre-existing unrelated flaky timeout in
+  `verifyEmailScreen.test.tsx` under full-suite parallel load — already
+  a known, separately-tracked flake, not caused by or related to this
+  item), driver-app 534/534, admin-dashboard (vitest) 327/327.
+- **Not identified**: which PR/session actually landed this fix, or
+  when — it predates this session's own restarted branch (based on
+  latest `main` as of 2026-08-18), so somewhere between 2026-08-03 (when
+  this item was filed) and now. Not chased down further since the item
+  is resolved either way; if it matters later, `git log -p --
+  rider-app/tsconfig.json driver-app/tsconfig.json
+  admin-dashboard/tsconfig.json` on `main` would find it.
+- [historical, pre-fix diagnosis below, kept for record]
+- ~~[ ] **Status:** open~~ — found 2026-08-03 while verifying PR #3382 (full-suite
   pass at that time: backend pytest 8742 passed/0 failed, rider-app jest
   434/434, driver-app jest 337/337, admin-dashboard vitest 157/157 — all
   green). Running a bare `npx tsc --noEmit` per surface afterward surfaced

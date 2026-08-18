@@ -62,13 +62,22 @@ export default function NotificationsScreen() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const loadNotifications = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
       const res = await api.get<{ notifications?: AppNotification[]; unread_count?: number }>('/notifications?limit=50&offset=0');
       setNotifications(res.data.notifications || []);
       setUnreadCount(res.data.unread_count ?? 0);
-    } catch (err) { console.error('[notifications]', err); }
+      setLoadFailed(false);
+    } catch (err) {
+      // A failed fetch leaves `notifications` empty, which the list would
+      // otherwise render as the cheerful "You're all caught up!" state —
+      // indistinguishable from a genuinely empty inbox. Track the failure so
+      // the empty state can say what actually happened and offer a retry.
+      console.error('[notifications]', err);
+      setLoadFailed(true);
+    }
     finally {
       setLoading(false);
       setRefreshing(false);
@@ -207,11 +216,22 @@ export default function NotificationsScreen() {
             />
           }
           ListEmptyComponent={
-            <View style={styles.empty}>
-              <Ionicons name="notifications-off-outline" size={52} color="#DDD" />
-              <Text style={styles.emptyTitle}>No notifications</Text>
-              <Text style={styles.emptySub}>You&apos;re all caught up! Check back later.</Text>
-            </View>
+            loadFailed ? (
+              <View style={styles.empty}>
+                <Ionicons name="cloud-offline-outline" size={52} color={colors.danger} />
+                <Text style={styles.emptyTitle}>Couldn&apos;t load notifications</Text>
+                <Text style={styles.emptySub}>Check your connection and try again.</Text>
+                <TouchableOpacity style={styles.retryBtn} onPress={() => loadNotifications()}>
+                  <Text style={styles.retryText}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.empty}>
+                <Ionicons name="notifications-off-outline" size={52} color="#DDD" />
+                <Text style={styles.emptyTitle}>No notifications</Text>
+                <Text style={styles.emptySub}>You&apos;re all caught up! Check back later.</Text>
+              </View>
+            )
           }
         />
       )}
@@ -263,5 +283,13 @@ function createStyles(colors: ThemeColors) {
     empty: { alignItems: 'center', paddingVertical: 60 },
     emptyTitle: { fontSize: 17, fontWeight: '700', color: colors.text, marginTop: 14 },
     emptySub: { fontSize: 13, color: colors.textDim, marginTop: 4, textAlign: 'center' },
+    retryBtn: {
+      marginTop: 16,
+      paddingHorizontal: 20,
+      paddingVertical: 10,
+      borderRadius: 20,
+      backgroundColor: colors.primary,
+    },
+    retryText: { color: '#fff', fontSize: 14, fontWeight: '600' },
   });
 }

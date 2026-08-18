@@ -6,6 +6,7 @@ import {
     TouchableOpacity,
     FlatList,
     Alert,
+    ActivityIndicator,
 } from 'react-native';
 import SafeRefreshControl from '../../components/SafeRefreshControl';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -56,7 +57,7 @@ export default function NotificationsScreen() {
     // handles dedupe, cache, refetch on focus, and the persisted cache
     // means re-opening this screen renders the inbox instantly while a
     // background refetch keeps it fresh.
-    const { data: rawNotifData, isFetching, refetch } = useNotifications(50);
+    const { data: rawNotifData, isFetching, isPending, isError, refetch } = useNotifications(50);
     const data = rawNotifData as { notifications?: Notification[]; unread_count?: number } | undefined;
     const notifications: Notification[] = data?.notifications ?? [];
     const unreadCount: number = data?.unread_count ?? 0;
@@ -167,11 +168,30 @@ export default function NotificationsScreen() {
                     <SafeRefreshControl refreshing={isFetching} onRefresh={onRefresh} tintColor={colors.primary} />
                 }
                 ListEmptyComponent={
-                    <View style={styles.emptyState}>
-                        <Ionicons name="notifications-off-outline" size={56} color={colors.surfaceLight} />
-                        <Text style={styles.emptyTitle}>{t('notifications.noNotifications')}</Text>
-                        <Text style={styles.emptySub}>{t('notifications.allCaughtUp')}</Text>
-                    </View>
+                    // An empty list is NOT automatically "all caught up" — a failed
+                    // fetch also yields zero rows. Rendering the same cheerful empty
+                    // state for both is what made a 401'd inbox look like an inbox
+                    // with nothing in it, while the bell badge still read "6 unread".
+                    isPending ? (
+                        <View style={styles.emptyState}>
+                            <ActivityIndicator size="large" color={colors.primary} />
+                        </View>
+                    ) : isError ? (
+                        <View style={styles.emptyState}>
+                            <Ionicons name="cloud-offline-outline" size={56} color={colors.danger} />
+                            <Text style={styles.emptyTitle}>{t('notifications.loadFailed')}</Text>
+                            <Text style={styles.emptySub}>{t('notifications.loadFailedBody')}</Text>
+                            <TouchableOpacity style={styles.retryBtn} onPress={onRefresh}>
+                                <Text style={styles.retryText}>{t('notifications.retry')}</Text>
+                            </TouchableOpacity>
+                        </View>
+                    ) : (
+                        <View style={styles.emptyState}>
+                            <Ionicons name="notifications-off-outline" size={56} color={colors.surfaceLight} />
+                            <Text style={styles.emptyTitle}>{t('notifications.noNotifications')}</Text>
+                            <Text style={styles.emptySub}>{t('notifications.allCaughtUp')}</Text>
+                        </View>
+                    )
                 }
             />
         </View>
@@ -248,6 +268,14 @@ function createStyles(colors: ThemeColors) {
         },
         emptyState: { alignItems: 'center', paddingVertical: 60, gap: 8 },
         emptyTitle: { color: colors.textDim, fontSize: 18, fontWeight: '600' },
-        emptySub: { color: colors.textSecondary, fontSize: 13 },
+        emptySub: { color: colors.textSecondary, fontSize: 13, textAlign: 'center' },
+        retryBtn: {
+            marginTop: 8,
+            paddingHorizontal: 20,
+            paddingVertical: 10,
+            borderRadius: 20,
+            backgroundColor: colors.primary,
+        },
+        retryText: { color: '#fff', fontSize: 14, fontWeight: '600' },
     });
 }

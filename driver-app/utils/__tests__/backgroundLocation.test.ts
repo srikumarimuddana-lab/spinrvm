@@ -232,13 +232,27 @@ describe('background durable trip recording', () => {
     expect(callOrder).toEqual(['enqueue', 'fetch']);
   });
 
-  it.each([401, 503])('retains queued points when the headless upload returns %i', async (status) => {
+  it.each([401, 500, 503])('retains queued points when the headless upload returns %i', async (status) => {
     (global as any).fetch = jest.fn(() => Promise.resolve({ ok: false, status }));
 
     await handleBackgroundLocationTask({ data: { locations: [makeLocation(0)] } as any });
 
     expect(mockQueuedPoints).toHaveLength(1);
     expect(mockedOutbox.acknowledge).not.toHaveBeenCalled();
+  });
+
+  // Terminal statuses (ride gone / no longer active / permanently rejected)
+  // must DRAIN the batch, mirroring apiLocationBatchTransport. This fetch
+  // previously threw on them, and because flushPending aborts its whole loop
+  // on a transport throw, one poisoned batch head-of-line-blocked every other
+  // pending session's background upload forever (H3).
+  it.each([404, 409, 410, 422])('drains the batch when the headless upload returns terminal %i', async (status) => {
+    (global as any).fetch = jest.fn(() => Promise.resolve({ ok: false, status }));
+
+    await handleBackgroundLocationTask({ data: { locations: [makeLocation(0)] } as any });
+
+    expect(mockedOutbox.acknowledge).toHaveBeenCalledWith('session-1', 0, []);
+    expect(mockQueuedPoints).toHaveLength(0);
   });
 
   it('deletes only after the server returns an acknowledgement', async () => {

@@ -3859,7 +3859,6 @@ async def admin_driver_daily_activity(
 
 class DecalGenerateRequest(BaseModel):
     driver_ids: List[str] = Field(..., min_length=1, max_length=200)
-    province: str = Field("SK", pattern=r"^(SK|AB)$")
 
 
 @router.post("/drivers/decals/generate-pdf")
@@ -3881,6 +3880,23 @@ async def generate_decal_pdf_endpoint(
             raise HTTPException(status_code=404, detail=f"Driver {driver_id} not found")
         drivers.append(row)
 
+    area_ids = list({d["service_area_id"] for d in drivers if d.get("service_area_id")})
+    area_province_map: Dict[str, str] = {}
+    if area_ids:
+        areas = await db_supabase.get_rows(
+            "service_areas",
+            filters={"id": {"$in": area_ids}},
+            columns="id,province_code,province",
+        )
+        for a in areas:
+            code = a.get("province_code") or a.get("province") or ""
+            if code:
+                area_province_map[a["id"]] = code.upper()[:2]
+
+    for driver in drivers:
+        aid = driver.get("service_area_id")
+        driver["_province"] = area_province_map.get(aid, "SK") if aid else "SK"
+
     now = datetime.now(timezone.utc).isoformat()
     for driver in drivers:
         updates: Dict[str, Any] = {}
@@ -3899,7 +3915,7 @@ async def generate_decal_pdf_endpoint(
         from settings_loader import get_app_settings  # type: ignore[no-redef]
 
     settings = await get_app_settings()
-    pdf_bytes = generate_decal_pdf(drivers, company=settings, province=body.province)
+    pdf_bytes = generate_decal_pdf(drivers, company=settings)
 
     await log_admin_action(
         admin,

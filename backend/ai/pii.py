@@ -14,6 +14,7 @@ data-minimization mitigation — see the pattern list below for specifics.
 """
 
 import re
+from typing import Any
 
 _PII_PATTERNS: list[tuple[re.Pattern, str]] = [
     # North American phone numbers with separators (+1 optional)
@@ -178,3 +179,44 @@ def filter_tool_leakage(text: str) -> str:
     change what the rider saw, only what gets stored/cached/replayed.
     """
     return _SNAKE_CASE_LEAK_RE.sub("[internal]", text)
+
+
+# 2026-08-18 fleet audit: scrub_pii above was only ever applied to the user's
+# own chat message and the model's final reply text -- never to a tool
+# RESULT, which re-enters the model context on the very next turn of the
+# same tool loop (orchestrator.py) and is also returned verbatim over /mcp
+# (mcp_server.py). Both paths call execute_tool()/_cap_result() in tools.py,
+# so scrub_pii_deep is wired in there as the single choke point that covers
+# both surfaces at once.
+_MAX_SCRUB_DEPTH = 6
+
+
+def scrub_pii_deep(value: Any, depth: int = 0) -> Any:
+    """Recursively apply scrub_pii to every string leaf in a JSON-like tool
+    result (nested dicts/lists/tuples). Value-pattern scrubbing only --
+    deliberately NOT key-name-based like utils/sentry_scrub.py's _scrub_deep,
+    whose KEY_ALLOWLIST treats a bare "name" key as a benign stack-frame
+    symbol (correct for Sentry breadcrumbs, wrong here: a tool result's
+    "name" key is routinely a person's actual name). Regex cannot catch a
+    plain name either way -- see this module's docstring; tools that surface
+    a person's name must data-minimize at the source (see
+    tools_rides.py::_driver_public), not rely on this scrub to catch it.
+    This closes the regex-detectable categories (phone/email/GPS/card/SIN/
+    postal code) for every current and future tool, not just the one already
+    known to leak.
+
+    Bounded recursion so a pathological/cyclic result can never spin the
+    scrubber. Never raises -- a scrub failure must not break the chat turn.
+    """
+    if depth >= _MAX_SCRUB_DEPTH:
+        return value
+    try:
+        if isinstance(value, str):
+            return scrub_pii(value)
+        if isinstance(value, dict):
+            return {k: scrub_pii_deep(v, depth + 1) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return type(value)(scrub_pii_deep(v, depth + 1) for v in value)
+    except Exception:  # noqa: BLE001 - never let scrubbing break a tool result
+        return value
+    return value

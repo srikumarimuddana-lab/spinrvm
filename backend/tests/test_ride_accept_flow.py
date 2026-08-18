@@ -77,6 +77,10 @@ def _driver_row():
         "vehicle_year": 2020,
         "lat": 50.41,
         "lng": -104.65,
+        # is_online=True: this fixture is the legitimately-online driver on
+        # every accept-flow test in this file; accept_ride now rejects
+        # offline drivers (2026-08-18 fleet audit ranked blocker #4).
+        "is_online": True,
     }
 
 

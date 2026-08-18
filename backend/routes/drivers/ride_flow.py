@@ -11,6 +11,7 @@ from ._deps import (  # noqa: F401
     AccountDisabledException,
     APIRouter,
     Depends,
+    DriverOfflineException,
     ErrorCode,
     ErrorKeys,
     HTTPException,
@@ -61,6 +62,26 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
             message_key=ErrorKeys.AUTH_ACCOUNT_SUSPENDED,
             action_hint="Contact support",
         )
+
+    # Offline re-check (2026-08-18 whole-app fleet audit, ranked blocker #4):
+    # accept_ride never re-read is_online, so a driver who went offline (via
+    # POST /drivers/status or an app-kill that already recorded is_online=False
+    # some other way) after being claimed for an offer could still accept it —
+    # a stale queued push-notification tap, an app resume with cached UI state,
+    # or a plain retry would all still succeed, stranding the rider with a
+    # driver who never shows up. Uses the `driver` row already fetched above
+    # (no extra round-trip); is_online is driver-toggled, so this is the same
+    # field go_online's own eligibility gates key off of. `is_available` is
+    # NOT the right check here — it's already False for any driver mid-offer
+    # by design (claim_driver_atomic), so checking it would reject every
+    # legitimate accept. DriverOfflineException was defined for exactly this
+    # case (backend/utils/error_handling.py) but had never been raised anywhere.
+    if not driver.get("is_online"):
+        diag_logger.info(
+            f"[ACCEPT] rejected: driver_id={driver['id']} is offline "
+            f"ride_id={ride_id} pre_ride_status={ride.get('status') if ride else None}"
+        )
+        raise DriverOfflineException(driver["id"])
 
     # Mid-session document-expiry re-check (P1 #12): go_online fail-closes on
     # expired license/insurance/inspection/CRC-VSC documents, but that's only

@@ -144,10 +144,10 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 > same duplicate-number pattern as the two `A34`s above; not renumbered
 > because this one had already merged. Treat the heading text as the
 > disambiguator.
-- [ ] **Status:** open, 1 of 17 baseline blockers fixed 2026-08-18 (same day,
-  later session) — see below. Of the baseline's 17 ranked blockers as
-  originally reported: 14 STILL-OPEN unchanged (no commits touching them
-  since 08-15), 1 now FIXED (below), 1
+- [ ] **Status:** open, 2 of 17 baseline blockers fixed 2026-08-18 (same day,
+  later sessions) — see below. Of the baseline's 17 ranked blockers as
+  originally reported: 13 STILL-OPEN unchanged (no commits touching them
+  since 08-15), 2 now FIXED (below), 1
   REGRESSED (`deploy-metrics-agent.yml` unpinned actions with a live
   `FLY_API_TOKEN` — missed by the C18b sweep that claimed this class fixed),
   2 partially mitigated but not resolved (corporate PDF tax-line fallback now
@@ -171,11 +171,34 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   (unrelated cleanup, not touched). See
   `docs/change-log/2026-08-18-period-2-insurance-timing-fix.md` for tests and
   verification detail.
-  Two structural (not one-off) findings remain open: no AI tool RESULT is
-  ever PII-scrubbed anywhere in the codebase (the driver-name-to-LLM leak is
-  just the first live instance — fix the choke point in
-  `ai/tools.py::_cap_result`, not just the one field); and no Prometheus
-  metric exists for any ride-state transition after offer acceptance
+  **FIXED 2026-08-18**: ranked blocker #4 — `accept_ride`
+  (`backend/routes/drivers/ride_flow.py`) never re-checked `is_online`, so a
+  driver who went offline (via `POST /drivers/status` or otherwise) after
+  being claimed for an offer could still accept it via a stale queued
+  push-notification tap or a plain retry, stranding the rider. Fixed by
+  raising `DriverOfflineException` (already defined in
+  `backend/utils/error_handling.py`/`ErrorCode.DRIVER_OFFLINE` for exactly
+  this case, but never previously raised anywhere in the codebase) when the
+  already-fetched driver row shows `is_online=False` — no extra DB round-trip.
+  `is_available` was deliberately NOT used for this check (it's already False
+  for every driver mid-offer by design; checking it would reject every
+  legitimate accept). See
+  `docs/change-log/2026-08-18-driver-accept-while-offline-fix.md`.
+  **FIXED 2026-08-18**: the AI tool-result PII scrub gap (ranked blocker
+  #5/#6) — no AI tool RESULT was ever PII-scrubbed anywhere in the codebase,
+  only the user's own message and the model's final reply text. Two-part
+  fix: `ai/tools_rides.py::_driver_public` now returns `first_name_only`
+  (reusing this codebase's established driver-name-minimization convention
+  from `utils/pii.py`) instead of the full legal name — closes the actual
+  leak at its source, since a plain name isn't regex-detectable by any
+  scrub; and `ai/tools.py::_cap_result` — the single choke point both
+  `execute_tool()` and `/mcp` funnel through — now runs a new recursive
+  `scrub_pii_deep` (`ai/pii.py`) on every tool result, closing the general
+  gap for every regex-detectable PII category on every current and future
+  tool, not just this one field. See
+  `docs/change-log/2026-08-18-ai-tool-result-pii-scrub-fix.md`.
+  One structural (not one-off) finding remains open: no Prometheus metric
+  exists for any ride-state transition after offer acceptance
   (arrival/start/completion/cancellation), leaving the match-rate and
   cancellation-rate KPIs invisible to any dashboard. Full ranked blocker
   register (30 items) and decision log (10 items, each with a suggested

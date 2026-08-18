@@ -82,7 +82,10 @@ class TestActiveRide:
         assert ok and result["active"] is True
         ride = result["ride"]
         assert ride["status"] == "in_progress"
-        assert ride["driver"]["name"] == "Alex K"
+        # First-name-only (2026-08-18 fleet audit): a driver's full legal
+        # name must never reach the AI provider — see
+        # tools_rides.py::_driver_public.
+        assert ride["driver"]["name"] == "Alex"
         assert ride["driver"]["license_plate"] == "ABC 123"
 
     @pytest.mark.anyio

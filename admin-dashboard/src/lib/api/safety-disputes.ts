@@ -56,6 +56,35 @@ export const getDisputeStats = () =>
 export const getDisputeDetails = (id: string) =>
     request<any>(`/api/admin/disputes/${id}`);
 
+/* ── Chargebacks (card-network disputes, C23) ──
+   Distinct from the rider-raised `disputes` above — these come from
+   Stripe's dispute webhooks (`stripe_disputes` table), not rider-filed
+   refund requests. Read-only: chargebacks are resolved via the Stripe
+   Dashboard today. */
+export interface Chargeback {
+    id: string;
+    stripe_dispute_id: string;
+    ride_id: string | null;
+    ride_code: string | null;
+    amount_cents: number;
+    reason: string;
+    status: string;
+    evidence_due_by: string | null;
+    evidence_submitted_at: string | null;
+    days_remaining: number | null;
+    created_at: string;
+    updated_at: string;
+}
+
+export const getChargebacks = (opts: { limit?: number; offset?: number; status?: string } = {}) => {
+    const sp = new URLSearchParams();
+    if (opts.limit != null) sp.set("limit", String(opts.limit));
+    if (opts.offset != null) sp.set("offset", String(opts.offset));
+    if (opts.status && opts.status !== "all") sp.set("status", opts.status);
+    const qs = sp.toString();
+    return request<Chargeback[]>(`/api/admin/disputes/chargebacks${qs ? `?${qs}` : ""}`);
+};
+
 export const createDispute = (data: any) =>
     request<any>("/api/admin/disputes", {
         method: "POST",

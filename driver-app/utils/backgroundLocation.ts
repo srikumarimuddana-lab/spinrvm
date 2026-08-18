@@ -417,8 +417,12 @@ export async function startBackgroundLocation(config?: BgLocationConfig): Promis
     // from resolving at load time; runs on iOS too (harmless — nothing starts
     // that task off Android).
     try {
+      // Unlocked variant — we hold the arbiter lock; repairDispatch false
+      // because the promotion on the next line supersedes any repair.
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      await require('../lib/androidAuto/carLocationTask').stopCarLocationService();
+      await require('../lib/androidAuto/carLocationTask').stopCarLocationServiceUnlocked({
+        repairDispatch: false,
+      });
     } catch {
       // Android Auto layer absent — nothing to stand down.
     }

@@ -10309,12 +10309,22 @@ how much they de-risk a public launch._
 
 ### C26. `pip-compile drift check` fails on any PR that touches `backend/requirements.in` — `requirements.txt` has drifted far out of sync with a fresh resolve, unrelated to the touching PR's actual diff
 
-- [x] **Status:** CLOSED (2026-08-18) — regenerated `backend/requirements.txt`
-  by running the exact command CI itself uses (verified against
-  `.github/workflows/pip-compile-check.yml`'s own invocation):
-  `pip-compile backend/requirements.in --output-file
-  backend/requirements.txt --strip-extras --no-header --annotation-style
-  line --no-upgrade` (pip-tools 7.6.1, Python 3.11.15).
+- [x] **Status:** CLOSED (2026-08-18) — regenerated `backend/requirements.txt`.
+  First attempt (agent-run, from the repo root) actually left PR #4211's
+  own `requirements.txt up to date` CI job still failing — the drift
+  check runs `pip-compile` with the working directory set to `backend/`,
+  so `-r requirements.in` is what lands in the `# via` annotation
+  comments; running the same command from the repo root instead
+  (`pip-compile backend/requirements.in ...`) produces `-r
+  backend/requirements.in` in those comments, a cosmetic but real diff
+  CI's byte-for-byte comparison correctly flagged. Caught by actually
+  watching this PR's own CI (not just trusting a clean local run) and
+  reading the job's raw diff output, which pointed straight at the
+  `-r backend/requirements.in` vs `-r requirements.in` mismatch.
+  Re-ran `pip-compile requirements.in --output-file requirements.txt
+  --strip-extras --no-header --annotation-style line --no-upgrade` from
+  *inside* `backend/`, matching CI's actual working directory
+  (pip-tools 7.6.1).
 - **Correction to the original diagnosis below**: the "dozens of unpinned
   transitive deps" read on PR #4085's CI diff was a misread of the raw
   line-count diff, not the actual drift. Normalizing both the old and

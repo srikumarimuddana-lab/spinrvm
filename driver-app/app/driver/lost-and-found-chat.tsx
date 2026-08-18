@@ -103,6 +103,10 @@ export default function DriverLostAndFoundChatScreen() {
   }, []);
 
   useEffect(() => {
+    // loadCase is useCallback([]) — stable identity, so this only re-fires
+    // when the caseId route param actually changes. It sets state after its
+    // own await, not synchronously at the top of the effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (caseId) loadCase(caseId);
   }, [caseId, loadCase]);
 

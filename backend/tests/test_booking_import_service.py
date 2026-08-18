@@ -201,7 +201,9 @@ def test_offset_payout_cancels_imported_earnings_exactly(monkeypatch):
     )
     (payout,) = plan.payouts_to_insert
     imported = sum(r["base_fare"] + r["distance_fare"] + r["time_fare"] + r["tip_amount"] for r in plan.rides_to_insert)
-    assert payout["amount"] == pytest.approx(imported)
+    # str(Decimal), not float -- payouts.amount is NUMERIC as of migration 331.
+    assert isinstance(payout["amount"], str)
+    assert float(payout["amount"]) == pytest.approx(imported)
     assert payout["driver_id"] == "drv-1"
     assert payout["status"] == "completed"
     assert payout["payout_type"] == "legacy_import"

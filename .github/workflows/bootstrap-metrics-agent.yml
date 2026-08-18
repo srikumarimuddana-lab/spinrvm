@@ -66,7 +66,7 @@ jobs:
           echo "FLY_API_TOKEN is set (length=${#FLY_API_TOKEN})."
 
       - name: Install flyctl
-        uses: superfly/flyctl-actions/setup-flyctl@master
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master (2026-08-18)
 
       # Idempotent: succeeds whether or not the app already exists.
       - name: Create app if missing

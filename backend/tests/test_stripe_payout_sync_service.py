@@ -178,7 +178,8 @@ async def test_paged_stripe_objects_without_get_are_converted(store):
 
     assert plan.errors == []
     assert len(plan.payouts_to_insert) == 1
-    assert plan.payouts_to_insert[0]["amount"] == 200.0
+    # str(Decimal), not float -- payouts.amount is NUMERIC as of migration 331.
+    assert plan.payouts_to_insert[0]["amount"] == "200.00"
     assert plan.payouts_to_insert[0]["stripe_transfer_id"] == "tr_obj"
 
 
@@ -192,7 +193,7 @@ async def test_plan_builds_rows_for_untracked_transfers(store):
     row = next(r for r in plan.payouts_to_insert if r["stripe_transfer_id"] == "tr_1")
     assert row["id"] == "stripe-sync-tr_1"
     assert row["driver_id"] == "drv_1"
-    assert row["amount"] == 29.99  # 2999 cents — Decimal conversion, no float drift
+    assert row["amount"] == "29.99"  # 2999 cents — str(Decimal), no float drift
     assert row["status"] == "completed"
     assert row["payout_type"] == "stripe_sync"
     assert row["created_at"].startswith("2025-01-01T00:00:00")
@@ -237,7 +238,7 @@ async def test_reversals_skipped_or_netted(store):
 
     assert plan.errors == []
     assert len(plan.payouts_to_insert) == 1
-    assert plan.payouts_to_insert[0]["amount"] == 7.50
+    assert plan.payouts_to_insert[0]["amount"] == "7.50"
     assert plan.stats["fully_reversed_skipped"] == 1
     assert plan.stats["partial_reversals"] == 1
     assert any(w.field == "partial_reversal" for w in plan.warnings)
@@ -371,9 +372,7 @@ async def test_driver_synced_earnings_for_year_sums_decimal():
 @pytest.mark.anyio
 async def test_superseded_account_history_is_synced(store):
     """A retired driver (no current account) is still a sync target."""
-    store["drivers"] = [
-        {"id": "drv_1", "stripe_account_id": None, "stripe_account_id_superseded": "acct_OLD"}
-    ]
+    store["drivers"] = [{"id": "drv_1", "stripe_account_id": None, "stripe_account_id_superseded": "acct_OLD"}]
     with _patch_transfers({"acct_OLD": [_transfer("tr_old", 5000)]}):
         plan = await svc.build_plan("sk_test_x", "batch1")
 
@@ -385,12 +384,8 @@ async def test_superseded_account_history_is_synced(store):
 @pytest.mark.anyio
 async def test_both_accounts_are_merged(store):
     """Re-onboarded driver: history spans the old and new accounts."""
-    store["drivers"] = [
-        {"id": "drv_1", "stripe_account_id": "acct_NEW", "stripe_account_id_superseded": "acct_OLD"}
-    ]
-    with _patch_transfers(
-        {"acct_NEW": [_transfer("tr_new", 1000)], "acct_OLD": [_transfer("tr_old", 2000)]}
-    ):
+    store["drivers"] = [{"id": "drv_1", "stripe_account_id": "acct_NEW", "stripe_account_id_superseded": "acct_OLD"}]
+    with _patch_transfers({"acct_NEW": [_transfer("tr_new", 1000)], "acct_OLD": [_transfer("tr_old", 2000)]}):
         plan = await svc.build_plan("sk_test_x", "batch1")
 
     assert plan.errors == []
@@ -402,9 +397,7 @@ async def test_both_accounts_are_merged(store):
 async def test_transfer_visible_on_both_accounts_is_counted_once(store):
     """A platform migration can expose the same transfer from both accounts;
     double-counting it would inflate the driver's T4A income."""
-    store["drivers"] = [
-        {"id": "drv_1", "stripe_account_id": "acct_NEW", "stripe_account_id_superseded": "acct_OLD"}
-    ]
+    store["drivers"] = [{"id": "drv_1", "stripe_account_id": "acct_NEW", "stripe_account_id_superseded": "acct_OLD"}]
     shared = _transfer("tr_same", 4000)
     with _patch_transfers({"acct_NEW": [shared], "acct_OLD": [shared]}):
         plan = await svc.build_plan("sk_test_x", "batch1")
@@ -415,9 +408,7 @@ async def test_transfer_visible_on_both_accounts_is_counted_once(store):
 
 @pytest.mark.anyio
 async def test_identical_current_and_superseded_lists_once(store):
-    store["drivers"] = [
-        {"id": "drv_1", "stripe_account_id": "acct_A1", "stripe_account_id_superseded": "acct_A1"}
-    ]
+    store["drivers"] = [{"id": "drv_1", "stripe_account_id": "acct_A1", "stripe_account_id_superseded": "acct_A1"}]
     calls: list[str] = []
 
     def _list(**params):
@@ -438,9 +429,7 @@ async def test_unreachable_superseded_account_warns_but_does_not_block(store):
     the sync unusable after a cutover — the new account still syncs."""
     import stripe as _stripe
 
-    store["drivers"] = [
-        {"id": "drv_1", "stripe_account_id": "acct_NEW", "stripe_account_id_superseded": "acct_OLD"}
-    ]
+    store["drivers"] = [{"id": "drv_1", "stripe_account_id": "acct_NEW", "stripe_account_id_superseded": "acct_OLD"}]
 
     def _list(**params):
         if params.get("destination") == "acct_OLD":
@@ -459,14 +448,10 @@ async def test_unreachable_superseded_account_warns_but_does_not_block(store):
 async def test_resource_missing_for_the_account_warns(store):
     import stripe as _stripe
 
-    store["drivers"] = [
-        {"id": "drv_1", "stripe_account_id": None, "stripe_account_id_superseded": "acct_OLD"}
-    ]
+    store["drivers"] = [{"id": "drv_1", "stripe_account_id": None, "stripe_account_id_superseded": "acct_OLD"}]
 
     def _list(**params):
-        raise _stripe.error.InvalidRequestError(
-            "No such account: 'acct_OLD'", param=None, code="resource_missing"
-        )
+        raise _stripe.error.InvalidRequestError("No such account: 'acct_OLD'", param=None, code="resource_missing")
 
     with patch("stripe.Transfer.list", side_effect=_list):
         plan = await svc.build_plan("sk_test_x", "batch1")

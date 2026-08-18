@@ -411,6 +411,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to import Stripe reconciliation loop: {e}")
 
+    # Chargeback evidence-deadline reminder — C23 Action 2. Checks every 6h
+    # for open disputes whose evidence_due_by (populated by
+    # charge.dispute.created, C23 Action 1) falls within 3 days, and fires
+    # a Sentry-tagged alert + ERROR log once per dispute (atomic claim via
+    # evidence_reminder_sent_at, migration 327) — miss the deadline and the
+    # dispute is lost automatically with no evidence considered.
+    try:
+        from utils.dispute_evidence_reminder import dispute_evidence_reminder_loop
+
+        _spawn("dispute_evidence_reminder (6h)", dispute_evidence_reminder_loop)
+    except Exception as e:
+        logger.warning(f"Failed to import dispute evidence reminder loop: {e}")
+
     # Double-entry leg projection — derives financial_event_entries rows from
     # financial_events headers (oldest first, via the missing-legs RPC,
     # migration 287). No-op until ledger_double_entry_enabled is on. Replay-safe
@@ -490,6 +503,20 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.opt(exception=True).error(f"Failed to import stale in_progress ride alerter: {e}")
 
+    # Regulatory guard-trigger monitor (A35) — an ad-hoc SQL script once
+    # disabled the append-only triggers on driver_insurance_periods/
+    # financial_events/audit_logs to hard-delete rows they exist to protect.
+    # No application code can prevent a direct DB session from doing this
+    # again; this loop detects it (Sentry + audit_logs row, no mutation) via
+    # the read-only check_disabled_guard_triggers() RPC (migration 317). No
+    # kill switch — this is a security control, not a product alert.
+    try:
+        from utils.retention_guard_monitor import retention_guard_monitor_loop
+
+        _spawn("retention_guard_monitor (6h)", retention_guard_monitor_loop)
+    except Exception as e:
+        logger.opt(exception=True).error(f"Failed to import retention guard monitor: {e}")
+
     # Orphaned card-hold reconciler — releases booking-time authorizations left open
     # on rides that are cancelled and will never be billed. Two populations: the
     # historical backlog from before the stuck-ride sweeper released holds at all
@@ -560,6 +587,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.opt(exception=True).error(f"Failed to import capacity watchdog loop: {e}")
 
+    # Auto-payout — runs hourly, fires the weekly batch on Sundays only.
+    # Scans eligible drivers (payable_balance >= $10, Stripe Connect set),
+    # creates a stripe.Transfer per driver, records payout rows with
+    # payout_type='auto'. Replay-safe via Redis leader lock + week_key
+    # unique index on auto_payout_batches + per-driver idempotency keys.
+    try:
+        from utils.auto_payout import auto_payout_loop
+
+        _spawn("auto_payout (1h, Sundays)", auto_payout_loop)
+    except Exception as e:
+        logger.opt(exception=True).error(f"Failed to import auto payout loop: {e}")
+
     # Loop watchdog — scans heartbeats every 5 minutes and posts a
     # Slack-compatible alert when any loop has gone stale.  No-op when
     # ALERT_WEBHOOK_URL is unset.
@@ -578,6 +617,7 @@ async def lifespan(app: FastAPI):
             "retention_purge (24h)",
             "data_export_purge (1h)",
             "stripe_reconcile (24h)",
+            "dispute_evidence_reminder (6h)",
             "ledger_projection (15min)",
             "t4a_annual_job (yearly Feb 28)",
             "driver_statements (30min)",
@@ -586,6 +626,8 @@ async def lifespan(app: FastAPI):
             "offer_expiry_reaper (10s)",
             "push_retry (30s)",
             "capacity_watchdog (60s)",
+            "auto_payout (1h, Sundays)",
+            "retention_guard_monitor (6h)",
         ]
     )
 

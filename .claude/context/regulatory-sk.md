@@ -57,7 +57,7 @@ product/legal scoping before implementation.
 ## Tax display
 
 - GST (5%, federal) on every fare
-- PST (6%, SK) on fare where applicable — ride-share currently PST-applicable in SK
+- **PST: GST-only, no PST currently applied to Saskatchewan rideshare** (confirmed 2026-08-14, `docs/change-log/2026-08-14-sk-pst-revert.md`). This flipped twice in one week — enabled 2026-08-11 on one user determination, reverted 2026-08-14 on a conflicting one from the same user — with no cited regulatory-authority source either time. **Treat this line as unresolved pending an actual tax/legal confirmation**, not as settled fact; verify against a primary source (SK PST Act / a tax advisor) before relying on it for anything compliance-consequential, and update this file + `service_areas.pst_enabled` + the code comment in `backend/features.py` together if it changes again.
 - Must appear as **separate line items** on the rider receipt, not bundled
 - Driver earnings summary is T4A-compatible when annual earnings exceed the CRA reporting threshold ($500 for T4A box 48 self-employment, subject to change — verify annually)
 - Fare floor: follow municipal minimum if set (Regina, Saskatoon currently have none specific to TNCs — verify)

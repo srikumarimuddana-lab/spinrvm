@@ -75,13 +75,17 @@ from .ai_console import router as ai_console_router
 from .analytics import api_router as analytics_router
 from .auth import admin_auth_router
 from .auth import router as auth_router
+from .auto_payouts import router as auto_payouts_router
 from .booking_import import router as booking_import_router
 from .compliance import api_router as compliance_router
 from .data_transfer_export import router as data_transfer_export_router
 from .data_transfer_import import router as data_transfer_import_router
 from .data_transfer_jobs import router as data_transfer_jobs_router
 from .data_transfer_search import router as data_transfer_search_router
+from .dispute_evidence_submission import router as dispute_evidence_submission_router
+from .dispute_pack_download import router as dispute_pack_download_router
 from .documents import router as documents_router
+from .driver_appeals import router as driver_appeals_router
 from .driver_import import router as driver_import_router
 from .driver_statements import router as driver_statements_router
 from .drivers import router as drivers_router
@@ -147,6 +151,7 @@ admin_router.include_router(service_areas_router, dependencies=[Depends(require_
 admin_router.include_router(venues_router, dependencies=[Depends(require_module("service_areas"))])
 admin_router.include_router(vehicle_fleet_router, dependencies=[Depends(require_module("vehicle_types"))])
 admin_router.include_router(drivers_router, dependencies=[Depends(require_module("drivers"))])
+admin_router.include_router(driver_appeals_router, dependencies=[Depends(require_module("drivers"))])
 admin_router.include_router(driver_import_router, dependencies=[Depends(require_module("drivers"))])
 # Driver earnings statements (payout section: date-filter -> download / email
 # to driver). Read-only + driver-addressed email; drivers module grant.
@@ -201,11 +206,23 @@ admin_router.include_router(booking_import_router, dependencies=[Depends(require
 # in-app collection). Writes Vault-encrypted SINs, so it takes the reveal-sin
 # posture: require_super_admin at the mount AND re-checked in each handler.
 admin_router.include_router(tax_id_import_router, dependencies=[Depends(require_super_admin)])
+# Stripe dispute-evidence submission (C23 item 5) -- a real, effectively
+# irreversible external write to a live chargeback. Same require_super_admin
+# posture as stripe_payout_sync/stripe_connect_ledger/tax_id_import above
+# (mount-level AND re-checked in the handler); stricter than the read-only
+# dispute-pack download in rides_router, which stays on the general
+# "support" module gate.
+admin_router.include_router(dispute_evidence_submission_router, dependencies=[Depends(require_super_admin)])
 admin_router.include_router(rides_router, dependencies=[Depends(require_module("rides"))])
 admin_router.include_router(users_router, dependencies=[Depends(require_module("users"))])
 admin_router.include_router(rider_import_router, dependencies=[Depends(require_module("users"))])
 admin_router.include_router(promotions_router, dependencies=[Depends(require_module("promotions"))])
 admin_router.include_router(support_router, dependencies=[Depends(require_module("support"))])
+# Dispute-evidence-pack download (C23 item 4) -- same "support" gate as the
+# Chargebacks tab above, not require_module("rides"). Kept as its own
+# router rather than folded into rides_router specifically so it doesn't
+# inherit that broader ops/dispatch grant (security-auditor finding).
+admin_router.include_router(dispute_pack_download_router, dependencies=[Depends(require_module("support"))])
 # support_tickets sub-router enforces require_module("support_tickets") per-handler
 # (the dashboard/trends/ticket routes carry it explicitly); config routes use
 # get_admin_user so any admin can connect the integration.
@@ -222,6 +239,11 @@ admin_router.include_router(maintenance_router, dependencies=[Depends(require_mo
 admin_router.include_router(analytics_router, dependencies=[Depends(require_module("dashboard"))])
 admin_router.include_router(monitoring_router, dependencies=[Depends(require_module("dashboard"))])
 admin_router.include_router(wallet_router, dependencies=[Depends(require_module("earnings"))])
+# Weekly auto-payout batch ledger + blocked-driver preflight. Read-only
+# monitoring views, so they sit on the `earnings` module alongside the other
+# driver-payout surfaces rather than the super_admin posture of the payout
+# SYNC router — nothing here can trigger or alter a payout.
+admin_router.include_router(auto_payouts_router, dependencies=[Depends(require_module("earnings"))])
 admin_router.include_router(incentives_router, dependencies=[Depends(require_module("service_areas"))])
 admin_router.include_router(disputes_admin_router, dependencies=[Depends(require_module("disputes"))])
 admin_router.include_router(compliance_router, dependencies=[Depends(require_module("compliance"))])

@@ -108,6 +108,51 @@ export function offerDisplayDataFromFcm(data: any): Record<string, any> | null {
   };
 }
 
+/**
+ * A dispatch event that reached this headless handler, republished in-process.
+ *
+ * Exists for the Android Auto car session. On a car-only launch NOTHING reads
+ * PENDING_OFFER_KEY back — useDriverDashboard, which does that on the phone,
+ * never mounts — so a ride offer would arrive, be written to AsyncStorage, and
+ * sit there while the head unit showed an idle map. The car subscribes to this
+ * instead and puts the offer straight into the shared driver store.
+ *
+ * Same idiom as carFixChannel's fix listeners, and the same reason: a headless
+ * handler and a rendered surface need a channel between them that is not React.
+ */
+export type BackgroundDispatchEvent =
+  | { type: 'new_ride_assignment'; ride_id: string; offer: Record<string, unknown> }
+  | { type: 'ride_cancelled'; ride_id: string };
+
+const dispatchListeners = new Set<(e: BackgroundDispatchEvent) => void>();
+
+/**
+ * Subscribe to dispatch events seen by the background handler.
+ *
+ * With NO subscriber — which is every phone-only launch — this channel does
+ * nothing at all, so the existing phone behaviour is byte-for-byte unchanged.
+ */
+export function subscribeBackgroundDispatch(
+  listener: (e: BackgroundDispatchEvent) => void,
+): () => void {
+  dispatchListeners.add(listener);
+  return () => {
+    dispatchListeners.delete(listener);
+  };
+}
+
+function notifyBackgroundDispatch(event: BackgroundDispatchEvent): void {
+  for (const l of dispatchListeners) {
+    try {
+      l(event);
+    } catch (e) {
+      // A bad subscriber must not stop the others, and must never be the reason
+      // an offer notification fails to render.
+      console.warn('[Push] background dispatch listener threw:', e);
+    }
+  }
+}
+
 let registered = false;
 
 export function registerBackgroundMessageHandlers(): void {
@@ -116,6 +161,17 @@ export function registerBackgroundMessageHandlers(): void {
 
   setBackgroundMessageHandler(async (remoteMessage: any) => {
     const data = remoteMessage?.data || {};
+
+    // Cancellations carry no payload to persist and render no notification here
+    // (the backend sends those with their own visible alert), so they are handled
+    // ahead of the offer path and only republished in-process. Nothing else about
+    // this handler's behaviour for non-offer messages changes: without a
+    // subscriber, notifyBackgroundDispatch is a no-op.
+    if (data?.type === 'ride_cancelled' && data?.ride_id) {
+      notifyBackgroundDispatch({ type: 'ride_cancelled', ride_id: String(data.ride_id) });
+      return;
+    }
+
     if (data?.type !== 'new_ride_assignment' || !data?.ride_id) return;
 
     const fare = toNum(data.fare) ?? 0;
@@ -124,8 +180,34 @@ export function registerBackgroundMessageHandlers(): void {
     const incentives = safeParse<any[]>(data.incentives);
     const questHint = safeParse<any>(data.quest_hint);
 
-    // 1. Persist the full offer payload so the in-app panel can hydrate
-    //    instantly on cold start (driver dashboard reads on mount).
+    // 1. Build the full offer payload. Named rather than inlined into the
+    //    setItem below so the car session can be handed the SAME object the
+    //    dashboard hydrates from storage — one payload shape, not two that drift.
+    const offerPayload = {
+      ride_id: data.ride_id,
+      booking_id: data.booking_id || data.ride_id,
+      pickup_address: data.pickup_address || '',
+      dropoff_address: data.dropoff_address || '',
+      pickup_lat: toNum(data.pickup_lat) ?? 0,
+      pickup_lng: toNum(data.pickup_lng) ?? 0,
+      dropoff_lat: toNum(data.dropoff_lat) ?? 0,
+      dropoff_lng: toNum(data.dropoff_lng) ?? 0,
+      fare,
+      distance_km: toNum(data.distance_km),
+      duration_minutes: toNum(data.duration_minutes),
+      rider_name: data.rider_name || undefined,
+      rider_rating: toNum(data.rider_rating),
+      requires_wav: data.requires_wav === 'true' || data.requires_wav === 'True',
+      quiet_mode: data.quiet_mode === 'true' || data.quiet_mode === 'True',
+      countdown_seconds: toNum(data.countdown_seconds),
+      offer_expires_at: data.offer_expires_at || undefined,
+      surge_multiplier: surgeMultiplier,
+      incentives,
+      total_bonus: totalBonus || undefined,
+      quest_hint: questHint,
+      payment_method: data.payment_method || undefined,
+    };
+
     try {
       // Deliberately lazy — see the alertPrefsStore require below and the
       // file header: handlers register at bundle load (headless JS launch),
@@ -133,33 +215,7 @@ export function registerBackgroundMessageHandlers(): void {
       // rather than loaded unconditionally on that critical path.
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-      await AsyncStorage.setItem(
-        PENDING_OFFER_KEY,
-        JSON.stringify({
-          ride_id: data.ride_id,
-          booking_id: data.booking_id || data.ride_id,
-          pickup_address: data.pickup_address || '',
-          dropoff_address: data.dropoff_address || '',
-          pickup_lat: toNum(data.pickup_lat) ?? 0,
-          pickup_lng: toNum(data.pickup_lng) ?? 0,
-          dropoff_lat: toNum(data.dropoff_lat) ?? 0,
-          dropoff_lng: toNum(data.dropoff_lng) ?? 0,
-          fare,
-          distance_km: toNum(data.distance_km),
-          duration_minutes: toNum(data.duration_minutes),
-          rider_name: data.rider_name || undefined,
-          rider_rating: toNum(data.rider_rating),
-          requires_wav: data.requires_wav === 'true' || data.requires_wav === 'True',
-          quiet_mode: data.quiet_mode === 'true' || data.quiet_mode === 'True',
-          countdown_seconds: toNum(data.countdown_seconds),
-          offer_expires_at: data.offer_expires_at || undefined,
-          surge_multiplier: surgeMultiplier,
-          incentives,
-          total_bonus: totalBonus || undefined,
-          quest_hint: questHint,
-          payment_method: data.payment_method || undefined,
-        }),
-      );
+      await AsyncStorage.setItem(PENDING_OFFER_KEY, JSON.stringify(offerPayload));
     } catch (e) {
       console.warn('[Push] Failed to persist background ride offer:', e);
     }
@@ -194,6 +250,14 @@ export function registerBackgroundMessageHandlers(): void {
         console.warn('[Notifee] displayRideOfferNotification failed:', e);
       }
     }
+
+    // 3. Republish in-process, LAST — after the durable write and the phone's
+    //    notification, so a throwing subscriber cannot cost a driver either.
+    notifyBackgroundDispatch({
+      type: 'new_ride_assignment',
+      ride_id: String(data.ride_id),
+      offer: offerPayload,
+    });
   });
 
   // Notifee background event listener — fires when the user taps

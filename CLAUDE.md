@@ -105,14 +105,27 @@ ruff format .                      # format
 
 ```bash
 cd backend
-python scripts/migrate.py            # ordered SQL runner over backend/migrations/; no --env flag —
-                                      # environment is selected by whichever SUPABASE_URL /
-                                      # SUPABASE_SERVICE_ROLE_KEY (or PG_CONNECTION_STRING /
-                                      # DATABASE_URL) are set when it runs. Add --dry-run to preview.
-                                      # The direct db.<ref>.supabase.co host is IPv6-only; on
-                                      # IPv4-only networks set PG_CONNECTION_STRING to the Session
-                                      # pooler connection string instead (takes precedence).
+python -m backend.scripts.run_migrations           # ordered SQL runner over backend/migrations/;
+                                                     # requires DATABASE_URL (direct Postgres/pooler
+                                                     # connection — REST client is intentionally not
+                                                     # used, multi-statement DDL needs a raw psycopg
+                                                     # session). Add --dry-run to preview, --status to
+                                                     # show applied vs pending.
 ```
+
+**Use `run_migrations.py` — `migrate.py` no longer exists.** Two scripts
+used to exist in `backend/scripts/`; only `run_migrations.py` ever matched
+production's actual `schema_migrations` schema (`filename`/`checksum`/
+`applied_at`/`applied_by`, defined by migration 24). `migrate.py` targeted
+an older, different `schema_migrations` shape (`version`/`applied_at`,
+migration 00) that was never the one actually applied to production —
+running it would have failed immediately on its own tracking-row `INSERT`
+(`column "version" does not exist`). Found 2026-08-17 while manually
+applying migration 317 (`ACTION_ITEMS.md` A39); `migrate.py`'s one genuinely
+useful piece — CONCURRENTLY-safe SQL statement splitting (`ACTION_ITEMS.md`
+B0), which `run_migrations.py` never had — was ported into
+`run_migrations.py` before `migrate.py` was deleted, so no functionality
+was lost.
 
 ## Architecture
 
@@ -247,9 +260,9 @@ Rules:
 
 ## Database & Migration Conventions
 
-Migrations live in `backend/migrations/` and are applied in filename order by `backend/scripts/migrate.py`.
+Migrations live in `backend/migrations/` and are applied in filename order by `backend/scripts/run_migrations.py`.
 
-Naming: `NN_short_description.sql` where `NN` is a zero-padded sequence number — check the current highest with `ls backend/migrations | sort -V | tail -1` before picking the next one. Pick the next available number — never reuse or reorder existing numbers. If two PRs conflict on a number, the second one renames to the next free slot before merge. Note: the runner uses the full filename as the idempotency key, so already-applied migrations must never be renamed. Duplicate numeric prefixes exist from history and are handled by full-filename keying — do not introduce new duplicates; a CI prefix-uniqueness check blocks them.
+Naming: `NN_short_description.sql` where `NN` is a zero-padded sequence number — check the current highest with `ls backend/migrations | sort -V | tail -1` before picking the next one. Pick the next available number — never reuse or reorder existing numbers. If two PRs conflict on a number, the second one renames to the next free slot before merge. Note: the runner uses the full filename as the idempotency key, so already-applied migrations must never be renamed. Duplicate numeric prefixes exist from history (319, 321, 327) and are handled by full-filename keying — do not introduce new duplicates. As of CR #4187, `migration-check.yml`'s CHECK B hard-fails a PR whose new migration's numeric prefix collides with (or precedes) one that already exists in the repo when the PR's CI runs — this only catches a collision visible to that PR's own CI, not a true cross-PR race where both PRs' branches predate each other's merge (see CR #4187 for that residual gap). A pure sequence *gap* (missing numbers, no collision) still only warns — gaps are cosmetic and an accepted historical pattern.
 
 Full conventions (append-only rule, RLS pattern, table naming, index rules): see `backend/migrations/CLAUDE.md`.
 

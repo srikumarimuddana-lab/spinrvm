@@ -459,6 +459,46 @@ export const extractError = (
 // '@shared/api/client'.
 export { clampToastMessage, TOAST_MESSAGE_MAX };
 
+// Error names the JS engine itself generates. A crash inside a catch block's
+// own try (a missing native method, a stale OTA bundle calling an API the
+// installed binary doesn't have, a bad destructure) reaches the same toast
+// path as a backend rejection — and its `.message` is engine text, not a
+// sentence for a rider. Riders were shown "undefined is not a function" as
+// the reason a booking failed. `SyntaxError` is deliberately absent: it is
+// already filtered below by name, alongside its JSON-parse message shapes.
+const ENGINE_ERROR_NAMES = new Set(['TypeError', 'ReferenceError', 'RangeError']);
+
+// Message shapes the engines produce, for errors that reach us with `name`
+// stripped — anything crossing a serialization boundary (a rethrow as a plain
+// object, a worker/bridge hop) keeps `message` but loses `name`. Covers
+// Hermes/JSC ("undefined is not a function", "undefined is not an object
+// (evaluating 'x.y')", "x.y is not a function") and V8/web ("Cannot read
+// properties of undefined (reading 'y')", "x is not iterable", "x is not
+// defined").
+const ENGINE_ERROR_MESSAGE = new RegExp(
+  [
+    '^(?:undefined|null) is not (?:a function|an object|iterable)',
+    '\\bis not a function\\b',
+    '\\bis not iterable\\b',
+    '\\bis not defined\\b',
+    '^Cannot read propert(?:y|ies) of ',
+    '^Cannot read propert(?:y|ies) ',
+  ].join('|'),
+  'i',
+);
+
+/**
+ * True when `err` is an engine-generated crash rather than a message meant for
+ * a human. Such an error must never become toast copy — it is a bug report,
+ * and belongs in Crashlytics with its stack (see the booking handlers' catch
+ * blocks, which record it) while the user sees the caller's own fallback.
+ */
+export function isEngineError(err: unknown): boolean {
+  const e = err as { name?: string; message?: string } | null;
+  if (e?.name && ENGINE_ERROR_NAMES.has(e.name)) return true;
+  return typeof e?.message === 'string' && ENGINE_ERROR_MESSAGE.test(e.message);
+}
+
 export function getApiErrorMessage(
   err: unknown,
   fallback = 'Something went wrong. Please try again.',
@@ -501,6 +541,11 @@ export function getApiErrorMessage(
   const raw = anyErr?.message;
   if (
     raw &&
+    // An engine crash carries no reason a user can act on, and leaking it
+    // makes a real failure look like gibberish ("Booking Failed — undefined
+    // is not a function"). The caller's fallback is the honest message; the
+    // crash itself is captured separately with its stack.
+    !isEngineError(anyErr) &&
     anyErr?.name !== 'SyntaxError' &&
     raw !== 'Request failed' && // extractError's no-detail sentinel
     !/^Request failed with status code/i.test(raw) &&

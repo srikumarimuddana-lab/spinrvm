@@ -86,7 +86,23 @@ jobs:
           # "Channel has no branches associated with it" otherwise; publishing
           # by --branch is unambiguous. The same-named channel routes builds to
           # this branch (one-time `eas channel:edit <name> --branch <name>`).
-          eas update --branch "$CHANNEL" --non-interactive --message "$MESSAGE"
+          #
+          # --environment is REQUIRED, not optional. EXPO_PUBLIC_* vars are
+          # inlined into the JS bundle when it is built, and `eas update`
+          # rebuilds the bundle. Without an environment it loads none of the EAS
+          # environment variables, so every EXPO_PUBLIC_* value ships as an
+          # empty string and the OTA silently strips config the binary had.
+          # This is the "known EAS / OTA hazard" already documented at
+          # driver-app/hooks/useDriverDashboard.ts:89, which cost a crash when
+          # EXPO_PUBLIC_BACKEND_URL went empty. `test` has no matching EAS
+          # environment (they are development/preview/production), so it maps to
+          # preview alongside the preview channel.
+          case "$CHANNEL" in
+            production) EAS_ENV=production ;;
+            *)          EAS_ENV=preview ;;
+          esac
+          eas update --branch "$CHANNEL" --environment "$EAS_ENV" \
+            --non-interactive --message "$MESSAGE"
 
   driver:
     needs: detect
@@ -115,5 +131,11 @@ jobs:
         run: |
           MESSAGE="${MSG:-manual update}"
           MESSAGE=$(echo "$MESSAGE" | head -1 | cut -c1-1000)
-          # See rider job above — publish by branch, not channel.
-          eas update --branch "$CHANNEL" --non-interactive --message "$MESSAGE"
+          # See rider job above — publish by branch, and always with an
+          # explicit --environment.
+          case "$CHANNEL" in
+            production) EAS_ENV=production ;;
+            *)          EAS_ENV=preview ;;
+          esac
+          eas update --branch "$CHANNEL" --environment "$EAS_ENV" \
+            --non-interactive --message "$MESSAGE"

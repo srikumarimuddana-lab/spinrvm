@@ -43,7 +43,7 @@ import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Users, Search, Mail, Phone, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus, Eye, EyeOff, CreditCard, MapPin, Gift } from "lucide-react";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatDate } from "@/lib/utils";
-import { getUsersPaginated, getUserDetails, updateUserStatus, updateUserFlags, getStats, getUserWallet, creditUserWallet, debitUserWallet, exportUsers, logPiiReveal } from "@/lib/api";
+import { getUsersPaginated, getUserDetails, updateUserStatus, updateUserFlags, getStats, getUserWallet, creditUserWallet, debitUserWallet, exportUsers, logPiiReveal, backfillStripeCustomerEmails } from "@/lib/api";
 import { maskEmail, maskPhone } from "@/lib/pii";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useToast } from "@/components/ui/use-toast";
@@ -236,6 +236,86 @@ export default function UsersPage() {
         }
     };
 
+    const [stripeEmailSyncRunning, setStripeEmailSyncRunning] = useState(false);
+    // The endpoint is bounded per call so one request can't run for minutes.
+    // This walks the batches itself: telling the operator to "run again" is how
+    // a partial sweep gets mistaken for a finished one, since a second bare
+    // call restarts at page one and reports everything already correct.
+    const STRIPE_SYNC_MAX_BATCHES = 40;
+    const handleBackfillStripeEmails = async () => {
+        // Preview FIRST, always. This sends rider email addresses to Stripe (a
+        // US processor) in bulk, so the operator sees the count — and which
+        // Stripe account it is — before anything leaves the country.
+        setStripeEmailSyncRunning(true);
+        try {
+            const preview = await backfillStripeCustomerEmails({ apply: false });
+            const stranded = preview.missing_on_key.length;
+            const account = (preview.key_mode || "unknown").toUpperCase();
+            if (preview.updated === 0 && !preview.has_more) {
+                toast({
+                    title: "Nothing to sync",
+                    description:
+                        `${preview.scanned} Stripe customer${preview.scanned === 1 ? "" : "s"} checked — all already carry the rider's email.` +
+                        (stranded ? ` ${stranded} unreachable on the current key.` : ""),
+                });
+                return;
+            }
+            const newly = preview.changes.filter(c => !c.had_email).length;
+            const corrected = preview.updated - newly;
+            if (!window.confirm(
+                `Sync rider emails to Stripe (${account} account)?\n\n` +
+                `First batch: ${preview.updated} of ${preview.scanned} customer(s) need updating — ` +
+                `${newly} have no email at all, ${corrected} carry a different address.\n\n` +
+                "This sends those riders' email addresses to Stripe so they can be found by " +
+                "address in the dashboard. Only the email field is written — no customer is " +
+                "created, no saved card is touched. Riders who have requested deletion are skipped." +
+                (stranded ? `\n\n${stranded} customer(s) are unreachable on the current Stripe key and will be skipped — those repair themselves on the rider's next visit to their own payment screen.` : "") +
+                (preview.has_more ? "\n\nMore riders remain beyond this batch. Confirming processes ALL remaining batches, not just this one." : "")
+            )) return;
+
+            const totals = { updated: 0, unchanged: 0, stranded: 0, throttled: 0, failed: 0 };
+            let cursor: string | undefined;
+            let batches = 0;
+            let stoppedEarly = false;
+            for (;;) {
+                const res = await backfillStripeCustomerEmails({ apply: true, cursor });
+                batches += 1;
+                totals.updated += res.updated;
+                totals.unchanged += res.unchanged;
+                totals.stranded += res.missing_on_key.length;
+                totals.throttled += res.throttled.length;
+                totals.failed += res.failed.length;
+                if (!res.has_more) break;
+                // No cursor with has_more set would loop on the same page —
+                // stop and say so rather than spinning or silently truncating.
+                if (!res.next_cursor || batches >= STRIPE_SYNC_MAX_BATCHES) {
+                    stoppedEarly = true;
+                    break;
+                }
+                cursor = res.next_cursor;
+            }
+            // Throttled riders were skipped, not written. Reporting this run as
+            // a success would leave them permanently unsynced in the operator's
+            // mind — the same silent-partial-success trap as stopping early.
+            const incomplete = stoppedEarly || totals.throttled > 0 || totals.failed > 0;
+            toast({
+                title: incomplete ? "Stripe email sync incomplete" : "Stripe customer emails synced",
+                description:
+                    `${totals.updated} updated, ${totals.unchanged} already correct` +
+                    (totals.stranded ? ` · ${totals.stranded} unreachable` : "") +
+                    (totals.throttled ? ` · ${totals.throttled} rate-limited by Stripe` : "") +
+                    (totals.failed ? ` · ${totals.failed} failed` : "") +
+                    (stoppedEarly ? ` · stopped after ${batches} batches` : "") +
+                    (incomplete ? " — run again to finish (safe to repeat)" : ""),
+                variant: incomplete ? "destructive" : undefined,
+            });
+        } catch (e: any) {
+            toast({ title: "Stripe email sync failed", description: e?.message || "Unknown error", variant: "destructive" });
+        } finally {
+            setStripeEmailSyncRunning(false);
+        }
+    };
+
     const totalForRoleStat = roleFilter === "driver"
         ? stats?.total_drivers
         : roleFilter === "rider"
@@ -269,6 +349,16 @@ export default function UsersPage() {
                     }}>
                         {showPii ? <EyeOff className="mr-2 h-4 w-4" /> : <Eye className="mr-2 h-4 w-4" />}
                         {showPii ? "Hide PII" : "Show PII"}
+                    </Button>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleBackfillStripeEmails}
+                        disabled={stripeEmailSyncRunning}
+                        title="Attach riders' emails to their Stripe customers so they can be found by address in the Stripe dashboard. Previews the count before writing (super admin)."
+                    >
+                        <CreditCard className="mr-2 h-4 w-4" />
+                        {stripeEmailSyncRunning ? "Syncing…" : "Sync Stripe emails"}
                     </Button>
                     <Button variant="outline" onClick={handleExport} disabled={users.length === 0}>
                         <Download className="mr-2 h-4 w-4" /> Export

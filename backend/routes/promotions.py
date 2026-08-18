@@ -93,6 +93,23 @@ class UpdatePromoCodeRequest(BaseModel):
 # ============ User-Facing Endpoints ============
 
 
+def _is_legacy_imported_rider(user: Dict[str, Any]) -> bool:
+    """True if ``user`` was created by ``rider_import_service.py`` rather than
+    a native signup.
+
+    CR-4105: ``rider_import_service.py`` stamps ``created_at = now()`` on
+    every net-new imported rider (the source CSV has no original-signup-date
+    column to recover a real value from), so an old-app customer imported
+    today reads as a brand-new account. Rather than fabricate a historical
+    ``created_at`` (which we cannot do honestly), ``new_user_days`` promo
+    eligibility instead checks for the provenance marker every import batch
+    already stamps -- ``legacy_import_metadata->'rider_csv_import'`` (see
+    ``rider_import_service.IMPORT_SOURCE`` / ``build_plan``) -- and excludes
+    those riders regardless of ``created_at`` age.
+    """
+    return bool((user.get("legacy_import_metadata") or {}).get("rider_csv_import"))
+
+
 async def _validate_promo_for_user(
     code: str,
     user_id: str,
@@ -213,6 +230,11 @@ async def _validate_promo_for_user(
     new_user_days = promo.get("new_user_days", 0)
     if new_user_days > 0:
         user = await db_supabase.get_user_by_id(user_id)
+        if user and _is_legacy_imported_rider(user):
+            # CR-4105: a legacy-imported rider's created_at is the import
+            # date, not a real signup date -- never eligible for new-user
+            # promos, regardless of how recent that import was.
+            raise HTTPException(status_code=400, detail="This promo is for new users only")
         if user and user.get("created_at"):
             created = parse_iso_utc(user["created_at"])
             if created is not None and (now - created).days > new_user_days:
@@ -555,6 +577,10 @@ async def list_available_promos(
 
             # New user only
             new_days = p.get("new_user_days", 0)
+            if new_days > 0 and user and _is_legacy_imported_rider(user):
+                # CR-4105: legacy-imported riders never qualify -- their
+                # created_at is the import date, not a real signup date.
+                continue  # noqa: E701
             if new_days > 0 and user and user.get("created_at"):
                 created = parse_iso_utc(user["created_at"])
                 if created is not None and (now - created).days > new_days:

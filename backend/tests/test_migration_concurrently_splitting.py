@@ -1,23 +1,29 @@
 """A migration containing CONCURRENTLY is split into statements by the runner.
 
-`scripts/migrate.py::apply_migration` routes a file to
-`_apply_migration_autocommit` when CONCURRENTLY appears in one of its actual
+`scripts/run_migrations.py::_apply_one` routes a file to
+`_apply_one_autocommit` when CONCURRENTLY appears in one of its actual
 (comment-free) statements, which cannot use a transaction and so must execute
 each statement individually.
 
-Fixed (ACTION_ITEMS.md B0): the splitter used to be a naive `sql.split(";")`
-with a leading-`--`-line strip per chunk, which had two failure modes — a
-mid-line semicolon inside a prose comment split inside the comment and handed
-the trailing prose to Postgres as SQL, and semicolons inside a `$$`-quoted
+Ported from the (now-deleted) `scripts/migrate.py` — ACTION_ITEMS.md A39
+found `migrate.py`'s `schema_migrations` shape didn't match what's actually
+live in production (`run_migrations.py`'s `filename`/`checksum` shape does),
+but `migrate.py`'s CONCURRENTLY-safe splitter (ACTION_ITEMS.md B0) was real,
+tested, and solved a gap `run_migrations.py` never had a fix for — without
+it, a migration containing CREATE/DROP INDEX CONCURRENTLY would fail against
+`run_migrations.py`'s single-transaction apply. Fixed originally on
+`migrate.py`: the splitter used to be a naive `sql.split(";")` with a
+leading-`--`-line strip per chunk, which had two failure modes — a mid-line
+semicolon inside a prose comment split inside the comment and handed the
+trailing prose to Postgres as SQL, and semicolons inside a `$$`-quoted
 PL/pgSQL function body shredded the body into fragments. `_split_sql_statements`
-(in `scripts/migrate.py`) is now a real lexical scan that tracks `--`/`/* */`
-comments, `'...'` string literals (with `''` escaping), and
+(now in `scripts/run_migrations.py`) is a real lexical scan that tracks
+`--`/`/* */` comments, `'...'` string literals (with `''` escaping), and
 `$tag$...$tag$` dollar-quoted bodies, so top-level semicolons are the only
 split points and comment text never leaks into the executable output. This
-test now exercises that real function (not a reimplementation) against every
-CONCURRENTLY-mentioning migration in the repo, and the previously-frozen
-allowlist of known-broken files is empty — every one of them now splits
-cleanly.
+test exercises that real function (not a reimplementation) against every
+CONCURRENTLY-mentioning migration in the repo, and the frozen allowlist of
+known-broken files is empty — every one of them splits cleanly.
 """
 
 from __future__ import annotations
@@ -26,7 +32,7 @@ import pathlib
 
 import pytest
 
-from backend.scripts.migrate import _split_sql_statements
+from backend.scripts.run_migrations import _split_sql_statements
 
 _MIGRATIONS = pathlib.Path(__file__).resolve().parent.parent / "migrations"
 
@@ -85,7 +91,7 @@ def test_no_prose_or_body_fragment_leaks_out(path: pathlib.Path):
     for stmt in _split_sql_statements(path.read_text()):
         first_word = stmt.split(None, 1)[0].upper().lstrip("(")
         assert first_word.startswith(_SQL_STARTS), (
-            f"{path.name}: scripts/migrate.py would hand this to Postgres as a statement:\n\n"
+            f"{path.name}: scripts/run_migrations.py would hand this to Postgres as a statement:\n\n"
             f"{stmt[:300]}\n\n"
             "The real splitter should never produce this — if it does, "
             "_split_sql_statements has a new lexical gap, not the migration."

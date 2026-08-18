@@ -42,7 +42,7 @@ query's row budget.
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 # Merge into a `rides` filter dict to exclude legacy-imported rides.
@@ -125,3 +125,51 @@ def is_legacy_offset_payout(payout: dict[str, Any]) -> bool:
 def drop_legacy_offset_payouts(payouts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Drop the offset rows that pair with legacy-imported rides."""
     return [p for p in payouts if not is_legacy_offset_payout(p)]
+
+
+# ── CR-4108 (issue #4108, D1 decision option (a): "re-label, don't rewrite") ─
+#
+# For the 186 legacy-imported rides, ``rides.tax_amount`` /
+# ``tax_breakdown`` hold a real number, but the WRONG BASE for "GST the
+# rider paid on this fare": bookings.csv's "gst" column is
+# commission_gst_amount (GST on Spinr's own platform-commission fee), not
+# fare-GST — see services/booking_import_service.py's comment on the
+# mismatch, confirmed 2026-08-15 by sampling every row in the export. The
+# correct historical fare-GST figure is not recoverable from the export.
+#
+# Product-owner decision (approved, see docs/change-log for this CR): do
+# NOT touch tax_amount's stored value anywhere — instead, every surface
+# that displays/exports it computes a label distinguishing the two
+# meanings at serialization time. Never persisted; never used to alter the
+# underlying figure.
+TAX_BASIS_FARE_GST = "fare_gst"
+TAX_BASIS_COMMISSION_GST_LEGACY_IMPORT = "commission_gst_legacy_import"
+
+# Short, human-readable footnote for rider/admin-facing documents (receipts,
+# invoices) where a legacy row's tax_amount is shown. Kept short enough to
+# sit as a single receipt/invoice line without disrupting layout for the
+# 99%+ of rides this never applies to.
+LEGACY_TAX_NOTE = (
+    "Tax shown for this ride is Spinr's platform-fee GST from the previous "
+    "app (commission-GST), carried over at import — not GST calculated on "
+    "the fare. The original fare-GST figure was not preserved by the import."
+)
+
+
+def tax_basis_for_ride(ride: dict[str, Any]) -> str:
+    """Computed, display-only label for what ``ride``'s ``tax_amount`` /
+    ``tax_breakdown`` represent — ``TAX_BASIS_COMMISSION_GST_LEGACY_IMPORT``
+    for one of the 186 legacy-imported rides, ``TAX_BASIS_FARE_GST``
+    (the normal, correct meaning) for every other ride.
+
+    Derived from ``legacy_import_metadata`` presence on every call; never
+    stored, and never used to change ``tax_amount``'s numeric value.
+    """
+    return TAX_BASIS_COMMISSION_GST_LEGACY_IMPORT if is_legacy_ride(ride) else TAX_BASIS_FARE_GST
+
+
+def legacy_tax_note_for_ride(ride: dict[str, Any]) -> Optional[str]:
+    """``LEGACY_TAX_NOTE`` for a legacy-imported ride, else ``None`` — so a
+    caller can drop the note field entirely (rather than emit an empty
+    string) for the non-legacy common case."""
+    return LEGACY_TAX_NOTE if is_legacy_ride(ride) else None

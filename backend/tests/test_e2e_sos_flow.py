@@ -45,6 +45,10 @@ def _sos_request(message: str = "Help!", lat: float = 52.13, lng: float = -106.6
     req.message = message
     req.latitude = lat
     req.longitude = lng
+    # Must be set explicitly: a bare MagicMock attribute is truthy, which would
+    # make the endpoint take the migration-315 dedup path with a Mock as the
+    # key. None mirrors EmergencyRequest's default (no dedup, always insert).
+    req.idempotency_key = None
     return req
 
 

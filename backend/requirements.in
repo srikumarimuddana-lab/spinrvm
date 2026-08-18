@@ -14,7 +14,7 @@ pydantic-settings>=2.5.0
 supabase>=2.10.0
 postgrest>=0.12.0
 realtime>=0.9.0
-# Direct Postgres access for the migration runner (backend/scripts/migrate.py).
+# Direct Postgres access for the migration runner (backend/scripts/run_migrations.py).
 # Not needed by the FastAPI server itself (which uses supabase-py). Required
 # when running migrations outside of Docker: pip install -r requirements.txt.
 psycopg2-binary>=2.9.9

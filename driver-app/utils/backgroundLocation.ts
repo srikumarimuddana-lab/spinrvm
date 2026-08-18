@@ -6,6 +6,7 @@ import { getAppCheckToken, initFirebaseServices } from '@shared/services/firebas
 import { tripLocationRecorder, type TripLocationBatchRequest } from './tripLocationRecorder';
 import { checkLocationIntegrity, haversineKm } from './locationIntegrity';
 import { recordNonFatal } from './crashlytics';
+import { publishCarFix } from '../lib/androidAuto/carFixChannel';
 import { SESSION_ENDED_KEY } from '@shared/auth/sessionMarker';
 
 // Use the same backend-URL resolver as the shared API client — it carries the
@@ -16,6 +17,16 @@ import { SESSION_ENDED_KEY } from '@shared/auth/sessionMarker';
 const API_URL = spinrConfig.backendUrl;
 
 const TASK_NAME = 'spinr-background-location';
+
+/**
+ * Accent for BOTH Spinr foreground-service notifications — this one and the
+ * Android Auto display service (lib/androidAuto/carLocationTask.ts). Shared so
+ * the two can never drift: a driver seeing two Spinr notifications in different
+ * colours would read as two apps. Predates the shared/theme palette and is not
+ * one of its tokens; moving it onto `darkColors.primary` is a deliberate
+ * separate change, since it alters an existing live notification.
+ */
+export const FOREGROUND_NOTIFICATION_COLOR = '#6C63FF';
 
 // ── Geofence-based future-capture re-arm ────────────────────────────────
 // A force-quit can suspend location delivery. Geofence re-entry may wake the
@@ -228,6 +239,19 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
       console.warn(`[BgLocation] Dropped untrusted sample: ${integrity.reason}`);
       continue;
     }
+    // Feed the Android Auto map. This service already holds a foreground-service
+    // notification, so while it runs the car needs no second one of its own —
+    // carLocationTask.startCarLocationService() defers to it for exactly this
+    // reason. Device-local only: publishCarFix updates the in-memory marker and
+    // the existing `spinr_driver_last_location` cache, and sends nothing.
+    // Placed after the integrity gate above so an untrusted sample can no more
+    // move the car marker than it can enter the durable route history.
+    publishCarFix({
+      latitude: location.coords.latitude,
+      longitude: location.coords.longitude,
+      heading: location.coords.heading ?? null,
+    });
+
     try {
       // Durable persistence is deliberately before auth/network work. The
       // recorder keeps every accepted native sample across process restarts.
@@ -317,6 +341,24 @@ async function _applyTaskOptions(config?: BgLocationConfig): Promise<void> {
   });
 }
 
+/**
+ * Whether the dispatch location service is up.
+ *
+ * Exported for lib/androidAuto/carLocationTask.ts, which must not start its own
+ * foreground service alongside this one — expo-location mints a service (and a
+ * notification) per task name, so two running tasks means two permanent Spinr
+ * notifications. Never throws; an unreadable probe answers "yes, assume it is
+ * running", because a missing car marker is a far smaller failure than a
+ * duplicate notification on every driver's phone.
+ */
+export async function isBackgroundLocationRunning(): Promise<boolean> {
+  try {
+    return await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
+  } catch {
+    return true;
+  }
+}
+
 export async function startBackgroundLocation(config?: BgLocationConfig): Promise<boolean> {
   const isRunning = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
   if (isRunning) {
@@ -335,6 +377,22 @@ export async function startBackgroundLocation(config?: BgLocationConfig): Promis
   }
 
   await _applyTaskOptions(config);
+
+  // A driver who plugged in while OFFLINE has the car's display-only service
+  // running; going online replaces it with this one. Stop it here or they end up
+  // with two permanent notifications for the rest of the shift. Lazily required
+  // to keep the module cycle (carLocationTask imports this file) from resolving
+  // at load time. It does NOT no-op on iOS, as this comment used to claim — the
+  // require loads carLocationTask and runs its module-scope defineTask there
+  // too. Harmless, since nothing ever starts that task off Android, but worth
+  // stating plainly rather than asserting a guard that does not exist.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    await require('../lib/androidAuto/carLocationTask').stopCarLocationService();
+  } catch {
+    // Android Auto layer absent — nothing to stand down.
+  }
+
   console.log('[BgLocation] Started');
   return true;
 }

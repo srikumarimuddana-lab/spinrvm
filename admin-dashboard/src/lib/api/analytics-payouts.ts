@@ -125,6 +125,64 @@ export const getPayoutsOverview = (params: { period: EarningsPeriod; service_are
     return request<PayoutsOverview>(`/api/admin/payouts/overview?${sp.toString()}`);
 };
 
+/* ── Weekly auto-payouts (Spinr-controlled Sunday batch) ── */
+
+/** One weekly run of the Sunday auto-payout batch (`auto_payout_batches`). */
+export interface AutoPayoutBatch {
+    id: string;
+    week_key: string;
+    /** running = in flight; partial = some paid, some failed/deferred (resumable). */
+    status: "running" | "completed" | "partial" | "failed";
+    started_at?: string | null;
+    completed_at?: string | null;
+    drivers_eligible: number;
+    drivers_paid: number;
+    drivers_failed: number;
+    total_amount: number | string;
+    error_summary?: string | null;
+    /** counts = everyone skipped; drivers_with_balance = those with money held up. */
+    skipped_summary?: {
+        counts?: Record<string, number>;
+        drivers_with_balance?: Record<string, string[]>;
+    } | null;
+    /**
+     * Per-market slice of the run, keyed by service_area_id ("unassigned"
+     * for drivers with no area). The batch itself always runs fleet-wide —
+     * this exists so the page can report per area. Null on runs recorded
+     * before per-area tracking existed.
+     */
+    area_summary?: Record<
+        string,
+        { paid: number; failed: number; skipped: number; amount: string }
+    > | null;
+    created_at?: string;
+}
+
+/** A driver the batch cannot pay right now, with the amount being held. */
+export interface BlockedDriver {
+    driver_id: string;
+    reason: string;
+    pending_amount: string;
+    service_area_id?: string | null;
+}
+
+export const getAutoPayoutBatches = (limit = 20, weekKey?: string) => {
+    const sp = new URLSearchParams({ limit: String(limit) });
+    // Direct lookup for a run older than the default window.
+    if (weekKey) sp.set("week_key", weekKey);
+    return request<{ batches: AutoPayoutBatch[]; count: number }>(
+        `/api/admin/auto-payouts/batches?${sp.toString()}`,
+    );
+};
+
+export const getBlockedPayoutDrivers = (limit = 50, serviceAreaId?: string) => {
+    const sp = new URLSearchParams({ limit: String(limit) });
+    if (serviceAreaId) sp.set("service_area_id", serviceAreaId);
+    return request<{ blocked: BlockedDriver[]; count: number; by_reason: Record<string, number> }>(
+        `/api/admin/auto-payouts/blocked-drivers?${sp.toString()}`,
+    );
+};
+
 /* ── Disputes (resolve) ─────────────────── */
 export const resolveDispute = (id: string, data: { resolution: string; refund_amount?: number; admin_note?: string }) =>
     request<any>(`/api/admin/disputes/${id}/resolve`, { method: "PUT", body: JSON.stringify(data) });

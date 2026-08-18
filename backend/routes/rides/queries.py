@@ -286,6 +286,36 @@ async def get_scheduled_rides(request: Request = None, current_user: dict = Depe
         desc=False,
         limit=50,
     )
+
+    # C29: expose the notice-window cancellation fee that would apply if the
+    # rider cancelled each ride right now — a read-only preview so the
+    # rider-app cancel sheet can warn *before* charging, instead of only
+    # after (mirrors how get_ride() already surfaces the live-ride
+    # `cancellation_fee` field for the same reason).
+    # calculate_scheduled_cancel_notice_fee() is flag-gated on
+    # scheduled_ride_notice_window_fee_enabled (default off) — with the flag
+    # off it always resolves to 0 for every ride, so `notice_window_fee_amount`
+    # is simply never added and this response is byte-for-byte unchanged from
+    # before this change while the flag stays off in production.
+    if rides:
+        try:
+            settings = await _deps.get_app_settings()
+        except Exception:
+            logger.error("Failed to load app settings for scheduled-ride cancel fee preview", exc_info=True)
+            settings = None
+        if settings is not None:
+            for ride in rides:
+                try:
+                    fee = _deps.calculate_scheduled_cancel_notice_fee(ride, settings)
+                    if fee > 0:
+                        ride["notice_window_fee_amount"] = fee
+                except Exception:
+                    logger.error(
+                        "Failed to compute scheduled-ride notice-window fee preview for ride_id={}",
+                        ride.get("id"),
+                        exc_info=True,
+                    )
+
     return rides
 
 

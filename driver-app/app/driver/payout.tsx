@@ -33,13 +33,9 @@ function PayoutScreen() {
         hasBankAccount,
         fetchDriverBalance,
         fetchBankAccount,
-        requestPayout,
-        isLoading,
         error,
         clearError,
     } = useDriverStore();
-
-    const [payoutAmount, setPayoutAmount] = useState('');
     // Hosted Stripe onboarding opens in the system browser, so track the brief
     // "opening…" state while we mint the AccountLink and hand off.
     const [stripeOnboarding, setStripeOnboarding] = useState(false);
@@ -266,28 +262,6 @@ function PayoutScreen() {
         }
     };
 
-    const handleRequestPayout = async () => {
-        const amount = parseFloat(payoutAmount);
-        if (isNaN(amount) || amount <= 0) {
-            showToast('error', 'Invalid Amount', 'Please enter a valid amount');
-            return;
-        }
-        if (amount < 10) {
-            showToast('error', 'Amount Too Low', 'Minimum payout amount is $10');
-            return;
-        }
-        if (driverBalance && amount > parseFloat(driverBalance.payable_balance)) {
-            showToast('error', 'Insufficient Balance', `Available balance: $${parseFloat(driverBalance.payable_balance).toFixed(2)}`);
-            return;
-        }
-
-        const result = await requestPayout(amount);
-        if (result.success) {
-            setPayoutAmount('');
-            showToast('success', 'Payout Requested', 'Funds will arrive in 2–3 business days.');
-        }
-    };
-
     // Most recent year the driver actually earned in. Preferred over
     // "last calendar year", which emailed a $0.00 slip for a year they may
     // not have driven — the section is hidden entirely when this is null.
@@ -334,11 +308,11 @@ function PayoutScreen() {
     const nextPayoutLabel = useMemo(() => {
         const now = new Date();
         const dayOfWeek = now.getDay();
-        const daysUntilFriday = (5 - dayOfWeek + 7) % 7 || 7;
-        if (daysUntilFriday === 1) return 'Tomorrow (Friday)';
-        if (daysUntilFriday === 7 && dayOfWeek === 5) return 'Today (Friday)';
+        const daysUntilSunday = (7 - dayOfWeek) % 7 || 7;
+        if (daysUntilSunday === 1) return 'Tomorrow (Sunday)';
+        if (daysUntilSunday === 7 && dayOfWeek === 0) return 'Today (Sunday)';
         const target = new Date(now);
-        target.setDate(target.getDate() + daysUntilFriday);
+        target.setDate(target.getDate() + daysUntilSunday);
         return target.toLocaleDateString('en-CA', { weekday: 'long', month: 'short', day: 'numeric' });
     }, []);
 
@@ -472,7 +446,19 @@ function PayoutScreen() {
                         <View style={styles.balanceItem}>
                             <Text style={styles.balanceItemLabel}>Total Earnings</Text>
                             <Text style={styles.balanceItemValue}>
-                                {driverBalance ? formatCurrency(driverBalance.total_earnings) : '$0.00'}
+                                {/* Lifetime, blended: Spinr earnings + money already paid by
+                                    the previous Spinr app (Previously Paid item below). Matches
+                                    the Activity screen's Total Earned — one blended number
+                                    everywhere, not two different "Total Earnings" figures on two
+                                    screens. Business decision 2026-08-13 (see
+                                    docs/change-log/2026-08-13-blended-lifetime-earnings.md). */}
+                                {driverBalance
+                                    ? formatCurrency(
+                                          (parseFloat(driverBalance.total_earnings || '0') +
+                                              parseFloat(driverBalance.previous_app_paid_total || '0')
+                                          ).toFixed(2)
+                                      )
+                                    : '$0.00'}
                             </Text>
                         </View>
                         <View style={styles.balanceDivider} />
@@ -489,17 +475,25 @@ function PayoutScreen() {
                                 {driverBalance ? formatCurrency(driverBalance.total_paid_out) : '$0.00'}
                             </Text>
                         </View>
+                        {/* Additive: only rendered for a driver with real previous-app
+                            money, so a driver with none sees the original 3-item row
+                            byte-identical to before. A visible line item (not a footnote)
+                            — Total Earnings above sums Paid Out + Pending + Previously Paid
+                            (+ Available), so every dollar is accounted for and verifiable
+                            against the payout history list below, which carries the real
+                            transfer dates. */}
+                        {parseFloat(driverBalance?.previous_app_paid_total || '0') > 0 && (
+                            <>
+                                <View style={styles.balanceDivider} />
+                                <View style={styles.balanceItem}>
+                                    <Text style={styles.balanceItemLabel}>Previously Paid</Text>
+                                    <Text style={styles.balanceItemValue}>
+                                        {formatCurrency(driverBalance!.previous_app_paid_total!)}
+                                    </Text>
+                                </View>
+                            </>
+                        )}
                     </View>
-
-                    {/* Migrated drivers: name the previous-app money instead of
-                        letting "Total Earnings $0.00" sit unexplained above a
-                        payment history full of transfers they remember. */}
-                    {parseFloat(driverBalance?.previous_app_paid_total || '0') > 0 && (
-                        <Text style={styles.previousAppNote}>
-                            Payments from the previous Spinr app ({formatCurrency(driverBalance!.previous_app_paid_total!)})
-                            stay in your payment history, but aren&apos;t part of your Spinr earnings above.
-                        </Text>
-                    )}
                 </View>
 
                 {/* Bonuses & Rewards — quest/referral payable earnings, included in balance */}
@@ -541,7 +535,7 @@ function PayoutScreen() {
                             <Text style={styles.payoutScheduleLabel}>Next payout</Text>
                             <Text style={styles.payoutScheduleDate}>{nextPayoutLabel}</Text>
                         </View>
-                        <Text style={styles.payoutScheduleNote}>Weekly</Text>
+                        <Text style={styles.payoutScheduleNote}>Every Sunday</Text>
                     </View>
                 )}
 
@@ -550,7 +544,7 @@ function PayoutScreen() {
                     <View style={styles.section}>
                         <Text style={styles.sectionTitle}>Set up payouts</Text>
                         <Text style={styles.sectionSubtitle}>
-                            Complete these steps to cash out your balance.
+                            Complete these steps to receive automatic weekly payouts.
                         </Text>
                         <View style={styles.checklistCard}>
                             {setupSteps.map((step, i) => {
@@ -630,7 +624,7 @@ function PayoutScreen() {
                         <View style={styles.readyCard}>
                             <Ionicons name="checkmark-circle" size={22} color={colors.success} />
                             <Text style={styles.readyText}>
-                                You&apos;re all set — your balance is ready to cash out.
+                                You&apos;re all set — your earnings are paid out automatically every Sunday.
                             </Text>
                         </View>
                     </View>
@@ -745,59 +739,15 @@ function PayoutScreen() {
                     </View>
                 )}
 
-                {/* Request Payout */}
+                {/* Auto Payout Info */}
                 <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Request payout</Text>
-                    {!allReady ? (
-                        <View style={styles.infoRow}>
-                            <Ionicons name="lock-closed" size={18} color={colors.textDim} />
-                            <Text style={styles.infoRowText}>
-                                Finish the setup steps above to request a payout.
-                            </Text>
-                        </View>
-                    ) : !driverBalance || parseFloat(driverBalance.payable_balance) <= 0 ? (
-                        <View style={styles.infoRow}>
-                            <Ionicons name="wallet-outline" size={18} color={colors.textDim} />
-                            <Text style={styles.infoRowText}>
-                                No balance to pay out yet. Completed rides will show up here.
-                            </Text>
-                        </View>
-                    ) : (
-                        <View style={styles.payoutCard}>
-                            <View style={styles.payoutInputRow}>
-                                <Text style={styles.dollarSign}>$</Text>
-                                <TextInput
-                                    style={styles.payoutInput}
-                                    placeholder="Amount"
-                                    placeholderTextColor={colors.textDim}
-                                    keyboardType="decimal-pad"
-                                    value={payoutAmount}
-                                    onChangeText={setPayoutAmount}
-                                />
-                                <TouchableOpacity
-                                    style={[
-                                        styles.payoutButton,
-                                        (!payoutAmount || isLoading) && styles.payoutButtonDisabled,
-                                    ]}
-                                    onPress={handleRequestPayout}
-                                    disabled={!payoutAmount || isLoading}
-                                >
-                                    {isLoading ? (
-                                        <ActivityIndicator size="small" color="#fff" />
-                                    ) : (
-                                        <Text style={styles.payoutButtonText}>Request</Text>
-                                    )}
-                                </TouchableOpacity>
-                            </View>
-                            <TouchableOpacity
-                                onPress={() => setPayoutAmount(driverBalance.payable_balance)}
-                            >
-                                <Text style={styles.maxAmount}>
-                                    Available: {formatCurrency(driverBalance.payable_balance)} · Min $10.00
-                                </Text>
-                            </TouchableOpacity>
-                        </View>
-                    )}
+                    <Text style={styles.sectionTitle}>How payouts work</Text>
+                    <View style={styles.infoRow}>
+                        <Ionicons name="calendar-outline" size={18} color={colors.primary} />
+                        <Text style={styles.infoRowText}>
+                            Spinr automatically pays out your earnings every Sunday. Balances of $10 or more are sent to your connected account, and funds typically reach your bank in 2–3 business days.
+                        </Text>
+                    </View>
                 </View>
 
                 {/* Tax Documents — only for drivers who actually have a tax
@@ -854,7 +804,7 @@ function PayoutScreen() {
                 <View style={styles.infoNote}>
                     <Ionicons name="information-circle" size={20} color={colors.textDim} />
                     <Text style={styles.infoText}>
-                        Payouts are processed via Stripe within 2-3 business days. Minimum payout is $10. Stripe handles all identity verification and banking securely.
+                        Earnings are automatically paid out every Sunday via Stripe, and typically reach your bank in 2–3 business days. Minimum payout is $10 — balances below carry forward to the next week. Stripe handles all identity verification and banking securely.
                     </Text>
                 </View>
             </ScrollView>
@@ -913,12 +863,6 @@ function createStyles(colors: ThemeColors) {
             paddingTop: 16,
             borderTopWidth: 1,
             borderTopColor: 'rgba(255,255,255,0.2)',
-        },
-        previousAppNote: {
-            marginTop: 12,
-            fontSize: 11,
-            lineHeight: 15,
-            color: 'rgba(255,255,255,0.75)',
         },
         balanceItem: { flex: 1, alignItems: 'center' },
         balanceItemLabel: {
@@ -1219,47 +1163,12 @@ function createStyles(colors: ThemeColors) {
             color: colors.text,
         },
 
-        // Payout
+        // Payout (payoutCard is still used by the Tax Documents card; the
+        // cashout input/button styles were removed with the manual-cashout UI)
         payoutCard: {
             backgroundColor: colors.surface,
             borderRadius: 16,
             padding: 16,
-        },
-        payoutInputRow: {
-            flexDirection: 'row',
-            alignItems: 'center',
-        },
-        dollarSign: {
-            fontSize: 24,
-            fontWeight: '700',
-            color: colors.text,
-            marginRight: 4,
-        },
-        payoutInput: {
-            flex: 1,
-            fontSize: 24,
-            fontWeight: '700',
-            color: colors.text,
-            paddingVertical: 8,
-        },
-        payoutButton: {
-            backgroundColor: colors.primary,
-            paddingHorizontal: 24,
-            paddingVertical: 12,
-            borderRadius: 12,
-        },
-        payoutButtonDisabled: {
-            opacity: 0.5,
-        },
-        payoutButtonText: {
-            color: '#fff',
-            fontSize: 16,
-            fontWeight: '700',
-        },
-        maxAmount: {
-            color: colors.primary,
-            fontSize: 13,
-            marginTop: 8,
         },
 
         infoNote: {

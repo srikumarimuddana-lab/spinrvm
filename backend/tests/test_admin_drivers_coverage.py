@@ -1740,6 +1740,54 @@ class TestPayoutsSummary:
         # settled old-app earnings that are not in this DB's rides.
         assert summary["pending_balance"] == 10.0
 
+    def test_legacy_outstanding_correction_excluded_from_balance_regardless_of_status(
+        self, test_client, super_admin_override
+    ):
+        """payout_type='legacy_outstanding_correction' (2026-08-17 write path,
+        services/legacy_payout_correction_service.py) must never deduct from
+        pending_balance at ANY status, and must only count toward total_paid_out
+        / legacy_stripe_transfers once settled ('completed') — an
+        'awaiting_stripe_onboarding'/'ready_for_transfer' row is a recorded
+        debt, not yet a real transfer."""
+
+        def rows(table, filters=None, **kwargs):
+            if table == "rides":
+                return [{"driver_earnings": "50.00", "tip_amount": "0", "ride_completed_at": "2026-07-01T00:00:00Z"}]
+            if table == "payouts":
+                return [
+                    {"id": "po-1", "amount": "40.00", "status": "completed", "created_at": "2026-07-03T00:00:00Z"},
+                    {
+                        "id": "legacy-correction-1",
+                        "amount": "12.00",
+                        "status": "completed",
+                        "payout_type": "legacy_outstanding_correction",
+                        "created_at": "2026-08-17T00:00:00Z",
+                    },
+                    {
+                        "id": "legacy-correction-2",
+                        "amount": "8.00",
+                        "status": "awaiting_stripe_onboarding",
+                        "payout_type": "legacy_outstanding_correction",
+                        "created_at": "2026-08-17T00:00:00Z",
+                    },
+                ]
+            return []
+
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/payouts-summary")
+        assert resp.status_code == 200, resp.text
+        summary = resp.json()["summary"]
+        # Only the $12 settled correction counts as paid; the $8 unsettled
+        # one counts nowhere yet.
+        assert summary["total_paid_out"] == 52.0
+        assert summary["legacy_stripe_transfers"] == 12.0
+        # 50 earned - 40 app-native paid = 10; neither correction row (settled
+        # or not) deducts from what Spinr still owes.
+        assert summary["pending_balance"] == 10.0
+
     def test_paid_out_not_zeroed_for_fully_migrated_driver(self, test_client, super_admin_override):
         """Regression: a migrated driver whose entire payout history is synced
         Stripe transfers showed 'Total paid out: $0.00' right after the

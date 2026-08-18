@@ -91,7 +91,8 @@ async def test_driver_annual_earnings_includes_stripe_synced_payouts():
         if table == "rides":
             return rides
         if table == "payouts":
-            assert filters["payout_type"] == "stripe_sync"
+            assert filters["payout_type"] == {"$in": ["stripe_sync", "legacy_outstanding_correction"]}
+            assert filters["status"] == "completed"
             assert filters["created_at"]["$gte"].startswith("2025-01-01")
             assert filters["created_at"]["$lt"].startswith("2026-01-01")
             return synced
@@ -104,6 +105,30 @@ async def test_driver_annual_earnings_includes_stripe_synced_payouts():
         total = await _driver_annual_earnings("d1", 2025)
 
     assert total == Decimal("650.25")
+
+
+@pytest.mark.asyncio
+async def test_driver_annual_earnings_includes_settled_correction_payouts():
+    """A settled legacy_outstanding_correction (2026-08-17 write path)
+    counts toward the $500 threshold exactly like stripe_sync — both are
+    real legacy income actually paid through Stripe."""
+    rides = [_make_ride("d1", "300.00")]
+    synced = [{"driver_id": "d1", "payout_type": "legacy_outstanding_correction", "amount": 12.50}]
+
+    async def _get_rows(table, filters=None, **kw):
+        if table == "rides":
+            return rides
+        if table == "payouts":
+            return synced
+        return []
+
+    with patch("utils.t4a_annual_job.db_supabase") as mock_db:
+        mock_db.get_rows = AsyncMock(side_effect=_get_rows)
+        from utils.t4a_annual_job import _driver_annual_earnings
+
+        total = await _driver_annual_earnings("d1", 2025)
+
+    assert total == Decimal("312.50")
 
 
 # ---------------------------------------------------------------------------

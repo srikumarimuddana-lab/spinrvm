@@ -36,6 +36,17 @@ import {
 import { buildOfferCard, type OfferLike } from './carCard';
 import { CarMapSurface } from './carSurface';
 import { useCarMapCamera } from './carMapCamera';
+import { isCarDebugAvailable, pushDebug, setDebugFact, useCarDebug } from './carDebug';
+import { getLastCarFix } from './useCarLocation';
+import { bumpCarSurfaceGeneration } from './carSurfaceGeneration';
+// Static, not lazy: importing this file is what runs its TaskManager.defineTask.
+// A task must be defined at bundle load or the OS has nothing to deliver to when
+// it relaunches the process for a location event. index.js only requires this
+// module on Android, so iOS never loads it.
+import { startCarLocationService, stopCarLocationService } from './carLocationTask';
+import { startCarSession, stopCarSession } from './carSession';
+import { setCarColorScheme, type CarColorScheme } from './carColorScheme';
+import { triggerDriverEmergency } from '../../hooks/useDriverSafetyTrigger';
 
 const NAV_TEMPLATE_ID = 'spinr-aa-nav';
 const FALLBACK_OFFER_MS = 15_000;
@@ -45,9 +56,24 @@ const FALLBACK_OFFER_MS = 15_000;
 const NAV_ICON = require('../../assets/images/nav_arrow.png');
 const ZOOM_IN_ICON = require('../../assets/images/zoom_in.png');
 const ZOOM_OUT_ICON = require('../../assets/images/zoom_out.png');
+const RECENTER_ICON = require('../../assets/images/recenter.png');
 
+// `console.log` stays gated on __DEV__ (release builds shouldn't chatter), but
+// the line is ALWAYS recorded to the on-surface debug buffer. Previously the
+// whole call was inside the __DEV__ guard, which compiled every android-auto
+// diagnostic out of exactly the release builds that can run on a head unit —
+// a template failure produced a blank screen and no trace anywhere.
 const log = (...args: unknown[]) => {
   if (__DEV__) console.log('[android-auto]', ...args);
+  pushDebug('info', ...args);
+};
+
+// Failures the driver can't see and logcat won't reach unless the phone is
+// tethered. Always recorded, and always console.error so Crashlytics/logcat
+// pick them up in release builds too.
+const logError = (...args: unknown[]) => {
+  console.error('[android-auto]', ...args);
+  pushDebug('error', ...args);
 };
 const noop = () => {};
 
@@ -136,7 +162,7 @@ export default function registerAutoPlay(): void {
     const webFallback = `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}&travelmode=driving`;
     log('hand-off →', provider, url);
     Linking.openURL(url).catch(() =>
-      Linking.openURL(webFallback).catch((e) => log('hand-off failed:', e)),
+      Linking.openURL(webFallback).catch((e) => logError('hand-off failed:', e)),
     );
   };
 
@@ -155,6 +181,20 @@ export default function registerAutoPlay(): void {
     },
   ];
 
+  // Recenter: clears the pan and resumes following the driver. Always present —
+  // once the head unit can pan the map (onDidPan below), a driver who has
+  // dragged away needs a way back, and hunting for it only when it appears
+  // would be worse than a button that is occasionally a no-op. Leaves zoom
+  // alone; the driver chose that deliberately.
+  const recenterButton = {
+    type: 'custom' as const,
+    image: { type: 'asset' as const, image: RECENTER_ICON },
+    onPress: () => {
+      useCarMapCamera.getState().recenter();
+      log('recentred on driver');
+    },
+  };
+
   // Navigate button only while navigating; zoom buttons in every state.
   const mapButtonsFor = (hasRoute: boolean) => {
     const navHandoffButtons = hasRoute
@@ -166,29 +206,49 @@ export default function registerAutoPlay(): void {
           },
         ]
       : [];
-    return [...navHandoffButtons, ...zoomButtons];
+    // Android Auto's action strip caps at 4. In a ride that is Navigate +
+    // Recenter + 2 zoom = exactly 4; idle drops Navigate and sits at 3.
+    return [...navHandoffButtons, recenterButton, ...zoomButtons];
   };
 
   // The single state-driven header action (top-right on Android). Accept/Decline
   // live in the offer alert, so the header is the *progress* action for the leg.
   const headerActionsFor = (rideState: string) => {
+    // `flags` is opt-in per action. Android Auto allows exactly ONE primary
+    // action in a strip and rejects a second — an earlier version marked both
+    // the progress action and SOS as Flag.Primary, which made setHeaderActions
+    // throw and took the WHOLE header down, SOS included. Only the leg's
+    // progress action is primary.
+    const mkAction = (
+      title: string,
+      style: 'confirm' | 'normal',
+      onPress: () => void,
+      flags?: number,
+    ) => ({
+      type: 'text' as const,
+      title,
+      style: style === 'confirm' ? ('confirm' as const) : ('normal' as const),
+      ...(flags === undefined ? {} : { flags }),
+      onPress,
+    });
+
+    // SOS rides ALONGSIDE the leg's progress action rather than replacing it —
+    // a driver must never have to give up "Complete trip" to reach safety, and
+    // must never have to hunt for safety in a menu. Text action, so it needs no
+    // icon asset and reads unambiguously at a glance. `headerActions` is typed
+    // Array<NitroAction>, so a second entry is legitimate.
+    const sosAction = mkAction('SOS', 'normal', confirmEmergency); // deliberately NOT primary
+
+    /** Leg progress action + SOS. */
     const act = (title: string, style: 'confirm' | 'normal', onPress: () => void) => ({
-      android: [
-        {
-          type: 'text' as const,
-          title,
-          style: style === 'confirm' ? ('confirm' as const) : ('normal' as const),
-          flags: Flag.Primary,
-          onPress,
-        },
-      ] as const,
+      android: [mkAction(title, style, onPress, Flag.Primary), sosAction],
     });
 
     switch (rideState) {
       case 'navigating_to_pickup':
         return act('Arrived', 'confirm', () => {
           const id = rideIdOf(useDriverStore.getState().activeRide);
-          if (id) useDriverStore.getState().arriveAtPickup(id).catch((e) => log('arrive failed:', e));
+          if (id) useDriverStore.getState().arriveAtPickup(id).catch((e) => logError('arrive failed:', e));
         });
       case 'arrived_at_pickup':
         // OTP start-trip stays on the phone — the header just routes the driver there.
@@ -198,15 +258,45 @@ export default function registerAutoPlay(): void {
       case 'trip_in_progress':
         return act('Complete trip', 'confirm', () => {
           const id = rideIdOf(useDriverStore.getState().activeRide);
-          if (id) useDriverStore.getState().completeRide(id).catch((e) => log('complete failed:', e));
+          if (id) useDriverStore.getState().completeRide(id).catch((e) => logError('complete failed:', e));
         });
       default:
-        return undefined; // idle / offer / completed: no progress action
+        // Idle / offer / completed have no progress action, which leaves the
+        // header free. Outside production, hand it to the debug panel — the car
+        // screen is otherwise undiagnosable without tethering the phone to a
+        // laptop, and idle is exactly the state a blank surface shows up in.
+        // A ride in progress always keeps its progress action; debug never
+        // displaces it.
+        // No SOS here: the emergency endpoint is ride-scoped, so with no active
+        // ride there is nothing to report against. Offering a button that
+        // silently does nothing would be worse than not offering it.
+        return isCarDebugAvailable()
+          ? { android: [mkAction('Debug', 'normal', () => useCarDebug.getState().toggle(), Flag.Primary)] }
+          : undefined;
     }
   };
 
   let template: InstanceType<typeof MapTemplate> | null = null;
   let lastKey: string | null = null;
+
+  // ---- Automatic navigation hand-off ---------------------------------------
+  // On accepting a ride (and again when the trip starts) the driver's nav app is
+  // launched for the current leg, so they don't have to reach for a button
+  // before pulling away.
+  //
+  // The hard part is firing on a real transition and ONLY a real transition. A
+  // head unit that swaps to the reversing camera and back re-runs this sync, and
+  // relaunching Google Maps every time the driver reverses would be intolerable.
+  // So:
+  //   - `handedOffFor` records the leg already handed off (ride id + leg), so a
+  //     repeated sync for the same leg is a no-op.
+  //   - `primed` stays false until the first sync of a session has completed.
+  //     Connecting mid-ride therefore ADOPTS the current leg silently instead of
+  //     launching nav at the driver. Only a transition observed while already
+  //     connected counts as an accept.
+  // Both are cleared on a genuine disconnect, so the next session re-adopts.
+  let handedOffFor: string | null = null;
+  let primed = false;
 
   // ---- Ride-offer alert lifecycle -----------------------------------------
   // iternio warns that updating an alert re-shows it, so we show exactly once
@@ -214,6 +304,155 @@ export default function registerAutoPlay(): void {
   let alertSeq = 1;
   let shownOfferId: string | null = null;
   let shownAlertNum: number | null = null;
+
+  // ---- Emergency (SOS) -----------------------------------------------------
+  // Ride-scoped: the endpoint is POST /rides/{id}/emergency, so this is offered
+  // only while there is an active ride — which is also when a driver is most
+  // exposed.
+  //
+  // TWO TAPS, DELIBERATELY. A single mis-tap on a head unit must never page the
+  // safety team and alarm the driver's emergency contacts, so the header action
+  // raises a confirmation and only the confirm actually sends. That is the whole
+  // reason this is not a one-press button.
+  //
+  // Per CLAUDE.md, Spinr's SOS "notifies emergency contacts and our safety team
+  // and *offers* one-tap 911; it never auto-dials". The result alert therefore
+  // offers 911 as an explicit driver-initiated action and never places a call by
+  // itself.
+  let sosInFlight = false;
+
+  const sendEmergency = (rideId: string) => {
+    // Guard the double-tap, not the retry: triggerDriverEmergency already owns
+    // the only retry policy (3 attempts, 1s/2s backoff) and its docstring warns
+    // that wrapping it again is how one press became nine POSTs.
+    if (sosInFlight) {
+      log('SOS already in flight — ignoring repeat press');
+      return;
+    }
+    sosInFlight = true;
+
+    const fix = getLastCarFix();
+    log('SOS sending for ride', rideId, fix ? 'with position' : 'WITHOUT position (no fix yet)');
+    setDebugFact('sos', 'sending…');
+
+    triggerDriverEmergency(rideId, fix?.latitude, fix?.longitude)
+      .then((res) => {
+        const n = res.contacts.length;
+        const notified = res.contacts.filter((c) => c.notified).length;
+        log('SOS sent — contacts notified', `${notified}/${n}`);
+        setDebugFact('sos', `sent · ${notified}/${n} contacts`);
+        showEmergencySentAlert(notified, n);
+      })
+      .catch((e) => {
+        // A failed SOS that looks like a success is the worst possible outcome
+        // on this surface — the driver would believe help is coming. Say so
+        // loudly and tell them to use the phone.
+        logError('SOS FAILED to send:', e);
+        setDebugFact('sos', 'FAILED');
+        showEmergencyFailedAlert();
+      })
+      .finally(() => {
+        sosInFlight = false;
+      });
+  };
+
+  const showEmergencySentAlert = (notified: number, total: number) => {
+    if (!template) return;
+    const id = alertSeq++;
+    const subtitle =
+      total > 0
+        ? `Safety team alerted · ${notified} of ${total} emergency contacts notified`
+        : 'Safety team alerted';
+    try {
+      template.showAlert({
+        id,
+        title: { text: 'Emergency alert sent' },
+        subtitle: { text: subtitle },
+        // Offered, never automatic — the driver decides.
+        primaryAction: {
+          title: 'Call 911',
+          style: 'destructive',
+          onPress: () => {
+            template?.dismissAlert(id);
+            Linking.openURL('tel:911').catch((e) => logError('911 dial failed:', e));
+          },
+        },
+        secondaryAction: {
+          title: 'Close',
+          style: 'default',
+          onPress: () => template?.dismissAlert(id),
+        },
+        durationMs: 20000,
+        priority: 'high',
+      });
+    } catch (e) {
+      logError('SOS result alert failed:', e);
+    }
+  };
+
+  const showEmergencyFailedAlert = () => {
+    if (!template) return;
+    const id = alertSeq++;
+    try {
+      template.showAlert({
+        id,
+        title: { text: 'Emergency alert FAILED to send' },
+        subtitle: { text: 'Use your phone, or call 911 directly.' },
+        primaryAction: {
+          title: 'Call 911',
+          style: 'destructive',
+          onPress: () => {
+            template?.dismissAlert(id);
+            Linking.openURL('tel:911').catch((e) => logError('911 dial failed:', e));
+          },
+        },
+        secondaryAction: {
+          title: 'Close',
+          style: 'default',
+          onPress: () => template?.dismissAlert(id),
+        },
+        durationMs: 30000,
+        priority: 'high',
+      });
+    } catch (e) {
+      logError('SOS failure alert failed:', e);
+    }
+  };
+
+  const confirmEmergency = () => {
+    const rideId = rideIdOf(useDriverStore.getState().activeRide);
+    if (!rideId) {
+      log('SOS pressed with no active ride — nothing to report against');
+      return;
+    }
+    if (!template) return;
+    const id = alertSeq++;
+    try {
+      template.showAlert({
+        id,
+        title: { text: 'Send emergency alert?' },
+        subtitle: { text: 'Alerts Spinr safety and your emergency contacts with your location.' },
+        primaryAction: {
+          title: 'Send alert',
+          style: 'destructive',
+          onPress: () => {
+            template?.dismissAlert(id);
+            sendEmergency(rideId);
+          },
+        },
+        secondaryAction: {
+          title: 'Cancel',
+          style: 'default',
+          onPress: () => template?.dismissAlert(id),
+        },
+        // Long enough to read and decide while driving; no auto-send on timeout.
+        durationMs: 20000,
+        priority: 'high',
+      });
+    } catch (e) {
+      logError('SOS confirm alert failed:', e);
+    }
+  };
 
   const showInfoAlert = (title: string, subtitle?: string) => {
     if (!template) return;
@@ -275,14 +514,14 @@ export default function registerAutoPlay(): void {
           title: 'Accept',
           style: 'default',
           onPress: () => {
-            useDriverStore.getState().acceptRide(rideId).catch((e) => log('accept failed:', e));
+            useDriverStore.getState().acceptRide(rideId).catch((e) => logError('accept failed:', e));
           },
         },
         secondaryAction: {
           title: 'Decline',
           style: 'destructive',
           onPress: () => {
-            useDriverStore.getState().declineRide(rideId).catch((e) => log('decline failed:', e));
+            useDriverStore.getState().declineRide(rideId).catch((e) => logError('decline failed:', e));
           },
         },
         durationMs: offerDurationMs(offer),
@@ -315,8 +554,26 @@ export default function registerAutoPlay(): void {
         template.setMapButtons(mapButtonsFor(!!route));
         template.setHeaderActions(headerActionsFor(rideState));
       } catch (e) {
-        log('chrome update failed:', e);
+        // Loud: a throw here leaves the driver with no header actions at all —
+        // no Arrived, no Complete trip, no SOS — and nothing else reports it.
+        logError('chrome update failed (header/map buttons may be missing):', e);
+        setDebugFact('chrome', 'FAILED — see log');
       }
+    }
+
+    // Auto hand-off — see `handedOffFor` / `primed` above for why this cannot
+    // simply fire whenever a nav leg is present.
+    const navLegKey = route ? `${rideIdOf(activeRide)}:${route.leg}` : null;
+    if (!primed) {
+      handedOffFor = navLegKey; // adopt the leg we connected into, silently
+      primed = true;
+    } else if (navLegKey && navLegKey !== handedOffFor) {
+      handedOffFor = navLegKey;
+      log('auto hand-off for leg', navLegKey);
+      setDebugFact('navHandoff', `${route?.leg} → ${navProvider}`);
+      handoffToNav(navProvider);
+    } else if (!navLegKey) {
+      handedOffFor = null; // ride ended; the next leg is a fresh hand-off
     }
 
     syncOfferAlert(rideState, offerOf(incomingRide, activeRide));
@@ -324,34 +581,124 @@ export default function registerAutoPlay(): void {
 
   let unsubscribe: (() => void) | null = null;
 
+  // Handle for the cold-start connection poll below. Held here so every path
+  // that makes it redundant — a successful connect, a disconnect — can stop it.
+  // A timer left running past its purpose is a leak, and one that survives a
+  // test run is how you find out.
+  let coldStartPoll: ReturnType<typeof setInterval> | null = null;
+  const stopColdStartPoll = () => {
+    if (coldStartPoll !== null) {
+      clearInterval(coldStartPoll);
+      coldStartPoll = null;
+    }
+  };
+
+  // Same rule for the post-connect chrome refreshes below: a timer that outlives
+  // the session it was scheduled for is a leak, and one that fires after a
+  // disconnect would push chrome at a template that no longer exists.
+  let chromeRefreshTimers: ReturnType<typeof setTimeout>[] = [];
+  const stopChromeRefresh = () => {
+    chromeRefreshTimers.forEach(clearTimeout);
+    chromeRefreshTimers = [];
+  };
+
   const onConnect = () => {
     // Guard: only build the surface for a genuinely connected head unit.
     if (!HybridAutoPlay.isConnected?.()) return;
-    useCarMapCamera.getState().reset(); // start each session framed at the default zoom
+
+    // Before anything else: the baseline (map/marker/buttons) does not depend
+    // on any of this, but everything data-backed does. carSession restores the
+    // session and then loads what the phone dashboard would have — active ride,
+    // today's earnings, dispatch config — none of which any phone screen is
+    // around to fetch on a car-only launch.
+    startCarSession().catch((e) => logError('car session bootstrap failed:', e));
+
+    // Keep the marker alive without the phone app. Android throttles foreground
+    // location for a process it considers backgrounded — which is exactly what a
+    // car-only launch is — so the in-hook watcher alone goes quiet at speed.
+    // Every failure path leaves that watcher in charge, i.e. today's behaviour.
+    startCarLocationService()
+      .then((result) => {
+        log('car location service:', result);
+        setDebugFact('carLocation', result);
+      })
+      .catch((e) => logError('car location service threw:', e));
 
     // Idempotent: the cold-launch-already-connected branch and the 'didConnect'
     // listener can both fire for one connection — build (and reset) at most once.
     // A genuine reconnect goes through didDisconnect (template = null) first, so
     // the reset still runs for a real new session.
+    //
+    // The camera reset MUST stay inside this guard. It used to sit above it,
+    // which contradicted the comment and meant every didConnect re-framed the
+    // map: a head unit that swaps to the reversing camera and back re-fires
+    // didConnect without a disconnect, so a driver who had zoomed out watched
+    // the map snap back to the default span each time.
     if (!template) {
+      useCarMapCamera.getState().reset(); // start each session framed at the default zoom
       try {
         template = new MapTemplate({
           id: NAV_TEMPLATE_ID,
           component: CarMapSurface,
           onStopNavigation: noop, // we never run our own turn-by-turn
+          // Head-unit pan gestures. Without this the surface's controlled
+          // `region` would fight the driver: the native map would move under
+          // their finger and then snap back on the next GPS fix. Routing the
+          // translation into the camera store makes the pan stick until they
+          // press Recenter.
+          onDidPan: (translation: { x: number; y: number }) => {
+            useCarMapCamera.getState().pan(translation.x, translation.y);
+          },
+          // Android Auto flips day/night from the car's own ambient state, so
+          // this fires mid-drive at dusk. The surface reads the initial value
+          // from its props; without this it would keep a daylight map for the
+          // rest of the night.
+          onAppearanceDidChange: (scheme: CarColorScheme) => {
+            log('color scheme →', scheme);
+            setCarColorScheme(scheme);
+          },
           mapButtons: mapButtonsFor(false),
         });
         template.setRootTemplate();
+        log('MapTemplate created + setRootTemplate OK');
+        setDebugFact('template', 'created');
       } catch (e) {
-        log('setRootTemplate (map) failed:', e);
+        logError('setRootTemplate (map) failed:', e);
+        setDebugFact('template', 'FAILED');
         template = null;
         return;
       }
       lastKey = null; // force a chrome refresh on a fresh session
       shownOfferId = null;
       shownAlertNum = null;
+
+      // Self-heal an early build.
+      //
+      // On a car-only cold launch — Android Auto starting the app after a force
+      // close — the template can be created before the JS bundle's assets are
+      // resolvable. The map buttons then render as broken-image placeholders and
+      // the surface comes up empty, and the only recovery was for the driver to
+      // unplug and replug. The cold-start poll below makes this MORE likely,
+      // since it builds the moment a connection appears rather than waiting.
+      //
+      // So re-push the chrome twice on a short delay. setMapButtons re-resolves
+      // the icons, and bumping the surface generation remounts the map. Both are
+      // no-ops when the first attempt already worked — lastKey is cleared so the
+      // chrome genuinely re-sets, and a remount of an already-good map is
+      // invisible.
+      stopChromeRefresh(); // never stack two sessions' worth
+      chromeRefreshTimers = [1200, 4000].map((delay) =>
+        setTimeout(() => {
+          if (!template || !HybridAutoPlay.isConnected?.()) return;
+          lastKey = null; // force setMapButtons/setHeaderActions to run again
+          apply();
+          bumpCarSurfaceGeneration();
+          log('post-connect chrome refresh at', delay, 'ms');
+        }, delay),
+      );
     }
 
+    stopColdStartPoll(); // whatever got us here, the poll has done its job
     apply();
     if (!unsubscribe) {
       unsubscribe = useDriverStore.subscribe(apply);
@@ -366,11 +713,51 @@ export default function registerAutoPlay(): void {
       clearOfferAlert();
       template = null;
       lastKey = null;
+      // Next session re-adopts its leg rather than launching nav on connect.
+      handedOffFor = null;
+      primed = false;
+      stopColdStartPoll();
+      stopChromeRefresh();
+      stopCarSession();
+      // The screen it was drawing for is gone; so must the notification be.
+      stopCarLocationService().catch((e) => logError('car location stop failed:', e));
     });
     // Cold-launch while a head unit is ALREADY connected: the connect event may
     // have fired during native init before this listener existed, so apply now.
+    //
+    // Re-checked on a short schedule rather than once. This runs at JS bundle
+    // load, and on a car-only cold launch — Android Auto starting the app with
+    // the phone UI closed, which is exactly the case a driver hits after force
+    // closing the app — the native connection handshake can still be in flight
+    // at this moment. A single synchronous check then returns false, and if
+    // 'didConnect' already fired natively there is no second event to catch it:
+    // the car screen sits blank for the whole session with no template ever
+    // built. Polling a few times over ~6s closes that window; every attempt
+    // after the template exists is a no-op, since onConnect is idempotent.
+    // Check synchronously FIRST, and only poll if that came back negative — a
+    // head unit already connected at bundle load needs no timer at all. Ordering
+    // it this way also means the common path leaves nothing running.
     if (HybridAutoPlay.isConnected?.()) {
       onConnect();
+    } else {
+      let coldStartAttempts = 0;
+      coldStartPoll = setInterval(() => {
+        coldStartAttempts += 1;
+        if (template) {
+          stopColdStartPoll(); // 'didConnect' beat us to it
+          return;
+        }
+        if (HybridAutoPlay.isConnected?.()) {
+          log('cold-start poll found a connected head unit on attempt', coldStartAttempts);
+          onConnect();
+          stopColdStartPoll();
+          return;
+        }
+        if (coldStartAttempts >= 12) {
+          // Not connected — the ordinary 'didConnect' listener takes it from here.
+          stopColdStartPoll();
+        }
+      }, 500);
     }
   } catch (e) {
     // Was a dev-only log(): in production a listener-registration failure left

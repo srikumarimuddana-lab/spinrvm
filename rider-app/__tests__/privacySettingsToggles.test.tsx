@@ -55,13 +55,36 @@ jest.mock('@shared/hooks/queries', () => ({
   useUpdateNotificationPreferences: () => ({ mutate: mockMutate }),
 }));
 
-function renderScreen() {
+// Flushes the microtask queue so the mount effect's `api.get(...).then(...)`
+// (marketing-preferences hydration) settles inside this test's own `act`,
+// instead of resolving after the test — or the whole file — has finished.
+// An unflushed renderer previously leaked that resolution into whatever
+// test ran next in the same Jest worker (see verifyEmailScreen.test.tsx's
+// `flush`/`mountedRenderer` comments for the same failure mode there).
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+// Tracked so afterEach can unmount it — otherwise the leaked mount effect
+// above fires its state updates against an unmounted-but-never-torn-down
+// renderer, producing "update not wrapped in act" warnings and, worse,
+// "import a file after the Jest environment has been torn down" errors in
+// later test files sharing this worker process.
+let mountedRenderer: TestRenderer.ReactTestRenderer | null = null;
+
+async function renderScreen() {
   let renderer!: TestRenderer.ReactTestRenderer;
-  act(() => {
+  await act(async () => {
     renderer = TestRenderer.create(<PrivacySettingsScreen />);
+    await flush();
+    await flush();
   });
+  mountedRenderer = renderer;
   return renderer;
 }
+
+afterEach(() => {
+  mountedRenderer?.unmount();
+  mountedRenderer = null;
+});
 
 function allText(renderer: TestRenderer.ReactTestRenderer): string {
   return JSON.stringify(renderer.toJSON());
@@ -79,8 +102,8 @@ beforeEach(() => {
 });
 
 describe('PrivacySettingsScreen toggles', () => {
-  it('no longer renders the dead Background Location / Share Live rows', () => {
-    const renderer = renderScreen();
+  it('no longer renders the dead Background Location / Share Live rows', async () => {
+    const renderer = await renderScreen();
     const rendered = allText(renderer);
     expect(rendered).not.toContain('privacy.background_location');
     expect(rendered).not.toContain('privacy.share_live');
@@ -88,24 +111,24 @@ describe('PrivacySettingsScreen toggles', () => {
     expect(renderer.root.findAllByType(CustomToggle)).toHaveLength(4);
   });
 
-  it('hydrates the push toggle from the server preference', () => {
+  it('hydrates the push toggle from the server preference', async () => {
     mockPrefsData = { push_enabled: false };
-    const renderer = renderScreen();
+    const renderer = await renderScreen();
     expect(pushToggle(renderer).props.value).toBe(false);
   });
 
-  it('writes push_enabled via the shared preferences mutation on toggle', () => {
+  it('writes push_enabled via the shared preferences mutation on toggle', async () => {
     mockPrefsData = { push_enabled: true };
-    const renderer = renderScreen();
+    const renderer = await renderScreen();
     act(() => {
       pushToggle(renderer).props.onValueChange(false);
     });
     expect(mockMutate).toHaveBeenCalledWith({ push_enabled: false }, expect.anything());
   });
 
-  it('reverts the push toggle when the save fails', () => {
+  it('reverts the push toggle when the save fails', async () => {
     mockPrefsData = { push_enabled: true };
-    const renderer = renderScreen();
+    const renderer = await renderScreen();
     act(() => {
       pushToggle(renderer).props.onValueChange(false);
     });

@@ -250,7 +250,7 @@ Spinr is the driver-first alternative to existing Canadian ride-sharing platform
 - REQ-DEPL-4: Backend: Railway (auto-deploy from `main`; Render fallback)
 - REQ-DEPL-5: Admin + shared: Vercel (auto-deploy from `main`)
 - REQ-DEPL-6: Mobile builds: Expo EAS — triggered only when commit message contains `[build]`
-- REQ-DEPL-7: Database migrations applied via `python migrate.py --env production` before new backend deploy
+- REQ-DEPL-7: Database migrations applied via `python -m backend.scripts.run_migrations` before new backend deploy
 - REQ-DEPL-8: Supabase region: ca-central-1 (PIPEDA compliance; never change without legal sign-off)
 - REQ-DEPL-9: Monitoring active before first real user: Sentry domain alerts, REFRESH TOKEN REUSE → PagerDuty
 - REQ-DEPL-10: Runbook for data breach (docs/runbooks/data-breach.md) created before launch

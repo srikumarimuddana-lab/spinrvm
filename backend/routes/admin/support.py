@@ -179,6 +179,87 @@ async def admin_get_dispute_stats():
     return {**counts, "total_refunded": float(round(total_refunded, 2))}
 
 
+@router.get("/disputes/chargebacks")
+async def admin_get_chargebacks(
+    limit: int = 50,
+    offset: int = 0,
+    status: Optional[str] = None,
+):
+    """Card-network chargebacks (Stripe disputes) — C23 Action item 3.
+
+    Distinct from `disputes` above (rider-raised refund requests): this
+    reads `stripe_disputes`, populated by the `charge.dispute.created`/
+    `.closed`/`.updated` webhook handlers (B27, C23 Action 1). Read-only —
+    chargebacks are resolved via the Stripe Dashboard today
+    (`docs/runbooks/payment-dispute-evidence.md`); this endpoint exists so
+    an admin can *see* an open chargeback's deadline without a raw SQL
+    query, not to act on it.
+
+    Must be registered before the `/disputes/{dispute_id}` path-param
+    routes below — FastAPI matches in registration order, and
+    `{dispute_id}` would otherwise swallow the literal `chargebacks` path
+    segment (same reason `/disputes/stats` sits above them too).
+    """
+    filters: Dict[str, Any] = {}
+    if status and status != "all":
+        filters["status"] = status
+    try:
+        rows = await db_supabase.get_rows(
+            "stripe_disputes",
+            filters,
+            order="created_at",
+            desc=True,
+            limit=limit,
+            offset=offset,
+        )
+    except Exception as exc:
+        logger.error("Failed to fetch stripe_disputes: %s", exc, exc_info=True)
+        raise HTTPException(status_code=503, detail="ERR_DATABASE") from exc
+
+    if not rows:
+        return rows
+
+    # Enrich with the human-readable ride_code (not the raw ride row — no
+    # PII needed here, just something an admin can search/recognize).
+    ride_ids = list({r["ride_id"] for r in rows if r.get("ride_id")})
+    ride_code_map: Dict[str, str] = {}
+    if ride_ids:
+        try:
+            rides = await db_supabase.get_rows(
+                "rides",
+                {"id": {"$in": ride_ids}},
+                limit=len(ride_ids),
+            )
+            for r in rides or []:
+                if r.get("id") and r.get("ride_code"):
+                    ride_code_map[r["id"]] = r["ride_code"]
+        except Exception as exc:
+            logger.error("Failed to enrich chargebacks with ride codes: %s", exc, exc_info=True)
+            raise HTTPException(status_code=503, detail="ERR_DATABASE") from exc
+
+    now = datetime.now(timezone.utc)
+    result = []
+    for r in rows:
+        days_remaining = None
+        due_by_raw = r.get("evidence_due_by")
+        if due_by_raw and not r.get("evidence_submitted_at"):
+            try:
+                due_by = datetime.fromisoformat(str(due_by_raw).replace("Z", "+00:00"))
+                if due_by.tzinfo is None:
+                    due_by = due_by.replace(tzinfo=timezone.utc)
+                days_remaining = (due_by - now).days
+            except (TypeError, ValueError):
+                days_remaining = None
+        result.append(
+            {
+                **r,
+                "ride_code": ride_code_map.get(r.get("ride_id") or "", None),
+                "days_remaining": days_remaining,
+            }
+        )
+    return result
+
+
 @router.post("/disputes")
 async def admin_create_dispute(dispute: DisputeCreateRequest):
     """Create a dispute manually from admin."""

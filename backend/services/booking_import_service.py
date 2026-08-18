@@ -448,6 +448,20 @@ def build_plan(
         # --- money ---
         total_amount = parse_money(b.get("total_amount", ""))
         gst = parse_money(b.get("gst", ""))
+        # bookings.csv's "gst" column is exactly "commission_gst_amount" --
+        # GST on Spinr's own small platform commission fee, NOT GST on the
+        # rider-facing fare (verified 2026-08-15: gst == commission_gst_amount
+        # in every sampled row; the fare-scaling GST lives in a completely
+        # separate "payout_gst_amount" column this importer has never read).
+        # tax_amount below is therefore a real number but the WRONG BASE for
+        # "tax the rider paid on this ride" -- do not assume it is. The
+        # correct historical rider-facing GST figure for already-imported
+        # rows is not recoverable from this export (no such column exists)
+        # and needs a business/legal decision, not a code change, on how to
+        # treat it -- see docs/change-log/2026-08-15-legacy-payout-correction-plan.md
+        # and this session's tax-audit findings. Preserved raw below so that
+        # decision isn't blocked on re-deriving the number from scratch.
+        payout_gst_amount = parse_money(b.get("payout_gst_amount", ""))
         discount = parse_money(b.get("coupon_discount", ""))
         tip = parse_money(b.get("tip_driver", ""))
 
@@ -483,6 +497,14 @@ def build_plan(
 
         # The rider-facing ride fare. The legacy export has no distance/time
         # split, so the ride line is the residual after tax, fees, and tip.
+        # This is a PERMANENT limitation, not a bug to fix later: the old app
+        # never recorded a per-ride distance/time breakdown at all, so
+        # `distance_fare`/`time_fare` are hardcoded to 0.0 below and the whole
+        # ride fare lives in `base_fare` instead. Any report that sums
+        # distance_fare/time_fare across rides will silently show $0 for every
+        # legacy-imported row -- that's expected, not missing data, but a
+        # caller doing per-component analytics needs to know to exclude or
+        # separately handle legacy_import_metadata != '{}' rows.
         residual = total_amount - gst - fees_total + discount - tip
         if residual < ZERO:
             plan.errors.append(ImportReportItem(idx, code, "total_amount", "fees + tax + tip exceed the total charged"))
@@ -532,15 +554,31 @@ def build_plan(
             "time_fare": 0.0,
             "booking_fee": 0.0,  # explicit: the column defaults to 2.0
             "airport_fee": 0.0,  # legacy airport charges ride in area_fees
+            # Verified 2026-08-15, not assumed: the old app's surge-schedule
+            # config (surchargedates.csv) had every weekday's time_slots
+            # empty and surchargehistories.csv was completely empty -- surge
+            # was configured but never once actually applied. 1.0 is the
+            # correct historical value for every imported row, not a gap.
             "surge_multiplier": 1.0,
             "total_fare": float(residual),
             "tip_amount": float(tip),
-            "grand_total": float(total_amount - tip),
-            "tax_amount": float(gst),
-            "tax_breakdown": {"GST": {"amount": float(gst)}} if gst > ZERO else {},
+            # str() only at the serialization boundary (rides.grand_total is
+            # NUMERIC(10,2) -- str(Decimal) round-trips exact, unlike
+            # float()). Verified against information_schema 2026-08-18; see
+            # ACTION_ITEMS.md B29 / docs/change-log/2026-08-18-b29-*.md.
+            "grand_total": str(total_amount - tip),
+            # tax_amount/tax_breakdown are commission-GST, not fare-GST -- see
+            # the "gst"-parsing comment above. `rate: 5.0` reflects Canada's
+            # actual GST rate (correct regardless of the base it's applied
+            # to); it is NOT a claim that this amount is 5% of the fare.
+            # rides.tax_amount is NUMERIC(8,2) -- str(Decimal), not float().
+            "tax_amount": str(gst),
+            "tax_breakdown": {"GST": {"rate": 5.0, "amount": float(gst)}} if gst > ZERO else {},
             "area_fees_breakdown": fees,
-            "area_fees_total": float(fees_total),
-            "discount_amount": float(discount),
+            # rides.area_fees_total is NUMERIC(8,2) -- str(Decimal), not float().
+            "area_fees_total": str(fees_total),
+            # rides.discount_amount is NUMERIC(10,2) -- str(Decimal), not float().
+            "discount_amount": str(discount),
             "payment_method": "card",
             "payment_status": "paid",
             "paid_at": completed_at,
@@ -568,6 +606,12 @@ def build_plan(
                 "old_customer_id": (b.get("customer_id") or "").strip(),
                 "old_driver_id": (b.get("driver_id") or "").strip(),
                 "imported_at": now_iso,
+                # Preserved raw, not merged into tax_amount: the fare-scaling
+                # GST component this importer doesn't (yet) know how to
+                # correctly apply. Keeping the raw source number means the
+                # eventual business/legal decision on historical GST
+                # treatment doesn't have to re-derive it from the CSV again.
+                "old_payout_gst_amount": float(payout_gst_amount),
             },
         }
         if started_at:
@@ -603,7 +647,10 @@ def build_plan(
             {
                 "id": pid,
                 "driver_id": driver_id,
-                "amount": float(amount),
+                # str() only at the serialization boundary (payouts.amount is
+                # NUMERIC as of migration 331 -- str(Decimal) round-trips
+                # exact, unlike float()). All arithmetic above stays Decimal.
+                "amount": str(amount),
                 # 'completed' deducts from payable_balance and is inert to the
                 # payout retry loop, the Stripe reconciler, and the migration
                 # 250 reservation guard (all of which key off other statuses).

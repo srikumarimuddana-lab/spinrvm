@@ -35,6 +35,11 @@ class FaqCreateRequest(BaseModel):
     # scope the FAQ to users operating in those areas (or their sub-regions,
     # via parent_service_area_id) — e.g. SGI content tagged to SK areas.
     service_area_ids: Optional[List[str]] = None
+    # Lower sorts first within a category. Column existed unused for a long
+    # time (every read path ordered by created_at instead) — now wired up in
+    # both the public /faqs list and this admin list. Default 0 keeps new
+    # rows at the top of ties, same as before this field had any effect.
+    sort_order: int = 0
 
 
 class FaqUpdateRequest(BaseModel):
@@ -44,6 +49,7 @@ class FaqUpdateRequest(BaseModel):
     audience: Optional[str] = Field(default=None, pattern="^(rider|driver|both)$")
     is_active: Optional[bool] = None
     service_area_ids: Optional[List[str]] = None
+    sort_order: Optional[int] = None
 
 
 class NotificationRequest(BaseModel):
@@ -59,7 +65,10 @@ class NotificationRequest(BaseModel):
 
 @router.get("/faqs")
 async def admin_get_faqs():
-    """Get all FAQ entries."""
+    """Get all FAQ entries, ordered for display: sort_order first (so the
+    dashboard table matches what riders/drivers actually see), then
+    created_at desc as the tiebreak for rows sharing a sort_order (e.g. the
+    default 0 on everything not yet manually reordered)."""
     # Exclude the semantic-search embedding vector — the dashboard never shows
     # it and it would bloat the list to multi-MB once vectors are populated.
     faqs = await db_supabase.get_rows(
@@ -69,6 +78,9 @@ async def admin_get_faqs():
         limit=500,
         columns="id,question,answer,category,audience,service_area_ids,sort_order,is_active,created_at,updated_at",
     )
+    # list.sort() is stable, so this layers "sort_order asc" on top of the
+    # "created_at desc" order already fetched, without a second DB round trip.
+    faqs.sort(key=lambda f: f.get("sort_order") or 0)
     return faqs
 
 
@@ -84,6 +96,7 @@ async def admin_create_faq(faq: FaqCreateRequest):
         "audience": faq.audience,
         "service_area_ids": faq.service_area_ids,
         "is_active": faq.is_active,
+        "sort_order": faq.sort_order,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row = await db_supabase.insert_one("faqs", doc)
@@ -104,6 +117,8 @@ async def admin_update_faq(faq_id: str, faq: FaqUpdateRequest):
         updates["audience"] = faq.audience
     if faq.is_active is not None:
         updates["is_active"] = faq.is_active
+    if faq.sort_order is not None:
+        updates["sort_order"] = faq.sort_order
     # Present in the payload (even as null/[]) → set it; null/[] clears the area
     # scope back to global. Omitted → leave unchanged.
     if "service_area_ids" in faq.model_fields_set:

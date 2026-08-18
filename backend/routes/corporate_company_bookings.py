@@ -35,6 +35,7 @@ try:
     from .. import db_supabase
     from ..dependencies.company_guard import require_company_admin, require_company_member
     from ..features import compute_fare_estimate
+    from ..schemas import validate_scheduled_time_value
     from ..services.company_booking_service import create_company_guest_booking
     from ..services.corporate_policy_service import require_company_bookable
     from ..utils.audit_logger import log_user_action
@@ -44,6 +45,7 @@ except ImportError:
     import db_supabase  # type: ignore
     from dependencies.company_guard import require_company_admin, require_company_member  # type: ignore
     from features import compute_fare_estimate  # type: ignore
+    from schemas import validate_scheduled_time_value  # type: ignore
     from services.company_booking_service import create_company_guest_booking  # type: ignore
     from services.corporate_policy_service import require_company_bookable  # type: ignore
     from utils.audit_logger import log_user_action  # type: ignore
@@ -70,6 +72,7 @@ class CompanyGuestBookingRequest(BaseModel):
     distance_km: float = Field(..., gt=0, le=500)
     duration_minutes: int = Field(..., gt=0, le=600)
     vehicle_type_id: str
+    scheduled_timezone: Optional[str] = None  # IANA name e.g. "America/Toronto"; used for DST-gap guard
     scheduled_time: Optional[datetime] = None
     rider_notes: Optional[str] = Field(default=None, max_length=500)
 
@@ -78,6 +81,20 @@ class CompanyGuestBookingRequest(BaseModel):
     def _phone_e164(cls, v: str) -> str:
         _, normalized = validate_phone(v.strip())
         return normalized or v.strip()
+
+    # ACTION_ITEMS.md C34: the company-portal guest-booking path built the
+    # `Ride` row directly (services/company_booking_service.py) instead of
+    # going through CreateRideRequest/create_ride, so it never inherited
+    # validate_scheduled_time's lead-time/max-advance/DST guard at all — a
+    # booker could schedule a guest ride seconds in the past, years out, or
+    # at a DST-ambiguous local wall-clock time with no timezone context.
+    # Delegates to the same shared validator CreateRideRequest uses
+    # (schemas.validate_scheduled_time_value) so the two booking paths
+    # can't drift out of sync with each other again.
+    @field_validator("scheduled_time", mode="after")
+    @classmethod
+    def _validate_scheduled_time(cls, value: Optional[datetime], info) -> Optional[datetime]:
+        return validate_scheduled_time_value(value, info.data.get("scheduled_timezone"))
 
 
 def _booking_row(ride: Dict[str, Any], member: Optional[Dict[str, Any]], guest: Optional[Dict[str, Any]]) -> dict:

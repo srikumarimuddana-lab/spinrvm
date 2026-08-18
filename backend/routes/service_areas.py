@@ -39,11 +39,25 @@ _PUBLIC_FIELDS = (
     "surge_active",
     "surge_enabled",
     "polygon",
+    # Safety panel (migration 316). Rider/driver apps render the local-authority
+    # row from these; all are optional and the row is hidden when name is unset.
+    # Distinct from the regulatory_* columns, which are driver-licensing
+    # metadata and deliberately NOT exposed publicly.
+    "emergency_number",
+    "safety_authority_name",
+    "safety_authority_phone",
+    "safety_authority_url",
+    "safety_authority_hours",
 )
 
 
 def _project_public(r: dict) -> dict:
     out = {k: r[k] for k in _PUBLIC_FIELDS if k in r}
+    # Never hand the apps an empty emergency number: a Safety panel whose 911
+    # button does nothing is worse than one that isn't there. Falls back to 911
+    # for any row predating migration 316 or blanked by an admin.
+    if not out.get("emergency_number"):
+        out["emergency_number"] = "911"
     # Normalize polygon to [{lat, lng}, ...] regardless of storage format
     # (admin dashboard saves GeoJSON dicts; older rows may have plain arrays).
     out["polygon"] = get_service_area_polygon(r)

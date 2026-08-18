@@ -18,6 +18,7 @@ import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Search, Plus, Pencil, Trash2, RefreshCw, ExternalLink } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { useToast } from "@/components/ui/use-toast";
+import { FAQ_CATEGORIES } from "@/lib/faq-categories";
 import {
     AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
     AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -61,7 +62,10 @@ export default function FaqsTab() {
         const q = search.toLowerCase();
         return i.question?.toLowerCase().includes(q) || i.answer?.toLowerCase().includes(q);
     });
-    const { sorted, sort, toggle } = useTableSort(filtered);
+    // Default view matches the public FAQ screens' display order (sort_order
+    // asc), not API fetch order — editing sort_order itself stays on the
+    // dedicated /dashboard/faqs page (see the banner above), this is read-only.
+    const { sorted, sort, toggle } = useTableSort(filtered, { key: "sort_order", dir: "asc" });
 
     const openCreate = () => { setEditing(null); setForm(EMPTY); setDialogOpen(true); };
     const openEdit = (item: any) => {
@@ -134,11 +138,12 @@ export default function FaqsTab() {
             <Card><CardContent className="p-0">
                 {loading ? <div className="flex justify-center p-12"><div className="h-7 w-7 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
                 : filtered.length === 0 ? <div className="text-center py-12 text-muted-foreground text-sm">No FAQs found.</div>
-                : <Table><TableHeader><TableRow><SortableHead column="question" sort={sort} onSort={toggle}>Question</SortableHead><SortableHead column="category" sort={sort} onSort={toggle}>Category</SortableHead><SortableHead column="audience" sort={sort} onSort={toggle}>Audience</SortableHead><SortableHead column="is_active" sort={sort} onSort={toggle}>Status</SortableHead><SortableHead column="updated_at" sort={sort} onSort={toggle}>Updated</SortableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
+                : <Table><TableHeader><TableRow><SortableHead column="sort_order" sort={sort} onSort={toggle} align="right" className="w-14">Order</SortableHead><SortableHead column="question" sort={sort} onSort={toggle}>Question</SortableHead><SortableHead column="category" sort={sort} onSort={toggle}>Category</SortableHead><SortableHead column="audience" sort={sort} onSort={toggle}>Audience</SortableHead><SortableHead column="is_active" sort={sort} onSort={toggle}>Status</SortableHead><SortableHead column="updated_at" sort={sort} onSort={toggle}>Updated</SortableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
                     <TableBody>{sorted.map((item) => {
                         const aud = item.audience || "both";
                         return (
                             <TableRow key={item.id}>
+                                <TableCell className="text-right text-xs text-muted-foreground tabular-nums">{item.sort_order ?? 0}</TableCell>
                                 <TableCell className="font-medium max-w-[420px] truncate text-sm">{item.question}</TableCell>
                                 <TableCell className="text-xs text-muted-foreground">{item.category || "—"}</TableCell>
                                 <TableCell><Badge className={`text-[10px] ${(A_CFG[aud] || A_CFG.both).c}`}>{(A_CFG[aud] || A_CFG.both).l}</Badge></TableCell>
@@ -159,7 +164,7 @@ export default function FaqsTab() {
                         <div className="space-y-1.5"><Label className="text-xs">Question *</Label><Input placeholder="e.g. How do I cancel a ride?" value={form.question} onChange={(e) => setForm({ ...form, question: e.target.value })} /></div>
                         <div className="space-y-1.5"><Label className="text-xs">Answer *</Label><Textarea placeholder="Plain-text answer shown in the app." value={form.answer} onChange={(e) => setForm({ ...form, answer: e.target.value })} rows={5} /></div>
                         <div className="grid grid-cols-2 gap-3">
-                            <div className="space-y-1.5"><Label className="text-xs">Category</Label><Input placeholder="general" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} /></div>
+                            <div className="space-y-1.5"><Label className="text-xs">Category</Label><Select value={form.category} onValueChange={(v) => setForm({ ...form, category: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{FAQ_CATEGORIES.map((c) => (<SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>))}</SelectContent></Select></div>
                             <div className="space-y-1.5"><Label className="text-xs">Audience</Label><Select value={form.audience} onValueChange={(v) => setForm({ ...form, audience: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="both">Both apps</SelectItem><SelectItem value="rider">Rider only</SelectItem><SelectItem value="driver">Driver only</SelectItem></SelectContent></Select></div>
                         </div>
                         <div className="flex items-center gap-2"><Switch checked={form.is_active} onCheckedChange={(v) => setForm({ ...form, is_active: v })} /><Label className="text-xs">Active (visible in app)</Label></div>

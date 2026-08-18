@@ -78,9 +78,8 @@ describe('rideStore — triggerEmergency (P2-14 / R13)', () => {
     mockPost.mockRejectedValue(err);
 
     // Use try/catch instead of .rejects.toThrow() — the latter's internal Jest
-    // assertion wrapper throws in the wrong execution context when real timers
-    // are in play (3s retry backoff), causing a fatal uncaught exception on
-    // Node 22 in CI even though the test ultimately passes.
+    // assertion wrapper throws in the wrong execution context and can produce
+    // a fatal uncaught exception on Node 22 in CI even when the test passes.
     let caughtErr: unknown;
     try {
       await useRideStore.getState().triggerEmergency('ride-003', 43.0, -79.0);
@@ -95,5 +94,45 @@ describe('rideStore — triggerEmergency (P2-14 / R13)', () => {
 
     // rideStore must NOT show its own Alert — that's SOSButton's responsibility
     expect(mockAlert).not.toHaveBeenCalled();
-  }, 10000); // 10s timeout: triggerEmergency retries 3× with 1s+2s real-timer backoff
+  });
+
+  // --- Regression: the nested-retry multiplication (analysis finding S2) ---
+
+  it('issues exactly ONE POST per call — retry policy lives only in SOSButton', async () => {
+    // rideStore used to retry 3x internally. SOSButton retries 3x around it,
+    // so a single press could fire up to 9 real POSTs — each able to insert
+    // its own safety_incidents row and re-blast "URGENT" SMS to every
+    // emergency contact. Exactly one POST per call is the invariant.
+    const err = new Error('Network error');
+    mockPost.mockRejectedValue(err);
+
+    await expect(
+      useRideStore.getState().triggerEmergency('ride-004', 43.0, -79.0),
+    ).rejects.toThrow('Network error');
+
+    expect(mockPost).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns the response body so the caller can report real contact status', async () => {
+    // Previously `return;` — the body was discarded and SOSButton claimed
+    // "your emergency contacts have been notified" regardless of the truth.
+    mockPost.mockResolvedValue({
+      data: {
+        success: true,
+        incident_id: 'inc-005',
+        contacts_notified: 1,
+        contacts: [
+          { id: 'c1', name: 'Jane', notified: true },
+          { id: 'c2', name: 'Sam', notified: false },
+        ],
+      },
+    });
+
+    const result = await useRideStore.getState().triggerEmergency('ride-005');
+
+    expect(result.incident_id).toBe('inc-005');
+    expect(result.contacts_notified).toBe(1);
+    expect(result.contacts).toHaveLength(2);
+    expect(result.contacts[1].notified).toBe(false);
+  });
 });

@@ -127,6 +127,41 @@ class TestScheduledDispatch:
         assert created_tasks, "ride_search_timeout was never armed"
         timeout_fn.assert_called_once_with(RIDE_ID)
 
+    async def test_final_confirmation_push_failure_does_not_mislog_as_dispatch_failure(self, caplog):
+        """C28: the final rider "Your scheduled ride is starting!" push is
+        wrapped in its own try/except. If it raises, dispatch must log a
+        distinct push-failure message and must NOT fall through to the outer
+        "Failed to dispatch scheduled ride" handler -- by this point the
+        claim, driver match, and offer timeout have already succeeded."""
+        from backend.utils import scheduled_rides as sr
+
+        ride = _scheduled_row()
+
+        async def _timeout(*_a, **_k):
+            return None
+
+        with (
+            caplog.at_level("ERROR"),
+            patch.object(sr.db, "update_one", AsyncMock(return_value={**ride, "status": "searching"})),
+            patch.object(sr.db, "get_user_by_id", AsyncMock(return_value={"id": RIDER_ID})),
+            patch("routes.rides.matching.match_driver_to_ride", AsyncMock()),
+            patch("routes.rides.matching.ride_search_timeout", _timeout),
+            patch.object(sr.manager, "broadcast_ride_status", AsyncMock()),
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()),
+            patch.object(sr, "send_push_notification", AsyncMock(side_effect=RuntimeError("push down"))),
+            patch("asyncio.create_task", lambda coro: coro.close()),
+        ):
+            # Must not raise -- the push failure is caught locally.
+            await sr._dispatch_scheduled_ride(ride)
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert any(f"final confirmation push failed for ride {RIDE_ID}" in m for m in messages), (
+            f"expected distinct push-failure log, got: {messages}"
+        )
+        assert not any("Failed to dispatch scheduled ride" in m for m in messages), (
+            f"push failure must not be mislogged as a dispatch failure, got: {messages}"
+        )
+
     async def test_dispatch_aborts_when_claim_lost(self):
         """If another replica already flipped the row, update_one returns None
         and we must NOT run driver matching again."""

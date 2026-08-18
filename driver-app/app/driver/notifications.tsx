@@ -6,6 +6,7 @@ import {
     TouchableOpacity,
     FlatList,
     Alert,
+    ActivityIndicator,
 } from 'react-native';
 import SafeRefreshControl from '../../components/SafeRefreshControl';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -26,6 +27,7 @@ interface Notification {
     title: string;
     body: string;
     type: string;
+    data?: Record<string, string>;
     is_read: boolean;
     created_at: string;
 }
@@ -55,7 +57,7 @@ export default function NotificationsScreen() {
     // handles dedupe, cache, refetch on focus, and the persisted cache
     // means re-opening this screen renders the inbox instantly while a
     // background refetch keeps it fresh.
-    const { data: rawNotifData, isFetching, refetch } = useNotifications(50);
+    const { data: rawNotifData, isFetching, isPending, isError, refetch } = useNotifications(50);
     const data = rawNotifData as { notifications?: Notification[]; unread_count?: number } | undefined;
     const notifications: Notification[] = data?.notifications ?? [];
     const unreadCount: number = data?.unread_count ?? 0;
@@ -70,6 +72,9 @@ export default function NotificationsScreen() {
         general: { name: 'notifications', color: colors.textDim },
         system: { name: 'settings', color: colors.textDim },
         safety: { name: 'shield-checkmark', color: colors.danger },
+        lost_and_found: { name: 'bag-handle', color: colors.orange },
+        lost_and_found_message: { name: 'bag-handle', color: colors.orange },
+        chat_message: { name: 'chatbubble', color: colors.primary },
     };
 
     const markAsRead = (id: string) => {
@@ -94,12 +99,15 @@ export default function NotificationsScreen() {
 
     const handleNotificationPress = (item: Notification) => {
         markAsRead(item.id);
+        const caseId = item.data?.case_id;
         if (item.type === 'document_expiry') router.push('/driver/documents' as any);
         else if (item.type === 'payout_processed') router.push('/driver/activity' as any);
         else if (item.type === 'ride_offer') router.push('/driver/' as any);
         else if (item.type === 'quest_earned') router.push('/driver/quests' as any);
-        // Unknown type: notification is marked read above; no navigation needed.
-        // Explicit no-op prevents accidental fall-through if new types are added later.
+        else if (item.type === 'lost_and_found' || item.type === 'lost_and_found_message') {
+            if (caseId) router.push({ pathname: '/driver/lost-and-found-chat', params: { caseId } } as any);
+            else router.push('/driver/lost-and-found' as any);
+        }
     };
 
     const renderNotification = ({ item }: { item: Notification }) => {
@@ -160,11 +168,30 @@ export default function NotificationsScreen() {
                     <SafeRefreshControl refreshing={isFetching} onRefresh={onRefresh} tintColor={colors.primary} />
                 }
                 ListEmptyComponent={
-                    <View style={styles.emptyState}>
-                        <Ionicons name="notifications-off-outline" size={56} color={colors.surfaceLight} />
-                        <Text style={styles.emptyTitle}>{t('notifications.noNotifications')}</Text>
-                        <Text style={styles.emptySub}>{t('notifications.allCaughtUp')}</Text>
-                    </View>
+                    // An empty list is NOT automatically "all caught up" — a failed
+                    // fetch also yields zero rows. Rendering the same cheerful empty
+                    // state for both is what made a 401'd inbox look like an inbox
+                    // with nothing in it, while the bell badge still read "6 unread".
+                    isPending ? (
+                        <View style={styles.emptyState}>
+                            <ActivityIndicator size="large" color={colors.primary} />
+                        </View>
+                    ) : isError ? (
+                        <View style={styles.emptyState}>
+                            <Ionicons name="cloud-offline-outline" size={56} color={colors.danger} />
+                            <Text style={styles.emptyTitle}>{t('notifications.loadFailed')}</Text>
+                            <Text style={styles.emptySub}>{t('notifications.loadFailedBody')}</Text>
+                            <TouchableOpacity style={styles.retryBtn} onPress={onRefresh}>
+                                <Text style={styles.retryText}>{t('notifications.retry')}</Text>
+                            </TouchableOpacity>
+                        </View>
+                    ) : (
+                        <View style={styles.emptyState}>
+                            <Ionicons name="notifications-off-outline" size={56} color={colors.surfaceLight} />
+                            <Text style={styles.emptyTitle}>{t('notifications.noNotifications')}</Text>
+                            <Text style={styles.emptySub}>{t('notifications.allCaughtUp')}</Text>
+                        </View>
+                    )
                 }
             />
         </View>
@@ -241,6 +268,14 @@ function createStyles(colors: ThemeColors) {
         },
         emptyState: { alignItems: 'center', paddingVertical: 60, gap: 8 },
         emptyTitle: { color: colors.textDim, fontSize: 18, fontWeight: '600' },
-        emptySub: { color: colors.textSecondary, fontSize: 13 },
+        emptySub: { color: colors.textSecondary, fontSize: 13, textAlign: 'center' },
+        retryBtn: {
+            marginTop: 8,
+            paddingHorizontal: 20,
+            paddingVertical: 10,
+            borderRadius: 20,
+            backgroundColor: colors.primary,
+        },
+        retryText: { color: '#fff', fontSize: 14, fontWeight: '600' },
     });
 }

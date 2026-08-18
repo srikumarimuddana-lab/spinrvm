@@ -1,0 +1,86 @@
+# Spinr Legal Documentation — Publication Checklist
+
+> **What this is.** Every draft under `docs/legal/` lists its own
+> pre-publication conditions in its file header — this checklist pulls them
+> into one tracked place so publication happens deliberately, once, instead
+> of someone re-deriving the conditions from twenty different file headers.
+> Recommended owner: Legal + Engineering jointly. Update this table as items
+> close — don't let it go stale the way `.claude/context/sprint-current.md`
+> did (see the startup-hook staleness warning this repo already surfaces).
+
+---
+
+## How to use this checklist
+
+A document in `docs/legal/` moves from **Draft** → **Ready for counsel
+review** → **Published** only when every row in its section below is
+checked. Do not publish a document with an open row — a false factual claim
+in a published legal document is worse than an honest delay.
+
+## Documents and their gating conditions
+
+### Rider & driver-facing
+
+| Document | Gating conditions | Status |
+|---|---|---|
+| `terms-of-service.md` | ☒ Counsel review — **NOT done; published without it** (see note below) · ☑ Audience-split routing built (Phase 1, `legal.tsx` reads the `/legal-documents` endpoint) · ☑ **Published live to `legal_documents` (rider/tos + driver/tos rows, version 1, 2026-08-17)** | **Published (with open gap — see note)** |
+| `privacy-policy.md` | ☒ Counsel review — **NOT done; published without it** (see note below) · ☑ Data residency: Supabase region confirmed `ca-central-1` via live API + Fly env confirmed (2026-08-17) · ☐ still open: signed Supabase DPA, Railway env unverified from repo (`reports/legal/supabase-region-attestation-checklist.md`) · ☐ Gemini + LogRocket disclosed (blocks on `subprocessor-list.md` below) · ☐ GPS retention figure reconciled in `docs/data-classification.md` (2yr vs. 3yr contradiction) · ☐ **30-day deletion enforcement job NOT built (DV-8) — policy text promises a 30-day removal the backend does not yet perform** · ☐ **`accessibility@spinr.ca` NOT provisioned as of 2026-08-17 — policy text references this inbox as live; no email/domain admin tool available to this session, requires a human with Zoho Mail/Workspace admin access** · ☑ **Published live to `legal_documents` (rider/privacy + driver/privacy rows, version 1, 2026-08-17)** | **Published (with open gaps — see note)** |
+| `community-guidelines.md` | ☐ Counsel review · ☐ Consistency check against `non-discrimination-policy.md` and `driver-deactivation-appeals-policy.md` | Draft |
+| `non-discrimination-policy.md` | ☐ Counsel review · ☐ Protected-grounds list verified against current SK Human Rights Code text | Draft |
+| `driver-deactivation-appeals-policy.md` | ☐ Counsel review · ☐ Real SLA timeframes from safety team (bracketed placeholders filled) · ☐ In-app appeal channel built | Draft |
+| `accessibility-statement.md` | ☐ Counsel review · ☐ `accessibility@spinr.ca` live and monitored · ☐ "What we've built so far" verified against `docs/ACCESSIBILITY.md`, not aspirational | Draft |
+| `insurance-coverage-periods.md` | ☐ Counsel review · ☐ Consistency check against ToS §6/§13 | Draft |
+| `cancellation-fee-policy.md` | ☐ Counsel review · ☐ Dollar amounts/time windows pulled from actual `services/fare_service.py` config | Draft |
+| `promotions-referral-terms.md` | ☐ Counsel review · ☐ Terms cross-checked against `backend/utils/referral_terms.py` and migration 176 | Draft |
+| `background-check-consent.md` | ☐ Counsel review · ☐ Real CRC/VSC vendor name filled in · ☐ Consent-capture screen built in driver onboarding | Draft |
+
+### Corporate / B2B
+
+| Document | Gating conditions | Status |
+|---|---|---|
+| `corporate-master-services-agreement.md` | ☐ Counsel review · ☐ Every bracketed commercial term resolved (notice periods, termination-for-convenience, arbitration vs. litigation, insurance limit) · ☐ Executed together with the DPA below | Draft |
+| `corporate-data-processing-addendum.md` | ☐ Counsel review · ☐ Data residency attestation closed (same gate as `privacy-policy.md`) · ☐ Section 4.2 security measures filled in with real detail | Draft |
+
+### Driver contract
+
+| Document | Gating conditions | Status |
+|---|---|---|
+| `independent-contractor-agreement.md` | ☐ Counsel review, specifically against current CRA worker-classification guidance · ☐ Every bracketed field resolved · ☐ E-signature capture flow built at onboarding · ☐ Arbitration-clause decision made deliberately, not defaulted | Draft |
+
+### Privacy & data infrastructure
+
+| Document | Gating conditions | Status |
+|---|---|---|
+| `subprocessor-list.md` | ☐ Counsel review · ☐ LogRocket processing region confirmed · ☐ Published together with the Gemini/LogRocket disclosure in `privacy-policy.md` §3 | Draft |
+| `cookie-policy.md` | ☐ Counsel review · ☐ Cookie-consent banner built on the website, or the "Your Choices" section rewritten to match actual (browser-only) control | Draft |
+| `data-retention-schedule.md` | ☐ **Do not publish before `privacy-policy.md`'s gating conditions close** — this table repeats the same promises in a more citable form | Draft |
+| `casl-marketing-consent-disclosure.md` | ☐ Counsel review · ☐ Real mailing address/contact filled in · ☐ Implied-consent window confirmed against current CASL rule · ☐ Mechanics matched to `backend/services/marketing_consent.py` | Draft |
+| `breach-notification-letter-template.md` | ☐ Not for public publication — internal template only. ☐ Reviewed by counsel once, kept current with `docs/runbooks/data-breach.md` | Internal template |
+
+### Website-specific
+
+| Document | Gating conditions | Status |
+|---|---|---|
+| `website-terms-of-use.md` | ☐ Counsel review · ☐ Confirm which repo/host actually serves spinr.ca and mirror there | Draft |
+| `trademark-copyright-notice.md` | ☐ Counsel review · ☐ Confirm actual CIPO trademark registration status before using ® vs. ™ | Draft |
+| `careers-privacy-notice.md` | ☐ Only needed once a careers/application page exists · ☐ Real ATS/vendor name filled in or clause removed | Draft |
+
+## Process notes
+
+1. **One document publishing does not mean related documents are ready.**
+   `community-guidelines.md`, `non-discrimination-policy.md`, and
+   `driver-deactivation-appeals-policy.md` describe the same account-standing
+   process from different angles — publish them together, not staggered.
+2. **`terms-of-service.md` and `privacy-policy.md` were published live on
+   2026-08-17** (audience-split rider/driver rows inserted into
+   `legal_documents`, version 1) at the explicit direction of the product
+   owner, who was told beforehand — and accepted — that this ships **without
+   counsel review** and that `privacy-policy.md` specifically still promises
+   two things the backend does not yet do: automated 30-day deletion
+   enforcement (DV-8) and a live `accessibility@spinr.ca` inbox. This is a
+   known, accepted gap, not an oversight — closing it (get counsel review,
+   build DV-8, provision the inbox) is tracked as follow-up work, not a
+   blocker that was missed.
+3. When a gating condition closes, update this table in the same PR that
+   closes it, so this checklist never claims a document is more ready than
+   it is.

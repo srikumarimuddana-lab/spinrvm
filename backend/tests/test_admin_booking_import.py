@@ -380,7 +380,8 @@ def test_commit_offset_payout_cancels_imported_earnings(test_client, super_admin
         _post(test_client, "/api/admin/bookings/import/commit")
     ride = store["rides"][0]
     payable = ride["base_fare"] + ride["distance_fare"] + ride["time_fare"] + ride["tip_amount"]
-    assert round(payable, 2) == round(store["payouts"][0]["amount"], 2)
+    # str(Decimal), not float -- payouts.amount is NUMERIC as of migration 331.
+    assert round(payable, 2) == round(float(store["payouts"][0]["amount"]), 2)
 
 
 def test_commit_refuses_dirty_plan_with_200_and_full_report(test_client, super_admin_override):

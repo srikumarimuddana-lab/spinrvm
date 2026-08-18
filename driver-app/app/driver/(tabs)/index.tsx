@@ -36,6 +36,7 @@ import { showToast } from '../../../hooks/useToast';
 import api, { isAppCheckTokenReady } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import type { SOSTriggerResult } from '@shared/types/safety';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from '@shared/api/queryClient';
@@ -705,11 +706,24 @@ function DriverDashboard() {
                   setDirectionsFailed(false);
                   if (result.duration != null) setRouteEtaMinutes(Math.round(result.duration));
                   if (result.distance != null) setRouteDistanceKm(Math.round(result.distance * 10) / 10);
+                  // C20 (ACTION_ITEMS.md): react-hooks/refs flags these as
+                  // reading/writing ref.current "during render", but this is
+                  // the MapViewDirections onReady callback -- verified against
+                  // the library source (node_modules/react-native-maps-directions/
+                  // src/MapViewDirections.js): it's invoked from a setState
+                  // callback inside a Promise.all(...).then(...) chain kicked
+                  // off in componentDidMount/componentDidUpdate, i.e. strictly
+                  // post-commit, never during React's render pass -- the same
+                  // async-completion timing as the untouched onError handler
+                  // just below (same promise chain's .catch), which the linter
+                  // doesn't flag.
+                  // eslint-disable-next-line react-hooks/refs
                   lastDirectionsFetchRef.current = {
                     lat: origin.latitude,
                     lng: origin.longitude,
                     ts: Date.now(),
                   };
+                  // eslint-disable-next-line react-hooks/refs -- see justification above
                   if (directionsKey === 0 && mapRef.current && result.coordinates?.length > 1) {
                     mapRef.current.fitToCoordinates(result.coordinates, {
                       edgePadding: { top: 100, right: 60, bottom: 300, left: 60 },
@@ -887,7 +901,7 @@ function DriverDashboard() {
           <View style={{ position: 'absolute', top: insets.top + 56, right: 16, zIndex: 50 }}>
             <SOSButton
               rideId={activeRide.ride.id}
-              onTrigger={async (rideId, lat, lng) => {
+              onTrigger={async (rideId, lat, lng, idempotencyKey) => {
                 // Bug fix (B16): rethrow instead of swallowing. Previously
                 // this try/catch+console.error meant SOSButton's own
                 // retry/FAILED state could never activate for drivers even
@@ -895,7 +909,19 @@ function DriverDashboard() {
                 // like silent success after one attempt. Pure improvement,
                 // no plausible regression on the happy path: the only
                 // behavior change flag-off drivers see.
-                await api.post(`/rides/${rideId}/emergency`, { latitude: lat, longitude: lng });
+                //
+                // Forwards idempotencyKey and RETURNS the response body. Both
+                // matter and were missed when the rider side was fixed:
+                // without the key, SOSButton's 3 retries can still create 3
+                // incidents and 3x "URGENT" SMS on this (default, live) driver
+                // path; without the return, deriveContactOutcome sees `void`
+                // and every successful driver SOS would show the "we could not
+                // confirm your contacts were reached" copy.
+                const res = await api.post<SOSTriggerResult>(
+                  `/rides/${rideId}/emergency`,
+                  { latitude: lat, longitude: lng, idempotency_key: idempotencyKey },
+                );
+                return res.data;
               }}
               t={t}
             />

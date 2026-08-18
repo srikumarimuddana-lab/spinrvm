@@ -1,0 +1,59 @@
+// Grafana Alloy pipeline for ADR-010's metrics-aggregation MVP (Option B,
+// standalone Fly app). See metrics-agent/README.md for the full design.
+//
+// Pipeline: discovery.file (Fly per-machine targets, refreshed by
+// discover-targets.sh every 30s) -> prometheus.scrape (backend's existing
+// /metrics endpoint, bearer auth) -> prometheus.remote_write (Grafana
+// Cloud).
+//
+// No changes to backend/utils/metrics.py or /metrics required — this
+// consumes the exact Prometheus text-exposition format server.py already
+// emits.
+
+discovery.file "backend_targets" {
+  files = ["/etc/alloy/targets.json"]
+  // Matches discover-targets.sh's refresh cadence so a machine that scales
+  // down doesn't get scraped again before the next file refresh.
+  refresh_interval = "30s"
+}
+
+prometheus.scrape "backend" {
+  targets    = discovery.file.backend_targets.targets
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+
+  // Matches ADR-010 §5 step 2 (15s scrape interval).
+  scrape_interval = "15s"
+  scrape_timeout  = "10s"
+
+  // Backend's own convention: bearer token from METRICS_AUTH_TOKEN,
+  // "Authorization: Bearer <token>" (backend/server.py's _metrics_token()).
+  // Sourced from a Fly secret on THIS app (metrics-agent), which must be
+  // set to the same value as the backend app's METRICS_AUTH_TOKEN secret —
+  // they are two independent Fly secrets that must be kept in sync by
+  // whoever rotates either one.
+  bearer_token = env("METRICS_AUTH_TOKEN")
+
+  // metric_path defaults to "/metrics", matching backend/server.py's route.
+
+  // Static label so every series is unambiguously tagged per ADR-010 §4 —
+  // required so a future Railway agent's loop-driven metrics are never
+  // silently summed with this one, and so split-brain DNS (simultaneous
+  // nonzero traffic on both providers) becomes visible instead of blended.
+  extra_labels = {
+    provider = "fly",
+  }
+}
+
+prometheus.remote_write "grafana_cloud" {
+  endpoint {
+    // Placeholder — set via the GRAFANA_REMOTE_WRITE_URL Fly secret. Not a
+    // real endpoint; see README.md "What's blocked" section for the
+    // `fly secrets set` command a human runs post-account-creation.
+    url = env("GRAFANA_REMOTE_WRITE_URL")
+
+    basic_auth {
+      username = env("GRAFANA_REMOTE_WRITE_USERNAME")
+      password = env("GRAFANA_REMOTE_WRITE_API_KEY")
+    }
+  }
+}

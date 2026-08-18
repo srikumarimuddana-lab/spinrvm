@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import {
     View,
     Text,
@@ -13,58 +13,34 @@ import { Ionicons } from '@expo/vector-icons';
 import { SpinrConfig } from '@shared/config/spinr.config';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { isValidLegalDocType, legalDocFallbackText, legalDocTitle } from '@shared/config/legalDocs';
 
-const STATIC_PRIVACY_POLICY = `Spinr Technologies Inc. ("Spinr", "we", "us") is committed to protecting your privacy.
-
-Information We Collect
-We collect information you provide when creating an account (name, email, phone number), location data while the app is in use, device identifiers, and usage information to improve our services.
-
-How We Use Your Information
-Your information is used to facilitate ridesharing services, process payments, communicate with you, ensure safety, comply with legal obligations, and improve the platform.
-
-Information Sharing
-We share information with riders as necessary to complete trips, with payment processors for payouts, and with authorities when required by law. We do not sell your personal information.
-
-Data Retention
-We retain your information for as long as your account is active and as required by law. You may request deletion of your account and associated data at any time.
-
-Your Rights
-You have the right to access, correct, or delete your personal data. Contact us at privacy@spinr.ca for any privacy-related requests.
-
-Contact Us
-For privacy inquiries, contact: privacy@spinr.ca`;
-
-const STATIC_TERMS_OF_SERVICE = `By using the Spinr driver application, you agree to these Terms of Service.
-
-Independent Contractor Status
-You are an independent contractor, not an employee of Spinr. You are responsible for your own taxes, insurance, and compliance with applicable laws.
-
-Eligibility
-You must be at least 21 years old, hold a valid driver's licence, maintain valid vehicle insurance, and have a vehicle that meets Spinr's requirements.
-
-Conduct
-You agree to treat riders with respect, maintain a safe and clean vehicle, follow all traffic laws, and complete trips as accepted. Discrimination or harassment of any kind is grounds for immediate deactivation.
-
-Earnings and Payouts
-Earnings are calculated based on completed trips minus the platform service fee. Payouts are processed via Stripe and transferred to your bank account within 2–3 business days.
-
-Deactivation
-Spinr may deactivate your account for violations of these Terms, low ratings, fraud, or safety incidents. You may appeal deactivation decisions through our support process.
-
-Limitation of Liability
-Spinr's liability to you is limited to the amounts paid to you in the 30 days prior to the claim. We are not liable for indirect, incidental, or consequential damages.
-
-Governing Law
-These Terms are governed by the laws of the Province of Ontario, Canada.
-
-Contact Us
-For questions: support@spinr.ca`;
+// Previously this fallback held hardcoded ToS/Privacy Policy text that was
+// factually wrong for Spinr's actual business (Ontario governing law, a
+// 21+ age minimum, and a "platform service fee" deducted from earnings —
+// contradicting the real Saskatchewan-first, 0%-commission model). Showing
+// wrong legal text is worse than showing an honest "not available yet"
+// message, so this is now a neutral placeholder, matching what
+// rider-app/app/legal.tsx already shows when no content is published.
+// Do not restore fabricated legal text here — see docs/legal/terms-of-service.md
+// and docs/legal/privacy-policy.md for the actual drafts, which are pending
+// counsel review before publication (see docs/legal/legal-text-publication-checklist.md).
+const FALLBACK_PRIVACY_POLICY = 'No Privacy Policy has been added yet.';
+const FALLBACK_TERMS_OF_SERVICE = 'No Terms of Service have been added yet.';
 
 export default function LegalScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const params = useLocalSearchParams();
-    const type = params.type as 'tos' | 'privacy' | undefined;
+    const rawType = params.type as string | undefined;
+    const type = rawType as 'tos' | 'privacy' | undefined;
+    // Any doc type beyond tos/privacy/undefined (e.g. reached from
+    // policies.tsx) renders as a single document instead of the combined
+    // Privacy+ToS scroll view below — see shared/config/legalDocs.ts.
+    const singleDocType =
+        rawType && rawType !== 'tos' && rawType !== 'privacy' && isValidLegalDocType(rawType)
+            ? rawType
+            : undefined;
     const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
     const scrollRef = useRef<ScrollView>(null);
@@ -73,33 +49,62 @@ export default function LegalScreen() {
 
     const [privacyText, setPrivacyText] = useState('');
     const [tosText, setTosText] = useState('');
+    const [singleDocContent, setSingleDocContent] = useState('');
     const [loading, setLoading] = useState(true);
 
     // Declared before the `useEffect` below (react-hooks/immutability /
     // React Compiler flags referencing a function before its source-order
     // declaration) — same expression, same effect timing, no behavior change.
-    const fetchLegalContent = async () => {
+    //
+    // Reads the per-audience /legal-documents endpoint instead of the legacy
+    // shared /settings/legal blob, so drivers see driver-audience content
+    // (Terms of Service Part A+B) once it's published, distinct from what
+    // riders see. The endpoint itself falls back to the legacy shared blob
+    // server-side when no per-audience row exists yet, so this is a
+    // non-breaking switch — same displayed content today, correct content
+    // once the admin dashboard publishes per-audience rows.
+    const fetchLegalContent = useCallback(async () => {
         try {
+            if (singleDocType) {
+                const res = await fetch(
+                    `${SpinrConfig.backendUrl}/legal-documents?audience=driver&type=${singleDocType}`
+                );
+                const data = await res.json();
+                setSingleDocContent(data.content || legalDocFallbackText(singleDocType));
+                return;
+            }
             // Public endpoint — no auth, no /api/v1 prefix (mounted at root).
-            const response = await fetch(`${SpinrConfig.backendUrl}/settings/legal`);
-            const data = await response.json();
-            setPrivacyText(data.privacy_policy_text || STATIC_PRIVACY_POLICY);
-            setTosText(data.terms_of_service_text || STATIC_TERMS_OF_SERVICE);
+            const [privacyRes, tosRes] = await Promise.all([
+                fetch(`${SpinrConfig.backendUrl}/legal-documents?audience=driver&type=privacy`),
+                fetch(`${SpinrConfig.backendUrl}/legal-documents?audience=driver&type=tos`),
+            ]);
+            const [privacyData, tosData] = await Promise.all([privacyRes.json(), tosRes.json()]);
+            setPrivacyText(privacyData.content || FALLBACK_PRIVACY_POLICY);
+            setTosText(tosData.content || FALLBACK_TERMS_OF_SERVICE);
         } catch {
-            setPrivacyText(STATIC_PRIVACY_POLICY);
-            setTosText(STATIC_TERMS_OF_SERVICE);
+            if (singleDocType) {
+                setSingleDocContent(legalDocFallbackText(singleDocType));
+            } else {
+                setPrivacyText(FALLBACK_PRIVACY_POLICY);
+                setTosText(FALLBACK_TERMS_OF_SERVICE);
+            }
         } finally {
             setLoading(false);
         }
-    };
+    }, [singleDocType]);
 
     useEffect(() => {
-        // Mount-only fetch; fetchLegalContent sets state after its own await
-        // (or in its catch fallback), not synchronously at the top of the
-        // effect. Empty deps, runs once.
+        // Re-fetches if the route param switches between single-doc mode
+        // and the combined view (e.g. navigating from one policies.tsx link
+        // to another without unmounting). fetchLegalContent sets state
+        // after its own await (or in its catch fallback), not synchronously
+        // at the top of the effect. fetchLegalContent is now a useCallback
+        // keyed on the same [singleDocType], so including it here doesn't
+        // change when this effect re-runs — it closes the exhaustive-deps
+        // finding honestly instead of suppressing it.
         // eslint-disable-next-line react-hooks/set-state-in-effect
         fetchLegalContent();
-    }, []);
+    }, [singleDocType, fetchLegalContent]);
 
     useEffect(() => {
         if (!loading && type && scrollRef.current) {
@@ -121,7 +126,7 @@ export default function LegalScreen() {
                 <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
                     <Ionicons name="arrow-back" size={24} color={colors.text} />
                 </TouchableOpacity>
-                <Text style={styles.headerTitle}>Legal</Text>
+                <Text style={styles.headerTitle}>{singleDocType ? legalDocTitle(singleDocType) : 'Legal'}</Text>
                 <View style={styles.headerRight} />
             </View>
 
@@ -129,6 +134,14 @@ export default function LegalScreen() {
                 <View style={styles.loadingContainer}>
                     <ActivityIndicator size="large" color={colors.primary} />
                 </View>
+            ) : singleDocType ? (
+                <ScrollView
+                    style={styles.container}
+                    contentContainerStyle={styles.contentContainer}
+                    showsVerticalScrollIndicator={false}
+                >
+                    <Text style={styles.textContent}>{singleDocContent}</Text>
+                </ScrollView>
             ) : (
                 <ScrollView
                     ref={scrollRef}

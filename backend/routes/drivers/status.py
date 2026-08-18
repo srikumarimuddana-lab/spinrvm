@@ -148,6 +148,27 @@ async def update_driver_status(
     if driver.get("user_id") != current_user["id"]:
         raise HTTPException(status_code=403, detail="Not authorized")
 
+    # CR-4104 / A34 dual-run cutover guard: block go-online for a
+    # legacy-imported driver an operator has confirmed is still active on
+    # the old app (drivers.dual_run_hold, migration 327). Scoped to
+    # legacy_import_metadata-bearing drivers only (per the CR's own risk
+    # mitigation) so a natively-onboarded driver — the vast majority of the
+    # fleet — can never be blocked by this check, even if the boolean were
+    # ever mistakenly set. dual_run_hold defaults to False everywhere and
+    # nothing in this codebase sets it automatically; this is a no-op until
+    # an operator flips it for a specific driver via the admin dashboard/DB.
+    # Blocking here (rather than only at dispatch-claim time) keeps a held
+    # driver out of the dispatch pool entirely, since is_available can only
+    # ever become True through this endpoint.
+    if is_online and driver.get("dual_run_hold") and driver.get("legacy_import_metadata"):
+        raise SpinrException(
+            message="Your account is on hold while active on the previous app. Please contact support.",
+            error_code=ErrorCode.DRIVER_NOT_AVAILABLE,
+            status_code=403,
+            message_key=ErrorKeys.DRIVER_DUAL_RUN_HOLD,
+            action_hint="Contact support",
+        )
+
     # Ban check: prevent banned drivers from going online
     if is_online and driver.get("status") == "banned":
         raise AccountDisabledException(
@@ -654,6 +675,17 @@ async def update_driver_status(
     # the round-trip by gating on status_flipped.
     if status_flipped:
         await _deps.record_period_transition(driver_id, 1 if is_online else 0)
+
+    # Dual-run cutover monitoring (A34/P3.1): on an actual offline→online
+    # flip, emit the labeled go-online counter and — once per legacy-imported
+    # driver — the first-activation audit row. Flag-gated in the helper
+    # (app_settings.dual_run_monitoring_enabled); never raises.
+    if status_flipped and is_online:
+        try:
+            from ...utils.dual_run_monitor import record_go_online_flip
+        except ImportError:
+            from utils.dual_run_monitor import record_go_online_flip
+        await record_go_online_flip(driver, current_user)
 
     # Presence: Go Online is the strongest possible liveness signal — the
     # driver is actively using the app. Refresh the TTL now so dispatch can

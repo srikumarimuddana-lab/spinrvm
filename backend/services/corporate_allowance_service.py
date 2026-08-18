@@ -155,6 +155,46 @@ async def apply_ride_debit(
     )
 
 
+async def apply_late_tip_debit(
+    *,
+    wallet_id: str,
+    allowance_id: str,
+    member_id: str,
+    amount: Union[Decimal, float],
+    actor_user_id: Optional[str] = None,
+    notes: Optional[str] = None,
+    floor: Optional[Union[Decimal, float]] = None,
+    ride_id: str,
+) -> Dict[str, Any]:
+    """Charge the allowance-covered portion of a tip added AFTER settlement.
+
+    Same master/used math as apply_ride_debit (master -amount, used
+    +amount) — it IS a ride debit, just applied after the fact — but uses
+    ``type_="late_tip_debit"``, a distinct dedup key (migration 319) from
+    the original settlement's ``"ride_debit"`` for the same ride_id.
+    Reusing ``"ride_debit"`` here would silently deduplicate against the
+    original settlement row and apply zero additional money movement.
+
+    ``ride_id`` is required (not optional, unlike apply_ride_debit) — a
+    late-tip debit only ever happens in the context of a specific already-
+    settled ride, and the dedup protection this function exists for
+    depends on it always being passed.
+    """
+    if amount <= 0:
+        raise ValueError("late tip debit amount must be positive")
+    return await _apply(
+        wallet_id=wallet_id,
+        allowance_id=allowance_id,
+        member_id=member_id,
+        type_="late_tip_debit",
+        amount=amount,
+        actor_user_id=actor_user_id,
+        notes=notes,
+        floor=floor,
+        ride_id=ride_id,
+    )
+
+
 async def apply_ride_debit_reversal(
     *,
     wallet_id: str,

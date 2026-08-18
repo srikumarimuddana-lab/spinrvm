@@ -93,6 +93,12 @@ class ChargeOutcome:
     decline_code: Optional[str] = None
     error_message: Optional[str] = None
     raw: Dict[str, Any] = field(default_factory=dict)
+    # Whether THIS authorization can later have its amount raised via
+    # PaymentIntent.increment_authorization (see ``increment_authorization``).
+    # Set by ``authorize_ride`` from the card's own capability flag — it varies
+    # per card brand and issuer, so it is read back from Stripe rather than
+    # assumed. False means a post-trip tip must be a separate charge.
+    incremental_authorization_supported: bool = False
 
 
 async def charge_ride(
@@ -313,6 +319,7 @@ async def charge_ancillary_fee(
     payment_method_id: Optional[str],
     stripe_customer_id: Optional[str],
     fee_type: str,
+    extra_metadata: Optional[Dict[str, str]] = None,
 ) -> ChargeOutcome:
     """Charge a rider's saved card for a fee outside normal trip settlement
     (e.g. a rider-initiated cancellation fee).
@@ -381,6 +388,13 @@ async def charge_ancillary_fee(
             "rider_id": rider_id,
             "fee_amount": str(amount_dec),
             "source": fee_type,
+            # extra_metadata lets a caller that charges for MORE than one ride
+            # (a batched tip charge) name every ride it covers. Without it the
+            # Stripe dashboard shows a single anchor ride_id for a charge
+            # spanning several, and a rider asking "what is this?" cannot be
+            # answered from the charge alone. Stripe caps metadata values at
+            # 500 chars, so callers must truncate.
+            **(extra_metadata or {}),
         },
     }
 
@@ -458,6 +472,44 @@ async def _resolve_stripe_secret(ride_id: str) -> Optional[str]:
     return secret
 
 
+def _reads_incremental_support(intent: Any) -> bool:
+    """Whether Stripe granted incremental-authorization support on this hold.
+
+    Support is per-card, not per-account: Visa/Mastercard grant it broadly, some
+    Amex issuers refuse, and Discover restricts by merchant category. So the
+    answer is read off the charge Stripe actually created rather than inferred
+    from our account settings — a wrong guess here would either strand a tip or
+    fire a doomed increment call.
+
+    Returns False on any missing/odd shape. False is the safe direction: it only
+    costs one extra Stripe fixed fee (the tip becomes its own charge), whereas a
+    false True would fail the increment at settlement.
+    """
+    try:
+        charge = getattr(intent, "latest_charge", None)
+        if charge is None or isinstance(charge, str):
+            # Not expanded (or expand silently dropped) — cannot tell, assume no.
+            return False
+        details = getattr(charge, "payment_method_details", None) or {}
+        card = (details.get("card") if isinstance(details, dict) else getattr(details, "card", None)) or {}
+        # On a CARD-NOT-PRESENT charge this is a nested object,
+        # card.incremental_authorization.status == "available" | "unavailable".
+        # The flat boolean `incremental_authorization_supported` belongs to
+        # payment_method_details.card_present (Terminal only) and is simply
+        # absent here — reading it would return None forever and silently pin
+        # every ride to the two-charge fallback.
+        inc = (
+            card.get("incremental_authorization")
+            if isinstance(card, dict)
+            else getattr(card, "incremental_authorization", None)
+        ) or {}
+        status = inc.get("status") if isinstance(inc, dict) else getattr(inc, "status", None)
+        return status == "available"
+    except Exception:  # pragma: no cover — never let a probe break authorization
+        logger.debug("could not read incremental_authorization_supported", exc_info=True)
+        return False
+
+
 async def authorize_ride(
     *,
     ride: Dict[str, Any],
@@ -520,6 +572,22 @@ async def authorize_ride(
         "capture_method": "manual",
         "confirm": True,
         "off_session": off_session,
+        # Ask Stripe to keep this authorization incrementable so a post-trip tip
+        # can be added to THIS hold rather than charged separately (one Stripe
+        # fixed fee instead of two). Stripe reports back, per card, whether it
+        # was actually granted — read by _reads_incremental_support below.
+        #
+        # NESTING AND SPELLING BOTH MATTER. This is
+        # payment_method_options.card.request_incremental_authorization, a
+        # Literal["if_available","never"]. There is a similarly-named
+        # payment_method_options.card_present.request_incremental_authorization_
+        # SUPPORT (a bool), but that one is Terminal/in-person only. This is a
+        # card-not-present charge, so the card variant is the correct one; the
+        # card_present spelling at top level is not a valid create param at all
+        # and would risk a 400 on EVERY booking authorization.
+        "payment_method_options": {"card": {"request_incremental_authorization": "if_available"}},
+        # Needed to read the granted capability off the charge below.
+        "expand": ["latest_charge"],
         # Disable redirect-based payment methods (see charge_ride above):
         # a confirmed PaymentIntent with redirect methods enabled requires a
         # `return_url`, which a server-side hold can't supply — Stripe was
@@ -569,6 +637,7 @@ async def authorize_ride(
             status="authorized",
             payment_intent_id=pi_id,
             charged_amount=to_decimal(amount),
+            incremental_authorization_supported=_reads_incremental_support(intent),
         )
     if status in ("requires_action", "requires_source_action"):
         return ChargeOutcome(status="requires_action", payment_intent_id=pi_id, client_secret=client_secret)
@@ -700,6 +769,96 @@ async def verify_authorization(
     )
 
 
+async def increment_authorization(
+    *,
+    ride_id: str,
+    payment_intent_id: str,
+    new_total: Union[Decimal, int],
+) -> ChargeOutcome:
+    """Raise an existing hold to ``new_total`` so a tip rides on the same charge.
+
+    This is the whole reason the booking hold no longer carries a tip buffer. We
+    hold exactly the quoted fare, and if the rider tips we ask the issuer for the
+    difference on the SAME PaymentIntent, then capture once — one Stripe fixed
+    fee, one line on the rider's statement, and no money reserved "just in case".
+
+    Only works BEFORE capture. Stripe: "After it's captured, a PaymentIntent can
+    no longer be incremented." A tip that arrives after settlement must be a
+    separate charge — callers must not reach for this to fix that case.
+
+    Eligibility was recorded at authorization time (``rides.auth_incrementable``)
+    from the card's own capability flag, so callers should gate on that rather
+    than calling this speculatively. It is still safe if they don't: an ineligible
+    PI comes back "failed", not an exception.
+
+    ``ChargeOutcome.status``:
+        "authorized"    hold raised; ``charged_amount`` is the new total
+        "declined"      issuer refused the extra amount (e.g. the rider's
+                        available balance moved since booking). The original
+                        hold survives untouched — capture it and charge the tip
+                        separately.
+        "failed"        not incrementable / already captured / Stripe-ops error
+        "unconfigured"  Stripe not installed/configured (dev/test)
+
+    Never raises — callers switch on ``outcome.status``.
+    """
+    if not payment_intent_id:
+        return ChargeOutcome(status="failed", error_message="No authorization PaymentIntent to increment")
+
+    secret = await _resolve_stripe_secret(ride_id)
+    if secret is None:
+        return ChargeOutcome(status="unconfigured", error_message="Payment processing is not configured")
+
+    amount_cents = dollars_to_cents(new_total)
+    try:
+        intent = await asyncio.to_thread(
+            lambda: stripe.PaymentIntent.increment_authorization(
+                payment_intent_id,
+                amount=amount_cents,
+                api_key=secret,
+                # Keyed on the target total: two replicas racing to add the same
+                # tip dedupe, but a genuinely different total (a corrected tip)
+                # gets its own key rather than silently returning the old result.
+                idempotency_key=f"ride-increment-{ride_id}-{amount_cents}",
+            )
+        )
+    except _StripeCardError as e:
+        err = getattr(e, "error", None)
+        decline_code = getattr(err, "decline_code", None) or getattr(err, "code", None)
+        logger.info("Increment declined for ride=%s pi=%s code=%s", ride_id, payment_intent_id, decline_code)
+        return ChargeOutcome(
+            status="declined",
+            payment_intent_id=payment_intent_id,
+            decline_code=decline_code,
+            error_message=str(getattr(err, "message", None) or e),
+        )
+    except _StripeBaseError as e:
+        # Not incrementable, already captured, or a Stripe-ops problem. Info, not
+        # error: the caller's fallback (capture + separate tip charge) is a
+        # designed path, not a failure — it just costs one extra fixed fee.
+        logger.info("Increment unavailable for ride=%s pi=%s: %s", ride_id, payment_intent_id, e)
+        return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id, error_message=str(e))
+    except Exception as e:  # pragma: no cover — defence-in-depth
+        logger.exception("Unexpected error incrementing ride=%s: %s", ride_id, e)
+        return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id, error_message=str(e))
+
+    status = getattr(intent, "status", "") or ""
+    pi_id = getattr(intent, "id", None) or payment_intent_id
+    if status == "requires_capture":
+        return ChargeOutcome(
+            status="authorized",
+            payment_intent_id=pi_id,
+            charged_amount=to_decimal(new_total),
+        )
+
+    logger.error("Unhandled increment PI status=%s for ride=%s pi=%s", status, ride_id, pi_id)
+    return ChargeOutcome(
+        status="failed",
+        payment_intent_id=pi_id,
+        error_message=f"Unhandled increment PaymentIntent status: {status}",
+    )
+
+
 async def capture_ride(
     *,
     ride_id: str,
@@ -709,9 +868,10 @@ async def capture_ride(
     """Capture a previously-authorized hold for ``amount`` (fare + tip).
 
     Captures against the manual-capture PaymentIntent created by
-    ``authorize_ride``. ``amount`` MUST be ≤ the originally authorized hold —
-    Stripe rejects a capture larger than the authorization, which is why a tip
-    beyond the buffer is charged separately rather than folded into this call.
+    ``authorize_ride``. ``amount`` MUST be ≤ the currently authorized hold —
+    Stripe rejects a capture larger than the authorization. To fold a tip in,
+    raise the hold first with ``increment_authorization``; a tip that cannot be
+    covered that way is charged separately rather than folded into this call.
 
     ``ChargeOutcome.status``:
         "captured"      funds captured (terminal success)
@@ -776,6 +936,100 @@ async def capture_ride(
         status="failed",
         payment_intent_id=pi_id,
         error_message=f"Unhandled capture PaymentIntent status: {status}",
+    )
+
+
+async def capture_cancellation_fee(
+    *,
+    ride_id: str,
+    payment_intent_id: str,
+    fee: Union[Decimal, int],
+    authorized_amount: Union[Decimal, int],
+) -> ChargeOutcome:
+    """Take a cancellation fee out of the booking hold, releasing the rest.
+
+    A partial capture: Stripe captures ``fee`` and automatically releases the
+    remainder of the authorization. Preferred over cancelling the hold and then
+    charging a fresh PaymentIntent, because the funds are *already reserved* —
+    this fee cannot be declined for insufficient funds, whereas a new charge
+    against the same card can (and did, whenever a rider's balance moved between
+    booking and cancelling).
+
+    ``fee`` is capped at ``authorized_amount``. Stripe rejects a capture larger
+    than the authorization, but the cap is also a policy decision: on a $4 fare
+    with a $5 cancellation fee we take the $4 and let the rest go rather than
+    chase the shortfall with a second charge. A cancellation fee larger than the
+    ride itself is not defensible to a rider or a regulator, and the extra dollar
+    is not worth the support ticket.
+
+    ``ChargeOutcome.status``:
+        "captured"      fee taken, remainder released. ``charged_amount`` is what
+                        was ACTUALLY captured, which may be less than ``fee``.
+        "declined"      card declined at capture (rare — issuer reversal)
+        "failed"        hold expired / already captured / Stripe-ops error;
+                        caller falls back to charging a fresh PaymentIntent
+        "unconfigured"  Stripe not installed/configured (dev/test)
+
+    Never raises — callers switch on ``outcome.status``.
+    """
+    capped = min(to_decimal(fee), to_decimal(authorized_amount))
+    if capped < to_decimal(fee):
+        logger.info(
+            "[CANCEL] fee capped to held amount ride=%s fee=%s held=%s uncollected=%s",
+            ride_id,
+            to_decimal(fee),
+            to_decimal(authorized_amount),
+            to_decimal(fee) - capped,
+        )
+    if capped <= 0:
+        return ChargeOutcome(status="captured", charged_amount=Decimal("0.00"))
+    if not payment_intent_id:
+        return ChargeOutcome(status="failed", error_message="No authorization PaymentIntent to capture")
+
+    secret = await _resolve_stripe_secret(ride_id)
+    if secret is None:
+        return ChargeOutcome(status="unconfigured", error_message="Payment processing is not configured")
+
+    amount_cents = dollars_to_cents(capped)
+    try:
+        intent = await asyncio.to_thread(
+            lambda: stripe.PaymentIntent.capture(
+                payment_intent_id,
+                amount_to_capture=amount_cents,
+                api_key=secret,
+                # Distinct namespace from ride-capture: a cancelled ride and a
+                # completed one are different events on the same PI, and reusing
+                # the settlement key would let one dedupe against the other.
+                idempotency_key=f"ride-cancelfee-{ride_id}-{amount_cents}",
+            )
+        )
+    except _StripeCardError as e:
+        err = getattr(e, "error", None)
+        decline_code = getattr(err, "decline_code", None) or getattr(err, "code", None)
+        logger.info("[CANCEL] fee capture declined ride=%s pi=%s code=%s", ride_id, payment_intent_id, decline_code)
+        return ChargeOutcome(
+            status="declined",
+            payment_intent_id=payment_intent_id,
+            decline_code=decline_code,
+            error_message=str(getattr(err, "message", None) or e),
+        )
+    except _StripeBaseError as e:
+        logger.error("[CANCEL] Stripe error capturing fee ride=%s pi=%s: %s", ride_id, payment_intent_id, e)
+        return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id, error_message=str(e))
+    except Exception as e:  # pragma: no cover — defence-in-depth
+        logger.exception("[CANCEL] unexpected error capturing fee ride=%s: %s", ride_id, e)
+        return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id, error_message=str(e))
+
+    status = getattr(intent, "status", "") or ""
+    pi_id = getattr(intent, "id", None) or payment_intent_id
+    if status == "succeeded":
+        return ChargeOutcome(status="captured", payment_intent_id=pi_id, charged_amount=capped)
+
+    logger.error("[CANCEL] unhandled fee-capture PI status=%s ride=%s pi=%s", status, ride_id, pi_id)
+    return ChargeOutcome(
+        status="failed",
+        payment_intent_id=pi_id,
+        error_message=f"Unhandled cancellation-fee capture status: {status}",
     )
 
 

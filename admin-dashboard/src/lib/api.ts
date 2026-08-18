@@ -20,6 +20,12 @@ export type {
     AdminUploadDocumentInput,
 } from "./api/driver-documents";
 export {
+    getDriverAppeals,
+    getDriverAppealStats,
+    resolveDriverAppeal,
+} from "./api/driver-appeals";
+export type { DriverAppeal, DriverAppealStats } from "./api/driver-appeals";
+export {
     getRides,
     exportRides,
     getRideDetails,
@@ -268,6 +274,7 @@ export {
     adminUpdateDriverStripeAccount,
     adminValidateRiderImport,
     adminCommitRiderImport,
+    adminRegenerateImportedSnapshots,
 } from "./api/imports";
 export type {
     DriverImportReportItem,
@@ -293,6 +300,7 @@ export type {
     RiderImportDuplicate,
     RiderImportReport,
     RiderImportCommitResult,
+    SnapshotRegenerateResult,
 } from "./api/imports";
 export {
     getCloudMessages,
@@ -317,6 +325,7 @@ export {
     getUserWallet,
     creditUserWallet,
     debitUserWallet,
+    backfillStripeCustomerEmails,
 } from "./api/users-wallet";
 export {
     getPromotions,
@@ -328,6 +337,9 @@ export {
     getDisputeDetails,
     createDispute,
     updateDispute,
+    getChargebacks,
+    downloadDisputeEvidencePack,
+    submitDisputeEvidence,
     getSafetyIncidents,
     getSafetyIncident,
     updateSafetyIncident,
@@ -348,7 +360,10 @@ export type {
     SafetyIncident,
     SafetyIncidentListResponse,
     SafetyIncidentDetail,
+    Chargeback,
+    SubmitDisputeEvidenceResult,
 } from "./api/safety-disputes";
+export type { LegalDocType } from "./api/content-area";
 export {
     getFaqs,
     createFaq,
@@ -411,9 +426,16 @@ export {
     getPayoutStats,
     closePayoutPeriod,
     getPayoutsOverview,
+    getAutoPayoutBatches,
+    getBlockedPayoutDrivers,
     resolveDispute,
 } from "./api/analytics-payouts";
-export type { PayoutsOverview, ClosePayoutPeriodResponse } from "./api/analytics-payouts";
+export type {
+    PayoutsOverview,
+    ClosePayoutPeriodResponse,
+    AutoPayoutBatch,
+    BlockedDriver,
+} from "./api/analytics-payouts";
 export {
     getActiveRides,
     getMonitoringDrivers,

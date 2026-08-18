@@ -123,9 +123,9 @@ export default function OtpScreen() {
       if (!response.data) throw new Error('Empty response from auth server');
       const data = response.data as any;
 
-      // PIPEDA: the account is in its 30-day deletion grace window. The backend
-      // issued no access token — route to the reactivation screen instead of
-      // signing in.
+      // PIPEDA: the account is pending deletion (reactivable any time before
+      // the 7-year retention ceiling). The backend issued no access token —
+      // route to the reactivation screen instead of signing in.
       if (data.requires_reactivation) {
         router.replace({
           pathname: '/reactivate-account',

@@ -55,10 +55,18 @@ except ImportError:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
-# Minutes to wait after completion before auto-capturing a hold. Gives the rider
-# time to add a tip on the rating screen so it captures on the same PaymentIntent.
-# Well inside Stripe's ~7-day authorization lifetime.
-TIP_WINDOW_MINUTES = 20
+# Minutes to wait after completion before auto-capturing a hold. This is only a
+# FALLBACK: the rider app settles explicitly via process_payment when the rider
+# submits the rating screen (with or without a tip), so in the normal case the
+# hold is captured within seconds and this sweeper never sees the ride. The
+# window exists for riders who never open or never submit that screen.
+#
+# 5 minutes, down from 20. The old 20 was sized to keep a tip on the same
+# PaymentIntent, back when the hold carried a $10 tip buffer. The hold is now
+# the bare fare and a tip is folded in via increment_authorization instead, so a
+# long window buys nothing — it just delays the driver's money. Well inside
+# Stripe's ~7-day authorization lifetime either way.
+TIP_WINDOW_MINUTES = 5
 CAPTURE_INTERVAL_SECONDS = 300  # 5 minutes
 _LOOP_NAME = "preauth_capture (5min)"
 
@@ -137,9 +145,13 @@ async def _capture_tick() -> None:
             limit=50,
             order="ride_completed_at",
             columns=(
+                # auth_incrementable must be selected explicitly: settle_card
+                # gates the fold-the-tip-into-the-hold path on it, and an
+                # unselected column reads as None, which would silently force
+                # every swept ride onto the two-charge fallback.
                 "id,rider_id,driver_id,payment_method,payment_method_id,payment_status,"
-                "auth_status,authorized_amount,payment_intent_id,total_fare,grand_total,"
-                "tip_amount,driver_earnings,ride_completed_at,updated_at"
+                "auth_status,authorized_amount,auth_incrementable,payment_intent_id,"
+                "total_fare,grand_total,tip_amount,driver_earnings,ride_completed_at,updated_at"
             ),
         )
     except Exception as e:

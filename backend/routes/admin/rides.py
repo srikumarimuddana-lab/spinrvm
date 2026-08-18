@@ -27,7 +27,7 @@ try:
         places_new_headers,
     )
     from ...utils.insurance_periods import record_period_transition
-    from ...utils.legacy_rides import drop_legacy_rides
+    from ...utils.legacy_rides import drop_legacy_rides, legacy_tax_note_for_ride, tax_basis_for_ride
     from ...utils.money import dollars_to_cents
     from ...utils.rate_limiter import default_limiter as limiter
 except ImportError:
@@ -49,7 +49,7 @@ except ImportError:
         places_new_headers,
     )
     from utils.insurance_periods import record_period_transition
-    from utils.legacy_rides import drop_legacy_rides
+    from utils.legacy_rides import drop_legacy_rides, legacy_tax_note_for_ride, tax_basis_for_ride
     from utils.money import dollars_to_cents
     from utils.rate_limiter import default_limiter as limiter
 
@@ -1426,6 +1426,13 @@ async def admin_get_ride_invoice(ride_id: str):
         # Tax + area-fee breakdowns (migration 46) so the invoice PDF can render
         # GST/PST as separate line items — a Saskatchewan regulatory requirement.
         "tax_breakdown": ride.get("tax_breakdown") or {},
+        # CR-4108 (issue #4108, D1): for one of the 186 legacy-imported
+        # rides, ride["tax_breakdown"]/["tax_amount"] above is Spinr's
+        # commission-GST, not fare-GST (see utils/legacy_rides.py) — flag it
+        # so the client-side invoice PDF can render the footnote. Computed
+        # at serialization time; tax_amount itself is unchanged.
+        "tax_basis": tax_basis_for_ride(ride),
+        "tax_note": legacy_tax_note_for_ride(ride),
         "area_fees_breakdown": ride.get("area_fees_breakdown") or [],
     }
 
@@ -1879,37 +1886,26 @@ async def admin_send_payable_invoice(
     return {"sent": True, "ride_id": ride_id, "stripe_invoice_id": invoice.id, "invoice_url": invoice_url}
 
 
-@router.get("/rides/{ride_id}/route-map.png")
-async def admin_get_ride_route_map(
-    ride_id: str,
-    admin_user: dict = Depends(get_admin_user),
-):
-    """Proxy a Google Static Maps image for the ride's actual GPS route.
-
-    Keeps the Google Maps API key server-side (prevents client bundle leak)
-    and sidesteps browser CORS when the admin dashboard embeds the image in
-    a generated PDF. Returns a PNG binary.
+async def _fetch_route_map_png_bytes(ride: dict) -> bytes:
+    """Core logic behind GET /rides/{id}/route-map.png, factored out so the
+    dispute-evidence-pack endpoint (C23 item 4) can embed the same image
+    without duplicating the Google Static Maps URL-building / PIPEDA
+    GPS-phase filter. Raises HTTPException on any failure -- callers in a
+    zip-building context should catch and either omit the map or fail the
+    whole pack, per their own risk tolerance.
     """
     import httpx
 
-    ride = await db_supabase.get_ride_details_enriched(ride_id)
-    if not ride:
-        raise HTTPException(status_code=404, detail="Ride not found")
+    ride_id = ride.get("id")
 
     # Serve the pre-rendered snapshot if available (avoids Google API call).
     snapshot_url = ride.get("route_snapshot_url")
     if snapshot_url:
-        import httpx
-
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(snapshot_url)
             if resp.status_code == 200:
-                return Response(
-                    content=resp.content,
-                    media_type="image/png",
-                    headers={"Cache-Control": "private, max-age=3600"},
-                )
+                return resp.content
         except Exception as exc:
             logger.warning("Snapshot fetch failed for ride %s, falling back to Google Static Maps: %s", ride_id, exc)
 
@@ -1971,11 +1967,7 @@ async def admin_get_ride_route_map(
                 resp.text[:200],
             )
             raise HTTPException(status_code=502, detail="Failed to fetch route map")
-        return Response(
-            content=resp.content,
-            media_type="image/png",
-            headers={"Cache-Control": "private, max-age=3600"},
-        )
+        return resp.content
     except httpx.HTTPError as e:
         logger.error(
             "Static Maps fetch error for ride %s",
@@ -1983,6 +1975,29 @@ async def admin_get_ride_route_map(
             exc_info=True,
         )
         raise HTTPException(status_code=502, detail="Failed to fetch route map") from e
+
+
+@router.get("/rides/{ride_id}/route-map.png")
+async def admin_get_ride_route_map(
+    ride_id: str,
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Proxy a Google Static Maps image for the ride's actual GPS route.
+
+    Keeps the Google Maps API key server-side (prevents client bundle leak)
+    and sidesteps browser CORS when the admin dashboard embeds the image in
+    a generated PDF. Returns a PNG binary.
+    """
+    ride = await db_supabase.get_ride_details_enriched(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    png_bytes = await _fetch_route_map_png_bytes(ride)
+    return Response(
+        content=png_bytes,
+        media_type="image/png",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
 
 
 _HEATMAP_MAX_ROWS = 5_000
@@ -3495,4 +3510,171 @@ async def admin_close_payout_period(
         "payout_count": len(payout_ids),
         "total_amount": total_amount,
         "audit_log_id": audit_id,
+    }
+
+
+# ── Imported ride snapshot regeneration ──────────────────────────────────
+
+
+class RegenerateSnapshotsRequest(BaseModel):
+    force: bool = False
+    limit: int = Field(50, ge=1, le=500)
+
+
+@router.post("/rides/regenerate-imported-snapshots")
+async def admin_regenerate_imported_snapshots(
+    body: RegenerateSnapshotsRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """Regenerate route snapshot images for imported rides.
+
+    Uses the production Google Static Maps pipeline to render PNGs
+    with actual map tiles behind the OSRM route polyline.
+
+    Restricted to super_admin.
+    """
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="role_required:super_admin")
+
+    import asyncio
+    import functools
+    import hashlib
+
+    try:
+        from ...utils.route_snapshot import (
+            normalize_polyline_points,
+            render_ride_snapshot,
+            render_ride_snapshot_google,
+        )
+    except ImportError:
+        from utils.route_snapshot import (  # type: ignore
+            normalize_polyline_points,
+            render_ride_snapshot,
+            render_ride_snapshot_google,
+        )
+
+    try:
+        from ...supabase_client import supabase as sb
+    except ImportError:
+        from supabase_client import supabase as sb  # type: ignore
+
+    try:
+        from ...core.config import settings as cfg
+    except ImportError:
+        from core.config import settings as cfg  # type: ignore
+
+    app_settings = await get_app_settings() or {}
+    gmap_key = (app_settings.get("google_maps_api_key") or "").strip()
+    base_url = (cfg.SUPABASE_URL or "").rstrip("/")
+    if not base_url:
+        raise HTTPException(status_code=500, detail="SUPABASE_URL not configured")
+
+    filters: Dict[str, Any] = {"legacy_import_metadata": {"$notnull": True}}
+    if not body.force:
+        filters["route_snapshot_url"] = None
+
+    rides = await db.get_rows(
+        "rides",
+        filters,
+        columns="id,pickup_lat,pickup_lng,dropoff_lat,dropoff_lng,planned_route_polyline",
+        limit=body.limit,
+    )
+    if not rides:
+        return {"total": 0, "success": 0, "failed": 0, "message": "No rides to process"}
+
+    loop = asyncio.get_event_loop()
+    success = 0
+    failed = 0
+    errors: list[dict] = []
+
+    for ride in rides:
+        ride_id = ride["id"]
+        pickup_lat = ride.get("pickup_lat")
+        pickup_lng = ride.get("pickup_lng")
+        dropoff_lat = ride.get("dropoff_lat")
+        dropoff_lng = ride.get("dropoff_lng")
+
+        if not all(isinstance(v, (int, float)) for v in [pickup_lat, pickup_lng, dropoff_lat, dropoff_lng]):
+            failed += 1
+            errors.append({"ride_id": ride_id, "error": "missing coordinates"})
+            continue
+
+        route_polyline = normalize_polyline_points(ride.get("planned_route_polyline"))
+
+        png_bytes = None
+        if gmap_key:
+            try:
+                png_bytes = await render_ride_snapshot_google(
+                    api_key=gmap_key,
+                    pickup_lat=float(pickup_lat),
+                    pickup_lng=float(pickup_lng),
+                    dropoff_lat=float(dropoff_lat),
+                    dropoff_lng=float(dropoff_lng),
+                    route_polyline=route_polyline,
+                )
+            except Exception as exc:
+                logger.error("Google render failed for ride %s: %s", ride_id, exc)
+
+        if not png_bytes:
+            try:
+                png_bytes = await loop.run_in_executor(
+                    None,
+                    functools.partial(
+                        render_ride_snapshot,
+                        pickup_lat=float(pickup_lat),
+                        pickup_lng=float(pickup_lng),
+                        dropoff_lat=float(dropoff_lat),
+                        dropoff_lng=float(dropoff_lng),
+                        route_polyline=route_polyline,
+                    ),
+                )
+            except Exception as exc:
+                logger.error("OSM render failed for ride %s: %s", ride_id, exc)
+
+        if not png_bytes:
+            failed += 1
+            errors.append({"ride_id": ride_id, "error": "render returned None"})
+            continue
+
+        storage_path = f"ride_{ride_id}.png"
+        try:
+            await loop.run_in_executor(
+                None,
+                functools.partial(
+                    sb.storage.from_("ride-snapshots").upload,
+                    path=storage_path,
+                    file=png_bytes,
+                    file_options={"content-type": "image/png", "upsert": "true", "cache-control": "31536000"},
+                ),
+            )
+        except Exception as exc:
+            failed += 1
+            errors.append({"ride_id": ride_id, "error": f"upload: {exc}"})
+            continue
+
+        digest = hashlib.sha256(png_bytes).hexdigest()[:12]
+        url = f"{base_url}/storage/v1/object/public/ride-snapshots/{storage_path}?v={digest}"
+        try:
+            await db.update_one("rides", {"id": ride_id}, {"route_snapshot_url": url})
+        except Exception as exc:
+            failed += 1
+            errors.append({"ride_id": ride_id, "error": f"db update: {exc}"})
+            continue
+
+        success += 1
+        await asyncio.sleep(0.3)
+
+    logger.info(
+        "Imported ride snapshot regeneration by admin %s: %d ok, %d failed of %d",
+        admin.get("id"),
+        success,
+        failed,
+        len(rides),
+    )
+    return {
+        "total": len(rides),
+        "success": success,
+        "failed": failed,
+        "renderer": "google" if gmap_key else "osm",
+        "errors": errors[:20],
     }

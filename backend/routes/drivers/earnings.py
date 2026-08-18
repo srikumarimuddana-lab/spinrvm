@@ -34,13 +34,11 @@ try:
     from ...utils.legacy_rides import (
         EXCLUDE_LEGACY_RIDES,
         drop_legacy_offset_payouts,
-        previous_app_history_visible,
     )
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
     from utils.legacy_rides import (  # type: ignore
         EXCLUDE_LEGACY_RIDES,
         drop_legacy_offset_payouts,
-        previous_app_history_visible,
     )
 
 router = APIRouter()
@@ -135,7 +133,7 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         # 'transfer_completed' payout silently stopped reducing the balance, so
         # the driver could re-withdraw the same earnings.)
         #
-        # Two payout types are NOT money out of a Spinr balance:
+        # Three payout types are NOT money out of a Spinr balance:
         #
         # - 'stripe_sync': legacy-app payout HISTORY materialized from Stripe
         #   transfer records (services/stripe_payout_sync_service.py) for
@@ -143,6 +141,12 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         #   OLD app and are not in this DB's rides, so deducting them would
         #   drive every migrated driver's payable_balance negative and block
         #   real withdrawals.
+        # - 'legacy_outstanding_correction': real Stripe Transfers the NEW app
+        #   sends for legacy-app earnings the old app itself recorded as never
+        #   paid (services/legacy_payout_correction_service.py). Same reason as
+        #   stripe_sync — the underlying rides' earnings are excluded above, so
+        #   deducting the correction too would double-subtract money that was
+        #   never in this balance to begin with.
         # - 'legacy_import': the synthetic offset the booking importer wrote to
         #   cancel imported ride earnings. Those rides are now excluded above,
         #   so their offset must go too — dropping only one half would move the
@@ -151,11 +155,13 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
             await db_supabase.get_rows("payouts", {"driver_id": driver["id"]}, limit=5000)
         )
         _not_money_out = {"reversed", "failed"}
+        _not_balance_affecting_types = {"stripe_sync", "legacy_outstanding_correction"}
         total_payouts = sum(
             (
                 _d(p.get("amount") or 0)
                 for p in payout_rows
-                if str(p.get("status") or "").lower() not in _not_money_out and p.get("payout_type") != "stripe_sync"
+                if str(p.get("status") or "").lower() not in _not_money_out
+                and p.get("payout_type") not in _not_balance_affecting_types
             ),
             Decimal("0"),
         )
@@ -196,22 +202,49 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
             detail="Earnings temporarily unavailable",
         ) from e
 
-    # Money the PREVIOUS app paid this driver (stripe_sync mirrors of real
-    # Stripe Transfers). Excluded from the balance math above by design; the
-    # app shows it as its own labeled figure so a migrated driver can see
-    # their history is intact without it inflating current earnings.
-    # Transition messaging with a sunset: after the cutoff in
-    # utils/legacy_rides this reports 0.00 and the app note self-hides.
-    previous_app_paid = Decimal("0")
-    if previous_app_history_visible():
-        previous_app_paid = sum(
-            (
-                _d(p.get("amount") or 0)
-                for p in payout_rows
-                if p.get("payout_type") == "stripe_sync" and str(p.get("status") or "").lower() not in _not_money_out
-            ),
-            Decimal("0"),
-        )
+    # Money the PREVIOUS Spinr app paid this driver (stripe_sync mirrors of
+    # real Stripe Transfers). Excluded from payable_balance math above by
+    # design — it's already in the driver's bank account, counting it there
+    # would let a driver withdraw it twice. The app reports it as its own
+    # labeled figure ("Previously Paid") so a driver's lifetime total is
+    # honest and blended, not hidden.
+    #
+    # Business decision 2026-08-13 (docs/change-log/2026-08-13-blended-
+    # lifetime-earnings.md): this used to sunset — after
+    # utils.legacy_rides.PREVIOUS_APP_VISIBLE_UNTIL (2026-08-31) it would
+    # report 0.00 and the note would self-hide. Reversed: previous-app money
+    # is now a PERMANENT part of a driver's earnings picture, not time-
+    # limited transition messaging. Making a driver's own lifetime earnings
+    # figure shrink on a date is the same trust problem A31 fixed for trip
+    # counts — this closes the same gap for the dollar figure.
+    # previous_app_history_visible() still exists (utils/legacy_rides) and
+    # is still correct; it's just no longer called here.
+    def _is_paid_previous_app_row(p: dict) -> bool:
+        payout_type = p.get("payout_type")
+        status = str(p.get("status") or "").lower()
+        if payout_type == "stripe_sync":
+            return status not in _not_money_out
+        if payout_type == "legacy_outstanding_correction":
+            # Unlike stripe_sync (always 'completed' by construction — it
+            # only ever materializes an ALREADY-settled Stripe Transfer),
+            # a correction row starts 'awaiting_stripe_onboarding' or
+            # 'ready_for_transfer' and is NOT yet real money until
+            # fire_ready_transfers actually moves it. Counting those early
+            # statuses here would show a driver money they have not
+            # received yet.
+            return status == "completed"
+        return False
+
+    previous_app_paid = sum(
+        (_d(p.get("amount") or 0) for p in payout_rows if _is_paid_previous_app_row(p)), Decimal("0")
+    )
+
+    instant_payout_available = True
+    sa_id = driver.get("service_area_id")
+    if sa_id:
+        sa_rows = await db_supabase.get_rows("service_areas", {"id": sa_id}, limit=1)
+        if sa_rows and sa_rows[0].get("instant_payout_enabled") is False:
+            instant_payout_available = False
 
     return {
         # total_earnings = ride income + tax + incentives + cancel fees +
@@ -236,6 +269,7 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         "stripe_id_number_provided": bool(driver.get("stripe_id_number_provided", False)),
         "total_tips": _money_str(total_tips),
         "total_rides": total_rides,
+        "instant_payout_available": instant_payout_available,
     }
 
 
@@ -314,15 +348,36 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
         start_date = now - timedelta(days=7)
 
     try:
-        filters: Dict[str, Any] = {
+        # Business decision 2026-08-13 (A32/A33, docs/change-log/2026-08-13-
+        # blended-lifetime-earnings.md): a single unfiltered query drives BOTH
+        # activity stats (trip count/distance/duration) AND money (Fare/Tips/
+        # Bonus/Tax/Total Earned) — no EXCLUDE_LEGACY_RIDES here anymore.
+        #
+        # Money used to stay legacy-excluded by design (A30 Finding 3): the
+        # old app already paid that money out, so "Total Earned" shouldn't
+        # double-count it as withdrawable. That reasoning is correct for
+        # payable_balance (get_driver_balance, unchanged — still legacy-
+        # excluded, still bounds the Stripe payout Transfer) but wrong here:
+        # `/drivers/earnings` was ALREADY decoupled from payable_balance math
+        # (no reconciliation identity ties to it), so excluding legacy money
+        # only ever produced a confusing display bug, not a financial safety
+        # property. Live report (2026-08-13): a migrated driver whose
+        # completed rides in a period were entirely legacy-imported saw real
+        # rides in their history list sitting under "Total Earned $0.00 / Avg
+        # per Trip $0.00" — the same trust problem A31 fixed for the trip-
+        # count fields, now closed for the dollar fields the same way, by the
+        # same mechanism: use every completed ride, source of truth is the
+        # ride record itself (each carries its own real `ride_completed_at`,
+        # so this stays correctly sliced per period — no precision was
+        # fabricated to make this work).
+        _activity_filters: Dict[str, Any] = {
             "driver_id": driver["id"],
             "status": RideStatus.COMPLETED,
-            **EXCLUDE_LEGACY_RIDES,
         }
         if use_date_filter and start_date:
-            filters["ride_completed_at"] = {"$gte": start_date.isoformat()}
-
-        rides = await db_supabase.get_rows("rides", filters, limit=10000)
+            _activity_filters["ride_completed_at"] = {"$gte": start_date.isoformat()}
+        all_completed_rides = await db_supabase.get_rows("rides", _activity_filters, limit=10000)
+        rides = all_completed_rides
 
         # Fetch incentive claims for these rides
         _ride_ids = [r["id"] for r in rides if r.get("id")]
@@ -352,6 +407,29 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
         # Tax collected from riders — passed through to driver as their income
         _total_tax = sum((_ride_tax(r) for r in rides), Decimal("0"))
 
+        # Elapsed days for "per day" averages (Avg Trips/Day, Avg KM/Day, Avg
+        # Online Time/Day) — the driver-app stats grid divides by this
+        # client-side. Fixed windows for the anchored periods; for "all" it's
+        # measured from the earliest completed ride in view (not account
+        # creation — a long pre-first-trip gap shouldn't dilute the average).
+        if period in ("today", "day"):
+            elapsed_days = 1
+        elif period == "week":
+            elapsed_days = 7
+        elif period == "month":
+            elapsed_days = 30
+        else:
+            _dates = [r.get("ride_completed_at") for r in all_completed_rides if r.get("ride_completed_at")]
+            if _dates:
+                _earliest = min(_dates)
+                try:
+                    _earliest_dt = datetime.fromisoformat(str(_earliest).replace("Z", "+00:00"))
+                    elapsed_days = max((now.astimezone(_earliest_dt.tzinfo) - _earliest_dt).days, 1)
+                except ValueError:
+                    elapsed_days = 1
+            else:
+                elapsed_days = 1
+
         stats = {
             # Driver INCOME = driver_earnings (canonical), fare-component fallback
             # for legacy rows. Matches the T4A summary and the trips view.
@@ -360,9 +438,10 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
             "total_incentives": float(_incentive_total),
             "total_cancel_fees": float(_cancel_fees_total),
             "total_tax": float(_total_tax),
-            "total_rides": len(rides),
-            "total_distance_km": sum(r.get("distance_km", 0) or 0 for r in rides),
-            "total_duration_minutes": sum(r.get("duration_minutes", 0) or 0 for r in rides),
+            "total_rides": len(all_completed_rides),
+            "total_distance_km": sum(r.get("distance_km", 0) or 0 for r in all_completed_rides),
+            "total_duration_minutes": sum(r.get("duration_minutes", 0) or 0 for r in all_completed_rides),
+            "elapsed_days": elapsed_days,
         }
     except Exception as e:
         # Don't mask a DB failure as an all-zero earnings summary — surface 503
@@ -402,9 +481,13 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
         "total_rides": stats.get("total_rides", 0),
         "total_distance_km": stats.get("total_distance_km", 0),
         "total_duration_minutes": stats.get("total_duration_minutes", 0),
-        "average_per_ride": (
-            _money_str(_total_with_extras / stats.get("total_rides", 1)) if stats.get("total_rides", 0) > 0 else "0.00"
-        ),
+        "elapsed_days": stats.get("elapsed_days", 1),
+        # `rides` is now `all_completed_rides` (see the money-inclusion note
+        # above) — this is a simple blended total-money / total-trips
+        # average, same denominator as total_rides, no diluted-by-$0-legacy-
+        # trips carve-out anymore (that concern only applied when legacy
+        # money was excluded from the numerator; now it isn't).
+        "average_per_ride": (_money_str(_total_with_extras / len(rides)) if len(rides) > 0 else "0.00"),
     }
 
 

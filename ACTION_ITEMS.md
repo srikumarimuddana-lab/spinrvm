@@ -7,7 +7,61 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-08-12 — C21 ADDED (open): two PRs (#3719, #3728, the
+_Last updated: 2026-08-17 — A39's deferred `migrate.py` decision resolved
+(product owner: reconcile, not just delete). Ported `migrate.py`'s tested
+CONCURRENTLY-safe SQL splitter (B0) into `run_migrations.py` — which
+never had that fix and would have failed on any `CREATE INDEX
+CONCURRENTLY` migration — fixed every living-doc/CI/runtime reference
+across `CLAUDE.md`, `AGENTS.md`, runbooks, CI workflow comments, and a
+real admin-facing error message, then deleted `migrate.py` outright.
+`spinr-migration-reviewer` then found the reference-cleanup was
+incomplete (11 more files); all fixed or explicitly judged out of scope
+(self-declared provenance records, auto-generated build artifacts) — see
+A39.
+128 directly affected tests pass. Prior same day: A40 CLOSED (all three questions resolved:
+#1 confirmed by the product owner that dual-run — old app still
+processing real Stripe charges on the shared account — is intentional
+right now, not an incident; #2 checked live and found no evidence of
+Connect-account overlap, `transfer.created` has no handler at all and
+zero of the 15 observed `account.updated` events match any current
+driver's Stripe account; #3 downgraded to a low-priority hygiene item
+— split the webhook endpoint before the Oct 31 decommission, not
+urgent since current handling is already confirmed safe). Prior same
+day: A38 CLOSED (migration 321 adds the missing
+`rides.driver_id` guard to `purge_pii_retention()`'s Step H, the
+sanctioned DSAR hard-delete path — closes the same class of gap A35
+found in an ad-hoc script, verified byte-identical to migration 296
+except the fix, reviewed clean by both `spinr-migration-reviewer`
+(one numbering-conflict blocker found and fixed) and
+`spinr-regulatory-compliance-checker`; see
+`docs/change-log/2026-08-17-a38-step-h-driver-rides-guard.md`).
+Prior same day: A36 CLOSED (root cause of the empty
+`financial_events` table found via live webhook-payload evidence: no
+native Spinr ride has ever completed a real payment yet — 100% of
+completed card-paid rides in production are legacy-imported, and the
+write path itself is sound, simply never invoked with real traffic;
+neither original hypothesis, wiped or broken, held up); A40 ADDED (open,
+operational question) — the same investigation confirmed, via real
+webhook payloads (not inference), that the OLD app is still issuing
+live Stripe charges on the shared Stripe account as recently as
+2026-08-15. Prior same day: A37 FIXED (real-time `ddl_command_end` event
+trigger, migration 318, closing the poll-interval gap A35 deliberately
+deferred; verified against a real isolated Supabase branch, not a mock;
+`spinr-migration-reviewer` + `spinr-regulatory-compliance-checker` manual
+passes run, one blocker found and fixed — missing `(action, created_at)`
+index for the new `audit_logs` query pattern, added via `CREATE INDEX
+CONCURRENTLY` — see
+`docs/change-log/2026-08-17-a37-guard-trigger-ddl-realtime-audit.md`).
+Prior same day: A35 FIXED (detection loop + sanctioned
+cleanup-tool replacement, migration 317 applied to production, reviewed by
+migration + regulatory-compliance agents); A38 ADDED (open, deliberately
+deferred follow-up spun off from A35's review); A39 ADDED and CLOSED same
+day (two competing migration runners found — `migrate.py` doesn't match
+production's actual schema and would fail if run; docs corrected to point
+at `run_migrations.py`, the one that's actually live). Prior: A34 ADDED (open): dual-run cutover readiness
+audit complete (PR #3954, `docs/audit/2026-08-15-dual-run-cutover/`);
+decommission blockers, launch-week collision/monitoring gaps, and required
+user decisions consolidated there. Prior: C21 ADDED (open): two PRs (#3719, #3728, the
 notification-throttling feature) merged via GitHub's native per-PR
 auto-merge before/without their full check set completing — #3719 merged
 while `CI/CD Pipeline`/`CI Guard Rails`/`Security Gates` were still
@@ -79,6 +133,97 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 ---
 
 ## P0 — Launch gating (code)
+
+### A34. Dual-run cutover readiness audit (2026-08-15) — decommission blockers and required decisions
+> **Note:** there is a second, unrelated `### A34` further down this file
+> ("Legacy-imported ride count dropped 224 → 186 in production — CLOSED") from
+> a different session on 2026-08-16. Both numbers are already cross-referenced
+> from other docs, so neither has been renumbered — treat the heading text as
+> the disambiguator, not the number. Filed as a process gap: this repo has no
+> mechanism preventing two parallel sessions from picking the same "next free"
+> ACTION_ITEMS number, the same collision class already found in SQL migration
+> filenames (310×2, 313×3, `docs/audit/2026-08-15-full-fleet-launch-readiness.md`
+> item #11).
+- [ ] **Status:** open, materially updated 2026-08-17 by later sessions'
+  work — see `docs/runbooks/full-app-audit.md`'s Prior-Findings Ledger for the
+  full detail; summary below. Old app decommission target: **Oct 31, 2026
+  (tentative)**.
+  - **RESOLVED**: the 224-vs-186 discrepancy — see the *other* A34 below,
+    CLOSED 2026-08-16 as intentional pre-launch test-account cleanup (also
+    spun off **A35**, a real finding: the cleanup script bypassed the 7-year
+    `driver_insurance_periods` retention guard triggers — read it).
+  - **RESOLVED (superseded number)**: the $276.59/20-driver figure — Stripe
+    cross-check ran 2026-08-16
+    (`docs/change-log/2026-08-16-gst-backfill-and-stripe-crosscheck.md` §1a).
+    Revised: **$185.31–$228.08** for buckets 1–15 (2 unresolved, $42.77,
+    genuinely ambiguous — one shows evidence trending *owed*, not excluded);
+    1 bucket ($22.43) likely already paid via Stripe, correctly excluded;
+    buckets 16–20 ($26.08) unaffected, still blocked on driver re-link.
+    Structural finding: the Stripe mirror schema can never definitively link a
+    ledger row to a specific ride — "likely" is the ceiling. Still open: which
+    Stripe account the mirror covers (old app's/new app's/both) — unconfirmed.
+  - **RESOLVED**: rider legacy-import provenance — 918/1,137 users backfilled
+    2026-08-17 (`docs/change-log/2026-08-17-rider-provenance-backfill-executed.md`).
+    **Correction (2026-08-17, later same day):** that change-log's claim that
+    "the code gap (`rider_import_service.py` never stamps new imports) is
+    still open" was stale/wrong — `rider_import_service.py` already stamps
+    `legacy_import_metadata` on both create and update as of `a591cf1`
+    (PR #3678, merged 2026-08-11, **before** the backfill even ran), with
+    dedicated coverage in `test_admin_rider_import.py`
+    (`test_commit_stamps_provenance_on_created_user`,
+    `test_commit_stamps_provenance_on_updated_user_without_clobbering_other_metadata`).
+    No code change needed; this note exists only to stop a future session
+    from re-doing already-shipped work off a stale status line.
+    **Second, separate finding (2026-08-17, CR-4105 — the provenance
+    stamping above was never the real bug):** `rider_import_service.py:315`
+    stamps `created_at = now()` on every net-new imported rider (the source
+    CSV has no signup-date column to recover a real value from), which let
+    `routes/promotions.py`'s `new_user_days` promo-eligibility check treat
+    old-app customers as brand-new signups. Fixed in PR #4132 by excluding
+    riders carrying `legacy_import_metadata->'rider_csv_import'` from
+    `new_user_days` eligibility regardless of `created_at` age —
+    `created_at` itself deliberately left unchanged/un-backdated (see
+    `docs/change-log/2026-08-17-rider-import-promo-eligibility-fix.md` for
+    why). **Open follow-up:** whether any of the 918 already-backfilled
+    riders need retroactive correction is unconfirmed without a live DB
+    query — flagged, not resolved, in the same change-log entry.
+  - **RESOLVED**: `payout_gst_amount` for the 186 already-migrated rides —
+    backfilled additive-only, $102.09 total
+    (`docs/change-log/2026-08-16-gst-backfill-executed.md`). **D1 remains
+    open**: what `tax_amount` itself should read for those 186 rows is a
+    business/legal decision, not resolved by the backfill — needs an owner
+    + due date.
+  - **RESOLVED (2026-08-18)**: insurance-period audit-trail gap for the 186
+    legacy-imported rides — **CR #4081**, decision: reconstruct-and-flag,
+    approved by this session's user (confirmed to hold the SGI-facing
+    legal/regulatory authority CLAUDE.md requires for this call). Backfilled
+    182/186 rides via migration `332_backfill_legacy_ride_insurance_periods.sql`
+    (Period 2 + Period 3 rows, each marked `is_reconstructed = true` — a new,
+    structurally-unmissable column, not a notes field). 4/186 rides
+    deliberately excluded and documented in the migration's own header (3
+    with no `driver_id`; 1 with no arrival/start timestamps, only a ~14.8hr
+    created_at→completed_at gap that would require fabricating a Period-3
+    boundary rather than reconstructing one). Known, disclosed limitation
+    inherited from the source data (same as migration 65's own precedent):
+    Period 2 starts from `driver_arrived_at`, not the true (never-captured)
+    `driver_assigned` moment, so the true Period-1→2 boundary is understated
+    for these 182 rows.
+  - **STILL OPEN, unchanged**: fresh final old-app export (unblocks the true
+    pending-money figure, the full identity map, and the corporate-money
+    unknown); no
+    final-export/teardown runbook owner/dates (draft exists,
+    `docs/runbooks/full-app-audit.md` Part B §3.2); double-dispatch/
+    double-payout structural risk (needs an operational roster policy — code
+    provides no guard); 3 monitoring signals **now shipped** (PR #3954,
+    `dual_run_monitoring_enabled`, verify still live rather than treating as
+    a to-do); open $16.63 Stripe dispute needs a response; rider-referral
+    velocity/identity-cross-check gap unchanged; 22 unmarked drivers; two
+    incompatible legacy-ID namespaces still need a crosswalk table.
+- **Files:** `docs/audit/2026-08-15-dual-run-cutover/` (4 phase reports),
+  `docs/runbooks/full-app-audit.md` (repeatable master audit prompt — supersedes
+  ad-hoc scratch prompts for future runs), PR #3946 (merged, dry-run-only as
+  designed, extend don't duplicate the write path).
+- **Acceptance:** each numbered blocker either closed with evidence or explicitly risk-accepted by the user with a dated note here.
 
 ### A1. Per-module test-coverage floors for money paths
 - [x] **Status:** DONE (2026-07-28) — `matching.py` and `rides/payments.py`,
@@ -3082,9 +3227,13 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     accounts active, offsetting `legacy_import` payout rows present and
     correctly amounted) — the visibility mechanism works correctly for
     matched records.
-  - **Follow-up (not yet done):** backfill a short change-log note
-    recording when/how the real production commit happened, since nothing
-    in the repo currently documents it.
+  - **Follow-up: DONE (2026-08-18).** Recovered the exact commit record
+    from `audit_logs` itself (the only source that had it): `action:
+    legacy_booking_import`, `2026-07-29 18:48:11 UTC`, `admin-001`
+    (super_admin), 224 rides imported, 60 offsetting payout rows
+    ($2,179.66 total) — matches the original importer doc's documented
+    scope exactly. Written up at
+    `docs/change-log/2026-08-18-a30-legacy-import-production-commit-note.md`.
 - **Finding 1 — real phone-match rate.**
   - [x] **Status:** measured (2026-08-13, live query). **100% of legacy
     rides have a matched rider** (0/224 NULL), **94.2% have a matched
@@ -3160,9 +3309,702 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   production (only 2 low-ride-count sample accounts were spot-checked
   live, both well under every cap these fixes address).
 
+### A31. `GET /drivers/earnings` zeroed trip-count/distance/duration stats for drivers whose period rides are all legacy-imported (2026-08-13)
+- **Source:** live user report against a real migrated driver's Activity
+  screen ("All Time" showed `Total Earned $0.00` / `0 Total Trips` /
+  `0.0 KM Driven` / `0h Online Time` directly above a rendered list of 17
+  real completed rides).
+- **Root cause:** `get_driver_earnings` (`backend/routes/drivers/earnings.py`)
+  summed `total_rides`/`total_distance_km`/`total_duration_minutes` from the
+  same `EXCLUDE_LEGACY_RIDES`-filtered rides list used for money totals.
+  Those three fields aren't money — `utils/legacy_rides.py`'s own docstring
+  says the exclusion "only governs money math" and imported rides "remain
+  fully visible in ride history" — so a driver with zero non-legacy
+  completed rides in the period got zeroed activity stats alongside the
+  (correctly) zeroed earnings.
+- [x] **Status:** DONE (2026-08-13). Added a second, unfiltered
+  "all completed rides in period" query; the three activity fields now
+  source from it. `average_per_ride` still divides by the money-rides count
+  (now explicit, not reused from `total_rides`) so it isn't diluted by
+  $0-earning legacy trips. 2 new regression tests
+  (`test_earnings_coverage.py::TestGetDriverEarningsLegacyActivityStats`).
+  Full Change Impact Log at
+  `docs/change-log/2026-08-13-driver-earnings-legacy-activity-stats.md`.
+- **Follow-up (not yet done):** `GET /drivers/balance`
+  (`get_driver_balance`, same file) has the identical `total_rides =
+  len(rides)` pattern on its own legacy-excluded query — same latent bug,
+  left unfixed here because its `total_rides` response field has no
+  frontend consumer today (`DriverBalance` TS type in
+  `driver-app/store/driverStore.ts` doesn't include it). Fix opportunistically
+  if/when a frontend surface starts reading `/balance`'s `total_rides`, or
+  proactively for consistency — low priority since no one currently sees
+  the wrong number.
+- **Superseded by A32:** the note above about `average_per_ride` staying
+  divided by the money-rides count "so it isn't diluted by $0-earning
+  legacy trips" described the state as of this entry's date. A32
+  (2026-08-13, same day) reversed that specific call: Avg per Trip is now
+  a deliberately blended `total_earnings / total_rides`, per an explicit
+  product decision that trip-count and dollar figures should use the same
+  denominator everywhere. See A32.
+
+### A32. Blended lifetime earnings — previous-app money is now permanent and unbadged on driver/rider surfaces (2026-08-13)
+- **Source:** direct product decision, same conversation as A31. A31 fixed
+  trip/distance/duration stats reading zero for all-legacy periods; the
+  user asked the natural follow-on question — if a driver's total money
+  earned and average per trip still exclude real, already-paid previous-app
+  money, and read a technical "legacy"/"imported" framing, is that the
+  smartest way to present it? Decision: no. Blend it into one honest
+  number, drop all "legacy"/"imported" language from rider/driver-facing
+  UI, keep the distinction in the backend and admin portal only.
+- **Reverses two prior decisions, both explicitly superseded here:**
+  - **A30 Finding 3/4** (2026-08-13, earlier same day) shipped a "N rides
+    from your previous account are shown below but not counted here"
+    explainer and an "Imported"/"Imported from your previous account"
+    ride-card badge on rider-app, driver-app, and admin-dashboard. Now
+    **removed from rider-app and driver-app** (no more badge, no more
+    explainer — money is blended, so the explainer's premise is false).
+    **Kept on admin-dashboard** — Spinr staff need the distinction for
+    support/audit; that surface was never customer-facing.
+  - **The `PREVIOUS_APP_VISIBLE_UNTIL` sunset** (`utils/legacy_rides.py`,
+    2026-08-31, introduced 2026-08-12/13 as deliberate transition
+    messaging with an end date) is **retired** for all three call sites
+    that used it (`get_driver_balance`, `get_payout_history`,
+    `build_statement`). Hiding a driver's own previous-app money on a
+    calendar date would make their lifetime total look like it shrank —
+    the same trust problem A31 fixed for trip counts, now closed for the
+    dollar figure too. The helper function itself is untouched (still
+    correct, just unused by these three call sites).
+- [x] **Status:** DONE (2026-08-13).
+  - **Backend:** `get_driver_balance`/`get_payout_history`/`build_statement`
+    no longer gate on `previous_app_history_visible()` — previous-app
+    money and payout rows are always included. No new fields; existing
+    `previous_app_paid_total` (`/drivers/balance`) is now unconditional.
+  - **driver-app Activity screen:** "All Time" Total Earned blends Spinr
+    earnings + `previous_app_paid_total` (not blended for Today/Week/Month
+    — no reliable per-period split for old-app transfer dates). New
+    "Previously Paid" breakdown row makes the blend a visible, additive
+    line item (every row sums to the total) rather than a footnote. Avg
+    per Trip is now a simple `total_earnings / total_rides` over the same
+    blended total and the already-all-inclusive trip count (A31). New "Avg
+    Distance/Trip" stat tile. Removed the ride-card badge and the "not
+    counted here" explainer.
+  - **driver-app Payout screen:** "Total Earnings" breakdown item now
+    blends the same way, so the figure matches the Activity screen instead
+    of showing two different "Total Earnings" numbers on two screens.
+    "Previously Paid" added as a 4th breakdown item (additive — only
+    rendered when non-zero, so a driver with none sees the original
+    3-item row unchanged). `AVAILABLE BALANCE` (the real withdrawable
+    figure) is untouched — blending only ever happens in *display*
+    totals, never in `payable_balance` math.
+  - **driver-app Payout History screen:** "Previous app" section's copy no
+    longer promises an Aug 31, 2026 cutoff or says the money "isn't part
+    of your Spinr earnings" (both now false).
+  - **rider-app Activity tab:** badge removed. No total/average change —
+    riders don't have an earnings-exclusion figure to blend.
+  - Full Change Impact Log:
+    `docs/change-log/2026-08-13-blended-lifetime-earnings.md`.
+- **Verification:** backend — `test_previous_app_sunset.py` rewritten to
+  pin "always visible" instead of the two-branch cutoff (5/5 pass); full
+  affected-file run (`test_previous_app_sunset.py`,
+  `test_earnings_coverage.py`, `test_drivers_extended.py`,
+  `test_payouts_coverage.py`, `test_driver_statement.py`,
+  `test_driver_statement_pdf.py`) — 193/193 pass. driver-app —
+  `ActivityView.test.tsx` updated (badge-removal + blended-total/average
+  regression tests), 9/9 pass; `tsc --noEmit` clean. rider-app — `tsc
+  --noEmit` clean (no test infra for `activity.tsx`, consistent with the
+  rest of this app's screen-level files).
+- **What was NOT verified:** not exercised against real Supabase or a real
+  migrated driver account — reasoned from the code and unit-mocked tests
+  only. No screenshot/visual verification (standing gap, no
+  visual-regression tooling in this repo). `payout.tsx`/`payout-history.tsx`
+  have no existing test file to extend (consistent with the rest of this
+  app's screen-level files, not a gap introduced here) — verified by
+  `tsc --noEmit` and manual code review only.
+- **Follow-up, found live the same day (A33):** A32's blend added
+  `driverBalance.previous_app_paid_total` (a Stripe-payout-ledger sum) on
+  top of Spinr-only earnings. A real migrated driver testing the shipped
+  fix still saw `Total Earned $0.00` / `Fare $0.00` / `Avg per Trip $0.00`
+  under a correctly-populated `Total Trips` / `KM Driven` / `Online Time` —
+  because that driver has real legacy RIDES but an incomplete previous-app
+  payout backfill, so the ledger-derived figure was 0. See A33.
+
+### A33. `get_driver_earnings`'s money math still legacy-excluded — A32's payout-ledger blend under-covered (2026-08-13, same day as A32)
+- **Source:** live user report against the just-shipped A32 fix (see A32's
+  follow-up note above) — the same migrated driver still saw all-zero
+  dollar figures.
+- **Root cause:** A32 blended `driverBalance.previous_app_paid_total`
+  (sum of `payouts` rows with `payout_type='stripe_sync'` — a record of
+  Stripe *transfers*) into the Activity screen's Total Earned. That figure
+  depends on the previous-app payout-history backfill having a row for
+  every driver's legacy earnings. `get_driver_earnings` itself still
+  filtered its OWN money query with `EXCLUDE_LEGACY_RIDES`
+  (`utils/legacy_rides.py`) — the same pattern A31 had already fixed for
+  `total_rides`/`total_distance_km`/`total_duration_minutes`, left
+  unfixed for money because A30 Finding 3 deliberately excluded legacy
+  money by design at the time. A32 then tried to patch that exclusion back
+  in from a different, less-complete source (the payout ledger) instead of
+  removing it at the actual source (the ride query).
+- [x] **Status:** DONE (2026-08-13). `get_driver_earnings` now sources
+  BOTH activity stats and money (Fare/Tips/Bonus/Referral/Tax/Total
+  Earned/Avg per Trip) from a single unfiltered ride query — the same
+  `all_completed_rides` list A31 already introduced for activity stats,
+  reused instead of duplicated. Each ride carries its own real
+  `ride_completed_at`, so this stays correctly sliced per calendar period
+  (no precision fabricated to make it work) and doesn't depend on the
+  payout-ledger backfill's completeness. New `elapsed_days` field
+  (fixed for today/week/month, measured from the earliest ride for "all")
+  backs three new driver-app stat tiles: Avg Trips/Day, Avg KM/Day, and
+  Online Time split into Total + Avg/Day (all requested directly by the
+  user alongside this fix).
+  - `driver-app` `ActivityView.tsx`: reads the now-blended
+    `total_earnings`/`average_per_ride` directly; removed the
+    client-side `previous_app_paid_total` addition (would now
+    double-count) and the "Previously Paid" breakdown row it fed (now
+    redundant — Fare/Tips/Bonus/Tax already include legacy money).
+  - `get_driver_balance`/`payable_balance` (the Payout screen's
+    withdrawable-balance math): **untouched** — still legacy-excluded by
+    design, since that money was already paid out by the old app and must
+    never be double-countable as withdrawable. This fix only ever affects
+    the `/drivers/earnings` DISPLAY endpoint.
+  - 2 tests in `TestGetDriverEarningsLegacyActivityStats` rewritten for
+    the new blended-money behavior (full file: 42/42 pass); affected-file
+    backend run 193/193 pass. `ActivityView.test.tsx` updated for the
+    backend-driven blend and new tiles, 8/8 pass. `tsc --noEmit` clean.
+  - Full Change Impact Log:
+    `docs/change-log/2026-08-13-blended-earnings-money-inclusion-fix.md`.
+- **What was NOT verified:** same boundary as A32 — not exercised against
+  real Supabase or a real migrated driver account, no visual verification.
+
+### A34. Legacy-imported ride count dropped 224 → 186 in production — CLOSED (2026-08-16), explained as intentional pre-launch test-account cleanup; two residual follow-ups spun off separately
+- **Source:** dual-run cutover audit (Phase 0.4/0.4-followup), 2026-08-16. A30
+  (2026-08-13, live-verified) recorded **224** rows for
+  `legacy_import_metadata->>'source' = 'legacy_mongo_booking_import'`. The
+  identical query, run live again 2026-08-16, returns **186** — a 38-row
+  drop, confirmed real (not a filter/measurement difference — same result
+  via both the old `!= '{}'` filter and the exact-source filter; not
+  soft-deleted (`deleted_at IS NULL` on all 186 remaining, and the missing
+  rows aren't hidden, they're gone); single import batch
+  (`20260729184745`) both before and after, so no re-import/dedup ran;
+  single Supabase project, zero branches; no application code path in this
+  repo ever deletes from `rides`; zero `rides`-deletion rows in the app's
+  own `audit_logs`).
+- **Mechanism found (2026-08-16, via `pg_stat_statements`, not
+  `postgres_logs`):** Postgres statement logging on this project only
+  captures DDL (`CREATE`/`ALTER`/`COMMENT`) — confirmed by exhaustively
+  sweeping `postgres_logs` across 2026-08-13 through 08-16 and finding
+  **zero** plain `DELETE`/`UPDATE`/`INSERT` statements anywhere, from any
+  source, despite `audit_logs` showing hundreds of real app-level ride
+  writes in the same window. This means ordinary DML — from the app, a
+  direct `psql` connection, or the Supabase dashboard SQL editor — is
+  structurally invisible to `postgres_logs` on this project regardless of
+  when it ran. `pg_stat_statements` (a separate, always-on catalog,
+  `stats_reset` 2026-05-22) was the tool that actually found it:
+  - A hand-written, phone-number-scoped account-deletion script (`DO $$
+    ... v_phones TEXT[] ... `) exists and was run for real
+    (`p_dry_run := false`) **twice on 2026-08-14** (`stats_since` timestamps
+    20:13:03 and 20:38:25 UTC — squarely inside the 08-13→08-16 gap
+    window), targeting 4 phone numbers total (1 in the first run, 3 in the
+    second). A third, dry-run-only call against the same script exists too.
+  - The script is a comprehensive right-to-delete/DSAR-style hard-delete:
+    resolves `users` by phone → `drivers` → **`rides` by
+    `driver_id`/`rider_id` match** → 16 groups of dependent tables → ends
+    with `DELETE FROM rides WHERE id = ANY(v_ride_ids)`, then `drivers`,
+    then `users`. It disables the append-only guard triggers on
+    `driver_insurance_periods`, `driver_period_distances`, `disputes`, and
+    `audit_logs` to do this (see separate flag below — this conflicts with
+    this repo's own documented 7-year regulatory retention policy).
+  - Confirmed against `bookings.csv`/`drivers.csv`/`customers.csv`: 3 of
+    the 4 targeted phone numbers (`3062929175`, `3066009097`, `3065203304`
+    in local 10-digit form) appear **repeatedly** in the legacy MongoDB
+    export as both driver and customer records — several clearly test
+    accounts ("Test YK", "Yy", "Hh", "Test Y") alongside apparently-real
+    names ("Kiran", "Tristan", "Yash Kumar", "Ryan D"). Since the legacy
+    importer links legacy bookings to real Spinr accounts by phone match
+    (A30: 100% rider / 94.2% driver match rate), any of these phone
+    numbers' Spinr accounts that had a legacy-imported ride attached would
+    have had that ride swept up by this script's
+    `rides.driver_id/rider_id`-based deletion — this is a coherent,
+    well-evidenced explanation for some or all of the 38-row gap.
+  - A **separate, distinct** script was also found in `pg_stat_statements`:
+    an unconditional environment-wipe (`DELETE FROM rides`/`drivers`/
+    non-admin `users` with no `WHERE`, same guard-trigger-disable pattern).
+    Ruled out as the cause of *this* gap — its `stats_since` is
+    2026-07-16, predating the 07-29 legacy import batch, and a wholesale
+    wipe after 07-29 would have left either 0 rows or a new batch tag, not
+    186 rows all carrying the *original* import batch id. Almost certainly
+    a pre-import "clean the environment" step, not implicated here — but
+    its mere existence (see flag below) is a standing risk independent of
+    this finding.
+- **Status: CLOSED (2026-08-16), explained by the repo owner.** Confirmed:
+  the 4 targeted phone numbers were intentional test accounts ("Kiran",
+  "Vikas", "Yash", "testy") deleted manually ahead of go-live while
+  validating driver/rider reporting and activity-stats screens — the same
+  validation pass that surfaced the `payout_gst_amount` import gap
+  (`docs/change-log/2026-08-15-legacy-import-gst-preservation.md`). This
+  matches the evidence exactly: "Kiran" and "Yash"/"Yash Kumar" were
+  literally the names attached to two of the four phone numbers in the
+  legacy CSV, and the test-labeled entries ("Test YK", "Yy", "Hh", "Test Y")
+  cover "testy". **Not a bug, not unexplained data loss** — intentional
+  pre-launch cleanup that happened to also remove legacy-imported rides
+  linked to those test accounts' phone numbers via the importer's own
+  phone-match logic. No further action needed on the row-count question
+  itself; every legacy-migration figure produced after 2026-08-14 (i.e.
+  everything in this session) reflects the post-cleanup state and does not
+  need re-verification against the earlier 224 baseline.
+- **Two residual items spun off separately** (both process/tooling gaps
+  surfaced *by* this investigation, independent of the cleanup itself being
+  legitimate) — see **A35** and **A36** below.
+- **Why this matters beyond the row count itself:** any "live-verified"
+  dollar figure or row count in this repo's audit docs (including A30,
+  A31, A32, A33, and every figure in this session's own Phase 0 report) is
+  a snapshot that can silently change with **no durable record of why** —
+  `postgres_logs` does not capture DML on this project, so only
+  `pg_stat_statements` (aggregate query shapes, no row-level detail, no
+  actor identity) offers any forensic trail at all, and only for as long as
+  `stats_reset` hasn't fired again.
+- **What was NOT independently re-verified after the owner's confirmation:**
+  the exact 38 ride IDs affected (not recoverable — the deleted
+  `users`/`drivers` rows are gone, and `RAISE NOTICE` output isn't captured
+  at this project's log verbosity); whether all 4 phone numbers' accounts
+  specifically had a legacy-imported ride attached (only circumstantial
+  CSV-presence evidence). Neither blocks closure — the mechanism, actor
+  intent, and timing are all now independently corroborated.
+
+### A35. Ad-hoc account-deletion scripts bypass the documented 7-year `driver_insurance_periods` retention policy
+- **Source:** surfaced while investigating A34 (2026-08-16), not itself
+  part of A34's original question.
+- **Issue:** the phone-scoped test-account cleanup script found in
+  `pg_stat_statements` (see A34) disables this repo's append-only
+  regulatory guard triggers (`driver_insurance_periods_no_mutate`,
+  `financial_events`'s delete gate, `audit_logs_no_delete`) in order to
+  hard-delete `driver_insurance_periods` rows for the matched driver(s).
+  CLAUDE.md's own PIPEDA section and `docs/runbooks/data-retention.md`
+  both state insurance-period transitions must be retained for the full
+  7-year SGI regulatory window *regardless* of a deletion request — the
+  documented, sanctioned Step H DSAR process (`purge_pii_retention()`)
+  enforces this by construction: it explicitly refuses to touch any
+  account that has `rides`, `driver_insurance_periods`, `payouts`, or
+  `bank_accounts` rows at all. This ad-hoc script does the opposite —
+  it's not a variant of the sanctioned process, it's a separate,
+  hand-written tool that never had that guard in the first place.
+- **Confirmed benign in this instance** — A34's cleanup targeted test
+  accounts, not real regulatory-covered drivers — but the script itself
+  would do the same thing to a real driver's insurance-period history if
+  reused for an actual DSAR request.
+- [x] **Status:** fixed (2026-08-17). Two-part fix, both reviewed
+  (`spinr-migration-reviewer` + `spinr-regulatory-compliance-checker`,
+  verdicts: safe to merge / adequate partial fix — see
+  `docs/change-log/2026-08-17-a35-retention-guard-monitor.md`):
+  1. **Detection**: `check_disabled_guard_triggers()` (migration 317, read-only,
+     `service_role`-only) + a new 6-hourly background loop
+     (`backend/utils/retention_guard_monitor.py`) that alerts (CRITICAL log +
+     Sentry `fatal` + one `audit_logs` row) if any `%_no_mutate`/`%_no_delete`
+     guard trigger (plus the named legacy exception `audit_logs_no_update`) is
+     found disabled. Never auto-remediates. Wired into both the spawn list
+     and the loop watchdog's tracked-name list from day one.
+  2. **Sanctioned replacement**: `backend/services/test_account_cleanup_service.py`
+     — dry-run-only plan builder (no delete path built), buckets every
+     phone-matched account into `safe_to_delete` / `blocked_regulated_data_present`
+     using Step H's eligibility guard **plus** a check Step H itself is
+     missing (see **A38** below).
+  - **Honestly-stated, NOT closed by this fix**: the detection loop is a
+    point-in-time poll — it cannot see a disable→mutate→re-enable cycle
+    completed within one session (the actual shape of the 2026-08-14
+    incident), at any polling cadence. Closing that needs a synchronous
+    `ddl_command_end` event trigger, deliberately **not** built in this
+    change (database-wide blast radius on every `ALTER TABLE` statement,
+    untestable against live Postgres from this session) — spun off as
+    **A37**.
+  - **What was NOT verified:** whether this script has ever been run against
+    an account that *did* have real `driver_insurance_periods` history —
+    A34 only confirmed the 2026-08-14 runs were test accounts. Migration 317
+    itself has **not been applied to production** in this session (repo
+    convention is `scripts/migrate.py`, not ad-hoc application) — until it
+    is, the new loop logs an RPC-not-found error every 6h (never a false
+    positive/negative, verified by test) rather than actually detecting
+    anything.
+
+### A37. Real-time DDL detection for regulatory guard triggers (event trigger) — CLOSED (2026-08-17)
+- **Source:** surfaced by `spinr-regulatory-compliance-checker`'s review of
+  the A35 fix (2026-08-17) — see
+  `docs/change-log/2026-08-17-a35-retention-guard-monitor.md`.
+- **Issue:** A35's fix polls trigger state every 6h. Polling, at any
+  cadence, cannot observe a disable → mutate/delete → re-enable cycle
+  completed *within* a single `psql`/dashboard session — exactly the shape
+  the 2026-08-14 incident actually had. The only mechanism that closes this
+  is synchronous: a `CREATE EVENT TRIGGER ... ON ddl_command_end` that
+  writes an append-only row the moment `ALTER TABLE ... {DIS,EN}ABLE
+  TRIGGER` fires on a regulated table, inspecting
+  `pg_event_trigger_ddl_commands()` inside the trigger function to filter to
+  our guarded tables.
+- **Why not built alongside A35:** an event trigger fires database-wide for
+  *every* `ALTER TABLE` statement in the project, not just the guarded ones
+  — a bug in its body (a raised exception, an unhandled edge case) risks
+  breaking every future migration repo-wide, on a live-tested production
+  system, with no way to test the function against a real Postgres instance
+  from this session first. Per CLAUDE.md's "escalate, don't silently ship,
+  when in doubt" rule — this needs a deliberate, tested, separately-reviewed
+  PR, not a bundled addition to a same-day fix.
+- **Fix:** migration 318 adds `guard_trigger_ddl_audit`, a
+  `ddl_command_end` event trigger scoped to `WHEN TAG IN ('ALTER TABLE')`,
+  that re-runs migration 317's `check_disabled_guard_triggers()` at the
+  instant any `ALTER TABLE` finishes and writes an append-only
+  `regulatory_guard_trigger_disabled_realtime` `audit_logs` row if a guard is
+  found disabled at that moment. `_audit_guard_trigger_ddl()`'s entire body
+  is wrapped in `EXCEPTION WHEN OTHERS THEN RAISE WARNING` so no internal bug
+  can escape and block the triggering DDL.
+  `backend/utils/retention_guard_monitor.py` was extended with
+  `_fetch_realtime_events()`, merging these rows into the same
+  per-`(table, trigger)` dedupe/escalation path as the existing 6h RPC poll —
+  so a same-session disable/re-enable now pages within one poll cycle
+  (previously: never), while the permanent record is instantaneous. Detail:
+  `docs/change-log/2026-08-17-a37-guard-trigger-ddl-realtime-audit.md`.
+- **Both original blockers addressed, not asserted away:** verified against
+  a real, isolated Supabase database branch (not a mock) — unrelated
+  `ALTER TABLE` succeeds cleanly with the trigger installed; disabling a
+  guard produces an immediate correct audit row; re-enabling produces no
+  error/no duplicate; and with `check_disabled_guard_triggers()` deliberately
+  dropped to force an internal failure, a subsequent `ALTER TABLE` still
+  succeeded — proving the exception-swallowing holds under real failure, not
+  just in code review. See the change-log's §9 for the exact branch id and
+  command sequence.
+- **Status:** closed. Detect-only, as scoped — never re-enables a trigger,
+  never blocks the DDL that disabled one; actual paging stays the existing
+  6h loop's job (true sub-6h paging directly from SQL, e.g. `pg_notify` +
+  a listener, is a reasonable future enhancement, deliberately not built
+  here to avoid adding a new always-on process dependency to a
+  database-wide DDL hook).
+
+### A38. `purge_pii_retention()` Step H never checks `rides.driver_id` for a driver account — CLOSED (2026-08-17)
+- **Source:** surfaced by `spinr-regulatory-compliance-checker`'s review of
+  the A35 fix (2026-08-17) — the new `test_account_cleanup_service.py`
+  deliberately added a `rides.driver_id` check that Step H itself lacks
+  (see `backend/migrations/296_pipeda_30day_profile_scrub.sql`'s Step H
+  body: it checks `driver_insurance_periods`/`payouts`/`bank_accounts` for a
+  driver account, and `rides.rider_id` for any account, but never
+  `rides.driver_id`).
+- **Issue:** a driver account with completed ride history but, for some
+  reason, no `driver_insurance_periods`/`payouts`/`bank_accounts` rows would
+  currently pass Step H's own eligibility guard and be hard-deleted at the
+  7-year mark despite having ride history — the sanctioned DSAR process has
+  the same class of gap A35 found in the ad-hoc script, just narrower and
+  less likely to be hit.
+- **Not fixed as part of A35** — that fix made its own replacement tool
+  stricter than Step H rather than attempting to also patch Step H's SQL,
+  since Step H is money/regulatory-adjacent production code that changes
+  hard-delete behavior and deserves its own dedicated review, not a
+  drive-by edit inside an unrelated fix.
+- **Fix (migration 321):** re-issues `CREATE OR REPLACE FUNCTION
+  purge_pii_retention()` (same `migration-override-ok` pattern migration
+  296 already established for this function) adding `EXISTS (SELECT 1 FROM
+  rides r2 WHERE r2.driver_id = d.id)` to Step H's driver-side guard, in
+  both the live-delete loop's `WHERE` clause and the dry-run `COUNT` query.
+  Verified by diffing the full function body against migration 296's
+  original: the ONLY substantive differences are the Step H comment and the
+  two added `EXISTS` clauses — every other step (A–G, I–N), the result
+  JSON, `REVOKE`/`GRANT`, and the audit-log insert are byte-identical.
+  Strictly more conservative direction — can only exclude MORE accounts
+  from hard-delete, never fewer; cannot retroactively affect any account
+  already deleted under the old guard.
+- **Manual review** (Codex auto-review off, C7/C9): `spinr-migration-
+  reviewer` found one blocker (the migration was initially numbered 319,
+  which two other PRs claimed on `main` while this branch was in progress
+  — renamed to 321, the actual next-free slot, and every self-reference
+  updated) — fixed. `spinr-regulatory-compliance-checker`: **SAFE TO
+  MERGE**, confirmed the fix correctly serves the SK Transportation Act's
+  7-year retention rule with no DSAR-stuck-forever risk (same convergence
+  behavior as the pre-existing rider-side guard, via Step B's unconditional
+  7-year ride purge).
+- **Status:** closed. Full detail:
+  `docs/change-log/2026-08-17-a38-step-h-driver-rides-guard.md`.
+
+### A39. Two competing migration runners; the one CLAUDE.md documents (`migrate.py`) does not match production's actual `schema_migrations` schema — CLOSED (2026-08-17), docs corrected
+- **Source:** found while manually applying migration 317 (the A35 fix) to
+  production, since `python scripts/migrate.py` couldn't be run in this
+  session (no `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`/`DATABASE_URL` in
+  the shell) and applying it directly surfaced the mismatch.
+- **Issue:** `backend/scripts/` contains **two** independent migration
+  runners with **two different** `schema_migrations` table shapes:
+  - `migrate.py` — expects `schema_migrations(version TEXT PRIMARY KEY,
+    applied_at)`, defined by `backend/migrations/00_schema_migrations_table.sql`.
+    This is the one `CLAUDE.md`'s "Database Migrations" section (and
+    `backend/migrations/CLAUDE.md`, and `AGENTS.md`) documented as
+    canonical.
+  - `run_migrations.py` — expects `schema_migrations(filename TEXT PRIMARY
+    KEY, checksum, applied_at, applied_by)`, defined by
+    `backend/migrations/24_schema_migrations.sql` (an April 2026
+    production-readiness fix, P0-B4, that added checksum verification and
+    fixed a real duplicate-prefix ordering bug — see that migration's own
+    top comment).
+  - **Confirmed live** (`select table_schema, column_name ... from
+    information_schema.columns where table_name='schema_migrations'`):
+    production's actual table has `filename`/`checksum`/`applied_at`/
+    `applied_by` — migration 24's shape, i.e. `run_migrations.py`'s.
+    Existing rows are stamped `applied_by='backfill-verified'`, a bootstrap
+    trace confirming `run_migrations.py` (or an equivalent manual process
+    using its schema) is what's actually been used against production.
+  - **`migrate.py` would fail immediately if run against production
+    today** — `INSERT INTO schema_migrations (version) VALUES (%s)` against
+    a table with no `version` column raises `column "version" does not
+    exist`. No evidence it has ever successfully tracked a migration
+    against the live database.
+  - Confirmed via `.github/workflows/`: **CI never invokes either script**
+    to actually apply migrations (`migration-check.yml` only lints
+    filenames/format) — migrations have always been applied manually or via
+    a one-off process, which is how this drift went unnoticed.
+- **Fix:** corrected the documented command in `CLAUDE.md`,
+  `backend/migrations/CLAUDE.md`, `AGENTS.md`, and
+  `docs/runbooks/migration-conflict-detection.md` to
+  `python -m backend.scripts.run_migrations`, with a note explaining why
+  `migrate.py` is wrong.
+- **Follow-up decision (2026-08-17, same day, product owner confirmed):**
+  reconcile, not just delete — `run_migrations.py` had a real gap
+  `migrate.py` didn't (no `CREATE/DROP INDEX CONCURRENTLY` support at all;
+  it wraps every migration in one transaction, which Postgres rejects for
+  `CONCURRENTLY`), and `migrate.py`'s CONCURRENTLY-safe statement splitter
+  (`ACTION_ITEMS.md` B0) was real, tested, working code. Ported
+  `_split_sql_statements` and the autocommit-routing logic from `migrate.py`
+  into `run_migrations.py` (`_apply_one_autocommit`), moved/adapted both
+  regression test files (`test_migration_concurrently_splitting.py`,
+  `test_run_migrations_autocommit_chunks.py`, née
+  `test_migrate_autocommit_chunks.py`) to test the ported functions, fixed
+  every other living-doc/CI/code reference (`CLAUDE.md` ×2 blocks,
+  `AGENTS.md` ×2 blocks, `docs/dev-setup.md`, the migration-conflict-
+  detection runbook, `.github/workflows/migration-check.yml`'s comments,
+  `.claude/commands/migration-check.md`, and a real runtime error message
+  in `routes/admin/auto_payouts.py` that told an admin to run the deleted
+  script), then deleted `backend/scripts/migrate.py` outright. Historical
+  audit/change-log documents that mention `migrate.py` were deliberately
+  left untouched — point-in-time records, not living docs (same convention
+  followed throughout this session). 128 directly affected tests pass
+  (`test_migration_concurrently_splitting.py`,
+  `test_run_migrations_autocommit_chunks.py`,
+  `test_financial_events_ride_id_fk_contract.py`,
+  `test_unbalanced_scoped_migration.py`, `test_auto_payout.py`,
+  `test_migration_ordering.py`, `test_migration_fk_column_types.py`).
+- **What was NOT verified:** whether any deploy pipeline outside
+  `.github/workflows/` (e.g. a Fly/Railway post-deploy hook, a manual
+  runbook step not checked in this repo) invokes `migrate.py` specifically
+  — only this repo's own CI config was checked.
+- **Pre-merge reviewer finding, same day:** `spinr-migration-reviewer`
+  (run per the standing "wait for the review, then open the PR"
+  instruction) confirmed the ported runner code itself was correct,
+  faithfully tested, and safe, but found the "fixed every other living
+  reference" claim above was not actually complete — a full-repo grep
+  turned up 11 more files still referencing `migrate.py`:
+  `backend/requirements.in`, `backend/.coveragerc`, two
+  `verify_migrations_*.sql` scripts, `docs/runbooks/admin-rollback.md`,
+  `docs/runbooks/supabase-region-migration.md`,
+  `docs/runbooks/deploy-migration-64-65.md`,
+  `docs/runbooks/deploy-migration-297.md`, `.planning/ROADMAP.md`,
+  `.planning/REQUIREMENTS.md`, `docs/driver-faqs-saskatchewan.md`.
+  Verdict: "FIX BEFORE MERGE (non-blocking to production safety, blocking
+  to the PR's own completeness claim)." 9 of the 11 are living docs and
+  are now fixed — three of those fixes (`supabase-region-migration.md`,
+  `deploy-migration-64-65.md`, `deploy-migration-297.md`) were substantive,
+  not just a script-name swap: the original text also documented
+  `migrate.py`'s `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` connection
+  interface, which is wrong for `run_migrations.py` (needs `DATABASE_URL`).
+  The other 2 (`verify_migrations_286_291.sql`, `verify_migrations_292_293.sql`)
+  were deliberately left alone — the latter's own header comment states
+  editing it would break the provenance of a result cited in
+  `docs/change-log/2026-08-08-migration-verification-result.md`, i.e. a
+  self-declared point-in-time record, same convention as the historical
+  docs already excluded above. One more file the reviewer's list didn't
+  catch (`docs/runbooks/stripe-identity-drift-manual-test.md`) was found
+  and fixed in an independent final sweep. `.planning/graphs/graph.json`
+  and `.last-build-snapshot.json` also reference `migrate.py` dozens of
+  times but are auto-generated Graphify build outputs per `AGENTS.md`, not
+  hand-authored docs — correctly left untouched.
+
+### A36. `financial_events` is 0 rows in production despite active use by 42 files — CLOSED (2026-08-17), root cause found: neither hypothesis was right
+
+- **Source:** surfaced while investigating A34 (2026-08-16), not itself
+  part of A34's original question.
+- **Issue:** `select count(*) from financial_events` returns **0** in
+  production, despite the table being read/written by `webhooks.py`,
+  `ledger_service.py`, `payment_service.py`, `stripe_reconcile.py`,
+  `reconciliation.py`, `payment_retry.py`, and 36 other files per a repo
+  grep — this table is the 7-year CRA/SOC2 money ledger
+  (`backend/migrations/58_financial_events.sql`), not a dead/unused
+  feature. A 0-row count on an actively-integrated ledger table in a
+  system with confirmed real Stripe transaction activity (per this
+  session's Phase 0.0/0.1 Stripe cross-check) is unexpected.
+- **Root cause, established 2026-08-17 with hard evidence (both original
+  hypotheses ruled out):**
+  1. `services/ledger_service.py`'s `record_event` (the only writer of
+     `financial_events`) is called from exactly two places:
+     `payment_service.record_payment_event`/`record_refund_event` —
+     **both only invoked from inside `routes/webhooks.py`'s
+     `if ride_id:` branches**, where `ride_id = meta.get("ride_id")` comes
+     from the incoming Stripe event's `metadata.ride_id` field
+     (`routes/webhooks.py:747`, `:854`). No other code path ever calls
+     either function.
+  2. Every completed, card-paid ride in production is legacy-imported:
+     `select count(*) from rides where status='completed' and
+     payment_method in ('card','stripe')` → **186/186** carry
+     `legacy_import_metadata->>'source' = 'legacy_mongo_booking_import'`.
+     Legacy imports are bulk `INSERT`s from `booking_import_service.py` —
+     they never touch the live Stripe webhook path and correctly never
+     write `financial_events` (a different, deliberate mechanism handles
+     their money bookkeeping — the `legacy_import`/`stripe_sync` payout
+     types, see A31-A33).
+  3. **Only 2 native (non-legacy) rides exist in all of production**
+     (`select count(*) from rides where legacy_import_metadata->>'source'
+     is distinct from 'legacy_mongo_booking_import'` → 2), both
+     `status='cancelled'`, `payment_status='pending'` — **never charged.**
+     No native Spinr ride has ever reached `status='completed'` with a
+     real Stripe payment in this production database.
+  4. Yet `stripe_events` has **1,232 real webhook deliveries** since
+     2026-06-16, including 117 `payment_intent.succeeded` / 178
+     `charge.succeeded` — genuine Stripe activity confirmed by inspecting
+     actual payloads. Every one inspected carries
+     `metadata = {"type": "card", "booking": "<24-hex ObjectId>",
+     "user_id": "<24-hex ObjectId>"}` — the OLD app's MongoDB-shaped
+     metadata contract, not the new app's `{"ride_id": "<uuid>",
+     "user_id": "<uuid>"}` contract. **The old app is still live and
+     processing real customer payments on the same Stripe account**, as
+     recently as 2026-08-15 (the day before this investigation started).
+  5. Because these events carry no `ride_id`, `routes/webhooks.py`'s
+     `if ride_id:` branch — the only call site of `record_payment_event` —
+     never executes for them. They fall through harmlessly to a
+     catch-all `mark_stripe_event_processed()` (no retry storm), with one
+     minor, low-severity side effect: the `if user_id:` push-notification
+     branch (`routes/webhooks.py:877`) still fires
+     `send_push_notification(user_id=<mongo_objectid>, ...)` for these —
+     wrapped in `try/except`, silently swallowed, wasted work only, not a
+     correctness bug (not fixed here, low priority — see Files below if
+     picked up later).
+- **Conclusion: neither original hypothesis was correct.** Not "wiped by
+  the environment-wipe script" (that script's `stats_since` predates the
+  first legacy import and, per the evidence above, there was never a real
+  row to wipe from this specific table). Not "write path broken" — the
+  write path (`ledger_service.py`'s retry + Sentry-escalation logic) is
+  sound by inspection and has simply never been invoked with real traffic,
+  because no native ride has ever completed a real payment yet. **A
+  0-row `financial_events` table is the CORRECT, accurate state for a
+  system that has not yet processed a single real completed ride** — not
+  a bug.
+- **New finding, more important than the original question:** the old app
+  is confirmed, via live webhook payload evidence (not inference), to
+  still be issuing real Stripe charges on the same Stripe account as of
+  2 days before this investigation. This sharpens (with concrete evidence)
+  the existing `docs/audit/2026-08-15-dual-run-cutover/P0-critical-
+  money-and-regulatory.md` finding #2's "the old app is still running and
+  we can't see inside it" into "confirmed still running, here is exactly
+  what its webhook traffic looks like." Spun off as **A40** below.
+- **Files reviewed (no code changed — this was a pure investigation):**
+  `backend/services/ledger_service.py`, `backend/services/payment_service.py`,
+  `backend/routes/webhooks.py` (lines 666-889 specifically).
+- **What was NOT verified:** whether the old app's webhook traffic is
+  expected/intentional for the current phase of the migration (a business
+  question, not a code question) or whether it should be re-pointed away
+  from the shared endpoint; whether any OTHER event type (beyond
+  `payment_intent.succeeded`) silently no-ops the same way for old-app
+  traffic — only `payment_intent.succeeded` payloads were inspected
+  directly.
+
+### A40. Old app confirmed still live, issuing real Stripe charges on the shared Stripe account (webhook-payload evidence, 2026-08-17) — CLOSED, dual-run confirmed intentional
+
+- **Source:** surfaced while closing A36 (above) — inspecting real
+  `stripe_events` payloads to explain why `financial_events` was empty.
+- **Issue:** live production `stripe_events` (1,232 rows since
+  2026-06-16) contains `payment_intent.succeeded` (117) and
+  `charge.succeeded` (178) events whose `metadata` is shaped
+  `{"type": "card", "booking": "<24-hex Mongo ObjectId>", "user_id":
+  "<24-hex Mongo ObjectId>"}` — the OLD app's metadata contract, landing
+  on THIS (new app's) Stripe webhook endpoint. Most recent observed:
+  2026-08-15, real amounts (e.g. $9.95, $6.00, $4.46, $20.27 CAD),
+  real `booking` references. This is concrete confirmation — not
+  inference — that the old app is currently processing real customer
+  payments on the same Stripe account the new app uses, and that events
+  from both apps are being delivered to a shared webhook receiver.
+- **Why this matters:** `docs/audit/2026-08-15-dual-run-cutover/P0-
+  critical-money-and-regulatory.md` finding #2 already flagged the
+  *structural* risk ("the new system has no idea the old app exists...
+  possibly the *same* Stripe accounts the old app pays into") but framed
+  it as unconfirmed ("we can't see inside it"). This finding closes that
+  gap with direct evidence: the shared-account risk is not hypothetical,
+  it is actively happening, today, and has been for at least the 2 months
+  `stripe_events` has been capturing webhook deliveries (2026-06-16
+  onward — possibly longer; that's just when this table's retention
+  starts).
+- **Current handling is safe, not silently wrong:** `routes/webhooks.py`
+  correctly no-ops these events for ride/payment purposes (no `ride_id`
+  in metadata → no ride update, no `financial_events` write, no double
+  processing) — see A36. The one minor side effect (a wasted, silently
+  swallowed push-notification attempt against an old-app user_id) is
+  low-severity and not itself a data-integrity risk.
+- **Open questions this raises:**
+  1. Is the old app's continued live Stripe activity expected/sanctioned
+     for the current migration phase, or should it have stopped by now?
+     **CLOSED (2026-08-17) — confirmed by the product owner: dual-run is
+     intentional right now.** Both apps coexisting and processing real
+     payments during this transition period is the expected state, not an
+     incident.
+  2. Are OLD-app Connect/payout-side webhook events (`transfer.created`,
+     `account.updated`, etc. — also present in the `stripe_events` type
+     breakdown) similarly falling through unprocessed, or could any of
+     those interact with NEW-app driver Connect accounts if a driver's
+     Stripe account is shared across both apps (per P0 finding #2's "104
+     of them already have Stripe payout accounts on file — possibly the
+     *same* Stripe accounts the old app pays into")?
+     **CLOSED (2026-08-17), reassuring answer:** `transfer.created` has
+     **no handler at all** in `routes/webhooks.py` — it falls to the
+     generic unhandled branch regardless of account, structurally inert.
+     `account.updated` **is** looked up by connected-account ID
+     (`services/stripe_kyc_sync.py::apply_account_update`, matched against
+     `drivers.stripe_account_id`) — the one event type that genuinely
+     could cross-match if an account were shared. Checked live: **zero**
+     of the 15 `account.updated` events observed in `stripe_events` match
+     any current driver's `stripe_account_id` **or**
+     `stripe_account_id_superseded`. No evidence the shared-account risk
+     has actually manifested at the Connect/webhook layer, even though it
+     remains structurally possible per the original P0 finding. (Syncing
+     `account.updated` regardless of which app triggered it would in any
+     case be *correct* behavior if it ever did match — Stripe Connect
+     account state is account-level truth, not app-level, so mirroring it
+     from either app's trigger is not itself a bug.)
+  3. Should the webhook endpoint eventually be split (old app → its own
+     endpoint) before the Oct 31 decommission, or does it not matter
+     since old-app events are already inert here? **Downgraded to a
+     low-priority nice-to-have, not closed** — now that #1 confirms
+     dual-run is intentional and #2 confirms current handling is safe
+     (no Connect-account collision observed, ride/payment events correctly
+     no-op), splitting the endpoint is cleanup/hygiene rather than a risk
+     mitigation. Worth doing before the Oct 31 decommission so the old
+     app's traffic naturally stops arriving here rather than needing to be
+     manually confirmed silent, but not urgent.
+- **Status:** CLOSED. All three questions resolved: #1 confirmed
+  intentional by the product owner (2026-08-17); #2 closed with live
+  evidence (no Connect-account overlap observed); #3 downgraded to a
+  low-priority hygiene item, not a risk. No code change was needed —
+  `routes/webhooks.py`'s existing metadata-gated handling was already
+  correct for this traffic shape.
+- **What was NOT verified:** whether this predates 2026-06-16
+  (`stripe_events`'s observed floor, not necessarily when old-app traffic
+  started); event types other than `payment_intent.succeeded`,
+  `transfer.created`, and `account.updated` were not individually traced
+  (though the general pattern — ride/booking-scoped handlers gate on
+  `metadata.ride_id`, Connect-scoped handlers gate on `stripe_account_id`
+  match — covers the two structurally distinct risk shapes).
+
 ## P1 — Fix before launch (code)
 
 ### B0. Migration runner shreds any migration whose text contains "CONCURRENTLY"
+- **Update (2026-08-17, A39 follow-up):** `scripts/migrate.py` has been
+  **deleted** (see A39 above — it targeted a `schema_migrations` shape that
+  was never actually applied to production). This fix's code —
+  `_split_sql_statements` and the autocommit-routing logic — was ported
+  into `scripts/run_migrations.py` (the canonical runner) **before**
+  `migrate.py` was deleted, so nothing was lost; `run_migrations.py` never
+  had this fix applied to it directly until now, since it never had any
+  CONCURRENTLY handling at all before this port (a real, separate gap this
+  same follow-up closed). The description below is preserved as it was
+  written against `migrate.py` at the time; read `scripts/run_migrations.py`
+  and `backend/tests/test_migration_concurrently_splitting.py` /
+  `backend/tests/test_run_migrations_autocommit_chunks.py` for the current,
+  live location of this logic.
 - [x] **Status:** done — `scripts/migrate.py` now has `_split_sql_statements`,
   a lexical scanner (comment/`'...'`-string/`$tag$...$tag$`-dollar-quote
   aware) replacing the naive `sql.split(";")`. `needs_autocommit` routing now
@@ -3926,7 +4768,9 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   the commit") — met; all four listed files reach ≥90% coverage — met.
 
 ### B13. 22 drivers have no `regulatory_authority`/`regulatory_region` set (blocks the SGI-forms segregation guard from covering them)
-- [x] **Status:** backfill done (2026-07-28, migration
+- [ ] **Status:** partially done — see Round 2 below; migration 333 not
+  yet applied and the guard tightening is still pending on that. Original
+  Round 1: backfill done (2026-07-28, migration
   `265_drivers_regulatory_authority_backfill.sql`) — all 22 rows verified
   by `id` against the real project (`soavhtdhefowwvforzwb`) and confirmed
   to resolve to `service_areas` 'Regina' or 'Saskatoon' (both real
@@ -3968,6 +4812,30 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 - **Files:** `backend/routes/admin/sgi_forms.py` (unchanged — tightening
   still pending), `backend/migrations/265_drivers_regulatory_authority_backfill.sql`
   (new, applied).
+- **Round 2 (2026-08-18) — the "not blocking, dead code" call above turned
+  out to be wrong within 3 weeks.** Re-checked production before doing the
+  planned guard-tightening: 212 drivers now exist (was 209), and **7 more
+  had NULL `regulatory_authority`** — real Saskatchewan signups from
+  2026-07-30 through 2026-08-16, all resolving to Saskatoon/Regina.
+  Root cause: the actual driver self-signup/creation write paths
+  (`routes/drivers/profile.py`'s two auto-create branches,
+  `documents.py`'s document-upload auto-create, `routes/drivers/
+  location.py`'s admin `POST /drivers`) never set these two fields at
+  all — only the bulk CSV `driver_import_service.py` path did. Migration
+  265 backfilled the 22 *legacy* rows but nothing stopped the same gap
+  from regrowing on every new signup. **Fixed at the root**: new shared
+  `_resolve_regulatory_defaults()` helper in `routes/drivers/_shared.py`
+  (reuses `driver_import_service.regulatory_authority_defaults`, single
+  source of truth), wired into all four write paths; new migration
+  `333_drivers_regulatory_authority_backfill_round2.sql` backfills the 7
+  rows the bug already produced (not yet applied to production — normal
+  manual-apply process, same as 265). **Guard tightening is still NOT
+  done** — intentionally deferred until 333 is confirmed applied (doing it
+  first would re-block real drivers). `spinr-migration-reviewer`: SAFE TO
+  APPLY, no blockers; one WARNING (the single-market SGI/SK fallback needs
+  revisiting before a second province launches — not urgent, no non-SK
+  driver exists yet). Full Change Impact Log:
+  `docs/change-log/2026-08-18-b13-driver-regulatory-authority-write-paths.md`.
 
 ### B14. SGI form company address split across dedicated fields + driver licence-number/class data gap
 - [x] **Status:** address bug DONE (2026-07-29). Licence-number/class
@@ -4013,17 +4881,30 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   PIPEDA violation per that module's own docstring. Fixed before building
   anything on top of that endpoint, with a regression test asserting the
   raw value never reaches the DB write.
-- **Immediate remediation — tooling DONE, data entry still open:** (1)
-  `/dashboard/driver-license-backfill` (new admin page) lists exactly the
-  drivers missing licence data via a new `missing_license` filter on
-  `GET /admin/drivers`, lets an admin open the existing `DocumentReviewer`
-  to view each driver's already-uploaded licence photo, and save via the
-  now-fixed encrypting update path — an admin still needs to actually work
-  through the queue (this session cannot reliably read government ID
-  photos); (2) make licence-number/class entry a required part of the
-  admin document-review "approve" action going forward, so this gap can't
-  grow — small scoped change, still open, own PR + Change Impact Log (it
-  changes an existing live admin workflow).
+- **Immediate remediation — tooling DONE, gate DONE, data entry still
+  open:** (1) `/dashboard/driver-license-backfill` (new admin page) lists
+  exactly the drivers missing licence data via a new `missing_license`
+  filter on `GET /admin/drivers`, lets an admin open the existing
+  `DocumentReviewer` to view each driver's already-uploaded licence photo,
+  and save via the now-fixed encrypting update path — an admin still needs
+  to actually work through the queue (this session cannot reliably read
+  government ID photos); (2) **DONE (2026-08-18):** `POST
+  /api/admin/documents/{document_id}/review` (`backend/routes/admin/
+  documents.py::admin_review_driver_document` — the endpoint behind the
+  `DocumentReviewer` component's Approve action, used from both the main
+  drivers screen and the backfill queue) now rejects approving a driver's
+  licence document (422, before any write) unless `license_number` and
+  `license_class` are both already on the driver row. Approving any other
+  document type, or a licence document for a driver who already has both
+  fields on file (the common case — 187 of 209 drivers), is unaffected.
+  No UI code changed — the existing generic error-toast plumbing in
+  `document-reviewer.tsx` already surfaces the backend's 422 `detail`
+  verbatim, so a proactive client-side check was judged unnecessary
+  duplication rather than skipped for being too large. Tests:
+  `backend/tests/test_admin_document_review_license_gate.py`. Full
+  Change Impact Log:
+  `docs/change-log/2026-08-18-b14-require-license-at-approve.md`. Data
+  entry itself (the 22 drivers) remains open, unchanged by this.
 - **Larger proposal (not started, needs a decision):** OCR-assisted
   document intake with client-side capture guidance (Expo camera +
   quality gate), a purpose-built ID-OCR vendor (buy, not build — see
@@ -4996,6 +5877,224 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   confirmed policy — and whichever way it resolves, that decision is
   written down so this doesn't silently drift a third time.
 
+### B27. `charge.dispute.closed` mis-marks rides and can update the wrong dispute row; dispute fees never reach the ledger — CLOSED (2026-08-17)
+
+- [x] **Status:** DONE (2026-08-17, found 2026-08-14 while writing
+  `docs/runbooks/payment-dispute-evidence.md`). All three defects fixed and
+  the `charge.dispute.updated` allowlist gap closed — see
+  `docs/change-log/2026-08-17-b27-dispute-closed-webhook-fixes.md` for the
+  full Change Impact Log. `spinr-money-auditor` reviewed the diff before PR
+  creation (Codex auto-review is off, C7/C9) and found 2 real blockers in
+  the first version of fix 3's ledger write — both fixed before merge:
+  (a) the per-balance-transaction-type `event_type` string violated
+  `financial_events`'s fixed CHECK-constraint enum (migration 58), which
+  would have failed every insert 100% of the time; `event_type` is now
+  always the literal `"stripe_dispute"`, with the Stripe subtype moved into
+  `metadata`; (b) a falsy `user_id` (unresolved rider) risked an FK
+  violation on `financial_events.user_id NOT NULL REFERENCES users(id)`;
+  guarded both in the new `record_dispute_close_events()` function itself
+  and at the webhook call site. 261 tests pass across the affected webhook/
+  dispute/ledger suites, including a new `test_dispute_close_ledger.py`
+  asserting directly on the ledger INSERT payload (the webhook-level tests
+  mock the function and can't see this class of bug).
+- **Issue/gap:** three defects in the `charge.dispute.closed` branch of
+  `backend/routes/webhooks.py` (≈ line 1183):
+  1. **`warning_closed` is treated as a loss.** Stripe fires
+     `charge.dispute.closed` for `won`, `lost` *and* `warning_closed` (an
+     early-fraud-warning/inquiry that resolved without becoming a real
+     chargeback). The code is `new_payment_status = "paid" if
+     dispute_status == "won" else "dispute_lost"` — so an inquiry that
+     closed in our favour permanently marks a fully-paid ride
+     `dispute_lost`, corrupting revenue reporting and the rider's record.
+  2. **The dispute row is looked up by `payment_intent_id`, not by
+     `stripe_dispute_id`.** `find_one("stripe_disputes",
+     {"payment_intent_id": pi})` ignores the table's only unique key
+     (`idx_stripe_disputes_dispute_id`). When the PI is absent Stripe sends
+     `""`, and rows are inserted with `""` too — so a PI-less close can
+     match an arbitrary earlier PI-less row and overwrite *its* status.
+     Two disputes on one PI hit the same bug.
+  3. **The dispute fee never lands in `financial_events`.** Stripe debits
+     the disputed amount *and* a per-dispute fee via
+     `dispute.balance_transactions`; neither is recorded, so
+     `docs/runbooks/stripe-reconciliation.md` will show an unexplained
+     delta for every chargeback.
+- **Also missing:** `charge.dispute.updated` is not in
+  `_STRIPE_HANDLED_EVENTS`, so `needs_response → under_review` transitions
+  are invisible; `charge.dispute.funds_withdrawn` /
+  `funds_reinstated` likewise.
+- **Action:** key the close lookup on `stripe_dispute_id`; map
+  `warning_closed` to a non-loss status (leave `paid`, or add a distinct
+  value — do **not** reuse `dispute_lost`); record the balance-transaction
+  amounts as `financial_events` rows; add `charge.dispute.updated` to the
+  allowlist.
+- **Risk of implementing:** low-moderate — webhook-only, additive on the
+  ledger side. The `warning_closed` fix changes what an existing branch
+  writes to `rides.payment_status`, so it needs a before/after in the
+  Change Impact Log and a check for any consumer that reads
+  `payment_status == 'dispute_lost'`.
+- **Verification:** extend `backend/tests/test_routes_webhooks_coverage.py`
+  — it covers `won`/`lost` but has no `warning_closed` case and no
+  two-disputes-one-PI case.
+- **Files:** `backend/routes/webhooks.py`, `backend/migrations/` (nullable
+  `evidence_due_by`/fee columns if taken with C23),
+  `backend/tests/test_routes_webhooks_coverage.py`
+- **Acceptance:** a `warning_closed` event leaves a paid ride `paid`; a
+  PI-less close updates only its own row; every closed dispute has matching
+  `financial_events` rows for the debit and the fee.
+
+### B28. `payouts.amount` is a legacy `FLOAT` column — every writer must `float()` a `Decimal` at the DB boundary — CLOSED (2026-08-18)
+
+- **Source:** `spinr-money-auditor` review of the 2026-08-17 legacy-payout-
+  correction write path (`docs/change-log/2026-08-17-legacy-payout-
+  correction-writepath.md`) — flagged `legacy_payout_correction_service.py`'s
+  `commit_write_plan` writing `"amount": float(r.amount)`, a literal
+  `float()` on a money value going into a DB write, which CLAUDE.md's
+  Decimal-only rule normally forbids outright.
+- **Not a new violation** — confirmed via `backend/migrations/159_payouts_
+  overview_aggregates_fn.sql`, `162_payout_stats_fn.sql`, and
+  `303_..._ytd_exclude_legacy.sql` (all comment `payouts.amount is FLOAT`)
+  that this is a real, pre-existing legacy column type, not a mistake
+  introduced by any of these callers. Every other `payouts` writer in this
+  repo already does the same thing at the same boundary
+  (`services/stripe_payout_sync_service.py:407`,
+  `services/booking_import_service.py`, `routes/drivers/payouts.py`) — all
+  of them keep every arithmetic step upstream as `Decimal` and only convert
+  to `float` at the literal moment of serializing the insert payload, which
+  is the correct workaround for a `FLOAT` column, not a shortcut around the
+  Decimal rule.
+- **Status: DONE (2026-08-18).** Migration 331
+  (`ALTER TABLE payouts ALTER COLUMN amount TYPE NUMERIC(10,2) USING
+  amount::numeric(10,2)`), applied against a live table of ~222 rows
+  (sub-second rewrite, verified via direct Supabase query before writing the
+  migration). All three real writers that bypass `db_supabase.insert_one`
+  (`legacy_payout_correction_service.py`, `stripe_payout_sync_service.py`,
+  `booking_import_service.py`) now serialize via `str(Decimal)` instead of
+  `float()`. `routes/drivers/payouts.py` needed no change — confirmed it
+  already goes through `db_supabase.insert_one`/`update_one`, whose
+  `_serialize_for_api` already does `str(Decimal)` on every write, so it
+  never had the bug. The three read-side SQL functions (159/162/303) that
+  already worked around the FLOAT column via `amount::text::numeric` were
+  deliberately left unedited per the append-only migration convention —
+  that cast is a harmless no-op once the column is already NUMERIC.
+  `spinr-migration-reviewer` (SAFE TO APPLY) and `spinr-money-auditor`
+  (SAFE TO MERGE) both reviewed before merge; no blockers from either.
+  New static-source-text regression test
+  (`test_payouts_amount_no_float_cast.py`) pins the fix — verified it
+  actually catches the regression by temporarily reverting one fix and
+  confirming the test fails before restoring it. Full detail:
+  `docs/change-log/2026-08-18-b28-payouts-amount-numeric.md`.
+- **Spun off (money-auditor finding during this review, NOT fixed here —
+  see B29 below):** several other `float()` calls in
+  `booking_import_service.py` (near `rides.base_fare`, `distance_km`,
+  `total_fare`, `tip_amount`, `grand_total`, `tax_amount`,
+  `area_fees_total`, `discount_amount`, `driver_earnings`,
+  `admin_earnings`, `old_payout_gst_amount`) write into `rides` columns that
+  are *already* `NUMERIC`/`DECIMAL` (migrations 46, 82) — the same landmine
+  class this item just fixed for `payouts.amount`, but on a different table,
+  pre-existing, and out of scope for this diff.
+- **Files:** `backend/migrations/331_payouts_amount_numeric.sql`,
+  `backend/services/legacy_payout_correction_service.py`,
+  `backend/services/stripe_payout_sync_service.py`,
+  `backend/services/booking_import_service.py`,
+  `backend/tests/test_payouts_amount_no_float_cast.py`.
+- **Acceptance:** `payouts.amount` is `NUMERIC(10,2)` — met; every writer
+  passes a `Decimal`/string, not `float()`, into the insert/update payload —
+  met; a regression test asserting no writer calls `float()` on a
+  `payouts.amount` value — met.
+
+### B29. `booking_import_service.py` calls `float()` on several `rides` columns that are already `NUMERIC`/`DECIMAL` — same landmine class as B28, different table — CLOSED (2026-08-18)
+
+- **Source:** `spinr-money-auditor`'s review of B28 (2026-08-18) — flagged
+  while confirming B28's own scoping claim that its untouched `float()`
+  calls in `booking_import_service.py` all targeted a jsonb column. That
+  claim was only partially correct: most of the untouched calls
+  (`"amount": float(...)` near `base_fare`, `distance_km`, `total_fare`,
+  `tip_amount`, `grand_total`, `tax_amount`, `area_fees_total`,
+  `discount_amount`, `driver_earnings`, `admin_earnings`,
+  `old_payout_gst_amount`) actually write to **scalar `rides` columns**, not
+  the jsonb `fare_breakdown_snapshot`/`tax_breakdown`/`area_fees_breakdown`
+  fields (only those three are genuinely jsonb).
+- **Status: DONE (2026-08-18).** Verified every candidate column's real type
+  against `information_schema.columns` (project `soavhtdhefowwvforzwb`)
+  before touching anything, per B28's precedent — the money-auditor's
+  original candidate list turned out to be only partially right. Confirmed
+  NUMERIC and fixed (`float()` → `str()`): `grand_total` (`numeric(10,2)`),
+  `tax_amount` (`numeric(8,2)`), `area_fees_total` (`numeric(8,2)`),
+  `discount_amount` (`numeric(10,2)`). Confirmed genuinely `double
+  precision` (FLOAT8) and correctly left unchanged: `base_fare`,
+  `distance_km`, `total_fare`, `tip_amount`, `driver_earnings`,
+  `admin_earnings`, `distance_fare`, `time_fare`, `booking_fee`,
+  `airport_fee`, `surge_multiplier` — five of these
+  (`base_fare`/`distance_km`/`total_fare`/`tip_amount`/`driver_earnings`)
+  were on the original candidate list but are NOT NUMERIC, so this item's
+  own acceptance criteria ("that is `NUMERIC`/`DECIMAL` at the DB level")
+  correctly excludes them. `old_payout_gst_amount` is a key inside the
+  jsonb `legacy_import_metadata` column, not a scalar `rides` column at
+  all — out of scope, same category as the three jsonb fields B28 already
+  carved out. No arithmetic changed: every fixed value was already
+  `Decimal` end-to-end; only the final serialization moved from `float()`
+  to `str()`. New regression test
+  (`backend/tests/test_booking_import_rides_numeric_no_float_cast.py`,
+  sibling of B28's `test_payouts_amount_no_float_cast.py`) — depth-aware
+  static scan of the `ride` insert dict (needed because it has a nested,
+  differently-scoped `"grand_total"` key inside its own
+  `fare_breakdown_snapshot` jsonb sub-dict, which a naive scan would
+  false-positive on) plus a negative control asserting the FLOAT8 columns
+  are never wrapped in `str()`. Verified the test catches the regression:
+  reverted one fix, confirmed failure, restored it. Three existing
+  `test_booking_import_service.py` assertions updated from
+  `pytest.approx(float)` to string/`Decimal` comparisons to match. Money-
+  auditor review was **self-performed**, not run via a spawned subagent —
+  this session had no Agent/Task tool available to invoke
+  `spinr-money-auditor` (confirmed via `ToolSearch`); reasoned through
+  Decimal-only discipline, no float reintroduction, and no pre-cast
+  summation in float directly instead, and said so explicitly rather than
+  silently skipping the step. Full detail: `docs/change-log/
+  2026-08-18-b29-booking-import-rides-numeric.md`.
+- **Spun off (found during this fix, NOT fixed here — see B30 below):**
+  `backend/routes/rides/_shared.py` independently builds these same four
+  column names (`grand_total`, `tax_amount`, `area_fees_total`,
+  `discount_amount`) via `float(_round(...))` in its own fare-snapshot
+  builder — the identical bug class, on the live booking path rather than
+  the offline legacy importer, and out of scope for this diff per its file
+  boundary.
+- **Files:** `backend/services/booking_import_service.py`,
+  `backend/tests/test_booking_import_rides_numeric_no_float_cast.py`,
+  `backend/tests/test_booking_import_service.py`.
+- **Acceptance:** every `rides` column written by `booking_import_service.py`
+  that is `NUMERIC`/`DECIMAL` at the DB level receives a `str(Decimal)` (or
+  equivalent Decimal-exact) value, not `float()`, at the write boundary —
+  met; a regression test covering the `rides` writes this item closes —
+  met.
+
+### B30. `routes/rides/_shared.py` casts `grand_total`/`tax_amount`/`area_fees_total`/`discount_amount` with `float(_round(...))` into the same `NUMERIC` `rides` columns B29 just fixed
+
+- **Source:** found while fixing B29 (2026-08-18) — the blast-radius grep
+  for other writers of these four column names surfaced this file as a
+  second, independent instance of the same bug class, this time on the
+  **live** ride-booking path (`routes/rides/_shared.py` is the shared
+  fare-snapshot builder used by booking/estimates/stops, not an offline
+  import script), which raises the stakes relative to B29's legacy-importer
+  scope.
+- **Status:** open, no owner assigned, not investigated beyond the grep hit
+  (`backend/routes/rides/_shared.py:424,426,436`) that found it. Needs the
+  same treatment as B28/B29: confirm the values being cast are `Decimal`
+  all the way through `_round()` (this repo's `_round`/`_d`/`_f` helpers
+  suggest yes, but verify rather than assume), then swap `float()` → `str()`
+  at the write boundary, then extend the regression-test pattern to cover
+  this file too. Given this is a live-booking-path file (not an offline
+  import), this needs the full pre-merge release gate treatment (dry run
+  against `mock_supabase_client`, before/after scenario) per CLAUDE.md's
+  "State-machine and money changes need a dry run" rule — do not treat it
+  as a copy-paste of B28/B29's diff without that.
+- **Files:** `backend/routes/rides/_shared.py`.
+- **Acceptance:** `grand_total`/`tax_amount`/`area_fees_total`/
+  `discount_amount` in `_shared.py`'s fare-snapshot builder are serialized
+  via `str(Decimal)`, not `float()`, at the write boundary; a regression
+  test (extending B28/B29's static-scan pattern, or a new one) covers it;
+  a dry-run scenario against `mock_supabase_client` is described in the
+  closing Change Impact Log, not just "tests pass."
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly
@@ -5591,9 +6690,18 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   query-failure never raises).
 
 ### C11. Metrics aggregation & alerting not yet implemented — SLA/KPI table still unmeasured
-- [ ] **Status:** open — design accepted (ADR-010, PR #3255, merged 2026-08-02);
-  implementation not started. Tracked as **CR-2026-008**, issue
-  [#3295](https://github.com/srikumarimuddana-lab/spinrvm/issues/3295).
+- [ ] **Status:** open — design accepted (ADR-010, PR #3255, merged
+  2026-08-02, status field corrected to "Accepted" 2026-08-18); **config
+  scaffolding merged** (PR #4055, 2026-08-17 — standalone `metrics-agent/`
+  Fly app running Grafana Alloy, scrape config, dashboard panel, and the
+  first 2 ADR-010 §3 alert rules, all committed as inert/undeployed
+  config). **Not yet live** — nothing scrapes or alerts in production until
+  a human completes the 8 steps `metrics-agent/README.md` lists (Grafana
+  Cloud account, `fly apps create`/`fly deploy` for the new app, 4 Fly
+  secrets, image-digest pin, Grafana rule import, smoke test). Tracked as
+  **CR-2026-008**, issue
+  [#3295](https://github.com/srikumarimuddana-lab/spinrvm/issues/3295)
+  (left open by design — see issue comments 2026-08-17).
 - **What's wrong:** `backend/utils/metrics.py` is per-process only (its own
   docstring says so — no cross-replica aggregation, no exporter sidecar).
   `CLAUDE.md`'s P95 SLA table (dispatch offer→accept < 2s, fare calc < 300ms,
@@ -5607,23 +6715,27 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   Cloud), with a concrete <1-day MVP: one dashboard panel + 2 alert rules
   (dispatch-latency breach, payment-failure-rate breach) wired to the
   existing `ALERT_WEBHOOK_URL` Slack channel `loop_watchdog` already uses.
-- **Why not done yet:** requires infra/vendor provisioning (a Grafana Cloud
-  account, a real Fly deploy) that no dev session/sandbox environment can do
-  — genuinely needs an operator with Fly + Grafana Cloud access, not just
-  code.
-- **Open decision before implementing:** agent placement — colocate the
-  scrape agent in `backend/Dockerfile`/`fly.toml` (touches the recently
-  hardened, digest-pinned, Trivy-scanned runtime image — see C6/CR-2026-002
-  — and could reopen that scan surface) vs. a standalone Fly app scraping
-  over the private network (avoids touching the hardened image, but needs
-  Fly Machines-API-based per-replica discovery glue since Fly's `.internal`
-  DNS load-balances rather than fanning out to all replicas). Full tradeoff
-  in ADR-010 §1 and issue #3295.
-- **Constraints:** implementation needs real source changes
-  (`Dockerfile`/`fly.toml`, or a new small standalone app) and a new
-  dependency (the agent binary) — **not** purely docs/design past this
-  point. Also needs a new Fly production secret (Grafana Cloud remote-write
-  API key).
+- **Why still not live:** the remaining steps are infra/vendor provisioning
+  (a real Grafana Cloud account, a real `fly deploy`, real Fly/Grafana
+  secrets) that no dev session/sandbox environment can do — genuinely needs
+  an operator with Fly + Grafana Cloud access, not more code. PR #4055
+  already carried every statically-verifiable piece (config syntax checks,
+  JSON/YAML/TOML validation, shell lint) as far as a sandboxed session can.
+- **Agent-placement decision: resolved.** Standalone Fly app (Option B) —
+  avoids touching the hardened, digest-pinned, Trivy-scanned backend runtime
+  image (C6/CR-2026-002) at the cost of Fly per-machine DNS discovery glue
+  (`metrics-agent/discover-targets.sh`, resolving `vms.<app>.internal`'s
+  multi-AAAA-record fan-out — no Fly Machines API token needed). Full
+  tradeoff in ADR-010 §1, issue #3295, and `metrics-agent/README.md`.
+- **Constraints:** the merged config still needs, before it does anything in
+  production: (1) a Grafana Cloud account + remote-write API key, (2) `fly
+  apps create`/`fly deploy` for the new `spinr-metrics-agent-yyz` app
+  (doesn't exist on Fly yet), (3) 4 Fly secrets on that new app, (4) the
+  `grafana/alloy` image's real digest pin (currently tag-only —
+  `metrics-agent/Dockerfile` has no registry access to resolve it from a
+  sandboxed session), (5) importing `metrics-agent/grafana/*.{json,yaml}`
+  into the real Grafana Cloud account and pointing its alert contact point
+  at the real `ALERT_WEBHOOK_URL`, (6) a smoke test against real traffic.
 - **Risk if left undone:** none of `CLAUDE.md`'s SLA/KPI numbers are
   verified; a real dispatch-latency or payment-failure regression during
   live app testing would only surface via user complaints/support tickets,
@@ -5632,19 +6744,37 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   payment/auth business logic — but see the Dockerfile/Trivy risk above if
   the colocated-agent option is chosen; otherwise routine additive-deploy
   risk only.
-- **Effort estimate:** ~4–8 hours active engineering time (half a day to a
-  full day) per ADR-010 §5, plus Grafana Cloud account lead time.
+- **Effort estimate:** config/code is done (PR #4055); remaining work is
+  account/deploy steps a human executes directly against Fly + Grafana
+  Cloud — likely under an hour of hands-on time once access exists, plus
+  Grafana Cloud account lead time and a smoke-test observation window.
 - **Verification once implemented:** confirm the Grafana dashboard panel
   populates from real production traffic, confirm the 2 alert rules don't
-  false-fire against normal load, and confirm `docker-image-scan` (Trivy)
-  is still green if the colocated-agent option was chosen.
-- **Files (once implemented):** `backend/fly.toml`, `backend/Dockerfile`
-  (or a new standalone app) + Grafana Cloud config (external, not in this
-  repo).
+  false-fire against normal load. `docker-image-scan` (Trivy) is
+  unaffected either way — Option B (chosen) never touches
+  `backend/Dockerfile`.
+- **Files:** `metrics-agent/` (Fly app, Alloy config, discovery script,
+  Dockerfile, fly.toml — merged, PR #4055) + `metrics-agent/grafana/*`
+  (dashboard panel + alert rules, importable, not yet imported) + Grafana
+  Cloud config (external, not in this repo, not yet created).
 
 ### C12. Codecov uploads on `main` pushes silently fail — no token configured
-- [ ] **Status:** open — partially addressed 2026-08-11 (the "also worth
-  doing alongside" half, not the actual fix — see below). The `CODECOV_TOKEN`
+- [x] **Status:** CLOSED 2026-08-16 — user explicitly chose "remove the
+  step" over "fix the token" (no Codecov account access available in-session
+  to generate one). All 4 `codecov/codecov-action@v6` upload steps removed
+  from `ci.yml` (`backend-test`, the already-dead `frontend-test`,
+  `driver-app-test`, `rider-app-test`) along with their now-orphaned
+  `steps.codecov_upload.outcome == 'failure'` warning-annotation follow-ups.
+  Verified the "Coverage Regression"/"Corporate Coverage Floor" guardrails
+  in `ci-guardrails.yml` never depended on these uploads (they compute
+  PR-branch coverage locally via `pytest --cov`), so this is a pure noise
+  reduction — no gating behavior changed. **Investigating this surfaced a
+  separate, more important gap — see C24.** Re-open (new item, don't reuse
+  this checkbox) if Codecov access is ever obtained and the dashboard/
+  historical-trend value is wanted back.
+- **Prior status before closing:** open — partially addressed 2026-08-11 (the
+  "also worth doing alongside" half, not the actual fix — see below). The
+  `CODECOV_TOKEN`
   secret itself is still missing; do not close this checkbox until it's
   added and `token: ${{ secrets.CODECOV_TOKEN }}` is wired into the 3 steps
   below.
@@ -5702,6 +6832,58 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 - **Not blocking:** actual test pass/fail and coverage-floor enforcement
   (the `--cov-fail-under` gate inside `pytest`) are unaffected — this is
   purely the external Codecov *reporting* path, not CI's own gate.
+
+### C24. "Coverage Regression" guardrail cannot fail while `CODECOV_TOKEN` is unset — every PR auto-passes it
+- [x] **Status:** partially CLOSED 2026-08-16, same day as found. The
+  **honesty half** is fixed: `ci-guardrails.yml`'s "Assert no regression"
+  step now distinguishes `base_pct <= 0` (no baseline — cannot verify
+  anything) from a genuinely verified pass/fail, sets a
+  `baseline_status` job output (`no-baseline` vs `verified`), and
+  `guardrail-summary` renders the PR-facing table row as
+  `⚠️ not verified (no baseline — see ACTION_ITEMS.md C24)` instead of a
+  bare ✅ when there's no baseline — the false "PASS: Coverage within
+  tolerance" message is gone; the step's own log and the PR summary now
+  both say plainly that no regression check happened. **Still open:** this
+  does not add real regression detection back — that still needs a real
+  `CODECOV_TOKEN` (same blocker as C12, no account access available in any
+  session so far). Deliberately did **not** make `base_pct <= 0` a hard
+  `sys.exit(1)` — job-level `continue-on-error: true` was already present
+  before this fix and a missing token isn't any individual PR author's
+  fault; turning it into a blocking failure for every PR until someone
+  adds the token would be a bigger, more disruptive behavior change than
+  this fix's actual goal (truthful reporting), and wasn't asked for.
+- **What's wrong:** `.github/workflows/ci-guardrails.yml`'s "Fetch base
+  branch coverage from Codecov" step (`base_coverage` job step, ~line 82)
+  calls `https://codecov.io/api/v2/github/.../branches/{base}/coverage`
+  with `Authorization: Bearer ${CODECOV_TOKEN}`. With no `CODECOV_TOKEN`
+  secret configured (same root cause as C12), that call fails; the script's
+  own fallback (`... || echo "0"`) sets `BASE_PCT=0`. The next step,
+  "Assert no regression", only fails when `base_pct > 0 and delta <
+  -TOLERANCE` — since `base_pct` is always `0`, that condition can **never**
+  be true. The gate does not degrade gracefully, it **structurally cannot
+  fail**, and has printed "PASS: Coverage within tolerance" on every PR this
+  session regardless of what the PR actually did to coverage.
+- **Impact:** "Coverage Regression: success" in every Guard Rails summary
+  this session (and, per the mechanism, every PR since this workflow was
+  introduced) has been a rubber stamp, not a real check. A PR that
+  genuinely tanked backend coverage would show the same green tick as one
+  that improved it. This is a real gap in the release-quality gate, more
+  consequential than C12's noisy-but-harmless upload failures.
+- **Root cause:** same missing `CODECOV_TOKEN` secret as C12, but this is
+  the half that actually changes gating behavior — C12 only affected
+  external reporting.
+- **Why not fixed here:** same constraint as C12 — no Codecov account
+  access available in this session to generate a real token. Two real
+  fixes, not mutually exclusive: (1) add `CODECOV_TOKEN` so the base-branch
+  fetch actually works; (2) regardless of (1), make the "Assert no
+  regression" step fail loudly (or at minimum warn) when `base_pct == 0`
+  instead of silently treating "no baseline data" as "no regression" —
+  those are different findings and should not share one code path.
+- **Confirmed NOT shared:** checked `corporate-coverage-floor-gate` (the
+  "Corporate Coverage Floor" guardrail) directly — it's a fully separate
+  job that runs its own test suite and calls
+  `scripts/check_corporate_coverage_floor.py` locally, no Codecov API call
+  anywhere in it. Only "Coverage Regression" has this bug.
 
 ### C13. Required `pull_request`-triggered workflows silently never fire on some PRs
 - [ ] **Status:** open — found 2026-08-10 on PR #3494. `CI/CD Pipeline`
@@ -6143,6 +7325,30 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   that's already fully pinned — not individually enumerated here; run the
   grep in this entry's own investigation to get the current list.
 
+### C18b. `superfly/flyctl-actions/setup-flyctl@master` — a mutable branch reference C18's sweep missed, repo-wide
+- [x] **Status:** CLOSED (2026-08-18). Found via a GHAS/Semgrep
+  `github-actions-mutable-action-tag` finding on PR #4221's new
+  `deploy-backend-staging.yml` (E1 scaffolding). C18's 2026-08-12 closure
+  claimed all 176 `uses:` references repo-wide were pinned, but this one
+  wasn't caught — 4 files used `superfly/flyctl-actions/setup-flyctl@master`,
+  a literal branch reference (worse than an unpinned version tag, which at
+  least targets a fixed release): `bootstrap-fly.yml`,
+  `bootstrap-metrics-agent.yml`, `deploy-fly.yml`, and (fixed directly in
+  #4221 itself) `deploy-backend-staging.yml`.
+- **Fix:** all 4 pinned to `ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1`
+  (master's tip as of 2026-08-18, resolved via `git ls-remote
+  https://github.com/superfly/flyctl-actions.git refs/heads/master` — the
+  same anonymous read-only proxy channel C18 itself used to resolve verified
+  SHAs). `flyctl-actions` has no tagged releases (confirmed via the same
+  `git ls-remote --tags`, which returns nothing), so the trailing comment
+  names "master" rather than a version, unlike every other C18 pin.
+- **Blast radius:** CI/deploy config only, not a live-tested app surface
+  (rides/dispatch/payments/auth/corporate/safety) — no Change Impact Log
+  entry required per CLAUDE.md's own trigger list. Grepped
+  `.github/workflows/*.yml` for every other `flyctl-actions` reference to
+  confirm these 4 (3 here + the one already fixed in #4221) are the complete
+  set; no other file references this action.
+
 ### C19. `eas update` is still 100% broken on `main` today — a second, different bug downstream of the C17/RNGH fix, in `eas update`'s fingerprint-computation step
 - [x] **Status:** DURABLY CLOSED (2026-08-11, same day, follow-up pass) —
   the actual `yarn.lock` resolution bug is now fixed at the source in both
@@ -6417,8 +7623,8 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       before suppressing — grepped each file for `.current =` and confirmed
       zero reassignment after creation — before adding a narrow
       `eslint-disable-next-line react-hooks/refs` at each read site (not a
-      blanket file/rule-level disable). **2 remaining, deliberately NOT
-      fixed**: `app/driver/(tabs)/index.tsx:696` (a `lastDirectionsFetchRef.current
+      blanket file/rule-level disable). **2 remaining — FIXED 2026-08-18**
+      (see below): `app/driver/(tabs)/index.tsx:696` (a `lastDirectionsFetchRef.current
       = {...}` **write**) and `:701` (a `mapRef.current` read), both inside
       the same `<MapViewDirections onReady={...}>` callback, itself nested
       in an IIFE embedded directly in JSX
@@ -6429,11 +7635,9 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       discrepancy, flag it") — round 1's #3778 fixed exactly 2 write findings,
       both in `ActiveRidePanel.tsx`; this is a third, different write finding
       in a different file that round 1 never touched and this round was
-      scoped not to touch either. Flagging for a future round: the write
-      likely isn't a real render-time mutation (it's inside an async
-      `onReady` completion callback, not the synchronous render pass) but
-      that needs the same kind of verification the other 53 got, not an
-      assumption.
+      scoped not to touch either. **Follow-up verification done, confirmed
+      false positive, fixed with the standard narrow-suppression pattern**
+      — see the dedicated write-up below the Round 2 bullets.
   - **Deliberately deferred, not fixed** (documented reasons, not silent;
     numbers below are post-round-2 for both apps — `react-hooks/refs`
     read-during-render, `purity`, `immutability`, and
@@ -6533,15 +7737,7 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       including the `panResponder.panHandlers` case in `ActiveRidePanel.tsx`)
       — each verified via grep for `.current =` reassignment before
       suppressing, narrow per-site `eslint-disable-next-line`, not a blanket
-      disable. **2 remaining, deliberately NOT fixed**:
-      `app/driver/(tabs)/index.tsx:696` (a ref **write**,
-      `lastDirectionsFetchRef.current = {...}`) and `:701` (a ref **read**,
-      `mapRef.current`), both inside a `<MapViewDirections onReady={...}>`
-      callback nested in an IIFE embedded in JSX — this round was scoped to
-      reads only, and this write is a *third*, different write finding from
-      the 2 round 1 (#3778) already closed in `ActiveRidePanel.tsx`; flagged
-      per this round's task instructions rather than silently re-fixed.
-      Needs the same kind of verification the other 53 got before closing.
+      disable. **2 remaining at the time — FIXED 2026-08-18, see below.**
     - **Side effect worth flagging** (same phenomenon as rider's round 2):
       fixing 10 of the 15 immutability findings surfaced 10 previously
       linter-invisible `react-hooks/set-state-in-effect` findings in the
@@ -6549,6 +7745,31 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       not new behavior. Left untouched (out of scope this round).
     - Full Change Impact Log:
       `docs/change-log/2026-08-12-c20-lint-tier2-driver-app.md`.
+  - **`app/driver/(tabs)/index.tsx:696`/`:701` write+read finding — FIXED
+    2026-08-18** (the "needs the same kind of verification the other 53
+    got before closing" follow-up called for above). Did that verification
+    against the actual `react-native-maps-directions` library source
+    (`node_modules/react-native-maps-directions/src/MapViewDirections.js`)
+    rather than assuming: `onReady` is invoked at line 219, inside the
+    callback argument to `this.setState(...)` (React's setState-with-
+    callback form, guaranteed to run only after the re-render it triggers
+    has committed), itself inside a `Promise.all(...).then(...)` chain
+    kicked off from `fetchAndRenderRoute`, which is only ever called from
+    `componentDidMount`/`componentDidUpdate` — i.e. `onReady` fires from
+    an async network-completion callback strictly after React's commit
+    phase, structurally identical to `onError` (called from the same
+    promise chain's `.catch`, one line below in `index.tsx`, which the
+    linter does **not** flag) — confirming this is the same class of
+    linter false positive as the 53 already-closed sibling findings, not
+    a real render-time mutation. Fixed with the identical narrow-
+    suppression pattern: a justification comment (citing the library
+    source and the `onError` comparison) plus one
+    `eslint-disable-next-line react-hooks/refs` at each of the two sites,
+    not a blanket file/rule disable. **Verification**: `npx eslint
+    "app/driver/(tabs)/index.tsx"` → 0 problems (was 2 errors); full
+    `yarn jest --silent` → 63 suites / 534 tests passing (unchanged count,
+    comment-and-suppression-only diff); `npx tsc --noEmit` → clean.
+    **Files**: `driver-app/app/driver/(tabs)/index.tsx` only.
     - `@typescript-eslint/no-require-imports` remaining (23 rider / 11
       driver) — all in `__tests__/`/`e2e/` files, where a dynamic
       `require()` mid-test-body is the idiomatic way to grab a
@@ -7030,6 +8251,32 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       this round's explicit instruction, given the risk profile).
     - Full Change Impact Log:
       `docs/change-log/2026-08-12-c20-lint-tier4-rider-app.md`.
+  - **Round 5 (2026-08-18, both apps)**: rounds 1–4 above closed the
+    *original* backlog to near-zero; this round confirmed that with a
+    fresh `eslint --no-cache` (not trusted from this document) and found
+    the debt had **regrown from new code shipped after 2026-08-12**, not
+    from any of rounds 1–4 being wrong. Every flagged file was confirmed
+    via `git log` to be new or modified after the rounds above closed:
+    `rider-app/app/safety-hub.tsx` (new 2026-08-17, F2 Safety Hub — 5
+    `react-hooks/static-components`, a rule the earlier rounds never
+    encountered since this screen didn't exist yet), `driver-app/
+    components/dashboard/HeatmapCells.tsx` (new 2026-08-13 — 1
+    `react/display-name`), `driver-app/app/legal.tsx` (modified
+    2026-08-17, #4042 — 1 `exhaustive-deps` on a new closure), `driver-app/
+    app/appeal.tsx` (new 2026-08-17, #4050 — 2
+    `react/no-unescaped-entities`), and 2 stale `eslint-disable` comments
+    in `rider-app/app/payment-confirm.tsx` / `ride-options.tsx` (both
+    touched 2026-08-16/17 by unrelated payment fixes, leaving the
+    suppression orphaned). Fixed all of the above; re-verified
+    `rider-app/app/work-profile.tsx`'s 2 pre-existing deferred findings
+    still need the same human decision documented in round 3/4 and left
+    them untouched. `eslint --no-cache`: rider-app 9→2 (both deferred),
+    driver-app 4→0. `tsc --noEmit` clean both apps. Real production build
+    (`yarn build:web`) run on both apps (not just dev/tsc). Full Change
+    Impact Log: `docs/change-log/2026-08-18-c20-lint-round5-post-round4-regrowth.md`.
+  - **Takeaway for future rounds**: mobile lint is still not a CI gate
+    (noted above), so debt will keep regrowing between manual sweeps —
+    this is expected, not evidence the tracking here is unreliable.
 - [ ] **LogRocket major-version split**: rider `@logrocket/react-native`
   ^2.3.1 vs driver ^3.7.0 — two different native binaries of the same vendor
   SDK across the fleet, both still gated OFF on Android (hidden-API hang, see
@@ -7117,8 +8364,126 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   YAML or application-code defect. No `.github/workflows/*.yml` change is
   implicated.
 
-### C22. `scripts/migrate.py`'s tracking table doesn't match what's actually live on the production Supabase project — the runner may never have successfully recorded a migration against it
-- [ ] **Status:** open — found 2026-08-13 while investigating why the
+### C22. `scripts/migrate.py`'s tracking table doesn't match what's actually live on the production Supabase project — the runner may never have successfully recorded a migration against it — PARTIALLY RESOLVED (2026-08-17, follow-up 2026-08-18)
+
+- [ ] **Status:** partially resolved (2026-08-17, follow-up 2026-08-18).
+  `scripts/migrate.py` no
+  longer exists — deleted by A39, which reconciled `run_migrations.py` to
+  the correct (migration 24) `schema_migrations` shape and ported
+  `migrate.py`'s one useful piece (CONCURRENTLY-safe splitting) first. That
+  closes this item's original acceptance (1) and (2): the shape mismatch
+  and the broken runner code are both gone. **Not closed** — acceptance
+  (3), the actual live audit, is now more precisely quantified than before
+  but still not complete:
+  - **Tracking-table coverage, verified live** (Supabase MCP,
+    `soavhtdhefowwvforzwb`): `schema_migrations` records 161 of 407 repo
+    migration files. The table itself was only bootstrapped 2026-08-14
+    (160 `backfill-verified` rows + 1 manual apply) and the bootstrap batch
+    stopped around migration `239` — everything numerically after that
+    (108 files) plus ~138 pre-window files with non-strictly-numeric
+    naming were never recorded. **This is a mix of real gaps, not one
+    cause** — spot-checks found migrations 286 and 297 genuinely live
+    despite being untracked (bookkeeping-only gap), but migration 321
+    (A38's regulatory fix, merged and marked CLOSED) had **never actually
+    been applied** to production until this session (a real application
+    gap, not just a tracking gap). **Applied 2026-08-17** (with explicit
+    user confirmation via `AskUserQuestion`) — `purge_pii_retention()` now
+    has A38's driver-ride guard live.
+  - **A much more serious bug found while verifying 321's apply**: running
+    `purge_pii_retention(true)` immediately after confirmed the function
+    could not execute past **Step D** — `ride_messages.created_at` doesn't
+    exist (the table has `timestamp`, per migration 98). Fixing that
+    (migration 323) surfaced the identical bug one step later at **Step
+    F** — `stripe_events.created_at` doesn't exist either (the table has
+    `received_at`, per migration 22). Same bug class migration 187 already
+    fixed once for `driver_location_history` (Step C) — a table
+    pre-existing under a different column name than a later
+    `CREATE TABLE IF NOT EXISTS` assumed, invisible because Postgres
+    doesn't validate `plpgsql` column references until execution. **This
+    means the entire daily PII/data-retention background loop
+    (`utils/retention_purge.py`, ~03:00 UTC) has likely never completed a
+    single successful run** — GPS anonymization at 3y, ride/DSAR
+    hard-delete at 7y, and every step from D onward were silently failing
+    every tick. Fixed 2026-08-17 (migrations 323, 324, both applied live
+    with explicit user confirmation, both reviewed by
+    `spinr-migration-reviewer` — verdict SAFE TO APPLY). A live
+    column-existence sweep against every other table/column the function
+    references found no further broken references — D and F were the
+    last two. `purge_pii_retention(true)` now completes end-to-end and
+    surfaced a real backlog (189,208 stale `surge_pricing` rows, 51
+    expired `refresh_tokens`) — **no live purge was executed**, that's a
+    separate decision left to the daily loop's next natural tick. Full
+    detail: `docs/change-log/2026-08-17-c22-purge-pii-retention-broken-and-fixed.md`.
+    **Note for future migrations touching `purge_pii_retention()`**:
+    migrations 323/324 merged (PR #4116) without the
+    `-- migration-override-ok: <reason>` marker that
+    `ci-guardrails.yml`'s "redefines the same Postgres object" check
+    requires (321 correctly has it; 323/324 don't) — the PR's Migration
+    Safety Check failed on that and was merged over it anyway. Not fixed
+    retroactively: the check is `pull_request`-only (no `push` trigger on
+    `main`), so there's no standing red gate today, and editing an
+    already-merged migration's content — even a comment-only marker —
+    would violate this repo's explicit append-only convention for a
+    cosmetic fix with zero functional effect. The **next** migration that
+    redefines `purge_pii_retention()` needs its own
+    `migration-override-ok` marker (as every one before 323/324 correctly
+    had) — don't forget it.
+  - **2026-08-18 follow-up pass** (both open sub-questions from the prior
+    pass, closed):
+    - **`110_settings_resend_email.sql` — confirmed landed.** Live query
+      (`information_schema.columns`, project `soavhtdhefowwvforzwb`):
+      `settings.resend_api_key` and `settings.resend_from_email` both
+      exist. Also tracked in `schema_migrations`
+      (`applied_by='backfill-verified'`, 2026-08-14) — a bookkeeping gap
+      that's since been backfilled, not a real application gap. (Side
+      note, not itself a problem: three unrelated migration files all
+      share the numeric prefix `110` —
+      `110_drivers_device_attestation.sql`,
+      `110_settings_resend_email.sql`,
+      `110_wallet_pay_for_ride_tip_atomic.sql` — pre-dates C36's hard-fail
+      collision check and is handled the same way as the documented
+      319/321/327 dupes: full-filename keying, not touched.)
+    - **Other `SECURITY DEFINER` functions/background loops audited for
+      the same bug class — none found.** Cross-referenced the 37
+      background loops in `core/lifespan.py` against their source files
+      for actual `.rpc(...)` calls (a plain Python/PostgREST table query
+      would fail loudly and immediately on a missing column — only a
+      `plpgsql`/`sql`-language function body can hide a bad column
+      reference until executed, exactly how `purge_pii_retention()`'s
+      bug went unnoticed). Found 4 other loop→RPC pairs (excluding
+      `purge_pii_retention` itself, already fixed):
+      `surge_engine.py`→`drivers_available_in_polygon` (flag-gated OFF by
+      default, `SURGE_SPATIAL_COUNT`), `driver_onboarding_reminders.py`→
+      `driver_onboarding_reminder_counts`, `ledger_projection.py`→
+      `financial_events_missing_legs`, `retention_guard_monitor.py`→
+      `check_disabled_guard_triggers` (pure `pg_catalog` introspection,
+      structurally immune to this bug class — no application table
+      referenced at all). Read each function's SQL body from its defining
+      migration, cross-checked every referenced `table.column` against
+      live `information_schema.columns` (all present), then actually
+      **executed** all four (all `STABLE`/read-only, safe) against the
+      live project rather than stopping at a column-existence check —
+      all four ran end-to-end with no SQL error.
+      `financial_events_missing_legs(5)` returned one genuine pending row
+      (real backlog for `ledger_projection_loop`'s next 15-min tick, not
+      an error). **Conclusion: no instance of this bug class exists
+      beyond the two already fixed in `purge_pii_retention()`
+      (migrations 323/324).**
+  - **Still open**: the broader `schema_migrations` reconciliation (161/407
+    tracked) itself — this session (and the 2026-08-18 follow-up above)
+    only individually verified and applied 321/323/324 plus the two
+    checks above, exactly the narrow, high-confidence action the original
+    finding called for ("manually audit at least the highest-risk ones...
+    don't blind-apply ~280 migrations' worth of accumulated drift in one
+    shot"). The full reconciliation remains a substantial, separate,
+    higher-stakes audit, same as originally scoped — not attempted here;
+    doing it for real means either (a) fixing `run_migrations.py`'s own
+    dry-run path to talk to the live table and diffing its output against
+    the 407 repo files, or (b) a manual file-by-file live-schema
+    cross-check same as this session's targeted checks, at ~2.5x this
+    session's scope. Neither started.
+- [ ] **Original status (2026-08-13, superseded above but kept for
+  history):** open — found while investigating why the
   corporate-portal OTP email send has been failing since it shipped (see
   `docs/change-log/2026-08-13-corporate-otp-error-detail-and-ses-investigation.md`).
 - **What's wrong:** two migration files define incompatible schemas for the
@@ -7171,8 +8536,47 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   ~280 migrations' worth of accumulated drift in one shot.
 - **Files:** `backend/scripts/migrate.py`, `backend/migrations/00_schema_migrations_table.sql`, `backend/migrations/24_schema_migrations.sql`.
 
-### C13. `tsc --noEmit` false-positives across all three frontend surfaces (pre-existing, not caused by any recent PR)
-- [ ] **Status:** open — found 2026-08-03 while verifying PR #3382 (full-suite
+### C13. `tsc --noEmit` false-positives across all three frontend surfaces (pre-existing, not caused by any recent PR) [duplicate item number — see the other C13 above at "Required `pull_request`-triggered workflows silently never fire"; kept as-is rather than renumbered to avoid breaking either item's cross-references]
+- [x] **Status:** CLOSED — already fixed by a different session/PR before
+  this one got to it (found 2026-08-18 while dispatching a fix agent for
+  this item in parallel with C26; the agent's own investigation found
+  both root causes below already resolved in the current `tsconfig.json`
+  files, with zero diff needed). Re-verified independently in this
+  session, not just trusted the agent's report:
+  `npx tsc --noEmit` run directly in all three surfaces — **0 errors in
+  rider-app, driver-app, and admin-dashboard.**
+- **What's actually fixing it now**, confirmed present in the current
+  files:
+  1. `rider-app/tsconfig.json` and `driver-app/tsconfig.json` both carry
+     an explicit `compilerOptions.paths` entry —
+     `"expo-router": ["./node_modules/expo-router"]` — which resolves
+     `expo-router/react-navigation`'s type declarations for `tsc`.
+  2. `admin-dashboard/tsconfig.json` carries
+     `"types": ["vitest/globals", "@testing-library/jest-dom"]`, which
+     registers both ambient global types for a standalone `tsc` run.
+  The fix agent confirmed these aren't false negatives (stale
+  `tsconfig.tsbuildinfo`, skipped files) by deleting the buildinfo cache
+  and rerunning (still 0), confirming via `tsc --listFiles` that the
+  specific files originally reported as erroring are actually in the
+  compiled set, and temporarily reverting each fix one at a time to
+  confirm the original error counts (3, 4, 61) reappear and disappear
+  again on restore.
+- **No regressions**: `npx jest ...` for the two specifically-named
+  previously-failing suites (`useBottomSheetGuard.test.tsx`,
+  `ActivityView.test.tsx`) both load and pass; full suites: rider-app
+  526/527 (1 pre-existing unrelated flaky timeout in
+  `verifyEmailScreen.test.tsx` under full-suite parallel load — already
+  a known, separately-tracked flake, not caused by or related to this
+  item), driver-app 534/534, admin-dashboard (vitest) 327/327.
+- **Not identified**: which PR/session actually landed this fix, or
+  when — it predates this session's own restarted branch (based on
+  latest `main` as of 2026-08-18), so somewhere between 2026-08-03 (when
+  this item was filed) and now. Not chased down further since the item
+  is resolved either way; if it matters later, `git log -p --
+  rider-app/tsconfig.json driver-app/tsconfig.json
+  admin-dashboard/tsconfig.json` on `main` would find it.
+- [historical, pre-fix diagnosis below, kept for record]
+- ~~[ ] **Status:** open~~ — found 2026-08-03 while verifying PR #3382 (full-suite
   pass at that time: backend pytest 8742 passed/0 failed, rider-app jest
   434/434, driver-app jest 337/337, admin-dashboard vitest 157/157 — all
   green). Running a bare `npx tsc --noEmit` per surface afterward surfaced
@@ -7237,6 +8641,503 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 - **Files:** `rider-app/tsconfig.json`, `driver-app/tsconfig.json`,
   `admin-dashboard/tsconfig.json` (+ possibly a new `vitest-setup.d.ts` in
   admin-dashboard); no application code.
+
+### C23. Chargeback operations: no deadline tracking, no admin visibility, no evidence tooling
+
+- [x] **Status:** CLOSED (2026-08-18) — all 5 action items done (the one
+  carved-out exception, a Sentry-dashboard alert rule under item 2, is
+  ops config outside engineering-session reach, noted where it appears
+  below). Filed 2026-08-14 alongside
+  `docs/runbooks/payment-dispute-evidence.md`, which documents the manual
+  workaround this entire item replaced. **Action item 1 of 5 DONE (2026-08-17)**:
+  migration 326 adds `evidence_due_by`/`evidence_submitted_at`/`fee_cents`
+  to `stripe_disputes` (additive, nullable); `charge.dispute.created` now
+  parses Stripe's `evidence_details.due_by` and stores it, with a logged
+  warning (never a silent drop, never a 500) if a future payload sends a
+  malformed value. `evidence_submitted_at`/`fee_cents` are placeholder
+  columns only — not populated by anything yet. Items 2–5 (alerting, admin
+  UI, evidence-pack endpoint, submission path) remain open, same priority
+  order as originally scoped. Full detail:
+  `docs/change-log/2026-08-17-c23-dispute-evidence-due-by.md`.
+  **Action item 2 of 5 partially DONE (2026-08-17, background-loop half)**:
+  new `dispute_evidence_reminder (6h)` background loop (`utils/
+  dispute_evidence_reminder.py`, migration 327 adds the
+  `evidence_reminder_sent_at` claim-flag column) checks every 6h for open
+  disputes whose `evidence_due_by` falls within 3 days, atomically claims
+  each one (same idempotency shape as `driver_subscriptions`'
+  `expiry_warned_3d`), and fires a Sentry-tagged alert (`spinr_alert=
+  dispute_evidence_due_soon`) + ERROR log exactly once per dispute.
+  `spinr-realtime-reliability-reviewer` caught a real gap before merge — the
+  loop wasn't watchdog-covered (no heartbeat, missing from
+  `_WATCHDOG_LOOP_NAMES`) — fixed in the same change. **Not done**: the
+  Sentry-rule half of item 2 ("a Sentry rule on the existing `CHARGEBACK:`
+  error log for the open event") is a Sentry-dashboard config action outside
+  engineering-session reach — someone with Sentry admin access should wire
+  an alert rule on the `spinr_alert=dispute_evidence_due_soon` tag (or the
+  pre-existing `CHARGEBACK:` log line) to page on-call. Full detail:
+  `docs/change-log/2026-08-17-c23-dispute-evidence-reminder-loop.md`.
+  **Action item 3 of 5 DONE (2026-08-18)**: read-only "Chargebacks" tab on
+  the existing Disputes page (`admin-dashboard/src/app/dashboard/disputes`,
+  wrapped in `Tabs` alongside the pre-existing "Rider Disputes" content) —
+  ride code, reason, amount, status, evidence-due date, days-remaining,
+  filed date. Backed by a new `GET /api/admin/disputes/chargebacks`
+  (`routes/admin/support.py`, same `require_module("support")` gate as its
+  `/disputes` siblings, registered before the `/disputes/{dispute_id}`
+  path-param routes). `spinr-design-consistency-reviewer` caught a real
+  blocker before merge — a failed fetch rendered identically to a genuine
+  zero-chargebacks result, with nothing logged — fixed with a distinct error
+  banner + retry button + `console.error`, since this is a deadline-monitoring
+  surface where silently hiding a fetch failure risks missing a real evidence
+  deadline. `spinr-admin-rbac-reviewer` flagged (non-blocking) that this
+  route inherits the general "support" module gate rather than
+  `require_super_admin` (the tier this repo reserves for full Stripe-ledger
+  pulls) — judged acceptable since the endpoint is read-only and returns no
+  PAN/PII beyond `ride_code`, but worth revisiting if chargeback data should
+  sit in a stricter tier. `spinr-accessibility-reviewer` found no hard
+  blockers; fixed `aria-pressed` on the filter buttons and a `role="status"`
+  loading announcement, but did NOT verify (no contrast-checker tooling in
+  this repo) whether the amber "due soon" text color passes AA contrast on
+  white, and did not add a live-region announcement on table updates —
+  flagged as a follow-up, not fixed. Full detail:
+  `docs/change-log/2026-08-18-c23-chargebacks-admin-tab.md`.
+  **Action items 4 and 5 of 5 DONE (2026-08-18, backend only)**: `GET
+  /rides/{ride_id}/dispute-pack` (`routes/admin/dispute_pack_download.py`,
+  `require_module("support")`) zips an invoice-summary PDF, the existing
+  route-map PNG, a ride-timeline + account-history PDF, a GPS-trail CSV,
+  and a draft cover letter. `POST /disputes/{dispute_id}/submit-evidence`
+  (`routes/admin/dispute_evidence_submission.py`) calls
+  `stripe.Dispute.modify(evidence=...)` to actually submit — ships dark
+  behind a new `dispute_stripe_evidence_submission_enabled` app_settings
+  flag (default off), requires an explicit `confirm: true` per request, and
+  is gated by `require_super_admin` (stricter than item 4's general
+  "support" gate — this is a real, effectively irreversible external
+  write). `spinr-security-auditor` caught two real issues before merge: the
+  pack endpoint initially inherited `require_module("rides")` from
+  `rides_router` (over-granting to ops/dispatch admins, under-granting to
+  the actual support-admin audience) — fixed by moving it to its own
+  router; and the ride-timeline builder was labeling offered-but-unassigned
+  drivers with their full name, contradicting this feature's own
+  driver-code-only PIPEDA policy — fixed by dropping per-driver identifiers
+  from offer events entirely. `spinr-money-auditor` caught that the
+  idempotency claim on `evidence_submitted_at` was taken *after* the live
+  Stripe call rather than before — fixed so a lost claim race 409s before
+  any Stripe call happens, with rollback on Stripe failure so a genuine
+  retry isn't permanently blocked. Full detail:
+  `docs/change-log/2026-08-18-c23-dispute-evidence-pack-and-submission.md`.
+  **Frontend UI wiring DONE (2026-08-18)**: a "Download evidence pack"
+  icon button (any admin who can see the tab) and a super_admin-only
+  "Submit to Stripe" icon button (with a confirmation dialog leading with
+  "This immediately submits evidence to Stripe and cannot be undone.", an
+  optional cover-letter-text override, and a visible "Submitted" badge
+  once `evidence_submitted_at` is set) were added to the Chargebacks tab.
+  `spinr-design-consistency-reviewer` found no blockers; two warnings
+  (irreversibility warning buried mid-paragraph, submitted-state relying
+  only on a hover tooltip) both fixed. **C23 is now fully closed — all 5
+  action items done.** Full detail:
+  `docs/change-log/2026-08-18-c23-dispute-pack-ui-wiring.md`.
+  **Accessibility follow-up DONE (2026-08-18)**: the deferred
+  `spinr-accessibility-reviewer` pass on the Chargebacks tab found two real
+  blockers — the fetch-failure and download-failure banners had no
+  `role="alert"`, so a screen-reader user with focus elsewhere would never
+  be told either appeared. Fixed. Three lower-severity WARNING items
+  (a speculative dialog-focus-return race on successful submit, no
+  `DialogDescription` on the confirmation dialog, disabled-download-button
+  reason not announced) remain genuinely unverified — need a manual
+  screen-reader/keyboard pass, not silently assumed clean. Full detail:
+  `docs/change-log/2026-08-18-c23-chargebacks-tab-a11y-alert-fix.md`.
+- **Issue/gap:** the webhook records a chargeback and then nothing else
+  happens. Specifically:
+  1. **No `evidence_due_by`.** Stripe puts
+     `dispute.evidence_details.due_by` on the event; we drop it. Miss the
+     date (7–21 days depending on network) and the dispute is lost
+     automatically with no evidence considered. Nothing warns as it
+     approaches.
+  2. **No admin UI over `stripe_disputes` at all.** The Disputes page
+     (`admin-dashboard/src/app/dashboard/disputes`) reads the `disputes`
+     table — rider-raised refund requests, a different thing. Card-network
+     chargebacks are visible only via SQL or the Stripe Dashboard. The
+     `charge_dispute_created` admin WS broadcast fires into a UI that has
+     nowhere to show it.
+  3. **No evidence pack.** Assembling a response is 4–6 endpoints and 3 SQL
+     queries by hand (see the runbook). Everything needed already exists —
+     invoice PDF, `route-map.png`, `location-trail`, ride timeline,
+     `ride_offers`, account history, `ride_messages` — just not in one
+     place.
+  4. **No submission path.** `stripe.Dispute.modify(...)` is never called;
+     evidence is uploaded manually in the Stripe Dashboard.
+- **Action (in priority order):**
+  1. Additive migration: `evidence_due_by timestamptz`,
+     `evidence_submitted_at timestamptz`, `fee_cents integer` on
+     `stripe_disputes`; populate `evidence_due_by` in the
+     `charge.dispute.created` handler.
+  2. Alert on approach — a Sentry rule on the existing `CHARGEBACK:` error
+     log for the open event, plus a T-3-days warning (a replay-safe
+     background loop per `spinr-background-loop`, or a Stripe Dashboard
+     notification if we'd rather not add a 19th loop).
+  3. "Chargebacks" tab on the existing Disputes page reading
+     `stripe_disputes` — ride link, reason, amount, status, due date,
+     days-remaining. Read-only first.
+  4. `GET /api/admin/rides/{ride_id}/dispute-pack` → zip of invoice PDF,
+     route-map PNG, GPS-trail CSV, timeline JSON, account-history summary,
+     draft cover letter. PIPEDA-filtered by construction (driver_code only,
+     never driver phone/plate/address; GPS clipped to
+     `navigating_to_pickup` + `trip_in_progress`, matching what
+     `route-map.png` already does).
+  5. Only then consider submitting from admin via the Stripe Files API —
+     higher risk, and the Dashboard works.
+- **Why it's P2 not P1:** chargeback volume is currently ~zero, and the
+  runbook makes the manual path workable. Items 1–2 should jump to P1 the
+  first time a real dispute lands, because a missed deadline is an
+  unrecoverable loss.
+- **Files:** `backend/routes/webhooks.py`, new `backend/migrations/NN_*.sql`,
+  `backend/routes/admin/rides.py` (pack endpoint),
+  `admin-dashboard/src/app/dashboard/disputes/`
+- **Acceptance:** every open chargeback is visible in admin with its
+  deadline; a support agent can produce a complete, PIPEDA-clean evidence
+  pack for a ride in one click.
+
+### C32. Scheduled rides: no booking-time check for overlapping/duplicate scheduled trips by the same rider
+
+- [x] **Status:** closed 2026-08-17. `create_ride` (`routes/rides/booking.py`)
+  now rejects (409, `scheduled_ride_overlap`) a new scheduled-ride request
+  whose `scheduled_time` falls within a new
+  `SCHEDULE_OVERLAP_WINDOW_MINUTES = 60` constant of any of the same
+  rider's other `scheduled`-status rides, inserted between the existing
+  active-ride guard and the unpaid-ride guard. Additive-only — gated on
+  `body.scheduled_time` being set, so immediate (non-scheduled) bookings
+  are unaffected; no other caller of the active-ride check is touched.
+  "Warn-and-confirm" was deliberately deferred as a rider-app UX/API
+  decision (would need a two-step flow) — reject is the unambiguous,
+  purely-additive option chosen instead, per CLAUDE.md's pre-merge gates.
+  New tests in `backend/tests/test_c26_scheduled_overlap.py`:
+  exact-duplicate rejected, within-window rejected, 3.5h-outside-window
+  succeeds, immediate booking unaffected.
+  `pytest tests/test_c26_scheduled_overlap.py
+  tests/test_create_ride_scheduled_confirmation.py -q` → 6 passed. **Not
+  verified**: no live-Supabase/real-unique-index interaction (mocked
+  `get_rows` only), no >200-existing-scheduled-rides edge case.
+- **Issue/gap:** `booking.py`'s active-ride guard
+  (`routes/rides/booking.py:394-408`) only checks
+  `RideStatus.active_statuses()`, which deliberately excludes `scheduled` —
+  and the DB-level uniqueness guard (`migrations/53_rides_one_active_per_rider.sql`)
+  is a partial unique index over the same active-status set, also excluding
+  `scheduled`. Nothing rejects a rider booking two scheduled rides at the
+  same or overlapping times.
+- **Why it matters:** the conflict is invisible until dispatch time, when
+  the second ride's `scheduled → searching` claim UPDATE
+  (`utils/scheduled_rides.py:447-477`) collides with the same unique index.
+  The rider then gets a "waiting on your current trip" defer push
+  (`_notify_schedule_delayed`, `utils/scheduled_rides.py:101-108`), which is
+  confusing — there is no "current trip," just their other still-stuck
+  scheduled ride — and can escalate all the way to admin paging after
+  `_SCHEDULE_DEFER_ESCALATE_AFTER` (20 ticks, ~20-40 min,
+  `utils/scheduled_rides.py:134-151`) before anyone understands why.
+- **Action:** at booking time, reject (or warn-and-confirm) a new
+  `scheduled_time` that falls within an estimated-trip-duration window of an
+  existing `scheduled` ride for the same rider; at minimum, reject an
+  exact-duplicate `scheduled_time`.
+- **Files:** `backend/routes/rides/booking.py` (validation), possibly a new
+  partial-unique or app-level check alongside
+  `migrations/53_rides_one_active_per_rider.sql`.
+- **Acceptance:** booking a second scheduled ride that overlaps an existing
+  one for the same rider is rejected (or confirmed) at request time, not
+  discovered at dispatch time via a constraint collision.
+
+### C33. Scheduled rides: no per-rider cap on pending scheduled trips
+
+- [x] **Status:** closed 2026-08-18. Added `SCHEDULE_MAX_PENDING_RIDES = 5`
+  next to `SCHEDULE_OVERLAP_WINDOW_MINUTES` in `routes/rides/booking.py`,
+  and a cap check in `create_ride` right before the C32 overlap loop —
+  reuses the same `existing_scheduled_rides` fetch already made for that
+  loop, no extra query. A rider at or above the cap gets a 409
+  (`error_code: "scheduled_ride_cap_exceeded"`, same `SpinrException`/
+  `ErrorCode.RESOURCE_CONFLICT` shape as the overlap guard) instead of
+  being silently allowed to queue more. Gated on `body.scheduled_time`
+  being set, same as the overlap guard — immediate bookings are
+  completely unaffected regardless of how many scheduled rides the rider
+  already has. New tests in `test_c26_scheduled_overlap.py`
+  (`TestScheduledRideCapGuard`): at-cap rejected, one-under-cap succeeds,
+  immediate booking unaffected by the cap — all using existing rides
+  spaced 4h apart so only the cap guard (not the overlap guard) is
+  exercised. `pytest tests/test_c26_scheduled_overlap.py
+  tests/test_create_ride_scheduled_confirmation.py
+  tests/test_p2_scheduled_rides.py tests/test_company_guest_booking.py -q`
+  → 49 passed. **Blast radius:** isolated to `create_ride`'s scheduled-time
+  branch, same as C32 — no other caller of the active-ride guard touched.
+  **Not verified:** no live-Supabase check (mocked `get_rows` only).
+- **Issue/gap:** nothing in `routes/rides/booking.py`'s create-ride path
+  bounds how many `scheduled` rides a single rider can have outstanding at
+  once.
+- **Why it matters:** each pending scheduled ride costs a row scanned by the
+  dispatcher every tick (`_SCHEDULED_RIDES_TICK_LIMIT = 100`,
+  `utils/scheduled_rides.py:54`) and can trip the tick-cap warning/metric
+  (`utils/scheduled_rides.py:732-741`) if enough riders (or a compromised
+  account, or the AI booking tool) queue up unbounded scheduled rides. Also
+  compounds C32 — more concurrent scheduled rides per rider means more
+  chances for an overlap.
+- **Action:** add a small per-rider concurrent-`scheduled`-ride cap (e.g.
+  3–5), enforced in `booking.py` alongside the active-ride check, returning
+  a clear 4xx rather than silently accepting unlimited bookings.
+- **Files:** `backend/routes/rides/booking.py`.
+- **Acceptance:** a rider attempting to exceed the cap gets a clear
+  rejection at booking time; dispatcher tick load stays bounded per rider.
+
+### C34. Corporate company-portal guest booking bypasses all scheduled-ride validation (lead-time, max-advance, DST, overlap)
+
+- [x] **Status:** closed 2026-08-17. `CreateRideRequest.validate_scheduled_time`'s
+  body is now extracted into a standalone, importable
+  `validate_scheduled_time_value(value, tz_name)` in `backend/schemas.py`
+  — both `CreateRideRequest` and the new `CompanyGuestBookingRequest`
+  field validator call the same logic, so the two paths can't drift out
+  of sync again. `CompanyGuestBookingRequest` gained a `scheduled_timezone`
+  field and the shared validator wired onto `scheduled_time`.
+  `create_company_guest_booking` (`backend/services/company_booking_service.py`)
+  gained an overlap-window guard, keyed on the guest's user id (not the
+  booker/admin's), reusing the same `SpinrException`/
+  `ErrorCode.RESOURCE_CONFLICT`/`scheduled_ride_overlap` 409 shape as C32,
+  gated on `scheduled_time is not None` so immediate guest bookings never
+  touch the new lookup. Confirmed the refactor left `CreateRideRequest`'s
+  own behavior byte-for-byte unchanged: `pytest tests/test_p2_scheduled_rides.py`
+  → 23 passed (same count as before the refactor). New tests in
+  `backend/tests/test_company_guest_booking.py` (8 cases: lead-time,
+  max-advance, DST-ambiguous, valid-in-window, immediate-unaffected at
+  the schema level; overlap-rejected, non-overlap-accepted,
+  immediate-skips-lookup at the service level).
+  `pytest tests/test_company_guest_booking.py tests/test_p2_scheduled_rides.py
+  tests/test_corporate_company_bookings_coverage.py
+  tests/test_corporate_company_bookings_routes.py -q` → 101 passed.
+  **Blast radius:** grepped `CompanyGuestBookingRequest` and
+  `create_company_guest_booking` across `backend/` — the only production
+  caller of each is `POST /company/{company_id}/bookings`; all other hits
+  are test files. Isolated, no other callers. **Not verified:** no live
+  Supabase instance (mocks only).
+- **Issue/gap:** there are three independent paths that create a corporate
+  scheduled ride, not two. `company_allowance` and `work_profile` bookings
+  both go through `CreateRideRequest`/`create_ride`
+  (`backend/routes/rides/booking.py`), so both correctly inherit
+  `validate_scheduled_time`'s 15-minute minimum lead time
+  (`SCHEDULE_MIN_LEAD_MINUTES`), 7-day max advance
+  (`SCHEDULE_MAX_ADVANCE_DAYS`), DST spring-forward-gap/fall-back-ambiguity
+  guard (`backend/schemas.py`), and the C32 scheduled-overlap guard
+  (`booking.py:496-525`). The third path — **company-portal guest
+  booking**, `POST /company/{company_id}/bookings`
+  (`backend/routes/corporate_company_bookings.py:119-139` →
+  `backend/services/company_booking_service.py:62-231`) — does not call
+  `create_ride` at all. It builds the `Ride` row directly from
+  `CompanyGuestBookingRequest`, whose `scheduled_time` field is a bare
+  `Optional[datetime] = None` with only a phone-format validator on a
+  sibling field — no min-lead-time, no max-advance, no DST guard, no
+  `scheduled_timezone` field, and it never runs the C32 overlap check
+  (that block lives only inside `create_ride` in `booking.py`, gated on
+  `body.scheduled_time is not None`).
+- **Why it matters:** a company booker/admin can schedule a guest ride
+  seconds in the past or years in the future, submit a DST-ambiguous local
+  wall-clock time with no timezone context (the exact failure mode
+  `schemas.py`'s guard was written to close for the rider path — unfixed
+  here), or double-book two overlapping scheduled rides for the same guest
+  phone. Overlapping guest bookings sit outside the
+  `rides_one_active_per_rider` partial unique index (same gap C32 closed
+  for personal riders) and can collide at dispatch — the "confusing
+  waiting on your current trip" defer loop
+  (`utils/scheduled_rides.py:462-477`, `_track_defer_and_maybe_escalate`)
+  that C32 exists to prevent, just unguarded for this one booking path.
+  Confirmed the money side is unaffected — `_corporate_policy_still_allows_dispatch`
+  (`utils/scheduled_rides.py:235-380`) still re-verifies company/policy/
+  membership state fresh at dispatch for every path including this one, so
+  this is a booking-time UX/data-integrity gap, not a billing gap.
+- **Action:** port the same `field_validator` logic (or import
+  `SCHEDULE_MIN_LEAD_MINUTES`/`SCHEDULE_MAX_ADVANCE_DAYS`/the DST-gap
+  check) onto `CompanyGuestBookingRequest.scheduled_time`
+  (`backend/routes/corporate_company_bookings.py`), and add the same
+  overlap-window guard (mirroring `booking.py`'s block, keyed on
+  `guest_user["id"]`) inside `create_company_guest_booking`
+  (`backend/services/company_booking_service.py`) before the `Ride(...)`
+  construction.
+- **Files:** `backend/routes/corporate_company_bookings.py`,
+  `backend/services/company_booking_service.py`.
+- **Acceptance:** a company-portal guest booking with an invalid lead
+  time, an out-of-window advance date, a DST-ambiguous local time, or an
+  overlapping `scheduled_time` for the same guest is rejected the same way
+  a personal rider's equivalent request already is.
+
+### C35. Driver-app scheduled-ride offers carry no signal distinguishing them from on-demand offers
+
+- [x] **Status:** closed 2026-08-17. `_match_driver_to_ride_attempt`
+  (`backend/routes/rides/matching.py`) now includes
+  `"is_scheduled": bool(ride.get("is_scheduled"))` in the driver-facing
+  dispatch offer payload — same "originally scheduled" semantics already
+  used by `routes/drivers/ride_cancel.py`'s `_was_scheduled` (true even
+  after the ride has since transitioned to `searching`). Threaded through
+  `driver-app/store/driverStore.ts`'s `IncomingRide` type (including the
+  `fetchActiveRide` REST-fallback hydration path) and the WS
+  `new_ride_assignment` handler in `driver-app/hooks/useDriverDashboard.ts`.
+  `RideOfferPanel.tsx` renders a small indigo "Pre-booked" badge when
+  present, matching the existing WAV/Quiet-ride/Cash badge-row style;
+  renders nothing when absent/false, so it's backward-compatible with any
+  offer payload shape that predates this field. Purely additive metadata
+  — zero dispatch-timing, matching-logic, or state-machine change. New
+  tests: `backend/tests/test_rides_matching_coverage.py` (dispatch
+  payload carries `is_scheduled: true`/`false` correctly) and
+  `driver-app/__tests__/components/RideOfferPanel.test.tsx` (badge
+  renders/hides correctly). `pytest tests/test_rides_matching_coverage.py -q`
+  → 101 passed (combined run with C34's suites, see above).
+  `npx jest __tests__/components/RideOfferPanel.test.tsx` → 20 passed.
+- **Issue/gap:** a scheduled ride dispatches to drivers via the identical
+  offer/accept/timeout mechanism as an immediate ride — confirmed sound,
+  `_dispatch_scheduled_ride` (`utils/scheduled_rides.py:424-611`) calls the
+  same `match_driver_to_ride`/`_match_driver_to_ride_attempt`
+  (`backend/routes/rides/matching.py`) with no scheduled-specific branch
+  anywhere in that file. But the dispatch/offer payload assembled in
+  `matching.py` never includes `is_scheduled` (or any equivalent flag) at
+  all, so `driver-app/components/panels/RideOfferPanel.tsx` has no data to
+  distinguish a pre-booked scheduled dispatch from an on-demand one even if
+  it wanted to — grepped `driver-app/` for any scheduled-ride handling:
+  zero hits outside unrelated matches (activity labels, demand heatmap, a
+  payout page, an OTP screen).
+- **Why it matters:** purely a missed-context UX gap for drivers — a
+  driver has no way to know "this ride was booked in advance" vs. "this is
+  happening right now," which could matter for trip-planning (e.g. a
+  driver who just accepted an immediate ride has no signal that a
+  scheduled one is coming up soon in the same area). Functionally
+  harmless: the driver still receives, accepts, and completes the ride
+  correctly regardless.
+- **Action:** add `is_scheduled` (or `scheduled_dispatched`) to the offer
+  payload assembled in `matching.py`, and have `RideOfferPanel.tsx` render
+  a small "Pre-booked" badge when present. No backend state-machine or
+  dispatch-timing change needed — this is additive metadata only.
+- **Files:** `backend/routes/rides/matching.py`,
+  `driver-app/components/panels/RideOfferPanel.tsx`.
+- **Acceptance:** a driver receiving an offer for a ride that was
+  originally scheduled sees a visual indicator distinguishing it from an
+  on-demand offer.
+
+### C28. Scheduled-ride dispatch-arrival push failure mislogs as a full dispatch failure
+
+- [x] **Status:** closed 2026-08-17. The final rider confirmation push in
+  `_dispatch_scheduled_ride` (`utils/scheduled_rides.py`) is now wrapped in
+  its own try/except, mirroring `_send_reminder`'s existing pattern. A
+  failure there now logs distinctly (`"scheduled dispatch: final
+  confirmation push failed for ride {ride_id}"`, `logger.error`,
+  `exc_info=True`) instead of falling through to the outer handler's
+  `"Failed to dispatch scheduled ride"` log. New regression test in
+  `backend/tests/test_scheduled_dispatch_cr.py` asserts the distinct
+  message fires and the dispatch-failure message does not.
+  `pytest tests/test_scheduled_dispatch_cr.py -q` → 40 passed.
+- **Issue/gap:** `_dispatch_scheduled_ride` sends the rider's "Your
+  scheduled ride is starting!" push with no local try/except
+  (`utils/scheduled_rides.py:589-600`), unlike every other push call in this
+  file (e.g. `_send_reminder`, which has its own try/except and
+  Redis-based retry/dedupe). If that call raises, it falls through to the
+  outer handler and is logged as `"Failed to dispatch scheduled ride
+  {ride_id}"` — even though the claim already succeeded, the driver match
+  already ran (with its own try/except at lines 574-582), the 5-minute
+  offer timeout is already armed, and the WS broadcast
+  (`broadcast_ride_status`, lines 528-535) already fired. The ride is fine;
+  only a non-critical confirmation push was lost.
+- **Why it matters:** wrong on-call signal. This log line reads as a
+  dispatch failure (chase a phantom dispatch bug) or, worse, engineers
+  learn to discount it and later miss a real dispatch failure logged the
+  same way.
+- **Action:** wrap the final rider push in its own try/except (mirroring
+  `_send_reminder`'s pattern), log distinctly (e.g. `"scheduled dispatch:
+  final confirmation push failed"`), and don't let it flow into the
+  `"Failed to dispatch"` branch.
+- **Files:** `backend/utils/scheduled_rides.py` (~line 589-600).
+- **Acceptance:** a push-send failure at this point logs as a push failure,
+  not a dispatch failure; the existing dispatch-failure log/metric only
+  fires for genuine dispatch failures.
+
+### C29. Scheduled-ride notice-window cancellation fee has no rider-facing warning in the cancel UI
+
+- [x] **Status:** closed 2026-08-17. `GET /rides/scheduled`
+  (`routes/rides/queries.py`) now attaches a read-only
+  `notice_window_fee_amount` to each ride, computed via the existing,
+  unchanged `calculate_scheduled_cancel_notice_fee()` against current
+  `app_settings` — mirrors how `get_ride()` already surfaces the live-ride
+  `cancellation_fee` field. No charging/deduction logic touched. Rider-app's
+  `scheduled-rides.tsx` `handleCancel` reads that field and, when present,
+  appends the fee amount to the cancel confirmation text; otherwise the
+  original generic text is unchanged. Ships dark today —
+  `scheduled_ride_notice_window_fee_enabled` still defaults off in
+  production, so the field is never added and the response/behavior is
+  byte-for-byte unchanged until the flag is enabled. New tests:
+  `backend/tests/test_p2_scheduled_rides.py::TestGetScheduledRidesNoticeWindowFeePreview`
+  (flag on + fee applies, flag off, flag on + outside window) and
+  `rider-app/__tests__/scheduledRidesNoticeWindowFee.test.tsx` (source-
+  contract test, not a rendered-DOM test — this screen's `FlatList`/
+  `VirtualizedList` tree hangs under this repo's Jest/RN setup, consistent
+  with the existing "app screens covered by e2e" policy; noted explicitly
+  in the test file rather than silently skipped).
+  `pytest tests/test_p2_scheduled_rides.py -q` → 23 passed.
+  `npx jest __tests__/scheduledRidesNoticeWindowFee.test.tsx` → 3 passed.
+  **Not verified**: no staging/live-Supabase check (mocked Supabase client
+  only); no visual/snapshot regression tooling exists for rider-app screens.
+- **Issue/gap:** `scheduled_ride_notice_window_fee_enabled`
+  (`services/cancellation_service.py:63-91`) defaults `False`, and even if
+  a company/service-area turns it on, the rider-app cancel confirmation
+  sheet (`rider-app/app/scheduled-rides.tsx:52-70`, `handleCancel`) shows
+  only a generic "Are you sure you want to cancel this scheduled ride?"
+  with no mention that a fee (`scheduled_ride_notice_window_fee_amount`,
+  default $3.00) may be charged. The fee is deducted only after the fact.
+- **Why it matters:** charging money the rider wasn't warned about at the
+  point of the cancel action is a hidden-fee UX risk, out of step with how
+  carefully this codebase avoids retroactive/undisclosed charges elsewhere
+  (surge lock-at-booking, receipt line-item transparency in CLAUDE.md's "Not
+  a hidden-fee operator" guardrail).
+- **Action:** have the cancel confirmation sheet fetch/display the
+  applicable notice-window fee (or a generic "a late-cancellation fee may
+  apply" line) whenever the flag is on for that rider/service area,
+  mirroring how live-ride cancellation fees are already surfaced elsewhere
+  in the rider app.
+- **Files:** `rider-app/app/scheduled-rides.tsx` (`handleCancel` /
+  confirmation UI), `backend/services/cancellation_service.py` (fee
+  lookup/exposure).
+- **Acceptance:** with the flag on, the rider sees the potential fee before
+  confirming cancellation, not only after.
+
+### C30. Scheduled-ride DST guard is opt-in per request, not enforced server-side
+
+- [x] **Status:** closed 2026-08-17 — additive half only. Added an `else`
+  branch to `validate_scheduled_time`'s `tz_name` gate
+  (`backend/schemas.py`): when `scheduled_time` is present but
+  `scheduled_timezone` is absent, it now logs a warning (no PII — no
+  lat/lng, no rider identity) so the gap is observable instead of silent.
+  Zero change to acceptance/rejection — the value still passes through
+  exactly as before. Deliberately did **not** make `scheduled_timezone`
+  required / reject requests that omit it — that's a breaking-change risk
+  to a live-tested booking flow and needs a product decision, not a code
+  fix in this pass; left open as a follow-up if the warning signal shows
+  real-world callers omitting it. New regression test in
+  `backend/tests/test_p2_scheduled_rides.py` asserts the value is
+  unchanged and the warning fires. `pytest tests/test_p2_scheduled_rides.py
+  -q` → 20 passed.
+- **Issue/gap:** the DST-gap/DST-ambiguity validation in
+  `CreateRideRequest.validate_scheduled_time` only runs `if tz_name:`
+  (`backend/schemas.py:840-934`, gate at line 853). When
+  `scheduled_timezone` is omitted, the incoming `scheduled_time` is trusted
+  as a true UTC instant with zero DST protection — documented as an
+  intentional trade-off for existing callers that already send true UTC
+  (schemas.py:928-932), but it means the guard's effectiveness depends on
+  every caller remembering to set the field. The current rider-app build
+  always sends it (`rider-app/store/rideStore.ts:769-776`), so there is no
+  live exposure today; the gap is any *future* caller — a third-party
+  integration, an older app version, or the AI booking tool
+  (`backend/ai/tools_booking.py`) — sending a naive local time without it.
+- **Why it matters:** a caller that ever passes a naive local time without
+  `scheduled_timezone` would get a ride dispatched at the wrong wall-clock
+  hour, silently — exactly the failure mode the DST guard exists to
+  prevent, but the guard doesn't force itself on.
+- **Action:** consider requiring `scheduled_timezone` on any
+  client-controlled surface (reject the request if absent), or at minimum
+  log a warning when `scheduled_timezone` is absent so a future caller's
+  omission is visible rather than silent. Saskatchewan itself doesn't
+  observe DST, so this is not an active regulatory risk today — it's about
+  protecting future callers/markets.
+- **Files:** `backend/schemas.py` (`validate_scheduled_time`), any new
+  caller of scheduled-ride creation.
+- **Acceptance:** either `scheduled_timezone` is required for
+  client-originated scheduled-ride requests, or its absence is logged so
+  the gap is observable instead of silent.
 
 ## P3 — Post-launch backlog (tracked, not gating)
 
@@ -7595,6 +9496,13 @@ Remaining, roughly in order of user impact:
   additionally now **escapes** admin-authored free text, which the previous
   bare `<h2>`/`<p>` interpolation did not. See
   `docs/change-log/2026-08-09-all-emails-on-shared-branded-shell.md`.
+- [ ] **N18. No light-on-dark variant of the Spinr logo** — `spinr_logo.png` is
+  a charcoal wordmark with a red spiral "o", drawn for a light ground. That
+  constrains the email layout in two places: the header band must stay light
+  even in dark mode, and the dark footer carries the company name as text
+  rather than the mark. A light-on-dark variant would let the email invert
+  fully. Design decision, not a code one — see
+  `docs/change-log/2026-08-09-email-header-uber-format.md`.
 - [x] **N17 closed**: added `company_app_name` (default `"Spinr"`) as a new,
   independent setting alongside `company_name` (the legal entity) —
   `schemas.AppSettings.company_app_name`, wired through
@@ -8356,6 +10264,21 @@ how much they de-risk a public launch._
   (Fly + Railway) with no intermediate environment. Stand up a staging Fly app +
   throwaway Supabase project with synthetic data; point a `staging` branch or
   manual workflow at it. Prereq for E2, E4, and safe migration rehearsal.
+  **Scaffolding added 2026-08-18** (inert, no real infra provisioned):
+  `backend/fly.staging.toml` (placeholder app `spinr-backend-staging`, scaled
+  down vs. prod — 1 machine, scale-to-zero, 512mb), a new
+  `.github/workflows/deploy-backend-staging.yml` triggered only on a
+  `staging` branch push or manual `workflow_dispatch` (never `main`, never
+  reads a production secret name), and
+  `docs/runbooks/staging-environment.md` documenting the one-time manual
+  setup. **Still blocked** on a human with real access completing three
+  things the scaffolding cannot do itself: (1) `fly apps create
+  spinr-backend-staging`, (2) creating a throwaway Supabase project in
+  `ca-central-1` per the PIPEDA data-residency rule and seeding it with
+  synthetic data only, (3) registering `FLY_API_TOKEN_STAGING`,
+  `SUPABASE_STAGING_URL`, `SUPABASE_STAGING_SERVICE_ROLE_KEY` as new GitHub
+  secrets. Until then the new workflow fails fast at its "Verify required
+  secrets" step on every run — by design, and harmlessly.
 - [ ] **E2. Marketplace load/simulation testing** — harness BUILT on branch
   `claude/eager-franklin-69ta0w` (`loadtest/locustfile.py` + runbook with
   breaking-point register): rider+driver bots, real dispatch matchmaking, WS
@@ -8384,7 +10307,18 @@ how much they de-risk a public launch._
   platform; a total outage is currently discovered by users. Add an external
   monitor (Checkly/UptimeRobot/Grafana synthetic) hitting `/health`, auth, and
   fare-estimate every minute from outside, alerting to PagerDuty. Tie alert
-  thresholds to the CLAUDE.md SLA table (SLO + error budget).
+  thresholds to the CLAUDE.md SLA table (SLO + error budget). **Scaffolding
+  landed 2026-08-18** (docs/spec only, vendor-agnostic, no real account or
+  external probe created): `docs/runbooks/synthetic-monitoring.md` specifies
+  the three probes (`GET /health`, `POST /api/v1/auth/refresh` expecting 401,
+  `GET /api/v1/fares?lat=...&lng=...`), their down/degraded semantics, and the
+  exact SLA thresholds cited from CLAUDE.md's Performance SLAs / KPI Targets
+  tables (fare estimate P95 < 300 ms, auth refresh P95 < 200 ms);
+  `monitoring/synthetic-checks.yaml` is the declarative check spec a human
+  translates into whichever vendor config is chosen. Still needed before this
+  is real monitoring: a human picks a vendor, creates the account, wires the
+  actual checks, and creates a real PagerDuty service (the integration key in
+  the YAML is a placeholder string, never a real credential).
 - [x] **E5. Kill switches / feature flags** — CLOSED (2026-08-11). Correction
   found while scoping this: the "no documented kill switches" premise was only
   3/4 true — `scheduled_dispatch_enabled` already existed and gated
@@ -8438,10 +10372,46 @@ how much they de-risk a public launch._
   nothing exercises the running app (OWASP ZAP baseline scan against staging on a
   schedule), and a payments+PII platform should have one external penetration
   test before public launch. Budget item; book it.
+  (2026-08-18): scaffolding added, item stays open —
+  `.github/workflows/dast-zap-baseline.yml` (OWASP ZAP baseline scan via
+  `zaproxy/action-baseline`, SHA-pinned per C18) and
+  `docs/runbooks/dast-and-pentest.md`. Manual (`workflow_dispatch`) + weekly
+  schedule only, never a PR gate. Stays inert — first step detects a missing
+  `STAGING_URL` and no-ops with exit 0 — until E1 (staging environment) lands
+  and `STAGING_URL` is configured; that's the remaining blocker for the DAST
+  half. The third-party pentest half remains a pure human/procurement action
+  (booking a firm, budget approval) — no workflow attempts it. See
+  `docs/change-log/2026-08-18-e6-dast-scaffolding.md`.
 - [ ] **E7. Backup-restore drill** — `docs/runbooks/pitr-restore.md` exists but
   (like the failover runbook) has never been exercised. Restore a Supabase PITR
   snapshot into a scratch project, verify row counts + a sample ride lifecycle,
   record actual RTO in the runbook. A backup is only real after a restore.
+  **2026-08-18: scaffolding done, drill itself still not run.** Added
+  `backend/scripts/verify_restore.py` — a standalone, read-only, opt-in tool a
+  human runs against a restored branch's connection string. It reports row
+  counts for `users`/`drivers`/`rides`/`payouts`/`stripe_disputes`/
+  `driver_insurance_periods`/`financial_events` (checked against
+  `backend/migrations/`, not guessed), walks one sample `status='completed'`
+  ride's full lifecycle (ride row → `driver_insurance_periods` →
+  `financial_events`), prints elapsed wall-clock time (feeds the RTO
+  measurement), and exits non-zero on any check failure. It requires
+  `--database-url` or `RESTORE_BRANCH_DATABASE_URL` explicitly — never reads a
+  bare `DATABASE_URL` — and refuses to run if the resolved URL matches this
+  shell's `DATABASE_URL` (the production-URL guard). Covered by
+  `backend/tests/test_verify_restore_script.py` (21 tests: guard
+  true/false/env-var/trailing-slash paths, row-count pass/empty/query-error,
+  ride-lifecycle found/missing/wrong-status/missing-related-rows). Reviewed
+  by `spinr-money-auditor` (no Decimal violations found; delta_cents is
+  correctly treated as an integer, not summed). `docs/runbooks/pitr-restore.md`'s
+  "Verify branch data" step and Quarterly DR Drill section now name this
+  script instead of the old vague "Run validation query" bullet.
+  **Still blocked / not done in this session:** the actual drill — creating a
+  scratch Supabase project, triggering a real PITR branch restore, running
+  this script against it for real, and recording the actual measured RTO in
+  the runbook — requires a human with Supabase org/billing access. This
+  session deliberately did not create any real scratch Supabase project or
+  touch production data; `verify_restore.py` has been exercised only against
+  a mocked connection in tests, never against a real restored branch.
 - [ ] **E8. CODEOWNERS + review routing** — partially done. Added
   `.github/CODEOWNERS` routing payments/corporate/wallet/surge, migrations,
   auth/security-sensitive files, dispatch, and safety paths to distinct
@@ -8525,6 +10495,409 @@ how much they de-risk a public launch._
   invented** — no real names/schedule exist in this repo to draw from, and
   fabricating them would be actively misleading in an ops document. Linked
   from `docs/incident-response.md`'s Runbook Index. Docs-only, no code.
+
+### C25. Accepted risk: `image-size` HIGH advisories (1138808, 1138809) blocking `G4b · yarn audit` for `rider-app`/`driver-app` — no upstream patch exists
+
+- [ ] **Status:** open, accepted risk — not a bug to fix, a standing gate
+  exception to re-check periodically. Filed via `[CR]` #3718
+  (`.github/ISSUE_TEMPLATE/ci_change_request.yml`), CR-2026-008 —
+  **approved and formally closed 2026-08-17** via the implementing PR
+  #4049 (`docs: accept risk for unpatchable image-size advisories`,
+  merged). This item is the ACTION_ITEMS.md record the CR itself calls
+  for (issue step 3(b)) since Yarn Classic (v1) has no built-in
+  per-advisory allowlist for `yarn audit` — there is no
+  `--exclude`/`--ignore <advisory-id>` flag, so the only
+  documented-acceptance path available is recording it here rather than
+  either silently leaving `G4b` red-and-unexplained or weakening the gate
+  itself. Stays open/unchecked here on purpose — this is a living risk
+  entry, not a task to mark done; it only gets checked off if a real
+  upstream patch ships and the dependency is bumped.
+- **What's accepted:** two HIGH-severity `image-size` advisories —
+  1138808 (ICNS parser infinite-loop DoS) and 1138809 (JXL/HEIF parser
+  infinite-loop DoS) — in both `rider-app/` and `driver-app/`, pulled in
+  transitively via `expo > @expo/cli > @expo/metro > metro > image-size`
+  (and the `metro-config` variant of the same chain). This is the same
+  finding B24 already flagged as "unpatchable, left as-is, documented"
+  when it closed the rest of the JS `yarn audit`/`npm audit` gate on
+  2026-08-11 — B24 named it but didn't carry its own tracking item; this
+  is that item, now that a `[CR]` exists for it.
+- **Why no fix exists:** `image-size`'s latest published version is
+  `2.0.2`, which is itself listed as vulnerable
+  (`vulnerable_versions: <=2.0.2`, `patched_versions: <0.0.0` — the
+  advisory-database convention for "no fix published yet"). There is no
+  newer release to bump to, no `resolutions`/override target that
+  resolves it without either breaking the Metro bundler toolchain or
+  pinning an untested pre-release, and `metro` itself pins the vulnerable
+  version — un-pinning it is not something this repo controls.
+- **Why the risk is low enough to accept rather than block on:**
+  `image-size` is exercised by Metro at local/CI build time only (parsing
+  asset files during bundling) — a devDependency-of-a-devDependency, never
+  shipped in the rider-app/driver-app runtime bundle that reaches
+  end-user devices. The DoS vector requires feeding a malicious
+  ICNS/JXL/HEIF image into the bundler process itself, which is not an
+  externally-reachable attack surface for Spinr's production rider/driver
+  apps.
+- **Re-verified 2026-08-17** (this CR's implementing PR) against
+  `origin/main` — `yarn audit --level high --json` in both `rider-app/`
+  and `driver-app/` confirms the finding is still exactly these two
+  advisories on `image-size` and nothing else has regressed alongside
+  them (both apps: `{module_name: image-size, ids: [1138808, 1138809]}`,
+  no other packages present at HIGH+ severity).
+- **Re-verified again 2026-08-18** against `origin/main` (post-#4102
+  merge): `npm view image-size versions` still tops out at `2.0.2` — no
+  new release since the last check. `yarn audit --level high --json` in
+  both apps still reports exactly the same two advisory IDs
+  (`vulnerable_versions: <=2.0.2`, `patched_versions: <0.0.0`
+  unchanged — GitHub's advisory record itself hasn't been updated with a
+  fix either). Additionally checked what's actually on disk, not just
+  the advisory's claimed range: `yarn why image-size` in both apps
+  resolves to the *installed* `image-size@1.2.1` (hoisted via
+  `expo > @expo/cli > @expo/metro > metro`), not `2.0.2` — `yarn.lock`
+  only ever pins `image-size@^1.0.2` → `1.2.1`, confirmed via
+  `grep -A3 "^image-size" yarn.lock`. Verified the affected parser code
+  (`icns.js`, `heif.js`, `jxl.js`) exists in this 1.2.1 build (the
+  advisory's broad `<=2.0.2` range is not a stale/inflated artifact —
+  the vulnerable code path is genuinely present in the version actually
+  shipped), so the accepted-risk reasoning below applies unchanged
+  regardless of which sub-version within the advisory's range is
+  installed.
+- **Gate left as-is, on purpose:** `security-gates.yml`'s `G4b` step keeps
+  `continue-on-error: false` — this CR is accept-and-document, not
+  weaken-the-gate. `G4b` will stay red for `rider-app`/`driver-app` until
+  upstream ships a fix; that red is now expected and explained, not a
+  silent failure.
+- **Re-check cadence:** the weekly Routine that checked issue #3718
+  (`trig_01Eqxfe3uCFWfubz1bUgRzQu`) deleted itself 2026-08-18 per its own
+  built-in resolution-check step, now that #3718 is formally closed
+  (approved via PR #4049) — its job was to watch for either a human
+  decision on the CR or an upstream patch, and the CR side is now
+  resolved. **No automated re-check remains for the upstream-patch side**
+  — the next re-verification of "has `image-size` shipped a fix yet" is
+  manual/on-demand (as this 2026-08-18 pass was) until someone sets up a
+  replacement routine or it's caught during a routine dependency-bump
+  pass. When `image-size` (or `metro`'s pin of it) ships a patched
+  version, bump the dependency and confirm `G4b` goes green on both
+  apps — at that point this item's checkbox above should finally be
+  ticked.
+
+### C31. `privacySettingsToggles.test.tsx` leaked an unflushed/unmounted renderer, causing an intermittent `rider-app-test` full-suite failure in an unrelated file
+
+- [x] **Status:** closed 2026-08-17, filed and fixed same session while
+  investigating a `rider-app-test` CI failure on PR #4102 that showed as
+  `verifyEmailScreen.test.tsx` exceeding its 5000ms timeout.
+- **Issue/gap:** `renderScreen()` in `rider-app/__tests__/privacySettingsToggles.test.tsx`
+  rendered `PrivacySettingsScreen` synchronously (`act(() => {...})`, no
+  await) and had **no `afterEach` unmount at all**. The screen's own mount
+  effect fires `api.get('/marketing/preferences').then(...)` (three
+  `setState` calls); since the test never awaited that promise or
+  unmounted the renderer, the resolution could still be pending — with its
+  `active` cleanup flag never flipped — when Jest moved past that test
+  file entirely. Reproduced only under a full-suite run
+  (`npx jest --silent`, 61 files together), never in single-file isolation:
+  `ReferenceError: You are trying to \`import\` a file after the Jest
+  environment has been torn down. From
+  __tests__/privacySettingsToggles.test.tsx.` This corrupted the shared
+  Jest worker process for whatever ran next in it, manifesting as an
+  unrelated timeout in `verifyEmailScreen.test.tsx` (a well-behaved file
+  that already tracks/flushes/unmounts correctly) rather than a failure
+  attributed to the actual leaking file — hence "rider-app-test failing
+  on verifyEmailScreen" reading as an unrelated flake until traced back.
+- **Why it matters:** an intermittent, misattributed CI failure that looks
+  unrelated to any given PR's diff erodes trust in `rider-app-test` and
+  invites exactly the "known flake, ignore it" reflex CLAUDE.md's PR
+  review guidance warns against — except this one was a real, fixable bug,
+  not a false positive.
+- **Fix:** `privacySettingsToggles.test.tsx`'s `renderScreen()` now mirrors
+  `verifyEmailScreen.test.tsx`'s established pattern exactly — async,
+  double `flush()` (one macrotask hop is not enough to drain the API
+  client wrapper's extra microtask layer, matching why the reference file
+  also flushes twice) inside `act`, plus a tracked `mountedRenderer` +
+  `afterEach` unmount so the mount effect's promise resolves and settles
+  before the test (and file) finishes. Zero production code touched —
+  test-file-only change, no behavior change to `privacy-settings.tsx`
+  itself.
+- **Verification:** `npx jest __tests__/privacySettingsToggles.test.tsx` →
+  4 passed. Full suite (`npx jest --silent`) run 3 times consecutively →
+  61 suites / 514 tests passed each time, with the prior
+  `ReferenceError: ...torn down...` gone. A separate, pre-existing,
+  harmless "act warning" on `.unmount()` itself (present in both this file
+  and `verifyEmailScreen.test.tsx` already) remains — that's React Test
+  Renderer's known quirk for calling `.unmount()` outside `act()`, not a
+  leak, and doesn't fail any test.
+- **Blast radius:** isolated to this one test file; no other test file
+  imports or reuses `renderScreen`/`flush`/`mountedRenderer` from it.
+- **Not verified:** did not bisect which specific other test file(s) in
+  the 61-suite run were previously vulnerable to landing right after the
+  leak in worker-assignment order — fixing the leak at its source makes
+  that moot rather than needing to be enumerated. A separate, unrelated
+  "worker process failed to exit gracefully" notice (real 30s timers in
+  `verifyEmailScreen.test.tsx`'s own resend-countdown, per that file's
+  existing comment) still prints at the end of a full run — cosmetic,
+  doesn't fail the suite, out of scope for this fix.
+- **Update 2026-08-17 (same day):** CI's `rider-app-test` job re-ran the
+  same `verifyEmailScreen.test.tsx` 5000ms timeout on PR #4102 *after*
+  this fix was live — but this time `privacySettingsToggles.test.tsx`
+  itself passed cleanly with no `ReferenceError`, confirming the leak fix
+  above is real and working. The residual failure is CI-runner-specific
+  timing (likely fewer cores / more worker contention than any local run
+  here reproduced across 3+ consecutive full-suite passes) rather than a
+  second logic bug. Resolved the same way this repo already resolved an
+  identical CI-only, non-locally-reproducible case in
+  `searchDestinationPinIntegrity.test.tsx:186` — widened this one test's
+  timeout to 20000ms with an explanatory comment, rather than continuing
+  to chase a cause invisible outside CI. Verified locally:
+  `npx jest __tests__/verifyEmailScreen.test.tsx` → 10 passed.
+
+### C26. `pip-compile drift check` fails on any PR that touches `backend/requirements.in` — `requirements.txt` has drifted far out of sync with a fresh resolve, unrelated to the touching PR's actual diff
+
+- [x] **Status:** CLOSED (2026-08-18) — regenerated `backend/requirements.txt`.
+  First attempt (agent-run, from the repo root) actually left PR #4211's
+  own `requirements.txt up to date` CI job still failing — the drift
+  check runs `pip-compile` with the working directory set to `backend/`,
+  so `-r requirements.in` is what lands in the `# via` annotation
+  comments; running the same command from the repo root instead
+  (`pip-compile backend/requirements.in ...`) produces `-r
+  backend/requirements.in` in those comments, a cosmetic but real diff
+  CI's byte-for-byte comparison correctly flagged. Caught by actually
+  watching this PR's own CI (not just trusting a clean local run) and
+  reading the job's raw diff output, which pointed straight at the
+  `-r backend/requirements.in` vs `-r requirements.in` mismatch.
+  Re-ran `pip-compile requirements.in --output-file requirements.txt
+  --strip-extras --no-header --annotation-style line --no-upgrade` from
+  *inside* `backend/`, matching CI's actual working directory
+  (pip-tools 7.6.1).
+- **Correction to the original diagnosis below**: the "dozens of unpinned
+  transitive deps" read on PR #4085's CI diff was a misread of the raw
+  line-count diff, not the actual drift. Normalizing both the old and
+  regenerated files down to plain `package==version` pairs and diffing
+  those showed **zero differences** — all 149 resolved pins were already
+  correct. The actual drift was purely annotation-style: the checked-in
+  file used pip-tools' default multi-line `# via` comments with extras
+  kept in brackets (e.g. `httpx[http2]==0.28.1`); a fresh compile with
+  this repo's own `--strip-extras --annotation-style line` flags
+  produces single-line `package==version  # via ...` output instead — a
+  524-line-removed/149-line-added diff that *looked* like missing pins
+  but wasn't. No pinned package's resolved version actually changed.
+- **Verification**: installed the regenerated lockfile into a fresh venv
+  (`pip install -r backend/requirements.txt`, clean exit) and ran
+  `pytest -m unit backend/tests` — **2831 passed, 2 failed, 1 skipped**.
+  Both failures are pre-existing and unrelated (confirmed by the
+  byte-identical resolved-pin diff above, so no library version changed):
+  `test_dual_import_parity.py::test_fallback_import_branches_mirror_try_branches`
+  (a real latent bug in `routes/lost_and_found.py`'s except-ImportError
+  branch missing a `DuplicateRecordError` binding the try-branch has —
+  worth its own ACTION_ITEMS entry, not filed here to keep this item
+  scoped) and a mock-assertion mismatch in
+  `test_scheduled_rides_coverage.py::test_lock_not_acquired_still_proceeds_to_fetch`.
+- **Not run**: the full test suite (integration/E2E tiers need live
+  Supabase/Redis, unavailable in the sandbox) — `pytest -m unit` is this
+  repo's own documented fast-local-loop subset (CLAUDE.md Testing
+  Conventions), covering 2831 tests.
+- **Where surfaced:** PR #4085 (A39's `migrate.py` reconciliation), whose
+  only change to `backend/requirements.in` was a one-line comment fix
+  (`migrate.py` → `run_migrations.py`, no dependency added/removed/
+  reordered). CI's `pip-compile drift check` job still failed —
+  `.github/workflows/pip-compile-check.yml` only triggers when
+  `backend/requirements.in`/`requirements.txt` changes, so this drift has
+  presumably existed unnoticed for a while and this PR was simply the
+  first to touch the trigger path.
+- **What the failure actually shows:** the job's diff is almost entirely
+  `+` (additions) — a fresh `pip-compile requirements.in --no-upgrade`
+  resolves dozens of transitive packages (`pydantic`, `pytest`, `stripe`,
+  `supabase`, `uvicorn`, etc.) that the checked-in `requirements.txt`
+  doesn't currently pin at all, not just version bumps. That's consistent
+  with `requirements.txt` being stale relative to `requirements.in`
+  rather than a resolver nondeterminism artifact.
+- **Not fixed in PR #4085**: regenerating `requirements.txt` correctly
+  requires running `pip-compile` and reviewing/testing the resulting
+  pinned versions — not something to do as a drive-by inside a
+  comment-only-diff PR. Attempting it blind risks silently changing pins
+  the fare/payment/auth code depends on without any of this repo's
+  version-bump review discipline (see the `dependabot` bump commits
+  throughout this file for the normal, reviewed path).
+- **Next step:** someone with a working `pip-compile` environment should
+  run `pip-compile backend/requirements.in --output-file
+  backend/requirements.txt --strip-extras --no-header
+  --annotation-style line --no-upgrade`, review the diff for anything
+  surprising (should be additions/reorderings only, given `--no-upgrade`),
+  test the backend against the regenerated lockfile, and merge that as
+  its own dependency-only PR — then this check goes green for any future
+  PR that touches `requirements.in`.
+
+### C27. `ci-error-audit.yml` has created 2,483 open issues since 2026-04-28 — no cross-run dedup, no auto-close
+
+- [x] **Status:** CLOSED — fixed via `[CR]` #4112, approved and merged as
+  PR #4130 (`fix(ci-audit): cross-run fingerprint dedup for
+  ci-error-audit issue creation`, 2026-08-18). This entry was still
+  showing `[ ]` open on `main` because the fix landed from a different
+  session/PR than the one that filed it — caught 2026-08-18 while
+  scanning for the next open CR to pick up, before duplicating the work.
+- **What shipped**: `scripts/ci-audit/create_github_issue.py` now
+  fingerprints on `(workflow name, sorted failing job names, classified
+  error category+description from `error_classifier.py`)` — explicitly
+  not run ID and not raw log text — and embeds it as a hidden
+  HTML-comment marker in the issue body. Before creating a new issue, an
+  open `ci-audit`-labeled issue with a matching marker is searched for
+  first; on a match, a comment is added to the existing issue instead of
+  opening a duplicate. 4 new tests in
+  `scripts/ci-audit/test_create_github_issue.py`.
+- **Explicitly deferred, per the CR's own scoping** (not gaps in this
+  fix): auto-closing resolved issues, and one-time cleanup of the
+  existing ~2,483-issue backlog — both flagged in #4112 as separate
+  decisions needing their own sign-off, not attempted in PR #4130.
+
+### C36. Migration numeric-prefix collision check is warning-only and per-PR-scoped — a cross-PR race can (and did) land two migrations with the same number on `main`
+
+- [x] **Status:** CLOSED — fixed via `[CR]` #4187, approved and merged as
+  PR #4192 (`fix(ci): make migration prefix collision a hard CI failure`,
+  2026-08-18). Same as C27 above — this entry was still showing `[ ]`
+  open on `main` because the fix landed from a different session/PR;
+  caught 2026-08-18 while scanning for the next open CR, before
+  duplicating the work.
+- **What shipped**: `migration-check.yml`'s `CHECK B` collision branch
+  now appends to `errors` (hard failure) instead of `warnings` when a
+  new file's numeric prefix collides with or precedes a number already
+  on the PR's merge-base — blocks the merge instead of just flagging it.
+  The sequence-*gap* case (missing numbers, no collision) is unchanged
+  and still only warns, per the CR's own recommendation (gaps are
+  cosmetic and an accepted historical pattern). `CLAUDE.md`'s Database &
+  Migration Conventions section was also corrected to state this
+  accurately (see the file's own "As of CR #4187" note).
+- **Verified not to retroactively fail** on the 3 pre-existing historical
+  duplicates (319, 321, 327×2) — `CHECK B` only evaluates files in a PR's
+  own diff, never the full existing migrations directory, so untouched
+  historical dupes sitting on `main` are structurally unreachable by the
+  new hard-fail path.
+- **Explicitly deferred, per the CR's own scoping**: option (b), a
+  post-merge/`push`-to-`main` check for the narrower true cross-PR race
+  window (both PRs' branches predate each other's merge) that a per-PR
+  check structurally can't catch — recommended to defer unless option
+  (a) alone proves insufficient in practice. Not implemented in PR #4192.
+
+### C37. `driver-app-test`: leaked Animated-timer update in `RideOfferPanel.test.tsx` corrupted the shared Jest worker, intermittently timing out `ActivityView.test.tsx`
+
+- [x] **Status:** fixed 2026-08-18. Root-caused by pulling the failing job's
+  raw log (not just the summary) for the actual failing run (commit
+  `09146188`, PR #4191) and reading the stack trace immediately preceding
+  `FAIL ActivityView.test.tsx`, rather than re-guessing from the C31
+  pattern:
+  ```
+  console.error
+    An update to Animated(View) inside a test was not wrapped in act(...).
+    ...
+    at ... createAnimatedPropsHook.js:131:20
+    at AnimatedProps._callback (createAnimatedPropsHook.js:71:36)
+    ...
+    at Object.runOnlyPendingTimers (__tests__/components/RideOfferPanel.test.tsx:83:10)
+
+  FAIL __tests__/components/ActivityView.test.tsx (7.216 s)
+    ● ActivityView › keeps ride history visible when earnings loading fails
+      thrown: "Exceeded timeout of 5000 ms for a test.
+  ```
+- **Root cause:** `RideOfferPanel.test.tsx`'s own comment already documented
+  that the component "starts Animated.spring/timing loops on mount with no
+  cleanup on unmount" and used fake timers so Jest could safely discard
+  them at teardown. But `@testing-library/react-native` registers its own
+  `afterEach(cleanup)` at **import time** (top of the file, before any
+  `describe`/`beforeEach`/`afterEach` in the file body runs), and Jest runs
+  `afterEach` hooks in registration order — so RTL's cleanup unmounted the
+  tree *first*, and only then did this file's own `afterEach` call
+  `jest.runOnlyPendingTimers()`, flushing the component's still-pending
+  Animated callback **against an already-unmounted renderer, outside any
+  `act()`**. That produced the "not wrapped in act(...)" warning and left
+  an unguarded React scheduler update not fully discharged before the test
+  file's teardown returned — which then bled into whichever test file the
+  same Jest worker happened to pick up next (`ActivityView.test.tsx` on the
+  failing run), same underlying failure class as C31 (leaked async work
+  escaping a file's boundary and corrupting the next file in the shared
+  worker), different trigger (a fake-timer-driven Animated callback instead
+  of a raw unmounted `act()` render).
+- **Fix:** `driver-app/__tests__/components/RideOfferPanel.test.tsx` — wrap
+  the pending-timer flush in `act()` so React processes and fully
+  discharges the update synchronously, before this file's own teardown
+  completes, instead of leaving it to fire asynchronously post-unmount:
+  ```diff
+  -import { render, fireEvent } from '@testing-library/react-native';
+  +import { act, render, fireEvent } from '@testing-library/react-native';
+   ...
+   afterEach(() => {
+  -  jest.runOnlyPendingTimers();
+  +  act(() => {
+  +    jest.runOnlyPendingTimers();
+  +  });
+     jest.useRealTimers();
+   });
+  ```
+- **Blast radius:** isolated to this one test file. `RideOfferPanel.tsx`
+  (the component under test) is untouched — this is a test-only fix, no
+  production code changed. No other `driver-app/__tests__/*` file matches
+  this exact pattern (fake timers + `runOnlyPendingTimers()` in `afterEach`
+  on a component with uncleaned-up mount-time Animated loops) — grepped for
+  `runOnlyPendingTimers` across `driver-app/__tests__/`, only this file
+  uses it in an `afterEach`.
+- **Verification performed:** `yarn jest __tests__/components/RideOfferPanel.test.tsx __tests__/components/ActivityView.test.tsx --verbose`
+  — both suites green, zero "not wrapped in act(...)" console.error output
+  (previously present). Full local suite: `yarn jest --silent` → 63 suites,
+  534/534 tests passing (same count as before the fix — no regressions,
+  no coverage change since this only reorders/wraps an existing
+  `afterEach` call). Not run against the actual CI runner under worker
+  contention (the condition that made this intermittent rather than
+  deterministic locally) — will confirm via the PR's own `driver-app-test`
+  job.
+- **Not verified:** whether this was the *only* leak source for this
+  failure shape — if `ActivityView.test.tsx` times out again on a future
+  CI run with a *different* preceding-file stack trace, that's a separate
+  leak to root-cause the same way (read the actual job log, don't
+  re-assume the same cause).
+- **Files:** likely `driver-app/__tests__/components/ActivityView.test.tsx`
+  plus whichever earlier-running test file in the same Jest worker is the
+  actual source, per the same investigative pattern used for C31.
+
+### C38. `routes/lost_and_found.py`'s except-ImportError fallback branch was missing a `DuplicateRecordError` binding present in the try branch — latent `NameError` if the dual-import ever took the fallback path
+
+- [x] **Status:** FIXED (2026-08-18) — found on PR #4211's own `backend-test`
+  CI run (unrelated PR, only `backend/requirements.txt` +
+  `ACTION_ITEMS.md` touched — confirmed via `git diff origin/main..HEAD
+  --stat`), surfaced by `test_dual_import_parity.py`'s own regression
+  test: `AssertionError: Names bound in the try branch but missing from
+  the except ImportError fallback ... assert not
+  {'routes/lost_and_found.py': ['DuplicateRecordError']}`.
+- **Root cause**: the file's dual-import block (CLAUDE.md's documented
+  `try: from .routes.X import ... / except ImportError: from routes.X
+  import ...` pattern) imports `DuplicateRecordError` in the try branch
+  (`from ..utils.error_handling import DuplicateRecordError`) but the
+  except-ImportError fallback branch never imported it — a latent bug
+  that would only surface as a real `NameError` at the `except
+  (DuplicateRecordError, Exception) as exc:` handler (line 217) on a
+  request that hit an actual `DuplicateRecordError`, and only when the
+  process was running under the fallback import path (`python -m
+  backend.server` vs top-level, per CLAUDE.md's dual-import convention)
+  — never exercised in this repo's own test/CI environment, which is why
+  it went undetected until the dedicated parity test caught it
+  structurally instead of by triggering the actual `NameError`.
+- **Fix**: added the missing import to the fallback branch, mirroring
+  the try branch exactly:
+  ```diff
+   except ImportError:
+       import db_supabase  # type: ignore
+       from dependencies import get_current_user  # type: ignore
+       from features import send_push_notification  # type: ignore
+       from services.zoho_desk_integration import create_ticket_for_lost_and_found  # type: ignore
+  +    from utils.error_handling import DuplicateRecordError  # type: ignore
+  ```
+- **Blast radius**: isolated — one import line in one file's fallback
+  branch, adding a name that already exists at that scope via the try
+  branch on the normal (non-fallback) import path. No other file reads
+  or imports from this except-branch's names.
+- **Verification performed**: `pytest tests/test_dual_import_parity.py`
+  → 3 passed (was 1 failed before). `pytest tests/ -k lost_and_found` →
+  43 passed, 1 skipped (unaffected, confirming no behavior change on the
+  normal import path).
+- **Not verified**: the actual fallback-import code path itself (running
+  the app via top-level `import routes.lost_and_found` instead of
+  `backend.routes.lost_and_found`) — the parity test verifies the two
+  branches bind the same names statically via AST inspection, not by
+  actually exercising both import paths at runtime.
 
 ## Recently completed (do not redo)
 

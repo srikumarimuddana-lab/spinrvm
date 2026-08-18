@@ -902,6 +902,13 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
             # Rider-set preference (migration 62). Surfaced to the driver in the
             # offer panel so they know a quiet ride was requested before accepting.
             "quiet_mode": bool(ride.get("quiet_mode")),
+            # C35: surface whether this ride was originally booked in advance —
+            # true even after it has since transitioned to searching (same
+            # "originally scheduled" semantics as ride_cancel.py's
+            # `_was_scheduled = bool((ride or {}).get("is_scheduled"))`). Purely
+            # additive metadata for the driver-app offer panel; no dispatch/
+            # matching behavior change.
+            "is_scheduled": bool(ride.get("is_scheduled")),
             "countdown_seconds": offer_timeout,
             "offer_expires_at": _offer_expires_at,
             "surge_multiplier": _surge_mult if _surge_mult > 1.0 else None,

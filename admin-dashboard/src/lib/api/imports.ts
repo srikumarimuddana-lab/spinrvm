@@ -366,3 +366,19 @@ export const adminCommitRiderImport = (file: File, batch?: string) =>
         body: riderImportFormData(file, batch),
     });
 
+/* ── Imported Ride Snapshot Regeneration ─────────────── */
+export interface SnapshotRegenerateResult {
+    total: number;
+    success: number;
+    failed: number;
+    renderer: string;
+    errors: { ride_id: string; error: string }[];
+}
+
+export const adminRegenerateImportedSnapshots = (force: boolean, limit: number = 50) =>
+    request<SnapshotRegenerateResult>("/api/admin/rides/regenerate-imported-snapshots", {
+        method: "POST",
+        body: JSON.stringify({ force, limit }),
+        headers: { "Content-Type": "application/json" },
+    });
+

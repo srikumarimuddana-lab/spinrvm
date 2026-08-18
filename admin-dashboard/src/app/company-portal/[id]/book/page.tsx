@@ -52,32 +52,54 @@ function AddressPicker({
     label,
     value,
     onSelect,
+    bias,
 }: {
     label: string;
     value: PlacePoint | null;
     onSelect: (p: PlacePoint | null) => void;
+    // Anchor point for Google Places autocomplete — without it, results are
+    // ranked/restricted Canada-wide, so "airport" from a Regina booker can
+    // surface Saskatoon, Calgary, etc. ahead of (or instead of) the local
+    // one. Mirrors rider-app/app/search-destination.tsx's exact bias
+    // contract: {lat, lng, radiusMeters}, forwarded verbatim as the backend
+    // maps proxy's location=lat,lng&radius= params (a hard 50km
+    // locationRestriction there, not just ranking bias — see that route's
+    // docstring). null means "no anchor yet" — search still runs unbiased
+    // rather than blocking on it.
+    bias: { lat: number; lng: number; radiusMeters: number } | null;
 }) {
     const [query, setQuery] = useState(value?.address ?? "");
     const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
     const [open, setOpen] = useState(false);
     const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Ignore a stale response that resolves after a newer request already
+    // rendered its own results (out-of-order network replies on a fast
+    // typer + slow connection).
+    const requestSeq = useRef(0);
 
-    const search = useCallback((text: string) => {
+    const search = useCallback((text: string, biasNow: { lat: number; lng: number; radiusMeters: number } | null) => {
         if (debounce.current) clearTimeout(debounce.current);
         if (text.trim().length < 3) {
             setSuggestions([]);
             return;
         }
+        const seq = ++requestSeq.current;
         debounce.current = setTimeout(async () => {
             try {
+                const qs = new URLSearchParams({ input: text });
+                if (biasNow) {
+                    qs.set("location", `${biasNow.lat},${biasNow.lng}`);
+                    qs.set("radius", String(Math.round(biasNow.radiusMeters)));
+                }
                 const res = await companyRequest<{ predictions?: Suggestion[] } | Suggestion[]>(
-                    `/api/v1/maps/places/autocomplete?input=${encodeURIComponent(text)}`
+                    `/api/v1/maps/places/autocomplete?${qs.toString()}`
                 );
+                if (seq !== requestSeq.current) return; // superseded by a newer keystroke
                 const rows = Array.isArray(res) ? res : (res.predictions ?? []);
                 setSuggestions(rows.slice(0, 6));
                 setOpen(true);
             } catch {
-                setSuggestions([]);
+                if (seq === requestSeq.current) setSuggestions([]);
             }
         }, 300);
     }, []);
@@ -115,7 +137,7 @@ function AddressPicker({
                     onChange={(e) => {
                         setQuery(e.target.value);
                         onSelect(null);
-                        search(e.target.value);
+                        search(e.target.value, bias);
                     }}
                     onFocus={() => suggestions.length > 0 && setOpen(true)}
                     onBlur={() => setTimeout(() => setOpen(false), 200)}
@@ -156,10 +178,48 @@ export default function CompanyBookRidePage() {
     const [notes, setNotes] = useState("");
     const [estimate, setEstimate] = useState<CompanyFareEstimate | null>(null);
     const [estimating, setEstimating] = useState(false);
+    const [estimateError, setEstimateError] = useState<string | null>(null);
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [confirmPhone, setConfirmPhone] = useState(false);
     const [result, setResult] = useState<CreateBookingResult | null>(null);
+
+    // Bias autocomplete to wherever the booker actually is — a Regina desk
+    // typing "airport" should surface Regina's, not the nearest Google match
+    // Canada-wide. Mirrors rider-app/app/search-destination.tsx's pattern:
+    // request browser geolocation once, non-blocking, and give up after a
+    // short timeout (denied permission / no GPS on a desktop) so typing
+    // never waits on a permission prompt. Not persisted — re-requested per
+    // page load, matching how a desk phone might move between visits.
+    const [browserLocation, setBrowserLocation] = useState<{ lat: number; lng: number } | null>(null);
+    useEffect(() => {
+        if (typeof navigator === "undefined" || !navigator.geolocation) return;
+        navigator.geolocation.getCurrentPosition(
+            (pos) => setBrowserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+            () => {
+                /* denied or unavailable — pickup search just runs unbiased */
+            },
+            { timeout: 5000, maximumAge: 5 * 60_000 }
+        );
+    }, []);
+
+    // Pickup has nothing to anchor on except the booker's own location.
+    const pickupBias = useMemo(
+        () => (browserLocation ? { ...browserLocation, radiusMeters: 50_000 } : null),
+        [browserLocation]
+    );
+    // Dropoff anchors on the pickup once chosen (same "search near the other
+    // leg" pattern as rider-app) — falls back to the booker's own location
+    // before a pickup is picked, so dropoff isn't unbiased either.
+    const dropoffBias = useMemo(
+        () =>
+            pickup
+                ? { lat: pickup.lat, lng: pickup.lng, radiusMeters: 50_000 }
+                : browserLocation
+                  ? { ...browserLocation, radiusMeters: 50_000 }
+                  : null,
+        [pickup, browserLocation]
+    );
 
     useEffect(() => {
         getPortalVehicleTypes()
@@ -182,10 +242,12 @@ export default function CompanyBookRidePage() {
     useEffect(() => {
         if (!companyId || !pickup || !dropoff || !vehicleTypeId || !route) {
             setEstimate(null);
+            setEstimateError(null);
             return;
         }
         let cancelled = false;
         setEstimating(true);
+        setEstimateError(null);
         companyBookingFareEstimate(companyId, {
             pickup_lat: pickup.lat,
             pickup_lng: pickup.lng,
@@ -196,7 +258,20 @@ export default function CompanyBookRidePage() {
             vehicle_type_id: vehicleTypeId,
         })
             .then((fare) => !cancelled && setEstimate(fare))
-            .catch(() => !cancelled && setEstimate(null))
+            .catch((e) => {
+                if (cancelled) return;
+                setEstimate(null);
+                // A pickup/dropoff outside every configured service area is the
+                // most common real cause here (not a transient error) — say so
+                // instead of leaving the booker staring at a spinner that just
+                // vanishes with no explanation.
+                const msg = e instanceof Error ? e.message : "";
+                setEstimateError(
+                    /service.?area/i.test(msg)
+                        ? "This pickup/dropoff is outside Spinr's service area — pick a closer address."
+                        : "Could not estimate the fare for this trip. Double-check the addresses and try again."
+                );
+            })
             .finally(() => !cancelled && setEstimating(false));
         return () => {
             cancelled = true;
@@ -293,6 +368,7 @@ export default function CompanyBookRidePage() {
                                 setNotes("");
                                 setConfirmPhone(false);
                                 setEstimate(null);
+                                setEstimateError(null);
                             }}
                         >
                             Book another
@@ -347,8 +423,8 @@ export default function CompanyBookRidePage() {
                         </div>
                     </div>
 
-                    <AddressPicker label="Pickup" value={pickup} onSelect={setPickup} />
-                    <AddressPicker label="Dropoff" value={dropoff} onSelect={setDropoff} />
+                    <AddressPicker label="Pickup" value={pickup} onSelect={setPickup} bias={pickupBias} />
+                    <AddressPicker label="Dropoff" value={dropoff} onSelect={setDropoff} bias={dropoffBias} />
 
                     <div className="grid gap-4 md:grid-cols-2">
                         <div>
@@ -431,6 +507,9 @@ export default function CompanyBookRidePage() {
                         <p className="text-xs text-muted-foreground">
                             <Loader2 className="mr-1 inline h-3 w-3 animate-spin" /> Estimating fare…
                         </p>
+                    )}
+                    {estimateError && !estimating && (
+                        <p className="rounded bg-destructive/10 p-3 text-sm text-destructive">{estimateError}</p>
                     )}
 
                     <label className="flex items-start gap-2 text-xs text-muted-foreground">

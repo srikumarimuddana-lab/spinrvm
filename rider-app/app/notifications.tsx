@@ -15,6 +15,7 @@ interface AppNotification {
   title: string;
   body: string;
   type: string;
+  data?: Record<string, string>;
   is_read: boolean;
   created_at: string;
 }
@@ -37,13 +38,18 @@ function getTypeIcon(type: string): { name: string; color: string } {
   switch (type) {
     case 'ride_update':
     case 'ride':
-      return { name: 'car', color: '' }; // colors.primary — filled at render time
+      return { name: 'car', color: '' };
     case 'promotion':
-      return { name: 'gift', color: '' }; // colors.orange — filled at render time
+      return { name: 'gift', color: '' };
     case 'safety':
-      return { name: 'shield-checkmark', color: '' }; // colors.danger — filled at render time
+      return { name: 'shield-checkmark', color: '' };
+    case 'lost_and_found':
+    case 'lost_and_found_message':
+      return { name: 'bag-handle', color: '' };
+    case 'chat_message':
+      return { name: 'chatbubble', color: '' };
     default:
-      return { name: 'notifications', color: '' }; // colors.textDim — filled at render time
+      return { name: 'notifications', color: '' };
   }
 }
 
@@ -79,21 +85,42 @@ export default function NotificationsScreen() {
     loadNotifications(true);
   };
 
-  const handleMarkRead = async (item: AppNotification) => {
-    if (item.is_read) return;
-    // Optimistic update
-    setNotifications(prev =>
-      prev.map(n => n.id === item.id ? { ...n, is_read: true } : n)
-    );
-    setUnreadCount(prev => Math.max(0, prev - 1));
-    try {
-      await api.put(`/notifications/${item.id}/read`);
-    } catch {
-      // Roll back
+  const handleNotificationPress = async (item: AppNotification) => {
+    if (!item.is_read) {
       setNotifications(prev =>
-        prev.map(n => n.id === item.id ? { ...n, is_read: false } : n)
+        prev.map(n => n.id === item.id ? { ...n, is_read: true } : n)
       );
-      setUnreadCount(prev => prev + 1);
+      setUnreadCount(prev => Math.max(0, prev - 1));
+      try {
+        await api.put(`/notifications/${item.id}/read`);
+      } catch {
+        setNotifications(prev =>
+          prev.map(n => n.id === item.id ? { ...n, is_read: false } : n)
+        );
+        setUnreadCount(prev => prev + 1);
+      }
+    }
+
+    const caseId = item.data?.case_id;
+    const rideId = item.data?.ride_id;
+    switch (item.type) {
+      case 'lost_and_found':
+      case 'lost_and_found_message':
+        if (caseId) router.push({ pathname: '/lost-and-found-chat', params: { caseId } } as any);
+        else router.push('/lost-and-found' as any);
+        break;
+      case 'chat_message':
+        if (rideId) router.push({ pathname: '/chat-driver', params: { rideId } } as any);
+        break;
+      case 'ride_completed':
+        if (rideId) router.push({ pathname: '/ride-completed', params: { rideId } } as any);
+        break;
+      case 'driver_accepted':
+      case 'driver_arrived':
+        if (rideId) router.push({ pathname: '/driver-arriving', params: { rideId } } as any);
+        break;
+      default:
+        break;
     }
   };
 
@@ -117,6 +144,8 @@ export default function NotificationsScreen() {
         case 'car': return colors.primary;
         case 'gift': return colors.orange;
         case 'shield-checkmark': return colors.danger;
+        case 'bag-handle': return colors.orange;
+        case 'chatbubble': return colors.primary;
         default: return colors.textDim;
       }
     })();
@@ -124,7 +153,7 @@ export default function NotificationsScreen() {
     return (
       <TouchableOpacity
         style={[styles.card, !item.is_read && styles.cardUnread]}
-        onPress={() => handleMarkRead(item)}
+        onPress={() => handleNotificationPress(item)}
         activeOpacity={0.7}
       >
         {!item.is_read && <View style={[styles.unreadBar, { backgroundColor: colors.primary }]} />}

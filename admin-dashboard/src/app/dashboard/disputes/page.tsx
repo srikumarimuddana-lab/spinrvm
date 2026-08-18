@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/select";
 import { Pagination } from "@/components/ui/pagination";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   AlertTriangle, RefreshCw, CheckCircle, XCircle, Clock, DollarSign,
   User,
@@ -24,6 +25,7 @@ import {
 import { formatDate } from "@/lib/utils";
 import { getDisputes, getDisputeStats, resolveDispute } from "@/lib/api";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import ChargebacksTab from "./chargebacks-tab";
 
 const STATUS_COLORS: Record<string, string> = {
   open: "bg-red-100 text-red-700",
@@ -178,6 +180,13 @@ export default function DisputesPage() {
         </Button>
       </div>
 
+      <Tabs defaultValue="rider">
+        <TabsList>
+          <TabsTrigger value="rider">Rider Disputes</TabsTrigger>
+          <TabsTrigger value="chargebacks">Chargebacks</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="rider" className="space-y-6">
       {/* Stats (aggregate, not per-page) */}
       <div className="grid grid-cols-4 gap-4">
         <Card><CardContent className="pt-4">
@@ -356,6 +365,12 @@ export default function DisputesPage() {
           )}
         </DialogContent>
       </Dialog>
+        </TabsContent>
+
+        <TabsContent value="chargebacks">
+          <ChargebacksTab />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

@@ -8338,9 +8338,30 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   an alert rule on the `spinr_alert=dispute_evidence_due_soon` tag (or the
   pre-existing `CHARGEBACK:` log line) to page on-call. Full detail:
   `docs/change-log/2026-08-17-c23-dispute-evidence-reminder-loop.md`.
-  **Action item 3 of 5**: read-only "Chargebacks" tab on the admin Disputes
-  page + its backing `GET /disputes/chargebacks` endpoint — open as PR #4165
-  at time of writing, not yet merged to `main`.
+  **Action item 3 of 5 DONE (2026-08-18)**: read-only "Chargebacks" tab on
+  the existing Disputes page (`admin-dashboard/src/app/dashboard/disputes`,
+  wrapped in `Tabs` alongside the pre-existing "Rider Disputes" content) —
+  ride code, reason, amount, status, evidence-due date, days-remaining,
+  filed date. Backed by a new `GET /api/admin/disputes/chargebacks`
+  (`routes/admin/support.py`, same `require_module("support")` gate as its
+  `/disputes` siblings, registered before the `/disputes/{dispute_id}`
+  path-param routes). `spinr-design-consistency-reviewer` caught a real
+  blocker before merge — a failed fetch rendered identically to a genuine
+  zero-chargebacks result, with nothing logged — fixed with a distinct error
+  banner + retry button + `console.error`, since this is a deadline-monitoring
+  surface where silently hiding a fetch failure risks missing a real evidence
+  deadline. `spinr-admin-rbac-reviewer` flagged (non-blocking) that this
+  route inherits the general "support" module gate rather than
+  `require_super_admin` (the tier this repo reserves for full Stripe-ledger
+  pulls) — judged acceptable since the endpoint is read-only and returns no
+  PAN/PII beyond `ride_code`, but worth revisiting if chargeback data should
+  sit in a stricter tier. `spinr-accessibility-reviewer` found no hard
+  blockers; fixed `aria-pressed` on the filter buttons and a `role="status"`
+  loading announcement, but did NOT verify (no contrast-checker tooling in
+  this repo) whether the amber "due soon" text color passes AA contrast on
+  white, and did not add a live-region announcement on table updates —
+  flagged as a follow-up, not fixed. Full detail:
+  `docs/change-log/2026-08-18-c23-chargebacks-admin-tab.md`.
   **Action items 4 and 5 of 5 DONE (2026-08-18, backend only)**: `GET
   /rides/{ride_id}/dispute-pack` (`routes/admin/dispute_pack_download.py`,
   `require_module("support")`) zips an invoice-summary PDF, the existing
@@ -10245,6 +10266,35 @@ how much they de-risk a public launch._
   unilaterally. See #4112 for the proposed fingerprint-based dedup fix,
   the separate (larger) question of one-time backlog cleanup, and the
   auto-close design tradeoffs.
+
+### C36. Migration numeric-prefix collision check is warning-only and per-PR-scoped — a cross-PR race can (and did) land two migrations with the same number on `main`
+
+- [ ] **Status:** open. Filed via `[CR]` #4187
+  (`.github/ISSUE_TEMPLATE/ci_change_request.yml`), CR-2026-(assign). Found
+  2026-08-18 while re-checking PR #4133's migration-numbering neighborhood
+  at the user's request.
+- **What was found**: `main` now carries two different migrations both
+  prefixed `327` — `327_merge_duplicate_onboarding_faqs.sql` (PR #4126)
+  and `327_stripe_disputes_evidence_reminder_claim_flag.sql` (PR #4129).
+  Neither PR is from this session; neither saw the other's file because
+  each PR's `migration-check.yml` run only diffs against its own
+  merge-base snapshot of `main`.
+- **Root cause**: `migration-check.yml`'s `CHECK B` (sequence gap /
+  collision) only ever appends to `warnings`, never `errors` — a numeric
+  collision cannot block a merge today, contradicting this file's own
+  earlier claim ("a CI prefix-uniqueness check blocks them"). Confirmed
+  by reading the check's source directly.
+- **This session hit the same race twice, live**: PR #4133 had to be
+  renumbered 323→328 mid-session after discovering a pre-existing
+  collision with `323_purge_pii_retention_step_d_ride_messages_column_fix.sql`;
+  PR #4134's migration was renumbered again 327→329 after `main` picked up
+  the *first* of the two 327s above while #4134's branch was in flight.
+  Both catches were manual (re-checking fresh `main`), not CI-driven.
+- **Not fixed here** — proposed fix (make true collisions a hard failure,
+  keep sequence gaps as warnings) is a decision-needing CR, not
+  implemented unilaterally. See #4187 for the full proposal, including a
+  documented-but-deferred option (b): a post-merge check to catch the
+  narrower true-race window a per-PR check structurally cannot.
 
 ## Recently completed (do not redo)
 

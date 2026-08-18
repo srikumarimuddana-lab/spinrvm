@@ -8338,6 +8338,31 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   an alert rule on the `spinr_alert=dispute_evidence_due_soon` tag (or the
   pre-existing `CHARGEBACK:` log line) to page on-call. Full detail:
   `docs/change-log/2026-08-17-c23-dispute-evidence-reminder-loop.md`.
+  **Action item 3 of 5 DONE (2026-08-18)**: read-only "Chargebacks" tab on
+  the existing Disputes page (`admin-dashboard/src/app/dashboard/disputes`,
+  wrapped in `Tabs` alongside the pre-existing "Rider Disputes" content) —
+  ride code, reason, amount, status, evidence-due date, days-remaining,
+  filed date. Backed by a new `GET /api/admin/disputes/chargebacks`
+  (`routes/admin/support.py`, same `require_module("support")` gate as its
+  `/disputes` siblings, registered before the `/disputes/{dispute_id}`
+  path-param routes). `spinr-design-consistency-reviewer` caught a real
+  blocker before merge — a failed fetch rendered identically to a genuine
+  zero-chargebacks result, with nothing logged — fixed with a distinct error
+  banner + retry button + `console.error`, since this is a deadline-monitoring
+  surface where silently hiding a fetch failure risks missing a real evidence
+  deadline. `spinr-admin-rbac-reviewer` flagged (non-blocking) that this
+  route inherits the general "support" module gate rather than
+  `require_super_admin` (the tier this repo reserves for full Stripe-ledger
+  pulls) — judged acceptable since the endpoint is read-only and returns no
+  PAN/PII beyond `ride_code`, but worth revisiting if chargeback data should
+  sit in a stricter tier. `spinr-accessibility-reviewer` found no hard
+  blockers; fixed `aria-pressed` on the filter buttons and a `role="status"`
+  loading announcement, but did NOT verify (no contrast-checker tooling in
+  this repo) whether the amber "due soon" text color passes AA contrast on
+  white, and did not add a live-region announcement on table updates —
+  flagged as a follow-up, not fixed. Items 4–5 (evidence-pack endpoint,
+  Stripe Files API submission) remain open. Full detail:
+  `docs/change-log/2026-08-18-c23-chargebacks-admin-tab.md`.
 - **Issue/gap:** the webhook records a chargeback and then nothing else
   happens. Specifically:
   1. **No `evidence_due_by`.** Stripe puts

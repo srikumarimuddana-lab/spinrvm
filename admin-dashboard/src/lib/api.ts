@@ -337,6 +337,7 @@ export {
     getDisputeDetails,
     createDispute,
     updateDispute,
+    getChargebacks,
     getSafetyIncidents,
     getSafetyIncident,
     updateSafetyIncident,
@@ -357,6 +358,7 @@ export type {
     SafetyIncident,
     SafetyIncidentListResponse,
     SafetyIncidentDetail,
+    Chargeback,
 } from "./api/safety-disputes";
 export type { LegalDocType } from "./api/content-area";
 export {

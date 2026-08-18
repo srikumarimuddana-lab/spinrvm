@@ -3,7 +3,12 @@ import * as TaskManager from 'expo-task-manager';
 import * as SecureStore from 'expo-secure-store';
 import spinrConfig from '@shared/config/spinr.config';
 import { getAppCheckToken, initFirebaseServices } from '@shared/services/firebase';
-import { tripLocationRecorder, type TripLocationBatchRequest } from './tripLocationRecorder';
+import {
+  drainTerminalAck,
+  TERMINAL_STATUS_CODES,
+  tripLocationRecorder,
+  type TripLocationBatchRequest,
+} from './tripLocationRecorder';
 import { checkLocationIntegrity, haversineKm } from './locationIntegrity';
 import { recordNonFatal } from './crashlytics';
 import { publishCarFix } from '../lib/androidAuto/carFixChannel';
@@ -281,6 +286,15 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
         },
         body: JSON.stringify(request),
       });
+      // Terminal statuses drain the batch, mirroring apiLocationBatchTransport:
+      // this fetch previously threw on them, and because flushPending aborts
+      // its whole loop on a transport throw, ONE permanently-rejected batch
+      // (e.g. 422 outside the completed-ride retention window) blocked every
+      // other pending session's upload forever from the background path.
+      if (TERMINAL_STATUS_CODES.has(response.status)) {
+        console.warn(`[BgLocation] Draining terminally-rejected batch (${response.status})`);
+        return drainTerminalAck(request);
+      }
       if (!response.ok) throw new Error(`location-batch ${response.status}`);
       return response.json();
     }, { force: true });

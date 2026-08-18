@@ -32,6 +32,25 @@ export interface TripLocationBatchAck {
 
 export type TripLocationTransport = (request: TripLocationBatchRequest) => Promise<TripLocationBatchAck>;
 
+// Server responses that will never succeed on retry for this batch: the ride
+// is gone (404), no longer active (409/410), or the points are permanently
+// rejected, e.g. outside the completed-ride retention window (422). Every
+// transport must DRAIN these instead of throwing — flushPending aborts its
+// whole loop on a transport throw, so one poisoned batch would otherwise
+// head-of-line-block every other pending session forever. Lives here (not in
+// tripLocationTransport.ts) so the headless background transport can share it
+// without pulling the axios/app-shell modules into the background task bundle.
+export const TERMINAL_STATUS_CODES = new Set([404, 409, 410, 422]);
+
+/** Synthesize a full ack for a terminally-rejected batch so the outbox clears it. */
+export function drainTerminalAck(request: TripLocationBatchRequest): TripLocationBatchAck {
+  const lastSequence = request.points[request.points.length - 1]?.sequence_number ?? 0;
+  return {
+    recording_session_id: request.recording_session_id,
+    acked_through: lastSequence,
+  };
+}
+
 export interface FlushPendingOptions {
   force?: boolean;
 }

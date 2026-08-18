@@ -92,15 +92,36 @@ def _configured_threshold_seconds(settings: dict) -> int:
 
 
 async def _latest_capture_time(ride_id: str) -> Optional[datetime]:
+    """Newest accepted capture time for the ride, ignoring NULL captured_at.
+
+    ``ORDER BY captured_at DESC`` puts NULLs FIRST in Postgres, so a single
+    legacy WS-path breadcrumb (v1 fields, no captured_at) permanently blinded
+    the monitor for the whole ride: every tick fetched the NULL row, parsed it
+    to None, and concluded "no captures yet" — the phantom gap-since-trip-start
+    was opened once and never resolved, and any REAL later blackout could not
+    be distinguished (ride SPR-PE7TTB: 2 of 51 rows NULL, an 11-minute
+    mid-trip outage went undetected). Filter NULLs out, then fall back to the
+    legacy "timestamp" column for rides whose points are all v1-shaped.
+    """
     rows = await db_supabase.get_rows(
         "driver_location_history",
-        {"ride_id": ride_id},
+        {"ride_id": ride_id, "captured_at": {"$notnull": True}},
         order="captured_at",
         desc=True,
         limit=1,
         columns="captured_at",
     )
-    return parse_iso_utc(rows[0].get("captured_at")) if rows else None
+    if rows:
+        return parse_iso_utc(rows[0].get("captured_at"))
+    rows = await db_supabase.get_rows(
+        "driver_location_history",
+        {"ride_id": ride_id, "timestamp": {"$notnull": True}},
+        order="timestamp",
+        desc=True,
+        limit=1,
+        columns="timestamp",
+    )
+    return parse_iso_utc(rows[0].get("timestamp")) if rows else None
 
 
 async def _open_gap_event(ride: dict, decision: GapDecision, threshold_seconds: int, now: datetime) -> bool:
@@ -179,6 +200,38 @@ async def _resolve_open_gap_event(ride_id: str, now: datetime) -> bool:
     return updated is not None
 
 
+async def _close_orphaned_open_events(now: datetime) -> int:
+    """Terminally close open gap events whose ride is no longer in progress.
+
+    A ride that completes (or is cancelled) mid-gap leaves its event 'open'
+    forever — the tick only scans in_progress rides, so nothing ever touches
+    it again (SPR-PE7TTB's phantom event sat open past completion). Close
+    those with a distinct terminal status so 'open' always means "an active
+    ride is silent right now"; gap_resolved_at stays NULL because capture
+    never actually resumed.
+    """
+    open_events = await db_supabase.get_rows(
+        "ride_location_gap_events", {"status": "open"}, limit=200, columns="id,ride_id"
+    )
+    if not open_events:
+        return 0
+    ride_ids = sorted({e["ride_id"] for e in open_events if e.get("ride_id")})
+    rides = await db_supabase.get_rows("rides", {"id": {"$in": ride_ids}}, limit=len(ride_ids), columns="id,status")
+    still_active = {r["id"] for r in rides if r.get("status") == "in_progress"}
+    closed = 0
+    for event in open_events:
+        if not event.get("ride_id") or event["ride_id"] in still_active:
+            continue
+        updated = await db_supabase.update_one(
+            "ride_location_gap_events",
+            {"id": event["id"], "status": "open"},
+            {"status": "unresolved_at_completion"},
+        )
+        if updated is not None:
+            closed += 1
+    return closed
+
+
 async def route_gap_monitor_tick() -> dict[str, int]:
     """Assess active rides and durably record only timestamp-based GPS gaps.
 
@@ -196,7 +249,8 @@ async def route_gap_monitor_tick() -> dict[str, int]:
         limit=MAX_ACTIVE_RIDES_PER_TICK,
         columns="id,driver_id,ride_started_at",
     )
-    result = {"scanned": 0, "opened": 0, "resolved": 0, "unknown": 0}
+    result = {"scanned": 0, "opened": 0, "resolved": 0, "unknown": 0, "orphaned_closed": 0}
+    result["orphaned_closed"] = await _close_orphaned_open_events(now)
     current_open_gaps = 0
 
     for ride in rides:

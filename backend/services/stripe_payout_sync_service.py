@@ -402,9 +402,13 @@ async def build_plan(
                 {
                     "id": payout_id_for(t["id"]),
                     "driver_id": driver_id,
-                    # float only at the serialization boundary (matches the
-                    # booking importer); all arithmetic above stays Decimal.
-                    "amount": float(amount),
+                    # str() only at the serialization boundary (matches the
+                    # booking importer and legacy payout correction service;
+                    # payouts.amount is NUMERIC as of migration 331, so
+                    # str(Decimal) round-trips exact -- float() would
+                    # reintroduce binary rounding error). All arithmetic
+                    # above stays Decimal.
+                    "amount": str(amount),
                     # 'completed' is inert to the payout retry loop, the Stripe
                     # reconciler, and the migration-250 reservation guard.
                     # get_driver_balance excludes it via payout_type (see module

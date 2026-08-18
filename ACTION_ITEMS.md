@@ -8186,9 +8186,10 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   YAML or application-code defect. No `.github/workflows/*.yml` change is
   implicated.
 
-### C22. `scripts/migrate.py`'s tracking table doesn't match what's actually live on the production Supabase project — the runner may never have successfully recorded a migration against it — PARTIALLY RESOLVED (2026-08-17)
+### C22. `scripts/migrate.py`'s tracking table doesn't match what's actually live on the production Supabase project — the runner may never have successfully recorded a migration against it — PARTIALLY RESOLVED (2026-08-17, follow-up 2026-08-18)
 
-- [ ] **Status:** partially resolved (2026-08-17). `scripts/migrate.py` no
+- [ ] **Status:** partially resolved (2026-08-17, follow-up 2026-08-18).
+  `scripts/migrate.py` no
   longer exists — deleted by A39, which reconciled `run_migrations.py` to
   the correct (migration 24) `schema_migrations` shape and ported
   `migrate.py`'s one useful piece (CONCURRENTLY-safe splitting) first. That
@@ -8249,19 +8250,60 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     redefines `purge_pii_retention()` needs its own
     `migration-override-ok` marker (as every one before 323/324 correctly
     had) — don't forget it.
+  - **2026-08-18 follow-up pass** (both open sub-questions from the prior
+    pass, closed):
+    - **`110_settings_resend_email.sql` — confirmed landed.** Live query
+      (`information_schema.columns`, project `soavhtdhefowwvforzwb`):
+      `settings.resend_api_key` and `settings.resend_from_email` both
+      exist. Also tracked in `schema_migrations`
+      (`applied_by='backfill-verified'`, 2026-08-14) — a bookkeeping gap
+      that's since been backfilled, not a real application gap. (Side
+      note, not itself a problem: three unrelated migration files all
+      share the numeric prefix `110` —
+      `110_drivers_device_attestation.sql`,
+      `110_settings_resend_email.sql`,
+      `110_wallet_pay_for_ride_tip_atomic.sql` — pre-dates C36's hard-fail
+      collision check and is handled the same way as the documented
+      319/321/327 dupes: full-filename keying, not touched.)
+    - **Other `SECURITY DEFINER` functions/background loops audited for
+      the same bug class — none found.** Cross-referenced the 37
+      background loops in `core/lifespan.py` against their source files
+      for actual `.rpc(...)` calls (a plain Python/PostgREST table query
+      would fail loudly and immediately on a missing column — only a
+      `plpgsql`/`sql`-language function body can hide a bad column
+      reference until executed, exactly how `purge_pii_retention()`'s
+      bug went unnoticed). Found 4 other loop→RPC pairs (excluding
+      `purge_pii_retention` itself, already fixed):
+      `surge_engine.py`→`drivers_available_in_polygon` (flag-gated OFF by
+      default, `SURGE_SPATIAL_COUNT`), `driver_onboarding_reminders.py`→
+      `driver_onboarding_reminder_counts`, `ledger_projection.py`→
+      `financial_events_missing_legs`, `retention_guard_monitor.py`→
+      `check_disabled_guard_triggers` (pure `pg_catalog` introspection,
+      structurally immune to this bug class — no application table
+      referenced at all). Read each function's SQL body from its defining
+      migration, cross-checked every referenced `table.column` against
+      live `information_schema.columns` (all present), then actually
+      **executed** all four (all `STABLE`/read-only, safe) against the
+      live project rather than stopping at a column-existence check —
+      all four ran end-to-end with no SQL error.
+      `financial_events_missing_legs(5)` returned one genuine pending row
+      (real backlog for `ledger_projection_loop`'s next 15-min tick, not
+      an error). **Conclusion: no instance of this bug class exists
+      beyond the two already fixed in `purge_pii_retention()`
+      (migrations 323/324).**
   - **Still open**: the broader `schema_migrations` reconciliation (161/407
-    tracked) itself — this session only individually verified and applied
-    321/323/324, exactly the narrow, high-confidence action the original
+    tracked) itself — this session (and the 2026-08-18 follow-up above)
+    only individually verified and applied 321/323/324 plus the two
+    checks above, exactly the narrow, high-confidence action the original
     finding called for ("manually audit at least the highest-risk ones...
     don't blind-apply ~280 migrations' worth of accumulated drift in one
     shot"). The full reconciliation remains a substantial, separate,
-    higher-stakes audit, same as originally scoped. Also still unverified:
-    whether `110_settings_resend_email.sql` (the original 2026-08-13
-    finding that started this item) has since landed — not re-checked in
-    this session's narrower pass. Also flagged as a natural follow-up:
-    whether any other `SECURITY DEFINER` function or background loop in
-    this codebase has the same "table pre-existed under a different column
-    name" bug class — not investigated beyond `purge_pii_retention()`.
+    higher-stakes audit, same as originally scoped — not attempted here;
+    doing it for real means either (a) fixing `run_migrations.py`'s own
+    dry-run path to talk to the live table and diffing its output against
+    the 407 repo files, or (b) a manual file-by-file live-schema
+    cross-check same as this session's targeted checks, at ~2.5x this
+    session's scope. Neither started.
 - [ ] **Original status (2026-08-13, superseded above but kept for
   history):** open — found while investigating why the
   corporate-portal OTP email send has been failing since it shipped (see

@@ -414,6 +414,16 @@ class SettingsUpdateRequest(BaseModel):
     # comparison for every client.
     min_rider_app_version: Optional[str] = Field(default=None, pattern=r"^$|^\d+\.\d+\.\d+$")
     min_driver_app_version: Optional[str] = Field(default=None, pattern=r"^$|^\d+\.\d+\.\d+$")
+    # Ships dark (default false/unset): gates POST /admin/disputes/{id}/
+    # submit-evidence (routes/admin/dispute_evidence_submission.py, C23
+    # item 5), which calls stripe.Dispute.modify(evidence=...) -- a
+    # real, effectively irreversible submission to Stripe on a live
+    # chargeback (evidence can be updated but not un-submitted before the
+    # dispute's due_by). Same "ship dark, flip on after staging
+    # verification" posture as corporate_subscription_billing_enabled
+    # above. The endpoint also requires an explicit confirm:true on every
+    # call -- this flag alone does not make a single request submit.
+    dispute_stripe_evidence_submission_enabled: Optional[bool] = None
 
     @field_validator("lms_api_base_url")
     @classmethod

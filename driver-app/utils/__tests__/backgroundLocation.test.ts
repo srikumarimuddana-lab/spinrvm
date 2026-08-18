@@ -180,29 +180,32 @@ describe('background durable trip recording', () => {
     await tripLocationRecorder.startRide('ride-1');
   });
 
-  it('drops spoofing samples (impossible speed) but keeps low/unknown-accuracy fixes', async () => {
-    // Regression guard: accuracy is NOT a trust signal. A null/0 or very high
-    // accuracy fix — routine for backgrounded driving — must still be recorded,
-    // or a trip driven with the app backgrounded loses nearly all its points.
+  it('captures EVERY sample durably; integrity gates only the car-marker display', async () => {
+    // CAPTURE BEFORE FILTER (SPR-PE7TTB): a client-side drop is route history
+    // lost forever, so even a spoof-suspect fix is persisted — the v2 point
+    // carries `mocked` and server settlement (trip_distance.py caps) owns
+    // billing quality. The integrity verdict only hides the sample from the
+    // Android Auto marker. Accuracy remains a non-signal either way.
+    const carFixChannel = require('../../lib/androidAuto/carFixChannel');
+    const publishSpy = jest.spyOn(carFixChannel, 'publishCarFix');
     const nullAccuracy = makeLocation(0);
-    (nullAccuracy.coords as any).accuracy = null; // background/coarse fix — keep
+    (nullAccuracy.coords as any).accuracy = null; // background/coarse fix
     const vague = makeLocation(1);
-    vague.coords.accuracy = 500; // poor GPS (tunnel/urban canyon) — keep
+    vague.coords.accuracy = 500; // poor GPS (tunnel/urban canyon)
     const impossible = makeLocation(2);
-    impossible.coords.speed = 120; // > 90 m/s — genuine spoof signal, drop
+    impossible.coords.speed = 120; // > 90 m/s — spoof signal: hide from display
 
     await handleBackgroundLocationTask({
       data: { locations: [nullAccuracy, vague, impossible, makeLocation(3)] } as any,
     });
 
-    // 3 kept (null-accuracy, vague, normal), only the impossible-speed dropped.
-    expect(mockedOutbox.enqueue).toHaveBeenCalledTimes(3);
+    // ALL 4 persisted to the outbox, in native order.
+    expect(mockedOutbox.enqueue).toHaveBeenCalledTimes(4);
     const capturedAts = mockedOutbox.enqueue.mock.calls.map((c: any[]) => c[0].captured_at);
-    expect(capturedAts).toEqual([
-      new Date(makeLocation(0).timestamp).toISOString(),
-      new Date(makeLocation(1).timestamp).toISOString(),
-      new Date(makeLocation(3).timestamp).toISOString(),
-    ]);
+    expect(capturedAts).toEqual([0, 1, 2, 3].map((i) => new Date(makeLocation(i).timestamp).toISOString()));
+    // Display gated: the impossible-speed sample never moves the car marker.
+    expect(publishSpy).toHaveBeenCalledTimes(3);
+    publishSpy.mockRestore();
   });
 
   it('enqueues native sensor timestamps before attempting a headless upload', async () => {

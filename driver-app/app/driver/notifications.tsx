@@ -26,6 +26,7 @@ interface Notification {
     title: string;
     body: string;
     type: string;
+    data?: Record<string, string>;
     is_read: boolean;
     created_at: string;
 }
@@ -70,6 +71,9 @@ export default function NotificationsScreen() {
         general: { name: 'notifications', color: colors.textDim },
         system: { name: 'settings', color: colors.textDim },
         safety: { name: 'shield-checkmark', color: colors.danger },
+        lost_and_found: { name: 'bag-handle', color: colors.orange },
+        lost_and_found_message: { name: 'bag-handle', color: colors.orange },
+        chat_message: { name: 'chatbubble', color: colors.primary },
     };
 
     const markAsRead = (id: string) => {
@@ -94,12 +98,15 @@ export default function NotificationsScreen() {
 
     const handleNotificationPress = (item: Notification) => {
         markAsRead(item.id);
+        const caseId = item.data?.case_id;
         if (item.type === 'document_expiry') router.push('/driver/documents' as any);
         else if (item.type === 'payout_processed') router.push('/driver/activity' as any);
         else if (item.type === 'ride_offer') router.push('/driver/' as any);
         else if (item.type === 'quest_earned') router.push('/driver/quests' as any);
-        // Unknown type: notification is marked read above; no navigation needed.
-        // Explicit no-op prevents accidental fall-through if new types are added later.
+        else if (item.type === 'lost_and_found' || item.type === 'lost_and_found_message') {
+            if (caseId) router.push({ pathname: '/driver/lost-and-found-chat', params: { caseId } } as any);
+            else router.push('/driver/lost-and-found' as any);
+        }
     };
 
     const renderNotification = ({ item }: { item: Notification }) => {

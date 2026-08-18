@@ -187,6 +187,14 @@ async def driver_report_found_item(
     category = req.item_category if req.item_category in _VALID_CATEGORIES else "other"
     rider_user_id: Optional[str] = ride.get("rider_id")
 
+    existing = await db_supabase.get_rows(
+        "lost_and_found",
+        {"ride_id": req.ride_id, "driver_id": driver["id"]},
+        limit=1,
+    )
+    if existing:
+        return {"success": True, "case": existing[0], "existing": True}
+
     case = await db_supabase.insert_one(
         "lost_and_found",
         {

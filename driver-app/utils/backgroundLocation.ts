@@ -10,6 +10,7 @@ import {
   type TripLocationBatchRequest,
 } from './tripLocationRecorder';
 import { createLocationIntegrityChecker, haversineKm } from './locationIntegrity';
+import { runExclusive } from './locationTaskArbiter';
 import { recordNonFatal } from './crashlytics';
 import { publishCarFix } from '../lib/androidAuto/carFixChannel';
 import { SESSION_ENDED_KEY } from '@shared/auth/sessionMarker';
@@ -388,6 +389,9 @@ export async function startBackgroundLocation(config?: BgLocationConfig): Promis
     return true;
   }
 
+  // Permission flow stays OUTSIDE the arbiter lock: the request can hold a
+  // system dialog open for minutes, and holding the lock through it would
+  // starve go-offline/AA transitions into the bounded-wait timeout.
   let { status } = await Location.getBackgroundPermissionsAsync();
   if (status !== 'granted') {
     const res = await Location.requestBackgroundPermissionsAsync();
@@ -398,25 +402,62 @@ export async function startBackgroundLocation(config?: BgLocationConfig): Promis
     return false;
   }
 
-  await _applyTaskOptions(config);
+  return runExclusive('bg-start', async () => {
+    // Re-probe under the lock — a queued car-task start may have raced us.
+    if (await Location.hasStartedLocationUpdatesAsync(TASK_NAME)) return true;
 
-  // A driver who plugged in while OFFLINE has the car's display-only service
-  // running; going online replaces it with this one. Stop it here or they end up
-  // with two permanent notifications for the rest of the shift. Lazily required
-  // to keep the module cycle (carLocationTask imports this file) from resolving
-  // at load time. It does NOT no-op on iOS, as this comment used to claim — the
-  // require loads carLocationTask and runs its module-scope defineTask there
-  // too. Harmless, since nothing ever starts that task off Android, but worth
-  // stating plainly rather than asserting a guard that does not exist.
+    // SINGLE-WRITER, order matters: stop the car task BEFORE promoting this
+    // one. expo-location runs ALL location tasks through ONE shared Android
+    // service, and stopping any task demotes it (stopForeground on the shared
+    // instance) — the previous stop-after-promote order un-promoted the
+    // service we had just promoted on the go-online-while-plugged-in path.
+    // Overlap is also actively lossy: a static native dedup discards one
+    // consumer's copy of every fix while two tasks are registered. Lazily
+    // required to keep the module cycle (carLocationTask imports this file)
+    // from resolving at load time; runs on iOS too (harmless — nothing starts
+    // that task off Android).
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      await require('../lib/androidAuto/carLocationTask').stopCarLocationService();
+    } catch {
+      // Android Auto layer absent — nothing to stand down.
+    }
+
+    await _applyTaskOptions(config);
+    console.log('[BgLocation] Started');
+    return true;
+  });
+}
+
+/**
+ * Re-assert the dispatch task's options in place — re-promoting the shared
+ * Android location service if something (an Android Auto task stop, an OS
+ * hiccup) demoted it. Never STARTS the task (that is go-online's job) and
+ * never throws. Composition primitive: callers already holding the arbiter
+ * lock use this; everyone else uses reassertDispatchTask().
+ */
+export async function reassertDispatchTaskUnlocked(): Promise<void> {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    await require('../lib/androidAuto/carLocationTask').stopCarLocationService();
-  } catch {
-    // Android Auto layer absent — nothing to stand down.
+    if (!(await Location.hasStartedLocationUpdatesAsync(TASK_NAME))) return;
+    const { status } = await Location.getBackgroundPermissionsAsync();
+    if (status !== 'granted') return;
+    let tripActive = false;
+    try {
+      tripActive = (await SecureStore.getItemAsync(TRIP_ACTIVE_KEY)) === 'true';
+    } catch {
+      // Unreadable flag → idle cadence; the ride-state effect re-tightens it.
+    }
+    // startLocationUpdatesAsync on a live task replaces options in place and
+    // re-runs the native foreground promotion — the repair we're here for.
+    await _applyTaskOptions(tripActive ? TRIP_CADENCE : IDLE_CADENCE);
+    console.log('[BgLocation] Dispatch task re-asserted');
+  } catch (e) {
+    recordNonFatal(e, { domain: 'drivers', surface: 'driver-app', location: 'reassert_failed' });
   }
+}
 
-  console.log('[BgLocation] Started');
-  return true;
+export function reassertDispatchTask(): Promise<void> {
+  return runExclusive('bg-reassert', reassertDispatchTaskUnlocked);
 }
 
 /**
@@ -428,15 +469,17 @@ export async function startBackgroundLocation(config?: BgLocationConfig): Promis
  * options in place — the task identity and handler are unchanged.
  */
 export async function updateBackgroundLocationCadence(config: BgLocationConfig): Promise<void> {
-  const isRunning = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
-  if (!isRunning) return;
-  const { status } = await Location.getBackgroundPermissionsAsync();
-  if (status !== 'granted') return;
-  await _applyTaskOptions(config);
-  console.log(
-    `[BgLocation] Cadence updated (t=${config.timeInterval ?? IDLE_CADENCE.timeInterval}ms ` +
-      `d=${config.distanceInterval ?? IDLE_CADENCE.distanceInterval}m)`,
-  );
+  return runExclusive('bg-cadence', async () => {
+    const isRunning = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
+    if (!isRunning) return;
+    const { status } = await Location.getBackgroundPermissionsAsync();
+    if (status !== 'granted') return;
+    await _applyTaskOptions(config);
+    console.log(
+      `[BgLocation] Cadence updated (t=${config.timeInterval ?? IDLE_CADENCE.timeInterval}ms ` +
+        `d=${config.distanceInterval ?? IDLE_CADENCE.distanceInterval}m)`,
+    );
+  });
 }
 
 /**
@@ -461,6 +504,10 @@ export async function recoverTripLocation(): Promise<boolean> {
 }
 
 export async function stopBackgroundLocation(): Promise<void> {
+  return runExclusive('bg-stop', stopBackgroundLocationUnlocked);
+}
+
+async function stopBackgroundLocationUnlocked(): Promise<void> {
   // The native stop is conditional (stopLocationUpdatesAsync throws when the
   // task was never started) but the key cleanup is NOT. It used to sit behind
   // the same early return, so a stop that ran while the task happened to be

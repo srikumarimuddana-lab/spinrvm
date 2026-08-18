@@ -10083,13 +10083,18 @@ how much they de-risk a public launch._
 
 - [ ] **Status:** open, accepted risk — not a bug to fix, a standing gate
   exception to re-check periodically. Filed via `[CR]` #3718
-  (`.github/ISSUE_TEMPLATE/ci_change_request.yml`), CR-2026-008. This item
-  is the ACTION_ITEMS.md record the CR itself calls for (issue step 3(b))
-  since Yarn Classic (v1) has no built-in per-advisory allowlist for `yarn
-  audit` — there is no `--exclude`/`--ignore <advisory-id>` flag, so the
-  only documented-acceptance path available is recording it here rather
-  than either silently leaving `G4b` red-and-unexplained or weakening the
-  gate itself.
+  (`.github/ISSUE_TEMPLATE/ci_change_request.yml`), CR-2026-008 —
+  **approved and formally closed 2026-08-17** via the implementing PR
+  #4049 (`docs: accept risk for unpatchable image-size advisories`,
+  merged). This item is the ACTION_ITEMS.md record the CR itself calls
+  for (issue step 3(b)) since Yarn Classic (v1) has no built-in
+  per-advisory allowlist for `yarn audit` — there is no
+  `--exclude`/`--ignore <advisory-id>` flag, so the only
+  documented-acceptance path available is recording it here rather than
+  either silently leaving `G4b` red-and-unexplained or weakening the gate
+  itself. Stays open/unchecked here on purpose — this is a living risk
+  entry, not a task to mark done; it only gets checked off if a real
+  upstream patch ships and the dependency is bumped.
 - **What's accepted:** two HIGH-severity `image-size` advisories —
   1138808 (ICNS parser infinite-loop DoS) and 1138809 (JXL/HEIF parser
   infinite-loop DoS) — in both `rider-app/` and `driver-app/`, pulled in
@@ -10121,17 +10126,42 @@ how much they de-risk a public launch._
   advisories on `image-size` and nothing else has regressed alongside
   them (both apps: `{module_name: image-size, ids: [1138808, 1138809]}`,
   no other packages present at HIGH+ severity).
+- **Re-verified again 2026-08-18** against `origin/main` (post-#4102
+  merge): `npm view image-size versions` still tops out at `2.0.2` — no
+  new release since the last check. `yarn audit --level high --json` in
+  both apps still reports exactly the same two advisory IDs
+  (`vulnerable_versions: <=2.0.2`, `patched_versions: <0.0.0`
+  unchanged — GitHub's advisory record itself hasn't been updated with a
+  fix either). Additionally checked what's actually on disk, not just
+  the advisory's claimed range: `yarn why image-size` in both apps
+  resolves to the *installed* `image-size@1.2.1` (hoisted via
+  `expo > @expo/cli > @expo/metro > metro`), not `2.0.2` — `yarn.lock`
+  only ever pins `image-size@^1.0.2` → `1.2.1`, confirmed via
+  `grep -A3 "^image-size" yarn.lock`. Verified the affected parser code
+  (`icns.js`, `heif.js`, `jxl.js`) exists in this 1.2.1 build (the
+  advisory's broad `<=2.0.2` range is not a stale/inflated artifact —
+  the vulnerable code path is genuinely present in the version actually
+  shipped), so the accepted-risk reasoning below applies unchanged
+  regardless of which sub-version within the advisory's range is
+  installed.
 - **Gate left as-is, on purpose:** `security-gates.yml`'s `G4b` step keeps
   `continue-on-error: false` — this CR is accept-and-document, not
   weaken-the-gate. `G4b` will stay red for `rider-app`/`driver-app` until
   upstream ships a fix; that red is now expected and explained, not a
   silent failure.
-- **Re-check cadence:** a session-level Claude routine already does a
-  weekly check on issue #3718 itself (the `[CR]` issue tracking this
-  acceptance) — that routine is the re-check mechanism for this item, not
-  a duplicate one. When `image-size` (or `metro`'s pin of it) ships a
-  patched version, close out both #3718 and this item together, bump the
-  dependency, and confirm `G4b` goes green on both apps.
+- **Re-check cadence:** the weekly Routine that checked issue #3718
+  (`trig_01Eqxfe3uCFWfubz1bUgRzQu`) deleted itself 2026-08-18 per its own
+  built-in resolution-check step, now that #3718 is formally closed
+  (approved via PR #4049) — its job was to watch for either a human
+  decision on the CR or an upstream patch, and the CR side is now
+  resolved. **No automated re-check remains for the upstream-patch side**
+  — the next re-verification of "has `image-size` shipped a fix yet" is
+  manual/on-demand (as this 2026-08-18 pass was) until someone sets up a
+  replacement routine or it's caught during a routine dependency-bump
+  pass. When `image-size` (or `metro`'s pin of it) ships a patched
+  version, bump the dependency and confirm `G4b` goes green on both
+  apps — at that point this item's checkbox above should finally be
+  ticked.
 
 ### C31. `privacySettingsToggles.test.tsx` leaked an unflushed/unmounted renderer, causing an intermittent `rider-app-test` full-suite failure in an unrelated file
 
@@ -10295,6 +10325,35 @@ how much they de-risk a public launch._
   implemented unilaterally. See #4187 for the full proposal, including a
   documented-but-deferred option (b): a post-merge check to catch the
   narrower true-race window a per-PR check structurally cannot.
+
+### C37. `driver-app-test`: possible leaked-renderer flake in `ActivityView.test.tsx`, same failure shape as the C31 rider-app flake
+
+- [ ] **Status:** open, flagged not investigated. Noticed 2026-08-18 on a
+  docs-only PR (#4191, `ACTION_ITEMS.md` C25 re-verification — zero
+  driver-app code touched) whose `driver-app-test` job still failed:
+  `ActivityView.test.tsx › keeps ride history visible when earnings
+  loading fails` hit `Exceeded timeout of 5000 ms for a test`
+  (`__tests__/components/ActivityView.test.tsx:92`), 533/534 tests
+  otherwise passing — same failure shape (single test, 5s Jest default
+  timeout, mount-effect-heavy screen, rest of the suite green) as the
+  `verifyEmailScreen.test.tsx` flake C31 root-caused and fixed in
+  `rider-app` (a leaked, never-unmounted renderer in an unrelated earlier
+  test file corrupting the shared Jest worker process for whatever ran
+  next in it).
+- **Why it matters:** if this is the same failure class, there's likely
+  another `driver-app/__tests__/*` file with the same
+  synchronous-render / no-`afterEach`-unmount / unflushed-mount-effect
+  pattern C31 found and fixed in `privacySettingsToggles.test.tsx` —
+  worth the same treatment (find the actual leaking file, not just the
+  file that happens to time out downstream of it).
+- **Not investigated**: out of scope for the docs-only PR that surfaced
+  it — no driver-app test files were read, no leak source identified,
+  not confirmed reproducible under a full local `npx jest --silent`
+  run (the way C31 was confirmed before being called a real bug rather
+  than CI-runner noise). Do that triage before attempting a fix.
+- **Files:** likely `driver-app/__tests__/components/ActivityView.test.tsx`
+  plus whichever earlier-running test file in the same Jest worker is the
+  actual source, per the same investigative pattern used for C31.
 
 ## Recently completed (do not redo)
 

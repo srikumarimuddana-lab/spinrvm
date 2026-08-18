@@ -613,7 +613,7 @@ export const getDriverStats = (params?: {
 export const updateDriver = (id: string, data: Record<string, any>) =>
     request<any>(`/api/admin/drivers/${id}`, { method: "PUT", body: JSON.stringify(data) });
 
-export async function generateDecalPdf(driverIds: string[]): Promise<Blob> {
+export async function generateDecalPdf(driverIds: string[], province: string = "SK"): Promise<Blob> {
     const { useAuthStore } = await import("@/store/authStore");
     const store = useAuthStore.getState();
     const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -622,7 +622,7 @@ export async function generateDecalPdf(driverIds: string[]): Promise<Blob> {
     const res = await fetch("/api/admin/drivers/decals/generate-pdf", {
         method: "POST",
         headers,
-        body: JSON.stringify({ driver_ids: driverIds }),
+        body: JSON.stringify({ driver_ids: driverIds, province }),
     });
     if (!res.ok) {
         const body = await res.json().catch(() => ({}));

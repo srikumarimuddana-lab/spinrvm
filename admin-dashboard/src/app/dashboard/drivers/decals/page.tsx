@@ -71,6 +71,7 @@ export default function WelcomeLettersPage() {
     const [page, setPage] = useState(1);
     const [generatingId, setGeneratingId] = useState<string | null>(null);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+    const [province, setProvince] = useState<"SK" | "AB">("SK");
 
     useEffect(() => {
         getServiceAreas()
@@ -166,7 +167,7 @@ export default function WelcomeLettersPage() {
     const handleGenerate = async (driver: any) => {
         setGeneratingId(driver.id);
         try {
-            const blob = await generateDecalPdf([driver.id]);
+            const blob = await generateDecalPdf([driver.id], province);
             const now = new Date().toISOString();
             setDrivers(prev => prev.map(d =>
                 d.id === driver.id
@@ -196,7 +197,7 @@ export default function WelcomeLettersPage() {
         setGeneratingId("bulk");
         try {
             const ids = targets.map(d => d.id);
-            const blob = await generateDecalPdf(ids);
+            const blob = await generateDecalPdf(ids, province);
             downloadBlob(blob, `welcome_letters_${ids.length}_drivers.pdf`);
             toast({
                 title: "Welcome letters downloaded",
@@ -342,6 +343,19 @@ export default function WelcomeLettersPage() {
                         {serviceAreas.map(a => (
                             <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
                         ))}
+                    </SelectContent>
+                </Select>
+
+                <Select value={province} onValueChange={v => setProvince(v as "SK" | "AB")}>
+                    <SelectTrigger className="w-44 h-9" aria-label="Letter province template">
+                        <div className="flex items-center gap-1.5">
+                            <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+                            <SelectValue placeholder="Province" />
+                        </div>
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="SK">Saskatchewan</SelectItem>
+                        <SelectItem value="AB">Alberta</SelectItem>
                     </SelectContent>
                 </Select>
 

@@ -21,9 +21,11 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
+  AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useFocusEffect } from 'expo-router/react-navigation';
 import { Ionicons } from '@expo/vector-icons';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../../hooks/useToast';
@@ -32,6 +34,7 @@ import type { ThemeColors } from '@shared/theme/index';
 
 interface LostFoundCase {
   id: string;
+  ride_id?: string;
   item_description: string;
   item_category?: string;
   status: string;
@@ -100,18 +103,57 @@ export default function DriverLostAndFoundChatScreen() {
   }, []);
 
   useEffect(() => {
-    // loadCase is useCallback([]) — stable identity, so this only re-fires
-    // when the caseId route param actually changes. It sets state after its
-    // own await, not synchronously at the top of the effect.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (caseId) loadCase(caseId);
   }, [caseId, loadCase]);
+
+  useEffect(() => {
+    if (rideId && !caseId && !lostCase) {
+      (async () => {
+        try {
+          const res = await api.get<{ cases: LostFoundCase[] }>('/lost-and-found');
+          const existing = (res.data?.cases ?? []).find(
+            (c) => c.ride_id === rideId,
+          );
+          if (existing) {
+            setLostCase(existing);
+            setLoading(true);
+            await loadCase(existing.id);
+          }
+        } catch {
+          // no existing case — show report form
+        }
+      })();
+    }
+  }, [rideId, caseId, lostCase, loadCase]);
 
   useEffect(() => {
     if (messages.length > 0) {
       setTimeout(() => flatRef.current?.scrollToEnd({ animated: true }), 100);
     }
   }, [messages.length]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!lostCase) return;
+      const id = lostCase.id;
+      const interval = setInterval(() => {
+        if (AppState.currentState === 'active') {
+          api.get<{ messages: Message[] }>(`/lost-and-found/${id}/messages`)
+            .then(res => {
+              const fresh = res.data?.messages ?? [];
+              setMessages(prev => {
+                if (fresh.length !== prev.length) return fresh;
+                const lastFresh = fresh[fresh.length - 1]?.id;
+                const lastPrev = prev[prev.length - 1]?.id;
+                return lastFresh !== lastPrev ? fresh : prev;
+              });
+            })
+            .catch(() => {});
+        }
+      }, 10_000);
+      return () => clearInterval(interval);
+    }, [lostCase]),
+  );
 
   // Submit a new driver-found case
   const submitReport = async () => {

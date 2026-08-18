@@ -4764,7 +4764,9 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   the commit") — met; all four listed files reach ≥90% coverage — met.
 
 ### B13. 22 drivers have no `regulatory_authority`/`regulatory_region` set (blocks the SGI-forms segregation guard from covering them)
-- [x] **Status:** backfill done (2026-07-28, migration
+- [ ] **Status:** partially done — see Round 2 below; migration 333 not
+  yet applied and the guard tightening is still pending on that. Original
+  Round 1: backfill done (2026-07-28, migration
   `265_drivers_regulatory_authority_backfill.sql`) — all 22 rows verified
   by `id` against the real project (`soavhtdhefowwvforzwb`) and confirmed
   to resolve to `service_areas` 'Regina' or 'Saskatoon' (both real
@@ -4806,6 +4808,30 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 - **Files:** `backend/routes/admin/sgi_forms.py` (unchanged — tightening
   still pending), `backend/migrations/265_drivers_regulatory_authority_backfill.sql`
   (new, applied).
+- **Round 2 (2026-08-18) — the "not blocking, dead code" call above turned
+  out to be wrong within 3 weeks.** Re-checked production before doing the
+  planned guard-tightening: 212 drivers now exist (was 209), and **7 more
+  had NULL `regulatory_authority`** — real Saskatchewan signups from
+  2026-07-30 through 2026-08-16, all resolving to Saskatoon/Regina.
+  Root cause: the actual driver self-signup/creation write paths
+  (`routes/drivers/profile.py`'s two auto-create branches,
+  `documents.py`'s document-upload auto-create, `routes/drivers/
+  location.py`'s admin `POST /drivers`) never set these two fields at
+  all — only the bulk CSV `driver_import_service.py` path did. Migration
+  265 backfilled the 22 *legacy* rows but nothing stopped the same gap
+  from regrowing on every new signup. **Fixed at the root**: new shared
+  `_resolve_regulatory_defaults()` helper in `routes/drivers/_shared.py`
+  (reuses `driver_import_service.regulatory_authority_defaults`, single
+  source of truth), wired into all four write paths; new migration
+  `333_drivers_regulatory_authority_backfill_round2.sql` backfills the 7
+  rows the bug already produced (not yet applied to production — normal
+  manual-apply process, same as 265). **Guard tightening is still NOT
+  done** — intentionally deferred until 333 is confirmed applied (doing it
+  first would re-block real drivers). `spinr-migration-reviewer`: SAFE TO
+  APPLY, no blockers; one WARNING (the single-market SGI/SK fallback needs
+  revisiting before a second province launches — not urgent, no non-SK
+  driver exists yet). Full Change Impact Log:
+  `docs/change-log/2026-08-18-b13-driver-regulatory-authority-write-paths.md`.
 
 ### B14. SGI form company address split across dedicated fields + driver licence-number/class data gap
 - [x] **Status:** address bug DONE (2026-07-29). Licence-number/class

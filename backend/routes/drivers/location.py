@@ -8,7 +8,7 @@ import uuid
 
 from pydantic import ValidationError, model_validator
 
-from . import _deps
+from . import _deps, _shared
 from ._deps import (  # noqa: F401
     APIRouter,
     BaseModel,
@@ -351,6 +351,11 @@ async def create_driver(driver: Driver, admin_user: dict = Depends(get_admin_use
 
     row = driver.dict()
     row.setdefault("driver_code", generate_driver_code())
+    # regulatory_authority/regulatory_region must never be left NULL on a
+    # new driver row — see ACTION_ITEMS.md B13. The `Driver` schema has no
+    # `service_area_id` field, so this always resolves via the single-market
+    # (SGI/SK) fallback — correct for this repo's current SK-only footprint.
+    row["regulatory_authority"], row["regulatory_region"] = await _shared._resolve_regulatory_defaults(None)
     await db_supabase.insert_one("drivers", row)
     return row
 

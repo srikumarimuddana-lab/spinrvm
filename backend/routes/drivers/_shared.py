@@ -238,6 +238,51 @@ async def _vault_decrypt(value: str, hint: str = "") -> str:
         return value
 
 
+async def _resolve_regulatory_defaults(service_area_id) -> tuple:
+    """``(regulatory_authority, regulatory_region)`` for a newly-created
+    driver row.
+
+    ACTION_ITEMS.md B13: both real driver-creation write paths (``/register``
+    and ``PUT /me``'s auto-create branch) left these two columns entirely
+    unset, silently relying on `sgi_forms.py`'s NULL-passes-through
+    grandfather allowance — which was only ever meant to cover the 22
+    pre-existing legacy rows the original backfill (migration 265) closed,
+    not a permanently-open gap. Confirmed live: 7 more NULL rows had
+    accumulated in production by 2026-08-18, all real Saskatchewan drivers.
+
+    Reuses the same resolver `driver_import_service.regulatory_authority_defaults`
+    already uses for the bulk CSV-import path, so both write paths agree on
+    one piece of logic. Falls back to the explicit single-market default
+    (SGI/SK) only if that resolver still can't determine a region — e.g. no
+    `service_area_id` was supplied at all — since every driver in production
+    today is Saskatchewan-based (see B13's own note on `service_areas`'
+    `regulatory_authority`/`province` columns still being NULL for every
+    area but 'Regina', which the resolver route already gracefully handles
+    via name-matching).
+    """
+    service_area: dict = {}
+    if service_area_id:
+        rows = await db_supabase.get_rows("service_areas", {"id": service_area_id}, limit=1)
+        service_area = rows[0] if rows else {}
+    try:
+        from ...services.driver_import_service import regulatory_authority_defaults
+    except ImportError:  # pragma: no cover - dual-import pattern
+        from services.driver_import_service import regulatory_authority_defaults  # type: ignore
+
+    authority, region = regulatory_authority_defaults({}, service_area)
+    if not region:
+        # The shared resolver couldn't determine a region at all (no
+        # `service_area_id` supplied, or one that doesn't resolve to a real
+        # row) — in that case it falls through to its own generic
+        # "Provincial / municipal authority" placeholder, meant for a real
+        # future non-SK province, not "we don't know". Every driver in
+        # production today is Saskatchewan-based, so override BOTH fields
+        # together rather than patching just the missing one — an
+        # unresolved region means the authority it computed is wrong too.
+        authority, region = "SGI", "SK"
+    return authority, region
+
+
 async def _encrypt_driver_pii(payload: dict) -> dict:
     """Encrypt vault PII fields in a write payload before sending to the DB.
 

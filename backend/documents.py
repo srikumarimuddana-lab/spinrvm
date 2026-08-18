@@ -735,6 +735,15 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
         # before the driver has completed the vehicle-info step.
         first = current_user.get("first_name", "")
         last = current_user.get("last_name", "")
+        # regulatory_authority/regulatory_region must never be left NULL on a
+        # new driver row — see ACTION_ITEMS.md B13. This is a third live
+        # driver auto-create path (document upload before vehicle-info is
+        # completed) with the same gap the other two had.
+        try:
+            from .routes.drivers._shared import _resolve_regulatory_defaults
+        except ImportError:  # pragma: no cover - dual-import pattern
+            from routes.drivers._shared import _resolve_regulatory_defaults  # type: ignore
+        _reg_authority, _reg_region = await _resolve_regulatory_defaults(None)
         driver = {
             "id": str(uuid.uuid4()),
             "user_id": current_user["id"],
@@ -749,6 +758,8 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
             "lat": 0,
             "lng": 0,
             "created_at": datetime.now(timezone.utc).isoformat(),
+            "regulatory_authority": _reg_authority,
+            "regulatory_region": _reg_region,
         }
         await db.insert_one("drivers", driver)
         await db.update_one(

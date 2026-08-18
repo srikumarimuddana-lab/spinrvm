@@ -134,6 +134,37 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 
 ## P0 — Launch gating (code)
 
+### A40. Whole-app fleet audit (2026-08-18, Part A) — 3-day drift check vs. 2026-08-15 baseline
+> Companion to A34 above — A34 tracks the Part B dual-run cutover seam audit;
+> this tracks Part A, the whole-app fleet audit (all 21 `spinr-*` reviewers,
+> not a diff). Full report: `docs/audit/2026-08-18-full-fleet-whole-app-audit.md`.
+> Baseline: `docs/audit/2026-08-15-full-fleet-launch-readiness.md`.
+- [ ] **Status:** open. Of the baseline's 17 ranked blockers: 14 STILL-OPEN
+  unchanged (no commits touching them since 08-15), 0 fully fixed, 1
+  REGRESSED (`deploy-metrics-agent.yml` unpinned actions with a live
+  `FLY_API_TOKEN` — missed by the C18b sweep that claimed this class fixed),
+  2 partially mitigated but not resolved (corporate PDF tax-line fallback now
+  logged/Sentry-alerted but still ships; emergency-contacts doc corrected to
+  be honest about plaintext storage, underlying decision still open).
+  **Highest-priority new finding**: `docs/legal/insurance-coverage-periods.md`
+  (a rider/driver-facing legal draft) states insurance coverage "starts as
+  soon as the driver is assigned — even before they've accepted," which is
+  the opposite of what the code does (Period 2 opens at `driver_accepted`,
+  not at offer/claim, because the production batch-offer dispatch model
+  never writes a `driver_assigned` ride status — confirmed dead code in
+  `services/dispatch_service.py::assign_driver_to_ride`). This doc must not
+  publish without a legal/SGI decision. Two structural (not one-off) findings
+  also surfaced: no AI tool RESULT is ever PII-scrubbed anywhere in the
+  codebase (the driver-name-to-LLM leak is just the first live instance —
+  fix the choke point in `ai/tools.py::_cap_result`, not just the one field);
+  and no Prometheus metric exists for any ride-state transition after offer
+  acceptance (arrival/start/completion/cancellation), leaving the match-rate
+  and cancellation-rate KPIs invisible to any dashboard. Full ranked blocker
+  register (30 items) and decision log (10 items, each with a suggested
+  owner/due date) are in the audit doc — see there before re-deriving.
+  Verdict: **FIX BLOCKERS** (17 of 21 domains; 3 NEEDS HUMAN REVIEW —
+  migration, admin-rbac, test-coverage; 1 SAFE TO LAUNCH — corporate-billing).
+
 ### A34. Dual-run cutover readiness audit (2026-08-15) — decommission blockers and required decisions
 > **Note:** there is a second, unrelated `### A34` further down this file
 > ("Legacy-imported ride count dropped 224 → 186 in production — CLOSED") from

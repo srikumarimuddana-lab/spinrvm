@@ -70,7 +70,15 @@ class TestGetScheduledRides:
 
         rides = [_scheduled_ride(), _scheduled_ride(id="ride-002")]
 
-        with patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=rides)) as get_rows:
+        with (
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=rides)) as get_rows,
+            # C29's notice-window fee preview calls get_app_settings() after
+            # the rides fetch; mock it separately so `get_rows.await_args`
+            # (the LAST call) still reflects the rides query below rather
+            # than a settings lookup that happens to route through the same
+            # mocked get_rows.
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+        ):
             result = await rides_mod.get_scheduled_rides(
                 current_user={"id": RIDER_ID},
             )
@@ -91,6 +99,86 @@ class TestGetScheduledRides:
             )
 
         assert result == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /rides/scheduled — notice-window cancellation fee preview (C29)
+#
+# calculate_scheduled_cancel_notice_fee() itself is unit-tested exhaustively
+# in test_scheduled_cancel_notice_fee.py; these tests only pin that
+# get_scheduled_rides() wires that pure function's result onto each ride as
+# `notice_window_fee_amount`, and — critically for the hidden-fee guardrail —
+# that the field is entirely absent (not just falsy) whenever no fee would
+# apply, so the flag-off-by-default response is unchanged from before C29.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestGetScheduledRidesNoticeWindowFeePreview:
+    async def test_flag_enabled_and_fee_would_apply_exposes_amount(self):
+        from backend.routes import rides as rides_mod
+
+        # 30 minutes to pickup, inside the default 60-minute notice window.
+        ride = _scheduled_ride(
+            scheduled_time=(datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(),
+            payment_method="card",
+        )
+        settings = {
+            "scheduled_ride_notice_window_fee_enabled": True,
+            "scheduled_ride_notice_window_minutes": 60,
+            "scheduled_ride_notice_window_fee_amount": "3.00",
+        }
+
+        with (
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[ride])),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value=settings)),
+        ):
+            result = await rides_mod.get_scheduled_rides(current_user={"id": RIDER_ID})
+
+        assert result[0]["notice_window_fee_amount"] == 3
+
+    async def test_flag_disabled_omits_the_field(self):
+        from backend.routes import rides as rides_mod
+
+        ride = _scheduled_ride(
+            scheduled_time=(datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(),
+            payment_method="card",
+        )
+        settings = {
+            "scheduled_ride_notice_window_fee_enabled": False,
+            "scheduled_ride_notice_window_minutes": 60,
+            "scheduled_ride_notice_window_fee_amount": "3.00",
+        }
+
+        with (
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[ride])),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value=settings)),
+        ):
+            result = await rides_mod.get_scheduled_rides(current_user={"id": RIDER_ID})
+
+        assert "notice_window_fee_amount" not in result[0]
+
+    async def test_flag_enabled_but_outside_notice_window_omits_the_field(self):
+        from backend.routes import rides as rides_mod
+
+        # 90 minutes to pickup — outside the default 60-minute window, so
+        # cancelling right now would still be free.
+        ride = _scheduled_ride(
+            scheduled_time=(datetime.now(timezone.utc) + timedelta(minutes=90)).isoformat(),
+            payment_method="card",
+        )
+        settings = {
+            "scheduled_ride_notice_window_fee_enabled": True,
+            "scheduled_ride_notice_window_minutes": 60,
+            "scheduled_ride_notice_window_fee_amount": "3.00",
+        }
+
+        with (
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[ride])),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value=settings)),
+        ):
+            result = await rides_mod.get_scheduled_rides(current_user={"id": RIDER_ID})
+
+        assert "notice_window_fee_amount" not in result[0]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -502,6 +590,36 @@ class TestDSTBoundary:
                 scheduled_time=datetime(2026, 11, 1, 5, 30, tzinfo=timezone.utc),
             )
         assert ride_req.scheduled_time is not None
+
+    def test_missing_scheduled_timezone_logs_warning_but_still_accepted(self, caplog):
+        """C30: omitting scheduled_timezone must NOT change acceptance
+        behavior (scheduled_time is still trusted as-is, exactly as before)
+        but must now emit a warning so a future caller's omission is
+        observable instead of silent."""
+        import logging as _logging
+
+        from backend.schemas import CreateRideRequest
+
+        frozen_now = datetime(2026, 10, 28, tzinfo=timezone.utc)
+        scheduled_time = datetime(2026, 11, 1, 5, 30, tzinfo=timezone.utc)
+        with _patch_schemas_now(frozen_now), caplog.at_level(_logging.WARNING):
+            ride_req = CreateRideRequest(
+                vehicle_type_id="standard",
+                pickup_address="123 Main St",
+                pickup_lat=52.1,
+                pickup_lng=-106.0,
+                dropoff_address="456 Broadway",
+                dropoff_lat=52.2,
+                dropoff_lng=-106.1,
+                is_scheduled=True,
+                scheduled_time=scheduled_time,
+            )
+
+        # Value unchanged -- purely additive, zero functional change.
+        assert ride_req.scheduled_time == scheduled_time
+
+        warnings = [r for r in caplog.records if r.levelno == _logging.WARNING]
+        assert any("scheduled_timezone" in r.message for r in warnings)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

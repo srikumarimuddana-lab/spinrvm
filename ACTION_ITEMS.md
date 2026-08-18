@@ -193,10 +193,24 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     open**: what `tax_amount` itself should read for those 186 rows is a
     business/legal decision, not resolved by the backfill — needs an owner
     + due date.
+  - **RESOLVED (2026-08-18)**: insurance-period audit-trail gap for the 186
+    legacy-imported rides — **CR #4081**, decision: reconstruct-and-flag,
+    approved by this session's user (confirmed to hold the SGI-facing
+    legal/regulatory authority CLAUDE.md requires for this call). Backfilled
+    182/186 rides via migration `332_backfill_legacy_ride_insurance_periods.sql`
+    (Period 2 + Period 3 rows, each marked `is_reconstructed = true` — a new,
+    structurally-unmissable column, not a notes field). 4/186 rides
+    deliberately excluded and documented in the migration's own header (3
+    with no `driver_id`; 1 with no arrival/start timestamps, only a ~14.8hr
+    created_at→completed_at gap that would require fabricating a Period-3
+    boundary rather than reconstructing one). Known, disclosed limitation
+    inherited from the source data (same as migration 65's own precedent):
+    Period 2 starts from `driver_arrived_at`, not the true (never-captured)
+    `driver_assigned` moment, so the true Period-1→2 boundary is understated
+    for these 182 rows.
   - **STILL OPEN, unchanged**: fresh final old-app export (unblocks the true
     pending-money figure, the full identity map, and the corporate-money
-    unknown); insurance-period audit-trail gap for imported rides (legal/SGI
-    decision — engineering must NOT fabricate period rows); no
+    unknown); no
     final-export/teardown runbook owner/dates (draft exists,
     `docs/runbooks/full-app-audit.md` Part B §3.2); double-dispatch/
     double-payout structural risk (needs an operational roster policy — code

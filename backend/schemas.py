@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -5,6 +6,8 @@ from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from pydantic.functional_serializers import PlainSerializer
+
+logger = logging.getLogger(__name__)
 
 try:
     from .validators import validate_license_plate, validate_vehicle_year, validate_vin
@@ -764,6 +767,123 @@ SCHEDULE_MIN_LEAD_MINUTES = 15
 SCHEDULE_MAX_ADVANCE_DAYS = 7
 
 
+def validate_scheduled_time_value(value: Optional[datetime], tz_name: Optional[str]) -> Optional[datetime]:
+    """Shared scheduled_time validation body for CreateRideRequest and
+    CompanyGuestBookingRequest (C34) — extracted so the two request schemas
+    can't drift out of sync with each other's lead-time/max-advance/DST
+    rules. Kept as a standalone function, not a classmethod, so either
+    Pydantic model's field_validator can call it directly."""
+    if value is not None:
+        from datetime import timedelta
+
+        # Normalise to UTC-aware. If scheduled_timezone is present this
+        # gets REPLACED below with the true converted UTC instant — see
+        # that branch for why.
+        v_utc = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        naive = v_utc.replace(tzinfo=None)
+
+        if tz_name:
+            try:
+                import zoneinfo
+
+                tz = zoneinfo.ZoneInfo(tz_name)
+            except (ImportError, KeyError) as exc:
+                raise ValueError(f"Unknown or unsupported timezone: {tz_name}") from exc
+
+            # scheduled_timezone changes the contract: `naive`'s digits
+            # are now read as the rider's intended LOCAL wall-clock
+            # pickup time in this zone (not a UTC instant) — this is the
+            # only way to detect a DST gap/ambiguity at all, since by
+            # the time you have a true UTC instant, a client-side Date
+            # construction has already silently resolved (or
+            # fabricated, for a gap time) which instant was meant, with
+            # no record of the choice. See rider-app/store/rideStore.ts
+            # for the client-side half of this contract.
+            #
+            # DST-gap guard: construct the wall-clock time in the named
+            # timezone (fold=0 = pre-transition assumption), convert to UTC,
+            # then convert back and verify the hour/minute round-trips.
+            # A mismatch means the local time doesn't exist (clock was
+            # skipped forward over it).
+            utc_tz = zoneinfo.ZoneInfo("UTC")
+            local = naive.replace(tzinfo=tz, fold=0)
+            converted_utc = local.astimezone(utc_tz)
+            back = converted_utc.astimezone(tz)
+            if back.hour != naive.hour or back.minute != naive.minute:
+                raise ValueError(
+                    f"The time {naive.strftime('%H:%M')} does not exist in "
+                    f"{tz_name} on that date (DST spring-forward gap). "
+                    "Please choose a time after the clocks change."
+                )
+
+            # DST fall-back guard: the gap check above only catches a
+            # local time that doesn't exist (spring-forward). The
+            # opposite case — a local time that occurs TWICE (the
+            # repeated hour when clocks fall back) — round-trips fine
+            # under either interpretation, so it isn't caught by that
+            # check at all. Compare the UTC offset under fold=0 (first
+            # occurrence) vs fold=1 (second occurrence): equal offsets
+            # means the time is unambiguous; different offsets means
+            # this exact wall-clock time happens twice on this date, and
+            # naive.replace(tzinfo=tz, fold=0) above would have silently
+            # picked the first occurrence with no way for the rider (or
+            # the regulatory trip-log record) to know which one they meant.
+            fold0_offset = local.utcoffset()
+            fold1_offset = naive.replace(tzinfo=tz, fold=1).utcoffset()
+            if fold0_offset != fold1_offset:
+                raise ValueError(
+                    f"The time {naive.strftime('%H:%M')} is ambiguous in {tz_name} on that "
+                    "date (DST fall-back — this local time occurs twice). Please choose a "
+                    "different time, or specify scheduled_time with an explicit UTC offset."
+                )
+
+            # The wall-clock time is valid and unambiguous in this zone
+            # — `converted_utc` IS the true UTC instant it represents.
+            # Without this reassignment the validator would pass
+            # DST-safety but then hand back `naive`'s digits mislabeled
+            # as UTC (the pre-fix behavior) — dispatching the ride up to
+            # many hours off from the rider's actual intended local
+            # time. The window checks below must run against this
+            # corrected value too, not the mislabeled one.
+            v_utc = converted_utc
+        else:
+            # No scheduled_timezone supplied — scheduled_time is trusted
+            # as-is as a true UTC instant with no DST-gap/ambiguity
+            # protection (see comment above). This is a known,
+            # intentional trade-off for existing callers (rider-app
+            # always sends scheduled_timezone today), but it means the
+            # guard's effectiveness silently depends on every future
+            # caller remembering to set the field. Log so an omission by
+            # a future caller (third-party integration, older app
+            # build, AI booking tool) is observable instead of silent.
+            # No PII: this validator only has the ride time value, and
+            # we don't log lat/lng or any address/identity field.
+            logger.warning(
+                "Scheduled ride request received without scheduled_timezone; "
+                "DST-gap/ambiguity validation skipped, scheduled_time trusted "
+                "as-is as a UTC instant",
+                extra={"has_scheduled_timezone": False},
+            )
+
+        now_utc = datetime.now(timezone.utc)
+        if v_utc < now_utc + timedelta(minutes=SCHEDULE_MIN_LEAD_MINUTES):
+            raise ValueError(f"Scheduled time must be at least {SCHEDULE_MIN_LEAD_MINUTES} minutes in the future")
+        # Server-side ceiling matching the rider app's date-picker maxDate.
+        # Previously enforced client-only, so any other caller — a direct
+        # API request or the AI booking assistant — could schedule
+        # arbitrarily far ahead with nothing to reject it.
+        if v_utc > now_utc + timedelta(days=SCHEDULE_MAX_ADVANCE_DAYS):
+            raise ValueError(f"Scheduled time cannot be more than {SCHEDULE_MAX_ADVANCE_DAYS} days in the future")
+
+        # tz_name path: return the corrected true-UTC instant, not the
+        # original (local-digits-mislabeled-as-UTC) `value`. No-tz_name
+        # path: return `value` completely unchanged, exactly as before
+        # this fix — existing callers that already send a true UTC
+        # instant (rider-app's toISOString() today) are unaffected.
+        return v_utc if tz_name else value
+    return value
+
+
 class CreateRideRequest(BaseModel):
     vehicle_type_id: str
     pickup_address: str
@@ -840,95 +960,5 @@ class CreateRideRequest(BaseModel):
     @field_validator("scheduled_time", mode="after")
     @classmethod
     def validate_scheduled_time(cls, value: Optional[datetime], info) -> Optional[datetime]:
-        if value is not None:
-            from datetime import timedelta
-
-            # Normalise to UTC-aware. If scheduled_timezone is present this
-            # gets REPLACED below with the true converted UTC instant — see
-            # that branch for why.
-            v_utc = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-            naive = v_utc.replace(tzinfo=None)
-
-            tz_name: Optional[str] = info.data.get("scheduled_timezone")
-            if tz_name:
-                try:
-                    import zoneinfo
-
-                    tz = zoneinfo.ZoneInfo(tz_name)
-                except (ImportError, KeyError) as exc:
-                    raise ValueError(f"Unknown or unsupported timezone: {tz_name}") from exc
-
-                # scheduled_timezone changes the contract: `naive`'s digits
-                # are now read as the rider's intended LOCAL wall-clock
-                # pickup time in this zone (not a UTC instant) — this is the
-                # only way to detect a DST gap/ambiguity at all, since by
-                # the time you have a true UTC instant, a client-side Date
-                # construction has already silently resolved (or
-                # fabricated, for a gap time) which instant was meant, with
-                # no record of the choice. See rider-app/store/rideStore.ts
-                # for the client-side half of this contract.
-                #
-                # DST-gap guard: construct the wall-clock time in the named
-                # timezone (fold=0 = pre-transition assumption), convert to UTC,
-                # then convert back and verify the hour/minute round-trips.
-                # A mismatch means the local time doesn't exist (clock was
-                # skipped forward over it).
-                utc_tz = zoneinfo.ZoneInfo("UTC")
-                local = naive.replace(tzinfo=tz, fold=0)
-                converted_utc = local.astimezone(utc_tz)
-                back = converted_utc.astimezone(tz)
-                if back.hour != naive.hour or back.minute != naive.minute:
-                    raise ValueError(
-                        f"The time {naive.strftime('%H:%M')} does not exist in "
-                        f"{tz_name} on that date (DST spring-forward gap). "
-                        "Please choose a time after the clocks change."
-                    )
-
-                # DST fall-back guard: the gap check above only catches a
-                # local time that doesn't exist (spring-forward). The
-                # opposite case — a local time that occurs TWICE (the
-                # repeated hour when clocks fall back) — round-trips fine
-                # under either interpretation, so it isn't caught by that
-                # check at all. Compare the UTC offset under fold=0 (first
-                # occurrence) vs fold=1 (second occurrence): equal offsets
-                # means the time is unambiguous; different offsets means
-                # this exact wall-clock time happens twice on this date, and
-                # naive.replace(tzinfo=tz, fold=0) above would have silently
-                # picked the first occurrence with no way for the rider (or
-                # the regulatory trip-log record) to know which one they meant.
-                fold0_offset = local.utcoffset()
-                fold1_offset = naive.replace(tzinfo=tz, fold=1).utcoffset()
-                if fold0_offset != fold1_offset:
-                    raise ValueError(
-                        f"The time {naive.strftime('%H:%M')} is ambiguous in {tz_name} on that "
-                        "date (DST fall-back — this local time occurs twice). Please choose a "
-                        "different time, or specify scheduled_time with an explicit UTC offset."
-                    )
-
-                # The wall-clock time is valid and unambiguous in this zone
-                # — `converted_utc` IS the true UTC instant it represents.
-                # Without this reassignment the validator would pass
-                # DST-safety but then hand back `naive`'s digits mislabeled
-                # as UTC (the pre-fix behavior) — dispatching the ride up to
-                # many hours off from the rider's actual intended local
-                # time. The window checks below must run against this
-                # corrected value too, not the mislabeled one.
-                v_utc = converted_utc
-
-            now_utc = datetime.now(timezone.utc)
-            if v_utc < now_utc + timedelta(minutes=SCHEDULE_MIN_LEAD_MINUTES):
-                raise ValueError(f"Scheduled time must be at least {SCHEDULE_MIN_LEAD_MINUTES} minutes in the future")
-            # Server-side ceiling matching the rider app's date-picker maxDate.
-            # Previously enforced client-only, so any other caller — a direct
-            # API request or the AI booking assistant — could schedule
-            # arbitrarily far ahead with nothing to reject it.
-            if v_utc > now_utc + timedelta(days=SCHEDULE_MAX_ADVANCE_DAYS):
-                raise ValueError(f"Scheduled time cannot be more than {SCHEDULE_MAX_ADVANCE_DAYS} days in the future")
-
-            # tz_name path: return the corrected true-UTC instant, not the
-            # original (local-digits-mislabeled-as-UTC) `value`. No-tz_name
-            # path: return `value` completely unchanged, exactly as before
-            # this fix — existing callers that already send a true UTC
-            # instant (rider-app's toISOString() today) are unaffected.
-            return v_utc if tz_name else value
-        return value
+        tz_name: Optional[str] = info.data.get("scheduled_timezone")
+        return validate_scheduled_time_value(value, tz_name)

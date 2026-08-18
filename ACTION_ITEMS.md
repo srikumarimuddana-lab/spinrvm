@@ -8376,6 +8376,349 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   deadline; a support agent can produce a complete, PIPEDA-clean evidence
   pack for a ride in one click.
 
+### C32. Scheduled rides: no booking-time check for overlapping/duplicate scheduled trips by the same rider
+
+- [x] **Status:** closed 2026-08-17. `create_ride` (`routes/rides/booking.py`)
+  now rejects (409, `scheduled_ride_overlap`) a new scheduled-ride request
+  whose `scheduled_time` falls within a new
+  `SCHEDULE_OVERLAP_WINDOW_MINUTES = 60` constant of any of the same
+  rider's other `scheduled`-status rides, inserted between the existing
+  active-ride guard and the unpaid-ride guard. Additive-only — gated on
+  `body.scheduled_time` being set, so immediate (non-scheduled) bookings
+  are unaffected; no other caller of the active-ride check is touched.
+  "Warn-and-confirm" was deliberately deferred as a rider-app UX/API
+  decision (would need a two-step flow) — reject is the unambiguous,
+  purely-additive option chosen instead, per CLAUDE.md's pre-merge gates.
+  New tests in `backend/tests/test_c26_scheduled_overlap.py`:
+  exact-duplicate rejected, within-window rejected, 3.5h-outside-window
+  succeeds, immediate booking unaffected.
+  `pytest tests/test_c26_scheduled_overlap.py
+  tests/test_create_ride_scheduled_confirmation.py -q` → 6 passed. **Not
+  verified**: no live-Supabase/real-unique-index interaction (mocked
+  `get_rows` only), no >200-existing-scheduled-rides edge case.
+- **Issue/gap:** `booking.py`'s active-ride guard
+  (`routes/rides/booking.py:394-408`) only checks
+  `RideStatus.active_statuses()`, which deliberately excludes `scheduled` —
+  and the DB-level uniqueness guard (`migrations/53_rides_one_active_per_rider.sql`)
+  is a partial unique index over the same active-status set, also excluding
+  `scheduled`. Nothing rejects a rider booking two scheduled rides at the
+  same or overlapping times.
+- **Why it matters:** the conflict is invisible until dispatch time, when
+  the second ride's `scheduled → searching` claim UPDATE
+  (`utils/scheduled_rides.py:447-477`) collides with the same unique index.
+  The rider then gets a "waiting on your current trip" defer push
+  (`_notify_schedule_delayed`, `utils/scheduled_rides.py:101-108`), which is
+  confusing — there is no "current trip," just their other still-stuck
+  scheduled ride — and can escalate all the way to admin paging after
+  `_SCHEDULE_DEFER_ESCALATE_AFTER` (20 ticks, ~20-40 min,
+  `utils/scheduled_rides.py:134-151`) before anyone understands why.
+- **Action:** at booking time, reject (or warn-and-confirm) a new
+  `scheduled_time` that falls within an estimated-trip-duration window of an
+  existing `scheduled` ride for the same rider; at minimum, reject an
+  exact-duplicate `scheduled_time`.
+- **Files:** `backend/routes/rides/booking.py` (validation), possibly a new
+  partial-unique or app-level check alongside
+  `migrations/53_rides_one_active_per_rider.sql`.
+- **Acceptance:** booking a second scheduled ride that overlaps an existing
+  one for the same rider is rejected (or confirmed) at request time, not
+  discovered at dispatch time via a constraint collision.
+
+### C33. Scheduled rides: no per-rider cap on pending scheduled trips
+
+- [x] **Status:** closed 2026-08-18. Added `SCHEDULE_MAX_PENDING_RIDES = 5`
+  next to `SCHEDULE_OVERLAP_WINDOW_MINUTES` in `routes/rides/booking.py`,
+  and a cap check in `create_ride` right before the C32 overlap loop —
+  reuses the same `existing_scheduled_rides` fetch already made for that
+  loop, no extra query. A rider at or above the cap gets a 409
+  (`error_code: "scheduled_ride_cap_exceeded"`, same `SpinrException`/
+  `ErrorCode.RESOURCE_CONFLICT` shape as the overlap guard) instead of
+  being silently allowed to queue more. Gated on `body.scheduled_time`
+  being set, same as the overlap guard — immediate bookings are
+  completely unaffected regardless of how many scheduled rides the rider
+  already has. New tests in `test_c26_scheduled_overlap.py`
+  (`TestScheduledRideCapGuard`): at-cap rejected, one-under-cap succeeds,
+  immediate booking unaffected by the cap — all using existing rides
+  spaced 4h apart so only the cap guard (not the overlap guard) is
+  exercised. `pytest tests/test_c26_scheduled_overlap.py
+  tests/test_create_ride_scheduled_confirmation.py
+  tests/test_p2_scheduled_rides.py tests/test_company_guest_booking.py -q`
+  → 49 passed. **Blast radius:** isolated to `create_ride`'s scheduled-time
+  branch, same as C32 — no other caller of the active-ride guard touched.
+  **Not verified:** no live-Supabase check (mocked `get_rows` only).
+- **Issue/gap:** nothing in `routes/rides/booking.py`'s create-ride path
+  bounds how many `scheduled` rides a single rider can have outstanding at
+  once.
+- **Why it matters:** each pending scheduled ride costs a row scanned by the
+  dispatcher every tick (`_SCHEDULED_RIDES_TICK_LIMIT = 100`,
+  `utils/scheduled_rides.py:54`) and can trip the tick-cap warning/metric
+  (`utils/scheduled_rides.py:732-741`) if enough riders (or a compromised
+  account, or the AI booking tool) queue up unbounded scheduled rides. Also
+  compounds C32 — more concurrent scheduled rides per rider means more
+  chances for an overlap.
+- **Action:** add a small per-rider concurrent-`scheduled`-ride cap (e.g.
+  3–5), enforced in `booking.py` alongside the active-ride check, returning
+  a clear 4xx rather than silently accepting unlimited bookings.
+- **Files:** `backend/routes/rides/booking.py`.
+- **Acceptance:** a rider attempting to exceed the cap gets a clear
+  rejection at booking time; dispatcher tick load stays bounded per rider.
+
+### C34. Corporate company-portal guest booking bypasses all scheduled-ride validation (lead-time, max-advance, DST, overlap)
+
+- [x] **Status:** closed 2026-08-17. `CreateRideRequest.validate_scheduled_time`'s
+  body is now extracted into a standalone, importable
+  `validate_scheduled_time_value(value, tz_name)` in `backend/schemas.py`
+  — both `CreateRideRequest` and the new `CompanyGuestBookingRequest`
+  field validator call the same logic, so the two paths can't drift out
+  of sync again. `CompanyGuestBookingRequest` gained a `scheduled_timezone`
+  field and the shared validator wired onto `scheduled_time`.
+  `create_company_guest_booking` (`backend/services/company_booking_service.py`)
+  gained an overlap-window guard, keyed on the guest's user id (not the
+  booker/admin's), reusing the same `SpinrException`/
+  `ErrorCode.RESOURCE_CONFLICT`/`scheduled_ride_overlap` 409 shape as C32,
+  gated on `scheduled_time is not None` so immediate guest bookings never
+  touch the new lookup. Confirmed the refactor left `CreateRideRequest`'s
+  own behavior byte-for-byte unchanged: `pytest tests/test_p2_scheduled_rides.py`
+  → 23 passed (same count as before the refactor). New tests in
+  `backend/tests/test_company_guest_booking.py` (8 cases: lead-time,
+  max-advance, DST-ambiguous, valid-in-window, immediate-unaffected at
+  the schema level; overlap-rejected, non-overlap-accepted,
+  immediate-skips-lookup at the service level).
+  `pytest tests/test_company_guest_booking.py tests/test_p2_scheduled_rides.py
+  tests/test_corporate_company_bookings_coverage.py
+  tests/test_corporate_company_bookings_routes.py -q` → 101 passed.
+  **Blast radius:** grepped `CompanyGuestBookingRequest` and
+  `create_company_guest_booking` across `backend/` — the only production
+  caller of each is `POST /company/{company_id}/bookings`; all other hits
+  are test files. Isolated, no other callers. **Not verified:** no live
+  Supabase instance (mocks only).
+- **Issue/gap:** there are three independent paths that create a corporate
+  scheduled ride, not two. `company_allowance` and `work_profile` bookings
+  both go through `CreateRideRequest`/`create_ride`
+  (`backend/routes/rides/booking.py`), so both correctly inherit
+  `validate_scheduled_time`'s 15-minute minimum lead time
+  (`SCHEDULE_MIN_LEAD_MINUTES`), 7-day max advance
+  (`SCHEDULE_MAX_ADVANCE_DAYS`), DST spring-forward-gap/fall-back-ambiguity
+  guard (`backend/schemas.py`), and the C32 scheduled-overlap guard
+  (`booking.py:496-525`). The third path — **company-portal guest
+  booking**, `POST /company/{company_id}/bookings`
+  (`backend/routes/corporate_company_bookings.py:119-139` →
+  `backend/services/company_booking_service.py:62-231`) — does not call
+  `create_ride` at all. It builds the `Ride` row directly from
+  `CompanyGuestBookingRequest`, whose `scheduled_time` field is a bare
+  `Optional[datetime] = None` with only a phone-format validator on a
+  sibling field — no min-lead-time, no max-advance, no DST guard, no
+  `scheduled_timezone` field, and it never runs the C32 overlap check
+  (that block lives only inside `create_ride` in `booking.py`, gated on
+  `body.scheduled_time is not None`).
+- **Why it matters:** a company booker/admin can schedule a guest ride
+  seconds in the past or years in the future, submit a DST-ambiguous local
+  wall-clock time with no timezone context (the exact failure mode
+  `schemas.py`'s guard was written to close for the rider path — unfixed
+  here), or double-book two overlapping scheduled rides for the same guest
+  phone. Overlapping guest bookings sit outside the
+  `rides_one_active_per_rider` partial unique index (same gap C32 closed
+  for personal riders) and can collide at dispatch — the "confusing
+  waiting on your current trip" defer loop
+  (`utils/scheduled_rides.py:462-477`, `_track_defer_and_maybe_escalate`)
+  that C32 exists to prevent, just unguarded for this one booking path.
+  Confirmed the money side is unaffected — `_corporate_policy_still_allows_dispatch`
+  (`utils/scheduled_rides.py:235-380`) still re-verifies company/policy/
+  membership state fresh at dispatch for every path including this one, so
+  this is a booking-time UX/data-integrity gap, not a billing gap.
+- **Action:** port the same `field_validator` logic (or import
+  `SCHEDULE_MIN_LEAD_MINUTES`/`SCHEDULE_MAX_ADVANCE_DAYS`/the DST-gap
+  check) onto `CompanyGuestBookingRequest.scheduled_time`
+  (`backend/routes/corporate_company_bookings.py`), and add the same
+  overlap-window guard (mirroring `booking.py`'s block, keyed on
+  `guest_user["id"]`) inside `create_company_guest_booking`
+  (`backend/services/company_booking_service.py`) before the `Ride(...)`
+  construction.
+- **Files:** `backend/routes/corporate_company_bookings.py`,
+  `backend/services/company_booking_service.py`.
+- **Acceptance:** a company-portal guest booking with an invalid lead
+  time, an out-of-window advance date, a DST-ambiguous local time, or an
+  overlapping `scheduled_time` for the same guest is rejected the same way
+  a personal rider's equivalent request already is.
+
+### C35. Driver-app scheduled-ride offers carry no signal distinguishing them from on-demand offers
+
+- [x] **Status:** closed 2026-08-17. `_match_driver_to_ride_attempt`
+  (`backend/routes/rides/matching.py`) now includes
+  `"is_scheduled": bool(ride.get("is_scheduled"))` in the driver-facing
+  dispatch offer payload — same "originally scheduled" semantics already
+  used by `routes/drivers/ride_cancel.py`'s `_was_scheduled` (true even
+  after the ride has since transitioned to `searching`). Threaded through
+  `driver-app/store/driverStore.ts`'s `IncomingRide` type (including the
+  `fetchActiveRide` REST-fallback hydration path) and the WS
+  `new_ride_assignment` handler in `driver-app/hooks/useDriverDashboard.ts`.
+  `RideOfferPanel.tsx` renders a small indigo "Pre-booked" badge when
+  present, matching the existing WAV/Quiet-ride/Cash badge-row style;
+  renders nothing when absent/false, so it's backward-compatible with any
+  offer payload shape that predates this field. Purely additive metadata
+  — zero dispatch-timing, matching-logic, or state-machine change. New
+  tests: `backend/tests/test_rides_matching_coverage.py` (dispatch
+  payload carries `is_scheduled: true`/`false` correctly) and
+  `driver-app/__tests__/components/RideOfferPanel.test.tsx` (badge
+  renders/hides correctly). `pytest tests/test_rides_matching_coverage.py -q`
+  → 101 passed (combined run with C34's suites, see above).
+  `npx jest __tests__/components/RideOfferPanel.test.tsx` → 20 passed.
+- **Issue/gap:** a scheduled ride dispatches to drivers via the identical
+  offer/accept/timeout mechanism as an immediate ride — confirmed sound,
+  `_dispatch_scheduled_ride` (`utils/scheduled_rides.py:424-611`) calls the
+  same `match_driver_to_ride`/`_match_driver_to_ride_attempt`
+  (`backend/routes/rides/matching.py`) with no scheduled-specific branch
+  anywhere in that file. But the dispatch/offer payload assembled in
+  `matching.py` never includes `is_scheduled` (or any equivalent flag) at
+  all, so `driver-app/components/panels/RideOfferPanel.tsx` has no data to
+  distinguish a pre-booked scheduled dispatch from an on-demand one even if
+  it wanted to — grepped `driver-app/` for any scheduled-ride handling:
+  zero hits outside unrelated matches (activity labels, demand heatmap, a
+  payout page, an OTP screen).
+- **Why it matters:** purely a missed-context UX gap for drivers — a
+  driver has no way to know "this ride was booked in advance" vs. "this is
+  happening right now," which could matter for trip-planning (e.g. a
+  driver who just accepted an immediate ride has no signal that a
+  scheduled one is coming up soon in the same area). Functionally
+  harmless: the driver still receives, accepts, and completes the ride
+  correctly regardless.
+- **Action:** add `is_scheduled` (or `scheduled_dispatched`) to the offer
+  payload assembled in `matching.py`, and have `RideOfferPanel.tsx` render
+  a small "Pre-booked" badge when present. No backend state-machine or
+  dispatch-timing change needed — this is additive metadata only.
+- **Files:** `backend/routes/rides/matching.py`,
+  `driver-app/components/panels/RideOfferPanel.tsx`.
+- **Acceptance:** a driver receiving an offer for a ride that was
+  originally scheduled sees a visual indicator distinguishing it from an
+  on-demand offer.
+
+### C28. Scheduled-ride dispatch-arrival push failure mislogs as a full dispatch failure
+
+- [x] **Status:** closed 2026-08-17. The final rider confirmation push in
+  `_dispatch_scheduled_ride` (`utils/scheduled_rides.py`) is now wrapped in
+  its own try/except, mirroring `_send_reminder`'s existing pattern. A
+  failure there now logs distinctly (`"scheduled dispatch: final
+  confirmation push failed for ride {ride_id}"`, `logger.error`,
+  `exc_info=True`) instead of falling through to the outer handler's
+  `"Failed to dispatch scheduled ride"` log. New regression test in
+  `backend/tests/test_scheduled_dispatch_cr.py` asserts the distinct
+  message fires and the dispatch-failure message does not.
+  `pytest tests/test_scheduled_dispatch_cr.py -q` → 40 passed.
+- **Issue/gap:** `_dispatch_scheduled_ride` sends the rider's "Your
+  scheduled ride is starting!" push with no local try/except
+  (`utils/scheduled_rides.py:589-600`), unlike every other push call in this
+  file (e.g. `_send_reminder`, which has its own try/except and
+  Redis-based retry/dedupe). If that call raises, it falls through to the
+  outer handler and is logged as `"Failed to dispatch scheduled ride
+  {ride_id}"` — even though the claim already succeeded, the driver match
+  already ran (with its own try/except at lines 574-582), the 5-minute
+  offer timeout is already armed, and the WS broadcast
+  (`broadcast_ride_status`, lines 528-535) already fired. The ride is fine;
+  only a non-critical confirmation push was lost.
+- **Why it matters:** wrong on-call signal. This log line reads as a
+  dispatch failure (chase a phantom dispatch bug) or, worse, engineers
+  learn to discount it and later miss a real dispatch failure logged the
+  same way.
+- **Action:** wrap the final rider push in its own try/except (mirroring
+  `_send_reminder`'s pattern), log distinctly (e.g. `"scheduled dispatch:
+  final confirmation push failed"`), and don't let it flow into the
+  `"Failed to dispatch"` branch.
+- **Files:** `backend/utils/scheduled_rides.py` (~line 589-600).
+- **Acceptance:** a push-send failure at this point logs as a push failure,
+  not a dispatch failure; the existing dispatch-failure log/metric only
+  fires for genuine dispatch failures.
+
+### C29. Scheduled-ride notice-window cancellation fee has no rider-facing warning in the cancel UI
+
+- [x] **Status:** closed 2026-08-17. `GET /rides/scheduled`
+  (`routes/rides/queries.py`) now attaches a read-only
+  `notice_window_fee_amount` to each ride, computed via the existing,
+  unchanged `calculate_scheduled_cancel_notice_fee()` against current
+  `app_settings` — mirrors how `get_ride()` already surfaces the live-ride
+  `cancellation_fee` field. No charging/deduction logic touched. Rider-app's
+  `scheduled-rides.tsx` `handleCancel` reads that field and, when present,
+  appends the fee amount to the cancel confirmation text; otherwise the
+  original generic text is unchanged. Ships dark today —
+  `scheduled_ride_notice_window_fee_enabled` still defaults off in
+  production, so the field is never added and the response/behavior is
+  byte-for-byte unchanged until the flag is enabled. New tests:
+  `backend/tests/test_p2_scheduled_rides.py::TestGetScheduledRidesNoticeWindowFeePreview`
+  (flag on + fee applies, flag off, flag on + outside window) and
+  `rider-app/__tests__/scheduledRidesNoticeWindowFee.test.tsx` (source-
+  contract test, not a rendered-DOM test — this screen's `FlatList`/
+  `VirtualizedList` tree hangs under this repo's Jest/RN setup, consistent
+  with the existing "app screens covered by e2e" policy; noted explicitly
+  in the test file rather than silently skipped).
+  `pytest tests/test_p2_scheduled_rides.py -q` → 23 passed.
+  `npx jest __tests__/scheduledRidesNoticeWindowFee.test.tsx` → 3 passed.
+  **Not verified**: no staging/live-Supabase check (mocked Supabase client
+  only); no visual/snapshot regression tooling exists for rider-app screens.
+- **Issue/gap:** `scheduled_ride_notice_window_fee_enabled`
+  (`services/cancellation_service.py:63-91`) defaults `False`, and even if
+  a company/service-area turns it on, the rider-app cancel confirmation
+  sheet (`rider-app/app/scheduled-rides.tsx:52-70`, `handleCancel`) shows
+  only a generic "Are you sure you want to cancel this scheduled ride?"
+  with no mention that a fee (`scheduled_ride_notice_window_fee_amount`,
+  default $3.00) may be charged. The fee is deducted only after the fact.
+- **Why it matters:** charging money the rider wasn't warned about at the
+  point of the cancel action is a hidden-fee UX risk, out of step with how
+  carefully this codebase avoids retroactive/undisclosed charges elsewhere
+  (surge lock-at-booking, receipt line-item transparency in CLAUDE.md's "Not
+  a hidden-fee operator" guardrail).
+- **Action:** have the cancel confirmation sheet fetch/display the
+  applicable notice-window fee (or a generic "a late-cancellation fee may
+  apply" line) whenever the flag is on for that rider/service area,
+  mirroring how live-ride cancellation fees are already surfaced elsewhere
+  in the rider app.
+- **Files:** `rider-app/app/scheduled-rides.tsx` (`handleCancel` /
+  confirmation UI), `backend/services/cancellation_service.py` (fee
+  lookup/exposure).
+- **Acceptance:** with the flag on, the rider sees the potential fee before
+  confirming cancellation, not only after.
+
+### C30. Scheduled-ride DST guard is opt-in per request, not enforced server-side
+
+- [x] **Status:** closed 2026-08-17 — additive half only. Added an `else`
+  branch to `validate_scheduled_time`'s `tz_name` gate
+  (`backend/schemas.py`): when `scheduled_time` is present but
+  `scheduled_timezone` is absent, it now logs a warning (no PII — no
+  lat/lng, no rider identity) so the gap is observable instead of silent.
+  Zero change to acceptance/rejection — the value still passes through
+  exactly as before. Deliberately did **not** make `scheduled_timezone`
+  required / reject requests that omit it — that's a breaking-change risk
+  to a live-tested booking flow and needs a product decision, not a code
+  fix in this pass; left open as a follow-up if the warning signal shows
+  real-world callers omitting it. New regression test in
+  `backend/tests/test_p2_scheduled_rides.py` asserts the value is
+  unchanged and the warning fires. `pytest tests/test_p2_scheduled_rides.py
+  -q` → 20 passed.
+- **Issue/gap:** the DST-gap/DST-ambiguity validation in
+  `CreateRideRequest.validate_scheduled_time` only runs `if tz_name:`
+  (`backend/schemas.py:840-934`, gate at line 853). When
+  `scheduled_timezone` is omitted, the incoming `scheduled_time` is trusted
+  as a true UTC instant with zero DST protection — documented as an
+  intentional trade-off for existing callers that already send true UTC
+  (schemas.py:928-932), but it means the guard's effectiveness depends on
+  every caller remembering to set the field. The current rider-app build
+  always sends it (`rider-app/store/rideStore.ts:769-776`), so there is no
+  live exposure today; the gap is any *future* caller — a third-party
+  integration, an older app version, or the AI booking tool
+  (`backend/ai/tools_booking.py`) — sending a naive local time without it.
+- **Why it matters:** a caller that ever passes a naive local time without
+  `scheduled_timezone` would get a ride dispatched at the wrong wall-clock
+  hour, silently — exactly the failure mode the DST guard exists to
+  prevent, but the guard doesn't force itself on.
+- **Action:** consider requiring `scheduled_timezone` on any
+  client-controlled surface (reject the request if absent), or at minimum
+  log a warning when `scheduled_timezone` is absent so a future caller's
+  omission is visible rather than silent. Saskatchewan itself doesn't
+  observe DST, so this is not an active regulatory risk today — it's about
+  protecting future callers/markets.
+- **Files:** `backend/schemas.py` (`validate_scheduled_time`), any new
+  caller of scheduled-ride creation.
+- **Acceptance:** either `scheduled_timezone` is required for
+  client-originated scheduled-ride requests, or its absence is logged so
+  the gap is observable instead of silent.
+
 ## P3 — Post-launch backlog (tracked, not gating)
 
 ### Notification-channel coverage backlog (2026-08-08 audit, branch `claude/email-alerts-spinr-branding-l12lg2`)
@@ -9724,6 +10067,74 @@ how much they de-risk a public launch._
   a duplicate one. When `image-size` (or `metro`'s pin of it) ships a
   patched version, close out both #3718 and this item together, bump the
   dependency, and confirm `G4b` goes green on both apps.
+
+### C31. `privacySettingsToggles.test.tsx` leaked an unflushed/unmounted renderer, causing an intermittent `rider-app-test` full-suite failure in an unrelated file
+
+- [x] **Status:** closed 2026-08-17, filed and fixed same session while
+  investigating a `rider-app-test` CI failure on PR #4102 that showed as
+  `verifyEmailScreen.test.tsx` exceeding its 5000ms timeout.
+- **Issue/gap:** `renderScreen()` in `rider-app/__tests__/privacySettingsToggles.test.tsx`
+  rendered `PrivacySettingsScreen` synchronously (`act(() => {...})`, no
+  await) and had **no `afterEach` unmount at all**. The screen's own mount
+  effect fires `api.get('/marketing/preferences').then(...)` (three
+  `setState` calls); since the test never awaited that promise or
+  unmounted the renderer, the resolution could still be pending — with its
+  `active` cleanup flag never flipped — when Jest moved past that test
+  file entirely. Reproduced only under a full-suite run
+  (`npx jest --silent`, 61 files together), never in single-file isolation:
+  `ReferenceError: You are trying to \`import\` a file after the Jest
+  environment has been torn down. From
+  __tests__/privacySettingsToggles.test.tsx.` This corrupted the shared
+  Jest worker process for whatever ran next in it, manifesting as an
+  unrelated timeout in `verifyEmailScreen.test.tsx` (a well-behaved file
+  that already tracks/flushes/unmounts correctly) rather than a failure
+  attributed to the actual leaking file — hence "rider-app-test failing
+  on verifyEmailScreen" reading as an unrelated flake until traced back.
+- **Why it matters:** an intermittent, misattributed CI failure that looks
+  unrelated to any given PR's diff erodes trust in `rider-app-test` and
+  invites exactly the "known flake, ignore it" reflex CLAUDE.md's PR
+  review guidance warns against — except this one was a real, fixable bug,
+  not a false positive.
+- **Fix:** `privacySettingsToggles.test.tsx`'s `renderScreen()` now mirrors
+  `verifyEmailScreen.test.tsx`'s established pattern exactly — async,
+  double `flush()` (one macrotask hop is not enough to drain the API
+  client wrapper's extra microtask layer, matching why the reference file
+  also flushes twice) inside `act`, plus a tracked `mountedRenderer` +
+  `afterEach` unmount so the mount effect's promise resolves and settles
+  before the test (and file) finishes. Zero production code touched —
+  test-file-only change, no behavior change to `privacy-settings.tsx`
+  itself.
+- **Verification:** `npx jest __tests__/privacySettingsToggles.test.tsx` →
+  4 passed. Full suite (`npx jest --silent`) run 3 times consecutively →
+  61 suites / 514 tests passed each time, with the prior
+  `ReferenceError: ...torn down...` gone. A separate, pre-existing,
+  harmless "act warning" on `.unmount()` itself (present in both this file
+  and `verifyEmailScreen.test.tsx` already) remains — that's React Test
+  Renderer's known quirk for calling `.unmount()` outside `act()`, not a
+  leak, and doesn't fail any test.
+- **Blast radius:** isolated to this one test file; no other test file
+  imports or reuses `renderScreen`/`flush`/`mountedRenderer` from it.
+- **Not verified:** did not bisect which specific other test file(s) in
+  the 61-suite run were previously vulnerable to landing right after the
+  leak in worker-assignment order — fixing the leak at its source makes
+  that moot rather than needing to be enumerated. A separate, unrelated
+  "worker process failed to exit gracefully" notice (real 30s timers in
+  `verifyEmailScreen.test.tsx`'s own resend-countdown, per that file's
+  existing comment) still prints at the end of a full run — cosmetic,
+  doesn't fail the suite, out of scope for this fix.
+- **Update 2026-08-17 (same day):** CI's `rider-app-test` job re-ran the
+  same `verifyEmailScreen.test.tsx` 5000ms timeout on PR #4102 *after*
+  this fix was live — but this time `privacySettingsToggles.test.tsx`
+  itself passed cleanly with no `ReferenceError`, confirming the leak fix
+  above is real and working. The residual failure is CI-runner-specific
+  timing (likely fewer cores / more worker contention than any local run
+  here reproduced across 3+ consecutive full-suite passes) rather than a
+  second logic bug. Resolved the same way this repo already resolved an
+  identical CI-only, non-locally-reproducible case in
+  `searchDestinationPinIntegrity.test.tsx:186` — widened this one test's
+  timeout to 20000ms with an explanatory comment, rather than continuing
+  to chase a cause invisible outside CI. Verified locally:
+  `npx jest __tests__/verifyEmailScreen.test.tsx` → 10 passed.
 
 ### C26. `pip-compile drift check` fails on any PR that touches `backend/requirements.in` — `requirements.txt` has drifted far out of sync with a fresh resolve, unrelated to the touching PR's actual diff
 

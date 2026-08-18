@@ -349,6 +349,12 @@ interface IncomingRide {
     // Surfaced as a badge in the offer panel so the driver knows before
     // accepting; purely informational, no dispatch filtering.
     quiet_mode?: boolean;
+    // C35: true when this ride was originally booked in advance (still true
+    // after it has since transitioned to searching/dispatched — same
+    // "originally scheduled" semantics used elsewhere in the codebase).
+    // Surfaced as a "Pre-booked" badge in the offer panel; purely
+    // informational, no dispatch/matching behavior change.
+    is_scheduled?: boolean;
     // Per-offer countdown sourced from the dispatch payload — overrides
     // the cached configuredCountdownSeconds so an admin-changed timeout
     // takes effect on the very next offer, not the next cold start.
@@ -924,6 +930,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                             offer_expires_at: ride.offer_expires_at ?? existing?.offer_expires_at,
                             requires_wav: ride.requires_wav ?? existing?.requires_wav,
                             quiet_mode: ride.quiet_mode ?? existing?.quiet_mode,
+                            is_scheduled: (ride as any).is_scheduled ?? existing?.is_scheduled,
                             planned_route_polyline: (ride as any).planned_route_polyline ?? undefined,
                             service_area_polygon: (res.data as any).service_area_polygon ?? existing?.service_area_polygon ?? undefined,
                         },

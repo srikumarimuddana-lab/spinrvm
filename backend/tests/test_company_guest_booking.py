@@ -165,6 +165,7 @@ def _booking_patches(
     fare=None,
     policy_result=None,
     insert_result=None,
+    existing_scheduled_rides=None,
 ):
     guest = guest or {"id": "guest_u1", "phone": "+13065550123", "is_guest": True}
 
@@ -177,6 +178,10 @@ def _booking_patches(
         _CBS + "evaluate_policy_for_ride": AsyncMock(return_value=policy_result or _policy_result()),
         "backend.routes.rides.booking._insert_ride_with_code": AsyncMock(side_effect=_insert),
         "backend.routes.rides.booking._prep_and_dispatch": MagicMock(name="prep"),
+        # ACTION_ITEMS.md C34 overlap guard -- controls the "rider's other
+        # scheduled rides" lookup. Empty by default (no overlap); tests that
+        # want a collision pass existing_scheduled_rides=[...].
+        _CBS + "db_supabase.get_rows": AsyncMock(return_value=existing_scheduled_rides or []),
         # side_effect closes the coroutine handed to spawn() instead of
         # leaking it un-awaited (A8) -- doesn't affect call_count assertions.
         _CBS + "spawn": MagicMock(name="spawn", side_effect=close_spawned_coro),
@@ -299,3 +304,185 @@ async def test_active_ride_conflict_is_reworded_409():
             p.stop()
     assert exc_info.value.status_code == 409
     assert "customer" in str(exc_info.value.detail).lower()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  ACTION_ITEMS.md C34 -- company-portal guest booking inherits the same
+#  scheduled_time validation (lead-time, max-advance, DST, overlap) as the
+#  rider-facing CreateRideRequest path, instead of building the Ride row
+#  straight from an unvalidated Optional[datetime].
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _frozen_datetime(fixed_utc: datetime):
+    """datetime subclass whose .now() always returns ``fixed_utc`` -- mirrors
+    tests/test_p2_scheduled_rides.py's helper of the same purpose."""
+
+    class _Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_utc.astimezone(tz) if tz else fixed_utc
+
+    return _Frozen
+
+
+def _patch_scheduled_time_validator_now(fixed_utc: datetime):
+    """Freeze datetime.now() as seen by the shared
+    schemas.validate_scheduled_time_value -- both CreateRideRequest and
+    CompanyGuestBookingRequest call this same function, so patching its
+    __globals__ (not CreateRideRequest's) is what actually takes effect for
+    the company-guest-booking path under test here."""
+    from backend.schemas import validate_scheduled_time_value
+
+    return patch.dict(validate_scheduled_time_value.__globals__, {"datetime": _frozen_datetime(fixed_utc)})
+
+
+def _guest_booking_body(**overrides):
+    from backend.routes.corporate_company_bookings import CompanyGuestBookingRequest
+
+    defaults = dict(
+        customer_name="Pat Customer",
+        customer_phone="+13065550123",
+        pickup_address="123 Showroom Rd, Saskatoon",
+        pickup_lat=52.13,
+        pickup_lng=-106.67,
+        dropoff_address="456 Home St, Saskatoon",
+        dropoff_lat=52.15,
+        dropoff_lng=-106.65,
+        distance_km=5.2,
+        duration_minutes=12,
+        vehicle_type_id="vt_standard",
+    )
+    defaults.update(overrides)
+    return CompanyGuestBookingRequest(**defaults)
+
+
+class TestCompanyGuestBookingScheduledTimeValidation:
+    """Schema-level: CompanyGuestBookingRequest.scheduled_time now goes
+    through the same validate_scheduled_time_value as CreateRideRequest."""
+
+    def test_less_than_lead_time_is_rejected(self):
+        from pydantic import ValidationError
+
+        frozen_now = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+        with (
+            _patch_scheduled_time_validator_now(frozen_now),
+            pytest.raises(ValidationError) as exc_info,
+        ):
+            _guest_booking_body(scheduled_time=frozen_now + timedelta(minutes=5))
+        assert "minutes in the future" in str(exc_info.value)
+
+    def test_beyond_max_advance_is_rejected(self):
+        from pydantic import ValidationError
+
+        frozen_now = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+        with (
+            _patch_scheduled_time_validator_now(frozen_now),
+            pytest.raises(ValidationError) as exc_info,
+        ):
+            _guest_booking_body(scheduled_time=frozen_now + timedelta(days=8))
+        assert "days in the future" in str(exc_info.value)
+
+    def test_dst_ambiguous_local_time_is_rejected(self):
+        """2026-11-01 01:30 America/Toronto is the fall-back repeated hour
+        (mirrors tests/test_p2_scheduled_rides.py::TestDSTBoundary::
+        test_dst_fall_back_ambiguous_hour_is_rejected)."""
+        from pydantic import ValidationError
+
+        frozen_now = datetime(2026, 10, 28, tzinfo=timezone.utc)
+        with (
+            _patch_scheduled_time_validator_now(frozen_now),
+            pytest.raises(ValidationError) as exc_info,
+        ):
+            _guest_booking_body(
+                scheduled_timezone="America/Toronto",
+                scheduled_time=datetime(2026, 11, 1, 1, 30),
+            )
+        errors_text = str(exc_info.value).lower()
+        assert "ambiguous" in errors_text or "fall-back" in errors_text or "twice" in errors_text
+
+    def test_valid_scheduled_time_well_within_windows_succeeds(self):
+        frozen_now = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+        with _patch_scheduled_time_validator_now(frozen_now):
+            body = _guest_booking_body(scheduled_time=frozen_now + timedelta(hours=6))
+        assert body.scheduled_time == frozen_now + timedelta(hours=6)
+
+    def test_immediate_booking_with_no_scheduled_time_is_unaffected(self):
+        """No scheduled_time at all -- the ASAP guest-booking path -- must
+        pass through with none of the new checks touched."""
+        body = _guest_booking_body()
+        assert body.scheduled_time is None
+
+
+@pytest.mark.anyio
+async def test_overlapping_scheduled_time_for_same_guest_is_rejected():
+    """ACTION_ITEMS.md C34 overlap guard: a second scheduled booking for the
+    SAME GUEST (by guest_user id, not the booker) within
+    SCHEDULE_OVERLAP_WINDOW_MINUTES of an existing scheduled ride is
+    rejected 409, mirroring the C32-style overlap guard."""
+    from backend.services.company_booking_service import (
+        SCHEDULE_OVERLAP_WINDOW_MINUTES,
+        create_company_guest_booking,
+    )
+    from backend.utils.error_handling import SpinrException
+
+    when = datetime.now(timezone.utc) + timedelta(hours=30)
+    existing = {
+        "id": "ride-existing-scheduled",
+        "scheduled_time": (when + timedelta(minutes=20)).isoformat(),
+    }
+    assert timedelta(minutes=20) <= timedelta(minutes=SCHEDULE_OVERLAP_WINDOW_MINUTES)
+
+    patchers, mocks = _start_patches(_booking_patches(existing_scheduled_rides=[existing]))
+    try:
+        with pytest.raises(SpinrException) as exc_info:
+            await create_company_guest_booking(_COMPANY_ID, _BOOKER, _payload(scheduled_time=when))
+    finally:
+        for p in patchers:
+            p.stop()
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.details["error_code"] == "scheduled_ride_overlap"
+    assert exc_info.value.details["existing_ride_id"] == "ride-existing-scheduled"
+    # Looked up by the GUEST's id, not the booker/admin's.
+    get_rows_call = mocks[_CBS + "db_supabase.get_rows"].call_args
+    assert get_rows_call.args[1]["rider_id"] == "guest_u1"
+
+
+@pytest.mark.anyio
+async def test_non_overlapping_scheduled_time_for_same_guest_succeeds():
+    """An existing scheduled ride well outside the overlap window doesn't
+    block a new one."""
+    from backend.services.company_booking_service import create_company_guest_booking
+
+    when = datetime.now(timezone.utc) + timedelta(hours=30)
+    existing = {
+        "id": "ride-existing-far",
+        "scheduled_time": (when + timedelta(hours=5)).isoformat(),
+    }
+    patchers, _ = _start_patches(_booking_patches(existing_scheduled_rides=[existing]))
+    try:
+        result = await create_company_guest_booking(_COMPANY_ID, _BOOKER, _payload(scheduled_time=when))
+    finally:
+        for p in patchers:
+            p.stop()
+    assert result["ride"]["status"] == "scheduled"
+
+
+@pytest.mark.anyio
+async def test_immediate_guest_booking_skips_overlap_lookup_entirely():
+    """An immediate (ASAP, no scheduled_time) guest booking must never touch
+    the C34 overlap-lookup path at all -- gated on is_deferred exactly like
+    routes/rides/booking.py's C32 guard is gated on
+    `body.scheduled_time is not None`."""
+    from backend.services.company_booking_service import create_company_guest_booking
+
+    patchers, mocks = _start_patches(_booking_patches())
+    try:
+        result = await create_company_guest_booking(_COMPANY_ID, _BOOKER, _payload())
+    finally:
+        for p in patchers:
+            p.stop()
+
+    assert result["ride"]["status"] == "searching"
+    mocks[_CBS + "db_supabase.get_rows"].assert_not_called()

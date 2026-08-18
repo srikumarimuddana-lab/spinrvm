@@ -46,6 +46,10 @@ interface IncomingRide {
     rider_profile_image?: string;
     requires_wav?: boolean;
     quiet_mode?: boolean;
+    // C35: true when this ride was originally booked in advance. Optional/
+    // falsy-default so an offer payload from a backend that hasn't shipped
+    // this field yet renders identically to today (no badge).
+    is_scheduled?: boolean;
     surge_multiplier?: number;
     incentives?: IncentiveItem[];
     total_bonus?: number;
@@ -69,6 +73,7 @@ const ACCENT_DARK = '#059669';
 const SURGE_ORANGE = '#F97316';
 const GOLD = '#F59E0B';
 const QUEST_PURPLE = '#8B5CF6';
+const SCHEDULED_INDIGO = '#6366F1';
 
 export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
     incomingRide,
@@ -307,9 +312,15 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                         </View>
                     </View>
 
-                    {/* Badges row: surge, wav, quiet, cash, payment */}
-                    {(hasSurge || incomingRide.requires_wav || incomingRide.quiet_mode || incomingRide.payment_method === 'cash') && (
+                    {/* Badges row: pre-booked, surge, wav, quiet, cash, payment */}
+                    {(incomingRide.is_scheduled || hasSurge || incomingRide.requires_wav || incomingRide.quiet_mode || incomingRide.payment_method === 'cash') && (
                         <View style={styles.badgesRow}>
+                            {incomingRide.is_scheduled && (
+                                <View style={[styles.badge, { backgroundColor: SCHEDULED_INDIGO + '20' }]}>
+                                    <Ionicons name="calendar" size={13} color={SCHEDULED_INDIGO} />
+                                    <Text style={[styles.badgeText, { color: SCHEDULED_INDIGO }]}>Pre-booked</Text>
+                                </View>
+                            )}
                             {hasSurge && (
                                 <View style={[styles.badge, { backgroundColor: SURGE_ORANGE + '20' }]}>
                                     <Ionicons name="flame" size={13} color={SURGE_ORANGE} />

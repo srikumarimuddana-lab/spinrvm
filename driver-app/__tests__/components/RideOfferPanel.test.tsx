@@ -188,6 +188,28 @@ describe('RideOfferPanel', () => {
     expect(queryByText('Quiet ride')).toBeNull();
   });
 
+  // C35: a scheduled ride dispatches via the identical offer/accept/timeout
+  // mechanism as an on-demand ride, but a driver has no way to tell them
+  // apart without this badge (ACTION_ITEMS.md C35).
+  it('shows the Pre-booked badge when is_scheduled is true', () => {
+    const { getByText } = render(
+      <RideOfferPanel {...defaultProps} incomingRide={{ ...mockRide, is_scheduled: true }} />,
+    );
+    expect(getByText('Pre-booked')).toBeTruthy();
+  });
+
+  it('does not show the Pre-booked badge when is_scheduled is false', () => {
+    const { queryByText } = render(
+      <RideOfferPanel {...defaultProps} incomingRide={{ ...mockRide, is_scheduled: false }} />,
+    );
+    expect(queryByText('Pre-booked')).toBeNull();
+  });
+
+  it('does not show the Pre-booked badge when is_scheduled is absent (backward-compatible offer payload)', () => {
+    const { queryByText } = render(<RideOfferPanel {...defaultProps} incomingRide={mockRide} />);
+    expect(queryByText('Pre-booked')).toBeNull();
+  });
+
   describe('isLoading (double-tap guard on accept/decline)', () => {
     it('fires onAccept and onDecline when not loading', () => {
       const onAccept = jest.fn();

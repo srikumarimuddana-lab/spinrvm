@@ -170,7 +170,15 @@ describe('VerifyEmailScreen — request on entry', () => {
   it('fires POST /users/verify-email/request on mount', async () => {
     await renderScreen();
     expect(mockApiPost).toHaveBeenCalledWith('/users/verify-email/request');
-  });
+    // Pragmatic timeout headroom: hung against the 5000ms default on CI's
+    // runners specifically (never reproduced locally across 3+ full-suite
+    // runs, including with the exact CI invocation) even after fixing a
+    // real, independently-confirmed leak in privacySettingsToggles.test.tsx
+    // (ACTION_ITEMS.md C31) that was corrupting this file's shared Jest
+    // worker. Same class of CI-only, non-reproducible residual documented
+    // in searchDestinationPinIntegrity.test.tsx — widening the budget
+    // rather than continuing to guess at a cause invisible outside CI.
+  }, 20000);
 
   it('short-circuits to the already-verified screen when the response says already_verified', async () => {
     mockApiPost.mockImplementation((url: string) => {

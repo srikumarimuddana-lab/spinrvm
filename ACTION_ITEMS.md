@@ -139,31 +139,50 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 > this tracks Part A, the whole-app fleet audit (all 21 `spinr-*` reviewers,
 > not a diff). Full report: `docs/audit/2026-08-18-full-fleet-whole-app-audit.md`.
 > Baseline: `docs/audit/2026-08-15-full-fleet-launch-readiness.md`.
-- [ ] **Status:** open. Of the baseline's 17 ranked blockers: 14 STILL-OPEN
-  unchanged (no commits touching them since 08-15), 0 fully fixed, 1
+> **Note:** there is a second, unrelated `### A40` further down this file
+> ("Old app confirmed still live... CLOSED") from a session the next day —
+> same duplicate-number pattern as the two `A34`s above; not renumbered
+> because this one had already merged. Treat the heading text as the
+> disambiguator.
+- [ ] **Status:** open, 1 of 17 baseline blockers fixed 2026-08-18 (same day,
+  later session) — see below. Of the baseline's 17 ranked blockers as
+  originally reported: 14 STILL-OPEN unchanged (no commits touching them
+  since 08-15), 1 now FIXED (below), 1
   REGRESSED (`deploy-metrics-agent.yml` unpinned actions with a live
   `FLY_API_TOKEN` — missed by the C18b sweep that claimed this class fixed),
   2 partially mitigated but not resolved (corporate PDF tax-line fallback now
   logged/Sentry-alerted but still ships; emergency-contacts doc corrected to
   be honest about plaintext storage, underlying decision still open).
-  **Highest-priority new finding**: `docs/legal/insurance-coverage-periods.md`
-  (a rider/driver-facing legal draft) states insurance coverage "starts as
-  soon as the driver is assigned — even before they've accepted," which is
-  the opposite of what the code does (Period 2 opens at `driver_accepted`,
-  not at offer/claim, because the production batch-offer dispatch model
-  never writes a `driver_assigned` ride status — confirmed dead code in
-  `services/dispatch_service.py::assign_driver_to_ride`). This doc must not
-  publish without a legal/SGI decision. Two structural (not one-off) findings
-  also surfaced: no AI tool RESULT is ever PII-scrubbed anywhere in the
-  codebase (the driver-name-to-LLM leak is just the first live instance —
-  fix the choke point in `ai/tools.py::_cap_result`, not just the one field);
-  and no Prometheus metric exists for any ride-state transition after offer
-  acceptance (arrival/start/completion/cancellation), leaving the match-rate
-  and cancellation-rate KPIs invisible to any dashboard. Full ranked blocker
+  **FIXED 2026-08-18**: ranked blocker #1/#2 — `docs/legal/insurance-coverage-periods.md`
+  (a rider/driver-facing legal draft, and the already-published
+  `terms-of-service.md` §13) stated insurance coverage "starts as soon as the
+  driver is assigned — even before they've accepted," which was the opposite
+  of what the code did (Period 2 opened at `driver_accepted`, not at
+  offer/claim, because the production batch-offer dispatch model never writes
+  a `driver_assigned` ride status). Fixed by opening Period 2 for every
+  claimed driver immediately after their `ride_offers` row is persisted in
+  `match_driver_to_ride` (`backend/routes/rides/matching.py`) — the moment
+  `claim_driver_atomic` succeeds and the driver is obligated/unavailable for
+  any other ride, matching CLAUDE.md's own stated rule. `decline_ride`
+  (`backend/routes/drivers/ride_flow.py`) now guards its Period-1 close on
+  `set_driver_available`'s actual result, mirroring `process_expired_offer`'s
+  existing guard, so a driver who went offline mid-offer doesn't get a false
+  Period-1 reopen. `assign_driver_to_ride` remains confirmed dead code
+  (unrelated cleanup, not touched). See
+  `docs/change-log/2026-08-18-period-2-insurance-timing-fix.md` for tests and
+  verification detail.
+  Two structural (not one-off) findings remain open: no AI tool RESULT is
+  ever PII-scrubbed anywhere in the codebase (the driver-name-to-LLM leak is
+  just the first live instance — fix the choke point in
+  `ai/tools.py::_cap_result`, not just the one field); and no Prometheus
+  metric exists for any ride-state transition after offer acceptance
+  (arrival/start/completion/cancellation), leaving the match-rate and
+  cancellation-rate KPIs invisible to any dashboard. Full ranked blocker
   register (30 items) and decision log (10 items, each with a suggested
   owner/due date) are in the audit doc — see there before re-deriving.
-  Verdict: **FIX BLOCKERS** (17 of 21 domains; 3 NEEDS HUMAN REVIEW —
-  migration, admin-rbac, test-coverage; 1 SAFE TO LAUNCH — corporate-billing).
+  Verdict at time of the 08-18 audit run: **FIX BLOCKERS** (17 of 21 domains;
+  3 NEEDS HUMAN REVIEW — migration, admin-rbac, test-coverage; 1 SAFE TO
+  LAUNCH — corporate-billing).
 
 ### A34. Dual-run cutover readiness audit (2026-08-15) — decommission blockers and required decisions
 > **Note:** there is a second, unrelated `### A34` further down this file
@@ -3936,6 +3955,11 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   directly.
 
 ### A40. Old app confirmed still live, issuing real Stripe charges on the shared Stripe account (webhook-payload evidence, 2026-08-17) — CLOSED, dual-run confirmed intentional
+> **Note:** there is a second, unrelated `### A40` earlier in this file
+> ("Whole-app fleet audit (2026-08-18, Part A)") added a day after this one —
+> same duplicate-number pattern as the two `A34`s above, caught too late here
+> (after the newer A40 had already merged) to renumber without chasing
+> cross-references. Treat the heading text as the disambiguator.
 
 - **Source:** surfaced while closing A36 (above) — inspecting real
   `stripe_events` payloads to explain why `financial_events` was empty.

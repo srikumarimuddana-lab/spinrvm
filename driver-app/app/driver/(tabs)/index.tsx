@@ -706,11 +706,24 @@ function DriverDashboard() {
                   setDirectionsFailed(false);
                   if (result.duration != null) setRouteEtaMinutes(Math.round(result.duration));
                   if (result.distance != null) setRouteDistanceKm(Math.round(result.distance * 10) / 10);
+                  // C20 (ACTION_ITEMS.md): react-hooks/refs flags these as
+                  // reading/writing ref.current "during render", but this is
+                  // the MapViewDirections onReady callback -- verified against
+                  // the library source (node_modules/react-native-maps-directions/
+                  // src/MapViewDirections.js): it's invoked from a setState
+                  // callback inside a Promise.all(...).then(...) chain kicked
+                  // off in componentDidMount/componentDidUpdate, i.e. strictly
+                  // post-commit, never during React's render pass -- the same
+                  // async-completion timing as the untouched onError handler
+                  // just below (same promise chain's .catch), which the linter
+                  // doesn't flag.
+                  // eslint-disable-next-line react-hooks/refs
                   lastDirectionsFetchRef.current = {
                     lat: origin.latitude,
                     lng: origin.longitude,
                     ts: Date.now(),
                   };
+                  // eslint-disable-next-line react-hooks/refs -- see justification above
                   if (directionsKey === 0 && mapRef.current && result.coordinates?.length > 1) {
                     mapRef.current.fitToCoordinates(result.coordinates, {
                       edgePadding: { top: 100, right: 60, bottom: 300, left: 60 },

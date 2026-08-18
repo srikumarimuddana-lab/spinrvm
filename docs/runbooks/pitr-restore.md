@@ -64,8 +64,18 @@
 
 ### 2. Verify branch data
 - [ ] Connect to branch via `psql` with branch-specific connection string
-- [ ] Run validation query: `SELECT count(*) FROM <affected_table> WHERE <condition>`
-- [ ] Sample rows to confirm expected state
+- [ ] Run `python -m backend.scripts.verify_restore --database-url "<branch connection string>"`
+  (or export it as `RESTORE_BRANCH_DATABASE_URL` first) — it reports row counts
+  for the core tables (`users`, `drivers`, `rides`, `payouts`, `stripe_disputes`,
+  `driver_insurance_periods`, `financial_events`), walks one sample completed
+  ride's full lifecycle (ride row → `driver_insurance_periods` → `financial_events`),
+  and prints elapsed wall-clock time to feed the RTO measurement below. Exits
+  non-zero on any failed check. Read-only — never issues a write statement, and
+  refuses to run if the target URL matches this shell's `DATABASE_URL` (see the
+  script's own docstring for the full production-URL guard). See
+  `backend/scripts/verify_restore.py` and `backend/tests/test_verify_restore_script.py`.
+- [ ] Sample rows to confirm expected state beyond what the script checks (e.g.
+  spot-check a table/condition specific to the incident under investigation)
 
 ### 3. Extract affected rows
 ```sql
@@ -123,12 +133,22 @@ WHERE deleted_at > '<incident_timestamp>';
 Execute Option A against a non-critical table in staging every quarter.
 Success criteria:
 - Branch ready within 15 min
-- Data extracted + validated within 30 min
+- Data extracted + validated within 30 min — run
+  `python -m backend.scripts.verify_restore --database-url "<branch connection string>"`
+  as the concrete validation step (see "Verify branch data" above); its
+  printed elapsed time is the number to record as the actual measured RTO
+  contribution for this step, not an estimate
 - Total wall-clock ≤ 2 h (safety margin over 4 h RTO)
 
 Failure → file as P2 in OPEN-ITEMS-TRACKER + re-drill in 30 days.
 
-**Artifact:** `reports/tabletop/YYYY-Q-pitr-drill.md`
+**Artifact:** `reports/tabletop/YYYY-Q-pitr-drill.md` — record `verify_restore.py`'s
+printed elapsed time and overall pass/fail alongside the drill's total wall-clock RTO.
+
+**Status:** this drill has never actually been run — see ACTION_ITEMS.md E7. The
+script above exists to make the "verify row counts + a sample ride lifecycle"
+step concrete and repeatable; it still requires a human with Supabase org/billing
+access to create a scratch project, trigger a real restore, and record a real RTO.
 
 ---
 

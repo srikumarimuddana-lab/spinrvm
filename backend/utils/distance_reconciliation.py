@@ -29,11 +29,13 @@ try:
     from .. import db_supabase
     from ..utils import metrics
     from ..utils.distance_integrity import record_integrity_event
+    from ..utils.loop_monitor import record_heartbeat as _record_heartbeat
     from ..utils.redis_client import redis_set_nx
 except ImportError:  # pragma: no cover - dual import path
     import db_supabase  # type: ignore
     from utils import metrics  # type: ignore
     from utils.distance_integrity import record_integrity_event  # type: ignore
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat  # type: ignore
     from utils.redis_client import redis_set_nx  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -201,4 +203,7 @@ async def distance_reconciliation_loop(target_hour_utc: int = _RUN_HOUR_UTC) -> 
                 logger.info("distance_reconciliation_loop: another replica holds the lock, skipping")
         except Exception:
             logger.error("distance_reconciliation_loop: tick raised", exc_info=True)
+        # Every iteration, lock or not — the watchdog is per-replica (same
+        # pattern as retention_purge).
+        _record_heartbeat("distance_reconciliation (daily 04:00 UTC)")
         await asyncio.sleep(86400)

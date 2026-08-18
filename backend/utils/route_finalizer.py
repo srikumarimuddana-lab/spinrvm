@@ -21,12 +21,18 @@ except ImportError:
 
 try:
     from .datetime_utils import parse_iso_utc
+    from .loop_monitor import record_heartbeat as _record_heartbeat
+    from .metrics import inc as _metric_inc
+    from .metrics import observe as _metric_observe
     from .route_distance import compute_segmented_road_route
     from .route_reconstruction import reconstruct_completed_route
     from .route_segments import SegmentedRoute, segment_route
     from .trip_distance import compute_trip_distances, load_ride_breadcrumbs
 except ImportError:
     from utils.datetime_utils import parse_iso_utc  # type: ignore
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat  # type: ignore
+    from utils.metrics import inc as _metric_inc  # type: ignore
+    from utils.metrics import observe as _metric_observe  # type: ignore
     from utils.route_distance import compute_segmented_road_route  # type: ignore
     from utils.route_reconstruction import reconstruct_completed_route  # type: ignore
     from utils.route_segments import SegmentedRoute, segment_route  # type: ignore
@@ -486,6 +492,7 @@ async def route_finalizer_loop(interval_seconds: int = ROUTE_FINALIZER_INTERVAL_
                 except Exception:
                     logger.error("settlement backstop sweep failed", exc_info=True)
             await route_finalizer_tick()
+            _record_heartbeat("route_finalizer (15s)")
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -818,6 +825,19 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
         )
         if updated is None:
             return {"processing_status": "superseded"}
+        # Fleet-health signal: outcome mix (complete / incomplete / pending
+        # retry) and the coverage distribution. A rising incomplete share or a
+        # sagging coverage histogram is the earliest sign of capture loss —
+        # both were invisible when SPR-PE7TTB-class failures happened.
+        _metric_inc("spinr_rides_route_finalized_total", {"status": str(processing_status)})
+        _cov = quality.get("coverage_ratio")
+        if isinstance(_cov, (int, float)):
+            # Ratio-scaled buckets (observe() defaults to millisecond buckets).
+            _metric_observe(
+                "spinr_rides_route_coverage_ratio",
+                float(_cov),
+                buckets=(0.1, 0.25, 0.5, 0.7, 0.85, 0.95, 1.0),
+            )
         if processing_status == "complete":
             try:
                 # Stats-only follow-up: late tail evidence changes the *measured*

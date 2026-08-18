@@ -32,6 +32,10 @@ LOOP_THRESHOLDS: Dict[str, float] = {
     "allowance_reset (1h)": 1 * 3600 * 4,  # 4 h
     "retention_purge (24h)": 24 * 3600 * 2,  # 48 h
     "stripe_reconcile (24h)": 24 * 3600 * 2,  # 48 h
+    "route_finalizer (15s)": 15 * 60,  # 15 min — 60× the tick, tolerates a long finalization
+    "route_gap_monitor (15s)": 15 * 60,  # 15 min
+    "period1_distance_finalizer (5min)": 5 * 60 * 4,  # 20 min
+    "distance_reconciliation (daily 04:00 UTC)": 24 * 3600 * 2,  # 48 h
 }
 
 _lock = threading.Lock()

@@ -188,17 +188,22 @@ def generate_decal_pdf(
     Each driver's letter is produced by filling the province-specific
     DOCX marketing template with their name/address, then converting to
     PDF via LibreOffice. Multiple drivers are merged into a single PDF
-    using pypdf. ``province`` selects the template: "SK" for
-    Saskatchewan (default), "AB" for Alberta.
+    using pypdf.
+
+    Province resolution order per driver:
+    1. ``driver["_province"]`` — pre-resolved from the driver's service area
+    2. ``province`` parameter (caller-supplied fallback)
+    3. ``"SK"`` default
     """
     from pypdf import PdfReader, PdfWriter  # type: ignore[import-untyped]
 
     writer = PdfWriter()
 
     for driver in drivers:
+        drv_province = driver.get("_province") or province
         work_dir = tempfile.mkdtemp(prefix="spinr_decal_")
         try:
-            docx_bytes = _fill_template(driver, company=company, province=province)
+            docx_bytes = _fill_template(driver, company=company, province=drv_province)
             pdf_bytes = _docx_to_pdf(docx_bytes, work_dir)
             reader = PdfReader(BytesIO(pdf_bytes))
             for page in reader.pages:

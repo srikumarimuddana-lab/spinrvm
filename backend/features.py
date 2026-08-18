@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 # Money helpers — keep tax / fee arithmetic in Decimal so 5% GST + 6% PST
 # on values like $47.83 stays bit-exact and matches the receipt.
@@ -220,31 +220,6 @@ class CreateTicketRequest(BaseModel):
     category: str = "general"
 
 
-class ReplyToTicketRequest(BaseModel):
-    message: str
-
-
-class CreateFaqRequest(BaseModel):
-    question: str
-    answer: str
-    category: str = "general"
-    sort_order: int = 0
-    # Required, explicit choice — a silent 'both' default is how driver-only
-    # FAQs leaked into the rider app. None/[] service_area_ids = global.
-    audience: str = Field(..., pattern="^(rider|driver|both)$")
-    service_area_ids: Optional[List[str]] = None
-
-
-class UpdateFaqRequest(BaseModel):
-    question: Optional[str] = None
-    answer: Optional[str] = None
-    category: Optional[str] = None
-    sort_order: Optional[int] = None
-    is_active: Optional[bool] = None
-    audience: Optional[str] = Field(default=None, pattern="^(rider|driver|both)$")
-    service_area_ids: Optional[List[str]] = None
-
-
 class ScheduleRideRequest(BaseModel):
     rider_id: str
     vehicle_type_id: str
@@ -272,20 +247,8 @@ class ShareTripRequest(BaseModel):
     contact_phone: str
 
 
-class UpdateSurgeRequest(BaseModel):
-    surge_active: Optional[bool] = None
-    surge_multiplier: Optional[float] = None
-
-
 class RegisterFcmTokenRequest(BaseModel):
     token: str
-
-
-class SendNotificationRequest(BaseModel):
-    user_id: str
-    title: str
-    body: str
-    data: Dict[str, str] = {}
 
 
 # ============ Airport Fee Check (User/App facing) ============
@@ -439,187 +402,28 @@ async def get_faqs(
     return [f for f in faqs if not f.get("service_area_ids") or (set(f["service_area_ids"]) & scope)]
 
 
-# ============ Admin: Support Tickets ============
-
-
-@admin_support_router.get("/tickets")
-async def admin_get_tickets(status: Optional[str] = None):
-    """Get all support tickets (admin)."""
-    query: Dict[str, Any] = {}
-    if status:
-        query["status"] = status
-    tickets = await db_supabase.get_rows("support_tickets", query, limit=500, order="created_at", desc=True)
-    return tickets
-
-
-@admin_support_router.post("/tickets/{ticket_id}/reply")
-async def admin_reply_ticket(ticket_id: str, req: ReplyToTicketRequest):
-    """Reply to a support ticket."""
-    ticket = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("support_tickets", {"id": ticket_id}, limit=1)
-    )
-    if not ticket:
-        raise HTTPException(status_code=404, detail="Ticket not found")
-
-    reply = {
-        "message": req.message,
-        "author": "admin",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-    replies = ticket.get("replies", [])
-    replies.append(reply)
-
-    await db_supabase.update_one(
-        "support_tickets",
-        {"id": ticket_id},
-        {
-            "replies": replies,
-            "status": RideStatus.IN_PROGRESS,
-            "updated_at": datetime.now(timezone.utc),
-        },
-    )
-    return {"status": "replied", "reply": reply}
-
-
-@admin_support_router.post("/tickets/{ticket_id}/close")
-async def admin_close_ticket(ticket_id: str):
-    """Close a support ticket."""
-    result = await db_supabase.update_one(
-        "support_tickets", {"id": ticket_id}, {"status": "closed", "updated_at": datetime.now(timezone.utc)}
-    )
-    if not result:
-        raise HTTPException(status_code=404, detail="Ticket not found")
-    return {"status": "closed"}
-
-
-# ============ Admin: FAQs ============
-
-
-@admin_support_router.get("/faqs")
-async def admin_get_faqs():
-    """Get all FAQs (including inactive) for admin."""
-    # Exclude the semantic-search embedding vector from the admin list payload.
-    faqs = await db_supabase.get_rows(
-        "faqs",
-        None,
-        limit=500,
-        order="sort_order",
-        desc=False,
-        columns="id,question,answer,category,audience,service_area_ids,sort_order,is_active,created_at,updated_at",
-    )
-    return faqs
-
-
-@admin_support_router.post("/faqs")
-async def admin_create_faq(req: CreateFaqRequest):
-    """Create a new FAQ."""
-    faq = {
-        "id": str(uuid.uuid4()),
-        "question": req.question,
-        "answer": req.answer,
-        "category": req.category,
-        "sort_order": req.sort_order,
-        "audience": req.audience,
-        "service_area_ids": req.service_area_ids,
-        "is_active": True,
-        "created_at": datetime.now(timezone.utc),
-        "updated_at": datetime.now(timezone.utc),
-    }
-    await db_supabase.insert_one("faqs", faq)
-    return faq
-
-
-@admin_support_router.put("/faqs/{faq_id}")
-async def admin_update_faq(faq_id: str, req: UpdateFaqRequest):
-    """Update an existing FAQ."""
-    update_data: Dict[str, Any] = {"updated_at": datetime.now(timezone.utc)}
-    if req.question is not None:
-        update_data["question"] = req.question
-    if req.answer is not None:
-        update_data["answer"] = req.answer
-    if req.category is not None:
-        update_data["category"] = req.category
-    if req.sort_order is not None:
-        update_data["sort_order"] = req.sort_order
-    if req.is_active is not None:
-        update_data["is_active"] = req.is_active
-    if req.audience is not None:
-        update_data["audience"] = req.audience
-    if "service_area_ids" in req.model_fields_set:
-        update_data["service_area_ids"] = req.service_area_ids
-
-    # Editing the question/answer invalidates any stored semantic embedding —
-    # clear it so search re-embeds from the new text (stale vectors would keep
-    # matching the old wording).
-    if req.question is not None or req.answer is not None:
-        update_data["embedding"] = None
-        update_data["embedding_model"] = None
-
-    await db_supabase.update_one("faqs", {"id": faq_id}, update_data)
-    return (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows(
-            "faqs",
-            {"id": faq_id},
-            limit=1,
-            columns="id,question,answer,category,sort_order,is_active,created_at,updated_at,audience",
-        )
-    )
-
-
-@admin_support_router.delete("/faqs/{faq_id}")
-async def admin_delete_faq(faq_id: str):
-    """Delete a FAQ."""
-    await db_supabase.delete_one("faqs", {"id": faq_id})
-    return {"deleted": True}
-
-
 # ============ Admin: Surge Pricing ============
-
-
-@admin_support_router.put("/service-areas/{area_id}/surge")
-async def admin_update_surge(area_id: str, req: UpdateSurgeRequest):
-    """Update surge pricing for a service area."""
-    update_data: Dict[str, Any] = {}
-    if req.surge_active is not None:
-        update_data["surge_active"] = req.surge_active
-    if req.surge_multiplier is not None:
-        # This endpoint has no written-justification field and writes no
-        # audit-log row, so it must not be a path to exceed the surge cap.
-        # Above-cap (> 2.5x) overrides are a regulatory + reputational risk and
-        # are only permitted via the canonical admin endpoint
-        # (PUT /api/admin/service-areas/{id}/surge), which requires a
-        # justification string and records a "surge_override_above_cap" audit
-        # entry. Hard-reject anything above SURGE_CAP here.
-        if req.surge_multiplier < 1.0 or req.surge_multiplier > SURGE_CAP:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"surge_multiplier must be between 1.0 and {SURGE_CAP}. "
-                    "Above-cap overrides require the audited admin endpoint "
-                    "with a written justification."
-                ),
-            )
-        update_data["surge_multiplier"] = req.surge_multiplier
-
-    # This v1 endpoint predates the per-area surge_enabled gate. Fares and the
-    # surge engine now require surge_enabled, so activating surge here without
-    # also setting the gate would return success yet leave every ride priced at
-    # 1.0x. Mirror the activation intent onto surge_enabled: turning surge on
-    # (active, or a >1.0 multiplier) enables the gate; an explicit
-    # surge_active=false disables it so this endpoint can also turn surge off.
-    if req.surge_active is True or (req.surge_multiplier is not None and req.surge_multiplier > 1.0):
-        update_data["surge_enabled"] = True
-    if req.surge_active is False:
-        update_data["surge_enabled"] = False
-
-    if update_data:
-        await db_supabase.update_one("service_areas", {"id": area_id}, update_data)
-
-    area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
-    if not area:
-        raise HTTPException(status_code=404, detail="Service area not found")
-    return area
+#
+# admin_support_router used to also host admin ticket CRUD (GET/POST /tickets,
+# POST /tickets/{id}/reply, POST /tickets/{id}/close), admin FAQ CRUD
+# (GET/POST/PUT/DELETE /faqs), a manual surge override (PUT
+# /service-areas/{id}/surge), and a push-notification sender (POST
+# /notifications/send). All 8 were dead code, removed 2026-08-18 — see
+# docs/change-log/2026-08-18-remove-admin-support-router-dead-code.md:
+#   - GET /tickets and GET /faqs were Starlette-shadowed by support_router's
+#     identical, earlier-registered paths in the same v1_api_router mount
+#     (found by scripts/check_route_shadowing.py --server-mounts, see PR
+#     #4204) — never reachable at all.
+#   - The other 6 weren't shadowed, but admin-dashboard doesn't call any of
+#     their /api/v1/... paths — it calls the real, live equivalents under
+#     /api/admin/... (routes/admin/support.py, support_tickets.py, faqs.py,
+#     service_areas.py), which is what actually serves the admin UI.
+# Only admin_reset_surge_to_auto below is real: admin-dashboard's
+# resetSurgeToAuto() calls PUT /api/v1/service-areas/{id}/surge/auto
+# directly (admin-dashboard/src/lib/api/pricing.ts), and no /api/admin/...
+# equivalent exists — routes/admin/service_areas.py only has the manual
+# override (PUT .../surge), not an auto-reset. Kept as-is, only the router
+# it lives on lost its other 8 (formerly dead) siblings.
 
 
 @admin_support_router.put("/service-areas/{area_id}/surge/auto")
@@ -2027,13 +1831,6 @@ async def notify_safety_team(incident: dict) -> dict:
         logger.opt(exception=True).error(f"[SAFETY] notify_safety_team email fan-out failed for incident {incident_id}")
 
     return {"ws": ws_ok, "email_sent": email_sent, "email_attempted": email_attempted}
-
-
-@admin_support_router.post("/notifications/send")
-async def admin_send_notification(req: SendNotificationRequest):
-    """Send a push notification to a specific user (admin)."""
-    success = await send_push_notification(req.user_id, req.title, req.body, req.data)
-    return {"sent": success}
 
 
 # ============ Scheduled Ride Background Checker ============

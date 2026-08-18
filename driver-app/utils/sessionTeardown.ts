@@ -2,6 +2,7 @@ import { registerLogoutCallback } from '@shared/store/authStore';
 import { stopBackgroundLocation, stopGeofenceRecovery } from './backgroundLocation';
 import { tripLocationRecorder } from './tripLocationRecorder';
 import { recordNonFatal } from './crashlytics';
+import { LAST_LOCATION_KEY } from '../lib/androidAuto/carFixChannel';
 
 /**
  * Tear down driver location tracking on sign-out.
@@ -18,7 +19,11 @@ import { recordNonFatal } from './crashlytics';
  *   - `bg_access_token` (a live driver JWT) on disk, which the headless task
  *     used to keep uploading GPS for the rest of its 15-minute lifetime;
  *   - the SQLite outbox full of raw lat/lng, flushed under whichever account
- *     signed in next on that device.
+ *     signed in next on that device;
+ *   - and, once the Android Auto work landed, the `spinr-car-location` task,
+ *     which this function did not know about at all. That one is worse than its
+ *     sibling: on the no-foreground-service fallback path there is no
+ *     notification, so a signed-out driver had no way to see it running.
  *
  * The rider app has used `registerLogoutCallback` for per-session state since
  * rideStore; the driver app simply never registered one.
@@ -44,7 +49,21 @@ export async function teardownDriverLocationSession(): Promise<void> {
     recordNonFatal(e, { domain: 'drivers', surface: 'driver-app', teardown: 'stop_geofence' });
   }
 
-  // 3. Drop coordinates already at rest on the device. Unlike every other
+  // 3. Stop the Android Auto display-only task. Its registration is persisted by
+  //    expo-task-manager and restored on process start, so leaving it running
+  //    means a location broadcast can relaunch the app headlessly and resume
+  //    tracking a signed-out driver with nothing on screen to show for it.
+  //    Lazily required: this is the driver app's logout path on BOTH platforms,
+  //    and the Android Auto tree is Android-only (index.js loads it under a
+  //    Platform check). The require is what keeps it off iOS.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    await require('../lib/androidAuto/carLocationTask').stopCarLocationService();
+  } catch (e) {
+    recordNonFatal(e, { domain: 'drivers', surface: 'driver-app', teardown: 'stop_car_location' });
+  }
+
+  // 4. Drop coordinates already at rest on the device. Unlike every other
   //    caller, this deliberately discards unacknowledged points — see
   //    TripLocationOutbox.purgeAll for why sign-out is the exception.
   try {
@@ -53,6 +72,19 @@ export async function teardownDriverLocationSession(): Promise<void> {
     // PII left at rest is not a "recoverable anomaly", so this is an error-level
     // report rather than a silent catch.
     recordNonFatal(e, { domain: 'drivers', surface: 'driver-app', teardown: 'purge_outbox' });
+  }
+
+  // 5. And the plain-AsyncStorage last-known position. The outbox purge above
+  //    does not cover it — different store, and it is the one coordinate pair
+  //    that survives a sign-out precisely because it is a display cache rather
+  //    than trip data. `useDriverDashboard` already deletes it on go-offline for
+  //    the same reason; sign-out is the stronger case.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+    await AsyncStorage.removeItem(LAST_LOCATION_KEY);
+  } catch (e) {
+    recordNonFatal(e, { domain: 'drivers', surface: 'driver-app', teardown: 'clear_last_location' });
   }
 }
 

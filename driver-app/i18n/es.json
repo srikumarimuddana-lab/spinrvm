@@ -193,7 +193,10 @@
     "noNotifications": "Sin notificaciones",
     "allCaughtUp": "¡Estás al día!",
     "markReadError": "No se pudo actualizar la notificación",
-    "markReadErrorBody": "Comprueba tu conexión e inténtalo de nuevo."
+    "markReadErrorBody": "Comprueba tu conexión e inténtalo de nuevo.",
+    "loadFailed": "No se pudieron cargar las notificaciones",
+    "loadFailedBody": "Comprueba tu conexión e inténtalo de nuevo.",
+    "retry": "Reintentar"
   },
   "profile": {
     "editProfile": "Editar perfil",

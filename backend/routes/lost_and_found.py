@@ -26,6 +26,7 @@ try:
     from ..dependencies import get_current_user
     from ..features import send_push_notification
     from ..services.zoho_desk_integration import create_ticket_for_lost_and_found
+    from ..utils.error_handling import DuplicateRecordError
 except ImportError:
     import db_supabase  # type: ignore
     from dependencies import get_current_user  # type: ignore
@@ -195,23 +196,35 @@ async def driver_report_found_item(
     if existing:
         return {"success": True, "case": existing[0], "existing": True}
 
-    case = await db_supabase.insert_one(
-        "lost_and_found",
-        {
-            "id": str(uuid.uuid4()),
-            "ride_id": req.ride_id,
-            "reporter_id": current_user["id"],
-            "rider_user_id": rider_user_id,
-            "driver_id": driver["id"],
-            "reporter_type": "driver",
-            "item_description": req.item_description,
-            "item_category": category,
-            "status": "driver_found",
-            "contact_method": "in_app",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        },
-    )
+    try:
+        case = await db_supabase.insert_one(
+            "lost_and_found",
+            {
+                "id": str(uuid.uuid4()),
+                "ride_id": req.ride_id,
+                "reporter_id": current_user["id"],
+                "rider_user_id": rider_user_id,
+                "driver_id": driver["id"],
+                "reporter_type": "driver",
+                "item_description": req.item_description,
+                "item_category": category,
+                "status": "driver_found",
+                "contact_method": "in_app",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except (DuplicateRecordError, Exception) as exc:
+        if "duplicate" not in str(exc).lower() and "unique" not in str(exc).lower():
+            raise
+        dup = await db_supabase.get_rows(
+            "lost_and_found",
+            {"ride_id": req.ride_id, "driver_id": driver["id"]},
+            limit=1,
+        )
+        if dup:
+            return {"success": True, "case": dup[0], "existing": True}
+        raise
 
     await _insert_system_message(
         case["id"],

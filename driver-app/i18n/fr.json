@@ -320,7 +320,7 @@
     "exportRequestedMsg": "Votre exportation de données est en route — consultez votre courriel.",
     "exportFailedTitle": "Échec de l'exportation",
     "exportFailedMsg": "Échec de la demande d'exportation des données. Veuillez réessayer.",
-    "deleteAccountConfirmMsg": "Votre compte sera programmé pour suppression avec une fenêtre de récupération de 30 jours.\n\nVous pouvez le réactiver à tout moment dans les 30 jours en vous reconnectant; après cela, toutes vos données, votre historique de revenus et vos enregistrements de courses sont définitivement supprimés.",
+    "deleteAccountConfirmMsg": "Votre compte sera verrouillé immédiatement.\n\nVous pouvez le réactiver à tout moment en vous reconnectant, avant que toutes vos données, votre historique de revenus et vos enregistrements de courses ne soient définitivement supprimés après la période de conservation de 7 ans exigée par la loi sur le transport de la Saskatchewan.",
     "deleteContinue": "Oui, continuer",
     "confirmDeletionTitle": "Confirmer la suppression",
     "confirmDeletionMsg": "Tapez « DELETE » ci-dessous pour supprimer définitivement votre compte.",

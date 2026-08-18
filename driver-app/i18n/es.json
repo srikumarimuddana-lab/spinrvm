@@ -269,7 +269,7 @@
     "exportRequestedMsg": "Su exportación de datos está en camino — revise su correo.",
     "exportFailedTitle": "Error de exportación",
     "exportFailedMsg": "No se pudo solicitar la exportación de datos. Inténtelo de nuevo.",
-    "deleteAccountConfirmMsg": "Su cuenta se programará para eliminación con una ventana de recuperación de 30 días.\n\nPuede reactivarla en cualquier momento dentro de los 30 días iniciando sesión de nuevo; después de eso, todos sus datos, historial de ganancias y registros de viajes se eliminan permanentemente.",
+    "deleteAccountConfirmMsg": "Su cuenta se bloqueará de inmediato.\n\nPuede reactivarla en cualquier momento iniciando sesión de nuevo, antes de que todos sus datos, historial de ganancias y registros de viajes se eliminen permanentemente tras el período de retención de 7 años que exige la ley de transporte de Saskatchewan.",
     "deleteContinue": "Sí, continuar",
     "confirmDeletionTitle": "Confirmar eliminación",
     "confirmDeletionMsg": "Escriba «DELETE» abajo para eliminar permanentemente su cuenta.",

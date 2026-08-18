@@ -1,0 +1,256 @@
+# Spinr Full-Fleet Whole-App Audit — Part A, all 21 reviewers (2026-08-18)
+
+**Date:** 2026-08-18 · **Scope:** the entire application (not a diff) — `backend/` (all ~25 routers,
+services, utils, background loops, migrations), `rider-app/`, `driver-app/`, `admin-dashboard/`,
+`shared/`, `.github/workflows/` + deploy config, and the AI surface (`backend/ai/**`, `/mcp`,
+`rider-app/app/ai-assistant.tsx`). Run per the Spinr Full-App Audit Master Prompt v3, Part A —
+a 3-day drift check against the 2026-08-15 launch-readiness baseline
+(`docs/audit/2026-08-15-full-fleet-launch-readiness.md`).
+
+**Method:** all 21 `spinr-*` reviewer agents dispatched independently and in parallel, each against
+its own domain across the whole codebase, audit-only — no files modified by any agent. Every agent
+was instructed to reconcile against the 2026-08-15 baseline first (FIXED / STILL-OPEN / REGRESSED)
+before reporting new findings (marked NEW). Two-layer output preserved below: plain-English summary
+up top, `file:line` technical detail underneath.
+
+**Standing non-agent-shaped gaps** (tracked, never silently absorbed): load/chaos testing (E2),
+DAST/pentest (E6), backup-restore drills (E7), real screen-reader/visual-regression passes (N12).
+
+```
+SPINR FULL-FLEET AUDIT — whole app, 3-day drift check
+========================================================
+Agents dispatched: 21/21
+
+── MONEY & BUSINESS LOGIC ──────────────────────
+  spinr-money-auditor                FIX BLOCKERS (receipts never itemize surge as a $ line; 3 carry-overs)
+  spinr-surge-auditor                FIX BLOCKERS (surge_source stamp still missing; blast radius narrower than baseline implied)
+  spinr-corporate-billing-reviewer   SAFE TO LAUNCH (new late-tip-debit code independently re-verified clean)
+  spinr-fraud-auditor                FIX BLOCKERS (v2 GPS path still unguarded; NEW: $0 promo ride still qualifies for referral payout)
+  spinr-corporate-reporting-reviewer FIX BLOCKERS (combined-tax PDF + UTC month bounds, both still open, zero commits since baseline)
+
+── CORE PLATFORM ───────────────────────────────
+  spinr-security-auditor              FIX BLOCKERS (4 carry-overs unchanged: emergency contacts, AI driver-name leak, admin audit gap, unpinned trufflehog)
+  spinr-dispatch-reviewer             FIX BLOCKERS (confirms batch-offer model has no driver_assigned; Period 2 gap is real, not theoretical)
+  spinr-insurance-period-auditor      FIX BLOCKERS (NEW: rider-facing legal draft doc says the opposite of what the code does)
+  spinr-safety-sos-reviewer           FIX BLOCKERS (both carry-overs unchanged; doc now honestly corrected, not "doc lies")
+  spinr-realtime-reliability-reviewer FIX BLOCKERS (both carry-overs unchanged; 13 loops still unwatchdogged)
+  spinr-migration-reviewer            NEEDS HUMAN REVIEW (numbering collisions grew from 3 to 7 duplicate prefixes; found+fixed a silently-broken nightly PIPEDA purge job)
+  spinr-admin-rbac-reviewer           NEEDS HUMAN REVIEW (no live security hole; 2 NEW frontend/backend module-string mismatches lock out legitimate staff)
+  spinr-cicd-infra-reviewer           FIX BLOCKERS (REGRESSED: deploy-metrics-agent.yml missed by the C18b sweep that claimed to fix this class)
+  spinr-edge-case-reviewer            FIX BLOCKERS (4 carry-overs unchanged, no new blockers)
+
+── COMPLIANCE & QUALITY ────────────────────────
+  spinr-regulatory-compliance-checker FIX BLOCKERS (all 5 carry-overs unchanged; retention/deletion machinery itself confirmed healthy)
+  spinr-accessibility-reviewer        FIX BLOCKERS (NEW: shared Toast component has zero screen-reader wiring fleet-wide; WAV toggle doesn't announce as a switch)
+  spinr-design-consistency-reviewer   FIX BLOCKERS (off-brand teal NEW 3rd instance; CustomAlert tokenization fix confirmed landed)
+  spinr-ai-guardrail-reviewer         FIX BLOCKERS (root-caused: no tool RESULT is ever PII-scrubbed, a structural gap, not just the driver-name instance)
+  spinr-performance-sla-reviewer      FIX BLOCKERS (NEW, non-load-test-dependent: fare-estimate can hard-block 3.5s by design; location-write has a duplicate DB fetch)
+  spinr-observability-reviewer        FIX BLOCKERS (NEW: unaudited Redis flush-prefix admin endpoint; NEW structural gap — no metric on any post-acceptance ride-state transition)
+  spinr-test-coverage-reviewer        NEEDS HUMAN REVIEW (corporate coverage gate shipped since baseline; payments/fare/crypto/rides/dispatch floors still unenforced; RLS never tested at the DB role level)
+
+VERDICT: FIX BLOCKERS
+```
+
+---
+
+## Plain-English executive summary
+
+Three days after the 2026-08-15 launch-readiness audit, **the picture has not meaningfully
+improved and has picked up one regression and several sharper findings**. Of the 17 ranked
+blockers in the baseline, independent re-verification (not re-trusting the prior report's text)
+found:
+
+- **14 STILL-OPEN, unchanged** — same file, same lines, no commits touching them since 08-15.
+- **0 fully FIXED.**
+- **1 REGRESSED** — `deploy-metrics-agent.yml` still runs an unpinned `flyctl-actions@master`
+  and `checkout@v7` with a live `FLY_API_TOKEN` in scope, even though the C18b remediation PR
+  explicitly claimed to have swept this exact class of finding across "4 files." It missed a
+  5th.
+- **2 partially mitigated but not resolved** — the corporate PDF combined-tax line is now
+  logged/Sentry-alerted internally (progress) but still ships to the customer unchanged; the
+  emergency-contacts plaintext finding is no longer a "doc lies" problem (the doc was honestly
+  corrected 2026-08-16) but the underlying plaintext storage — now an explicitly-flagged, still
+  undecided privacy trade-off — is unchanged.
+
+New work landed in the same window genuinely helped in places: a late-tip corporate-debit
+feature (08-17) was independently re-verified clean rather than trusted from its own change-log;
+a corporate coverage-floor CI gate now exists and blocks PRs (closing part of a baseline gap);
+the admin document-reviewer modal gained real `role="dialog"`/`aria-modal`/Escape-key handling;
+two real production bugs were caught and fixed in the same window this audit ran — a nightly
+PIPEDA retention-purge job that had been silently failing since it was written, and a
+corporate-allowance-reversal type that had been rejected by its own CHECK constraint since
+migration 248.
+
+**The single most consequential new finding this pass**: `docs/legal/insurance-coverage-periods.md`
+— a rider/driver-facing legal draft — explicitly states insurance coverage "starts as soon as the
+driver is assigned to your ride, even before they've accepted." The code does the opposite: Period 2
+(TNC primary commercial coverage) opens only at `driver_accepted`, not at offer/claim time, because
+the production batch-offer dispatch model structurally never writes a `driver_assigned` ride status
+at all (`assign_driver_to_ride`, the only function that would, is confirmed dead code). This is no
+longer just an engineering gap — it is a public-facing document promising a coverage rule the system
+does not implement, and it must not go live without a legal/SGI decision one way or the other.
+
+**Two structural (not one-off) findings, new this pass:**
+1. AI guardrails: the root cause of the "driver full name leaks to the LLM provider" finding is not
+   that one field — it's that **no tool result, from any tool, is ever PII-scrubbed** before
+   re-entering the model's context or being returned via `/mcp`. Any future tool that surfaces free
+   text inherits the same leak silently.
+2. Observability: **no Prometheus metric exists for any ride-state transition after offer-acceptance**
+   (arrival, trip start, completion, cancellation) — the two headline KPIs in CLAUDE.md (match rate,
+   cancellation rate) are invisible to any dashboard or alert, visible only via a manual DB query.
+   Compounding this, a `POST /admin/redis/flush-prefix` endpoint can wipe production
+   rate-limit/OTP-lockout state with zero log line anywhere.
+
+---
+
+## Baseline reconciliation — all 17 ranked blockers from 2026-08-15
+
+| # | 08-15 Finding | Status 08-18 | Evidence this pass |
+|---|---|---|---|
+| 1 | Period 2 insurance opens at accept, not claim | **STILL-OPEN, escalated** | insurance-period + dispatch agents independently re-confirmed `assign_driver_to_ride` is dead code (zero callers outside tests); **NEW**: `docs/legal/insurance-coverage-periods.md` promises the opposite rule to riders/drivers |
+| 2 | Driver can accept a ride while offline | **STILL-OPEN** | `routes/drivers/ride_flow.py:46-350` — no `is_online` reference anywhere in the file, confirmed by dispatch, edge-case, and security agents independently |
+| 3 | Go-online never re-checks SK eligibility | **STILL-OPEN** | `routes/drivers/status.py` — document expiry re-checked correctly every call; license class/vehicle age/experience never read |
+| 4 | `planned_route_polyline` escapes 3-yr GPS purge | **STILL-OPEN** | confirmed absent from all `purge_pii_retention()` revisions through migration 333 |
+| 5 | No consent-version on rider/driver signup | **STILL-OPEN** | `routes/auth.py` — zero `consent_version` write; corporate signup still the only path that has it |
+| 6 | Driver full legal name sent to AI providers; `/mcp` unscrubbed | **STILL-OPEN, root-caused** | `ai/tools_rides.py:75-77`; AI-guardrail agent traced this to a structural gap in `execute_tool`/`_cap_result` — **this exact finding was never added to `ACTION_ITEMS.md`'s AI1-AI15 list**, which is why it slipped 3 days untracked |
+| 7 | v2 GPS location-batch path skips integrity check | **STILL-OPEN** | `routes/drivers/location.py:109-170`, `utils/breadcrumbs.py:246-397` — v1/WS paths correctly gated, v2 still not |
+| 8 | Emergency contacts plaintext vs. doc promise | **STILL-OPEN, doc now honest** | `domain-safety.md` corrected 2026-08-16 to describe plaintext as shipped state — no longer a doc-mismatch, still an unresolved privacy decision |
+| 9 | Safety check-in "sent" flag non-atomic | **STILL-OPEN** | `utils/safety_checkin_loop.py:104-127` unchanged; re-scoped this pass as duplicate-push risk only (escalation-insert path independently confirmed safe, cannot double-fire an incident) |
+| 10 | Second device silently steals WS connection | **STILL-OPEN** | `socket_manager.py:64-66` — independently confirmed by 4 separate agents (realtime, edge-case, security, dispatch) |
+| 11 | Unpinned GitHub Actions in deploy/security gates | **STILL-OPEN + REGRESSED** | `ci-guardrails.yml:389` trufflehog, `deploy-driver-play-testing.yml:55-61` still open; **REGRESSED**: `deploy-metrics-agent.yml` missed by the C18b sweep that claimed this class fixed; 2 more NEW unpinned instances found (`claude-audit.yml`, `bootstrap-metrics-agent.yml`) |
+| 12 | Admin actions with no audit trail | **STILL-OPEN, worse** | same ~12 endpoints unchanged; **NEW**: `POST /admin/redis/flush-prefix` (production cache/rate-limit wipe) and `driver_appeals.py` resolve action both also write zero audit row |
+| 13 | Document upload swallows supersede DB error | **STILL-OPEN** | `backend/documents.py:401-423` (renamed/relocated, same bug) unchanged; **NEW same-pattern instance** found in `routes/drivers/ride_cancel.py:182-185` (Stripe-hold-release DB write) |
+| 14 | Corporate PDF combined-tax line + UTC month bounds | **STILL-OPEN, partially mitigated** | both unchanged in code (zero commits since 08-15); tax-line fallback now logs + Sentry-alerts internally (added between 08-15 and now) — customer-facing PDF itself unchanged |
+| 15 | Admin surge endpoint missing `surge_source` stamp | **STILL-OPEN, narrower blast radius** | `routes/admin/service_areas.py:908-937` unchanged; surge-auditor traced that the *live* admin-dashboard UI actually goes through a different, correctly-wired endpoint today — only future/unwired callers of the buggy route are exposed |
+| 16 | 5 unlabeled icon buttons + hand-rolled admin modal | **PARTIALLY FIXED** | 4 of 5 buttons confirmed still unlabeled; admin document-reviewer modal gained real `role="dialog"`/`aria-modal`/Escape-key handling — still missing focus-trap-in/restore-out |
+| 17 | Off-brand teal; payment error state indistinguishable from empty | **STILL-OPEN, worse** | both unchanged; **NEW 3rd teal instance** found on driver subscription screen (same ad hoc "success/mint" pattern); `CustomAlert.tsx`'s color tokenization (the top color-consistency blocker from the May review) is now fixed and available to reuse for these sites |
+
+**Also re-verified from the baseline's decision log:**
+- `compliance` admin module (super-admin-only by omission) — still open, still regression-pinned by `test_admin_module_list_parity.py`, correctly deferred pending a human decision.
+- Per-module coverage floors — a **new, blocking** gate now exists for `corporate_*.py` (`check_corporate_coverage_floor.py`, shipped since baseline) but the higher-priority `payments.py`/`fare_service.py`/`crypto.py`/`rides.py`/`dispatch_service.py` floors CLAUDE.md names explicitly still have no equivalent gate — only the 60% whole-repo aggregate is blocking.
+- Migration CI CHECK B — **fixed as designed** (now a true hard-fail on a collision visible to the same PR's CI), but the residual cross-PR race window it cannot see is not hypothetical: duplicate prefixes grew from 3 (310, 313, and a partial count) to **7 distinct duplicates** across migrations 305–333, including a fresh 328×2 collision from 2026-08-18 itself.
+- Money-auditor's "does the wallet→allowance→master→card cascade exist?" question — still unresolved, independently re-confirmed by both the money-auditor and corporate-billing-reviewer this pass: what exists is payment-method *choice* at booking time, not a per-ride fallback cascade across all four tiers. Needs a documentation correction or a real cascade decision.
+
+---
+
+## NEW findings, not in the 2026-08-15 baseline
+
+| # | Finding | Agent | Where | Severity |
+|---|---|---|---|---|
+| N1 | Legal draft doc contradicts insurance-period code (see above) | insurance-period | `docs/legal/insurance-coverage-periods.md:40-45` | High — must resolve before publication |
+| N2 | `$0`-cost `first_ride_only` promo ride still satisfies rider-referral qualification — real wallet money farmable via throwaway phone numbers, no velocity cap | fraud | `routes/users.py:846-848`, `routes/promotions.py:224-227`, `utils/referral_payout.py:298-311` | Medium — real-money leak |
+| N3 | `deploy-metrics-agent.yml` unpinned `checkout@v7` + `flyctl-actions@master` with `FLY_API_TOKEN` in scope — missed by the C18b sweep | cicd-infra | `.github/workflows/deploy-metrics-agent.yml:36,49` | High — deploy-secret exposure |
+| N4 | 2 more unpinned-action instances (`claude-audit.yml` literal `@master`; `bootstrap-metrics-agent.yml` partial fix) | cicd-infra | `.github/workflows/claude-audit.yml:84`, `bootstrap-metrics-agent.yml:57` | Low–Medium |
+| N5 | Shared Toast/banner component (both mobile apps) has zero screen-reader wiring — the single error-announcement path for nearly every form/failure in the app | accessibility | `rider-app/components/Toast.tsx:106-122`, `driver-app/components/toastConfig.tsx` | High — blast radius is fleet-wide |
+| N6 | Driver-app WAV accessibility-declaration toggle doesn't announce as a switch or report checked state | accessibility | `driver-app/app/driver/settings.tsx:217-250,327-342` | Medium — regulatory-adjacent (WAV) |
+| N7 | 3rd off-brand-teal instance on driver subscription screen | design | `driver-app/app/driver/subscription.tsx:590-602` | Low |
+| N8 | AI guardrail gap is structural: no tool RESULT is ever PII-scrubbed anywhere in the codebase (driver-name leak is just the first live instance) | ai-guardrail | `ai/tools.py:226-240` (`_cap_result`), `ai/orchestrator.py:412-438` | High — pre-empts future leaks too |
+| N9 | Fare-estimate endpoint can hard-block up to 3.5s waiting on Google Directions before fallback — a real, code-confirmed >10x breach of the 300ms SLA target, by design, undocumented in the SLA table | performance | `routes/rides/estimates.py:62,455` | Medium — needs a documented exception or a ceiling |
+| N10 | Driver-location-write path (tightest 150ms SLA budget) does a byte-for-byte duplicate DB fetch inside a fully sequential await chain | performance | `routes/drivers/location.py:456,487,540-542` | Low–Medium |
+| N11 | `POST /admin/redis/flush-prefix` — production cache/rate-limit/OTP-lockout wipe with zero audit-log row anywhere | observability | `routes/admin/monitoring.py:509-539` | High — no forensic trail on a destructive prod action |
+| N12b | No Prometheus metric on ANY ride-state transition after offer-acceptance (arrival/start/completion/cancellation) | observability | `routes/rides/lifecycle.py`, `routes/drivers/ride_complete.py`, `routes/rides/cancellation.py` | Medium — KPI blind spot |
+| N13 | Ride-cancel Stripe-hold-release DB write swallows errors at `logger.warning` (same anti-pattern as baseline #13, new instance) | observability/edge-case | `routes/drivers/ride_cancel.py:182-185` | Medium — feeds `orphaned_hold_reconciler`'s trust assumption |
+| N14 | Emailed/PDF receipts (7-year retained legal record) never show surge as a dollar line item — text footnote only, while the in-app UI (not retained) does show a real number | money | `utils/receipt_pdf.py`, `utils/email_receipt.py:191-198` | Medium — transparency gap on the durable record |
+| N15 | 2 new `round()`-on-Decimal slips in admin analytics/support screens, outside the pre-commit hook's protected files | money | `routes/admin/support.py:179`, `routes/admin/rides.py:2470-2492` | Low — display only, not settlement |
+| N16 | Admin-RBAC frontend/backend module-string mismatches silently lock out legitimately-permissioned staff (not a leak — the opposite failure direction) | admin-rbac | Vehicle Types page keyed `"pricing"` vs backend `"vehicle_types"`; Audit Logs sidebar keyed `"settings"` vs backend `"audit"` | Low — access bug, not security hole |
+| N17 | `stripe_import_router` mounted at a weaker module gate (`"drivers"`) than its documented super-admin-only sensitivity class; safe today only via handler-level check | admin-rbac | `routes/admin/__init__.py:161` | Low — single point of fragility |
+| N18 | No test in the entire suite exercises an RLS policy from a real Postgres `anon`/`authenticated` role — 207 policy statements across 139 migrations have zero DB-level allow/deny coverage | test-coverage | fleet-wide | Medium — a broken policy would ship green |
+| N19 | 2 production bugs independently caught and fixed in this same window (not this audit's finding, but worth recording): nightly `purge_pii_retention()` had been silently failing on Step D since it was defined (fixed 08-17/18, migrations 323/324); corporate-allowance-reversal type rejected by its own CHECK constraint since migration 248 (fixed via migration 319) | migration | migrations 319, 323, 324 | Informational — confirm the purge failure was ever loudly alerted, not just logged |
+
+---
+
+## Ranked blocker register (highest consequence first, owner + due date)
+
+> Owners below are domain placeholders (Engineering — &lt;surface&gt;) pending assignment by
+> whoever runs the actual sprint board; due dates are suggested working targets, not commitments —
+> confirm both with the team lead before treating either as final.
+
+| # | Finding | Agent(s) | Owner (suggested) | Due (suggested) |
+|---|---|---|---|---|
+| 1 | Legal draft doc contradicts insurance-period code — must not publish as-is | insurance-period | Legal/Compliance + Eng — Insurance | Before `docs/legal/insurance-coverage-periods.md` leaves Draft |
+| 2 | Period 2 insurance coverage opens at accept, not claim | insurance-period, dispatch | Eng — Dispatch/Insurance | 2026-08-25 or explicit SGI/legal acceptance |
+| 3 | `deploy-metrics-agent.yml` unpinned actions with live `FLY_API_TOKEN` (regression) | cicd-infra | Eng — Platform/CI | 2026-08-20 (small, 1-file) |
+| 4 | Driver can accept a ride while offline | dispatch, edge-case, security | Eng — Dispatch | 2026-08-22 |
+| 5 | AI tool-result PII scrub gap (structural) — driver name to LLM + `/mcp` | ai-guardrail | Eng — AI | 2026-08-22 |
+| 6 | `$0` promo ride farmable for real referral payout, no velocity cap | fraud | Eng — Growth/Fraud | 2026-08-25 |
+| 7 | v2 GPS location-batch path skips spoofing check | fraud | Eng — Driver Location | 2026-08-22 |
+| 8 | `POST /admin/redis/flush-prefix` has zero audit trail on a destructive prod action | observability | Eng — Platform | 2026-08-20 |
+| 9 | No metric on any post-acceptance ride-state transition (KPI blind spot) | observability | Eng — Observability | 2026-08-29 |
+| 10 | Go-online never re-checks SK eligibility (license class/vehicle age/experience) | regulatory | Eng — Driver Onboarding | 2026-08-29 |
+| 11 | `planned_route_polyline` escapes 3-yr GPS purge | regulatory | Eng — Data/Retention | 2026-08-22 |
+| 12 | No consent-version on rider/driver signup | regulatory | Eng — Auth + Legal | 2026-08-29 |
+| 13 | Emergency contacts stored plaintext (needs decision, not just fix) | safety-sos, security | Privacy/Legal | Decision by 2026-08-25 |
+| 14 | Safety check-in "sent" flag non-atomic (duplicate push risk) | realtime | Eng — Safety | 2026-08-22 |
+| 15 | Second device silently steals WS connection | realtime, edge-case, security, dispatch | Eng — Realtime | 2026-08-25 |
+| 16 | Shared Toast component has zero screen-reader wiring (fleet-wide blast radius) | accessibility | Eng — Mobile/Shared UI | 2026-08-29 |
+| 17 | Unpinned trufflehog inside the security gate itself + Expo/Play workflow | cicd-infra | Eng — Platform/CI | 2026-08-22 |
+| 18 | Admin actions with no audit trail (~12 endpoints + 2 new) | observability | Eng — Admin/Platform | 2026-08-29 |
+| 19 | Document-upload / ride-cancel DB-error swallow (2 instances) | edge-case, observability | Eng — Backend | 2026-08-25 |
+| 20 | Corporate PDF combined-tax line + UTC month bounds | corporate-reporting | Eng — Corporate Billing | 2026-09-02 |
+| 21 | Admin surge endpoint missing `surge_source` stamp | surge | Eng — Pricing | 2026-08-25 |
+| 22 | 4 unlabeled icon buttons + WAV toggle accessibility gap | accessibility | Eng — Mobile UI | 2026-08-29 |
+| 23 | Off-brand teal (3 instances) + payment error state | design | Eng — Mobile UI | 2026-08-29 |
+| 24 | Fare-estimate 3.5s Directions wait undocumented in SLA table | performance | Eng — Pricing + doc owner | 2026-08-22 (doc), decision on ceiling |
+| 25 | Driver-location-write duplicate DB fetch | performance | Eng — Driver Location | 2026-08-22 |
+| 26 | Receipts never itemize surge as a $ line (7-yr retained record) | money | Eng — Payments | 2026-08-29 |
+| 27 | 13 background loops absent from the watchdog list | realtime, observability | Eng — Platform | 2026-08-29 |
+| 28 | Admin-RBAC frontend/backend module-string mismatches (access bugs) | admin-rbac | Eng — Admin Dashboard | 2026-08-29 |
+| 29 | No RLS DB-role-level test coverage | test-coverage | Eng — Backend/QA | 2026-09-05 |
+| 30 | Money-path coverage floors unenforced beyond corporate_* | test-coverage | Eng — Backend/QA | 2026-09-05 |
+
+---
+
+## Decision log (needs a human, not just a fix — owner + due date required)
+
+| Decision | Context | Owner | Due |
+|---|---|---|---|
+| Period 2 timing: fix code to open at offer/claim, or get SGI/legal to accept "opens at accept" — **and correct or hold the legal draft doc that currently promises the opposite** | insurance-period, dispatch | Legal/Compliance | 2026-08-25 |
+| Emergency-contact encryption: implement pgcrypto vs. accept plaintext (doc already corrected to state actual behavior) | safety-sos, security | Privacy/Legal | 2026-08-25 |
+| `compliance` admin module: add to `AVAILABLE_MODULES` or switch to `require_super_admin` explicitly | admin-rbac (carried from 08-15) | Eng lead / Admin owner | 2026-08-29 |
+| Inert `surge`/`pricing` grantable module strings — retire or wire up | admin-rbac (carried from 08-15) | Eng lead / Admin owner | 2026-08-29 |
+| Per-module coverage gate scope: extend `check_corporate_coverage_floor.py`'s pattern to `payments.py`/`fare_service.py`/`crypto.py`/`rides.py`/`dispatch_service.py` | test-coverage | Eng lead / QA owner | 2026-09-05 |
+| Migration numbering collisions: 7 duplicate prefixes now exist (up from 3) — accept as documented convention or invest in a merge-queue/stronger CI check | migration | Eng lead | 2026-08-29 |
+| Corporate payment-source cascade: correct `domain-payments.md`'s "wallet → allowance → master → card" language to describe payment-method choice, or build the literal cascade | money, corporate-billing | Product/Eng lead | 2026-08-29 |
+| >2.5× admin surge override with justification is accepted/stored but always clamped to 2.5× at every fare-calc call site — decide whether the documented 1.0–10.0 capability should ever reach a rider, or correct CLAUDE.md | surge | Product/Legal | 2026-08-29 |
+| Fare-estimate 3.5s Directions-wait trade-off: document as an accepted SLA exception, or add a hard latency-preserving ceiling and accept the undercharge-risk tail | performance | Product/Eng lead | 2026-08-25 |
+| Confirm whether the silently-failed nightly `purge_pii_retention()` job (fixed 08-17/18) ever produced a loud, actionable alert during its failure window, or only a log line | migration, observability | Eng — Observability | 2026-08-22 |
+
+---
+
+## What was NOT verified (explicit boundary, every agent)
+
+- **No runtime execution anywhere in this audit** — no code was run, no test suite executed, no live
+  Supabase/Redis/Stripe/Twilio/FCM call made, no load or chaos test, no DAST/pentest scan, no
+  screen-reader or contrast-ratio measurement. All 21 reports are static code + migration + config
+  reading, cross-referenced against the 08-15 baseline's own text (re-verified against current
+  source, not re-trusted).
+- **E2 (load/chaos testing), E6 (DAST/pentest), E7 (backup-restore drills), N12 (visual/screen-reader
+  regression tooling)** — standing gaps, not agent-shaped, tracked in `ACTION_ITEMS.md`, restated
+  here per the master prompt's rule rather than silently absorbed.
+- No agent queried a live/staging Supabase instance for row counts or dollar figures in this pass —
+  this is Part A (whole-app fleet audit), not Part B (dual-run cutover); money-domain agents that
+  needed dollar figures either had none to report or cited the 2026-08-15 baseline's filter-chained
+  numbers without re-deriving them live.
+- Frontend build verification (`npm run build` for `admin-dashboard`/`rider-app`/`driver-app`) was
+  not run by any agent — all frontend findings are source-level reasoning, not a production build
+  check.
+- Coverage percentages (payments.py 96%, matching.py 89%, etc.) are the 2026-08-10 point-in-time
+  measurements recorded in `ACTION_ITEMS.md`, not freshly re-measured — `pytest --cov` was not
+  executed this session (no pytest installed in the audit sandbox).
+- No agent re-verified every one of the other 20 agents' domains — each stayed in its assigned lane;
+  cross-domain overlaps (e.g. WS second-device steal, flagged by 4 different agents) were each
+  independently derived, not copied from one another.
+
+---
+
+## Rollup verdict
+
+**FIX BLOCKERS.**
+
+3 of 21 domains returned NEEDS HUMAN REVIEW (migration, admin-rbac, test-coverage) and 1 returned
+SAFE TO LAUNCH (corporate-billing); the remaining 17 returned FIX BLOCKERS. Per the master prompt's
+rule, the rollup is the worst verdict across all 21 and no single agent's verdict is softened here.
+Nothing found in this pass is new-and-catastrophic — it is, overwhelmingly, **the same 17 blockers
+from three days ago, still unfixed**, plus one real regression in CI pinning and a genuinely
+consequential new finding (the legal-draft/code contradiction on insurance Period 2 timing) that
+raises the priority of item #1 on the ranked list above everything else in this report.

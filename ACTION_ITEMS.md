@@ -10274,6 +10274,35 @@ how much they de-risk a public launch._
   documented-but-deferred option (b): a post-merge check to catch the
   narrower true-race window a per-PR check structurally cannot.
 
+### C37. `driver-app-test`: possible leaked-renderer flake in `ActivityView.test.tsx`, same failure shape as the C31 rider-app flake
+
+- [ ] **Status:** open, flagged not investigated. Noticed 2026-08-18 on a
+  docs-only PR (#4191, `ACTION_ITEMS.md` C25 re-verification — zero
+  driver-app code touched) whose `driver-app-test` job still failed:
+  `ActivityView.test.tsx › keeps ride history visible when earnings
+  loading fails` hit `Exceeded timeout of 5000 ms for a test`
+  (`__tests__/components/ActivityView.test.tsx:92`), 533/534 tests
+  otherwise passing — same failure shape (single test, 5s Jest default
+  timeout, mount-effect-heavy screen, rest of the suite green) as the
+  `verifyEmailScreen.test.tsx` flake C31 root-caused and fixed in
+  `rider-app` (a leaked, never-unmounted renderer in an unrelated earlier
+  test file corrupting the shared Jest worker process for whatever ran
+  next in it).
+- **Why it matters:** if this is the same failure class, there's likely
+  another `driver-app/__tests__/*` file with the same
+  synchronous-render / no-`afterEach`-unmount / unflushed-mount-effect
+  pattern C31 found and fixed in `privacySettingsToggles.test.tsx` —
+  worth the same treatment (find the actual leaking file, not just the
+  file that happens to time out downstream of it).
+- **Not investigated**: out of scope for the docs-only PR that surfaced
+  it — no driver-app test files were read, no leak source identified,
+  not confirmed reproducible under a full local `npx jest --silent`
+  run (the way C31 was confirmed before being called a real bug rather
+  than CI-runner noise). Do that triage before attempting a fix.
+- **Files:** likely `driver-app/__tests__/components/ActivityView.test.tsx`
+  plus whichever earlier-running test file in the same Jest worker is the
+  actual source, per the same investigative pattern used for C31.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

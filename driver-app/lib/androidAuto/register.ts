@@ -45,6 +45,7 @@ import { bumpCarSurfaceGeneration } from './carSurfaceGeneration';
 // module on Android, so iOS never loads it.
 import { startCarLocationService, stopCarLocationService } from './carLocationTask';
 import { startCarSession, stopCarSession } from './carSession';
+import { setCarColorScheme, type CarColorScheme } from './carColorScheme';
 import { triggerDriverEmergency } from '../../hooks/useDriverSafetyTrigger';
 
 const NAV_TEMPLATE_ID = 'spinr-aa-nav';
@@ -647,6 +648,14 @@ export default function registerAutoPlay(): void {
           // press Recenter.
           onDidPan: (translation: { x: number; y: number }) => {
             useCarMapCamera.getState().pan(translation.x, translation.y);
+          },
+          // Android Auto flips day/night from the car's own ambient state, so
+          // this fires mid-drive at dusk. The surface reads the initial value
+          // from its props; without this it would keep a daylight map for the
+          // rest of the night.
+          onAppearanceDidChange: (scheme: CarColorScheme) => {
+            log('color scheme →', scheme);
+            setCarColorScheme(scheme);
           },
           mapButtons: mapButtonsFor(false),
         });

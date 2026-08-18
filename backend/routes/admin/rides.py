@@ -1,5 +1,8 @@
+import csv
+import io
 import logging
 import uuid
+import zipfile
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, Optional
@@ -16,6 +19,13 @@ try:
     from ...settings_loader import get_app_settings
     from ...socket_manager import manager
     from ...utils.audit_logger import log_admin_action
+    from ...utils.dispute_evidence_pack import (
+        build_account_history_summary,
+        build_cover_letter_text,
+        build_gps_trail_rows,
+        build_ride_timeline,
+    )
+    from ...utils.dispute_evidence_pdf import render_invoice_summary_pdf, render_timeline_and_history_pdf
     from ...utils.google_places_new import (
         PLACES_NEW_AUTOCOMPLETE_FIELD_MASK,
         PLACES_NEW_AUTOCOMPLETE_URL,
@@ -38,6 +48,13 @@ except ImportError:
     from settings_loader import get_app_settings
     from socket_manager import manager
     from utils.audit_logger import log_admin_action
+    from utils.dispute_evidence_pack import (
+        build_account_history_summary,
+        build_cover_letter_text,
+        build_gps_trail_rows,
+        build_ride_timeline,
+    )
+    from utils.dispute_evidence_pdf import render_invoice_summary_pdf, render_timeline_and_history_pdf
     from utils.google_places_new import (
         PLACES_NEW_AUTOCOMPLETE_FIELD_MASK,
         PLACES_NEW_AUTOCOMPLETE_URL,
@@ -1886,37 +1903,26 @@ async def admin_send_payable_invoice(
     return {"sent": True, "ride_id": ride_id, "stripe_invoice_id": invoice.id, "invoice_url": invoice_url}
 
 
-@router.get("/rides/{ride_id}/route-map.png")
-async def admin_get_ride_route_map(
-    ride_id: str,
-    admin_user: dict = Depends(get_admin_user),
-):
-    """Proxy a Google Static Maps image for the ride's actual GPS route.
-
-    Keeps the Google Maps API key server-side (prevents client bundle leak)
-    and sidesteps browser CORS when the admin dashboard embeds the image in
-    a generated PDF. Returns a PNG binary.
+async def _fetch_route_map_png_bytes(ride: dict) -> bytes:
+    """Core logic behind GET /rides/{id}/route-map.png, factored out so the
+    dispute-evidence-pack endpoint (C23 item 4) can embed the same image
+    without duplicating the Google Static Maps URL-building / PIPEDA
+    GPS-phase filter. Raises HTTPException on any failure -- callers in a
+    zip-building context should catch and either omit the map or fail the
+    whole pack, per their own risk tolerance.
     """
     import httpx
 
-    ride = await db_supabase.get_ride_details_enriched(ride_id)
-    if not ride:
-        raise HTTPException(status_code=404, detail="Ride not found")
+    ride_id = ride.get("id")
 
     # Serve the pre-rendered snapshot if available (avoids Google API call).
     snapshot_url = ride.get("route_snapshot_url")
     if snapshot_url:
-        import httpx
-
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(snapshot_url)
             if resp.status_code == 200:
-                return Response(
-                    content=resp.content,
-                    media_type="image/png",
-                    headers={"Cache-Control": "private, max-age=3600"},
-                )
+                return resp.content
         except Exception as exc:
             logger.warning("Snapshot fetch failed for ride %s, falling back to Google Static Maps: %s", ride_id, exc)
 
@@ -1978,11 +1984,7 @@ async def admin_get_ride_route_map(
                 resp.text[:200],
             )
             raise HTTPException(status_code=502, detail="Failed to fetch route map")
-        return Response(
-            content=resp.content,
-            media_type="image/png",
-            headers={"Cache-Control": "private, max-age=3600"},
-        )
+        return resp.content
     except httpx.HTTPError as e:
         logger.error(
             "Static Maps fetch error for ride %s",
@@ -1990,6 +1992,114 @@ async def admin_get_ride_route_map(
             exc_info=True,
         )
         raise HTTPException(status_code=502, detail="Failed to fetch route map") from e
+
+
+@router.get("/rides/{ride_id}/route-map.png")
+async def admin_get_ride_route_map(
+    ride_id: str,
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Proxy a Google Static Maps image for the ride's actual GPS route.
+
+    Keeps the Google Maps API key server-side (prevents client bundle leak)
+    and sidesteps browser CORS when the admin dashboard embeds the image in
+    a generated PDF. Returns a PNG binary.
+    """
+    ride = await db_supabase.get_ride_details_enriched(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    png_bytes = await _fetch_route_map_png_bytes(ride)
+    return Response(
+        content=png_bytes,
+        media_type="image/png",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
+@router.get("/rides/{ride_id}/dispute-pack")
+async def admin_get_dispute_evidence_pack(
+    ride_id: str,
+    admin_user: dict = Depends(get_admin_user),
+):
+    """C23 (ACTION_ITEMS.md) Action item 4: zip of everything a support
+    agent needs to respond to a card-network chargeback on this ride --
+    invoice PDF, route-map PNG, ride-timeline + account-history PDF, a
+    GPS-trail CSV, and a draft cover letter. Read-only: this is a *download*
+    for a human to review and edit, never auto-submitted (that's item 5,
+    behind its own explicit-confirm endpoint).
+
+    Looks up the most recent stripe_disputes row for this ride so the pack
+    can reference the actual dispute id/reason/amount; still generates a
+    ride-only pack (with a placeholder dispute reference) if no dispute row
+    exists yet, since a support agent may want to review the ride before a
+    dispute officially lands.
+    """
+    ride = await db_supabase.get_ride_details_enriched(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    try:
+        dispute_rows = await db_supabase.get_rows(
+            "stripe_disputes",
+            {"ride_id": ride_id},
+            order="created_at",
+            desc=True,
+            limit=1,
+        )
+    except Exception as exc:
+        logger.error("dispute-pack: stripe_disputes lookup failed for ride %s: %s", ride_id, exc, exc_info=True)
+        raise HTTPException(status_code=503, detail="ERR_DATABASE") from exc
+    dispute = dispute_rows[0] if dispute_rows else {"stripe_dispute_id": "(no dispute on file)", "reason": "n/a"}
+
+    account_summary = await build_account_history_summary(ride)
+    timeline = build_ride_timeline(ride)
+    gps_rows = build_gps_trail_rows(ride)
+    cover_letter = build_cover_letter_text(ride, dispute, account_summary)
+
+    invoice_pdf = render_invoice_summary_pdf(ride, dispute)
+    timeline_pdf = render_timeline_and_history_pdf(ride, timeline, account_summary)
+
+    # Route map is best-effort -- a missing Google Maps key or upstream
+    # failure shouldn't block the rest of the pack from downloading.
+    try:
+        route_map_png = await _fetch_route_map_png_bytes(ride)
+    except HTTPException as exc:
+        logger.warning("dispute-pack: route map unavailable for ride %s: %s", ride_id, exc.detail)
+        route_map_png = None
+
+    ride_code = ride.get("ride_code") or ride_id
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("invoice.pdf", invoice_pdf)
+        zf.writestr("timeline_and_account_history.pdf", timeline_pdf)
+        if route_map_png:
+            zf.writestr("route_map.png", route_map_png)
+        else:
+            zf.writestr("route_map_UNAVAILABLE.txt", "Route map could not be generated -- see admin logs.")
+
+        csv_buf = io.StringIO()
+        writer = csv.DictWriter(csv_buf, fieldnames=["timestamp", "lat", "lng", "phase"])
+        writer.writeheader()
+        writer.writerows(gps_rows)
+        zf.writestr("gps_trail.csv", csv_buf.getvalue())
+
+        zf.writestr("cover_letter_DRAFT.txt", cover_letter)
+
+    await log_admin_action(
+        admin_user,
+        "dispute_evidence_pack_download",
+        "ride",
+        ride_id,
+        {"stripe_dispute_id": dispute.get("stripe_dispute_id"), "has_route_map": route_map_png is not None},
+    )
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="dispute_evidence_{ride_code}.zip"'},
+    )
 
 
 _HEATMAP_MAX_ROWS = 5_000

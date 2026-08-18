@@ -1886,37 +1886,26 @@ async def admin_send_payable_invoice(
     return {"sent": True, "ride_id": ride_id, "stripe_invoice_id": invoice.id, "invoice_url": invoice_url}
 
 
-@router.get("/rides/{ride_id}/route-map.png")
-async def admin_get_ride_route_map(
-    ride_id: str,
-    admin_user: dict = Depends(get_admin_user),
-):
-    """Proxy a Google Static Maps image for the ride's actual GPS route.
-
-    Keeps the Google Maps API key server-side (prevents client bundle leak)
-    and sidesteps browser CORS when the admin dashboard embeds the image in
-    a generated PDF. Returns a PNG binary.
+async def _fetch_route_map_png_bytes(ride: dict) -> bytes:
+    """Core logic behind GET /rides/{id}/route-map.png, factored out so the
+    dispute-evidence-pack endpoint (C23 item 4) can embed the same image
+    without duplicating the Google Static Maps URL-building / PIPEDA
+    GPS-phase filter. Raises HTTPException on any failure -- callers in a
+    zip-building context should catch and either omit the map or fail the
+    whole pack, per their own risk tolerance.
     """
     import httpx
 
-    ride = await db_supabase.get_ride_details_enriched(ride_id)
-    if not ride:
-        raise HTTPException(status_code=404, detail="Ride not found")
+    ride_id = ride.get("id")
 
     # Serve the pre-rendered snapshot if available (avoids Google API call).
     snapshot_url = ride.get("route_snapshot_url")
     if snapshot_url:
-        import httpx
-
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(snapshot_url)
             if resp.status_code == 200:
-                return Response(
-                    content=resp.content,
-                    media_type="image/png",
-                    headers={"Cache-Control": "private, max-age=3600"},
-                )
+                return resp.content
         except Exception as exc:
             logger.warning("Snapshot fetch failed for ride %s, falling back to Google Static Maps: %s", ride_id, exc)
 
@@ -1978,11 +1967,7 @@ async def admin_get_ride_route_map(
                 resp.text[:200],
             )
             raise HTTPException(status_code=502, detail="Failed to fetch route map")
-        return Response(
-            content=resp.content,
-            media_type="image/png",
-            headers={"Cache-Control": "private, max-age=3600"},
-        )
+        return resp.content
     except httpx.HTTPError as e:
         logger.error(
             "Static Maps fetch error for ride %s",
@@ -1990,6 +1975,29 @@ async def admin_get_ride_route_map(
             exc_info=True,
         )
         raise HTTPException(status_code=502, detail="Failed to fetch route map") from e
+
+
+@router.get("/rides/{ride_id}/route-map.png")
+async def admin_get_ride_route_map(
+    ride_id: str,
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Proxy a Google Static Maps image for the ride's actual GPS route.
+
+    Keeps the Google Maps API key server-side (prevents client bundle leak)
+    and sidesteps browser CORS when the admin dashboard embeds the image in
+    a generated PDF. Returns a PNG binary.
+    """
+    ride = await db_supabase.get_ride_details_enriched(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    png_bytes = await _fetch_route_map_png_bytes(ride)
+    return Response(
+        content=png_bytes,
+        media_type="image/png",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
 
 
 _HEATMAP_MAX_ROWS = 5_000

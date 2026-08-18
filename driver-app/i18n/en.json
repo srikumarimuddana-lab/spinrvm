@@ -193,7 +193,10 @@
     "noNotifications": "No notifications",
     "allCaughtUp": "You're all caught up!",
     "markReadError": "Could not update notification",
-    "markReadErrorBody": "Please check your connection and try again."
+    "markReadErrorBody": "Please check your connection and try again.",
+    "loadFailed": "Couldn't load notifications",
+    "loadFailedBody": "Check your connection and try again.",
+    "retry": "Retry"
   },
   "emergencyContacts": {
     "title": "Emergency Contacts",

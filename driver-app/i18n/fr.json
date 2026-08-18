@@ -193,7 +193,10 @@
     "noNotifications": "Aucune notification",
     "allCaughtUp": "Vous êtes à jour !",
     "markReadError": "Impossible de mettre à jour la notification",
-    "markReadErrorBody": "Vérifiez votre connexion et réessayez."
+    "markReadErrorBody": "Vérifiez votre connexion et réessayez.",
+    "loadFailed": "Impossible de charger les notifications",
+    "loadFailedBody": "Vérifiez votre connexion et réessayez.",
+    "retry": "Réessayer"
   },
   "emergencyContacts": {
     "title": "Contacts d'urgence",

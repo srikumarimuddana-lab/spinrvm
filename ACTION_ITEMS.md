@@ -8417,6 +8417,16 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   only on a hover tooltip) both fixed. **C23 is now fully closed — all 5
   action items done.** Full detail:
   `docs/change-log/2026-08-18-c23-dispute-pack-ui-wiring.md`.
+  **Accessibility follow-up DONE (2026-08-18)**: the deferred
+  `spinr-accessibility-reviewer` pass on the Chargebacks tab found two real
+  blockers — the fetch-failure and download-failure banners had no
+  `role="alert"`, so a screen-reader user with focus elsewhere would never
+  be told either appeared. Fixed. Three lower-severity WARNING items
+  (a speculative dialog-focus-return race on successful submit, no
+  `DialogDescription` on the confirmation dialog, disabled-download-button
+  reason not announced) remain genuinely unverified — need a manual
+  screen-reader/keyboard pass, not silently assumed clean. Full detail:
+  `docs/change-log/2026-08-18-c23-chargebacks-tab-a11y-alert-fix.md`.
 - **Issue/gap:** the webhook records a chargeback and then nothing else
   happens. Specifically:
   1. **No `evidence_due_by`.** Stripe puts

@@ -209,7 +209,10 @@ export default function ChargebacksTab() {
           ) : (
             <>
               {error && (
-                <div className="flex items-center justify-between gap-3 border-b bg-red-50 dark:bg-red-950/30 px-4 py-3 text-sm text-red-700 dark:text-red-400">
+                <div
+                  role="alert"
+                  className="flex items-center justify-between gap-3 border-b bg-red-50 dark:bg-red-950/30 px-4 py-3 text-sm text-red-700 dark:text-red-400"
+                >
                   <span className="flex items-center gap-2">
                     <AlertTriangle className="h-4 w-4" />
                     Failed to load chargebacks. The list below may be incomplete.
@@ -220,7 +223,10 @@ export default function ChargebacksTab() {
                 </div>
               )}
               {downloadError && (
-                <div className="flex items-center justify-between gap-3 border-b bg-red-50 dark:bg-red-950/30 px-4 py-3 text-sm text-red-700 dark:text-red-400">
+                <div
+                  role="alert"
+                  className="flex items-center justify-between gap-3 border-b bg-red-50 dark:bg-red-950/30 px-4 py-3 text-sm text-red-700 dark:text-red-400"
+                >
                   <span className="flex items-center gap-2">
                     <AlertTriangle className="h-4 w-4" />
                     {downloadError}

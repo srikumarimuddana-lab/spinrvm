@@ -2,7 +2,7 @@
 
 Covers the two enforcement points described in the CR's own risk
 mitigation: block go-online and block payout for a driver an operator has
-flagged `dual_run_hold=True` (drivers.dual_run_hold, migration 327) — but
+flagged `dual_run_hold=True` (drivers.dual_run_hold, migration 329) — but
 ONLY when that driver also carries non-empty `legacy_import_metadata`
 (migration 221), since the flag is meaningless for natively-onboarded
 drivers.

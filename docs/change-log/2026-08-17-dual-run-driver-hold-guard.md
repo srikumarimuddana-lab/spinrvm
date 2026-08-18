@@ -23,7 +23,7 @@ The dual-run cutover (old app + new Spinr app running in parallel ahead of the t
 
 Adds the **optional code guard** the CR itself scopes out as a separate, engineering-owned follow-up to the roster-coordination policy question (which remains organizational, not code, and is explicitly NOT resolved by this PR):
 
-1. **New column** `drivers.dual_run_hold BOOLEAN NOT NULL DEFAULT FALSE` (migration 327) — admin-settable, no automated writer anywhere.
+1. **New column** `drivers.dual_run_hold BOOLEAN NOT NULL DEFAULT FALSE` (migration 329) — admin-settable, no automated writer anywhere.
 2. **Go-online guard** (`routes/drivers/status.py::update_driver_status`) — rejects `is_online=True` with a clear 403 when `dual_run_hold=True` AND the driver carries non-empty `legacy_import_metadata`. Placed immediately after the existing authorization check, before any other status/document/subscription gate.
 3. **Payout guard** (`routes/drivers/payouts.py::request_payout`) — same check, same error, placed before the endpoint's existing unconditional 410 (standard cashout has been disabled platform-wide since an earlier change — see §4 "Important scoping note" below).
 4. Reuses the existing `ErrorCode.DRIVER_NOT_AVAILABLE` / new `ErrorKeys.DRIVER_DUAL_RUN_HOLD` i18n key (added to `driver-app/i18n/en.json` only, matching `error_keys.py`'s own documented convention).
@@ -54,7 +54,7 @@ Adds the **optional code guard** the CR itself scopes out as a separate, enginee
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/migrations/327_drivers_dual_run_hold.sql` | New additive column `drivers.dual_run_hold BOOLEAN NOT NULL DEFAULT FALSE` | Storage for the admin-settable hold flag |
+| `backend/migrations/329_drivers_dual_run_hold.sql` | New additive column `drivers.dual_run_hold BOOLEAN NOT NULL DEFAULT FALSE` | Storage for the admin-settable hold flag |
 | `backend/routes/drivers/status.py` | New guard clause in `update_driver_status`, before the ban/suspended checks | Blocks go-online for a held, legacy-imported driver |
 | `backend/routes/drivers/payouts.py` | New guard clause in `request_payout`, before the existing unconditional 410; added `ErrorKeys`/`ErrorCode`/`SpinrException` imports | Blocks payout for a held, legacy-imported driver |
 | `backend/utils/error_keys.py` | New constant `DRIVER_DUAL_RUN_HOLD = "errors.driver.dual_run_hold"` | i18n key for the new error |
@@ -128,7 +128,7 @@ async def request_payout(current_user: dict = Depends(get_current_user)):
 
 - [x] Automated tests: added `backend/tests/test_dual_run_hold_guard.py` (6 new unit tests, all mocked via `patch(...db_supabase...)`, no real DB). Ran via `pytest backend/tests/test_dual_run_hold_guard.py -v` — **6 passed**.
 - [x] Regression check: ran the pre-existing `test_go_online_availability.py`, `test_p1_driver_offline.py`, `test_driver_status_notifications.py`, `test_auto_payout.py`, `test_stripe_account_discovery.py` alongside the new file — see PR body for the exact pass count recorded at PR-open time.
-- [x] `python3 backend/scripts/check_migration.py backend/migrations/327_drivers_dual_run_hold.sql` — all hard checks passed (naming, sequence, RLS-skip-correct, rollback-comment present, no destructive ops).
+- [x] `python3 backend/scripts/check_migration.py backend/migrations/329_drivers_dual_run_hold.sql` — all hard checks passed (naming, sequence, RLS-skip-correct, rollback-comment present, no destructive ops).
 - [x] `ruff check` on all 3 modified Python files — all checks passed.
 - [x] Blast-radius grep performed — see §4, both for the two guarded endpoints and for the new column itself.
 - [x] Reviewed against CLAUDE.md conventions: additive-only migration (no RLS needed, no new query pattern so no index), dual-import pattern followed in `payouts.py`'s try/except block, `ErrorCode`/`ErrorKeys`/`SpinrException` used instead of a bare `HTTPException` string for the new error (matches the rest of `status.py`'s gating style).

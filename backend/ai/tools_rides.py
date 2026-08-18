@@ -17,9 +17,11 @@ except ImportError:  # bare-import runtime (python -m backend.server puts backen
 try:
     from .. import db_supabase
     from ..models.ride_status import RideStatus
+    from ..utils.pii import first_name_only
 except ImportError:
     import db_supabase
     from models.ride_status import RideStatus
+    from utils.pii import first_name_only  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -72,9 +74,16 @@ async def _driver_public(driver_id: Optional[str]) -> Optional[Dict[str, Any]]:
         return None
     info = _pick(driver, _DRIVER_PUBLIC_FIELDS)
     user = await db_supabase.get_user_by_id(driver.get("user_id"))
-    info["name"] = (
-        f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Driver"
-    ) or "Driver"
+    # 2026-08-18 fleet audit: this used to send the driver's full legal name
+    # (first + last) into the model's context on every "who's my driver"
+    # query -- a PIPEDA violation (full names are explicitly forbidden in
+    # AI/analytics payloads) that scrub_pii_deep in tools.py cannot catch,
+    # since a plain name isn't regex-detectable. First-name-only is this
+    # codebase's established driver-display-name convention elsewhere
+    # (utils/pii.py::first_name_only, already used for the rider's name on
+    # the driver-facing WS/push path in routes/rides/matching.py) -- reused
+    # here rather than inventing a second minimization rule.
+    info["name"] = first_name_only(user, fallback="Driver")
     return info
 
 

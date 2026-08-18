@@ -401,6 +401,68 @@ async def recover_stale_route_claims() -> int:
     return recovered
 
 
+BACKSTOP_SWEEP_EVERY_TICKS = 20  # ~5 min at the 15 s tick
+BACKSTOP_GRACE_SECONDS = 5 * 60
+BACKSTOP_LOOKBACK_DAYS = 7
+BACKSTOP_BATCH_LIMIT = 25
+
+
+async def sweep_unsettled_completed_rides() -> int:
+    """Settle completed rides that have no ride_routes row (missed settlement).
+
+    Every completion writer is supposed to create the ride_routes row and queue
+    finalization; the rider-end and admin force-complete paths historically
+    didn't (ride SPR-PE7TTB: 51 breadcrumbs stored, gps_points_count=0, no
+    route, no period-distance audit). This sweep heals recent history and any
+    future missed writer. Replay-safe: settle_completed_ride_geometry skips
+    rides that already have a ride_routes row, and its underlying writers are
+    idempotent, so concurrent replicas collapse harmlessly.
+    """
+    # Lazy import: ride_settlement imports mark_route_pending from this module.
+    try:
+        from .ride_settlement import settle_completed_ride_geometry
+    except ImportError:
+        from utils.ride_settlement import settle_completed_ride_geometry  # type: ignore
+
+    now = _now()
+    rides = await db_supabase.get_rows(
+        "rides",
+        {
+            "status": "completed",
+            "ride_completed_at": {
+                "$gte": (now - timedelta(days=BACKSTOP_LOOKBACK_DAYS)).isoformat(),
+                # Grace window so a normal driver completion (which writes the
+                # row synchronously) is never raced by the sweep.
+                "$lte": (now - timedelta(seconds=BACKSTOP_GRACE_SECONDS)).isoformat(),
+            },
+            "driver_id": {"$notnull": True},
+        },
+        order="ride_completed_at",
+        desc=True,
+        limit=200,
+        columns="id",
+    )
+    if not rides:
+        return 0
+    ride_ids = [r["id"] for r in rides if r.get("id")]
+    settled_rows = await db_supabase.get_rows(
+        "ride_routes", {"ride_id": {"$in": ride_ids}}, limit=len(ride_ids), columns="ride_id"
+    )
+    already = {r.get("ride_id") for r in settled_rows}
+    missing = [rid for rid in ride_ids if rid not in already]
+    settled = 0
+    for rid in missing[:BACKSTOP_BATCH_LIMIT]:
+        if await settle_completed_ride_geometry(rid, trigger="backstop_sweep"):
+            settled += 1
+    if missing:
+        logger.info(
+            "settlement backstop: %d/%d unsettled completed rides handled this sweep",
+            settled,
+            len(missing),
+        )
+    return settled
+
+
 async def route_finalizer_tick() -> int:
     """Recover stale work, atomically claim one route, then finalize it."""
     await recover_stale_route_claims()
@@ -413,13 +475,22 @@ async def route_finalizer_tick() -> int:
 
 async def route_finalizer_loop(interval_seconds: int = ROUTE_FINALIZER_INTERVAL_SECONDS) -> None:
     """Replay-safe 15-second loop for versioned route finalization."""
+    tick = 0
     while True:
         try:
+            # Backstop first on the sweep ticks so a healed ride can be
+            # claimed by this same tick's finalization pass.
+            if tick % BACKSTOP_SWEEP_EVERY_TICKS == 0:
+                try:
+                    await sweep_unsettled_completed_rides()
+                except Exception:
+                    logger.error("settlement backstop sweep failed", exc_info=True)
             await route_finalizer_tick()
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.error("route finalizer tick failed", exc_info=True)
+        tick += 1
         await asyncio.sleep(interval_seconds)
 
 

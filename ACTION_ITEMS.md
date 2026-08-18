@@ -10363,31 +10363,81 @@ how much they de-risk a public launch._
   documented-but-deferred option (b): a post-merge check to catch the
   narrower true-race window a per-PR check structurally cannot.
 
-### C37. `driver-app-test`: possible leaked-renderer flake in `ActivityView.test.tsx`, same failure shape as the C31 rider-app flake
+### C37. `driver-app-test`: leaked Animated-timer update in `RideOfferPanel.test.tsx` corrupted the shared Jest worker, intermittently timing out `ActivityView.test.tsx`
 
-- [ ] **Status:** open, flagged not investigated. Noticed 2026-08-18 on a
-  docs-only PR (#4191, `ACTION_ITEMS.md` C25 re-verification — zero
-  driver-app code touched) whose `driver-app-test` job still failed:
-  `ActivityView.test.tsx › keeps ride history visible when earnings
-  loading fails` hit `Exceeded timeout of 5000 ms for a test`
-  (`__tests__/components/ActivityView.test.tsx:92`), 533/534 tests
-  otherwise passing — same failure shape (single test, 5s Jest default
-  timeout, mount-effect-heavy screen, rest of the suite green) as the
-  `verifyEmailScreen.test.tsx` flake C31 root-caused and fixed in
-  `rider-app` (a leaked, never-unmounted renderer in an unrelated earlier
-  test file corrupting the shared Jest worker process for whatever ran
-  next in it).
-- **Why it matters:** if this is the same failure class, there's likely
-  another `driver-app/__tests__/*` file with the same
-  synchronous-render / no-`afterEach`-unmount / unflushed-mount-effect
-  pattern C31 found and fixed in `privacySettingsToggles.test.tsx` —
-  worth the same treatment (find the actual leaking file, not just the
-  file that happens to time out downstream of it).
-- **Not investigated**: out of scope for the docs-only PR that surfaced
-  it — no driver-app test files were read, no leak source identified,
-  not confirmed reproducible under a full local `npx jest --silent`
-  run (the way C31 was confirmed before being called a real bug rather
-  than CI-runner noise). Do that triage before attempting a fix.
+- [x] **Status:** fixed 2026-08-18. Root-caused by pulling the failing job's
+  raw log (not just the summary) for the actual failing run (commit
+  `09146188`, PR #4191) and reading the stack trace immediately preceding
+  `FAIL ActivityView.test.tsx`, rather than re-guessing from the C31
+  pattern:
+  ```
+  console.error
+    An update to Animated(View) inside a test was not wrapped in act(...).
+    ...
+    at ... createAnimatedPropsHook.js:131:20
+    at AnimatedProps._callback (createAnimatedPropsHook.js:71:36)
+    ...
+    at Object.runOnlyPendingTimers (__tests__/components/RideOfferPanel.test.tsx:83:10)
+
+  FAIL __tests__/components/ActivityView.test.tsx (7.216 s)
+    ● ActivityView › keeps ride history visible when earnings loading fails
+      thrown: "Exceeded timeout of 5000 ms for a test.
+  ```
+- **Root cause:** `RideOfferPanel.test.tsx`'s own comment already documented
+  that the component "starts Animated.spring/timing loops on mount with no
+  cleanup on unmount" and used fake timers so Jest could safely discard
+  them at teardown. But `@testing-library/react-native` registers its own
+  `afterEach(cleanup)` at **import time** (top of the file, before any
+  `describe`/`beforeEach`/`afterEach` in the file body runs), and Jest runs
+  `afterEach` hooks in registration order — so RTL's cleanup unmounted the
+  tree *first*, and only then did this file's own `afterEach` call
+  `jest.runOnlyPendingTimers()`, flushing the component's still-pending
+  Animated callback **against an already-unmounted renderer, outside any
+  `act()`**. That produced the "not wrapped in act(...)" warning and left
+  an unguarded React scheduler update not fully discharged before the test
+  file's teardown returned — which then bled into whichever test file the
+  same Jest worker happened to pick up next (`ActivityView.test.tsx` on the
+  failing run), same underlying failure class as C31 (leaked async work
+  escaping a file's boundary and corrupting the next file in the shared
+  worker), different trigger (a fake-timer-driven Animated callback instead
+  of a raw unmounted `act()` render).
+- **Fix:** `driver-app/__tests__/components/RideOfferPanel.test.tsx` — wrap
+  the pending-timer flush in `act()` so React processes and fully
+  discharges the update synchronously, before this file's own teardown
+  completes, instead of leaving it to fire asynchronously post-unmount:
+  ```diff
+  -import { render, fireEvent } from '@testing-library/react-native';
+  +import { act, render, fireEvent } from '@testing-library/react-native';
+   ...
+   afterEach(() => {
+  -  jest.runOnlyPendingTimers();
+  +  act(() => {
+  +    jest.runOnlyPendingTimers();
+  +  });
+     jest.useRealTimers();
+   });
+  ```
+- **Blast radius:** isolated to this one test file. `RideOfferPanel.tsx`
+  (the component under test) is untouched — this is a test-only fix, no
+  production code changed. No other `driver-app/__tests__/*` file matches
+  this exact pattern (fake timers + `runOnlyPendingTimers()` in `afterEach`
+  on a component with uncleaned-up mount-time Animated loops) — grepped for
+  `runOnlyPendingTimers` across `driver-app/__tests__/`, only this file
+  uses it in an `afterEach`.
+- **Verification performed:** `yarn jest __tests__/components/RideOfferPanel.test.tsx __tests__/components/ActivityView.test.tsx --verbose`
+  — both suites green, zero "not wrapped in act(...)" console.error output
+  (previously present). Full local suite: `yarn jest --silent` → 63 suites,
+  534/534 tests passing (same count as before the fix — no regressions,
+  no coverage change since this only reorders/wraps an existing
+  `afterEach` call). Not run against the actual CI runner under worker
+  contention (the condition that made this intermittent rather than
+  deterministic locally) — will confirm via the PR's own `driver-app-test`
+  job.
+- **Not verified:** whether this was the *only* leak source for this
+  failure shape — if `ActivityView.test.tsx` times out again on a future
+  CI run with a *different* preceding-file stack trace, that's a separate
+  leak to root-cause the same way (read the actual job log, don't
+  re-assume the same cause).
 - **Files:** likely `driver-app/__tests__/components/ActivityView.test.tsx`
   plus whichever earlier-running test file in the same Jest worker is the
   actual source, per the same investigative pattern used for C31.

@@ -104,7 +104,7 @@
     "download_requested": "Requested",
     "download_requested_msg": "Your data export has been requested. You will receive an email with a download link within 24 hours.",
     "delete_confirm_title": "Delete Account",
-    "delete_confirm_msg": "This will schedule your account for deletion after a 30-day grace period as required by PIPEDA. This cannot be undone.",
+    "delete_confirm_msg": "Your account will be locked right away. You can reactivate it any time by signing back in, before ride and trip records are permanently deleted after the 7-year retention period Saskatchewan's Transportation Act requires.",
     "delete_my_account": "Delete My Account",
     "footer": "Your data is handled in accordance with our Privacy Policy. Spinr never sells your personal information."
   },

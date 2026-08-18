@@ -137,6 +137,19 @@ class MemorySqliteDatabase {
       return;
     }
     if (sql.includes('INSERT INTO trip_location_quarantine')) {
+      // Bulk form (purgeAll): reason is inline SQL, params = [quarantinedAt] —
+      // copies EVERY outbox row. Per-row form (acknowledge rejections):
+      // params = [reason, quarantinedAt, sessionId, sequence].
+      if (params.length === 1) {
+        const reasonMatch = sql.match(/'([a-z_]+)'/);
+        const bulkReason = reasonMatch ? reasonMatch[1] : 'unknown';
+        for (const [key, point] of this.outbox) {
+          if (!this.quarantine.has(key)) {
+            this.quarantine.set(key, { ...point, rejection_reason: bulkReason });
+          }
+        }
+        return;
+      }
       const [rejectionReason, , sessionId, sequence] = params as [string, string, string, number];
       const point = this.outbox.get(`${sessionId}:${sequence}`);
       if (point) this.quarantine.set(`${sessionId}:${sequence}`, { ...point, rejection_reason: rejectionReason });
@@ -320,7 +333,7 @@ describe('TripLocationOutbox', () => {
 });
 
 describe('purgeAll (sign-out)', () => {
-  it('drops pending points, quarantine, and sessions', async () => {
+  it('preserves unacknowledged points into quarantine, then clears outbox + sessions', async () => {
     const database = new MemorySqliteDatabase();
     const outbox = createTripLocationOutbox({
       openDatabase: async () => database as never,
@@ -331,17 +344,23 @@ describe('purgeAll (sign-out)', () => {
     await outbox.startSession('ride-1');
     await outbox.enqueue(makeFix());
     await outbox.enqueue(makeFix({ monotonic_ms: 2345 }));
+    await outbox.enqueue(makeFix({ monotonic_ms: 3456 })); // the un-flushed tail
     await outbox.acknowledge('session-purge', 0, [{ sequence_number: 1, reason: 'stale_capture' }]);
-    expect(database.outbox.size + database.quarantine.size + database.sessions.size).toBeGreaterThan(0);
+    const preQuarantine = database.quarantine.size;
 
     await outbox.purgeAll();
 
-    // Raw coordinates must not survive sign-out anywhere in the file — a
-    // shared/rented vehicle would otherwise upload them under the next
-    // driver's session.
+    // Sign-out must never destroy location evidence (SGI/billing): unacked
+    // points move to quarantine — which no flush path ever reads, so the next
+    // account on a shared device cannot upload them — and age off via the
+    // prune TTL. The active outbox and sessions are cleared.
     expect(database.outbox.size).toBe(0);
-    expect(database.quarantine.size).toBe(0);
     expect(database.sessions.size).toBe(0);
+    expect(database.quarantine.size).toBeGreaterThanOrEqual(preQuarantine);
+    const preserved = [...database.quarantine.values()].filter(
+      (p) => p.rejection_reason === 'signout_unflushed',
+    );
+    expect(preserved.length).toBeGreaterThan(0);
   });
 
   it('is a no-op on an untouched outbox', async () => {

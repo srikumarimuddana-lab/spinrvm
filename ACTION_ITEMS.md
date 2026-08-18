@@ -10512,6 +10512,52 @@ how much they de-risk a public launch._
   plus whichever earlier-running test file in the same Jest worker is the
   actual source, per the same investigative pattern used for C31.
 
+### C38. `routes/lost_and_found.py`'s except-ImportError fallback branch was missing a `DuplicateRecordError` binding present in the try branch — latent `NameError` if the dual-import ever took the fallback path
+
+- [x] **Status:** FIXED (2026-08-18) — found on PR #4211's own `backend-test`
+  CI run (unrelated PR, only `backend/requirements.txt` +
+  `ACTION_ITEMS.md` touched — confirmed via `git diff origin/main..HEAD
+  --stat`), surfaced by `test_dual_import_parity.py`'s own regression
+  test: `AssertionError: Names bound in the try branch but missing from
+  the except ImportError fallback ... assert not
+  {'routes/lost_and_found.py': ['DuplicateRecordError']}`.
+- **Root cause**: the file's dual-import block (CLAUDE.md's documented
+  `try: from .routes.X import ... / except ImportError: from routes.X
+  import ...` pattern) imports `DuplicateRecordError` in the try branch
+  (`from ..utils.error_handling import DuplicateRecordError`) but the
+  except-ImportError fallback branch never imported it — a latent bug
+  that would only surface as a real `NameError` at the `except
+  (DuplicateRecordError, Exception) as exc:` handler (line 217) on a
+  request that hit an actual `DuplicateRecordError`, and only when the
+  process was running under the fallback import path (`python -m
+  backend.server` vs top-level, per CLAUDE.md's dual-import convention)
+  — never exercised in this repo's own test/CI environment, which is why
+  it went undetected until the dedicated parity test caught it
+  structurally instead of by triggering the actual `NameError`.
+- **Fix**: added the missing import to the fallback branch, mirroring
+  the try branch exactly:
+  ```diff
+   except ImportError:
+       import db_supabase  # type: ignore
+       from dependencies import get_current_user  # type: ignore
+       from features import send_push_notification  # type: ignore
+       from services.zoho_desk_integration import create_ticket_for_lost_and_found  # type: ignore
+  +    from utils.error_handling import DuplicateRecordError  # type: ignore
+  ```
+- **Blast radius**: isolated — one import line in one file's fallback
+  branch, adding a name that already exists at that scope via the try
+  branch on the normal (non-fallback) import path. No other file reads
+  or imports from this except-branch's names.
+- **Verification performed**: `pytest tests/test_dual_import_parity.py`
+  → 3 passed (was 1 failed before). `pytest tests/ -k lost_and_found` →
+  43 passed, 1 skipped (unaffected, confirming no behavior change on the
+  normal import path).
+- **Not verified**: the actual fallback-import code path itself (running
+  the app via top-level `import routes.lost_and_found` instead of
+  `backend.routes.lost_and_found`) — the parity test verifies the two
+  branches bind the same names statically via AST inspection, not by
+  actually exercising both import paths at runtime.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

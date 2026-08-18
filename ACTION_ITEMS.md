@@ -8338,6 +8338,37 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   an alert rule on the `spinr_alert=dispute_evidence_due_soon` tag (or the
   pre-existing `CHARGEBACK:` log line) to page on-call. Full detail:
   `docs/change-log/2026-08-17-c23-dispute-evidence-reminder-loop.md`.
+  **Action item 3 of 5**: read-only "Chargebacks" tab on the admin Disputes
+  page + its backing `GET /disputes/chargebacks` endpoint — open as PR #4165
+  at time of writing, not yet merged to `main`.
+  **Action items 4 and 5 of 5 DONE (2026-08-18, backend only)**: `GET
+  /rides/{ride_id}/dispute-pack` (`routes/admin/dispute_pack_download.py`,
+  `require_module("support")`) zips an invoice-summary PDF, the existing
+  route-map PNG, a ride-timeline + account-history PDF, a GPS-trail CSV,
+  and a draft cover letter. `POST /disputes/{dispute_id}/submit-evidence`
+  (`routes/admin/dispute_evidence_submission.py`) calls
+  `stripe.Dispute.modify(evidence=...)` to actually submit — ships dark
+  behind a new `dispute_stripe_evidence_submission_enabled` app_settings
+  flag (default off), requires an explicit `confirm: true` per request, and
+  is gated by `require_super_admin` (stricter than item 4's general
+  "support" gate — this is a real, effectively irreversible external
+  write). `spinr-security-auditor` caught two real issues before merge: the
+  pack endpoint initially inherited `require_module("rides")` from
+  `rides_router` (over-granting to ops/dispatch admins, under-granting to
+  the actual support-admin audience) — fixed by moving it to its own
+  router; and the ride-timeline builder was labeling offered-but-unassigned
+  drivers with their full name, contradicting this feature's own
+  driver-code-only PIPEDA policy — fixed by dropping per-driver identifiers
+  from offer events entirely. `spinr-money-auditor` caught that the
+  idempotency claim on `evidence_submitted_at` was taken *after* the live
+  Stripe call rather than before — fixed so a lost claim race 409s before
+  any Stripe call happens, with rollback on Stripe failure so a genuine
+  retry isn't permanently blocked. **Not done**: the admin-dashboard UI
+  wiring (a "Download evidence pack" button and a "Submit to Stripe"
+  confirmation flow on the Chargebacks tab) is deferred until PR #4165
+  (item 3) merges, since the tab component it would extend doesn't exist on
+  `main` yet. Full detail:
+  `docs/change-log/2026-08-18-c23-dispute-evidence-pack-and-submission.md`.
 - **Issue/gap:** the webhook records a chargeback and then nothing else
   happens. Specifically:
   1. **No `evidence_due_by`.** Stripe puts

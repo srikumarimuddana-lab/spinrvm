@@ -363,20 +363,21 @@ export class TripLocationOutbox {
   }
 
   /**
-   * Drop every row from the outbox, including quarantined points.
+   * Sign-out purge: PRESERVE unacknowledged points into quarantine, then clear
+   * the active outbox and sessions.
    *
-   * Only for sign-out. Everywhere else, an unacknowledged point is retained on
-   * purpose — a trip's billed distance and its SGI per-insurance-period audit
-   * trail are settled from these breadcrumbs, so the recorder never discards one
-   * that the server hasn't confirmed. Sign-out is the one case where retention
-   * is the wrong answer: these are raw coordinates in an unencrypted SQLite file
-   * belonging to a driver who is no longer using the device, and on a shared or
-   * rented vehicle the next sign-in would upload them under a different
-   * driver's session.
-   *
-   * Accepts the data loss that implies. Any points still pending at sign-out are
-   * gone; a driver signing out mid-trip loses that tail. The trade is
-   * deliberate — see the Change Impact Log for 2026-07-29.
+   * This reverses the 2026-07-29 deliberate-discard decision (which dropped a
+   * mid-trip sign-out's GPS tail forever — an SGI/billing evidence loss the
+   * owner has ruled out: location evidence must never be silently destroyed).
+   * The privacy properties that motivated the old behaviour are kept by
+   * construction instead of by deletion:
+   *   - quarantine rows are NEVER uploaded — no flush path reads the table, so
+   *     the next sign-in on a shared device cannot post another driver's
+   *     points under its own session;
+   *   - no network is needed here (authStore wipes tokens BEFORE logout
+   *     callbacks run, so an upload could not authenticate anyway);
+   *   - retention is bounded: the prune pass TTLs quarantine at 14 days and
+   *     caps it at 5k rows, so the coordinates age off the device.
    *
    * Runs in one exclusive transaction so a concurrent enqueue cannot interleave
    * and leave orphan points behind a deleted session row.
@@ -384,8 +385,21 @@ export class TripLocationOutbox {
   async purgeAll(): Promise<void> {
     const database = await this.getDatabase();
     await database.withExclusiveTransactionAsync(async (transaction) => {
+      await transaction.runAsync(
+        `INSERT INTO trip_location_quarantine (
+          session_id, sequence_number, ride_id, captured_at, monotonic_ms,
+          lat, lng, accuracy, speed, heading, altitude, source, mocked,
+          is_completion_fix, rejection_reason, quarantined_at
+        )
+        SELECT
+          session_id, sequence_number, ride_id, captured_at, monotonic_ms,
+          lat, lng, accuracy, speed, heading, altitude, source, mocked,
+          is_completion_fix, 'signout_unflushed', ?
+        FROM trip_location_outbox
+        ON CONFLICT(session_id, sequence_number) DO NOTHING`,
+        [this.now()],
+      );
       await transaction.runAsync('DELETE FROM trip_location_outbox');
-      await transaction.runAsync('DELETE FROM trip_location_quarantine');
       await transaction.runAsync('DELETE FROM trip_location_sessions');
     });
   }

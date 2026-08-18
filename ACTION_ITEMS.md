@@ -8508,8 +8508,26 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 
 ### C35. Driver-app scheduled-ride offers carry no signal distinguishing them from on-demand offers
 
-- [ ] **Status:** open (filed 2026-08-17, same corporate/driver-scoped
-  follow-up as C34). Cosmetic/UX-only — confirmed functionally harmless.
+- [x] **Status:** closed 2026-08-17. `_match_driver_to_ride_attempt`
+  (`backend/routes/rides/matching.py`) now includes
+  `"is_scheduled": bool(ride.get("is_scheduled"))` in the driver-facing
+  dispatch offer payload — same "originally scheduled" semantics already
+  used by `routes/drivers/ride_cancel.py`'s `_was_scheduled` (true even
+  after the ride has since transitioned to `searching`). Threaded through
+  `driver-app/store/driverStore.ts`'s `IncomingRide` type (including the
+  `fetchActiveRide` REST-fallback hydration path) and the WS
+  `new_ride_assignment` handler in `driver-app/hooks/useDriverDashboard.ts`.
+  `RideOfferPanel.tsx` renders a small indigo "Pre-booked" badge when
+  present, matching the existing WAV/Quiet-ride/Cash badge-row style;
+  renders nothing when absent/false, so it's backward-compatible with any
+  offer payload shape that predates this field. Purely additive metadata
+  — zero dispatch-timing, matching-logic, or state-machine change. New
+  tests: `backend/tests/test_rides_matching_coverage.py` (dispatch
+  payload carries `is_scheduled: true`/`false` correctly) and
+  `driver-app/__tests__/components/RideOfferPanel.test.tsx` (badge
+  renders/hides correctly). `pytest tests/test_rides_matching_coverage.py -q`
+  → 101 passed (combined run with C34's suites, see above).
+  `npx jest __tests__/components/RideOfferPanel.test.tsx` → 20 passed.
 - **Issue/gap:** a scheduled ride dispatches to drivers via the identical
   offer/accept/timeout mechanism as an immediate ride — confirmed sound,
   `_dispatch_scheduled_ride` (`utils/scheduled_rides.py:424-611`) calls the

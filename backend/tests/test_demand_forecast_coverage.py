@@ -189,10 +189,24 @@ class TestForecastDemand:
 
     @pytest.mark.anyio
     async def test_peak_detection_flags_highest_value_hours(self, monkeypatch):
-        """Hour 18 (0.90) in the default pattern is always >= 75% of the
-        24h max — must be flagged as a peak."""
+        """Hour 18 (0.90) is the default pattern's global max, so within a
+        single-day window it is always >= 75% of the 24h max and must be
+        flagged as a peak.
+
+        The clock is frozen at a midnight start deliberately: forecast_demand
+        windows 24h from ``datetime.now()``, and a window that spans two
+        weekdays mixes two DAY_MULTIPLIERS — e.g. started Friday evening, the
+        Saturday x1.25 hours outrank Friday's hour 18, and this assertion
+        fails purely because of the wall-clock time the suite ran at (found
+        as a real CI flake on PR #3954, run at Fri 19:04 UTC)."""
         from backend.utils import demand_forecast
 
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 1, 5, 0, 0, tzinfo=tz or timezone.utc)  # Monday 00:00 UTC
+
+        monkeypatch.setattr(demand_forecast, "datetime", _FrozenDatetime)
         monkeypatch.setattr(demand_forecast.db, "get_rows", AsyncMock(return_value=[]))
         forecast = await demand_forecast.forecast_demand(hours_ahead=24)
         peak_hours = {f["hour"] for f in forecast if f["is_peak"]}

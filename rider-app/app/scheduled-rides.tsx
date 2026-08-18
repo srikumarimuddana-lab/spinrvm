@@ -51,10 +51,21 @@ export default function ScheduledRidesScreen() {
   };
 
   const handleCancel = (rideId: string) => {
+    // C29: server-computed, flag-gated preview of the notice-window
+    // cancellation fee (backend/services/cancellation_service.py). Only
+    // present on the ride when scheduled_ride_notice_window_fee_enabled is
+    // on AND this ride's current timing would actually trigger it — so
+    // when the flag is off (default in production today) this is always
+    // undefined and the message below is unchanged.
+    const ride = scheduledRides.find((r: any) => r.id === rideId) as any;
+    const feeAmount = ride?.notice_window_fee_amount;
+    const message = feeAmount
+      ? `Are you sure you want to cancel this scheduled ride? A $${Number(feeAmount).toFixed(2)} late-cancellation fee may apply.`
+      : 'Are you sure you want to cancel this scheduled ride?';
     setConfirmSheet({
       visible: true,
       title: 'Cancel Scheduled Ride',
-      message: 'Are you sure you want to cancel this scheduled ride?',
+      message,
       variant: 'warning',
       buttons: [
         {

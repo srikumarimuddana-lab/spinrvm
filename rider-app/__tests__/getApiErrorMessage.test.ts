@@ -88,6 +88,70 @@ describe('getApiErrorMessage', () => {
     expect(getApiErrorMessage({ response: { status: 500, data: {} } }, FALLBACK)).toBe(FALLBACK);
   });
 
+  // Live-testing report: the booking screen rendered "Booking Failed —
+  // undefined is not a function". That is Hermes crash text, not a backend
+  // rejection: a client-side throw inside the booking handler lands in the
+  // same catch as an API error, and its `.message` was passed straight to the
+  // toast. The rider saw engine gibberish where the real reason belonged.
+  describe('engine-generated crashes never become toast copy', () => {
+    const BOOKING_FALLBACK = 'Failed to book ride. Please try again.';
+
+    it.each([
+      // Hermes / JSC (React Native)
+      'undefined is not a function',
+      "undefined is not an object (evaluating 'ride.id')",
+      "null is not an object (evaluating 'estimate.total_fare')",
+      "confirmPayment.call is not a function (it is undefined)",
+      // V8 / web (admin dashboard shares this client)
+      "Cannot read properties of undefined (reading 'total_fare')",
+      "Cannot read property 'id' of null",
+      'estimates.find is not a function',
+      'routePolyline is not iterable',
+    ])('falls back instead of leaking %p', (message) => {
+      expect(getApiErrorMessage(new TypeError(message), BOOKING_FALLBACK)).toBe(BOOKING_FALLBACK);
+    });
+
+    it('filters engine crashes that arrive with the name stripped', () => {
+      // Rethrown as a plain object across a store/bridge boundary: `message`
+      // survives, `name` does not.
+      expect(getApiErrorMessage({ message: 'undefined is not a function' }, BOOKING_FALLBACK)).toBe(
+        BOOKING_FALLBACK,
+      );
+    });
+
+    it('filters ReferenceError and RangeError by name', () => {
+      expect(getApiErrorMessage(new ReferenceError('Analytics is not defined'), BOOKING_FALLBACK)).toBe(
+        BOOKING_FALLBACK,
+      );
+      expect(getApiErrorMessage(new RangeError('Maximum call stack size exceeded'), BOOKING_FALLBACK)).toBe(
+        BOOKING_FALLBACK,
+      );
+    });
+
+    it('still prefers the backend body when a crash-shaped error also carries one', () => {
+      // Defence in depth: the response body is checked before `.message`, so a
+      // real 402 keeps its reason even if the thrown object looks engine-ish.
+      const err = Object.assign(new TypeError('undefined is not a function'), {
+        response: { status: 402, data: { detail: 'Your card was declined.' } },
+      });
+      expect(getApiErrorMessage(err, BOOKING_FALLBACK)).toBe('Your card was declined.');
+    });
+
+    it('leaves deliberately thrown domain messages alone', () => {
+      // rideStore.createRide throws these as real rider-facing copy — they are
+      // plain Errors, not engine crashes, and must survive the filter.
+      expect(getApiErrorMessage(new Error('A ride is already active'), BOOKING_FALLBACK)).toBe(
+        'A ride is already active',
+      );
+      expect(
+        getApiErrorMessage(
+          new Error('Your destination looks too close to your pickup. Please re-select it so we price the trip correctly.'),
+          BOOKING_FALLBACK,
+        ),
+      ).toContain('too close to your pickup');
+    });
+  });
+
   it('never leaks the bare "Request failed" extractor sentinel', () => {
     expect(getApiErrorMessage(new Error('Request failed'), FALLBACK)).toBe(FALLBACK);
   });

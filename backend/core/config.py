@@ -140,10 +140,22 @@ class Settings(BaseSettings):
 
     # Card pre-authorization buffer (PAY pre-auth). At booking we place a manual-
     # capture hold of (estimated_fare + this buffer) on the rider's card/Apple Pay
-    # so a post-trip tip can be captured on the SAME PaymentIntent (one Stripe fee)
-    # and a dead card is caught BEFORE dispatch. Tunable via env without redeploy;
+    # so a dead card is caught BEFORE dispatch. Tunable via env without redeploy;
     # money value so it is a Decimal, never a float. Applies to card source only.
-    RIDE_AUTH_BUFFER_CAD: Decimal = Decimal("10.00")
+    #
+    # DEFAULT IS 0.00 — the hold equals the fare the rider was quoted.
+    # It used to be 10.00 to leave room for a post-trip tip on the same
+    # PaymentIntent, but that made a $5 ride show a $15 pending charge on the
+    # rider's bank feed, which reads as an overcharge. A tip now rides on an
+    # *incremental authorization* instead (see utils/stripe_charge.increment_
+    # authorization), which needs no pre-reserved headroom, and falls back to a
+    # separate tip charge when the card does not support incrementing.
+    #
+    # Safe at 0.00 ONLY while settlement cannot exceed the booking-time fare —
+    # i.e. while app_settings.fare_lock_enabled is TRUE (migration 248). The
+    # booking path re-checks that flag and restores a proportional buffer if the
+    # lock is ever turned off; do not rely on this default alone.
+    RIDE_AUTH_BUFFER_CAD: Decimal = Decimal("0.00")
 
     # Public tracking page base URL — used when generating shareable trip links.
     # Customer links are clean: "{TRACKING_BASE_URL}/{token}". The tracking

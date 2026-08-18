@@ -575,6 +575,34 @@ class TestDocumentRegressions:
         assert "drivers" in inserted_tables, "Expected a drivers row to be auto-created during onboarding upload"
 
     @pytest.mark.asyncio
+    async def test_link_document_autocreate_sets_regulatory_defaults(self):
+        # ACTION_ITEMS.md B13: this is the third of three real driver
+        # auto-create paths found leaving regulatory_authority/
+        # regulatory_region NULL. Confirms the fix reaches this path too.
+        from documents import LinkDocumentRequest, link_driver_document
+
+        mock_user = {"id": "user_888", "is_driver": False, "first_name": "C", "last_name": "D", "phone": "+1"}
+        doc = LinkDocumentRequest(
+            requirement_id="drivers_license",
+            document_url="https://test.supabase.co/storage/v1/object/sign/driver-documents/license.jpg",
+            side="front",
+            document_type="image/jpeg",
+        )
+
+        with (
+            patch("documents.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("documents.db_supabase.insert_one", AsyncMock(return_value={})) as insert_one,
+            patch("documents.db_supabase.update_one", AsyncMock(return_value={})),
+            patch("documents._supersede_and_flag_pending_review", AsyncMock(return_value=None)),
+        ):
+            await link_driver_document(doc_data=doc, current_user=mock_user)
+
+        driver_call = next(c for c in insert_one.call_args_list if c.args[0] == "drivers")
+        inserted_driver = driver_call.args[1]
+        assert inserted_driver["regulatory_authority"] == "SGI"
+        assert inserted_driver["regulatory_region"] == "SK"
+
+    @pytest.mark.asyncio
     async def test_link_document_uses_service_area_requirement(self):
         """Regression: when the driver's service area configures the requirement,
         the endpoint must synthesise the req from that area entry — and must NOT

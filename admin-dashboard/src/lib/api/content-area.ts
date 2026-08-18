@@ -23,13 +23,27 @@ export const updateFaq = (id: string, data: any) =>
 export const deleteFaq = (id: string) =>
     request<any>(`/api/admin/faqs/${id}`, { method: "DELETE" });
 
-/* ── Legal Documents (per-audience ToS / Privacy) ─────────────── */
+/* ── Legal Documents (per-audience ToS / Privacy + the broader set of
+   standalone policy pages under docs/legal/ — keep this union in sync with
+   backend/routes/admin/legal_documents.py's ALLOWED_TYPES) ─────────────── */
+export type LegalDocType =
+    | "tos"
+    | "privacy"
+    | "community-guidelines"
+    | "non-discrimination"
+    | "accessibility"
+    | "cancellation-fees"
+    | "promotions-referral"
+    | "insurance-periods"
+    | "deactivation-appeals"
+    | "background-check-consent";
+
 export const getLegalDocuments = () =>
     request<any[]>("/api/admin/legal-documents");
 
 export const upsertLegalDocument = (data: {
     audience: "rider" | "driver";
-    type: "tos" | "privacy";
+    type: LegalDocType;
     content: string;
 }) =>
     request<any>("/api/admin/legal-documents", {

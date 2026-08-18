@@ -24,7 +24,8 @@ import { useWorkProfileStore } from '../store/workProfileStore';
 import { showToast } from '../store/toastStore';
 import type { Ride, RideRequiresAction } from '../store/rideStore';
 import ConfirmSheet from '../components/ConfirmSheet';
-import api, { getApiErrorMessage } from '@shared/api/client';
+import api, { getApiErrorMessage, isEngineError } from '@shared/api/client';
+import { recordNonFatal } from '../utils/crashlytics';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { Analytics } from '@shared/analytics';
@@ -146,7 +147,6 @@ function PaymentConfirmScreenContent() {
       // elsewhere; neither useCorporate nor selectedCorporateId is a dep of
       // this effect (workModeEnabled/corporateAccounts.length are), so no
       // loop.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setUseCorporate(true);
       setSelectedCorporateId(prev => prev ?? activeCompanyId ?? firstCorporateAccountId ?? null);
     }
@@ -220,6 +220,15 @@ function PaymentConfirmScreenContent() {
         router.replace({ pathname: '/driver-arriving', params: { rideId: bookedRide.id } } as any);
       }
     } catch (error: any) {
+      // Same capture as ride-options' proceedWithBooking: this catch also
+      // swallows client-side crashes (notably confirmPayment() when the
+      // Stripe native module is absent or older than the JS bundle), which
+      // rideStore's recordNonFatal never sees because they happen outside its
+      // try. Without this the only trace was a toast.
+      if (isEngineError(error)) {
+        console.error('[booking] client-side crash during booking', error);
+        recordNonFatal(error, { screen: 'payment-confirm', action: 'handleBookRide' });
+      }
       // Not user-facing: `error.message` here only drives the 409-detection
       // control-flow branch below (routing to the rider's already-active
       // ride instead of retrying booking). The actual user-visible message a
@@ -529,9 +538,26 @@ function PaymentConfirmScreenContent() {
         {selectedPayment === 'card' && (
           <View style={styles.holdNote}>
             <Ionicons name="lock-closed-outline" size={15} color={colors.textDim} style={{ marginRight: 8, marginTop: 1 }} />
+            {/*
+              The hold equals the fare shown above — the backend authorizes
+              grand_total exactly (RIDE_AUTH_BUFFER_CAD is 0). This used to read
+              `totalFare + 10` because the hold carried a $10 tip buffer, which
+              made a $5 ride announce a $15 hold. Do NOT reintroduce arithmetic
+              here: the buffer is a server-side decision this screen cannot see,
+              so a hardcoded number can only ever drift out of sync with it.
+            */}
+            {/*
+              Deliberately does NOT promise the hold equals the fare exactly.
+              It normally does (RIDE_AUTH_BUFFER_CAD is 0), but the server adds a
+              proportional buffer whenever app_settings.fare_lock_enabled is off
+              — or whenever that settings lookup fails, which is treated as
+              unlocked. Both are operator/runtime conditions this screen cannot
+              see, so an exact-equivalence claim would quietly become false and
+              recreate the "hold ≠ what I was told" problem this change fixed.
+            */}
             <Text style={styles.holdNoteText}>
-              A temporary hold of ${(totalFare + 10).toFixed(2)} (estimated fare + $10) is placed on your card.
-              You&apos;re only charged the final fare plus any tip you add after the ride.
+              A temporary hold for your fare (${totalFare.toFixed(2)}) is placed on your card. It&apos;s a
+              hold, not a charge — you&apos;re only charged once the ride ends.
             </Text>
           </View>
         )}

@@ -47,16 +47,66 @@ useDefault = true
 description = "Next.js build cache"
 paths = ['''\.next/cache/''']
 
-# Draft Mode (preview) signing/encryption keys and the Server Actions payload
-# encryption key. Next generates fresh random values for these on every build
-# and writes them into its manifests; they are scoped to that one build.
+# CR #4216 split this one entry into two (2026-08-18). Root cause, verified
+# empirically against a real local `npm run build` + gitleaks 8.27.2 (not
+# assumed): a `paths`-bearing `[[allowlists]]` entry in this gitleaks version
+# fully excludes every byte of a matching file from scanning by EVERY rule —
+# not just the entry's own regex — regardless of `condition = "AND"`. Proved
+# this three ways:
+#   1. A real 40-char high-entropy canary secret planted in one of these 4
+#      manifest files, in a shape matching NONE of this entry's regexes, was
+#      still silently skipped entirely ("scanned ~0 bytes").
+#   2. A canary using the *exact* `encryptionKey": "<secret>"` shape planted
+#      OUTSIDE these 4 files, with `paths` removed, was correctly still
+#      caught by the plain `generic-api-key` rule — proving regex-only
+#      scoping is NOT inherently unsafe by itself.
+#   3. A canary with an UNRELATED secret shape (`sk_live_...`, matching
+#      nothing here at all) planted INSIDE one of these 4 files, alongside a
+#      benign `encryptionKey` value, was ALSO silently skipped — proving the
+#      exclusion really is file-wide, not finding-wide. A real Stripe key
+#      accidentally landing in `prerender-manifest.json` would currently go
+#      undetected by this specific gate (G5a's separate git-history scan and
+#      G5b's bundle scan on the REST of the build still apply; this is a gap
+#      in one gate, not the only line of defense).
 #
-# regexTarget = "match" so these test the full matched span (which includes the
-# JSON key name), not just the extracted secret. Matching on the secret alone
-# would allowlist by value, and the values change every build — the key *name*
-# is the stable, meaningful discriminator.
+# gitleaks 8.27.2 has no allowlist mechanism that suppresses one specific
+# regex match without excluding the whole file from every other rule too —
+# `paths` is the only file-scoping primitive it offers, and it is
+# structurally all-or-nothing. `stopwords` (the other content-adjacent
+# allowlist check) matches against the *secret itself*, which is a fresh
+# random value every build here, so it can't provide a stable anchor either.
+# CR #4216's hoped-for full fix (drop `paths` entirely, rely on regex
+# precision alone) is genuinely not achievable for one of these four
+# regexes — `server-reference-manifest.json` really does use the bare JSON
+# field name `"encryptionKey"` (verified directly in the built file, not
+# guessed), which is exactly generic enough that a real secret elsewhere in
+# the codebase could plausibly use the same field name. So this is now split:
+#
+# Entry A (below): the three specific, Next.js-internal-constant-shaped
+# regexes. Verified safe to drop `paths` for these — planted each pattern's
+# literal keyword as a canary OUTSIDE the 4 manifest files and confirmed all
+# three are still caught (not swallowed) once `paths` is gone. Now enforced
+# repo-wide, not just inside these 4 files — a real improvement, not just a
+# reshuffle.
 [[allowlists]]
-description = "Next.js per-build generated keys, in Next's own manifests only"
+description = "Next.js per-build generated preview/server-action keys — safe repo-wide, no path anchor needed"
+regexTarget = "match"
+regexes = [
+  '''previewMode(Signing|Encryption)Key''',
+  '''__NEXT_PREVIEW_MODE_(SIGNING|ENCRYPTION)_KEY''',
+  '''NEXT_SERVER_ACTIONS_ENCRYPTION_KEY''',
+]
+
+# Entry B: the one pattern that genuinely cannot be made regex-only-safe
+# (see the analysis above item 2/3) — the bare `"encryptionKey"` JSON field
+# name `server-reference-manifest.json` actually uses. `paths` is kept here
+# deliberately, with the file-wide-exclusion consequence now documented
+# accurately rather than the previous comment's inaccurate claim that
+# `condition = "AND"` scoped this to matching content only. This is the
+# residual, disclosed gap CR #4216 could not close — filed as its own
+# tracking note rather than silently left as an unexplained known-limitation.
+[[allowlists]]
+description = "Next.js Server Actions payload encryptionKey field — cannot safely drop paths, see CR #4216"
 condition = "AND"
 regexTarget = "match"
 paths = [
@@ -66,11 +116,6 @@ paths = [
   '''\.next/server/server-reference-manifest\.json$''',
 ]
 regexes = [
-  '''previewMode(Signing|Encryption)Key''',
-  '''__NEXT_PREVIEW_MODE_(SIGNING|ENCRYPTION)_KEY''',
-  '''NEXT_SERVER_ACTIONS_ENCRYPTION_KEY''',
-  # Generic enough to be worth the path constraint above — on its own it would
-  # mask a real `encryptionKey: "<our secret>"` anywhere in the bundle.
   '''encryptionKey"\s*:''',
 ]
 
@@ -83,3 +128,32 @@ regexes = [
 description = "jsPDF API.f2 helper misread as an API key assignment"
 regexTarget = "match"
 regexes = ['''API\.f2\s*=''']
+
+# Cloudflare D1/Durable Objects metering field names, reached through a
+# server edge-runtime sourcemap. The CI scan runs with --redact, so the
+# report only ever shows the secret as the literal string "REDACTED" —
+# do not allowlist on that placeholder text, it is not the real content.
+# Rebuilt admin-dashboard locally and ran gitleaks WITHOUT --redact to see
+# the real captured value: `CLOUDFLARE_DURABLE_OBJECT_QUERY_BINDINGS`, an
+# all-caps enum-shaped field-name constant (paired with the field name
+# `CLOUDFLARE_D1_ROWS_WRITTEN` immediately before it), consistent with a
+# Cloudflare D1/Durable-Objects telemetry field list bundled by Vercel's
+# edge-runtime instrumentation — not a live credential. First seen
+# 2026-08-18, blocking every `deploy-admin` run on `main` since (identical
+# match across 3 consecutive runs — 15:46, 17:04, 18:04 UTC — same file,
+# same line, same value).
+#
+# Deliberately NO `paths` key here, unlike the other `condition = "AND"`
+# entry above. Verified empirically (planting a real 40-char high-entropy
+# canary secret in this same directory, `.next/server/edge/chunks/`) that
+# gitleaks 8.27.2 treats an allowlist's `paths` list as a full pre-scan
+# file exclusion REGARDLESS of `condition`/`regexes` — a canary secret in
+# an otherwise-untouched file under that path was silently skipped
+# entirely ("scanned ~0 bytes"), even though it matched neither this
+# entry's regex nor its own content. Scoping by regex alone (below) still
+# suppresses only this exact literal match — verified the same canary is
+# still caught with this narrower entry in place.
+[[allowlists]]
+description = "Cloudflare D1/Durable Objects telemetry field-name pair misread as an API key"
+regexTarget = "match"
+regexes = ['''CLOUDFLARE_D1_ROWS_WRITTEN","CLOUDFLARE_DURABLE_OBJECT_QUERY_BINDINGS''']

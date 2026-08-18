@@ -104,7 +104,7 @@
     "download_requested": "Requested",
     "download_requested_msg": "Your data export has been requested. You will receive an email with a download link within 24 hours.",
     "delete_confirm_title": "Delete Account",
-    "delete_confirm_msg": "This will schedule your account for deletion after a 30-day grace period as required by PIPEDA. This cannot be undone.",
+    "delete_confirm_msg": "Your account will be locked right away. You can reactivate it any time by signing back in, before ride and trip records are permanently deleted after the 7-year retention period Saskatchewan's Transportation Act requires.",
     "delete_my_account": "Delete My Account",
     "footer": "Your data is handled in accordance with our Privacy Policy. Spinr never sells your personal information."
   },
@@ -138,6 +138,8 @@
     "about": "About",
     "tos": "Terms of Service",
     "privacy_policy": "Privacy Policy",
+    "more_policies": "More policies",
+    "more_policies_subtitle": "Community Guidelines, accessibility, cancellations & more",
     "prefNotSavedTitle": "Preference not saved",
     "prefNotSavedMsg": "Could not reach the server. Your setting has been reverted — please try again."
   },
@@ -147,6 +149,9 @@
     "alert_sent_label": "Emergency alert sent",
     "alert_title": "\uD83D\uDEA8 Emergency Alert Sent",
     "alert_msg": "Your location has been shared with Spinr support and your emergency contacts.\n\nDo you want to call 911?",
+    "alert_msg_contacts_failed": "Your location has been shared with Spinr support.\n\nWe could NOT reach your emergency contacts — please call them directly.\n\nDo you want to call 911?",
+    "alert_msg_no_contacts": "Your location has been shared with Spinr support.\n\nYou have no emergency contacts saved, so nobody else was alerted.\n\nDo you want to call 911?",
+    "alert_msg_contacts_unknown": "Your location has been shared with Spinr support.\n\nWe could not confirm whether your emergency contacts were reached — consider calling them directly.\n\nDo you want to call 911?",
     "call_911": "Call 911",
     "im_ok": "I'm OK",
     "failure_title": "\u26A0\uFE0F Alert Not Sent",

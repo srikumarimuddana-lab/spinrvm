@@ -189,6 +189,17 @@ export default function SettingsScreen() {
             </View>
             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
           </TouchableOpacity>
+
+          <TouchableOpacity style={styles.row} onPress={() => router.push('/policies' as any)}>
+            <View style={[styles.rowIcon, { backgroundColor: colors.surfaceLight }]}>
+              <Ionicons name="library" size={20} color={colors.textSecondary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowTitle}>{t('settings.more_policies')}</Text>
+              <Text style={styles.rowSub}>{t('settings.more_policies_subtitle')}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+          </TouchableOpacity>
         </View>
 
         <Text style={styles.version}>Spinr v1.0.2 · {user?.phone || ''}</Text>

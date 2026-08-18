@@ -87,7 +87,16 @@ async def get_t4a_years(current_user: dict = Depends(get_current_user)):
         "payouts",
         {
             "driver_id": driver["id"],
-            "payout_type": "stripe_sync",
+            # 'stripe_sync' (always 'completed' by construction) + settled
+            # 'legacy_outstanding_correction' rows (2026-08-17 write path,
+            # services/legacy_payout_correction_service.py) — both are real
+            # legacy-app income actually paid through Stripe. The explicit
+            # status='completed' only matters for the correction type: an
+            # 'awaiting_stripe_onboarding'/'ready_for_transfer' row is a
+            # recorded debt, not yet money the driver received, and must not
+            # count toward a tax slip until the Transfer actually settles.
+            "payout_type": {"$in": ["stripe_sync", "legacy_outstanding_correction"]},
+            "status": "completed",
             "created_at": {
                 "$gte": f"{earliest}-01-01T00:00:00+00:00",
                 "$lt": f"{this_year + 1}-01-01T00:00:00+00:00",
@@ -153,21 +162,29 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
         )
     )
 
-    # Legacy-era income synced from Stripe transfer history
-    # (services/stripe_payout_sync_service.py): payouts rows with
-    # payout_type='stripe_sync' are the record of legacy income actually PAID
-    # through Stripe — the T4A must report it, attributed to the year of the
-    # transfer (CRA reports amounts paid). App-native payouts are cash-outs of
-    # the ride earnings summed below, and 'legacy_import' offsets pair with
-    # imported rides now excluded above — only the synced type is added, so
-    # nothing double-counts.
+    # Legacy-era income actually PAID through Stripe — the T4A must report
+    # it, attributed to the year of the transfer (CRA reports amounts paid).
+    # Two sources, both real settled money, never a promise:
+    #   - 'stripe_sync' (services/stripe_payout_sync_service.py) — always
+    #     'completed' by construction.
+    #   - 'legacy_outstanding_correction' (services/legacy_payout_correction_
+    #     service.py, 2026-08-17) — a real Stripe Transfer for old-app
+    #     earnings the old app itself recorded as never paid. status must be
+    #     'completed' explicitly here: an 'awaiting_stripe_onboarding' or
+    #     'ready_for_transfer' row is a recorded debt, not yet income the
+    #     driver received, and must not appear on a tax slip early.
+    # App-native payouts are cash-outs of the ride earnings summed below, and
+    # 'legacy_import' offsets pair with imported rides now excluded above —
+    # only these two settled-legacy-income types are added, so nothing
+    # double-counts.
     # Queried via this module's db binding so the established
     # _deps.db_supabase patch point covers it in tests.
     synced_rows = await db_supabase.get_rows(
         "payouts",
         {
             "driver_id": driver["id"],
-            "payout_type": "stripe_sync",
+            "payout_type": {"$in": ["stripe_sync", "legacy_outstanding_correction"]},
+            "status": "completed",
             "created_at": {
                 "$gte": f"{year}-01-01T00:00:00+00:00",
                 "$lt": f"{year + 1}-01-01T00:00:00+00:00",

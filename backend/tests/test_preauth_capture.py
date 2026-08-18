@@ -22,8 +22,17 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from backend.utils.preauth_capture import TIP_WINDOW_MINUTES
 
-def _ride(minutes_ago=60, auth_status="authorized"):
+# Window-relative rather than hardcoded minutes: TIP_WINDOW_MINUTES has already
+# changed once (20 -> 5), and a literal that happens to land exactly on the new
+# boundary flips a test's meaning silently.
+INSIDE_WINDOW = max(1, TIP_WINDOW_MINUTES - 1)
+PAST_WINDOW = TIP_WINDOW_MINUTES * 4
+
+
+def _ride(minutes_ago=None, auth_status="authorized"):
+    minutes_ago = PAST_WINDOW if minutes_ago is None else minutes_ago
     completed = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
     return {
         "id": "ride_sw_1",
@@ -70,7 +79,7 @@ class TestCaptureTick:
 
         from backend.utils.preauth_capture import _capture_tick
 
-        patches, settle, claim = _patches(rows=[_ride(minutes_ago=5)], claim={"id": "ride_sw_1"})
+        patches, settle, claim = _patches(rows=[_ride(minutes_ago=INSIDE_WINDOW)], claim={"id": "ride_sw_1"})
         with ExitStack() as st:
             for p in patches:
                 st.enter_context(p)
@@ -84,7 +93,7 @@ class TestCaptureTick:
 
         from backend.utils.preauth_capture import _capture_tick
 
-        patches, settle, claim = _patches(rows=[_ride(minutes_ago=60)], claim={"id": "ride_sw_1"})
+        patches, settle, claim = _patches(rows=[_ride(minutes_ago=PAST_WINDOW)], claim={"id": "ride_sw_1"})
         with ExitStack() as st:
             for p in patches:
                 st.enter_context(p)
@@ -104,7 +113,7 @@ class TestCaptureTick:
 
         from backend.utils.preauth_capture import _capture_tick
 
-        patches, settle, claim = _patches(rows=[_ride(minutes_ago=60)], claim=None)  # lost race
+        patches, settle, claim = _patches(rows=[_ride(minutes_ago=PAST_WINDOW)], claim=None)  # lost race
         with ExitStack() as st:
             for p in patches:
                 st.enter_context(p)

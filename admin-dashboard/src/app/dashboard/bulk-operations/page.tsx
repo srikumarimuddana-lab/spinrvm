@@ -36,6 +36,7 @@ import {
     adminUpdateDriverStripeAccount,
     adminValidateRiderImport,
     adminCommitRiderImport,
+    adminRegenerateImportedSnapshots,
     type StripeImportKind,
     type StripeImportReport,
     type StripeImportReportItem,
@@ -44,7 +45,9 @@ import {
     type RiderImportReport,
     type RiderImportReportItem,
     type RiderImportDuplicate,
+    type SnapshotRegenerateResult,
 } from "@/lib/api";
+import { MapPin } from "lucide-react";
 import { LegacyBookingImport } from "./_components/LegacyBookingImport";
 import { useAuthStore } from "@/store/authStore";
 import { Button } from "@/components/ui/button";
@@ -755,12 +758,118 @@ export default function BulkOperationsPage() {
             </Card>
 
             <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                <MapPin className="h-4 w-4" />
+                Imported Ride Snapshots — regenerate route map images with Google Maps tiles
+            </div>
+            <SnapshotRegenerateSection />
+
+            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                 <Upload className="h-4 w-4" />
                 Legacy Booking Import — bring completed rides from the previous app into rider
                 and driver trip history
             </div>
             <LegacyBookingImport />
         </div>
+    );
+}
+
+function SnapshotRegenerateSection() {
+    const { toast } = useToast();
+    const [running, setRunning] = useState(false);
+    const [force, setForce] = useState(true);
+    const [result, setResult] = useState<SnapshotRegenerateResult | null>(null);
+
+    const handleRegenerate = async () => {
+        setRunning(true);
+        setResult(null);
+        try {
+            const res = await adminRegenerateImportedSnapshots(force, 200);
+            setResult(res);
+            toast({
+                title: `Snapshots regenerated`,
+                description: `${res.success} succeeded, ${res.failed} failed (${res.renderer} renderer)`,
+            });
+        } catch (err: unknown) {
+            toast({
+                title: "Snapshot generation failed",
+                description: err instanceof Error ? err.message : "Unknown error",
+                variant: "destructive",
+            });
+        } finally {
+            setRunning(false);
+        }
+    };
+
+    return (
+        <Card>
+            <CardHeader>
+                <CardTitle>Route Map Snapshots</CardTitle>
+                <CardDescription>
+                    Regenerate PNG route map images for imported rides using Google Static Maps.
+                    Each snapshot shows the OSRM road route with an orange-to-red gradient on real
+                    map tiles, with pickup (green) and dropoff (red) markers.
+                </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <div className="flex items-center gap-4">
+                    <label className="flex items-center gap-2 text-sm">
+                        <input
+                            type="checkbox"
+                            checked={force}
+                            onChange={(e) => setForce(e.target.checked)}
+                            className="rounded border-input"
+                        />
+                        Re-generate all (including rides that already have a snapshot)
+                    </label>
+                </div>
+                <Button onClick={handleRegenerate} disabled={running}>
+                    {running ? (
+                        <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Generating snapshots...
+                        </>
+                    ) : (
+                        <>
+                            <RefreshCw className="mr-2 h-4 w-4" />
+                            Regenerate Snapshots
+                        </>
+                    )}
+                </Button>
+                {result && (
+                    <div className="rounded-md border p-4 space-y-2">
+                        <div className="flex gap-4 text-sm">
+                            <span className="flex items-center gap-1">
+                                <CheckCircle2 className="h-4 w-4 text-green-600" />
+                                {result.success} succeeded
+                            </span>
+                            {result.failed > 0 && (
+                                <span className="flex items-center gap-1">
+                                    <AlertTriangle className="h-4 w-4 text-amber-500" />
+                                    {result.failed} failed
+                                </span>
+                            )}
+                            <span className="text-muted-foreground">
+                                Renderer: {result.renderer}
+                            </span>
+                        </div>
+                        {result.errors.length > 0 && (
+                            <details className="text-sm">
+                                <summary className="cursor-pointer text-muted-foreground">
+                                    Error details ({result.errors.length})
+                                </summary>
+                                <ul className="mt-2 space-y-1 text-xs font-mono">
+                                    {result.errors.map((e, i) => (
+                                        <li key={i}>
+                                            {e.ride_id.slice(0, 8)}… — {e.error}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </details>
+                        )}
+                    </div>
+                )}
+            </CardContent>
+        </Card>
     );
 }
 

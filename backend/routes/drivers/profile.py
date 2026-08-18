@@ -217,6 +217,10 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
 
         first = current_user.get("first_name", "")
         last = current_user.get("last_name", "")
+        # regulatory_authority/regulatory_region must never be left NULL on a
+        # new driver row — see ACTION_ITEMS.md B13, `_resolve_regulatory_defaults`'s
+        # own docstring for why.
+        _reg_authority, _reg_region = await _shared._resolve_regulatory_defaults(updates.get("service_area_id"))
         new_driver = {
             "id": str(uuid.uuid4()),
             "driver_code": generate_driver_code(),
@@ -234,6 +238,8 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
             "lat": 0,
             "lng": 0,
             "created_at": datetime.now(timezone.utc).isoformat(),
+            "regulatory_authority": _reg_authority,
+            "regulatory_region": _reg_region,
             **updates,
         }
         # Encrypt on this path too. It was writing `**updates` straight to the
@@ -797,6 +803,11 @@ async def register_driver(
     # Create new row
     import uuid as _uuid
 
+    # regulatory_authority/regulatory_region must never be left NULL on a new
+    # driver row — see ACTION_ITEMS.md B13, `_resolve_regulatory_defaults`'s
+    # own docstring for why. `/register` is the primary become-driver flow —
+    # the one that actually produced the 7 NULL rows found live in production.
+    _reg_authority, _reg_region = await _shared._resolve_regulatory_defaults(payload.get("service_area_id"))
     new_driver = {
         "id": str(_uuid.uuid4()),
         "driver_code": generate_driver_code(),
@@ -815,6 +826,8 @@ async def register_driver(
         "lng": 0.0,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "submitted_at": datetime.now(timezone.utc).isoformat(),
+        "regulatory_authority": _reg_authority,
+        "regulatory_region": _reg_region,
         **payload,
     }
     await db_supabase.insert_one("drivers", await _shared._encrypt_driver_pii(new_driver))

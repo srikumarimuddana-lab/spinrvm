@@ -36,8 +36,9 @@ import { useVehicleTypeStore } from '@shared/store/vehicleTypeStore';
 import SchedulePicker from '../components/SchedulePicker';
 import SkeletonBox from '../components/SkeletonBox';
 import { useResponsive } from '@shared/utils/responsive';
-import api, { getApiErrorMessage } from '@shared/api/client';
+import api, { getApiErrorMessage, isEngineError } from '@shared/api/client';
 import { Analytics } from '@shared/analytics';
+import { recordNonFatal } from '../utils/crashlytics';
 import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
 import { useAnimatedValue } from '../hooks/useAnimatedValue';
 import { promoDiscountForEstimate, grandTotalOf } from '../utils/promoDiscount';
@@ -448,7 +449,6 @@ function RideOptionsScreenContent() {
       // elsewhere; neither useCorporate nor selectedCorporateId is a dep of
       // this effect (workModeEnabled/corporateAccounts.length are), so no
       // loop.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setUseCorporate(true);
       setSelectedCorporateId(prev => prev ?? activeCompanyId ?? corporateAccounts[0]?.id ?? null);
     }
@@ -616,6 +616,17 @@ function RideOptionsScreenContent() {
         router.replace({ pathname: '/driver-arriving', params: { rideId: ride.id } } as any);
       }
     } catch (error: any) {
+      // A throw here is not always an API rejection. Anything that crashes
+      // between createRide() resolving and the router.replace() below —
+      // Analytics, scheduleReminder, a native method missing from the
+      // installed binary — lands in this same catch, and rideStore's own
+      // recordNonFatal() never sees it because it fired outside that store's
+      // try. Those crashes were invisible: no stack, no Crashlytics record,
+      // just a toast. Capture them here so the next one is diagnosable.
+      if (isEngineError(error)) {
+        console.error('[booking] client-side crash during booking', error);
+        recordNonFatal(error, { screen: 'ride-options', action: 'proceedWithBooking' });
+      }
       // Not user-facing: `error.message` here only drives the 409-detection
       // control-flow branch below (routing to the rider's already-active
       // ride instead of retrying booking). The actual user-visible message a

@@ -20,6 +20,9 @@ from ._deps import (  # noqa: F401
     _metric_observe,
     _time_mod,
     build_earnings_snapshot,
+    charge_late_corporate_tip,
+    charge_late_tip,
+    charge_late_wallet_tip,
     datetime,
     first_name_only,
     get_current_user,
@@ -78,6 +81,81 @@ async def add_tip(
     existing_tip = _d(ride.get("tip_amount") or 0)
     if existing_tip > 0:
         raise HTTPException(status_code=400, detail="ERR_TIP_DUPLICATE")
+
+    # A tip added after the ride's fare was already settled has no open
+    # PaymentIntent/authorization to ride on — the settlement charge/debit is
+    # already applied, and none of the three payment methods' settlement
+    # RPCs can be re-run against the same ride (each dedupes on ride_id).
+    # Card rides collect it for real via a fresh, tip-only Stripe charge; a
+    # genuine decline there still surfaces the normal "your card was
+    # declined" error — an existing, well-understood failure mode elsewhere
+    # in the app already, not a new one this path introduces.
+    #
+    # Wallet and company_allowance rides collect it for real too, via
+    # charge_late_wallet_tip / charge_late_corporate_tip (migration 319 adds
+    # the disjoint 'late_tip_debit'/'late_tip_adjustment' ledger types these
+    # need so they don't dedup-collide with the original settlement's rows
+    # for the same ride). Per the 2026-08-17 trust-first product decision,
+    # NEITHER of those two ever raises a rider-facing error, though — unlike
+    # a card decline, an insufficient wallet balance or exhausted corporate
+    # allowance is not something the rider can act on for a tip that's
+    # already "done" from their perspective, so whatever can't be collected
+    # is absorbed silently (mirroring the existing refund policy: driver
+    # keeps the pay, platform absorbs the gap — see record_refund_event).
+    # This is a deliberate, logged/metered decision, not a silent gap — see
+    # docs/proposals/2026-08-17-tip-capture-stripe-cost-minimization-strategy.md
+    # (Finding 1) and docs/change-log/2026-08-17-add-tip-late-charge-guard.md
+    # for the full history (earlier versions of this guard: first a flat 400
+    # for non-card methods, then absorbing the entire amount unconditionally
+    # with no debit attempt at all — both superseded by this real,
+    # best-effort collection).
+    #
+    # Reachable in production: the rider-app offline action queue replays a
+    # queued tip after the 20-minute tip window closes
+    # (rider-app/store/rideStore.ts), and tipping from ride history days
+    # later is a documented, intentional feature
+    # (utils/driver_statement_job.py's grace window exists for exactly this).
+    if (ride.get("payment_status") or "").lower() == "paid":
+        payment_method = (ride.get("payment_method") or "card").lower()
+        if payment_method == "card":
+            charge_result = await charge_late_tip(ride, ride_id, current_user["id"], tip_amount)
+            if not charge_result.success:
+                _metric_inc("spinr_payment_late_tip_total", {"outcome": "failed"})
+                detail = charge_result.error or "Payment failed"
+                if charge_result.error_code:
+                    detail = {"code": charge_result.error_code, "message": charge_result.error}
+                    if charge_result.decline_code:
+                        detail["decline_code"] = charge_result.decline_code
+                    if charge_result.extra:
+                        detail.update(charge_result.extra)
+                raise HTTPException(status_code=charge_result.status_code, detail=detail)
+            _metric_inc("spinr_payment_late_tip_total", {"outcome": "success"})
+        else:
+            if payment_method == "wallet":
+                collected = await charge_late_wallet_tip(ride, ride_id, current_user["id"], tip_amount)
+            elif payment_method == "company_allowance":
+                collected = await charge_late_corporate_tip(ride, ride_id, tip_amount)
+            else:
+                # Unrecognized payment method — never seen in practice (the
+                # three above cover every value routes/rides/payments.py's
+                # process_payment dispatches on), but fail safe rather than
+                # crash: absorb rather than guess at an unknown debit path.
+                logger.error(f"[TIP] late tip on ride {ride_id} has unrecognized payment_method {payment_method!r}")
+                collected = Decimal("0")
+
+            if collected >= tip_amount:
+                outcome = "success"
+            elif collected > 0:
+                outcome = "partial"
+            else:
+                outcome = "absorbed"
+            _metric_inc("spinr_payment_late_tip_total", {"outcome": outcome})
+            if outcome != "success":
+                logger.info(
+                    f"[TIP] late tip on already-paid {payment_method} ride {ride_id}: "
+                    f"collected ${_money_str(collected)} of ${_money_str(tip_amount)} for real, "
+                    "absorbing the rest per product decision (driver credited in full either way)"
+                )
 
     existing_earnings = _d(ride.get("driver_earnings") or 0)
     new_tip = _round(existing_tip + tip_amount)

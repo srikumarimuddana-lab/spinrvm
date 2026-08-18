@@ -8,9 +8,11 @@ import {
   FlatList,
   KeyboardAvoidingView,
   ActivityIndicator,
+  AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useFocusEffect } from 'expo-router/react-navigation';
 import { Ionicons } from '@expo/vector-icons';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
@@ -83,6 +85,27 @@ export default function LostAndFoundChatScreen() {
   // caseId value; the state it sets (lostCase/messages/loading) isn't a dep.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { loadAll(); }, [loadAll]);
+
+  useFocusEffect(
+    useCallback(() => {
+      const interval = setInterval(() => {
+        if (caseId && AppState.currentState === 'active') {
+          api.get<{ messages: Message[] }>(`/lost-and-found/${caseId}/messages`)
+            .then(res => {
+              const fresh = res.data?.messages ?? [];
+              setMessages(prev => {
+                if (fresh.length !== prev.length) return fresh;
+                const lastFresh = fresh[fresh.length - 1]?.id;
+                const lastPrev = prev[prev.length - 1]?.id;
+                return lastFresh !== lastPrev ? fresh : prev;
+              });
+            })
+            .catch(() => {});
+        }
+      }, 10_000);
+      return () => clearInterval(interval);
+    }, [caseId]),
+  );
 
   useEffect(() => {
     if (messages.length > 0) {

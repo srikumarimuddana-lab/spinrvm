@@ -23,18 +23,20 @@ admin's keystroke is a different decision (see the 2026-08-08 change log).
 from __future__ import annotations
 
 import logging
-from typing import NamedTuple, Optional
+from typing import NamedTuple, Optional, Tuple
 from urllib.parse import urlparse
 
 try:
     from ..core.config import settings as _cfg
     from ..settings_loader import get_app_settings
+    from ..utils.address_format import address_lines as _address_lines
     from ..utils.address_format import coalesce_setting as _coalesce
     from ..utils.address_format import postal_address as _postal_address
     from ..utils.report_branding import COMPANY_CONTACT_LINE, COMPANY_LINE
 except ImportError:  # pragma: no cover - direct module imports in tests
     from core.config import settings as _cfg  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
+    from utils.address_format import address_lines as _address_lines  # type: ignore
     from utils.address_format import coalesce_setting as _coalesce  # type: ignore
     from utils.address_format import postal_address as _postal_address  # type: ignore
     from utils.report_branding import COMPANY_CONTACT_LINE, COMPANY_LINE  # type: ignore
@@ -67,6 +69,12 @@ class CompanyDetails(NamedTuple):
     #: required) so existing keyword-only ``CompanyDetails(...)`` test
     #: fixtures built before this field existed keep constructing.
     app_name: str = "Spinr"
+    #: The mailing address split into display lines — street, then locality.
+    #: The email footer prints one per line (the conventional receipt shape)
+    #: rather than the comma-joined ``address`` above, which reads as a
+    #: run-on at footer type sizes. Defaulted for the same reason as
+    #: ``app_name``: fixtures built before it existed keep constructing.
+    address_lines: Tuple[str, ...] = ()
 
     @property
     def name_sentence(self) -> str:
@@ -190,4 +198,5 @@ async def load_company_details() -> CompanyDetails:
         contact_line=contact_line,
         support_email=support_email,
         logo_url=_safe_logo_url(_coalesce(settings, "company_logo_url")) or _bundled_logo_url(),
+        address_lines=_address_lines(settings),
     )

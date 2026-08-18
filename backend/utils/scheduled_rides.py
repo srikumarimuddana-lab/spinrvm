@@ -586,15 +586,26 @@ async def _dispatch_scheduled_ride(ride: dict):
         # hanging in 'searching' indefinitely. Armed unconditionally (see above).
         asyncio.create_task(_rides_matching.ride_search_timeout(ride_id))
 
-        # Notify rider
+        # Notify rider. By this point the claim, driver match, and offer
+        # timeout have all already succeeded — a failure here is a lost
+        # confirmation push only, not a failed dispatch, so it gets its own
+        # try/except (mirroring _send_reminder's pattern) and a distinct log
+        # line instead of falling into the "Failed to dispatch" handler below
+        # (ACTION_ITEMS.md C28).
         if rider_id:
-            await send_push_notification(
-                rider_id,
-                "Your scheduled ride is starting!",
-                f"We're finding a driver for your ride to {ride.get('dropoff_address', 'your destination')}.",
-                data={"type": "scheduled_ride_dispatched", "ride_id": ride_id},
-                target_app="rider",
-            )
+            try:
+                await send_push_notification(
+                    rider_id,
+                    "Your scheduled ride is starting!",
+                    f"We're finding a driver for your ride to {ride.get('dropoff_address', 'your destination')}.",
+                    data={"type": "scheduled_ride_dispatched", "ride_id": ride_id},
+                    target_app="rider",
+                )
+            except Exception as push_err:
+                logger.error(
+                    f"scheduled dispatch: final confirmation push failed for ride {ride_id}: {push_err}",
+                    exc_info=True,
+                )
 
     except Exception as e:
         logger.error(f"Failed to dispatch scheduled ride {ride_id}: {e}", exc_info=True)

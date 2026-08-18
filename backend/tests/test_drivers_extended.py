@@ -223,6 +223,246 @@ class TestUpdateMyDriver:
             result = asyncio.run(drv.update_my_driver(body=req, current_user={"id": USER_ID}))
         assert result == {"success": True}
 
+    def test_auto_create_sets_regulatory_defaults(self):
+        # ACTION_ITEMS.md B13: the auto-create branch (a brand new driver's
+        # first profile write) must never leave regulatory_authority/
+        # regulatory_region NULL — that's the exact live gap this fix closes.
+        from backend.routes import drivers as drv
+
+        captured = {}
+
+        async def _fake_insert(table, payload):
+            captured["table"] = table
+            captured["payload"] = payload
+            return payload
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.drivers._deps.db_supabase.insert_one", AsyncMock(side_effect=_fake_insert)),
+            patch("backend.routes.drivers._shared._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+            patch(
+                "backend.routes.drivers._shared._resolve_regulatory_defaults",
+                AsyncMock(return_value=("SGI", "SK")),
+            ) as mock_resolve,
+        ):
+            req = drv.UpdateDriverProfileRequest(license_plate="ABC123")
+            asyncio.run(drv.update_my_driver(body=req, current_user={"id": USER_ID, "first_name": "Test"}))
+
+        assert captured["table"] == "drivers"
+        assert captured["payload"]["regulatory_authority"] == "SGI"
+        assert captured["payload"]["regulatory_region"] == "SK"
+        # service_area_id wasn't in this update, so the resolver was called
+        # with None — confirms the real (unset) value is threaded through,
+        # not silently defaulted before the resolver even runs.
+        mock_resolve.assert_awaited_once_with(None)
+
+    def test_auto_create_threads_service_area_id_to_resolver(self):
+        from backend.routes import drivers as drv
+
+        captured = {}
+
+        async def _fake_insert(table, payload):
+            captured["payload"] = payload
+            return payload
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.drivers._deps.db_supabase.insert_one", AsyncMock(side_effect=_fake_insert)),
+            patch("backend.routes.drivers._shared._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+            patch(
+                "backend.routes.drivers._shared._resolve_regulatory_defaults",
+                AsyncMock(return_value=("SGI", "SK")),
+            ) as mock_resolve,
+        ):
+            req = drv.UpdateDriverProfileRequest(service_area_id="sa-regina")
+            asyncio.run(drv.update_my_driver(body=req, current_user={"id": USER_ID}))
+
+        mock_resolve.assert_awaited_once_with("sa-regina")
+        assert captured["payload"]["service_area_id"] == "sa-regina"
+
+
+# ---------------------------------------------------------------------------
+# create_driver (admin/internal POST /drivers)
+# ---------------------------------------------------------------------------
+
+
+class TestCreateDriver:
+    def test_sets_regulatory_defaults(self):
+        # ACTION_ITEMS.md B13: third of three real driver-creation paths
+        # found leaving regulatory_authority/regulatory_region NULL. The
+        # `Driver` schema has no service_area_id field, so this always
+        # resolves via the single-market (SGI/SK) fallback.
+        from backend.routes import drivers as drv
+
+        captured = {}
+
+        async def _fake_insert(table, row):
+            captured["table"] = table
+            captured["row"] = row
+            return row
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.drivers._deps.db_supabase.insert_one", AsyncMock(side_effect=_fake_insert)),
+        ):
+            driver = drv.Driver(
+                name="New Driver",
+                phone="+15550009999",
+                vehicle_type_id="sedan",
+                vehicle_make="Toyota",
+                vehicle_model="Camry",
+                vehicle_color="Black",
+                license_plate="ABC123",
+                lat=52.13,
+                lng=-106.67,
+            )
+            asyncio.run(drv.create_driver(driver=driver, admin_user={"id": "admin_1"}))
+
+        assert captured["table"] == "drivers"
+        assert captured["row"]["regulatory_authority"] == "SGI"
+        assert captured["row"]["regulatory_region"] == "SK"
+
+    def test_existing_phone_rejected_before_insert(self):
+        # Blast-radius guard: confirms the existing 400-on-duplicate-phone
+        # behavior is unaffected by threading the regulatory-defaults call
+        # through this function.
+        from fastapi import HTTPException
+
+        from backend.routes import drivers as drv
+
+        with patch(
+            "backend.routes.drivers._deps.db_supabase.get_rows",
+            AsyncMock(return_value=[{"id": "drv_existing", "phone": "+15550009999"}]),
+        ):
+            driver = drv.Driver(
+                name="Dup Driver",
+                phone="+15550009999",
+                vehicle_type_id="sedan",
+                vehicle_make="Toyota",
+                vehicle_model="Camry",
+                vehicle_color="Black",
+                license_plate="XYZ999",
+                lat=52.13,
+                lng=-106.67,
+            )
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(drv.create_driver(driver=driver, admin_user={"id": "admin_1"}))
+        assert exc.value.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# register_driver
+# ---------------------------------------------------------------------------
+
+
+class TestRegisterDriver:
+    def test_new_driver_sets_regulatory_defaults(self):
+        from backend.routes import drivers as drv
+
+        captured = {}
+
+        async def _fake_insert(table, payload):
+            captured["table"] = table
+            captured["payload"] = payload
+            return payload
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.drivers._deps.db_supabase.insert_one", AsyncMock(side_effect=_fake_insert)),
+            patch("backend.routes.drivers._shared._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+            patch(
+                "backend.routes.drivers._shared._resolve_regulatory_defaults",
+                AsyncMock(return_value=("SGI", "SK")),
+            ) as mock_resolve,
+        ):
+            result = asyncio.run(
+                drv.register_driver(
+                    body={"first_name": "New", "last_name": "Driver", "service_area_id": "sa-saskatoon"},
+                    current_user={"id": USER_ID, "phone": "+15550001111"},
+                )
+            )
+
+        assert captured["table"] == "drivers"
+        assert captured["payload"]["regulatory_authority"] == "SGI"
+        assert captured["payload"]["regulatory_region"] == "SK"
+        mock_resolve.assert_awaited_once_with("sa-saskatoon")
+        assert result is not None
+
+    def test_existing_driver_update_path_untouched(self):
+        # The update-existing branch is unrelated to this fix — confirms the
+        # resolver is only invoked on the create path, never on update.
+        from backend.routes import drivers as drv
+
+        driver = _driver()
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value=driver)),
+            patch("backend.routes.drivers._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.routes.drivers._shared._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+            patch("backend.routes.drivers._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+            patch(
+                "backend.routes.drivers._shared._resolve_regulatory_defaults",
+                AsyncMock(return_value=("SGI", "SK")),
+            ) as mock_resolve,
+        ):
+            asyncio.run(
+                drv.register_driver(
+                    body={"first_name": "Existing"},
+                    current_user={"id": USER_ID, "phone": "+15550001111"},
+                )
+            )
+
+        mock_resolve.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# _resolve_regulatory_defaults
+# ---------------------------------------------------------------------------
+
+
+class TestResolveRegulatoryDefaults:
+    def test_no_service_area_id_defaults_to_sgi_sk(self):
+        from backend.routes.drivers import _shared
+
+        with patch("backend.routes.drivers._shared.db_supabase.get_rows", AsyncMock(return_value=[])):
+            result = asyncio.run(_shared._resolve_regulatory_defaults(None))
+        assert result == ("SGI", "SK")
+
+    def test_service_area_with_explicit_authority(self):
+        from backend.routes.drivers import _shared
+
+        regina = {"id": "sa-regina", "name": "Regina", "regulatory_authority": "SGI", "regulatory_region": "SK"}
+        with patch("backend.routes.drivers._shared.db_supabase.get_rows", AsyncMock(return_value=[regina])):
+            result = asyncio.run(_shared._resolve_regulatory_defaults("sa-regina"))
+        assert result == ("SGI", "SK")
+
+    def test_service_area_name_match_when_authority_columns_null(self):
+        # ACTION_ITEMS.md B13's own "related, separate gap" note:
+        # service_areas.regulatory_authority/province is NULL for every area
+        # but 'Regina' today, including 'Saskatoon' — the resolver must still
+        # land on SGI/SK for it via name-matching, not silently degrade.
+        from backend.routes.drivers import _shared
+
+        saskatoon = {
+            "id": "sa-saskatoon",
+            "name": "Saskatoon",
+            "regulatory_authority": None,
+            "regulatory_region": None,
+            "province": None,
+        }
+        with patch("backend.routes.drivers._shared.db_supabase.get_rows", AsyncMock(return_value=[saskatoon])):
+            result = asyncio.run(_shared._resolve_regulatory_defaults("sa-saskatoon"))
+        assert result == ("SGI", "SK")
+
+    def test_unresolvable_service_area_id_still_defaults_to_sgi_sk(self):
+        # service_area_id was supplied but the row lookup found nothing
+        # (e.g. stale/bad id) — must still fall back, never return NULLs.
+        from backend.routes.drivers import _shared
+
+        with patch("backend.routes.drivers._shared.db_supabase.get_rows", AsyncMock(return_value=[])):
+            result = asyncio.run(_shared._resolve_regulatory_defaults("sa-nonexistent"))
+        assert result == ("SGI", "SK")
+
 
 # ---------------------------------------------------------------------------
 # get_driver_balance
@@ -439,6 +679,39 @@ class TestGetDriverBalance:
             result = asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
 
         # 100 - 30 = 70; the $500 synced legacy payout never deducts.
+        assert result["payable_balance"] == "70.00"
+        assert result["total_paid_out"] == "30.00"
+
+    def test_balance_excludes_legacy_outstanding_correction_regardless_of_status(self):
+        """payout_type='legacy_outstanding_correction' (2026-08-17 write path,
+        services/legacy_payout_correction_service.py) must never deduct from
+        payable_balance, at ANY status — 'awaiting_stripe_onboarding' and
+        'ready_for_transfer' are not reversed/failed, so the old blanket
+        not-in-{reversed,failed} filter would have wrongly deducted them."""
+        from backend.routes import drivers as drv
+
+        rides = [{"base_fare": 100.0}]
+        payouts = [
+            {"amount": 30.0, "status": "completed", "payout_type": "standard"},  # deduct
+            {"amount": 12.0, "status": "awaiting_stripe_onboarding", "payout_type": "legacy_outstanding_correction"},
+            {"amount": 8.0, "status": "ready_for_transfer", "payout_type": "legacy_outstanding_correction"},
+            {"amount": 5.0, "status": "completed", "payout_type": "legacy_outstanding_correction"},
+        ]
+
+        def get_rows_mock(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                status = (filters or {}).get("status")
+                return rides if status == "completed" else []
+            if table == "payouts":
+                return payouts
+            return []
+
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
+            result = asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
+
+        # 100 - 30 = 70; none of the 3 correction rows deduct, at any status.
         assert result["payable_balance"] == "70.00"
         assert result["total_paid_out"] == "30.00"
 

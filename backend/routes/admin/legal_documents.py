@@ -1,9 +1,9 @@
-"""Admin CRUD for per-audience legal documents (Terms of Service + Privacy Policy).
+"""Admin CRUD for per-audience legal documents (Terms of Service, Privacy
+Policy, and the broader set of standalone policy pages under docs/legal/).
 
-Authoring model: the admin dashboard reads all four docs (rider/tos,
-rider/privacy, driver/tos, driver/privacy) at once and pushes any
-edited blob back via PUT. We upsert on (audience, doc_type) so the
-admin UI doesn't need to track row IDs.
+Authoring model: the admin dashboard reads every (audience, doc_type)
+combination at once and pushes any edited blob back via PUT. We upsert on
+(audience, doc_type) so the admin UI doesn't need to track row IDs.
 """
 
 import logging
@@ -22,7 +22,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 ALLOWED_AUDIENCES = {"rider", "driver"}
-ALLOWED_TYPES = {"tos", "privacy"}
+# Keep in sync with routes/legal_documents.py's ALLOWED_TYPES — this is the
+# admin-authoring side of the same set.
+ALLOWED_TYPES = {
+    "tos",
+    "privacy",
+    "community-guidelines",
+    "non-discrimination",
+    "accessibility",
+    "cancellation-fees",
+    "promotions-referral",
+    "insurance-periods",
+    "deactivation-appeals",
+    "background-check-consent",
+}
 
 
 @router.get("/legal-documents")
@@ -43,11 +56,12 @@ async def admin_upsert_legal_document(payload: Dict[str, Any]):
     content = payload.get("content") or ""
 
     if audience not in ALLOWED_AUDIENCES:
-        raise HTTPException(
-            status_code=400, detail="audience must be 'rider' or 'driver'"
-        )
+        raise HTTPException(status_code=400, detail="audience must be 'rider' or 'driver'")
     if doc_type not in ALLOWED_TYPES:
-        raise HTTPException(status_code=400, detail="type must be 'tos' or 'privacy'")
+        raise HTTPException(
+            status_code=400,
+            detail=f"type must be one of: {', '.join(sorted(ALLOWED_TYPES))}",
+        )
 
     existing = await db_supabase.find_one(
         "legal_documents",

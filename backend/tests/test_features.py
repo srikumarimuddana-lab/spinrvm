@@ -159,6 +159,145 @@ class TestFAQs:
 
         assert result["answer"] == "Updated answer..."
 
+    @pytest.mark.asyncio
+    async def test_get_faqs_route_orders_by_sort_order_ascending(self):
+        """features.get_faqs is the only GET /faqs handler (the formerly-
+        shadowed duplicate at routes/faqs.py was removed 2026-08-18). A lower
+        sort_order must sort first regardless of DB fetch order, since neither
+        app re-sorts this list client-side."""
+        from backend import features
+
+        rows = [
+            {"id": "third", "sort_order": 2},
+            {"id": "first", "sort_order": 0},
+            {"id": "second", "sort_order": 1},
+        ]
+        with (
+            patch("backend.features.db_supabase.get_rows", new=AsyncMock(return_value=rows)),
+            patch("backend.routes.fares.resolve_area_scope", new=AsyncMock(return_value=set())),
+        ):
+            result = await features.get_faqs()
+        assert [r["id"] for r in result] == ["first", "second", "third"]
+
+    @pytest.mark.asyncio
+    async def test_get_faqs_route_missing_sort_order_treated_as_zero(self):
+        from backend import features
+
+        rows = [{"id": "explicit-zero", "sort_order": 0}, {"id": "no-field"}, {"id": "positive", "sort_order": 1}]
+        with (
+            patch("backend.features.db_supabase.get_rows", new=AsyncMock(return_value=rows)),
+            patch("backend.routes.fares.resolve_area_scope", new=AsyncMock(return_value=set())),
+        ):
+            result = await features.get_faqs()
+        assert [r["id"] for r in result] == ["explicit-zero", "no-field", "positive"]
+
+    @pytest.mark.asyncio
+    async def test_get_faqs_audience_filter_passed_to_query(self):
+        """The live handler's own docstring says this filter MUST apply —
+        without it, driver-only FAQs would surface in the rider app. Assert
+        the $in:[audience, 'both'] filter is actually built and passed to
+        the DB call, not just documented as a requirement."""
+        from backend import features
+
+        with (
+            patch("backend.features.db_supabase.get_rows", new=AsyncMock(return_value=[])) as mock_get_rows,
+            patch("backend.routes.fares.resolve_area_scope", new=AsyncMock(return_value=set())),
+        ):
+            await features.get_faqs(audience="driver")
+        _, kwargs = mock_get_rows.call_args
+        query = mock_get_rows.call_args.args[1] if len(mock_get_rows.call_args.args) > 1 else kwargs.get("query")
+        assert query["audience"] == {"$in": ["both", "driver"]}
+
+    @pytest.mark.asyncio
+    async def test_get_faqs_category_filter_passed_to_query(self):
+        from backend import features
+
+        with (
+            patch("backend.features.db_supabase.get_rows", new=AsyncMock(return_value=[])) as mock_get_rows,
+            patch("backend.routes.fares.resolve_area_scope", new=AsyncMock(return_value=set())),
+        ):
+            await features.get_faqs(category="billing")
+        query = mock_get_rows.call_args.args[1]
+        assert query["category"] == "billing"
+
+    @pytest.mark.asyncio
+    async def test_get_faqs_global_rows_always_included_area_tagged_rows_scoped(self):
+        """Global FAQs (no service_area_ids) always show. Area-tagged FAQs
+        only show when the caller's resolved scope overlaps their tags."""
+        from backend import features
+
+        rows = [
+            {"id": "global", "service_area_ids": None},
+            {"id": "in-scope", "service_area_ids": ["area-yxe"]},
+            {"id": "out-of-scope", "service_area_ids": ["area-other"]},
+        ]
+        with (
+            patch("backend.features.db_supabase.get_rows", new=AsyncMock(return_value=rows)),
+            patch("backend.routes.fares.resolve_area_scope", new=AsyncMock(return_value={"area-yxe"})),
+        ):
+            result = await features.get_faqs(service_area_id="area-yxe")
+        assert {r["id"] for r in result} == {"global", "in-scope"}
+
+    @pytest.mark.asyncio
+    async def test_get_faqs_lat_lng_resolves_service_area_then_scopes(self):
+        from backend import features
+
+        rows = [{"id": "a1", "service_area_ids": ["area-5"]}]
+        with (
+            patch("backend.features.db_supabase.get_rows", new=AsyncMock(return_value=rows)),
+            patch(
+                "backend.routes.fares.resolve_service_area_for_point",
+                new=AsyncMock(return_value={"id": "area-5"}),
+            ) as mock_point,
+            patch("backend.routes.fares.resolve_area_scope", new=AsyncMock(return_value={"area-5"})) as mock_scope,
+        ):
+            result = await features.get_faqs(lat=52.1332, lng=-106.6700)
+        mock_point.assert_awaited_once_with(52.1332, -106.6700)
+        mock_scope.assert_awaited_once_with("area-5")
+        assert [r["id"] for r in result] == ["a1"]
+
+    @pytest.mark.asyncio
+    async def test_get_faqs_no_location_context_hides_area_tagged_rows(self):
+        from backend import features
+
+        rows = [{"id": "area-only", "service_area_ids": ["area-1"]}, {"id": "global"}]
+        with (
+            patch("backend.features.db_supabase.get_rows", new=AsyncMock(return_value=rows)),
+            patch("backend.routes.fares.resolve_area_scope", new=AsyncMock(return_value=set())),
+        ):
+            result = await features.get_faqs()
+        assert [r["id"] for r in result] == ["global"]
+
+    @pytest.mark.asyncio
+    async def test_get_faqs_returns_empty_list_when_db_returns_none(self):
+        from backend import features
+
+        with (
+            patch("backend.features.db_supabase.get_rows", new=AsyncMock(return_value=None)),
+            patch("backend.routes.fares.resolve_area_scope", new=AsyncMock(return_value=set())),
+        ):
+            result = await features.get_faqs()
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_get_faqs_area_resolution_failure_degrades_to_empty_scope(self):
+        """Must never 500 an unauthenticated public endpoint on a service-area
+        lookup failure — degrade to global-FAQs-only instead (CLAUDE.md
+        'no silent swallow' still requires the error be logged, not hidden)."""
+        from backend import features
+
+        rows = [{"id": "global"}, {"id": "area-tagged", "service_area_ids": ["area-1"]}]
+        with (
+            patch("backend.features.db_supabase.get_rows", new=AsyncMock(return_value=rows)),
+            patch(
+                "backend.routes.fares.resolve_area_scope",
+                new=AsyncMock(side_effect=RuntimeError("service_areas lookup exploded")),
+            ),
+            patch("backend.features.logger.opt", new=MagicMock(return_value=MagicMock(error=MagicMock()))),
+        ):
+            result = await features.get_faqs(service_area_id="area-1")
+        assert [r["id"] for r in result] == ["global"]
+
 
 class TestSurgePricing:
     """Tests for surge pricing functionality."""

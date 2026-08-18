@@ -19,13 +19,18 @@ try:
     from ..services import corporate_allowance_service, corporate_wallet_service, ledger_service
     from ..services.corporate_policy_service import evaluate_policy
     from ..socket_manager import manager
-    from ..utils.stripe_charge import cancel_authorization, capture_ride, charge_ride
+    from ..utils.stripe_charge import cancel_authorization, capture_ride, charge_ride, increment_authorization
 except ImportError:
     import db_supabase  # type: ignore
     from services import corporate_allowance_service, corporate_wallet_service, ledger_service  # type: ignore
     from services.corporate_policy_service import evaluate_policy  # type: ignore
     from socket_manager import manager  # type: ignore
-    from utils.stripe_charge import cancel_authorization, capture_ride, charge_ride  # type: ignore
+    from utils.stripe_charge import (  # type: ignore
+        cancel_authorization,
+        capture_ride,
+        charge_ride,
+        increment_authorization,
+    )
 
 try:
     from ..core.config import settings as app_config
@@ -198,13 +203,19 @@ class PaymentResult:
 # ── Ledger ───────────────────────────────────────────────────────────
 
 
-def _charge_event_metadata(ride: dict | None, tip_amount: Decimal | None) -> Dict[str, Any]:
+def _charge_event_metadata(
+    ride: dict | None, tip_amount: Decimal | None, *, source: str = "process_payment"
+) -> Dict[str, Any]:
     """Metadata for a stripe_charge ledger header.
 
     Shared by record_payment_event (legacy two-write path) and the atomic
-    settle RPC path so both write byte-identical metadata.
+    settle RPC path so both write byte-identical metadata. ``source`` defaults
+    to the original ride-settlement label; callers charging money OUTSIDE
+    settlement (e.g. a tip added after the ride is already paid — see
+    charge_late_tip) pass their own so the 7-year ledger doesn't mislabel a
+    tip-only charge as a fare settlement.
     """
-    meta: Dict[str, Any] = {"source": "process_payment"}
+    meta: Dict[str, Any] = {"source": source}
     if ride:
         fare = _round(_d(ride.get("total_fare", 0)))
         meta.update(
@@ -244,6 +255,7 @@ async def record_payment_event(
     *,
     ride: dict | None = None,
     tip_amount: Decimal | None = None,
+    source: str = "process_payment",
 ) -> None:
     """Append a stripe_charge row to the financial_events ledger.
 
@@ -258,7 +270,7 @@ async def record_payment_event(
     ledger_projection background loop derives them from the ride row once
     the ``ledger_double_entry_enabled`` app_settings flag is on.
     """
-    meta = _charge_event_metadata(ride, tip_amount)
+    meta = _charge_event_metadata(ride, tip_amount, source=source)
     # No legs= here by design: double-entry legs are derived asynchronously by
     # the ledger_projection loop (single-writer invariant — only the projection
     # writes financial_event_entries). It decomposes from the ride row AFTER
@@ -324,6 +336,469 @@ async def record_refund_event(
         ref=payment_intent_id,
         metadata=meta,
     )
+
+
+async def record_dispute_close_events(
+    dispute_id: str,
+    user_id: str,
+    ride_id: str | None,
+    balance_transactions: list,
+    *,
+    dispute_status: str,
+) -> None:
+    """Append one financial_events row per Stripe balance transaction on
+    ``charge.dispute.closed`` (B27).
+
+    Stripe posts the disputed-amount debit and its own per-dispute fee as
+    separate entries in ``dispute.balance_transactions`` when a dispute
+    closes. Neither was previously recorded, so
+    ``docs/runbooks/stripe-reconciliation.md`` showed an unexplained delta
+    for every chargeback. ``delta_cents`` is taken verbatim from Stripe's own
+    signed ``amount`` (negative = debited from us, positive = reinstated) —
+    no sign inference here, since a `won` dispute can still carry a
+    non-refundable dispute fee that stays negative. Never raises — mirrors
+    ``record_refund_event``'s never-fail posture; the money has already
+    moved by the time this webhook fires.
+
+    ``event_type`` is always the literal ``"stripe_dispute"`` --
+    ``financial_events.event_type`` has a fixed CHECK-constraint enum
+    (migration 58) with no per-subtype dispute values, so a per-balance-
+    transaction-type string (e.g. ``stripe_dispute_adjustment``) would
+    violate the constraint on every insert. The Stripe balance-transaction
+    ``type`` (``adjustment``, ``stripe_fee``, ...) is carried in
+    ``metadata`` instead, where it's still fully queryable.
+
+    Skips silently (no insert, no raise) when ``user_id`` is falsy —
+    ``financial_events.user_id`` is ``NOT NULL REFERENCES users(id)``, so an
+    empty/unresolved id would fail the FK. Callers should already guard on a
+    resolved rider before calling this; the guard is repeated here so a
+    future caller can't reintroduce the FK violation by skipping it.
+    """
+    if not user_id:
+        logger.warning("[B27] Skipping dispute ledger write — no resolvable user_id for dispute {}", dispute_id)
+        return
+    for bt in balance_transactions:
+        if not isinstance(bt, dict):
+            continue
+        amount_cents = int(bt.get("amount", 0) or 0)
+        if amount_cents == 0:
+            continue
+        await ledger_service.record_event(
+            event_type="stripe_dispute",
+            user_id=user_id,
+            ride_id=ride_id,
+            delta_cents=amount_cents,
+            ref=dispute_id,
+            metadata={
+                "stripe_dispute_id": dispute_id,
+                "balance_transaction_id": bt.get("id") or "",
+                "balance_transaction_type": bt.get("type") or "",
+                "fee_cents": int(bt.get("fee", 0) or 0),
+                "dispute_status": dispute_status,
+                "currency": bt.get("currency") or "",
+            },
+        )
+
+
+async def charge_late_tip(
+    ride: dict,
+    ride_id: str,
+    rider_id: str,
+    tip_amount: Decimal,
+) -> "PaymentResult":
+    """Charge a tip added to a ride whose fare was already settled — card only.
+
+    ``add_tip`` (routes/rides/payments.py) accepts a tip on any completed ride
+    with no time bound, by design (a rider tipping from ride history days
+    later, or an offline-queued tip replaying after the tip window closed —
+    see ``rider-app/store/rideStore.ts``'s offline action queue and
+    ``utils/driver_statement_job.py``'s late-tip grace window). Both land here
+    once ``ride.payment_status == 'paid'``. The booking-time hold, if any, was
+    already captured at settlement and Stripe forbids capturing it twice, so
+    this is always a fresh, tip-amount-only PaymentIntent — never a reuse of
+    the settlement PaymentIntent.
+
+    Closes the gap documented in
+    docs/proposals/2026-08-17-tip-capture-stripe-cost-minimization-strategy.md
+    (Finding 1): the caller MUST only persist tip_amount/driver_earnings when
+    ``result.success`` is True. Crediting the driver before the rider is
+    actually charged is exactly the bug this function exists to close.
+
+    Wallet / company_allowance rides are not handled here — the caller must
+    refuse those explicitly rather than call this function, since there is no
+    equivalent "charge the delta after the fact" debit path for those payment
+    methods yet.
+    """
+    rider_user = await db_supabase.get_user_by_id(rider_id)
+    stripe_customer_id = (rider_user or {}).get("stripe_customer_id")
+    payment_method_id = ride.get("payment_method_id") or (rider_user or {}).get("default_payment_method")
+
+    outcome = await charge_ride(
+        ride=ride,
+        total_amount=tip_amount,
+        rider_id=rider_id,
+        payment_method_id=payment_method_id,
+        stripe_customer_id=stripe_customer_id,
+    )
+
+    if outcome.status == "unconfigured":
+        # Same production-vs-dev split as _refuse_unconfigured_settlement:
+        # the Stripe key lives in app_settings (no startup fail-fast), so a
+        # blanked key in production must refuse rather than silently credit
+        # the driver for a tip that was never charged.
+        if app_config.ENV.lower() == "production":
+            logger.error(
+                "[PAYMENT] stripe_secret_key is EMPTY in production — refusing to charge "
+                "late tip for ride {} without a real charge.",
+                ride_id,
+            )
+            return PaymentResult(
+                success=False,
+                error_code="stripe_unconfigured",
+                error="Payment processing is temporarily unavailable. Please try again shortly.",
+                status_code=503,
+            )
+        logger.error("Stripe unconfigured (dev/test) — not charging late tip for ride {}", ride_id)
+        return PaymentResult(success=True, charged_amount=_money_str(tip_amount))
+
+    if outcome.status == "requires_action":
+        # Off-session confirm asked for SCA. There is no in-app 3DS challenge
+        # path at this call site either — mirrors the settlement gap already
+        # documented in docs/architecture/payments-rider-stripe.md (Known Gap
+        # 4). The rider must change card, same as a declined settlement.
+        return PaymentResult(
+            success=False,
+            error_code="authentication_required",
+            error="Your card needs to be re-verified before this tip can be charged. Please update your payment method.",
+            status_code=402,
+        )
+
+    if outcome.status != "succeeded":
+        logger.error(
+            "[PAYMENT] late tip charge failed for ride {} rider {} ({})",
+            ride_id,
+            rider_id,
+            outcome.error_message,
+        )
+        return PaymentResult(
+            success=False,
+            error_code="card_declined" if outcome.status == "declined" else "tip_charge_failed",
+            decline_code=outcome.decline_code,
+            error=outcome.error_message or "Your card was declined.",
+            status_code=402,
+            extra={"suggested_action": "change_card"},
+        )
+
+    amount_cents = ledger_service.to_cents(tip_amount)
+    await record_payment_event(
+        ride_id,
+        rider_id,
+        amount_cents,
+        outcome.payment_intent_id,
+        ride=ride,
+        tip_amount=tip_amount,
+        source="late_tip",
+    )
+    return PaymentResult(success=True, charged_amount=_money_str(tip_amount))
+
+
+async def charge_late_wallet_tip(
+    ride: dict,
+    ride_id: str,
+    rider_id: str,
+    tip_amount: Decimal,
+) -> Decimal:
+    """Debit the rider's personal wallet for a tip added AFTER the ride's
+    fare was already settled. Best-effort — never raises.
+
+    Uses ``wallet_apply_delta`` (not ``wallet_pay_for_ride``, which is
+    ride-settlement-specific and already consumed for this ride) with
+    ``type_="late_tip_debit"`` — migration 319's dedup key, disjoint from
+    the original settlement's ``"ride_payment"`` row for this same ride.
+    Reusing ``"ride_payment"`` here would silently deduplicate against
+    that row and apply zero additional debit while still reporting
+    success.
+
+    ``clamp_to_floor=True`` means a wallet with insufficient balance is
+    debited for whatever it has rather than failing outright: per the
+    2026-08-17 trust-first product decision, a late tip must never
+    surface a rider-facing error. Any shortfall between the amount
+    returned here and ``tip_amount`` is Spinr's to absorb — the same
+    outcome as before this real-debit path existed, just smaller (or
+    zero) whenever the wallet actually has the funds.
+
+    Returns the amount actually collected, ``0 <= collected <= tip_amount``.
+    A wallet lookup/RPC failure absorbs the full amount (returns 0)
+    instead of raising — logged loudly, never rider-facing.
+    """
+    try:
+        wallet = await db_supabase.find_one("wallets", {"user_id": rider_id})
+        if not wallet or not wallet.get("is_active", True):
+            logger.info(
+                "[PAYMENT] late tip wallet debit for ride {} skipped ({}) — absorbing full ${}",
+                ride_id,
+                "no wallet on file" if not wallet else "wallet suspended",
+                _money_str(tip_amount),
+            )
+            return Decimal("0")
+
+        result = await db_supabase.wallet_apply_delta(
+            wallet_id=wallet["id"],
+            user_id=rider_id,
+            type_="late_tip_debit",
+            delta=-tip_amount,
+            reference_id=ride_id,
+            description=f"Late tip for ride {ride_id}",
+            metadata={"ride_id": ride_id, "source": "late_tip"},
+            floor=Decimal("0"),
+            clamp_to_floor=True,
+        )
+    except Exception as exc:
+        logger.opt(exception=exc).error(
+            "[PAYMENT] late tip wallet debit failed for ride {} rider {} — absorbing full ${}: {}",
+            ride_id,
+            rider_id,
+            _money_str(tip_amount),
+            exc,
+        )
+        return Decimal("0")
+
+    # applied_delta is signed (negative for a debit); a clamped partial debit
+    # returns the smaller magnitude actually applied, per wallet_apply_delta's
+    # own contract (utils/... clamp_to_floor docstring, migration 249).
+    collected = _round(max(-_d(result.get("applied_delta")), Decimal("0")))
+    if collected < tip_amount:
+        logger.info(
+            "[PAYMENT] late tip wallet debit for ride {} partially collected: "
+            "${} of ${} (insufficient balance) — absorbing the rest",
+            ride_id,
+            _money_str(collected),
+            _money_str(tip_amount),
+        )
+    return collected
+
+
+async def charge_late_corporate_tip(
+    ride: dict,
+    ride_id: str,
+    tip_amount: Decimal,
+) -> Decimal:
+    """Debit the employee's allowance (falling back to the company master
+    wallet) for a tip added AFTER the ride's fare was already settled.
+    Best-effort — never raises.
+
+    Mirrors ``settle_corporate``'s allowance-then-master-wallet saga,
+    scoped to just the tip amount, using migration 319's disjoint
+    ``"late_tip_debit"`` / ``"late_tip_adjustment"`` types so this never
+    dedup-collides with the original settlement's ledger rows for the
+    same ride (reusing ``"ride_debit"``/``"adjustment"`` would silently
+    apply zero additional debit).
+
+    Deliberately does NOT reverse a partial success the way
+    ``settle_corporate`` reverses the allowance debit if its master-wallet
+    fallback then fails. That reversal exists because the ORIGINAL
+    settlement must be all-or-nothing (the ride has to be fully paid, or
+    the caller retries with a different payment method) — neither applies
+    to a late tip under the 2026-08-17 trust-first decision, where keeping
+    a partial collection and absorbing only the genuinely uncollectable
+    remainder is the intended outcome, not a failure to compensate away.
+
+    Returns the amount actually collected, ``0 <= collected <= tip_amount``.
+    """
+    tip = _round(tip_amount)
+    company_id = ride.get("corporate_account_id")
+    if not company_id:
+        logger.error(
+            "[PAYMENT] late tip on corporate ride {} has no corporate_account_id — absorbing full ${}",
+            ride_id,
+            _money_str(tip),
+        )
+        return Decimal("0")
+
+    try:
+        membership = None
+        stamped_member_id = ride.get("corporate_member_id")
+        if stamped_member_id:
+            candidate = await db_supabase.get_corporate_member_by_id(stamped_member_id)
+            if candidate and candidate.get("company_id") == company_id and candidate.get("status") == "active":
+                membership = candidate
+        else:
+            memberships = await db_supabase.list_active_memberships_for_user(ride["rider_id"])
+            membership = next((m for m in memberships if m.get("company_id") == company_id), None)
+        if not membership:
+            logger.info(
+                "[PAYMENT] late tip on corporate ride {} — no active membership found, absorbing full ${}",
+                ride_id,
+                _money_str(tip),
+            )
+            return Decimal("0")
+
+        allowance = await db_supabase.get_member_allowance(membership["id"]) or {}
+        corp_wallet = await db_supabase.get_corporate_wallet_by_company(company_id) or {}
+        if not corp_wallet.get("id"):
+            logger.info(
+                "[PAYMENT] late tip on corporate ride {} — company {} has no wallet, absorbing full ${}",
+                ride_id,
+                company_id,
+                _money_str(tip),
+            )
+            return Decimal("0")
+
+        if allowance.get("type") == "unlimited":
+            allowance_debit = tip
+        elif allowance.get("id"):
+            remaining = _round(_d(allowance.get("amount") or 0) - max(_d(allowance.get("used") or 0), _d("0")))
+            remaining = max(remaining, _round(Decimal("0")))
+            allowance_debit = min(remaining, tip)
+        else:
+            allowance_debit = _round(Decimal("0"))
+        master_debit = tip - allowance_debit
+
+        collected_via_allowance = Decimal("0")
+        collected_via_master = Decimal("0")
+        actor = membership.get("user_id") or ride.get("rider_id") or "system"
+
+        if allowance_debit > 0 and allowance.get("id"):
+            try:
+                await corporate_allowance_service.apply_late_tip_debit(
+                    wallet_id=corp_wallet["id"],
+                    allowance_id=allowance["id"],
+                    member_id=membership["id"],
+                    amount=_f(allowance_debit),
+                    actor_user_id=actor,
+                    notes=f"ride:{ride_id}:late_tip_allowance",
+                    ride_id=ride_id,
+                    floor=0.0,
+                )
+                collected_via_allowance += allowance_debit
+            except Exception as alw_err:
+                detail = (
+                    (getattr(alw_err, "details", None) or {}).get("original", "") if hasattr(alw_err, "details") else ""
+                )
+                text = f"{alw_err} {detail}"
+                if "allowance_cap_exceeded" in text:
+                    logger.info(
+                        "[PAYMENT] late tip allowance cap hit for member {} ride {} — routing full ${} to master wallet",
+                        membership["id"],
+                        ride_id,
+                        _money_str(tip),
+                    )
+                else:
+                    logger.opt(exception=alw_err).error(
+                        "[PAYMENT] late tip allowance debit failed for ride {}: {} — routing full ${} to master wallet",
+                        ride_id,
+                        alw_err,
+                        _money_str(tip),
+                    )
+                # Either way the allowance debit did not apply (collected_via_
+                # allowance is still 0) — the whole tip now needs the master path.
+                master_debit = tip
+
+        if master_debit > 0 and corp_wallet.get("id"):
+            try:
+                await corporate_wallet_service.apply_late_tip_master_debit(
+                    wallet_id=corp_wallet["id"],
+                    amount=master_debit,
+                    ride_id=ride_id,
+                    actor_user_id=actor,
+                    notes=f"Late tip master-fallback debit {ride_id}",
+                    floor=0.0,
+                )
+                collected_via_master += master_debit
+            except Exception as master_err:
+                logger.opt(exception=master_err).error(
+                    "[PAYMENT] late tip master-fallback debit failed for ride {}: {} — absorbing ${}",
+                    ride_id,
+                    master_err,
+                    _money_str(master_debit),
+                )
+
+        # Record the collected amounts on the ride's EXISTING ride_payment_sources
+        # row (one per ride, written by settle_corporate at original settlement)
+        # rather than a new row — that table is the sole source for the company's
+        # billing summary/statement/PDF totals (routes/corporate_company.py
+        # _aggregate_rows, utils/corporate_statement_pdf.py), both of which sum
+        # allowance_debit_amount + master_fallback_amount as "total billed to
+        # company" (repositories/corporate_repo.py's own docstring). Without this,
+        # a late tip moves real money in corporate_wallet_transactions /
+        # corporate_member_allowances.used but never appears in what the company
+        # is actually invoiced — found by spinr-corporate-billing-reviewer.
+        # Best-effort: the money movement above already succeeded (or didn't);
+        # a failure to update this bookkeeping row must not undo it or block the
+        # return value, but must be logged loudly since it means the company's
+        # next statement will under-report by this amount.
+        if collected_via_allowance > 0 or collected_via_master > 0:
+            try:
+                existing = await db_supabase.find_one("ride_payment_sources", {"ride_id": ride_id})
+                if existing:
+                    await db_supabase.update_one(
+                        "ride_payment_sources",
+                        {"ride_id": ride_id},
+                        {
+                            "allowance_debit_amount": _f(
+                                _d(existing.get("allowance_debit_amount") or 0) + collected_via_allowance
+                            ),
+                            "master_fallback_amount": _f(
+                                _d(existing.get("master_fallback_amount") or 0) + collected_via_master
+                            ),
+                        },
+                    )
+                else:
+                    logger.error(
+                        "[PAYMENT] late tip on corporate ride {} collected ${} but no ride_payment_sources "
+                        "row exists to record it against — company's next billing statement will under-report "
+                        "this amount",
+                        ride_id,
+                        _money_str(collected_via_allowance + collected_via_master),
+                    )
+            except Exception as rps_err:
+                logger.opt(exception=rps_err).error(
+                    "[PAYMENT] failed to record late tip (${} allowance, ${} master) on ride_payment_sources "
+                    "for ride {} — money was collected but the company's next billing statement will "
+                    "under-report by this amount: {}",
+                    _money_str(collected_via_allowance),
+                    _money_str(collected_via_master),
+                    ride_id,
+                    rps_err,
+                )
+
+        # Visibility-only section spend tracking (same hook settle_corporate
+        # uses — "track and display, never block"). Without this, a late tip
+        # on a ride booked under a department/section budget would silently
+        # under-count against that section for the month, same class of gap
+        # as the ride_payment_sources one above but lower severity (display-
+        # only, not the actual invoice total).
+        if membership.get("section_id") and (collected_via_allowance + collected_via_master) > 0:
+            try:
+                await db_supabase.record_section_spend(
+                    section_id=membership["section_id"],
+                    month=datetime.now(timezone.utc).strftime("%Y-%m"),
+                    amount=collected_via_allowance + collected_via_master,
+                )
+            except Exception:
+                logger.opt(exception=True).error(
+                    "[PAYMENT] failed to record section spend for late tip ride={} section={}",
+                    ride_id,
+                    membership["section_id"],
+                )
+
+        collected = _round(min(collected_via_allowance + collected_via_master, tip))
+        if collected < tip:
+            logger.info(
+                "[PAYMENT] late tip on corporate ride {} partially collected: ${} of ${} — absorbing the rest",
+                ride_id,
+                _money_str(collected),
+                _money_str(tip),
+            )
+        return max(collected, Decimal("0"))
+    except Exception as exc:
+        logger.opt(exception=exc).error(
+            "[PAYMENT] late tip corporate debit raised unexpectedly for ride {} — absorbing full ${}: {}",
+            ride_id,
+            _money_str(tip),
+            exc,
+        )
+        return Decimal("0")
 
 
 # ── Wallet settlement ───────────────────────────────────────────────
@@ -1222,12 +1697,17 @@ async def _settle_against_hold(
     stripe_customer_id: Optional[str],
     payment_method_id: Optional[str],
 ) -> Optional[PaymentResult]:
-    """Capture a booking-time hold for (fare + tip) in a single Stripe fee.
+    """Capture a booking-time hold for (fare + tip), ideally in one Stripe fee.
 
-    Captures ``min(total_charge, authorized)`` against the manual-capture
-    PaymentIntent placed at booking. When the tip pushes the total OVER the
-    authorized hold (a tip beyond the buffer), the overflow is charged on a
-    fresh PaymentIntent — Stripe forbids capturing more than was authorized.
+    The hold placed at booking is the bare fare — no tip headroom — so any tip
+    pushes the total over it. Two ways to cover that, in order of preference:
+
+    1. INCREMENT the hold to the full total, then capture once. One Stripe fixed
+       fee, one statement line. Requires the card to support incremental
+       authorization, which was recorded at booking as ``auth_incrementable``.
+    2. Capture what IS authorized and charge the difference on a fresh
+       PaymentIntent. Costs a second fixed fee. This is the fallback whenever
+       the card cannot be incremented or the issuer refuses the increase.
 
     Returns:
         PaymentResult — terminal outcome (captured-and-paid, or capture
@@ -1235,6 +1715,35 @@ async def _settle_against_hold(
         ``None`` — the hold is unusable (expired / amount_too_large / Stripe
             ops error); the caller falls back to a fresh full charge.
     """
+    # Try to grow the hold to cover the tip before capturing. Gated on the
+    # capability recorded at booking so we don't burn a doomed Stripe round-trip
+    # on every tipped ride whose card was never eligible.
+    if total_charge > authorized and ride.get("auth_incrementable"):
+        inc = await increment_authorization(
+            ride_id=ride_id,
+            payment_intent_id=held_pi,
+            new_total=total_charge,
+        )
+        if inc.status == "authorized":
+            # The hold now covers fare + tip, so the capture below takes it all
+            # in one go and the overflow branch never runs.
+            authorized = _round(total_charge)
+            logger.info(
+                "[PAYMENT] hold incremented to {} for ride {} — tip settles on one charge",
+                _money_str(authorized),
+                ride_id,
+            )
+        else:
+            # Designed fallback, not a failure: capture what we hold and bill the
+            # tip separately. Info-level — it costs one extra fixed fee, nothing
+            # is lost or stuck. The original hold is untouched by a failed
+            # increment, so the capture below is still valid.
+            logger.info(
+                "[PAYMENT] hold increment unavailable for ride {} ({}) — tip will be a separate charge",
+                ride_id,
+                inc.error_message,
+            )
+
     capture_amount = _round(min(total_charge, authorized))
     cap = await capture_ride(ride_id=ride_id, payment_intent_id=held_pi, amount=capture_amount)
 
@@ -1249,6 +1758,26 @@ async def _settle_against_hold(
             ride_id,
             cap.error_message,
         )
+        # The caller now mints a NEW PaymentIntent for the full amount and
+        # repoints rides.payment_intent_id at it, which is the only durable
+        # reference to this hold — so unless we release it here, nobody can find
+        # it again and the rider's funds stay reserved until Stripe's ~7-day
+        # expiry. That gap predates this code for the fare-only case, but a
+        # successful increment makes the abandoned hold LARGER (fare + tip), so
+        # it is worth closing rather than inheriting.
+        #
+        # Best-effort: if the release fails there is nothing further to do here
+        # (the hold expires on its own), and it must not stop the fresh charge
+        # that actually settles the ride.
+        try:
+            await cancel_authorization(ride_id=ride_id, payment_intent_id=held_pi)
+        except Exception as _rel_exc:  # pragma: no cover — helper never raises
+            logger.error(
+                "[PAYMENT] could not release uncapturable hold pi={} for ride {}: {}",
+                held_pi,
+                ride_id,
+                _rel_exc,
+            )
         return None
 
     if cap.status == "declined":

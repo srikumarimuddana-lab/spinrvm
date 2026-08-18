@@ -108,6 +108,14 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
 
     if (!open) return null;
 
+    // Legacy-imported rides (migrated from the previous app) carry a planned
+    // route and a booked distance only — no Phase 2/3 GPS, no v2 segments, no
+    // measured distances. Without this flag the GPS views fall through to the
+    // map's straight-line fallback, which draws a pickup→dropoff line that
+    // reads as a real route. Say "never captured" instead of inventing one.
+    const isImported = !!ride?.legacy_import_metadata
+        && Object.keys(ride.legacy_import_metadata).length > 0;
+
     const storedPhases: Record<string, number> | null = ride?.phase_distances && Object.keys(ride.phase_distances).length > 0
         ? ride.phase_distances : null;
 
@@ -656,8 +664,17 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                         {/* Phase selector */}
                                         <div className="pt-3 border-t">
                                             <div className="flex items-center justify-between mb-2.5">
-                                                <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">Route Views</p>
-                                                <p className="text-[10px] text-muted-foreground/70">Click to replay on map</p>
+                                                <div className="flex items-center gap-1.5">
+                                                    <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">Route Views</p>
+                                                    {isImported && (
+                                                        <span className="text-[10px] font-medium text-muted-foreground bg-muted rounded px-1.5 py-0.5">
+                                                            Imported
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <p className="text-[10px] text-muted-foreground/70">
+                                                    {isImported ? "Planned route only — no GPS captured" : "Click to replay on map"}
+                                                </p>
                                             </div>
                                             <div className="grid grid-cols-3 gap-2">
                                                 {(() => {
@@ -665,9 +682,12 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     const fmtKm = (v: number | undefined | null) => typeof v === "number" ? `${Number(v).toFixed(2)} km` : "—";
                                                     type CardKey = "pickup" | "actual" | "planned";
                                                     const cards: { key: CardKey; label: string; km: string; sub: string | null; colorCls: string; }[] = [
-                                                        { key: "pickup",  label: "Pickup",       km: fmtKm(ride.phase_distances?.navigating_to_pickup), sub: fmtDur(ride.phase_durations?.navigating_to_pickup), colorCls: PHASE_COLORS.navigating_to_pickup },
-                                                        { key: "actual",  label: "Actual Trip",  km: fmtKm(ride.phase_distances?.trip_in_progress ?? ride.actual_distance_km), sub: Number(ride.route_schema_version || 0) >= 2 ? routeQualityLabel(ride.route_quality) : fmtDur(ride.phase_durations?.trip_in_progress), colorCls: PHASE_COLORS.trip_in_progress },
-                                                        { key: "planned", label: "Planned Trip", km: fmtKm(ride.planned_distance_km), sub: (Array.isArray(ride.planned_route_polyline) && ride.planned_route_polyline.length > 1) ? "Planned route" : "No planned road geometry", colorCls: "bg-muted/60 text-foreground" },
+                                                        { key: "pickup",  label: "Pickup",       km: fmtKm(ride.phase_distances?.navigating_to_pickup), sub: isImported ? "Not captured (imported)" : fmtDur(ride.phase_durations?.navigating_to_pickup), colorCls: PHASE_COLORS.navigating_to_pickup },
+                                                        { key: "actual",  label: "Actual Trip",  km: fmtKm(ride.phase_distances?.trip_in_progress ?? ride.actual_distance_km), sub: isImported ? "Not captured (imported)" : Number(ride.route_schema_version || 0) >= 2 ? routeQualityLabel(ride.route_quality) : fmtDur(ride.phase_durations?.trip_in_progress), colorCls: PHASE_COLORS.trip_in_progress },
+                                                        // Imported rides never got a planned_distance_km, but the OSRM
+                                                        // backfill wrote the road distance to distance_km — show that
+                                                        // rather than an em-dash beside a route the map is drawing.
+                                                        { key: "planned", label: "Planned Trip", km: fmtKm(ride.planned_distance_km ?? (isImported ? ride.distance_km : undefined)), sub: (Array.isArray(ride.planned_route_polyline) && ride.planned_route_polyline.length > 1) ? (isImported ? "Planned route (imported)" : "Planned route") : "No planned road geometry", colorCls: "bg-muted/60 text-foreground" },
                                                     ];
                                                     return cards.map(c => (
                                                         <button key={c.key} type="button" onClick={() => setSelectedPhase(c.key)}
@@ -698,7 +718,19 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                             let label = "";
                                             let emptyHint: string | null = null;
 
-                                            if (selectedPhase === "pickup") {
+                                            // An imported ride has no GPS of any kind. Both GPS views must
+                                            // say so and draw nothing — the straight-line fallback would
+                                            // otherwise render a pickup→dropoff line indistinguishable
+                                            // from a real trace on the exact screen used for SGI and
+                                            // dispute review.
+                                            const importedNoGps = isImported && selectedPhase !== "planned";
+
+                                            if (importedNoGps) {
+                                                label = selectedPhase === "pickup"
+                                                    ? "Driver → Pickup (not captured)"
+                                                    : "Pickup → Dropoff (not captured)";
+                                                emptyHint = "Imported from the previous app — no GPS was recorded for this ride";
+                                            } else if (selectedPhase === "pickup") {
                                                 // Prefer the OSRM road-matched pickup leg, then raw Phase 2
                                                 // GPS, then a driver-start → pickup reference line so the
                                                 // card always shows the approach.
@@ -787,6 +819,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                             plannedTrail={plannedProp}
                                                             locationTrail={trailForMap}
                                                             actualSegments={actualSegmentsProp}
+                                                            suppressStraightFallback={importedNoGps}
                                                         />
                                                     </div>
                                                 </div>

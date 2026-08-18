@@ -196,11 +196,12 @@ export default function SettingsScreen() {
             return;
         }
         try {
-            // PIPEDA-compliant 30-day grace window: DELETE /users/account
-            // schedules the deletion rather than executing it immediately, so
-            // drivers can recover the account by contacting support within 30
-            // days. DELETE /users/profile (immediate, irreversible) is reserved
-            // for internal admin tooling.
+            // PIPEDA-compliant soft delete: DELETE /users/account locks the
+            // account immediately but schedules the actual data deletion for
+            // the 7-year Saskatchewan Transportation Act retention ceiling —
+            // drivers can reactivate by signing back in any time before then.
+            // DELETE /users/profile (immediate, irreversible) is reserved for
+            // internal admin tooling.
             await api.delete('/users/account');
             setShowDeleteStep2(false);
             await logout();
@@ -365,6 +366,30 @@ export default function SettingsScreen() {
                             </View>
                             <Text style={styles.settingLabel}>{t('settings.legal')}</Text>
                             <Text style={styles.settingValue}>{t('settings.termsAndPrivacy')}</Text>
+                            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+                        </TouchableOpacity>
+                        <View style={styles.cardDivider} />
+                        <TouchableOpacity style={styles.actionRow} onPress={() => router.push('/policies' as any)}>
+                            <View style={[styles.settingIcon, { backgroundColor: `${colors.primary}12` }]}>
+                                <Ionicons name="library" size={18} color={colors.primary} />
+                            </View>
+                            <Text style={styles.settingLabel}>{t('settings.morePolicies')}</Text>
+                            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+                        </TouchableOpacity>
+                        <View style={styles.cardDivider} />
+                        <TouchableOpacity style={styles.actionRow} onPress={() => router.push('/crc-consent' as any)}>
+                            <View style={[styles.settingIcon, { backgroundColor: `${colors.primary}12` }]}>
+                                <Ionicons name="shield-checkmark" size={18} color={colors.primary} />
+                            </View>
+                            <Text style={styles.settingLabel}>{t('settings.backgroundCheckConsent')}</Text>
+                            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+                        </TouchableOpacity>
+                        <View style={styles.cardDivider} />
+                        <TouchableOpacity style={styles.actionRow} onPress={() => router.push('/appeal' as any)}>
+                            <View style={[styles.settingIcon, { backgroundColor: `${colors.primary}12` }]}>
+                                <Ionicons name="hand-left" size={18} color={colors.primary} />
+                            </View>
+                            <Text style={styles.settingLabel}>{t('settings.appealAccountStatus')}</Text>
                             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                         </TouchableOpacity>
                         <View style={styles.cardDivider} />

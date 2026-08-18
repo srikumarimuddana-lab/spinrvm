@@ -42,6 +42,13 @@ const mockTemplates: MockTpl[] = [];
 const mockZoomIn = jest.fn();
 const mockZoomOut = jest.fn();
 const mockReset = jest.fn();
+const mockRecenter = jest.fn();
+const mockPan = jest.fn();
+
+const mockStartCarLocation = jest.fn().mockResolvedValue('started');
+const mockStopCarLocation = jest.fn().mockResolvedValue(undefined);
+const mockStartCarSession = jest.fn().mockResolvedValue(undefined);
+const mockStopCarSession = jest.fn();
 
 jest.mock('../../../store/driverStore', () => ({
   useDriverStore: {
@@ -52,9 +59,31 @@ jest.mock('../../../store/driverStore', () => ({
 
 jest.mock('../carSurface', () => ({ CarMapSurface: () => null }));
 
+// Not a location test. Mocking it also keeps the real module's transitive
+// utils/backgroundLocation import (SQLite recorder, Firebase App Check) out of
+// this suite entirely.
+jest.mock('../carLocationTask', () => ({
+  startCarLocationService: (...a: unknown[]) => mockStartCarLocation(...a),
+  stopCarLocationService: (...a: unknown[]) => mockStopCarLocation(...a),
+}));
+
+// Its own suite covers the bootstrap; here we only care that register wires the
+// start/stop to connect/disconnect, and that a failing bootstrap cannot take
+// the template down with it.
+jest.mock('../carSession', () => ({
+  startCarSession: (...a: unknown[]) => mockStartCarSession(...a),
+  stopCarSession: (...a: unknown[]) => mockStopCarSession(...a),
+}));
+
 jest.mock('../carMapCamera', () => ({
   useCarMapCamera: {
-    getState: () => ({ zoomIn: mockZoomIn, zoomOut: mockZoomOut, reset: mockReset }),
+    getState: () => ({
+      zoomIn: mockZoomIn,
+      zoomOut: mockZoomOut,
+      reset: mockReset,
+      recenter: mockRecenter,
+      pan: mockPan,
+    }),
   },
 }));
 
@@ -127,13 +156,28 @@ beforeEach(() => {
   mockDeclineRide.mockClear();
   mockArriveAtPickup.mockClear();
   mockCompleteRide.mockClear();
+  mockStartCarLocation.mockClear();
+  mockStopCarLocation.mockClear();
+  mockStartCarSession.mockClear();
+  mockStopCarSession.mockClear();
   mockConnected = true;
   mockState.rideState = 'idle';
   mockState.activeRide = null;
   mockState.incomingRide = null;
 });
 
-afterEach(() => jest.restoreAllMocks());
+afterEach(() => {
+  // Every test here registers a fresh listener set and most connect a head unit;
+  // without a matching disconnect the session's timers (cold-start poll,
+  // post-connect chrome refresh) stay armed and fire into the NEXT test — or
+  // after the run, which is what "Cannot log after tests are done" was.
+  try {
+    mockListeners.didDisconnect?.();
+  } catch {
+    /* a suite that never registered has nothing to tear down */
+  }
+  jest.restoreAllMocks();
+});
 
 it('does nothing on non-Android platforms', () => {
   (Platform as unknown as { OS: string }).OS = 'ios';
@@ -150,9 +194,13 @@ it('creates ONE live MapTemplate with zoom-only buttons and no header action whe
   expect(t.setRootTemplate).toHaveBeenCalled();
 
   const buttons = lastMapButtons(t);
-  expect(buttons).toHaveLength(2); // zoom out + zoom in only
-  buttons[0].onPress();
-  buttons[1].onPress();
+  // Recenter is always present — once the head unit can pan (onDidPan), a
+  // driver who has dragged away needs a way back regardless of ride state.
+  expect(buttons).toHaveLength(3); // recenter + zoom out + zoom in
+  buttons[0].onPress(); // recenter
+  buttons[1].onPress(); // zoom out
+  buttons[2].onPress(); // zoom in
+  expect(mockRecenter).toHaveBeenCalledTimes(1);
   expect(mockZoomOut).toHaveBeenCalledTimes(1);
   expect(mockZoomIn).toHaveBeenCalledTimes(1);
 
@@ -169,7 +217,9 @@ it('adds a single Navigate hand-off (before zoom) and a Complete action while in
 
   const t = lastTpl();
   const buttons = lastMapButtons(t);
-  expect(buttons).toHaveLength(3); // navigate, zoom out, zoom in
+  // Exactly Android Auto's action-strip cap. If this ever needs a fifth entry,
+  // something has to be dropped rather than appended.
+  expect(buttons).toHaveLength(4); // navigate, recenter, zoom out, zoom in
 
   buttons[0].onPress(); // Navigate → Google hand-off (platform default)
   expect(Linking.openURL).toHaveBeenCalledWith(
@@ -278,6 +328,92 @@ it('never creates a template when no car is connected', () => {
   registerAutoPlay();
   mockListeners.didConnect?.();
   expect(mockTemplates).toHaveLength(0);
+});
+
+describe('display-only location service', () => {
+  it('starts on connect — the in-hook watcher alone is throttled car-only', () => {
+    registerAutoPlay();
+    mockListeners.didConnect();
+    // Deliberately not a call count. registerAutoPlay's already-connected branch
+    // and the didConnect listener can both fire for one connection, and a head
+    // unit swapping to the reversing camera re-fires it again; the service is
+    // idempotent (it returns 'already-running'), so re-asking is the cheap
+    // self-heal, not a bug to assert against.
+    expect(mockStartCarLocation).toHaveBeenCalled();
+  });
+
+  it('stops on disconnect, so the notification dies with the screen it drew for', () => {
+    registerAutoPlay();
+    mockListeners.didConnect();
+    mockListeners.didDisconnect();
+    expect(mockStopCarLocation).toHaveBeenCalledTimes(1);
+  });
+
+  it('disconnect cancels the post-connect chrome refreshes', () => {
+    // Those two timers exist to re-push chrome at a template that came up before
+    // its assets resolved. Left armed past a disconnect they fire at a template
+    // that is already null — and they outlive the test run, which is how the
+    // leak showed up.
+    jest.useFakeTimers();
+    try {
+      registerAutoPlay();
+      mockListeners.didConnect();
+      expect(jest.getTimerCount()).toBeGreaterThan(0);
+      mockListeners.didDisconnect();
+      expect(jest.getTimerCount()).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('is never started for a head unit that is not actually connected', () => {
+    mockConnected = false;
+    registerAutoPlay();
+    mockListeners.didConnect?.();
+    expect(mockStartCarLocation).not.toHaveBeenCalled();
+  });
+});
+
+describe('headless car session', () => {
+  it('bootstraps on connect — no phone screen mounts to load this data', () => {
+    registerAutoPlay();
+    mockListeners.didConnect();
+    expect(mockStartCarSession).toHaveBeenCalled();
+  });
+
+  it('tears down on disconnect', () => {
+    registerAutoPlay();
+    mockListeners.didConnect();
+    mockListeners.didDisconnect();
+    expect(mockStopCarSession).toHaveBeenCalled();
+  });
+
+  it('a failing bootstrap still leaves a working map and buttons', async () => {
+    // The whole premise is that the baseline needs no session: a signed-out or
+    // offline driver must still get a map, a marker and a header.
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    mockStartCarSession.mockRejectedValueOnce(new Error('no network'));
+    registerAutoPlay();
+    expect(() => mockListeners.didConnect()).not.toThrow();
+    await Promise.resolve();
+    expect(mockTemplates).toHaveLength(1);
+    expect(lastTpl().setMapButtons).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it('a rejected start cannot take the car screen down with it', async () => {
+    // The reversing-camera path re-fires didConnect, and a throw here would
+    // abort onConnect before apply() — leaving the driver with no header
+    // actions at all, SOS included.
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    mockStartCarLocation.mockRejectedValueOnce(new Error('FGS start refused'));
+    registerAutoPlay();
+    expect(() => mockListeners.didConnect()).not.toThrow();
+    await Promise.resolve();
+    expect(mockTemplates).toHaveLength(1);
+    expect(lastTpl().setRootTemplate).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
 });
 
 // The missing-native-module degrade path is covered in register.degrade.test.ts:

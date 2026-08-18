@@ -261,6 +261,15 @@ class SettingsUpdateRequest(BaseModel):
     # credentials.
     sos_paging_webhook_url: Optional[str] = None
     sos_paging_routing_key: Optional[str] = None
+    # Safety panel — global tiles (migration 316 covers the per-service-area
+    # local-authority row instead). Surfaced to the apps via GET /settings.
+    # Blank email/phone hides that tile, same "render only what's configured"
+    # rule the authority row uses. Not credentials — these are published to
+    # riders and drivers by design, so no masking or super_admin gate.
+    safety_team_email: Optional[str] = None
+    safety_team_phone: Optional[str] = None
+    sos_show_share_trip: Optional[bool] = None
+    sos_show_report_issue: Optional[bool] = None
     # Dispatch & matching — also configurable per service area (area overrides global).
     max_simultaneous_offers: Optional[int] = Field(default=None, ge=1, le=10)
     ride_offer_timeout_seconds: Optional[int] = Field(default=None, ge=5, le=60)
@@ -405,6 +414,16 @@ class SettingsUpdateRequest(BaseModel):
     # comparison for every client.
     min_rider_app_version: Optional[str] = Field(default=None, pattern=r"^$|^\d+\.\d+\.\d+$")
     min_driver_app_version: Optional[str] = Field(default=None, pattern=r"^$|^\d+\.\d+\.\d+$")
+    # Ships dark (default false/unset): gates POST /admin/disputes/{id}/
+    # submit-evidence (routes/admin/dispute_evidence_submission.py, C23
+    # item 5), which calls stripe.Dispute.modify(evidence=...) -- a
+    # real, effectively irreversible submission to Stripe on a live
+    # chargeback (evidence can be updated but not un-submitted before the
+    # dispute's due_by). Same "ship dark, flip on after staging
+    # verification" posture as corporate_subscription_billing_enabled
+    # above. The endpoint also requires an explicit confirm:true on every
+    # call -- this flag alone does not make a single request submit.
+    dispute_stripe_evidence_submission_enabled: Optional[bool] = None
 
     @field_validator("lms_api_base_url")
     @classmethod

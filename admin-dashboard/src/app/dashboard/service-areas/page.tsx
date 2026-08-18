@@ -622,6 +622,13 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
     regulatory_region: area.regulatory_region || area.province || "SK",
     regulatory_requirements_url: area.regulatory_requirements_url || "",
     regulatory_notes: area.regulatory_notes || "",
+    // Safety panel (migration 316) — rider/driver facing, distinct from the
+    // regulatory_* fields above which are driver-licensing metadata.
+    emergency_number: area.emergency_number || "911",
+    safety_authority_name: area.safety_authority_name || "",
+    safety_authority_phone: area.safety_authority_phone || "",
+    safety_authority_url: area.safety_authority_url || "",
+    safety_authority_hours: area.safety_authority_hours || "",
     max_pickup_radius_km: area.max_pickup_radius_km || 5,
     is_active: area.is_active !== false,
     driver_matching_algorithm: area.driver_matching_algorithm || "nearest",
@@ -669,6 +676,14 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
       regulatory_region: form.regulatory_region || form.province,
       regulatory_requirements_url: form.regulatory_requirements_url,
       regulatory_notes: form.regulatory_notes,
+      // Blank strings are sent through as-is: the apps treat an empty
+      // safety_authority_name as "hide the row", so clearing a field is a
+      // valid way to remove the tile for an area.
+      emergency_number: (form.emergency_number || "").trim() || "911",
+      safety_authority_name: form.safety_authority_name,
+      safety_authority_phone: form.safety_authority_phone,
+      safety_authority_url: form.safety_authority_url,
+      safety_authority_hours: form.safety_authority_hours,
       max_pickup_radius_km: parseFloat(String(form.max_pickup_radius_km)) || 5,
       is_active: form.is_active,
       driver_matching_algorithm: form.driver_matching_algorithm,
@@ -745,6 +760,42 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
           <label className="block text-xs font-semibold text-muted-foreground mb-1">Regulatory Notes</label>
           <textarea className="w-full border rounded-lg px-3 py-2 text-sm min-h-[80px]" value={form.regulatory_notes} onChange={e => setForm({ ...form, regulatory_notes: e.target.value })} placeholder="Summarize local driver approval/licensing rules for this service area" />
         </div>
+        {/* ---- Safety panel (migration 316) ----
+            Kept visually separate from the Regulatory block above on purpose:
+            those fields decide who licenses a DRIVER, these decide what a
+            RIDER sees when they press SOS. Conflating them is how a licensing
+            office ends up on an emergency screen. */}
+        <div className="md:col-span-3 mt-2 pt-3 border-t">
+          <h4 className="text-sm font-semibold">Safety panel (rider &amp; driver facing)</h4>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Shown when someone opens SOS in this area. Leave the authority name blank to hide that
+            row entirely — a new area with nothing filled in simply shows no local contact.
+          </p>
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Emergency Number</label>
+          <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.emergency_number} onChange={e => setForm({ ...form, emergency_number: e.target.value })} placeholder="911" />
+          <p className="text-[11px] text-muted-foreground mt-1">Dialled by the SOS panel. Leave as 911 unless this area genuinely differs.</p>
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Local Authority Name</label>
+          <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.safety_authority_name} onChange={e => setForm({ ...form, safety_authority_name: e.target.value })} placeholder="e.g. City of Calgary 311" />
+          <p className="text-[11px] text-muted-foreground mt-1">Non-emergency complaint channel. Blank = row hidden.</p>
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Local Authority Phone</label>
+          <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.safety_authority_phone} onChange={e => setForm({ ...form, safety_authority_phone: e.target.value })} placeholder="e.g. 311" />
+          <p className="text-[11px] text-muted-foreground mt-1">Short codes like 311 are fine. Blank = link only, no call button.</p>
+        </div>
+        <div className="md:col-span-2">
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Local Authority URL</label>
+          <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.safety_authority_url} onChange={e => setForm({ ...form, safety_authority_url: e.target.value })} placeholder="Link to the local rideshare complaint page" />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-muted-foreground mb-1">Authority Hours</label>
+          <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.safety_authority_hours} onChange={e => setForm({ ...form, safety_authority_hours: e.target.value })} placeholder="e.g. 24/7" />
+        </div>
+
         <div>
           <label className="block text-xs font-semibold text-muted-foreground mb-1">Pickup Radius (km)</label>
           <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" step="0.5" value={form.max_pickup_radius_km} onChange={e => setForm({ ...form, max_pickup_radius_km: e.target.value as any })} />

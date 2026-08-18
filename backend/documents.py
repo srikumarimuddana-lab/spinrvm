@@ -32,6 +32,35 @@ def _is_valid_uuid(value: str) -> bool:
 
 
 # --- File Upload Security ---
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+_UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1 MB
+
+
+class FileTooLargeError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(status_code=413, detail="File too large (max 10MB)")
+
+
+async def read_upload_capped(file: UploadFile, max_bytes: int = MAX_FILE_SIZE) -> bytes:
+    """Read an UploadFile into memory, refusing to buffer more than max_bytes.
+
+    Reads in chunks and bails as soon as the cap is passed, so an oversized
+    body is never fully materialised — a plain ``await file.read()`` would
+    buffer the whole thing before anyone could check its length.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(_UPLOAD_CHUNK_SIZE)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise FileTooLargeError()
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 ALLOWED_MIME_TYPES = {
     "image/jpeg",
     "image/jpg",  # alias — some devices/pickers send this
@@ -49,7 +78,62 @@ _MAGIC_BYTES = {
     b"%PDF": "application/pdf",
 }
 
-ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf"}
+# Canonical extension per accepted type. The extension an upload is stored
+# under is derived from this map, never from the client-supplied filename —
+# see _resolve_upload_type.
+_MIME_TO_EXTENSION = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "application/pdf": ".pdf",
+}
+
+# Every accepted MIME type must have a canonical extension, or the upload
+# endpoints silently refuse a type the rest of the module says is allowed.
+# `image/jpg` is an alias normalised to image/jpeg before any lookup, so it is
+# deliberately absent from _MIME_TO_EXTENSION rather than missing from it.
+_MIME_ALIASES = {"image/jpg": "image/jpeg"}
+if set(_MIME_TO_EXTENSION) | set(_MIME_ALIASES) != ALLOWED_MIME_TYPES:
+    # A raise, not an assert: `python -O` strips asserts, and this invariant
+    # failing means one upload path accepts a type another silently refuses.
+    raise RuntimeError(
+        "ALLOWED_MIME_TYPES and _MIME_TO_EXTENSION have drifted apart: "
+        f"{ALLOWED_MIME_TYPES ^ (set(_MIME_TO_EXTENSION) | set(_MIME_ALIASES))}"
+    )
+
+# ISO base-media-format brands. These are real image formats, but no
+# <img> tag in the admin document-review UI can render HEIF and React
+# Native's <Image> support for both HEIF and AVIF is inconsistent across OS
+# versions — so they are detected in order to be REJECTED with an actionable
+# message. Storing one would break document review silently at review time
+# instead of loudly at upload time.
+_UNRENDERABLE_BRANDS = {
+    b"heic": "HEIC",
+    b"heix": "HEIC",
+    b"heim": "HEIC",
+    b"heis": "HEIC",
+    b"hevc": "HEIC",
+    b"hevx": "HEIC",
+    b"heif": "HEIF",
+    b"mif1": "HEIF",
+    b"msf1": "HEIF",
+    b"avif": "AVIF",
+    b"avis": "AVIF",
+}
+# Declared content-types that name an unrenderable format. Used so a file too
+# short or too truncated to sniff still gets the actionable message rather
+# than the generic "unsupported format" one.
+_UNRENDERABLE_MIMES = {
+    "image/heic": "HEIC",
+    "image/heif": "HEIF",
+    "image/heic-sequence": "HEIC",
+    "image/heif-sequence": "HEIF",
+    "image/avif": "AVIF",
+}
+# Sentinel returned by _sniff_mime_type for these formats. It is intentionally
+# NOT a key in _MIME_TO_EXTENSION — nothing may be stored under it.
+_UNRENDERABLE_MIME = "image/x-unrenderable"
 
 
 def _is_valid_webp(data: bytes) -> bool:
@@ -57,8 +141,93 @@ def _is_valid_webp(data: bytes) -> bool:
     return data[:4] == b"RIFF" and data[8:12] == b"WEBP"
 
 
+def _unrenderable_brand(data: bytes) -> Optional[str]:
+    """Return the display name ('HEIC'/'HEIF'/'AVIF') if data is an ISO-BMFF
+    file with a brand we refuse to store, else None."""
+    if len(data) < 12 or data[4:8] != b"ftyp":
+        return None
+    return _UNRENDERABLE_BRANDS.get(data[8:12])
+
+
+def _sniff_mime_type(content: bytes) -> Optional[str]:
+    """Identify a file's real type from its header bytes, or None if unknown.
+
+    May return ``_UNRENDERABLE_MIME``, which is deliberately absent from
+    ``_MIME_TO_EXTENSION`` — callers must route it to a rejection rather than
+    indexing the extension map with it. Prefer ``_resolve_upload_type``, which
+    handles that for you.
+    """
+    if _is_valid_webp(content):
+        return "image/webp"
+    if _unrenderable_brand(content):
+        return _UNRENDERABLE_MIME
+    for magic, magic_mime in _MAGIC_BYTES.items():
+        if content.startswith(magic):
+            return magic_mime
+    return None
+
+
+def _unrenderable_format_error(fmt: str) -> HTTPException:
+    """400 for a real image format we can detect but refuse to store."""
+    return HTTPException(
+        status_code=400,
+        detail=(
+            f"{fmt} photos aren't supported. On iPhone, either take the photo with "
+            "the in-app camera, or set Settings → Camera → Formats → Most Compatible "
+            "and re-take it. JPG, PNG, GIF, WEBP and PDF are accepted."
+        ),
+    )
+
+
+def _resolve_upload_type(content: bytes, declared_type: str) -> tuple[str, str]:
+    """Return the (mime_type, extension) an upload should be stored under.
+
+    The file's own bytes are authoritative; the client's declared
+    content-type is only consulted when the header is unrecognised. Mobile
+    pickers routinely mislabel uploads — expo-image-picker reports every
+    asset it returns as ``image/jpeg`` whatever the real format is, Android's
+    document picker sends ``application/octet-stream``, and an iPhone gallery
+    asset keeps its ``.HEIC`` filename even after Expo has re-encoded the
+    bytes to JPEG. Gating on the declared type (or on the filename extension)
+    therefore rejected most real driver-signup uploads.
+
+    Raises HTTPException(400) for HEIF/AVIF and for content we cannot place.
+    """
+    normalised = _MIME_ALIASES.get(declared_type, declared_type)
+
+    sniffed = _sniff_mime_type(content)
+    if sniffed == _UNRENDERABLE_MIME:
+        raise _unrenderable_format_error(_unrenderable_brand(content) or "HEIC")
+    if sniffed:
+        return sniffed, _MIME_TO_EXTENSION[sniffed]
+
+    # Header unrecognised — too short to sniff, truncated, or a format we have
+    # no signature for. A file that never got far enough to sniff but *says*
+    # it is one of the unrenderable formats still earns the actionable message
+    # rather than the generic one.
+    if normalised in _UNRENDERABLE_MIMES:
+        raise _unrenderable_format_error(_UNRENDERABLE_MIMES[normalised])
+
+    # Otherwise fall back to the declared type, exactly as the old magic-byte
+    # check did for unknown headers.
+    if normalised in _MIME_TO_EXTENSION:
+        return normalised, _MIME_TO_EXTENSION[normalised]
+
+    raise HTTPException(
+        status_code=400,
+        detail=(f"Unsupported file format (received '{declared_type}'). Please upload a JPG, PNG, GIF, WEBP or PDF."),
+    )
+
+
 def _validate_file_type(content: bytes, declared_type: str) -> None:
-    """Validate file MIME type against allowlist and verify magic bytes."""
+    """Validate file MIME type against allowlist and verify magic bytes.
+
+    Kept for callers whose declared content-type is trustworthy: admin
+    illustration uploads from a browser (routes/admin/vehicle_fleet.py) and
+    bundle replay, which derives the type from a server-written manifest
+    extension. Uploads from the mobile pickers go through
+    _resolve_upload_type instead, which does not trust the declared type.
+    """
     # Normalise image/jpg → image/jpeg before allowlist check
     normalised = "image/jpeg" if declared_type == "image/jpg" else declared_type
     if normalised not in ALLOWED_MIME_TYPES:
@@ -410,14 +579,31 @@ def regenerate_signed_url(stored_url: str, expires_in: int = 3600) -> str:
 
 
 async def save_upload(file: UploadFile) -> str:
-    file_ext = os.path.splitext(file.filename)[1]
+    # Capped read: this path has no Request object to pre-check content-length
+    # against, and there is no global body-size middleware, so without this an
+    # authenticated caller could make the worker buffer an unbounded body.
+    try:
+        file_bytes = await read_upload_capped(file)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to read uploaded file: {e}")
+        raise HTTPException(status_code=400, detail="Could not read the uploaded file") from e
+
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    # Same byte-sniffing contract as /api/v1/upload: the content decides the
+    # stored type and extension, not the client's filename or content-type
+    # header. Raised outside the storage try below so a 400 "unsupported
+    # format" reaches the caller as a 400 instead of being caught by the
+    # `except Exception` and re-raised as an opaque 500 "Could not save file".
+    content_type, file_ext = _resolve_upload_type(file_bytes, file.content_type or "application/octet-stream")
     filename = f"{uuid.uuid4()}{file_ext}"
 
     try:
-        file_bytes = await file.read()
-        _validate_file_type(file_bytes, file.content_type or "application/octet-stream")
         supabase.storage.from_("driver-documents").upload(
-            file=file_bytes, path=filename, file_options={"content-type": file.content_type}
+            file=file_bytes, path=filename, file_options={"content-type": content_type}
         )
 
         url_res = supabase.storage.from_("driver-documents").create_signed_url(filename, 3600)
@@ -549,6 +735,15 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
         # before the driver has completed the vehicle-info step.
         first = current_user.get("first_name", "")
         last = current_user.get("last_name", "")
+        # regulatory_authority/regulatory_region must never be left NULL on a
+        # new driver row — see ACTION_ITEMS.md B13. This is a third live
+        # driver auto-create path (document upload before vehicle-info is
+        # completed) with the same gap the other two had.
+        try:
+            from .routes.drivers._shared import _resolve_regulatory_defaults
+        except ImportError:  # pragma: no cover - dual-import pattern
+            from routes.drivers._shared import _resolve_regulatory_defaults  # type: ignore
+        _reg_authority, _reg_region = await _resolve_regulatory_defaults(None)
         driver = {
             "id": str(uuid.uuid4()),
             "user_id": current_user["id"],
@@ -563,6 +758,8 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
             "lat": 0,
             "lng": 0,
             "created_at": datetime.now(timezone.utc).isoformat(),
+            "regulatory_authority": _reg_authority,
+            "regulatory_region": _reg_region,
         }
         await db.insert_one("drivers", driver)
         await db.update_one(
@@ -982,14 +1179,6 @@ files_router = APIRouter(prefix="/documents", tags=["Files"])
 upload_router = APIRouter(tags=["Upload"])
 
 
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
-
-
-class FileTooLargeError(HTTPException):
-    def __init__(self) -> None:
-        super().__init__(status_code=413, detail="File too large (max 10MB)")
-
-
 @upload_router.post("/upload")
 async def upload_file(
     request: Request,
@@ -1007,8 +1196,8 @@ async def upload_file(
     # identity documents (licence, insurance, registration) and the uploaded
     # name routinely carries the driver's name or licence number — the same
     # reason `safe_name` below never echoes it back to the caller (12-8).
-    # The extension is the only part with diagnostic value here, since the
-    # next failure mode is the ALLOWED_EXTENSIONS check.
+    # The extension is the only part with diagnostic value here, since a
+    # picker that mislabels the extension usually mislabels content_type too.
     logger.info(
         "[upload] hit /api/v1/upload user={} ext={} content_type={}",
         (current_user or {}).get("id"),
@@ -1020,24 +1209,21 @@ async def upload_file(
         if content_length and int(content_length) > MAX_FILE_SIZE:
             raise FileTooLargeError()
 
-        content = await file.read()
+        # 10 MB hard cap -- documents are usually photos/PDFs. The
+        # content-length check above is only a fast path; a client can lie
+        # about or omit the header, so the read itself is what enforces it.
+        content = await read_upload_capped(file)
         if not content:
             raise HTTPException(status_code=400, detail="Empty file")
 
-        # 10 MB hard cap -- documents are usually photos/PDFs
-        if len(content) > MAX_FILE_SIZE:
-            raise FileTooLargeError()
-
         size = len(content)
-        original_filename = file.filename or "upload"
-        content_type = file.content_type or "application/octet-stream"
 
-        _validate_file_type(content, content_type)
-
-        # Validate file extension against allowlist (12-11)
-        ext = Path(original_filename).suffix.lower()
-        if ext not in ALLOWED_EXTENSIONS:
-            raise HTTPException(status_code=400, detail=f"File type {ext} not allowed")
+        # Type and extension are both derived from the file's own bytes — the
+        # client-supplied filename is never trusted for either (12-11). A
+        # mobile picker's declared content-type and filename extension
+        # disagree with the real content often enough that gating on them
+        # rejected most genuine driver-signup uploads.
+        content_type, ext = _resolve_upload_type(content, file.content_type or "application/octet-stream")
 
         # Preserve extension so Supabase serves the object with a sensible
         # content-type when the browser fetches the public URL.

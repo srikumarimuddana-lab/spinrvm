@@ -49,6 +49,9 @@ class _Req:
     message = "Emergency!"
     latitude = 43.651070
     longitude = -79.347015
+    # Mirrors EmergencyRequest's default. Absent key == pre-migration-315
+    # behavior (always insert), which is what these baseline tests pin.
+    idempotency_key = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -450,3 +453,236 @@ class TestTriggerEmergency:
         assert persisted, "the incident itself must still be persisted"
         assert sms_calls == []
         assert any("SOS emergency contact notification failed" in c.args[0] for c in mock_logger.error.call_args_list)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Idempotency (migration 315)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class _ReqWithKey(_Req):
+    idempotency_key = "abc123def-9f8e7d6c"
+
+
+@pytest.mark.asyncio
+class TestSOSIdempotency:
+    """A retry after a lost response must not create a second incident or
+    re-send the "URGENT" SMS to the reporter's emergency contacts.
+
+    SOSButton deliberately retries (3 attempts, 1s/2s backoff) because an SOS
+    has to survive a flaky connection -- but a request that landed and whose
+    response was lost is indistinguishable client-side from one that never
+    arrived. Before migration 315 every such retry inserted another
+    safety_incidents row and re-alerted the rider's family.
+
+    Code under test: backend/routes/rides/safety.py::trigger_emergency
+    """
+
+    async def _call(self, body, prior_incidents, get_rows_side_effect=None):
+        from backend.routes import rides as rides_mod
+
+        persisted = []
+        sms_calls = []
+
+        async def _insert(table, row):
+            persisted.append((table, row))
+
+        async def _get_rows(table, query, **kwargs):
+            if table == "drivers":
+                return []
+            if table == "safety_incidents":
+                return prior_incidents
+            if table == "emergency_contacts":
+                return [{"id": "ec-1", "phone": "+13061112222", "name": "Mom"}]
+            return []
+
+        async def _send_sms(phone, body_text, **kwargs):
+            sms_calls.append(phone)
+            return {"success": True}
+
+        with (
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=_ride())),
+            patch(
+                "backend.routes.rides._deps.db_supabase.get_rows",
+                AsyncMock(side_effect=get_rows_side_effect or _get_rows),
+            ),
+            patch("backend.routes.rides._deps.db_supabase.insert_one", AsyncMock(side_effect=_insert)),
+            patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch(
+                "backend.routes.rides._deps.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"first_name": "Test", "last_name": "User"}),
+            ),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+            patch("backend.routes.rides._deps.send_sms", AsyncMock(side_effect=_send_sms)),
+        ):
+            result = await rides_mod.trigger_emergency(ride_id=RIDE_ID, body=body, current_user={"id": RIDER_ID})
+        # Filter to the incident rows: trigger_emergency also inserts via the
+        # SOS-confirmation push path, which is not what these tests are about.
+        incidents = [row for table, row in persisted if table == "safety_incidents"]
+        return result, incidents, sms_calls
+
+    async def test_replay_returns_original_incident_without_side_effects(self):
+        """The whole point: zero new inserts, zero new SMS."""
+        prior = [{"id": "incident-original-001", "sos_idempotency_key": _ReqWithKey.idempotency_key}]
+
+        result, persisted, sms_calls = await self._call(_ReqWithKey(), prior_incidents=prior)
+
+        assert result["success"] is True
+        assert result["incident_id"] == "incident-original-001"
+        assert result["duplicate"] is True
+        assert persisted == [], "a replay must not insert a second incident"
+        assert sms_calls == [], "a replay must not re-alarm the emergency contacts"
+
+    async def test_first_call_persists_and_stamps_the_key(self):
+        result, persisted, sms_calls = await self._call(_ReqWithKey(), prior_incidents=[])
+
+        assert result["success"] is True
+        assert result.get("duplicate") is None
+        assert len(persisted) == 1
+        assert persisted[0]["sos_idempotency_key"] == _ReqWithKey.idempotency_key
+        assert sms_calls, "the first call must still alert emergency contacts"
+
+    async def test_absent_key_keeps_legacy_insert_always_behavior(self):
+        """Older clients that send no key must be unaffected -- and must NOT
+        be deduped against each other by a NULL key."""
+        result, persisted, _sms = await self._call(_Req(), prior_incidents=[])
+
+        assert result["success"] is True
+        assert len(persisted) == 1
+        assert "sos_idempotency_key" not in persisted[0]
+
+    async def test_dedup_lookup_failure_falls_through_rather_than_dropping_sos(self):
+        """A failing dedup read must never block the alert. A duplicate
+        incident is strictly better than a dropped SOS."""
+
+        async def _boom(table, query, **kwargs):
+            if table == "safety_incidents":
+                raise RuntimeError("supabase down")
+            if table == "drivers":
+                return []
+            if table == "emergency_contacts":
+                return [{"id": "ec-1", "phone": "+13061112222", "name": "Mom"}]
+            return []
+
+        result, persisted, sms_calls = await self._call(_ReqWithKey(), prior_incidents=[], get_rows_side_effect=_boom)
+
+        assert result["success"] is True
+        assert len(persisted) == 1, "the SOS must still be recorded"
+        assert sms_calls, "contacts must still be alerted"
+
+
+@pytest.mark.asyncio
+class TestSOSIdempotencyFailureRecovery:
+    """Review follow-ups: neither recoverable insert failure may surface to the
+    user as "alert not sent"."""
+
+    async def _call(self, insert_side_effect, prior_after_failure):
+        from backend.routes import rides as rides_mod
+
+        persisted = []
+        lookups = {"n": 0}
+        attempts = {"n": 0}
+
+        async def _insert(table, row):
+            if table == "safety_incidents":
+                # Count ATTEMPTS, not successes -- a failed insert appends
+                # nothing, so counting persisted rows made the retry re-raise.
+                outcome = insert_side_effect(attempts["n"])
+                attempts["n"] += 1
+                if outcome is not None:
+                    raise outcome
+            persisted.append((table, row))
+
+        async def _get_rows(table, query, **kwargs):
+            if table == "safety_incidents":
+                lookups["n"] += 1
+                # First lookup = the pre-insert dedup check (miss). Any later
+                # lookup is the post-failure race re-read.
+                return prior_after_failure if lookups["n"] > 1 else []
+            if table == "drivers":
+                return []
+            if table == "emergency_contacts":
+                return []
+            return []
+
+        with (
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=_ride())),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.rides._deps.db_supabase.insert_one", AsyncMock(side_effect=_insert)),
+            patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch(
+                "backend.routes.rides._deps.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"first_name": "T", "last_name": "U"}),
+            ),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+            patch("backend.routes.rides._deps.send_sms", AsyncMock(return_value={"success": True})),
+        ):
+            result = await rides_mod.trigger_emergency(
+                ride_id=RIDE_ID, body=_ReqWithKey(), current_user={"id": RIDER_ID}
+            )
+        incidents = [row for table, row in persisted if table == "safety_incidents"]
+        return result, incidents
+
+    async def test_unique_violation_returns_the_original_not_a_503(self):
+        """A concurrent retry losing the UNIQUE race means the alert ALREADY
+        fired. Reporting 503 would tell the user their SOS failed while their
+        contacts were being texted."""
+        result, _ = await self._call(
+            insert_side_effect=lambda n: Exception("duplicate key value violates unique constraint"),
+            prior_after_failure=[{"id": "incident-raced-001"}],
+        )
+        assert result["success"] is True
+        assert result["incident_id"] == "incident-raced-001"
+        assert result["duplicate"] is True
+
+    async def test_missing_column_retries_without_the_key_instead_of_failing(self):
+        """If this build reaches production before migration 315 is applied,
+        PostgREST rejects the payload for an unknown column. Dropping dedup is
+        acceptable; dropping the SOS is not."""
+        result, incidents = await self._call(
+            # Fail only the first attempt (the one carrying the key).
+            insert_side_effect=lambda n: Exception('column "sos_idempotency_key" does not exist') if n == 0 else None,
+            prior_after_failure=[],
+        )
+        assert result["success"] is True
+        assert len(incidents) == 1
+        assert "sos_idempotency_key" not in incidents[0]
+
+
+@pytest.mark.asyncio
+class TestSOSMalformedKeyFailsOpen:
+    async def test_malformed_key_is_ignored_rather_than_422ing_the_alert(self):
+        """Optional metadata must never be able to reject an emergency."""
+        from backend.routes import rides as rides_mod
+
+        class _BadKeyReq(_Req):
+            idempotency_key = "../../etc/passwd"
+
+        persisted = []
+
+        async def _insert(table, row):
+            persisted.append((table, row))
+
+        async def _get_rows(table, query, **kwargs):
+            return []
+
+        with (
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=_ride())),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.rides._deps.db_supabase.insert_one", AsyncMock(side_effect=_insert)),
+            patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch(
+                "backend.routes.rides._deps.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"first_name": "T", "last_name": "U"}),
+            ),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+            patch("backend.routes.rides._deps.send_sms", AsyncMock(return_value={"success": True})),
+        ):
+            result = await rides_mod.trigger_emergency(
+                ride_id=RIDE_ID, body=_BadKeyReq(), current_user={"id": RIDER_ID}
+            )
+
+        incidents = [row for t, row in persisted if t == "safety_incidents"]
+        assert result["success"] is True
+        assert len(incidents) == 1
+        assert "sos_idempotency_key" not in incidents[0], "a malformed key must not be stored"

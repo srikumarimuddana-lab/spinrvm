@@ -740,3 +740,73 @@ async def test_offer_timeout_handler_driver_notify_exception_is_swallowed():
             await _offer_timeout_handler("ride-1", "drv-1", "rider-1", timeout_seconds=1)
 
     mock_deps.db_supabase.set_driver_available.assert_awaited_once()
+
+
+# ── C35: offer payload carries is_scheduled ──────────────────────────────
+
+
+async def _run_single_driver_dispatch(ride):
+    """Shared harness: dispatches ``ride`` to one claimed driver and returns
+    the WS dispatch_payload dict sent to that driver."""
+    driver = _make_driver("drv-1")
+
+    from backend.routes.rides.matching import _match_driver_to_ride_attempt
+
+    with (
+        patch("backend.routes.rides.matching._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
+        patch(
+            "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
+            AsyncMock(return_value=("nearest", 0, 10.0, 1, False)),
+        ),
+        patch(
+            "backend.routes.rides.matching._deps.filter_and_rank_drivers",
+            side_effect=lambda ride, drivers, *a, **kw: [(d, 1.0) for d in drivers],
+        ),
+        patch(
+            "backend.utils.driver_presence.present_driver_ids_checked",
+            AsyncMock(return_value=(set(), False)),
+        ),
+        patch("backend.utils.redis_client.redis_mget", AsyncMock(return_value=[None])),
+        patch("backend.routes.rides.matching._deps.manager.send_personal_message", AsyncMock()) as mock_send,
+        patch("backend.routes.rides.matching._deps.send_push_notification", AsyncMock()),
+        patch("backend.routes.rides.matching._deps.spawn", side_effect=lambda coro: coro.close()),
+        patch("backend.routes.rides.matching.sign_offer_card_token", return_value="tok"),
+    ):
+        mock_db.find_one = AsyncMock(return_value=None)
+        mock_db.get_rows = AsyncMock(return_value=[driver])
+        mock_db.claim_driver_atomic = AsyncMock(return_value=True)
+        mock_db.get_driver_by_id = AsyncMock(return_value=driver)
+        mock_db.set_driver_available = AsyncMock()
+        mock_db.run_sync = AsyncMock(return_value=None)
+        mock_db.get_user_by_id = AsyncMock(return_value={"first_name": "Jamie"})
+
+        await _match_driver_to_ride_attempt("ride-1", ride=ride)
+
+    assert mock_send.await_count == 1
+    payload = mock_send.await_args.args[0]
+    return payload
+
+
+async def test_dispatch_payload_marks_originally_scheduled_ride():
+    """A ride that was originally booked in advance (``is_scheduled=True``)
+    keeps that flag in the offer payload even after it has since
+    transitioned to ``searching`` for live dispatch — same "originally
+    scheduled" semantics as ride_cancel.py's `_was_scheduled`."""
+    ride = _make_ride(service_area_id=None, is_scheduled=True)
+
+    payload = await _run_single_driver_dispatch(ride)
+
+    assert payload["is_scheduled"] is True
+
+
+async def test_dispatch_payload_immediate_ride_is_scheduled_false():
+    """An on-demand ride (no is_scheduled flag on the row) must not be
+    mistaken for a pre-booked dispatch — the offer payload carries
+    is_scheduled=False, not a missing key, so driver-app's optional/
+    falsy-default handling never has to guess."""
+    ride = _make_ride(service_area_id=None)  # no is_scheduled key
+
+    payload = await _run_single_driver_dispatch(ride)
+
+    assert payload["is_scheduled"] is False

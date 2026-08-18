@@ -1,0 +1,124 @@
+name: Bootstrap metrics-agent Fly app (one-time / manual)
+
+# Manually-triggered, idempotent bootstrap for the standalone metrics-agent
+# app (ADR-010's Option B — see metrics-agent/README.md and issue #3295), so
+# you never need flyctl locally:
+#   1. creates the Fly app (no-op if it already exists)
+#   2. verifies the required secrets already exist ON THE FLY APP
+#   3. (optional) deploys, then confirms it started
+#
+# Mirrors .github/workflows/bootstrap-fly.yml's pattern for spinr-backend-yyz.
+#
+# Secrets are NOT managed here — set them directly in Fly (dashboard or
+# `fly secrets set ...`) so production/Grafana Cloud credentials never live
+# in GitHub. This job only checks they are present before deploying.
+#
+# ── Required GitHub Actions secret ───────────────────────────────────────────
+#   FLY_API_TOKEN  — the same org-scoped token bootstrap-fly.yml uses. Must
+#                    have create permission on the target org (a per-app
+#                    deploy token does not).
+#
+# ── Required Fly secrets (set in Fly, not GitHub) ────────────────────────────
+#   METRICS_AUTH_TOKEN            — same value as spinr-backend-yyz's own
+#                                    METRICS_AUTH_TOKEN secret (kept in sync
+#                                    manually by whoever rotates either one)
+#   GRAFANA_REMOTE_WRITE_URL      — from Grafana Cloud → Connections →
+#                                    Prometheus → "Sending metrics"
+#   GRAFANA_REMOTE_WRITE_USERNAME — the numeric Instance ID shown on the same
+#                                    page
+#   GRAFANA_REMOTE_WRITE_API_KEY  — a Cloud Access Policy token scoped to
+#                                    metrics:write, generated from the same
+#                                    page
+#
+# See metrics-agent/README.md for the full "what's blocked" checklist this
+# workflow exists to unblock.
+
+on:
+  workflow_dispatch:
+    inputs:
+      org:
+        description: 'Fly organization slug (for app creation) — same org as spinr-backend-yyz'
+        required: true
+        type: string
+      deploy:
+        description: 'Deploy after setting secrets'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  bootstrap:
+    name: Bootstrap spinr-metrics-agent-yyz
+    runs-on: ubuntu-latest
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      FLY_APP: spinr-metrics-agent-yyz
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Verify FLY_API_TOKEN is set
+        run: |
+          if [ -z "${FLY_API_TOKEN}" ]; then
+            echo "::error title=Missing secret::FLY_API_TOKEN is not set."
+            echo "Bootstrap needs an ORG-scoped token: fly tokens create org"
+            exit 1
+          fi
+          echo "FLY_API_TOKEN is set (length=${#FLY_API_TOKEN})."
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master (2026-08-18)
+
+      # Idempotent: succeeds whether or not the app already exists.
+      - name: Create app if missing
+        run: |
+          echo "── Orgs visible to this FLY_API_TOKEN (use one of these slugs) ──"
+          flyctl orgs list || echo "(could not list orgs — token may be app/deploy-scoped)"
+          echo "────────────────────────────────────────────────────────────────"
+          if flyctl status -a "${FLY_APP}" >/dev/null 2>&1; then
+            echo "App ${FLY_APP} already exists — skipping create."
+          else
+            echo "Creating app ${FLY_APP} in org '${{ inputs.org }}'…"
+            flyctl apps create "${FLY_APP}" --org "${{ inputs.org }}"
+          fi
+
+      # Secrets are set manually in Fly (not stored in GitHub). Verify the
+      # required ones are present on the app before deploying so a missing one
+      # fails fast here instead of the container crash-looping with nothing
+      # to scrape/nowhere to remote_write.
+      - name: Verify required Fly secrets exist
+        if: ${{ inputs.deploy }}
+        run: |
+          present="$(flyctl secrets list -a "${FLY_APP}" 2>/dev/null || true)"
+          missing=0
+          for k in METRICS_AUTH_TOKEN GRAFANA_REMOTE_WRITE_URL \
+                   GRAFANA_REMOTE_WRITE_USERNAME GRAFANA_REMOTE_WRITE_API_KEY; do
+            if ! printf '%s\n' "$present" | grep -qw "$k"; then
+              echo "::error title=Missing Fly secret::${k} is not set on ${FLY_APP}. Set it with: fly secrets set ${k}=... -a ${FLY_APP}"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || { echo "Set the missing secrets in Fly, then re-run."; exit 1; }
+          echo "All required secrets present on ${FLY_APP}."
+
+      # Build context must be metrics-agent/ — that's where its Dockerfile,
+      # config.alloy, and discover-targets.sh live.
+      - name: Deploy
+        if: ${{ inputs.deploy }}
+        working-directory: metrics-agent
+        run: flyctl deploy --remote-only --config fly.toml
+
+      - name: Confirm machine started
+        if: ${{ inputs.deploy }}
+        run: |
+          echo "Polling machine status for ${FLY_APP} …"
+          for i in $(seq 1 12); do
+            STATE="$(flyctl status -a "${FLY_APP}" --json 2>/dev/null | grep -o '"Status":"[a-z]*"' | head -1 || true)"
+            echo "  attempt ${i}/12 → ${STATE:-unknown}"
+            if printf '%s' "$STATE" | grep -q '"started"'; then
+              echo "Machine started."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::Machine did not reach 'started' within 2 minutes. Inspect: flyctl logs -a ${FLY_APP}"
+          exit 1

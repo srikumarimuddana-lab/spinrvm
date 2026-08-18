@@ -97,7 +97,9 @@ npm run lint
 
 ```bash
 cd backend
-python migrate.py --env production   # ordered SQL runner over backend/migrations/
+python -m backend.scripts.run_migrations   # ordered SQL runner over backend/migrations/;
+                                            # requires DATABASE_URL. Add --dry-run to
+                                            # preview, --status to show applied vs pending.
 ```
 
 ## Architecture
@@ -228,7 +230,7 @@ Rules:
 
 ## Database & Migration Conventions
 
-Migrations live in `backend/migrations/` and are applied in filename order by `backend/migrate.py`.
+Migrations live in `backend/migrations/` and are applied in filename order by `backend/scripts/run_migrations.py` (a second runner, `backend/scripts/migrate.py`, targeted an older schema that was never actually applied to production — deleted; see `CLAUDE.md`'s Database Migrations section and `ACTION_ITEMS.md` A39).
 
 Naming: `NN_short_description.sql` where `NN` is a zero-padded sequence number (currently highest applied is `101_users_add_is_rider.sql`; **next free slot is `102`**). Pick the next available number — never reuse or reorder existing numbers. If two PRs conflict on a number, the second one renames to the next free slot before merge. Note: the runner uses the full filename as the idempotency key, so already-applied migrations must never be renamed. (Pre-existing duplicate prefixes at 08, 28, 29, 48, 50, 51, 52, 54, 55, 56, 57, 58, 91, 92, 96 are handled by full-filename keying — do not introduce new duplicates; a CI prefix-uniqueness check blocks them.)
 

@@ -33,6 +33,7 @@ import {
   TRIP_CADENCE,
   IDLE_CADENCE,
 } from '../utils/backgroundLocation';
+import { consumePendingRideOffer } from '../services/pendingRideOffer';
 import { checkLocationIntegrity, resetLocationIntegrity } from '../utils/locationIntegrity';
 import { startSensorMonitoring, stopSensorMonitoring, checkMovementConsistency } from '../utils/sensorIntegrity';
 import { attestDeviceIntegrity } from '../utils/deviceIntegrity';
@@ -825,6 +826,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           rider_rating: data.rider_rating,
           requires_wav: data.requires_wav === true,
           quiet_mode: data.quiet_mode === true,
+          is_scheduled: data.is_scheduled === true,
           countdown_seconds: typeof data.countdown_seconds === 'number' ? data.countdown_seconds : undefined,
           offer_expires_at: data.offer_expires_at,
           surge_multiplier: typeof data.surge_multiplier === 'number' ? data.surge_multiplier : undefined,
@@ -1460,6 +1462,25 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         } else if (status === 403 && errCode === 5006) {
           // Daily Spinr Pass ride allowance used up — resets at local midnight.
           showToast('info', "Daily ride limit reached", reason || "You've used today's Spinr Pass rides. They reset at midnight.");
+        } else if (status === 403 && errCode === 1006) {
+          // ErrorCode.AUTH_ACCOUNT_DISABLED (backend utils/error_handling.py) —
+          // raised by routes/drivers/status.py for both 'suspended' and
+          // 'banned' driver status. This is the authoritative, reliable
+          // detection point: the client-side onboardingStatus === 'suspended'
+          // pre-check earlier in this function is keyed off drivers.is_suspended,
+          // which admin_driver_action never actually sets (it sets
+          // drivers.status instead) — so that pre-check does not reliably
+          // fire for a real admin suspension/ban. This catch block reflects
+          // the real backend rejection, so it does.
+          showToast('error', "Account disabled", reason || "Your account is currently suspended or banned.");
+          showAlert(
+            "Account Disabled",
+            reason || "Your account has been suspended or banned. You can submit an appeal for review.",
+            [
+              { text: "Appeal", onPress: () => router.push('/appeal' as any) },
+              { text: "Cancel", style: "cancel" },
+            ]
+          );
         } else {
           showToast('error', "Cannot Go Online", reason || "Failed to update status. Please try again.");
         }
@@ -1525,23 +1546,15 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // clobber an active ride, and on offer_expires_at so a stale offer is dropped.
   // (Accept/Decline taps clear PENDING_OFFER_KEY in the background handler, so
   // on resume this only fires for a body tap / a still-pending offer.)
-  const consumePendingOffer = useCallback(async () => {
-    try {
-      const raw = await AsyncStorage.getItem('spinr_pending_ride_offer');
-      if (!raw) return;
-      await AsyncStorage.removeItem('spinr_pending_ride_offer');
-      if (useDriverStore.getState().rideState !== 'idle') return;
-      const offer = JSON.parse(raw);
-      const expiresAt = offer.offer_expires_at;
-      const isExpired = expiresAt && new Date(expiresAt) <= new Date();
-      if (!isExpired) {
-        Vibration.vibrate([0, 500, 200, 500]);
-        setIncomingRide(offer);
-      }
-    } catch (e) {
-      console.warn('[Push] Failed to hydrate pending ride offer:', e);
-    }
-  }, [setIncomingRide]);
+  //
+  // The rules themselves now live in services/pendingRideOffer.ts, because the
+  // Android Auto car session needs the identical behaviour on a car-only launch
+  // where this hook never mounts. The buzz stays here: it is the phone's way of
+  // announcing an offer, and the head unit raises its own alert instead.
+  const consumePendingOffer = useCallback(
+    () => consumePendingRideOffer({ onOffer: () => Vibration.vibrate([0, 500, 200, 500]) }),
+    [],
+  );
 
   // ─── Crash recovery + background-push hydration ──────────────────
   // 1. Surface any offer received while backgrounded/killed — on mount AND on

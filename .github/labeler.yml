@@ -93,6 +93,7 @@ area:money:
           - 'backend/utils/reconciliation.py'
           - 'backend/utils/stripe_charge.py'
           - 'backend/utils/stripe_reconcile.py'
+          - 'backend/utils/auto_payout.py'
 
 area:auth:
   - changed-files:

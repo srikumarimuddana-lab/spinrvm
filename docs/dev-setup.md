@@ -144,7 +144,7 @@ curl http://localhost:8000/health
 
 ```bash
 cd backend
-python migrate.py --env development
+python -m backend.scripts.run_migrations
 cd ..
 ```
 

@@ -37,18 +37,63 @@ export const zoomInDelta = (delta: number): number => clampDelta(delta / ZOOM_FA
 /** Zoom out one step (larger span), clamped at MAX_DELTA. */
 export const zoomOutDelta = (delta: number): number => clampDelta(delta * ZOOM_FACTOR);
 
+/**
+ * How far one unit of pan translation moves the camera, as a fraction of the
+ * visible span.
+ *
+ * iternio hands `onDidPan` a translation already divided by the surface scale
+ * (VirtualRenderer.kt's onScroll), but not the surface dimensions — so mapping
+ * it to degrees exactly would need a width we do not have here. This constant
+ * approximates "a full-width drag pans about one screen" for a typical head
+ * unit. It is a feel constant, not a measurement: if panning is too fast or too
+ * slow on real hardware, tune this one number. The debug panel reports the live
+ * offset so it can be tuned by observation.
+ */
+const PAN_UNITS_PER_SCREEN = 700;
+
 interface CarMapCameraState {
   /** Current map span (latitude/longitude delta in degrees). */
   delta: number;
+  /**
+   * Manual pan away from the driver, in degrees. Zero on both axes means the
+   * camera is following the driver; anything else means the driver has dragged
+   * the map and we must STOP following, or the next GPS fix would yank the view
+   * back mid-drag.
+   */
+  offsetLat: number;
+  offsetLng: number;
   zoomIn: () => void;
   zoomOut: () => void;
+  /** Apply a pan translation from the head unit. */
+  pan: (translationX: number, translationY: number) => void;
+  /** Clear the pan and resume following the driver. Leaves zoom alone — the
+   *  driver chose that deliberately; only the position was incidental. */
+  recenter: () => void;
   /** Reset to the default span — called on (re)connect so each session starts framed. */
   reset: () => void;
 }
 
 export const useCarMapCamera = create<CarMapCameraState>((set) => ({
   delta: DEFAULT_DELTA,
+  offsetLat: 0,
+  offsetLng: 0,
   zoomIn: () => set((s) => ({ delta: zoomInDelta(s.delta) })),
   zoomOut: () => set((s) => ({ delta: zoomOutDelta(s.delta) })),
-  reset: () => set({ delta: DEFAULT_DELTA }),
+  pan: (translationX, translationY) =>
+    set((s) => {
+      const scale = s.delta / PAN_UNITS_PER_SCREEN;
+      return {
+        // Dragging the map right moves the viewport LEFT (west), hence the
+        // sign flip on X; screen Y grows downward while latitude grows north,
+        // so Y flips too.
+        offsetLng: s.offsetLng - translationX * scale,
+        offsetLat: s.offsetLat + translationY * scale,
+      };
+    }),
+  recenter: () => set({ offsetLat: 0, offsetLng: 0 }),
+  reset: () => set({ delta: DEFAULT_DELTA, offsetLat: 0, offsetLng: 0 }),
 }));
+
+/** True when the driver has panned away from their own position. */
+export const isPanned = (s: Pick<CarMapCameraState, 'offsetLat' | 'offsetLng'>): boolean =>
+  s.offsetLat !== 0 || s.offsetLng !== 0;

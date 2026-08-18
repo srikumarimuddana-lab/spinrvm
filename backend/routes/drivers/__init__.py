@@ -11,6 +11,8 @@ motion — no behaviour changes. See docs/refactors/god-file-split.md.
 # ruff: noqa: F401
 
 from . import (  # noqa: E402
+    appeals,
+    crc_consent,
     earnings,
     location,
     payouts,
@@ -160,6 +162,7 @@ from .payouts import (  # noqa: F401
     _attempt_transfer_reversal,
     _ensure_stripe_account,
     _gst_on_file,
+    _request_payout_legacy,
     _require_gst_for_payout,
     _require_sin_for_payout,
     _stripe_bounce_page,
@@ -285,6 +288,8 @@ for _sub in (
     ride_cancel,
     referrals,
     subscriptions,
+    crc_consent,
+    appeals,
     status,
 ):
     api_router.include_router(_sub.router, prefix="/drivers")

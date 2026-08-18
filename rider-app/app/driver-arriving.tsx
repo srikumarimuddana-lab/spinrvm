@@ -31,7 +31,7 @@ import ConfirmSheet from '../components/ConfirmSheet';
 import CancelReasonSheet from '../components/CancelReasonSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import { SOSButton } from '@shared/components/SOSButton';
+import { RiderSOS } from '../components/RiderSOS';
 import { CarMarker } from '@shared/components/CarMarker';
 import { FreeCancelTimer } from '../components/FreeCancelTimer';
 import { useResponsive } from '@shared/utils/responsive';
@@ -496,7 +496,7 @@ function DriverArrivingScreenContent() {
           </View>
         )}
 
-        {!isSearching && <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} t={t} />}
+        {!isSearching && <RiderSOS rideId={rideId as string} onTrigger={triggerEmergency} t={t} />}
       </View>
 
       {/* ═══ Bottom sheet ═══ */}

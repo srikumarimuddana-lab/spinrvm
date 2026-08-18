@@ -101,10 +101,17 @@ class _SimpleCursor:
 @pytest.mark.e2e
 @pytest.mark.asyncio
 class TestRequestPayout:
-    """Pins request_payout: balance check, bank-account guard, payout persisted.
+    """Pins _request_payout_legacy: balance check, bank-account guard, payout persisted.
 
-    Code under test: backend/routes/drivers.py::request_payout (~line 1353).
+    POST /payouts is now a 410 stub (weekly auto-payouts); the original logic is
+    preserved at _request_payout_legacy behind _STANDARD_CASHOUT_DISABLED for
+    rollback. These tests pin that preserved path with the flag patched off.
     """
+
+    @pytest.fixture(autouse=True)
+    def _enable_legacy_cashout(self):
+        with patch("backend.routes.drivers.payouts._STANDARD_CASHOUT_DISABLED", False):
+            yield
 
     async def _request(
         self,
@@ -115,7 +122,7 @@ class TestRequestPayout:
     ):
         from starlette.requests import Request as StarletteRequest
 
-        from backend.routes.drivers import PayoutRequest, request_payout
+        from backend.routes.drivers import PayoutRequest, _request_payout_legacy
 
         req = PayoutRequest(amount=Decimal(str(amount)))
         # GST/HST registration is a hard precondition for payout (CRA rideshare
@@ -157,7 +164,7 @@ class TestRequestPayout:
             patch("backend.routes.drivers.earnings.get_driver_balance", AsyncMock(side_effect=_mock_balance)),
             patch("backend.settings_loader.get_app_settings", AsyncMock(return_value={})),  # no Stripe key
         ):
-            result = await request_payout(
+            result = await _request_payout_legacy(
                 req=req,
                 request=mock_request,
                 current_user={"id": DRIVER_USER_ID},
@@ -217,7 +224,7 @@ class TestRequestPayout:
         from fastapi import HTTPException
         from starlette.requests import Request as StarletteRequest
 
-        from backend.routes.drivers import PayoutRequest, request_payout
+        from backend.routes.drivers import PayoutRequest, _request_payout_legacy
 
         req = PayoutRequest(amount=Decimal("50.00"))
         mock_request = StarletteRequest(
@@ -232,7 +239,7 @@ class TestRequestPayout:
 
         with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[])):
             with pytest.raises(HTTPException) as exc_info:
-                await request_payout(req=req, request=mock_request, current_user={"id": "ghost-driver"})
+                await _request_payout_legacy(req=req, request=mock_request, current_user={"id": "ghost-driver"})
 
         assert exc_info.value.status_code == 404
 
@@ -315,7 +322,8 @@ class TestGetT4ASummary:
         with (
             patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
             patch(
-                "backend.routes.drivers._deps.db_supabase.get_rides_for_driver", AsyncMock(side_effect=_get_rides_for_driver)
+                "backend.routes.drivers._deps.db_supabase.get_rides_for_driver",
+                AsyncMock(side_effect=_get_rides_for_driver),
             ),
         ):
             result = await get_t4a_summary(year=2025, current_user={"id": DRIVER_USER_ID})
@@ -339,7 +347,8 @@ class TestGetT4ASummary:
             if table == "drivers":
                 return [driver]
             if table == "payouts":
-                assert query["payout_type"] == "stripe_sync"
+                assert query["payout_type"] == {"$in": ["stripe_sync", "legacy_outstanding_correction"]}
+                assert query["status"] == "completed"
                 assert query["created_at"]["$gte"].startswith("2025-01-01")
                 return [{"amount": 500.10, "payout_type": "stripe_sync"}]
             return []
@@ -354,6 +363,31 @@ class TestGetT4ASummary:
         assert result["net_earnings"] == "520.10"
         assert result["legacy_synced_earnings"] == "500.10"
         assert result["total_trips"] == 1  # synced payouts are not trips
+
+    async def test_t4a_includes_settled_legacy_outstanding_correction(self):
+        """A settled (status='completed') legacy_outstanding_correction row
+        (2026-08-17 write path) reports the same as a stripe_sync row —
+        both are real legacy income actually paid through Stripe."""
+        from backend.routes.drivers import get_t4a_summary
+
+        driver = _driver_row()
+        rides = [_ride_row(20.00)]
+
+        async def _get_rows(table, query=None, **kwargs):
+            if table == "drivers":
+                return [driver]
+            if table == "payouts":
+                return [{"amount": 12.00, "payout_type": "legacy_outstanding_correction", "status": "completed"}]
+            return []
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rides_for_driver", AsyncMock(return_value=rides)),
+        ):
+            result = await get_t4a_summary(year=2025, current_user={"id": DRIVER_USER_ID})
+
+        assert result["total_earnings"] == "32.00"
+        assert result["legacy_synced_earnings"] == "12.00"
 
     async def test_t4a_excludes_previous_app_imported_rides(self):
         """Rides imported from the old app (utils/legacy_rides) are that app's
@@ -518,13 +552,19 @@ class TestUpdateDriverGstFields:
         import contextlib
 
         stack = contextlib.ExitStack()
-        stack.enter_context(patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])))
+        stack.enter_context(
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver]))
+        )
         stack.enter_context(patch("backend.routes.drivers._deps.db_supabase.update_one", update_mock))
         stack.enter_context(
             patch("backend.routes.drivers._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver))
         )
-        stack.enter_context(patch("backend.routes.drivers._shared._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)))
-        stack.enter_context(patch("backend.routes.drivers._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)))
+        stack.enter_context(
+            patch("backend.routes.drivers._shared._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d))
+        )
+        stack.enter_context(
+            patch("backend.routes.drivers._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d))
+        )
         return stack
 
     @pytest.mark.anyio

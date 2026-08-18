@@ -38,10 +38,10 @@ ledger tables used in Step 5b.
 ```bash
 cd backend
 # Preview first — prints what would run, writes nothing
-python scripts/migrate.py --dry-run
+python -m backend.scripts.run_migrations --dry-run
 
 # Then apply
-python scripts/migrate.py
+python -m backend.scripts.run_migrations
 ```
 
 Verify the columns and indexes landed:

@@ -41,12 +41,98 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import sys
 from pathlib import Path
 from typing import List, Tuple
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 TRACKING_TABLE_MIGRATION = "24_schema_migrations.sql"
+
+# Matches a dollar-quote tag opener: `$$` or `$tag$` (tag must start with a
+# letter/underscore, so positional parameters like `$1` never match).
+_DOLLAR_TAG_RE = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$")
+
+
+def _split_sql_statements(sql: str) -> list[str]:
+    """Split a SQL script into individual, comment-free, executable statements.
+
+    Ported from the (now-deleted) scripts/migrate.py -- ACTION_ITEMS.md A39
+    found migrate.py's schema_migrations shape doesn't match what's actually
+    live in production, but its CONCURRENTLY-safe splitter (ACTION_ITEMS.md
+    B0) was real, tested, and solved a gap this runner never had a fix for:
+    without it, this runner's single-transaction `_apply_one` would fail on
+    any migration containing CREATE/DROP INDEX CONCURRENTLY (Postgres refuses
+    those inside a transaction block).
+
+    A lexical scan (not a naive `str.split(";")`) tracks state so top-level
+    semicolons are the only split points -- ones inside `--` line comments,
+    `/* */` block comments, `'...'` string literals (with `''` escaping), and
+    `$tag$...$tag$` dollar-quoted bodies (PL/pgSQL function bodies) are never
+    treated as statement boundaries. Comment text is dropped from the output
+    entirely, so the result is directly executable and safe to scan for
+    keywords like CONCURRENTLY without re-parsing comments out again.
+    """
+    statements: list[str] = []
+    buf: list[str] = []
+    i, n = 0, len(sql)
+    state = "normal"  # normal | string | dollar
+    dollar_tag = None
+
+    while i < n:
+        ch = sql[i]
+        if state == "normal":
+            if sql[i : i + 2] == "--":
+                j = sql.find("\n", i)
+                i = n if j == -1 else j + 1
+                continue
+            if sql[i : i + 2] == "/*":
+                j = sql.find("*/", i + 2)
+                i = n if j == -1 else j + 2
+                continue
+            if ch == "'":
+                buf.append(ch)
+                state = "string"
+                i += 1
+                continue
+            m = _DOLLAR_TAG_RE.match(sql, i)
+            if m:
+                dollar_tag = m.group(0)
+                buf.append(dollar_tag)
+                state = "dollar"
+                i += len(dollar_tag)
+                continue
+            if ch == ";":
+                statements.append("".join(buf))
+                buf = []
+                i += 1
+                continue
+            buf.append(ch)
+            i += 1
+        elif state == "string":
+            if sql[i : i + 2] == "''":
+                buf.append("''")
+                i += 2
+                continue
+            buf.append(ch)
+            if ch == "'":
+                state = "normal"
+            i += 1
+        else:  # state == "dollar"
+            if sql[i : i + len(dollar_tag)] == dollar_tag:
+                buf.append(dollar_tag)
+                i += len(dollar_tag)
+                state = "normal"
+                dollar_tag = None
+                continue
+            buf.append(ch)
+            i += 1
+
+    tail = "".join(buf).strip()
+    if tail:
+        statements.append(tail)
+
+    return [s.strip() for s in statements if s.strip()]
 
 
 def _checksum(path: Path) -> str:
@@ -176,10 +262,28 @@ def _classify(files: List[Path], applied: dict[str, str]) -> Tuple[List[Path], L
 
 
 def _apply_one(conn, path: Path) -> None:
-    """Apply one migration file inside a transaction + record provenance."""
+    """Apply one migration file + record provenance.
+
+    Migrations containing CREATE/DROP INDEX CONCURRENTLY (or any other
+    statement that cannot run inside a transaction block) must execute
+    outside a transaction -- Postgres rejects them otherwise. Those are
+    detected from the comment-free, split statements (never raw text, so a
+    CONCURRENTLY mention inside a rollback comment doesn't misroute a file
+    that contains no actual concurrent index) and routed through the
+    autocommit path; everything else runs in the normal single-transaction
+    path unchanged.
+    """
     sql = path.read_text()
     checksum = _checksum(path)
     print(f"[apply] {path.name}  ({len(sql):,} bytes, sha256={checksum[:12]}…)")
+
+    statements = _split_sql_statements(sql)
+    needs_autocommit = any("CONCURRENTLY" in stmt.upper() for stmt in statements)
+
+    if needs_autocommit:
+        _apply_one_autocommit(conn, path.name, checksum, statements)
+        return
+
     with conn.cursor() as cur:
         cur.execute(sql)
         cur.execute(
@@ -187,6 +291,29 @@ def _apply_one(conn, path: Path) -> None:
             (path.name, checksum),
         )
     conn.commit()
+
+
+def _apply_one_autocommit(conn, filename: str, checksum: str, statements: List[str]) -> None:
+    """Apply a migration containing CONCURRENTLY -- no transaction wrapper.
+
+    Each already-split, comment-free statement executes individually under
+    autocommit; the schema_migrations row is inserted last, in the same
+    autocommit mode, so a crash partway through still leaves whatever
+    already-committed statements ran (the same partial-apply risk this
+    runner's normal transactional path doesn't have -- inherent to
+    CONCURRENTLY itself, not something this function can avoid).
+    """
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            for stmt in statements:
+                cur.execute(stmt)
+            cur.execute(
+                "INSERT INTO schema_migrations (filename, checksum) VALUES (%s, %s)",
+                (filename, checksum),
+            )
+    finally:
+        conn.autocommit = False
 
 
 def main() -> int:

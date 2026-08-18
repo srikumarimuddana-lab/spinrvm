@@ -102,7 +102,7 @@
     "download_requested": "Demand\u00e9",
     "download_requested_msg": "Votre exportation de donn\u00e9es a \u00e9t\u00e9 demand\u00e9e. Vous recevrez un courriel avec un lien de t\u00e9l\u00e9chargement dans les 24 heures.",
     "delete_confirm_title": "Supprimer le compte",
-    "delete_confirm_msg": "La suppression de votre compte sera programm\u00e9e apr\u00e8s une p\u00e9riode de gr\u00e2ce de 30 jours conform\u00e9ment \u00e0 la LPRPDE. Cette action est irr\u00e9versible.",
+    "delete_confirm_msg": "Votre compte sera verrouill\u00e9 imm\u00e9diatement. Vous pouvez le r\u00e9activer \u00e0 tout moment en vous reconnectant, avant que vos donn\u00e9es de courses ne soient supprim\u00e9es d\u00e9finitivement apr\u00e8s la p\u00e9riode de conservation de 7 ans exig\u00e9e par la loi sur le transport de la Saskatchewan.",
     "delete_my_account": "Supprimer mon compte",
     "footer": "Vos donn\u00e9es sont trait\u00e9es conform\u00e9ment \u00e0 notre politique de confidentialit\u00e9. Spinr ne vend jamais vos informations personnelles."
   },
@@ -145,6 +145,9 @@
     "alert_sent_label": "Alerte d\u2019urgence envoy\u00e9e",
     "alert_title": "\uD83D\uDEA8 Alerte d\u2019urgence envoy\u00e9e",
     "alert_msg": "Votre localisation a \u00e9t\u00e9 partag\u00e9e avec le soutien Spinr et vos contacts d\u2019urgence.\n\nVoulez-vous appeler le 911\u00a0?",
+    "alert_msg_contacts_failed": "Votre localisation a \u00e9t\u00e9 partag\u00e9e avec le soutien Spinr.\n\nNous n\u2019avons PAS pu joindre vos contacts d\u2019urgence \u2014 appelez-les directement.\n\nVoulez-vous appeler le 911\u00a0?",
+    "alert_msg_no_contacts": "Votre localisation a \u00e9t\u00e9 partag\u00e9e avec le soutien Spinr.\n\nAucun contact d\u2019urgence n\u2019est enregistr\u00e9, donc personne d\u2019autre n\u2019a \u00e9t\u00e9 alert\u00e9.\n\nVoulez-vous appeler le 911\u00a0?",
+    "alert_msg_contacts_unknown": "Votre localisation a \u00e9t\u00e9 partag\u00e9e avec le soutien Spinr.\n\nNous n\u2019avons pas pu confirmer si vos contacts d\u2019urgence ont \u00e9t\u00e9 joints \u2014 envisagez de les appeler directement.\n\nVoulez-vous appeler le 911\u00a0?",
     "call_911": "Appeler le 911",
     "im_ok": "Je vais bien",
     "failure_title": "\u26a0\ufe0f Alerte non envoy\u00e9e",

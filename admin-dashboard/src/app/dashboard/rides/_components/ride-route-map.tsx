@@ -11,6 +11,7 @@ import {
 import { toGeoJsonMultiLineString } from "@spinr/shared/utils/routeSegments";
 import {
     buildPathGradient,
+    buildStraightRouteGradient,
     ROUTE_PIN_COLORS,
     ROUTE_STROKE_WIDTH,
 } from "@spinr/shared/constants/routeMapStyle";
@@ -68,6 +69,12 @@ interface Props {
     /** Version 2 captured route geometry. Each segment remains independent so
      *  an offline gap is not rendered as a false straight-line connection. */
     actualSegments?: unknown;
+    /** Suppress the pickup→dropoff straight-line fallback, leaving just the two
+     *  markers. Set when the absence of geometry is itself the finding — e.g. a
+     *  legacy-imported ride that never had GPS — so the map cannot imply a path
+     *  that was never recorded. Defaults to false: every existing caller keeps
+     *  the fallback. */
+    suppressStraightFallback?: boolean;
 }
 
 const PLANNED_SOURCE_ID = "ride-planned-src";
@@ -90,6 +97,7 @@ export default function RideRouteMap({
     tripTrail,
     plannedTrail,
     actualSegments,
+    suppressStraightFallback = false,
 }: Props) {
     const containerRef = useRef<HTMLDivElement>(null);
     const mapRef = useRef<maplibregl.Map | null>(null);
@@ -135,20 +143,14 @@ export default function RideRouteMap({
                 .setPopup(new maplibregl.Popup({ closeButton: false, offset: 6 }).setText("Dropoff"))
                 .addTo(map);
 
-            // Road-following planned route (planned_route_polyline). Drawn
-            // as a gray dashed line — the "planned" reference, but real road
-            // geometry from the Directions API rather than a straight line.
+            // Road-following planned route (planned_route_polyline) — orange→red
+            // gradient, same as every other route surface.
             if (hasPlannedTrail) {
                 map.addSource(PLANNED_SOURCE_ID, {
                     type: "geojson",
-                    data: {
-                        type: "Feature",
-                        properties: {},
-                        geometry: {
-                            type: "LineString",
-                            coordinates: plannedTrail!.map((p) => [p.lng, p.lat]),
-                        },
-                    },
+                    data: buildGradientFeatureCollection([
+                        plannedTrail!.map((p) => [p.lng, p.lat] as [number, number]),
+                    ]),
                 });
                 map.addLayer({
                     id: PLANNED_LAYER_ID,
@@ -156,10 +158,9 @@ export default function RideRouteMap({
                     source: PLANNED_SOURCE_ID,
                     layout: { "line-cap": "round", "line-join": "round" },
                     paint: {
-                        "line-color": "#6b7280",
-                        "line-width": 3,
+                        "line-color": ["get", "color"],
+                        "line-width": ROUTE_STROKE_WIDTH,
                         "line-opacity": 0.7,
-                        "line-dasharray": ["literal", [2, 1.5]],
                     },
                 });
             }
@@ -187,18 +188,14 @@ export default function RideRouteMap({
                 });
             }
 
-            // Phase 2 (driver → pickup) — amber road-following line.
+            // Phase 2 (driver → pickup) — orange→red gradient, same as
+            // every other route. Approximate trails draw at lower opacity.
             if (hasPickupTrail) {
                 map.addSource(PICKUP_TRAIL_SOURCE_ID, {
                     type: "geojson",
-                    data: {
-                        type: "Feature",
-                        properties: {},
-                        geometry: {
-                            type: "LineString",
-                            coordinates: pickupTrail!.map((p) => [p.lng, p.lat]),
-                        },
-                    },
+                    data: buildGradientFeatureCollection([
+                        pickupTrail!.map((p) => [p.lng, p.lat] as [number, number]),
+                    ]),
                 });
                 map.addLayer({
                     id: PICKUP_TRAIL_LAYER_ID,
@@ -206,12 +203,9 @@ export default function RideRouteMap({
                     source: PICKUP_TRAIL_SOURCE_ID,
                     layout: { "line-cap": "round", "line-join": "round" },
                     paint: {
-                        "line-color": "#f59e0b",
-                        "line-width": 3,
+                        "line-color": ["get", "color"],
+                        "line-width": ROUTE_STROKE_WIDTH,
                         "line-opacity": pickupApprox ? 0.5 : 0.85,
-                        // Approximate (no GPS) → dashed so it reads as a
-                        // reference, not a recorded trace.
-                        ...(pickupApprox ? { "line-dasharray": ["literal", [2, 2]] } : {}),
                     },
                 });
             }
@@ -261,26 +255,25 @@ export default function RideRouteMap({
                 });
             }
 
-            // Fallback: older / partially-populated rides with no planned
-            // polyline AND no recorded route still get a route reference — a
-            // straight pickup→dropoff dashed line — so the drawer never shows
-            // markers only (the modal advertises this as "straight-line
-            // reference"). Reuses the planned source/layer ids, which are unused
-            // here because hasPlannedTrail is false.
-            if (!hasPlannedTrail && !hasRouteGeometry && !(locationTrail && locationTrail.length > 1)) {
+            // Fallback: straight pickup→dropoff gradient when no other
+            // route data exists. Uses buildStraightRouteGradient so it
+            // matches the orange→red language everywhere else.
+            if (!suppressStraightFallback && !hasPlannedTrail && !hasRouteGeometry && !(locationTrail && locationTrail.length > 1)) {
+                const straightGradient = buildStraightRouteGradient(
+                    [pickupLat, pickupLng],
+                    [dropoffLat, dropoffLng],
+                );
+                const features: GeoJSON.Feature[] = straightGradient.map((seg) => ({
+                    type: "Feature" as const,
+                    properties: { color: seg.color },
+                    geometry: {
+                        type: "LineString" as const,
+                        coordinates: seg.coordinates.map(([lat, lng]) => [lng, lat]),
+                    },
+                }));
                 map.addSource(PLANNED_SOURCE_ID, {
                     type: "geojson",
-                    data: {
-                        type: "Feature",
-                        properties: {},
-                        geometry: {
-                            type: "LineString",
-                            coordinates: [
-                                [pickupLng, pickupLat],
-                                [dropoffLng, dropoffLat],
-                            ],
-                        },
-                    },
+                    data: { type: "FeatureCollection", features },
                 });
                 map.addLayer({
                     id: PLANNED_LAYER_ID,
@@ -288,10 +281,9 @@ export default function RideRouteMap({
                     source: PLANNED_SOURCE_ID,
                     layout: { "line-cap": "round", "line-join": "round" },
                     paint: {
-                        "line-color": "#6b7280",
-                        "line-width": 3,
+                        "line-color": ["get", "color"],
+                        "line-width": ROUTE_STROKE_WIDTH,
                         "line-opacity": 0.7,
-                        "line-dasharray": ["literal", [2, 1.5]],
                     },
                 });
             }
@@ -316,7 +308,7 @@ export default function RideRouteMap({
             map.remove();
             mapRef.current = null;
         };
-    }, [pickupLat, pickupLng, dropoffLat, dropoffLng, locationTrail, pickupTrail, pickupApprox, tripTrail, plannedTrail, actualGeometry]);
+    }, [pickupLat, pickupLng, dropoffLat, dropoffLng, locationTrail, pickupTrail, pickupApprox, tripTrail, plannedTrail, actualGeometry, suppressStraightFallback]);
 
     return <div ref={containerRef} className="w-full h-[280px] rounded-xl overflow-hidden" />;
 }

@@ -13,17 +13,16 @@
 Run the dry-run against staging first:
 
 ```bash
-export SUPABASE_URL=<staging-url>
-export SUPABASE_SERVICE_ROLE_KEY=<staging-service-role-key>
-python backend/scripts/migrate.py --dry-run
+export DATABASE_URL=<staging-pooler-connection-string>
+python -m backend.scripts.run_migrations --dry-run
 ```
 
-Expected output shows both `64_driver_insurance_periods.sql` and `65_backfill_driver_insurance_periods.sql` as "Would apply".
+Expected output shows both `64_driver_insurance_periods.sql` and `65_backfill_driver_insurance_periods.sql` as pending.
 
 Then apply for real on staging:
 
 ```bash
-python backend/scripts/migrate.py
+python -m backend.scripts.run_migrations
 ```
 
 ### 1b. Verify the table and indexes exist on staging
@@ -141,9 +140,8 @@ Migration 65 depends on the table and partial unique index created by 64. The ru
 
 ```bash
 # From repo root, pointing at production credentials:
-export SUPABASE_URL=<prod-url>
-export SUPABASE_SERVICE_ROLE_KEY=<prod-service-role-key>
-python backend/scripts/migrate.py
+export DATABASE_URL=<prod-pooler-connection-string>
+python -m backend.scripts.run_migrations
 ```
 
 The runner applies files in alphanumeric (filename) order, skipping versions already in `schema_migrations`. Both migrations execute inside their own `BEGIN / COMMIT` transaction; a failure rolls back and halts the runner.
@@ -330,6 +328,6 @@ WHERE d.is_online = true AND dip.id IS NULL;
 - `backend/migrations/64_driver_insurance_periods.sql`
 - `backend/migrations/65_backfill_driver_insurance_periods.sql`
 - `backend/utils/insurance_periods.py` — runtime transition recorder
-- `backend/scripts/migrate.py` — migration runner
+- `backend/scripts/run_migrations.py` — migration runner
 - CLAUDE.md §Insurance periods — period mapping and retention rules
 - `docs/runbooks/data-retention.md` — 7-year retention enforcement

@@ -19,7 +19,7 @@ this extraction, proving no behavior changed.
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 
 def coalesce_setting(settings: Dict[str, Any], key: str) -> str:
@@ -32,14 +32,18 @@ def coalesce_setting(settings: Dict[str, Any], key: str) -> str:
     return str(settings.get(key) or "").strip()
 
 
-def postal_address(settings: Dict[str, Any]) -> str:
-    """Assemble a mailing address from its configured parts.
+def address_lines(settings: Dict[str, Any]) -> Tuple[str, ...]:
+    """The mailing address as display lines: street, then locality.
 
     ``company_address`` is a free-text field on the admin Settings page and
     often holds the whole address on its own; ``company_city`` /
     ``company_province`` / ``company_postal_code`` came later (migration
-    192) and are not on that page, so they are usually blank. Joining only
-    the non-empty parts handles both shapes without producing stray commas.
+    192) and are not on that page, so they are usually blank. Keeping only
+    the non-empty parts handles both shapes without producing blank lines.
+
+    The email footer prints these one per line — the conventional receipt
+    shape. :func:`postal_address` joins them for the contexts that need a
+    single line (the PDF header, the plain-text identity line).
     """
     street = coalesce_setting(settings, "company_address")
     locality = " ".join(
@@ -51,4 +55,14 @@ def postal_address(settings: Dict[str, Any]) -> str:
         )
         if p
     )
-    return ", ".join(p for p in (street, locality) if p)
+    return tuple(p for p in (street, locality) if p)
+
+
+def postal_address(settings: Dict[str, Any]) -> str:
+    """The same mailing address as one comma-joined line.
+
+    Defined in terms of :func:`address_lines` so the two cannot disagree
+    about which settings fields make up an address — the duplication this
+    module was extracted to remove (N16).
+    """
+    return ", ".join(address_lines(settings))

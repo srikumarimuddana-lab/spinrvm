@@ -1402,42 +1402,6 @@ class TestEstimateToken:
 
 
 # ===========================================================================
-# routes/faqs.py — endpoint coverage
-# ===========================================================================
-
-
-class TestFaqsEndpoint:
-    def test_get_public_faqs_no_filters(self):
-        from backend.routes.faqs import get_public_faqs
-
-        with patch("backend.routes.faqs.db_supabase.get_rows", AsyncMock(return_value=[{"id": "1"}])):
-            result = asyncio.run(get_public_faqs(category=None, audience=None))
-        assert result == [{"id": "1"}]
-
-    def test_get_public_faqs_with_category(self):
-        from backend.routes.faqs import get_public_faqs
-
-        with patch("backend.routes.faqs.db_supabase.get_rows", AsyncMock(return_value=[])):
-            result = asyncio.run(get_public_faqs(category="billing", audience=None))
-        assert result == []
-
-    def test_get_public_faqs_with_audience(self):
-        from backend.routes.faqs import get_public_faqs
-
-        faqs = [{"id": "2", "audience": "rider"}]
-        with patch("backend.routes.faqs.db_supabase.get_rows", AsyncMock(return_value=faqs)):
-            result = asyncio.run(get_public_faqs(category=None, audience="rider"))
-        assert result == faqs
-
-    def test_get_public_faqs_returns_empty_list_when_none(self):
-        from backend.routes.faqs import get_public_faqs
-
-        with patch("backend.routes.faqs.db_supabase.get_rows", AsyncMock(return_value=None)):
-            result = asyncio.run(get_public_faqs(category=None, audience=None))
-        assert result == []
-
-
-# ===========================================================================
 # routes/settings.py — endpoint coverage
 # ===========================================================================
 

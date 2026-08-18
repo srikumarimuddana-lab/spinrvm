@@ -50,5 +50,5 @@ VERDICT: SAFE TO APPLY / FIX BLOCKERS / NEEDS DBA REVIEW
 
 ## Do NOT
 
-- Do not run `python migrate.py --env production` from this command — that's a deploy step, not an audit
+- Do not run `python -m backend.scripts.run_migrations` from this command — that's a deploy step, not an audit
 - Do not auto-renumber conflicting migrations — surface the conflict, let the human pick the slot

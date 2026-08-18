@@ -59,7 +59,9 @@ class TestDriverForUser:
     async def test_returns_driver_row_when_found(self):
         from backend.routes.lost_and_found import _driver_for_user
 
-        patches = _start(_patches(**{"backend.routes.lost_and_found.db_supabase.get_rows": AsyncMock(return_value=[_DRIVER_ROW])}))
+        patches = _start(
+            _patches(**{"backend.routes.lost_and_found.db_supabase.get_rows": AsyncMock(return_value=[_DRIVER_ROW])})
+        )
         try:
             result = await _driver_for_user("driver-user-1")
             assert result == _DRIVER_ROW
@@ -95,7 +97,9 @@ class TestRequireParticipant:
         from backend.routes.lost_and_found import _require_participant
 
         case = {"id": "case-1", "reporter_id": "someone-else", "rider_user_id": "another-user", "driver_id": None}
-        patches = _start(_patches(**{"backend.routes.lost_and_found.db_supabase.find_one": AsyncMock(return_value=case)}))
+        patches = _start(
+            _patches(**{"backend.routes.lost_and_found.db_supabase.find_one": AsyncMock(return_value=case)})
+        )
         try:
             with pytest.raises(HTTPException) as exc:
                 await _require_participant("case-1", "rider-1")
@@ -108,7 +112,9 @@ class TestRequireParticipant:
         from backend.routes.lost_and_found import _require_participant
 
         case = {"id": "case-1", "reporter_id": "rider-1", "rider_user_id": None, "driver_id": None}
-        patches = _start(_patches(**{"backend.routes.lost_and_found.db_supabase.find_one": AsyncMock(return_value=case)}))
+        patches = _start(
+            _patches(**{"backend.routes.lost_and_found.db_supabase.find_one": AsyncMock(return_value=case)})
+        )
         try:
             result = await _require_participant("case-1", "rider-1")
             assert result == case
@@ -120,7 +126,9 @@ class TestRequireParticipant:
         from backend.routes.lost_and_found import _require_participant
 
         case = {"id": "case-1", "reporter_id": "rider-1", "rider_user_id": "rider-1", "driver_id": "driverrow-1"}
-        patches = _start(_patches(**{"backend.routes.lost_and_found.db_supabase.find_one": AsyncMock(return_value=case)}))
+        patches = _start(
+            _patches(**{"backend.routes.lost_and_found.db_supabase.find_one": AsyncMock(return_value=case)})
+        )
         try:
             result = await _require_participant("case-1", "driver-user-1", driver_id="driverrow-1")
             assert result == case
@@ -174,7 +182,9 @@ class TestGetCase:
         from backend.routes.lost_and_found import get_case
 
         case = {"id": "case-1", "reporter_id": "rider-1", "rider_user_id": None, "driver_id": None}
-        patches = _start(_patches(**{"backend.routes.lost_and_found.db_supabase.find_one": AsyncMock(return_value=case)}))
+        patches = _start(
+            _patches(**{"backend.routes.lost_and_found.db_supabase.find_one": AsyncMock(return_value=case)})
+        )
         try:
             result = await get_case("case-1", current_user=_RIDER)
             assert result == {"case": case}
@@ -271,7 +281,7 @@ class TestDriverReportFoundItem:
         patches = _start(
             _patches(
                 **{
-                    "backend.routes.lost_and_found.db_supabase.get_rows": AsyncMock(return_value=[_DRIVER_ROW]),
+                    "backend.routes.lost_and_found.db_supabase.get_rows": AsyncMock(side_effect=[[_DRIVER_ROW], []]),
                     "backend.routes.lost_and_found.db_supabase.get_ride": AsyncMock(return_value=ride),
                     "backend.routes.lost_and_found.db_supabase.insert_one": insert_one,
                     "backend.routes.lost_and_found.send_push_notification": push,
@@ -299,7 +309,7 @@ class TestDriverReportFoundItem:
         patches = _start(
             _patches(
                 **{
-                    "backend.routes.lost_and_found.db_supabase.get_rows": AsyncMock(return_value=[_DRIVER_ROW]),
+                    "backend.routes.lost_and_found.db_supabase.get_rows": AsyncMock(side_effect=[[_DRIVER_ROW], []]),
                     "backend.routes.lost_and_found.db_supabase.get_ride": AsyncMock(return_value=ride),
                     "backend.routes.lost_and_found.db_supabase.insert_one": insert_one,
                 }
@@ -312,6 +322,41 @@ class TestDriverReportFoundItem:
             )
             saved = insert_one.await_args_list[0].args[1]
             assert saved["item_category"] == "other"
+        finally:
+            _stop(patches)
+
+    @pytest.mark.anyio
+    async def test_existing_case_returns_early_without_insert(self):
+        from backend.routes.lost_and_found import DriverReportRequest, driver_report_found_item
+
+        ride = {"id": "ride-1", "driver_id": "driverrow-1", "status": "completed", "rider_id": "rider-1"}
+        existing_case = {
+            "id": "existing-case-1",
+            "ride_id": "ride-1",
+            "driver_id": "driverrow-1",
+            "status": "driver_found",
+        }
+        insert_one = AsyncMock()
+        patches = _start(
+            _patches(
+                **{
+                    "backend.routes.lost_and_found.db_supabase.get_rows": AsyncMock(
+                        side_effect=[[_DRIVER_ROW], [existing_case]]
+                    ),
+                    "backend.routes.lost_and_found.db_supabase.get_ride": AsyncMock(return_value=ride),
+                    "backend.routes.lost_and_found.db_supabase.insert_one": insert_one,
+                }
+            )
+        )
+        try:
+            result = await driver_report_found_item(
+                DriverReportRequest(ride_id="ride-1", item_description="a phone", item_category="electronics"),
+                current_user=_DRIVER_USER,
+            )
+            assert result["success"] is True
+            assert result["existing"] is True
+            assert result["case"]["id"] == "existing-case-1"
+            insert_one.assert_not_awaited()
         finally:
             _stop(patches)
 
@@ -460,8 +505,16 @@ class TestSendMessage:
     async def test_closed_case_raises_400(self):
         from backend.routes.lost_and_found import SendMessageRequest, send_message
 
-        case = {"id": "case-1", "reporter_id": "rider-1", "rider_user_id": None, "driver_id": None, "status": "resolved"}
-        patches = _start(_patches(**{"backend.routes.lost_and_found.db_supabase.find_one": AsyncMock(return_value=case)}))
+        case = {
+            "id": "case-1",
+            "reporter_id": "rider-1",
+            "rider_user_id": None,
+            "driver_id": None,
+            "status": "resolved",
+        }
+        patches = _start(
+            _patches(**{"backend.routes.lost_and_found.db_supabase.find_one": AsyncMock(return_value=case)})
+        )
         try:
             with pytest.raises(HTTPException) as exc:
                 await send_message("case-1", SendMessageRequest(message="hi"), current_user=_RIDER)

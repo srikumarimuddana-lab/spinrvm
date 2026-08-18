@@ -2641,18 +2641,19 @@ async def test_rider_complete_ride_quest_scheduling_failure_is_swallowed():
     ride = _ride(status="in_progress", rider_id=_RIDER_ID)
     completed_ride = {**ride, "status": "completed"}
 
-    # _deps.spawn is used for the rider completion push (N15/R19, unwrapped),
-    # the live-activity update (unwrapped) and the quest-progress scheduling
-    # (wrapped in try/except) -- let the first two calls through and only
-    # fail the third. Each call still gets its coroutine argument closed
-    # (via close_spawned_coro) so it doesn't leak un-awaited and fail an
-    # unrelated test on GC (A8).
+    # _deps.spawn is used for the GPS geometry settlement (wrapped in
+    # try/except), the rider completion push (N15/R19, unwrapped), the
+    # live-activity update (unwrapped) and the quest-progress scheduling
+    # (wrapped in try/except) -- let the first three calls through and only
+    # fail the fourth (the quest spawn this test is about). Each call still
+    # gets its coroutine argument closed (via close_spawned_coro) so it
+    # doesn't leak un-awaited and fail an unrelated test on GC (A8).
     _spawn_call_count = [0]
 
     def _spawn_first_ok_then_fails(coro, *_args, **_kwargs):
         close_spawned_coro(coro)
         _spawn_call_count[0] += 1
-        if _spawn_call_count[0] <= 2:
+        if _spawn_call_count[0] <= 3:
             return None
         raise RuntimeError("event loop full")
 

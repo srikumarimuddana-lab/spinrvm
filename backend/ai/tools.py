@@ -26,8 +26,10 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 try:
     from .. import db_supabase
+    from .pii import scrub_pii_deep
 except ImportError:  # pragma: no cover — top-level run
     import db_supabase
+    from ai.pii import scrub_pii_deep  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -229,7 +231,18 @@ def _cap_result(result: Dict[str, Any]) -> Dict[str, Any]:
     neither counts against the budget nor gets destroyed by truncation —
     a rich quote card must survive even when the textual result is huge.
     Guardrail keys (notes, refusal sentinels) are re-attached after
-    truncation for the same reason."""
+    truncation for the same reason.
+
+    2026-08-18 fleet audit: this is the single choke point both consumers
+    (execute_tool -> orchestrator's tool loop, and /mcp's _call_tool) funnel
+    through, so scrub_pii_deep runs here on the WHOLE result (including
+    _client_action, which /mcp serializes verbatim with no further
+    processing) before anything else happens to it. Regex-detectable PII
+    only (phone/email/GPS/card/SIN/postal) -- a plain name is NOT caught,
+    see scrub_pii_deep's own docstring; tools returning a person's name must
+    data-minimize at the source instead (tools_rides.py::_driver_public)."""
+    if isinstance(result, dict):
+        result = scrub_pii_deep(result)
     client_action = result.pop("_client_action", None) if isinstance(result, dict) else None
     serialized = json.dumps(result, default=str)
     if len(serialized) > TOOL_RESULT_MAX_CHARS:

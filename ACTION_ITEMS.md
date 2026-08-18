@@ -7486,8 +7486,8 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       before suppressing — grepped each file for `.current =` and confirmed
       zero reassignment after creation — before adding a narrow
       `eslint-disable-next-line react-hooks/refs` at each read site (not a
-      blanket file/rule-level disable). **2 remaining, deliberately NOT
-      fixed**: `app/driver/(tabs)/index.tsx:696` (a `lastDirectionsFetchRef.current
+      blanket file/rule-level disable). **2 remaining — FIXED 2026-08-18**
+      (see below): `app/driver/(tabs)/index.tsx:696` (a `lastDirectionsFetchRef.current
       = {...}` **write**) and `:701` (a `mapRef.current` read), both inside
       the same `<MapViewDirections onReady={...}>` callback, itself nested
       in an IIFE embedded directly in JSX
@@ -7498,11 +7498,9 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       discrepancy, flag it") — round 1's #3778 fixed exactly 2 write findings,
       both in `ActiveRidePanel.tsx`; this is a third, different write finding
       in a different file that round 1 never touched and this round was
-      scoped not to touch either. Flagging for a future round: the write
-      likely isn't a real render-time mutation (it's inside an async
-      `onReady` completion callback, not the synchronous render pass) but
-      that needs the same kind of verification the other 53 got, not an
-      assumption.
+      scoped not to touch either. **Follow-up verification done, confirmed
+      false positive, fixed with the standard narrow-suppression pattern**
+      — see the dedicated write-up below the Round 2 bullets.
   - **Deliberately deferred, not fixed** (documented reasons, not silent;
     numbers below are post-round-2 for both apps — `react-hooks/refs`
     read-during-render, `purity`, `immutability`, and
@@ -7602,15 +7600,7 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       including the `panResponder.panHandlers` case in `ActiveRidePanel.tsx`)
       — each verified via grep for `.current =` reassignment before
       suppressing, narrow per-site `eslint-disable-next-line`, not a blanket
-      disable. **2 remaining, deliberately NOT fixed**:
-      `app/driver/(tabs)/index.tsx:696` (a ref **write**,
-      `lastDirectionsFetchRef.current = {...}`) and `:701` (a ref **read**,
-      `mapRef.current`), both inside a `<MapViewDirections onReady={...}>`
-      callback nested in an IIFE embedded in JSX — this round was scoped to
-      reads only, and this write is a *third*, different write finding from
-      the 2 round 1 (#3778) already closed in `ActiveRidePanel.tsx`; flagged
-      per this round's task instructions rather than silently re-fixed.
-      Needs the same kind of verification the other 53 got before closing.
+      disable. **2 remaining at the time — FIXED 2026-08-18, see below.**
     - **Side effect worth flagging** (same phenomenon as rider's round 2):
       fixing 10 of the 15 immutability findings surfaced 10 previously
       linter-invisible `react-hooks/set-state-in-effect` findings in the
@@ -7618,6 +7608,31 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       not new behavior. Left untouched (out of scope this round).
     - Full Change Impact Log:
       `docs/change-log/2026-08-12-c20-lint-tier2-driver-app.md`.
+  - **`app/driver/(tabs)/index.tsx:696`/`:701` write+read finding — FIXED
+    2026-08-18** (the "needs the same kind of verification the other 53
+    got before closing" follow-up called for above). Did that verification
+    against the actual `react-native-maps-directions` library source
+    (`node_modules/react-native-maps-directions/src/MapViewDirections.js`)
+    rather than assuming: `onReady` is invoked at line 219, inside the
+    callback argument to `this.setState(...)` (React's setState-with-
+    callback form, guaranteed to run only after the re-render it triggers
+    has committed), itself inside a `Promise.all(...).then(...)` chain
+    kicked off from `fetchAndRenderRoute`, which is only ever called from
+    `componentDidMount`/`componentDidUpdate` — i.e. `onReady` fires from
+    an async network-completion callback strictly after React's commit
+    phase, structurally identical to `onError` (called from the same
+    promise chain's `.catch`, one line below in `index.tsx`, which the
+    linter does **not** flag) — confirming this is the same class of
+    linter false positive as the 53 already-closed sibling findings, not
+    a real render-time mutation. Fixed with the identical narrow-
+    suppression pattern: a justification comment (citing the library
+    source and the `onError` comparison) plus one
+    `eslint-disable-next-line react-hooks/refs` at each of the two sites,
+    not a blanket file/rule disable. **Verification**: `npx eslint
+    "app/driver/(tabs)/index.tsx"` → 0 problems (was 2 errors); full
+    `yarn jest --silent` → 63 suites / 534 tests passing (unchanged count,
+    comment-and-suppression-only diff); `npx tsc --noEmit` → clean.
+    **Files**: `driver-app/app/driver/(tabs)/index.tsx` only.
     - `@typescript-eslint/no-require-imports` remaining (23 rider / 11
       driver) — all in `__tests__/`/`e2e/` files, where a dynamic
       `require()` mid-test-body is the idiomatic way to grab a

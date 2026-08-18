@@ -89,6 +89,12 @@ COMMENT ON COLUMN driver_insurance_periods.is_reconstructed IS
     'rows for SGI audit exports, admin tooling, and '
     'spinr-insurance-period-auditor — never conflate with a live-logged row.';
 
+-- migration-override-ok: intentional CREATE OR REPLACE of migration 64's
+-- _driver_insurance_periods_immutable() trigger function, to extend its
+-- column-lock to the new is_reconstructed column below -- not an
+-- accidental redefinition collision. See the comment immediately below
+-- for the full rationale.
+--
 -- ---------------------------------------------------------------------
 -- Step 2: extend the append-only immutability trigger (migration 64) so
 -- is_reconstructed is protected the same way every other column already

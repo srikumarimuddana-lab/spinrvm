@@ -30,6 +30,7 @@ try:
     from ...services.stripe_kyc_sync import get_legal_name_and_address_from_stripe
     from ...settings_loader import get_app_settings
     from ...utils import metrics, report_branding
+    from ...utils.legacy_rides import is_legacy_ride
     from ...utils.rate_limiter import default_limiter as limiter
 except ImportError:
     import db_supabase
@@ -39,6 +40,7 @@ except ImportError:
     from services.stripe_kyc_sync import get_legal_name_and_address_from_stripe  # type: ignore
     from settings_loader import get_app_settings
     from utils import metrics, report_branding
+    from utils.legacy_rides import is_legacy_ride
     from utils.rate_limiter import default_limiter as limiter
 
 logger = logging.getLogger(__name__)
@@ -245,7 +247,7 @@ def _check_truncated(fetched_count: int, report_type: str) -> bool:
 
 async def _gst_pst_rows(
     start_date: datetime, end_date: datetime, service_area_ids: Optional[list[str]] = None
-) -> tuple[list[dict], Decimal, Decimal, Decimal, bool]:
+) -> tuple[list[dict], Decimal, Decimal, Decimal, bool, Decimal]:
     """Sum GST/PST/HST from completed rides' persisted tax_breakdown, grouped
     by calendar month. Reads what was actually charged (ride.tax_breakdown),
     the same field the rider receipt (utils/receipt_pdf.py) and email
@@ -254,7 +256,16 @@ async def _gst_pst_rows(
     `service_area_ids` narrows to rides in those areas via the ride's own
     `service_area_id` — the area the ride was actually dispatched in, which
     is what a per-jurisdiction tax remittance needs, not the driver's home
-    area. None means every area (the pre-filter behaviour)."""
+    area. None means every area (the pre-filter behaviour).
+
+    CR-4108 (issue #4108, D1): the 186 legacy-imported rides' tax_breakdown
+    is real money under the "GST" label, but it's commission-GST (GST on
+    Spinr's platform fee), not fare-GST — see utils/legacy_rides.py and
+    services/booking_import_service.py's comment on the mismatch. Per the
+    product-owner's decision this function still sums it into gst/GST
+    exactly as before (tax_amount is never altered), but also tracks it
+    separately per month so a filer can see how much of the "GST" total is
+    commission-GST that should not be remitted as fare-GST."""
     filters: dict = {
         "status": "completed",
         "ride_completed_at": {"$gte": start_date.isoformat(), "$lte": end_date.isoformat()},
@@ -264,7 +275,7 @@ async def _gst_pst_rows(
     rides = await db_supabase.get_rows(
         "rides",
         filters,
-        columns="id,ride_completed_at,tax_breakdown,total_fare",
+        columns="id,ride_completed_at,tax_breakdown,total_fare,legacy_import_metadata",
         limit=_ROW_LIMIT,
     )
     truncated = _check_truncated(len(rides), "gst_pst_remittance")
@@ -273,15 +284,23 @@ async def _gst_pst_rows(
     gst_total = Decimal("0")
     pst_total = Decimal("0")
     hst_total = Decimal("0")
+    legacy_commission_gst_total = Decimal("0")
     for ride in rides:
         completed_at = ride.get("ride_completed_at") or ""
         month_key = completed_at[:7] if len(completed_at) >= 7 else "unknown"
         tax_breakdown = ride.get("tax_breakdown") or {}
         if not isinstance(tax_breakdown, dict):
             continue
+        ride_is_legacy = is_legacy_ride(ride)
         bucket = by_month.setdefault(
             month_key,
-            {"GST": Decimal("0"), "PST": Decimal("0"), "HST": Decimal("0"), "unrecognized": Decimal("0")},
+            {
+                "GST": Decimal("0"),
+                "PST": Decimal("0"),
+                "HST": Decimal("0"),
+                "unrecognized": Decimal("0"),
+                "legacy_commission_gst": Decimal("0"),
+            },
         )
         for label, payload in tax_breakdown.items():
             if not isinstance(payload, dict):
@@ -293,6 +312,9 @@ async def _gst_pst_rows(
             if label_upper == "GST":
                 bucket["GST"] += amount
                 gst_total += amount
+                if ride_is_legacy:
+                    bucket["legacy_commission_gst"] += amount
+                    legacy_commission_gst_total += amount
             elif label_upper in ("PST", "QST"):
                 bucket["PST"] += amount
                 pst_total += amount
@@ -317,10 +339,14 @@ async def _gst_pst_rows(
             "hst": f"{v['HST']:.2f}",
             "unrecognized_tax": f"{v['unrecognized']:.2f}",
             "total_tax": f"{(v['GST'] + v['PST'] + v['HST'] + v['unrecognized']):.2f}",
+            # CR-4108: already included in "gst" above (tax_amount unchanged)
+            # — broken out so a filer can see it's commission-GST, not
+            # fare-GST, from the 186 legacy-imported rides.
+            "legacy_commission_gst_included": f"{v['legacy_commission_gst']:.2f}",
         }
         for month, v in sorted(by_month.items())
     ]
-    return rows, gst_total, pst_total, hst_total, truncated
+    return rows, gst_total, pst_total, hst_total, truncated, legacy_commission_gst_total
 
 
 def _render_tabular_report(
@@ -445,7 +471,9 @@ async def get_gst_pst_remittance(
     area_ids = _parse_service_area_ids(service_area_ids)
 
     try:
-        rows, gst_total, pst_total, hst_total, truncated = await _gst_pst_rows(start_date, end_date, area_ids)
+        rows, gst_total, pst_total, hst_total, truncated, legacy_commission_gst_total = await _gst_pst_rows(
+            start_date, end_date, area_ids
+        )
     except Exception as e:
         logger.error(f"Failed to build GST/PST remittance summary: {e}", exc_info=True)
         _capture_export_failure("gst_pst_remittance", e)
@@ -461,7 +489,7 @@ async def get_gst_pst_remittance(
     if gate_response is not None:
         return gate_response
 
-    fieldnames = ["month", "gst", "pst", "hst", "unrecognized_tax", "total_tax"]
+    fieldnames = ["month", "gst", "pst", "hst", "unrecognized_tax", "total_tax", "legacy_commission_gst_included"]
     # The header states what the report is and what period it covers — the
     # GST/PST/HST figures themselves belong in the table body (a TOTAL row
     # below), not crammed under the title next to the date range. Previously
@@ -470,6 +498,16 @@ async def get_gst_pst_remittance(
     subtitle = f"{report_branding.period_label(start_date, end_date)} — {await _service_area_scope_label(area_ids)}"
     if truncated:
         subtitle += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rides; narrow the date range for a complete filing"
+    # CR-4108 (issue #4108, D1): warn on the report itself, not just in a
+    # column, when any of the 186 legacy-imported rides fall in this window
+    # — "gst" above already includes this amount unchanged, but it is
+    # commission-GST (Spinr's platform fee), not fare-GST, and should not be
+    # remitted as fare-GST without accounting for that.
+    if legacy_commission_gst_total > 0:
+        subtitle += (
+            f" — includes ${legacy_commission_gst_total:.2f} commission-GST from legacy-imported rides "
+            f"(see 'legacy_commission_gst_included' column; CR #4108 — not fare-GST)"
+        )
 
     month_row_count = len(rows)
     if rows:
@@ -482,6 +520,7 @@ async def get_gst_pst_remittance(
                 "hst": f"{hst_total:.2f}",
                 "unrecognized_tax": f"{sum(_d(r['unrecognized_tax']) for r in rows):.2f}",
                 "total_tax": f"{(gst_total + pst_total + hst_total):.2f}",
+                "legacy_commission_gst_included": f"{legacy_commission_gst_total:.2f}",
             },
         ]
 

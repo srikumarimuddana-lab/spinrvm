@@ -141,6 +141,37 @@ class TestAdminRideInvoice:
         body = resp.json()
         assert body["fare_locked"] is False
         assert body["grand_total"] == "12.50"
+        # CR-4108 (issue #4108, D1): an ordinary ride's tax_basis is
+        # "fare_gst" (the correct, default meaning) and carries no footnote.
+        assert body["tax_basis"] == "fare_gst"
+        assert body["tax_note"] is None
+
+    def test_invoice_legacy_imported_ride_flags_commission_gst(self, client, as_super_admin):
+        """CR-4108 (issue #4108, D1 decision, option (a) "re-label, don't
+        rewrite"): a legacy-imported ride's invoice must label tax_amount /
+        tax_breakdown as commission-GST, not fare-GST, without touching the
+        stored numeric value at all."""
+        ride = {
+            "id": "ride-legacy-1",
+            "status": "completed",
+            "total_fare": "15.00",
+            "grand_total": "15.73",
+            "tax_amount": "0.73",
+            "tax_breakdown": {"GST": {"amount": 0.73, "rate": 5.0}},
+            "legacy_import_metadata": {
+                "source": "legacy_mongo_booking_import",
+                "old_booking_id": "6a023ea1173f9129709e2a64",
+            },
+        }
+        with patch("db_supabase.get_ride_details_enriched", AsyncMock(return_value=ride)):
+            resp = client.get("/api/admin/rides/ride-legacy-1/invoice")
+        assert resp.status_code == 200
+        body = resp.json()
+        # tax_breakdown's number is untouched -- exactly the stored value.
+        assert body["tax_breakdown"] == {"GST": {"amount": 0.73, "rate": 5.0}}
+        assert body["tax_basis"] == "commission_gst_legacy_import"
+        assert body["tax_note"] is not None
+        assert "commission-GST" in body["tax_note"]
 
     def test_invoice_fare_locked_snapshot_used(self, client, as_super_admin):
         ride = {

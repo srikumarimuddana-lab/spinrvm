@@ -24,6 +24,11 @@ from ._shared import (  # noqa: F401
     relabel_booked_distance_lines,
 )
 
+try:
+    from ...utils.legacy_rides import legacy_tax_note_for_ride, tax_basis_for_ride
+except ImportError:
+    from utils.legacy_rides import legacy_tax_note_for_ride, tax_basis_for_ride  # type: ignore
+
 router = APIRouter()
 
 
@@ -126,6 +131,12 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
         "area_fees_breakdown": ride.get("area_fees_breakdown", []),
         "tax_amount": ride.get("tax_amount", 0),
         "tax_breakdown": ride.get("tax_breakdown", {}),
+        # CR-4108 (issue #4108, D1): tax_amount for one of the 186
+        # legacy-imported rides is commission-GST, not fare-GST (see
+        # utils/legacy_rides.py). Computed at serialization time from
+        # legacy_import_metadata presence — tax_amount itself is unchanged.
+        "tax_basis": tax_basis_for_ride(ride),
+        "tax_note": legacy_tax_note_for_ride(ride),
         "tip_amount": ride.get("tip_amount", 0),
         "total_charged": ride.get("total_fare", 0),
         "grand_total": receipt_grand_total,

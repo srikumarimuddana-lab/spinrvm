@@ -6,21 +6,16 @@ fixed" section) was so this class of bug gets caught automatically going
 forward. A checker nobody runs is exactly the illusion of coverage this
 session's FAQ audit kept finding — don't repeat that here.
 
-Known pre-existing issue (documented, not fixed by this test file): the
-checker's new cross-router literal-duplicate check found that
-`features.py`'s `admin_support_router.get("/tickets")` and `.get("/faqs")`
-are shadowed by `support_router`'s identical, earlier-registered paths in
-the same `v1_api_router` mount group — and, per the admin-dashboard source
-(it calls `/api/admin/tickets` and `/api/admin/faqs`, served by the
-`routes/admin` package, never `/api/v1/tickets` or `/api/v1/faqs`), these
-two `admin_support_router` handlers appear to be fully dead code, not just
-shadowed. This mirrors the `routes/faqs.py` dead-code pattern fixed in PR
-#4199, but inside `features.py` this time. NOT fixed here — deliberately
-out of scope for "fix the checker's detection gap" (this PR's actual ask);
-flagged directly to the user as a separate follow-up. `_KNOWN_VIOLATIONS`
-below is a closed allowlist (not a general suppression mechanism) so this
-test still fails loudly on any NEW violation while not blocking CI on the
-pre-existing one.
+`_KNOWN_VIOLATIONS` is a closed allowlist (not a general suppression
+mechanism), currently empty: the two violations it originally held —
+`features.py`'s `admin_support_router.get("/tickets")` and `.get("/faqs")`,
+shadowed by `support_router`'s identical, earlier-registered paths — were
+fixed 2026-08-18 by removing all 8 dead `admin_support_router` handlers
+(shadowed and otherwise-unreachable, superseded by the real `/api/admin/...`
+implementations in `routes/admin/`) — see
+docs/change-log/2026-08-18-remove-admin-support-router-dead-code.md. Left
+empty rather than deleted so a future violation has an obvious place to be
+recorded with the same discipline.
 """
 
 from pathlib import Path
@@ -45,13 +40,9 @@ except ImportError:
 SERVER_PY = Path(__file__).resolve().parent.parent / "server.py"
 
 # (method, path, name) -> must exactly match a real, currently-open finding.
-# Shrinking this set (by fixing the underlying dead code) is welcome; growing
-# it silently is not — any new entry here should point at a tracked decision,
-# not just be added to make this test pass.
-_KNOWN_VIOLATIONS = {
-    ("GET", "/tickets", "admin_get_tickets"),
-    ("GET", "/faqs", "admin_get_faqs"),
-}
+# Adding an entry here should point at a tracked decision (a linked
+# change-log/finding), not just be added to make this test pass.
+_KNOWN_VIOLATIONS: set[tuple[str, str, str]] = set()
 
 
 def test_server_mounts_have_no_unexpected_route_shadowing():

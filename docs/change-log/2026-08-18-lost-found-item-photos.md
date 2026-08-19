@@ -40,7 +40,7 @@ Two adjacent findings surfaced while tracing it:
 
 ## 3. Fix / remediation
 
-- Migration 334 adds `image_key` / `image_mime` to `lost_and_found_messages`
+- Migration 339 adds `image_key` / `image_mime` to `lost_and_found_messages`
   and provisions a **private** `lost-and-found` storage bucket.
 - New `POST /lost-and-found/{case_id}/messages/image` accepts a multipart
   image, runs the same participant and closed-case guards as the text endpoint,
@@ -71,7 +71,7 @@ when the module loads via the top-level import path.
 - `lost_and_found_messages` is read by the two chat screens and written by this
   router only. Grepped: no admin screen, export, or retention job selects its
   columns by name, so the two added columns break nothing.
-- Migration 334 adds a CHECK constraint (`text OR image present`). Existing rows
+- Migration 339 adds a CHECK constraint (`text OR image present`). Existing rows
   all have non-empty `message`, so it validates clean — **but see "not verified"**.
 - New bucket, so no existing object namespace is touched.
 - No ride-state-machine, money, dispatch, auth, or insurance-period path is
@@ -99,7 +99,7 @@ skipped entirely for text-only threads (`targets` is empty → no storage calls)
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/migrations/334_lost_and_found_message_images.sql` | image columns, CHECK, private bucket | Somewhere to put the photo |
+| `backend/migrations/339_lost_and_found_message_images.sql` | image columns, CHECK, private bucket | Somewhere to put the photo |
 | `backend/routes/lost_and_found.py` | upload endpoint, signed-URL read, shared notify helper, import repair | The feature + fixing my earlier import regression |
 | `backend/tests/test_lost_and_found_route_coverage.py` | 7 new tests | Guard rails on a new upload path |
 | `shared/api/client.ts` | FormData support in `post()` | Multipart POSTs actually send the file |
@@ -139,7 +139,7 @@ return {"messages": await _sign_message_images(list(reversed(rows)))}
 - **Backend route**: `git revert`. The endpoint only adds rows; reverting stops
   new uploads and leaves existing image messages rendering as empty-text
   bubbles (the client already tolerates a missing `image_url`).
-- **Migration 334**: rollback SQL is in the file header — drop the two columns,
+- **Migration 339**: rollback SQL is in the file header — drop the two columns,
   the CHECK constraint, and the bucket. **Order matters**: drop the CHECK
   constraint before the columns. Objects already uploaded are deleted by the
   `DELETE FROM storage.objects` line; that is real data loss, so if any case is
@@ -170,10 +170,10 @@ return {"messages": await _sign_message_images(list(reversed(rows)))}
 ## 10. What was NOT verified
 
 - **Nothing was run against live Supabase.** Storage calls are mocked in tests.
-  The bucket does not exist until Migration 334 is applied — **until then the
+  The bucket does not exist until Migration 339 is applied — **until then the
   upload endpoint will fail with "Bucket not found"**. Migration first, then
   deploy; this is exactly the drift that migration 202 was written to fix.
-- **Migration 334 has not been applied anywhere.** The CHECK constraint assumes
+- **Migration 339 has not been applied anywhere.** The CHECK constraint assumes
   no existing row has an empty/whitespace `message`. That is true of every code
   path I read (both writers trim and the API enforces `min_length=1`), but it
   was **not** verified against production data. If such a row exists the

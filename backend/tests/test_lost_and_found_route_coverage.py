@@ -743,7 +743,7 @@ class TestSendMessageImage:
             saved = insert_one.await_args_list[0].args[1]
             assert saved["image_key"].startswith("case-1/")
             assert saved["image_mime"] == "image/png"
-            # Image-only message: empty text is what the migration-334 CHECK
+            # Image-only message: empty text is what the migration-339 CHECK
             # constraint permits precisely because image_key is set.
             assert saved["message"] == ""
             assert saved["sender_role"] == "rider"

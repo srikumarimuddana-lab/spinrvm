@@ -1,4 +1,4 @@
--- 334_lost_and_found_message_images.sql
+-- 339_lost_and_found_message_images.sql
 --
 -- Lets Lost & Found chat participants attach a photo of the item. Drivers
 -- reported being unable to send a picture of what they found, which is the

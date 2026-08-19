@@ -591,7 +591,7 @@ function IncidentDetailDrawer({
     onPatched: (updated: SafetyIncident) => void;
 }) {
     const { incident, reporter, ride } = detail;
-    // Optional: a backend deployed before migration 335 omits the key entirely.
+    // Optional: a backend deployed before migration 340 omits the key entirely.
     const photos = detail.photos ?? [];
     const { toast } = useToast();
 
@@ -692,7 +692,7 @@ function IncidentDetailDrawer({
                     <p className="text-sm mt-1.5 whitespace-pre-wrap leading-relaxed">{incident.description || "(no description)"}</p>
                 </section>
 
-                {/* Evidence photos (backend migration 335). Sits directly under
+                {/* Evidence photos (backend migration 340). Sits directly under
                     the description because it is the reporter's own account of
                     the same event. Renders nothing when there are no photos. */}
                 <IncidentEvidencePhotos photos={photos} formatDateTime={fmtDateTime} />

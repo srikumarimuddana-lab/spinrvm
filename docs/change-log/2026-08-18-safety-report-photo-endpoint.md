@@ -42,7 +42,7 @@ failure this log is really about.
 
 ## 3. Fix / remediation
 
-- Migration 335: `safety_incident_photos` table (RLS, service-role only) plus a
+- Migration 340: `safety_incident_photos` table (RLS, service-role only) plus a
   **private** `safety-evidence` bucket.
 - `POST /safety/report/{incident_id}/photo` implemented — reporter-only guard,
   4-photo cap matching the client's own picker limit, byte-sniffed content type,
@@ -102,7 +102,7 @@ safety team before deploy.
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/migrations/335_safety_incident_photos.sql` | new table + private bucket | Somewhere to put evidence |
+| `backend/migrations/340_safety_incident_photos.sql` | new table + private bucket | Somewhere to put evidence |
 | `backend/routes/safety.py` | new photo endpoint + upload imports | The route the client always called |
 | `backend/routes/admin/safety.py` | `photos[]` w/ signed URLs on incident detail | Otherwise evidence is write-only |
 | `backend/tests/test_safety_incident_photos.py` | 8 new tests | Guard rails incl. a route-exists regression test |
@@ -147,7 +147,7 @@ if (failedPhotos > 0) showToast('warning', 'Report Sent — Photos Failed', ...)
   reverting the client *alone* is safe; reverting the **shared `client.post`
   FormData change** (in the companion L&F commit) without also reverting this
   screen would break these uploads, since it now relies on that support.
-- **Migration 335**: rollback SQL is in the file header. **Dropping the bucket
+- **Migration 340**: rollback SQL is in the file header. **Dropping the bucket
   destroys evidence attached to open incidents** — if anything is under review,
   drop the table only and leave the bucket. Flagged in the migration comment too.
 
@@ -184,7 +184,7 @@ if (failedPhotos > 0) showToast('warning', 'Report Sent — Photos Failed', ...)
 ## 10. What was NOT verified
 
 - **Nothing ran against live Supabase.** Storage is mocked. **The bucket does
-  not exist until migration 335 is applied — until then every upload returns
+  not exist until migration 340 is applied — until then every upload returns
   502.** Apply the migration before deploying the client change, or drivers
   trade a silent failure for a visible one.
 - **The admin E2E specs could not be run locally.** 4 new cases were added to

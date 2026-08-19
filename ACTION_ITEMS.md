@@ -326,6 +326,38 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   logs via loguru (not stdlib `logging`), which `caplog` doesn't capture.
   `pytest tests/test_documents.py -q --no-cov` → 48 passed. See
   `docs/change-log/2026-08-19-documents-supersede-error-swallow-fix.md`.
+  **FIXED 2026-08-19**: ranked blocker #4/#11 — `purge_pii_retention()`'s
+  Step A anonymizes ride GPS at the 3-year regulatory window
+  (`pickup_lat/lng`, `dropoff_lat/lng`, `route_polyline`,
+  `phase_polylines`, `route_snapshot_url`) but never touched
+  `rides.planned_route_polyline` (migration 100, the Google Directions
+  polyline captured at booking time) — a ride older than 3 years still had
+  its full planned route live even after `gps_anonymized_at` was stamped.
+  New migration 335 re-forks `purge_pii_retention` verbatim from its
+  current definition (324) and adds `planned_route_polyline = '[]'::jsonb`
+  to Step A's `SET` clause, following the exact same-file precedent as
+  321/323/324. `spinr-migration-reviewer` pass: numbering/append-only/
+  reversibility/forward-compat all clean, diffed programmatically against
+  324 to confirm every other step is byte-for-byte unchanged — verdict SAFE
+  TO APPLY. New regression test suite (textual SQL-contract pinning, same
+  convention as the 321/323/324 test files, since CI has no live Postgres).
+  `pytest tests/test_step_a_planned_route_polyline_purge_migration.py
+  tests/test_retention_purge.py tests/test_retention_purge_coverage.py
+  tests/test_step_f_stripe_events_column_fix_migration.py
+  tests/test_step_d_ride_messages_column_fix_migration.py
+  tests/test_step_h_driver_rides_guard_migration.py -q --no-cov` → 56
+  passed. See
+  `docs/change-log/2026-08-19-purge-pii-planned-route-polyline-fix.md`.
+  **Not applied to production** — per this repo's standing convention,
+  applying a migration to live data needs explicit confirmation, not sought
+  this session; ships as a file for the normal deploy pipeline. **Known
+  residual gap, explicitly not silently left out:** the unchanged
+  `gps_anonymized_at IS NULL` guard means rides already anonymized under
+  the *old* function body are not retroactively re-swept to clear
+  `planned_route_polyline` — only rides that hit the 3-year window *after*
+  this migration lands get the new column cleared; a one-time backfill
+  UPDATE for already-anonymized rows was deliberately left out of scope to
+  keep this fix purely additive.
   Full ranked blocker register (30 items) and decision log (10 items, each
   with a suggested owner/due date) are in the audit doc — see there before
   re-deriving. Verdict at time of the 08-18 audit run: **FIX BLOCKERS** (17

@@ -54,6 +54,15 @@ def pg():
         pytest.skip(f"integration Postgres not available: {exc}")
     connection.autocommit = True
     with connection.cursor() as cursor:
+        # 336's REVOKE/GRANT lockdown references Supabase's roles; create
+        # them locally so the migration applies verbatim.
+        for role in ("anon", "authenticated", "service_role"):
+            cursor.execute(
+                "DO $$ BEGIN CREATE ROLE {} NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$".format(role)
+            )
+        # Clean slate: a v2 function from a prior run blocks 54's
+        # CREATE OR REPLACE (return type differs).
+        cursor.execute("DROP FUNCTION IF EXISTS compute_driver_phase_distances(UUID, TIMESTAMPTZ, TIMESTAMPTZ)")
         cursor.execute("DROP TABLE IF EXISTS driver_location_history CASCADE")
         cursor.execute(
             """

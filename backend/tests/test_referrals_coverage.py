@@ -541,3 +541,43 @@ class TestGetDriverLeaderboard:
 
         assert result["total_drivers"] == 0
         assert result["my_rank"] is None
+
+    async def test_topup_boundary_is_regina_day_end_not_utc_midnight(self):
+        """MAX(stat_date)=D covers created_at through D+1 06:00 UTC (Regina
+        day end). A UTC-midnight boundary would double-count the last 6
+        Regina evening hours already aggregated into row D."""
+        from backend.routes.drivers import get_driver_leaderboard
+
+        agg_result = MagicMock(
+            data=[
+                {
+                    "driver_id": DRIVER_ID,
+                    "rides": 5,
+                    "earnings": "100.00",
+                    "tips": "10.00",
+                    "last_stat_date": "2026-07-30",
+                },
+            ]
+        )
+        captured = {}
+
+        def get_rows(table, filters=None, columns=None, **kw):
+            if table == "drivers":
+                return self._drivers_list()
+            if table == "rides":
+                captured["filters"] = filters
+                return []
+            if table == "users":
+                return []
+            return []
+
+        with (
+            patch("backend.db_supabase.find_one", AsyncMock(return_value=_driver())),
+            patch("backend.db_supabase.get_rows", AsyncMock(side_effect=get_rows)),
+            patch("backend.db_supabase.run_sync", AsyncMock(return_value=agg_result)),
+        ):
+            await get_driver_leaderboard(period="all", limit=20, current_user={"id": USER_ID})
+
+        # Regina is UTC-6 year-round: day 2026-07-30 ends 2026-07-31 06:00 UTC.
+        boundary = captured["filters"]["created_at"]["$gte"]
+        assert boundary.startswith("2026-07-31T06:00:00")

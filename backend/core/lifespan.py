@@ -458,6 +458,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.opt(exception=True).error(f"Failed to import period1 distance finalizer loop: {e}")
 
+    # Stale Period-3 span closer — alerts on open passenger-aboard insurance
+    # spans whose ride is terminal or long-abandoned (misstated SGI commercial
+    # exposure); closes them at the evidence-based end time only when
+    # stale_p3_autoclose_enabled is set (default off, alert-first). Single
+    # replica via Redis leader lock; touches only the open span's ended_at.
+    try:
+        from utils.stale_p3_closer import stale_p3_closer_loop
+
+        _spawn("stale_p3_closer (15min)", stale_p3_closer_loop)
+    except Exception as e:
+        logger.opt(exception=True).error(f"Failed to import stale P3 closer loop: {e}")
+
     # T4A annual issuance — runs on the last day of February each year at
     # 08:00 UTC. Identifies drivers with ≥ $500 prior-year earnings, sends
     # each a push notification that their T4A slip is available, and logs
@@ -635,6 +647,7 @@ async def lifespan(app: FastAPI):
             "route_gap_monitor (15s)",
             "period1_distance_finalizer (5min)",
             "distance_reconciliation (daily 04:00 UTC)",
+            "stale_p3_closer (15min)",
         ]
     )
 

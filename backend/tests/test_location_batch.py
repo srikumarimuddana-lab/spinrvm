@@ -115,7 +115,7 @@ def test_v2_batch_skips_live_marker_update_when_integrity_check_rejects(monkeypa
     events = []
     update_one = _install_driver_and_ride(monkeypatch, _ride())
 
-    async def persist(driver_id, ride_id, session_id, points, *, active_ride):
+    async def persist(driver_id, ride_id, session_id, points, *, active_ride, driver_last_known=None):
         events.append("persist")
         return _result()
 

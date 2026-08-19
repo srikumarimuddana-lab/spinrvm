@@ -37,6 +37,7 @@ LOOP_THRESHOLDS: Dict[str, float] = {
     "period1_distance_finalizer (5min)": 5 * 60 * 4,  # 20 min
     "distance_reconciliation (daily 04:00 UTC)": 24 * 3600 * 2,  # 48 h
     "stale_p3_closer (15min)": 15 * 60 * 3,  # 45 min — 3 missed ticks
+    "driver_daily_rollup (30min)": 30 * 60 * 3,  # 90 min — 3 missed ticks
 }
 
 _lock = threading.Lock()

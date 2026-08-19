@@ -11,7 +11,13 @@ State is tracked in Redis to avoid re-sending or re-escalating:
   ``safety:checkin:escalated:{ride_id}`` — set after escalation (TTL: 4 h)
 
 Replay-safety: all three Redis keys prevent duplicate actions on replicas
-running the same loop concurrently.
+running the same loop concurrently. The ``sent`` key specifically is claimed
+via an atomic ``SET ... NX`` (``redis_set_nx``, the same primitive every other
+leader-election / dedupe lock in ``backend/utils/`` uses — e.g.
+``scheduled_rides.py``'s notify dedupe, ``routes/rides/payments.py``'s wallet
+re-drive lock) rather than a read-then-write, so two concurrent ticks
+(same replica racing itself, or two replicas racing each other) can never
+both observe "not sent yet" and both fire the push.
 
 Interval: 30 seconds.
 """
@@ -28,9 +34,9 @@ _CHECKIN_AFTER_MINUTES = 20  # send push after this many minutes in_progress
 _ESCALATE_AFTER_SECONDS = 90  # escalate if no response within this window
 
 try:
-    from .redis_client import redis_get, redis_set
+    from .redis_client import redis_delete, redis_get, redis_set, redis_set_nx
 except ImportError:
-    from utils.redis_client import redis_get, redis_set  # type: ignore
+    from utils.redis_client import redis_delete, redis_get, redis_set, redis_set_nx  # type: ignore
 
 try:
     from ..db import db as _supabase_db
@@ -101,10 +107,19 @@ async def _tick() -> None:
         if started_at > cutoff:
             continue  # ride not yet 20 min old
 
-        sent_ts_str = await redis_get(_sent_key(ride_id))
+        # Atomically claim the "sent" slot before doing anything else. A plain
+        # read-then-write here (GET is-not-set -> send -> SET) has a TOCTOU
+        # race window: two concurrent ticks (this replica racing itself on a
+        # slow send, or two replicas racing each other) can both read "not
+        # sent" and both fire the push. `redis_set_nx` (SET ... NX) makes the
+        # claim atomic — only one caller ever gets `True` for a given
+        # ride_id, so only one caller ever proceeds to send. TTL = 4 h so the
+        # key expires well after the ride ends and won't accumulate
+        # indefinitely.
+        claimed = await redis_set_nx(_sent_key(ride_id), now.isoformat(), ttl=4 * 3600)
 
-        if not sent_ts_str:
-            # Haven't sent a check-in yet — send one now.
+        if claimed:
+            # Won the claim — we're the one caller responsible for sending.
             rider_id = ride.get("rider_id")
             if rider_id:
                 try:
@@ -119,12 +134,30 @@ async def _tick() -> None:
                         f"[SAFETY_CHECKIN] FCM push failed ride_id={ride_id}",
                         exc_info=True,
                     )
+                    # Release the claim so a later tick (this replica or
+                    # another) can retry the send instead of silently never
+                    # notifying this rider.
+                    try:
+                        await redis_delete(_sent_key(ride_id))
+                    except Exception:
+                        logger.error(
+                            f"[SAFETY_CHECKIN] Failed to release claim after push failure ride_id={ride_id}",
+                            exc_info=True,
+                        )
                     continue
 
-            # Record that we sent the push; TTL = 4 h so the key expires
-            # well after the ride ends and won't accumulate indefinitely.
-            await redis_set(_sent_key(ride_id), now.isoformat(), ttl=4 * 3600)
             logger.info(f"[SAFETY_CHECKIN] Check-in sent for ride {ride_id}")
+            continue
+
+        # Did not win the claim — another tick already sent (or is sending)
+        # this check-in. This is expected, routine contention, not a
+        # failure, so it's logged at debug rather than error/warning.
+        logger.debug(f"[SAFETY_CHECKIN] Check-in already claimed for ride {ride_id}; skipping duplicate send")
+        sent_ts_str = await redis_get(_sent_key(ride_id))
+        if not sent_ts_str:
+            # The claim key vanished between the NX attempt and this read
+            # (e.g. TTL edge, key was never actually persisted) — treat as
+            # not-yet-sent and let the next tick attempt to claim again.
             continue
 
         # Push was already sent.  Check whether the rider responded.

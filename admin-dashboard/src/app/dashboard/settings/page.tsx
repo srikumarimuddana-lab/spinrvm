@@ -747,6 +747,80 @@ export default function SettingsPage() {
                             </div>
                         </CardContent>
                     </Card>
+
+                    {/* SOS panel — what riders/drivers SEE when they open SOS.
+                        Distinct from "Safety alerts" above, which is who WE
+                        notify internally. Only global values live here; the
+                        per-city local authority (Calgary 311, SGI) is on each
+                        service area, since only it varies by city. */}
+                    <Card className="border-border/50 lg:col-span-2">
+                        <CardHeader>
+                            <CardTitle className="text-base">SOS panel</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <p className="text-xs text-muted-foreground">
+                                Shown to riders and drivers when they open SOS. Every row appears
+                                only if it can actually do something — leave a field blank to hide
+                                that row rather than showing an empty one. The local transport
+                                authority (e.g. City of Calgary 311) is set per service area under{" "}
+                                <span className="font-medium">Service Areas → Safety panel</span>,
+                                because only it differs by city.
+                            </p>
+                            <div className="space-y-2">
+                                <Label htmlFor="safety-team-email">Spinr Safety email</Label>
+                                <Input
+                                    id="safety-team-email"
+                                    value={settings.safety_team_email || ""}
+                                    onChange={(e) => update("safety_team_email", e.target.value)}
+                                    placeholder="safety@spinr.ca"
+                                />
+                                <p className="text-[11px] text-muted-foreground">
+                                    Adds an &quot;Email Spinr Safety&quot; row, pre-filled with the
+                                    ride id. Blank hides the row. This is public — riders see it.
+                                </p>
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="safety-team-phone">Spinr Safety phone</Label>
+                                <Input
+                                    id="safety-team-phone"
+                                    value={settings.safety_team_phone || ""}
+                                    onChange={(e) => update("safety_team_phone", e.target.value)}
+                                    placeholder="Optional non-emergency line"
+                                />
+                                <p className="text-[11px] text-muted-foreground">
+                                    Non-emergency only. 911 is always shown and is never taken from
+                                    this field.
+                                </p>
+                            </div>
+                            <div className="flex items-center justify-between gap-4 pt-1">
+                                <div>
+                                    <Label htmlFor="sos-share-trip">Show &quot;Share my live trip&quot;</Label>
+                                    <p className="text-[11px] text-muted-foreground">
+                                        Only ever appears during an active ride.
+                                    </p>
+                                </div>
+                                <Switch
+                                    id="sos-share-trip"
+                                    checked={settings.sos_show_share_trip !== false}
+                                    onCheckedChange={(v) => update("sos_show_share_trip", v)}
+                                />
+                            </div>
+                            <div className="flex items-center justify-between gap-4">
+                                <div>
+                                    <Label htmlFor="sos-report-issue">Show &quot;Report a safety issue&quot;</Label>
+                                    <p className="text-[11px] text-muted-foreground">
+                                        Routes to the existing safety report form.
+                                    </p>
+                                </div>
+                                <Switch
+                                    id="sos-report-issue"
+                                    checked={settings.sos_show_report_issue !== false}
+                                    onCheckedChange={(v) => update("sos_show_report_issue", v)}
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
                 </TabsContent>
                 <TabsContent value="operations" className="mt-0 grid gap-6 lg:grid-cols-2 items-start">
                     {/* Dispatch & Matching */}

@@ -31,6 +31,15 @@ ALTER TABLE driver_daily_stats
     ADD COLUMN IF NOT EXISTS trip_seconds       INTEGER NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS day_tz             TEXT    NOT NULL DEFAULT 'utc';
 
+-- day_tz is the discriminator the overwrite-in-place design depends on; a
+-- typo from a future writer ('UTC', 'Regina', '') would create a silent
+-- third bucket no reader accounts for. Table is one row per driver-day, so
+-- validation is cheap.
+ALTER TABLE driver_daily_stats
+    DROP CONSTRAINT IF EXISTS driver_daily_stats_day_tz_check;
+ALTER TABLE driver_daily_stats
+    ADD CONSTRAINT driver_daily_stats_day_tz_check CHECK (day_tz IN ('utc', 'regina'));
+
 COMMENT ON COLUMN driver_daily_stats.idle_seconds IS
   'Seconds moving while online_idle (accepted GPS segments only, gaps > 5 min excluded).';
 COMMENT ON COLUMN driver_daily_stats.navigating_seconds IS

@@ -157,3 +157,13 @@ COMMENT ON FUNCTION compute_driver_phase_distances IS
   'v2 (migration 336): per-phase km AND seconds for one driver-day, with the '
   'same segment anomaly caps as settlement (5 km / 300 s / 150 km/h). '
   'arrived_at_pickup folds into navigating_to_pickup. Always returns one row.';
+
+-- SECURITY DEFINER bypasses driver_location_history's RLS and the function
+-- takes an arbitrary driver_id with no auth.uid() check — without this
+-- lockdown any anon/authenticated PostgREST caller could pull another
+-- driver's per-day activity via /rest/v1/rpc/. v1 (migration 54) never had
+-- the REVOKE; closing that gap here, same pattern as migration 204.
+REVOKE EXECUTE ON FUNCTION compute_driver_phase_distances(UUID, TIMESTAMPTZ, TIMESTAMPTZ)
+    FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION compute_driver_phase_distances(UUID, TIMESTAMPTZ, TIMESTAMPTZ)
+    TO service_role;

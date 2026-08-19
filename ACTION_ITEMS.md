@@ -326,6 +326,16 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   logs via loguru (not stdlib `logging`), which `caplog` doesn't capture.
   `pytest tests/test_documents.py -q --no-cov` → 48 passed. See
   `docs/change-log/2026-08-19-documents-supersede-error-swallow-fix.md`.
+  **CORRECTED same day:** the fix above used `%s` placeholders and
+  `exc_info=True` — the stdlib `logging` convention, correct for N13's
+  `ride_cancel.py` but wrong here, since `documents.py` logs via loguru
+  (`str.format` `{}` placeholders, no `exc_info` param — traceback comes
+  from `logger.opt(exception=True)`). Caught immediately by this repo's
+  pre-existing `tests/test_loguru_call_conventions.py` gate on the very
+  next PR's `backend-test` run, before it could ship further. Fixed to
+  `logger.opt(exception=True).error("...{}...", ...)`, matching this same
+  file's own existing loguru call sites. See
+  `docs/change-log/2026-08-19-documents-loguru-call-convention-fix.md`.
   **FIXED 2026-08-19**: ranked blocker #4/#11 — `purge_pii_retention()`'s
   Step A anonymizes ride GPS at the 3-year regulatory window
   (`pickup_lat/lng`, `dropoff_lat/lng`, `route_polyline`,

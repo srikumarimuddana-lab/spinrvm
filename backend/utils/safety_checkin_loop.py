@@ -57,6 +57,11 @@ except ImportError:
         pass
 
 
+# Must match the exact name lifespan.py passes to _spawn() for this loop —
+# the watchdog matches on this string.
+_LOOP_NAME = "safety_checkin (30s)"
+
+
 def _sent_key(ride_id: str) -> str:
     return f"safety:checkin:sent:{ride_id}"
 
@@ -74,9 +79,9 @@ async def safety_checkin_loop() -> None:
     while True:
         try:
             await _tick()
-            _record_heartbeat("safety_checkin_loop")
         except Exception:
             logger.error("safety_checkin_loop tick failed", exc_info=True)
+        _record_heartbeat(_LOOP_NAME)
         await asyncio.sleep(_INTERVAL_SECONDS)
 
 

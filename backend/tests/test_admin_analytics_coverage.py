@@ -299,6 +299,31 @@ class TestDashboardOverview:
         first_call_filters = mock_count.call_args_list[0].args[1]
         assert first_call_filters.get("service_area_id") == "area-9"
 
+    def test_ride_counts_exclude_legacy_imported_rides(self, admin_client):
+        """migration 341: rides_total and every per-status breakdown count
+        must exclude legacy-imported rides, same predicate as
+        admin_ride_money_rollup (302) — a legacy ride's created_at is its
+        true historical old-app date, so it can sit inside a 24h/7d window
+        and silently inflate these homepage stat cards otherwise (found in
+        this session's migration-data audit)."""
+        mock_count = AsyncMock(return_value=0)
+        with (
+            patch("backend.db_supabase.count_documents", mock_count),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(return_value=[{}])),
+        ):
+            resp = admin_client.get("/api/admin/analytics/dashboard", params={"range": "today"})
+        assert resp.status_code == 200
+
+        rides_calls = [c for c in mock_count.call_args_list if c.args[0] == "rides"]
+        # rides_total (windowed, no status filter) + one call per breakdown
+        # status — all but rides_active (unwindowed, status $in active
+        # statuses — no legacy row is ever in an active status) must carry
+        # the exclusion.
+        windowed_rides_calls = [c for c in rides_calls if "$and" in c.args[1]]
+        assert windowed_rides_calls, "expected at least one windowed rides count call"
+        for call in windowed_rides_calls:
+            assert call.args[1].get("legacy_import_metadata") == {"$eq": {}}
+
 
 # ── demand forecast ────────────────────────────────────────────────────
 

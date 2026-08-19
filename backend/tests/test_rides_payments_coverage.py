@@ -60,6 +60,34 @@ async def test_add_tip_rounds_to_zero_rejected():
     assert "greater than zero" in exc.value.detail
 
 
+async def test_add_tip_rejects_imported_legacy_ride():
+    """Rides imported from the previous app cannot be tipped.
+
+    Same guard rating.py's tip-while-rating path already has
+    (test_rate_driver.py::test_rate_driver_rejects_imported_legacy_ride) —
+    mirrored here because add_tip is the other tip-writing entry point.
+    Without it, a legacy ride's matched rider could fire a real Stripe
+    charge against their card for a pre-Spinr trip, and the resulting
+    driver_earnings_with_tip() call would silently inflate driver_earnings
+    by the old platform's historical admin commission (found in this
+    session's money audit, docs/audit — legacy total_fare/base_fare is a
+    receipt-display reconstruction, not real fare components).
+    """
+    from backend.routes.rides.payments import TipRequest, add_tip
+
+    ride = _completed_ride(
+        payment_status="paid",
+        legacy_import_metadata={"source": "legacy_mongo_booking_import", "old_booking_id": "bk-1"},
+    )
+    with patch("backend.routes.rides.payments._deps.db_supabase.get_ride", AsyncMock(return_value=ride)):
+        req = TipRequest(amount=Decimal("5.00"))
+        with pytest.raises(HTTPException) as exc:
+            await add_tip(RIDE_ID, req, current_user={"id": RIDER_ID})
+
+    assert exc.value.status_code == 400
+    assert "Imported historical rides" in exc.value.detail
+
+
 async def test_add_tip_rebuilds_fare_and_earnings_snapshots_and_notifies_driver():
     from backend.routes.rides.payments import TipRequest, add_tip
 
@@ -228,9 +256,7 @@ async def test_add_tip_after_paid_wallet_partial_collection_absorbs_rest():
     with (
         patch("backend.routes.rides.payments._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
         patch("backend.routes.rides.payments._deps.db_supabase.update_ride", AsyncMock(return_value=None)),
-        patch(
-            "backend.routes.rides.payments.charge_late_wallet_tip", AsyncMock(return_value=Decimal("1.50"))
-        ),
+        patch("backend.routes.rides.payments.charge_late_wallet_tip", AsyncMock(return_value=Decimal("1.50"))),
     ):
         req = TipRequest(amount=Decimal("5.00"))
         result = await add_tip(RIDE_ID, req, current_user={"id": RIDER_ID})
@@ -293,15 +319,14 @@ async def test_late_tip_absorption_recorded_and_alerted_past_threshold():
     assert Decimal(result["tip_amount"]) == Decimal("5.00")
 
     mock_incrby.assert_awaited_once_with(
-        payments_mod._LATE_TIP_ABSORBED_KEY.format(RIDER_ID), 500  # $5.00 absorbed, in cents
+        payments_mod._LATE_TIP_ABSORBED_KEY.format(RIDER_ID),
+        500,  # $5.00 absorbed, in cents
     )
     # Cumulative (6000) != this event's own delta (500), so expiry must NOT
     # be (re)set — this isn't the first event in a fresh window.
     mock_expire.assert_not_awaited()
     mock_metric.assert_any_call("spinr_payment_late_tip_absorption_alert_total")
-    assert any(
-        "LATE_TIP_ABSORPTION_THRESHOLD" in str(call.args[0]) for call in mock_logger.error.call_args_list
-    )
+    assert any("LATE_TIP_ABSORPTION_THRESHOLD" in str(call.args[0]) for call in mock_logger.error.call_args_list)
 
 
 async def test_late_tip_absorption_first_event_sets_window_expiry():
@@ -332,9 +357,7 @@ async def test_late_tip_absorption_first_event_sets_window_expiry():
         payments_mod._LATE_TIP_ABSORPTION_WINDOW_SECONDS,
     )
     # $3.00 absorbed is under the $50 threshold — no alert.
-    assert (
-        "spinr_payment_late_tip_absorption_alert_total" not in [c.args[0] for c in mock_metric.call_args_list]
-    )
+    assert "spinr_payment_late_tip_absorption_alert_total" not in [c.args[0] for c in mock_metric.call_args_list]
 
 
 async def test_late_tip_absorption_redis_failure_never_blocks_tip():
@@ -409,9 +432,7 @@ async def test_add_tip_after_paid_company_allowance_partial_collection_absorbs_r
     with (
         patch("backend.routes.rides.payments._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
         patch("backend.routes.rides.payments._deps.db_supabase.update_ride", AsyncMock(return_value=None)),
-        patch(
-            "backend.routes.rides.payments.charge_late_corporate_tip", AsyncMock(return_value=Decimal("3.00"))
-        ),
+        patch("backend.routes.rides.payments.charge_late_corporate_tip", AsyncMock(return_value=Decimal("3.00"))),
     ):
         req = TipRequest(amount=Decimal("5.00"))
         result = await add_tip(RIDE_ID, req, current_user={"id": RIDER_ID})

@@ -23,6 +23,7 @@ from services.fare_service import (  # noqa: E402
     build_default_fares,
     build_fare_breakdown_lines,
     calculate_fare,
+    driver_earnings_with_tip,
     find_service_area_for_point,
     merge_fare_configs_with_vehicle_types,
     merge_vehicle_pricing_with_vehicle_types,
@@ -537,3 +538,44 @@ class TestRecalculateFareForDistance:
         out = recalculate_fare_for_distance(ride, actual_distance_km=0.1)
         # total_fare (8.00, floored) + 3.50 in area fees, no tax/discount.
         assert out["grand_total"] == 11.50
+
+
+class TestDriverEarningsWithTip:
+    """driver_earnings_with_tip() — the canonical, idempotent formula from the
+    2026-08-19 tip-underpayment fix. Computes fresh from the ride row every
+    time; never a delta against a possibly-stale existing value."""
+
+    def test_computes_fare_minus_admin_earnings_plus_tip(self):
+        ride = _completed_ride(total_fare=8.00, booking_fee=2.00, airport_fee=0)
+        assert driver_earnings_with_tip(ride, Decimal("0.50")) == Decimal("6.50")
+
+    def test_idempotent_regardless_of_existing_driver_earnings_value(self):
+        # Stale/wrong existing driver_earnings must not affect the result —
+        # this is the exact property the delta-math bug violated.
+        ride = _completed_ride(total_fare=8.00, booking_fee=2.00, airport_fee=0, driver_earnings=0.17)
+        assert driver_earnings_with_tip(ride, Decimal("0.50")) == Decimal("6.50")
+
+    def test_never_negative_when_admin_earnings_exceeds_total_fare(self):
+        ride = _completed_ride(total_fare=1.00, booking_fee=2.00, airport_fee=0)
+        assert driver_earnings_with_tip(ride, Decimal("0")) == Decimal("0.00")
+
+    def test_refuses_legacy_imported_ride(self):
+        """A legacy ride's total_fare/base_fare is a receipt-display
+        reconstruction (booking_import_service.py), not real fare
+        components — total_fare - admin_earnings there algebraically
+        equals the OLD app's admin commission, not a minimum-fare uplift.
+        Applying this formula would silently inflate driver_earnings by
+        that commission. rating.py and add_tip both reject a tip on a
+        legacy ride before reaching here; this is the last-line guard."""
+        ride = _completed_ride(
+            legacy_import_metadata={"source": "legacy_mongo_booking_import", "old_booking_id": "bk-1"}
+        )
+        with pytest.raises(ValueError, match="legacy-imported ride"):
+            driver_earnings_with_tip(ride, Decimal("0.50"))
+
+    def test_organic_ride_with_empty_legacy_metadata_default_is_not_blocked(self):
+        # The DB default for legacy_import_metadata is '{}'::jsonb on every
+        # organic ride — must stay falsy, same convention rating.py/add_tip
+        # already rely on (`if ride.get("legacy_import_metadata"):`).
+        ride = _completed_ride(total_fare=8.00, booking_fee=2.00, airport_fee=0, legacy_import_metadata={})
+        assert driver_earnings_with_tip(ride, Decimal("0.50")) == Decimal("6.50")

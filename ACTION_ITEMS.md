@@ -539,6 +539,38 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   for all 3 frontend surfaces (driver-app 558/558, rider-app 532/532,
   admin-dashboard 329/329) plus a real production `npm run build` for the
   admin-dashboard change, per CLAUDE.md's explicit requirement.
+  **FIXED 2026-08-19** (3 more, from the ranked blocker register, again run
+  in parallel across disjoint files): **#18** (baseline #12) a systematic
+  sweep of every `@router.post/put/patch/delete` across `routes/admin/*.py`
+  found the real scope was **50 endpoints across 13 files** missing
+  `log_admin_action()` — not the audit's rough "~12" estimate — including
+  `driver_appeals.py`'s resolve action named explicitly by the audit.
+  Read-only/dry-run endpoints deliberately excluded and documented, not
+  silently dropped; several false positives from the initial grep (audit
+  logging already existed via indirection) also documented rather than
+  double-fixed. See `docs/change-log/2026-08-19-admin-audit-trail-sweep-fix.md`.
+  **#24/N9** the fare-estimate endpoint's up-to-3.5s Google Directions wait
+  (confirmed still live — widened 1.5s→3.0s on 2026-07-29 after a real
+  pricing-inconsistency incident) is now documented as an SLA exception in
+  CLAUDE.md's Performance SLAs table — pure documentation, zero code
+  touched, no Change Impact Log required per CLAUDE.md's own scoping rule.
+  The underlying accept-vs-ceiling decision remains explicitly open (owner
+  Product/Eng lead, due 2026-08-25), not resolved by this fix. **#30** a new
+  blocking coverage-floor CI gate now covers `payments.py`, `fare_service.py`,
+  `crypto.py`, the `rides/` package, and `dispatch_service.py` (extending
+  the existing `corporate_*.py` gate's pattern, refactored into a shared
+  `_coverage_floor_lib.py`), with floors set just below each file's real
+  2026-08-19-measured coverage — blocking further erosion without
+  retroactively failing the whole repo. **Escalation, not silently
+  patched**: `payments.py` measured **86.1%**, below its CLAUDE.md-documented
+  90% target — flagged explicitly as needing a human decision (write the
+  missing tests, or revise the target), per the "Escalate, don't silently
+  ship" release gate. See
+  `docs/change-log/2026-08-19-money-path-coverage-floor-gate-fix.md`. All 3
+  independently tested (backend: 1447+ admin tests passed plus a full
+  20-test coverage-gate suite, ruff clean, real coverage measurements taken
+  — not stale 2026-08-10 numbers) and re-verified together: full backend
+  suite after integration — see next entry for the post-integration count.
   Full ranked blocker register (30 items) and decision log (10 items, each
   with a suggested owner/due date) are in the audit doc — see there before
   re-deriving. Verdict at time of the 08-18 audit run: **FIX BLOCKERS** (17

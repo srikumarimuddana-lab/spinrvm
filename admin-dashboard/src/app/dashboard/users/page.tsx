@@ -590,6 +590,15 @@ export default function UsersPage() {
                                         {selectedUser.is_driver && (
                                             <Badge variant="secondary" className="bg-violet-500/15 text-violet-600">Driver</Badge>
                                         )}
+                                        {/* legacy_import_metadata is only present on the DETAIL fetch
+                                            (admin_get_user_details selects the full users row) -- the
+                                            list endpoint's _USER_LIST_COLUMNS projection omits it, so
+                                            this reads from userDetail, not selectedUser. */}
+                                        {userDetail?.legacy_import_metadata && Object.keys(userDetail.legacy_import_metadata).length > 0 && (
+                                            <span className="inline-block text-[10px] font-medium text-muted-foreground bg-muted rounded px-1.5 py-0.5">
+                                                Imported
+                                            </span>
+                                        )}
                                     </div>
                                 </div>
                             </div>

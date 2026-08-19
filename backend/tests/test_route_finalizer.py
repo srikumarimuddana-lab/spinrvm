@@ -248,6 +248,7 @@ def test_provider_unavailable_keeps_a_drawable_observed_segment_complete(monkeyp
         {
             "source_segment_index": 0,
             "provider": "observed_fallback",
+            "phase": "trip_in_progress",
             "coordinates": [[50.445, -104.618], [50.4451, -104.618]],
         }
     ]

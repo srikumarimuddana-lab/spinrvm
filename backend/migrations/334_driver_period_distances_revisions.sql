@@ -15,9 +15,9 @@
 --
 -- Rollback (only if no revision>0 rows exist yet):
 --   DROP VIEW IF EXISTS driver_period_distances_current;
---   DROP INDEX IF EXISTS uq_driver_period_distances_ride_period_rev;
---   CREATE UNIQUE INDEX IF NOT EXISTS uq_driver_period_distances_ride_period
+--   CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uq_driver_period_distances_ride_period
 --       ON driver_period_distances (ride_id, period) WHERE ride_id IS NOT NULL;
+--   DROP INDEX CONCURRENTLY IF EXISTS uq_driver_period_distances_ride_period_rev;
 --   ALTER TABLE driver_period_distances
 --     DROP COLUMN IF EXISTS supersedes_id, DROP COLUMN IF EXISTS revision;
 
@@ -25,11 +25,17 @@ ALTER TABLE driver_period_distances
     ADD COLUMN IF NOT EXISTS revision smallint NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS supersedes_id uuid REFERENCES driver_period_distances(id);
 
-DROP INDEX IF EXISTS uq_driver_period_distances_ride_period;
-
-CREATE UNIQUE INDEX IF NOT EXISTS uq_driver_period_distances_ride_period_rev
+-- CONCURRENTLY (runner auto-commits each statement): record_ride_period_
+-- distances is awaited synchronously inside ride completion / fare settlement
+-- — a transactional index swap would hold an ACCESS EXCLUSIVE lock across the
+-- build and stall trip-end receipts. CREATE the new index BEFORE dropping the
+-- old one so the (ride, period[, revision]) invariant is never unenforced;
+-- with revision defaulted to 0 everywhere, existing rows satisfy both.
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uq_driver_period_distances_ride_period_rev
     ON driver_period_distances (ride_id, period, revision)
     WHERE ride_id IS NOT NULL;
+
+DROP INDEX CONCURRENTLY IF EXISTS uq_driver_period_distances_ride_period;
 
 -- Latest revision per (ride_id, period) + every ride-less row (Period 1
 -- deadhead spans have no ride and no revisions).
@@ -43,5 +49,13 @@ WHERE dpd.ride_id IS NULL
         WHERE inner_dpd.ride_id = dpd.ride_id
           AND inner_dpd.period = dpd.period
    );
+
+-- A view executes with its OWNER's privileges for RLS purposes (unless created
+-- WITH security_invoker), and Supabase grants anon/authenticated default CRUD
+-- on new public-schema objects — so without this REVOKE the view would expose
+-- every driver's per-period audit rows through the anon key, bypassing the
+-- migration-249 RLS policy on the base table. Same lockdown pattern as
+-- migration 286's financial_event_entries_unbalanced view.
+REVOKE ALL ON driver_period_distances_current FROM anon, authenticated;
 
 NOTIFY pgrst, 'reload schema';

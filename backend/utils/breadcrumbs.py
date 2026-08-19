@@ -573,7 +573,7 @@ async def persist_idle_location_batch(
             # insert so idle points still land (finalizer/rollup de-dup later).
             logger.warning(
                 "idle insert_many_ignore_conflicts failed for driver %s — "
-                "falling back to plain insert (migration 333 may be missing)",
+                "falling back to plain insert (migration 341 may be missing)",
                 driver_id,
             )
             inserted = await db_supabase.insert_many("driver_location_history", rows)

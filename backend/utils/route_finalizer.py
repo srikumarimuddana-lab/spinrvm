@@ -753,7 +753,7 @@ async def _recompute_ride_distance_stats(
 
     # Insurer audit correction: the SGI per-period distances were frozen at
     # settlement; late evidence that shifted the measured distance beyond the
-    # epsilon appends revision rows (append-only-safe, migration 334). Readers
+    # epsilon appends revision rows (append-only-safe, migration 342). Readers
     # use the driver_period_distances_current view. Best-effort.
     driver_id = ride.get("driver_id")
     if driver_id:

@@ -1,4 +1,4 @@
--- 335_driver_daily_stats_phase_seconds.sql
+-- 343_driver_daily_stats_phase_seconds.sql
 --
 -- Rollback: ALTER TABLE driver_daily_stats
 --             DROP COLUMN IF EXISTS idle_seconds,

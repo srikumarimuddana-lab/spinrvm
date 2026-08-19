@@ -165,13 +165,19 @@ def location_health_payload(ride_id: str, gap_seconds: int, threshold_seconds: i
 
 
 async def _notify_driver_location_health(ride: dict, decision: GapDecision, threshold_seconds: int) -> None:
-    """Best-effort WS nudge to the driver when a NEW gap opens (once per gap).
+    """Best-effort nudge to the driver when a NEW gap opens (once per gap).
 
-    Fully defensive: a nudge failure (driver lookup, WS delivery) must never
-    fail the monitor tick. The WS connection key is ``driver_{user_id}``, so the
-    drivers-table id on the ride is resolved to its user_id first (same mapping
-    the ride lifecycle uses). A killed-WS driver won't receive this — an FCM
-    data-ping fallback is a follow-up.
+    Fully defensive: a nudge failure (driver lookup, WS delivery, push) must
+    never fail the monitor tick. The WS connection key is ``driver_{user_id}``,
+    so the drivers-table id on the ride is resolved to its user_id first (same
+    mapping the ride lifecycle uses).
+
+    Delivery is two-channel: the WS message reaches a foregrounded app, and —
+    behind ``location_health_push_nudge_enabled`` — a data-only FCM push
+    reaches the backgrounded/killed app the WS cannot (the driver app closes
+    its socket ~3s after backgrounding, which is exactly the state that
+    produces mid-trip GPS gaps). The push payload carries ids and counters
+    only — never a coordinate (PIPEDA).
     """
     driver_id = ride.get("driver_id")
     if not driver_id:
@@ -188,6 +194,32 @@ async def _notify_driver_location_health(ride: dict, decision: GapDecision, thre
         _metric_inc("spinr_rides_gps_gap_nudge_sent_total")
     except Exception:
         logger.warning("location-health driver nudge failed for ride_id=%s", ride.get("id"), exc_info=True)
+        user_id = None
+
+    try:
+        settings = await get_app_settings() or {}
+        if not settings.get("location_health_push_nudge_enabled", False) or not user_id:
+            return
+        try:
+            from ..features import send_push_notification
+        except ImportError:
+            from features import send_push_notification  # type: ignore
+
+        await send_push_notification(
+            user_id,
+            "Spinr",
+            "Restoring trip tracking…",
+            {
+                "type": "location_health",
+                "ride_id": str(ride.get("id")),
+                "gap_seconds": str(int(decision.gap_seconds)),
+            },
+            priority="dispatch",
+            target_app="driver",
+        )
+        _metric_inc("spinr_rides_gps_gap_push_nudge_sent_total")
+    except Exception:
+        logger.warning("location-health push nudge failed for ride_id=%s", ride.get("id"), exc_info=True)
 
 
 async def _resolve_open_gap_event(ride_id: str, now: datetime) -> bool:

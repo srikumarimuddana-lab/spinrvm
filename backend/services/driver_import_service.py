@@ -1101,7 +1101,17 @@ def apply_legacy_sin_dob_import(plan: SinDobImportPlan, *, batch: str) -> list[s
         driver_id = upd["id"]
         existing = supabase.table("drivers").select("legacy_import_metadata").eq("id", driver_id).execute().data
         meta = dict((existing[0].get("legacy_import_metadata") or {}) if existing else {})
-        meta[LEGACY_BANK_SIN_DOB_SOURCE] = {"batch": batch, "imported_at": now_iso}
+        # sin_written/dob_written distinguish "this batch actually wrote the
+        # SIN" from "this batch only backfilled DOB for a driver whose SIN
+        # was already on file" — a plain marker-key presence check cannot
+        # tell those apart (see sin_source() below), and conflating them
+        # would mislabel a self-entered SIN as legacy-imported.
+        meta[LEGACY_BANK_SIN_DOB_SOURCE] = {
+            "batch": batch,
+            "imported_at": now_iso,
+            "sin_written": bool(plain_sin),
+            "dob_written": bool(upd.get("date_of_birth")),
+        }
         fields["legacy_import_metadata"] = meta
 
         query = supabase.table("drivers").update(fields).eq("id", driver_id)
@@ -1114,6 +1124,36 @@ def apply_legacy_sin_dob_import(plan: SinDobImportPlan, *, batch: str) -> list[s
             conflicts.append(upd["old_driver_id"])
 
     return conflicts
+
+
+def sin_source(driver: dict[str, Any] | None) -> str | None:
+    """Derive SIN provenance for display, without changing what
+    ``sin_collected_at`` means or is written as (see
+    docs/audit/2026-08-19-legacy-migration-data-quality-audit.md,
+    "sin_collected_at misrepresents provenance").
+
+    - ``"legacy_import"`` — this driver's SIN was written by
+      ``apply_legacy_sin_dob_import`` (the ``banks.csv`` backfill), detected
+      via the ``sin_written`` flag on its ``legacy_import_metadata`` marker.
+      The marker key alone is not enough: it is also stamped when a batch
+      only backfills date_of_birth for a driver whose SIN was already
+      self-entered, which must NOT be reported as legacy-imported.
+    - ``"self_entry"`` — ``sin_collected_at`` is set and the above doesn't
+      apply; the driver supplied it via ``routes/drivers/profile.py``.
+    - ``None`` — no SIN on file (or no driver row).
+
+    Pure function, no DB access — callers pass a driver row (or dict subset)
+    that already has ``sin_collected_at`` and ``legacy_import_metadata``.
+    """
+    if not driver:
+        return None
+    meta = driver.get("legacy_import_metadata") or {}
+    marker = meta.get(LEGACY_BANK_SIN_DOB_SOURCE) if isinstance(meta, dict) else None
+    if isinstance(marker, dict) and marker.get("sin_written"):
+        return "legacy_import"
+    if driver.get("sin_collected_at"):
+        return "self_entry"
+    return None
 
 
 def print_sin_dob_report(plan: SinDobImportPlan, *, dry_run: bool) -> None:

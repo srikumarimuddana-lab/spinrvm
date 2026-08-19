@@ -29,6 +29,24 @@ from ._shared import (  # noqa: F401
 router = APIRouter()
 
 
+def _coverage_end_utc(max_stat_date: str) -> "datetime":
+    """UTC instant up to which the newest driver_daily_stats row covers rides.
+
+    Rollups are keyed to America/Regina business days (day_tz='regina',
+    utils/driver_daily_rollup), so a row for date D covers created_at in
+    [D 06:00 UTC, D+1 06:00 UTC). The freshness top-up must start at that
+    row's END — a UTC-midnight boundary would re-count the last 6 Regina
+    evening hours the row already aggregated.
+    """
+    try:
+        from ...utils.driver_activity import regina_day_bounds_utc
+    except ImportError:
+        from utils.driver_activity import regina_day_bounds_utc  # type: ignore
+
+    d = datetime.strptime(max_stat_date[:10], "%Y-%m-%d").date()
+    return regina_day_bounds_utc(d)[1]
+
+
 # ============ Referral Program Endpoints ============
 
 
@@ -377,8 +395,13 @@ async def get_driver_leaderboard(
             # Rides on days after the newest rollup row aren't aggregated yet;
             # top them up below. Keyed off the actual MAX(stat_date), not
             # "yesterday" — the rollup endpoint takes an arbitrary target_date.
-            _day_after = datetime.strptime(str(_max_stat_date), "%Y-%m-%d") + timedelta(days=1)
-            _oldest_uncovered = max(start_dt.replace(tzinfo=None), _day_after).isoformat()
+            # Coverage of a stat row now ends at the REGINA day end (06:00 UTC
+            # next day, day_tz='regina' rollups): a UTC-midnight boundary here
+            # would double-count the last 6 Regina-evening hours already inside
+            # the row. For a legacy 'utc' MAX row this over-extends coverage by
+            # 6h (a transient undercount that heals when the loop recomputes
+            # the day as Regina) — the safe direction vs. persistent inflation.
+            _oldest_uncovered = max(start_dt, _coverage_end_utc(str(_max_stat_date))).isoformat()
     except Exception:
         # Pre-migration-204 environment (or RPC outage): approximate from the
         # most recent daily rows, capped so PostgREST can't silently truncate
@@ -414,8 +437,7 @@ async def get_driver_leaderboard(
                 _fb_max_date = _r_date
         if _fb_max_date:
             # Same no-double-count boundary as the RPC path.
-            _day_after = datetime.strptime(_fb_max_date, "%Y-%m-%d") + timedelta(days=1)
-            _oldest_uncovered = max(start_dt.replace(tzinfo=None), _day_after).isoformat()
+            _oldest_uncovered = max(start_dt, _coverage_end_utc(_fb_max_date)).isoformat()
 
     # Freshness top-up: completed rides the rollup hasn't covered yet, in one
     # batched query (same earnings formula as the old implementation).

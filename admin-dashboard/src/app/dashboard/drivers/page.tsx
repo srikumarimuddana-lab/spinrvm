@@ -26,6 +26,7 @@ import DriverNotes from "./_components/driver-notes";
 import DriverTimeline from "./_components/driver-timeline";
 import { DriverStatementsPanel } from "./_components/driver-statements-panel";
 import DriverActivity from "./_components/driver-activity";
+import DriverDistance from "./_components/driver-distance";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useToast } from "@/components/ui/use-toast";
 import { useAuthStore } from "@/store/authStore";
@@ -1190,6 +1191,7 @@ export default function DriversPage() {
                                 <TabsTrigger value="overview">Overview</TabsTrigger>
                                 <TabsTrigger value="documents">Documents{pendingDocsCount > 0 && <span className="ml-1.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full" title={`${pendingDocsCount} document${pendingDocsCount === 1 ? "" : "s"} awaiting review`}>{pendingDocsCount}</span>}</TabsTrigger>
                                 <TabsTrigger value="rides">Rides{selected.total_rides > 0 && <span className="ml-1.5 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">{(selected.total_rides || 0).toLocaleString()}</span>}</TabsTrigger>
+                                <TabsTrigger value="distance">Distance</TabsTrigger>
                                 <TabsTrigger value="payouts">Payouts{payoutSummary && payoutSummary.summary.pending_balance > 0 && <span className="ml-1.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full" title={`${formatCurrency(payoutSummary.summary.pending_balance)} pending payout`}>!</span>}</TabsTrigger>
                                 <TabsTrigger value="referrals">Referrals</TabsTrigger>
                                 <TabsTrigger value="training">Training</TabsTrigger>
@@ -1705,6 +1707,12 @@ export default function DriversPage() {
                                 {/* Notes */}
                                 <TabsContent value="notes" className="mt-4">
                                     <DriverNotes driverId={selected.id} />
+                                </TabsContent>
+
+                                {/* Distance Travelled: per-Regina-day phase km + durations,
+                                    with per-day Distance Logs drill-down (insurance/ops view) */}
+                                <TabsContent value="distance" className="mt-4">
+                                    <DriverDistance driverId={selected.id} />
                                 </TabsContent>
 
                                 {/* History: daily activity (per-phase km + empty/riding time) + audit timeline */}

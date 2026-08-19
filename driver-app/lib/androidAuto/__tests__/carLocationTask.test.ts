@@ -30,10 +30,12 @@ jest.mock('expo-task-manager', () => ({
 
 const mockIsSessionEnded = jest.fn();
 const mockIsBgRunning = jest.fn();
+const mockReassertDispatch = jest.fn();
 jest.mock('../../../utils/backgroundLocation', () => ({
   FOREGROUND_NOTIFICATION_COLOR: '#6C63FF',
   isSessionEnded: () => mockIsSessionEnded(),
   isBackgroundLocationRunning: () => mockIsBgRunning(),
+  reassertDispatchTaskUnlocked: () => mockReassertDispatch(),
 }));
 
 const mockPublishCarFix = jest.fn();
@@ -48,7 +50,10 @@ const mockIntegrity = jest.fn<{ trusted: boolean; reason?: string }, [unknown]>(
   trusted: true,
 }));
 jest.mock('../../../utils/locationIntegrity', () => ({
-  checkLocationIntegrity: (l: unknown) => mockIntegrity(l),
+  createLocationIntegrityChecker: () => ({
+    check: (l: unknown) => mockIntegrity(l),
+    reset: jest.fn(),
+  }),
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -337,5 +342,60 @@ describe('stop', () => {
   it('swallows the throw expo raises when the task was never started', async () => {
     mockLocation.stopLocationUpdatesAsync.mockRejectedValue(new Error('not started'));
     await expect(stopCarLocationService()).resolves.toBeUndefined();
+  });
+});
+
+describe('single-writer invariant + shared-service repair', () => {
+  beforeEach(() => {
+    mockIsSessionEnded.mockResolvedValue(false);
+    mockIsBgRunning.mockResolvedValue(false);
+    mockReassertDispatch.mockClear();
+    mockLocation.hasStartedLocationUpdatesAsync.mockResolvedValue(false);
+    mockLocation.getBackgroundPermissionsAsync.mockResolvedValue({ status: 'granted' });
+    mockLocation.startLocationUpdatesAsync.mockResolvedValue(undefined);
+    mockLocation.stopLocationUpdatesAsync.mockResolvedValue(undefined);
+  });
+
+  it('stopCarLocationService repairs the dispatch task when it is running', async () => {
+    mockIsBgRunning.mockResolvedValue(true);
+    await stopCarLocationService();
+    expect(mockLocation.stopLocationUpdatesAsync).toHaveBeenCalledWith(CAR_LOCATION_TASK);
+    expect(mockReassertDispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('stopCarLocationService does NOT repair when dispatch is not running (sign-out path)', async () => {
+    mockIsBgRunning.mockResolvedValue(false);
+    await stopCarLocationService();
+    expect(mockReassertDispatch).not.toHaveBeenCalled();
+  });
+
+  it('the piggyback stop of a stale car task repairs the dispatch task it demoted', async () => {
+    // Degraded car task registered; driver has since gone online.
+    mockLocation.hasStartedLocationUpdatesAsync.mockResolvedValue(true);
+    mockIsBgRunning.mockResolvedValue(true);
+    // Force the degraded mode so start falls past already-running to piggyback.
+    await (async () => {
+      // Register in degraded mode first: FGS refused, fallback succeeds.
+      mockLocation.hasStartedLocationUpdatesAsync.mockResolvedValueOnce(false);
+      mockIsBgRunning.mockResolvedValueOnce(false);
+      mockLocation.startLocationUpdatesAsync
+        .mockRejectedValueOnce(fgsRefusal())
+        .mockResolvedValueOnce(undefined);
+      expect(await startCarLocationService()).toBe('started-no-notification');
+    })();
+
+    const result = await startCarLocationService();
+    expect(result).toBe('piggyback');
+    expect(mockLocation.stopLocationUpdatesAsync).toHaveBeenCalledWith(CAR_LOCATION_TASK);
+    expect(mockReassertDispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('the foreground-service options no longer carry killServiceOnDestroy', async () => {
+    await startCarLocationService();
+    const options = mockLocation.startLocationUpdatesAsync.mock.calls.at(-1)?.[1];
+    expect(options.foregroundService).toBeDefined();
+    // The flag lives on the SHARED LocationTaskService instance - setting it
+    // here made swipe-from-recents kill dispatch tracking too.
+    expect(options.foregroundService).not.toHaveProperty('killServiceOnDestroy');
   });
 });

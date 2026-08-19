@@ -19,9 +19,13 @@ describe('trip-phase GPS heartbeat', () => {
     expect(effect).toContain('30_000');
   });
 
-  it('gates heartbeat fixes through the same integrity filter as the watcher', () => {
-    expect(effect).toContain('checkLocationIntegrity(loc)');
-    expect(effect).toContain('if (!integrity.trusted) return;');
+  it('captures heartbeat fixes WITHOUT an integrity gate (capture-before-filter)', () => {
+    // The heartbeat's only output is the durable recorder — no display surface
+    // to protect. A false teleport/speed verdict here deleted the one fix that
+    // plugs a 30s trail gap (SPR-PE7TTB class loss); server settlement filters
+    // own quality. Pin the gate's absence and the rationale comment.
+    expect(effect).not.toContain('integrity.trusted');
+    expect(effect).toContain('Capture-before-filter: no integrity gate here.');
   });
 
   it('surfaces device-wide location services going off mid-trip', () => {

@@ -52,10 +52,31 @@ export interface TripLocationOutboxOptions {
   openDatabase?: () => Promise<TripLocationOutboxDatabase>;
   randomUUID?: () => string;
   now?: () => string;
+  /** Test-only overrides for the retention caps (defaults: 5k / 50k). */
+  retention?: { quarantineMaxRows?: number; outboxSoftCapRows?: number };
 }
 
 const DATABASE_NAME = 'spinr-trip-location-outbox.db';
 const MAX_UPLOAD_BATCH_SIZE = 500;
+
+// ── Retention bounds (the prune pass) ────────────────────────────────────────
+// The outbox had NO age or size bound: a long outage, a poisoned session, or a
+// driver who never signs out grew the SQLite file without limit, and the
+// quarantine table was write-only. Bounds, applied oldest-first:
+//   - quarantine rows age out at 14 days and cap at 5k (quarantine is the
+//     preservation store for signout/expired/evicted points — never uploaded);
+//   - sessions CLOSED >7 days ago are expired (their leftover points move to
+//     quarantine first, reason 'expired_unflushed');
+//   - the active outbox soft-caps at 50k points by evicting oldest rows of
+//     CLOSED sessions only ('evicted_capacity') — an OPEN session's points are
+//     never evicted, so the cap is deliberately unenforced if only live trip
+//     data remains (losing 3-week-old closed-session points beats losing the
+//     current trip's).
+const QUARANTINE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+const QUARANTINE_MAX_ROWS = 5_000;
+const CLOSED_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const OUTBOX_SOFT_CAP_ROWS = 50_000;
+const PRUNE_THROTTLE_MS = 60 * 60 * 1000;
 
 const SCHEMA = `
   PRAGMA journal_mode = WAL;
@@ -162,11 +183,18 @@ export class TripLocationOutbox {
   private readonly randomUUID: () => string;
   private readonly now: () => string;
   private databasePromise: Promise<TripLocationOutboxDatabase> | null = null;
+  // Wall-clock throttle for the retention prune (not the injectable `now`,
+  // which tests pin to fixed ISO strings — a throttle wants real elapsed time).
+  private lastPruneAt = 0;
+  private readonly quarantineMaxRows: number;
+  private readonly outboxSoftCapRows: number;
 
   constructor(options: TripLocationOutboxOptions = {}) {
     this.openDatabase = options.openDatabase ?? (async () => SQLite.openDatabaseAsync(DATABASE_NAME));
     this.randomUUID = options.randomUUID ?? Crypto.randomUUID;
     this.now = options.now ?? (() => new Date().toISOString());
+    this.quarantineMaxRows = options.retention?.quarantineMaxRows ?? QUARANTINE_MAX_ROWS;
+    this.outboxSoftCapRows = options.retention?.outboxSoftCapRows ?? OUTBOX_SOFT_CAP_ROWS;
   }
 
   async startSession(rideId: string): Promise<PendingTripLocationSession> {
@@ -177,6 +205,9 @@ export class TripLocationOutbox {
     await database.withExclusiveTransactionAsync(async (transaction) => {
       session = await this.openOrCreateSession(transaction, rideId);
     });
+    // Retention housekeeping rides on ride-start (~once per trip) and on
+    // acknowledge; fire-and-forget so it can never delay a session open.
+    void this.maybePrune();
     return session!;
   }
 
@@ -315,6 +346,7 @@ export class TripLocationOutbox {
         [recordingSessionId, acknowledgedThrough],
       );
     });
+    void this.maybePrune();
   }
 
   async latestPoint(rideId: string): Promise<TripLocationPoint | null> {
@@ -363,20 +395,21 @@ export class TripLocationOutbox {
   }
 
   /**
-   * Drop every row from the outbox, including quarantined points.
+   * Sign-out purge: PRESERVE unacknowledged points into quarantine, then clear
+   * the active outbox and sessions.
    *
-   * Only for sign-out. Everywhere else, an unacknowledged point is retained on
-   * purpose — a trip's billed distance and its SGI per-insurance-period audit
-   * trail are settled from these breadcrumbs, so the recorder never discards one
-   * that the server hasn't confirmed. Sign-out is the one case where retention
-   * is the wrong answer: these are raw coordinates in an unencrypted SQLite file
-   * belonging to a driver who is no longer using the device, and on a shared or
-   * rented vehicle the next sign-in would upload them under a different
-   * driver's session.
-   *
-   * Accepts the data loss that implies. Any points still pending at sign-out are
-   * gone; a driver signing out mid-trip loses that tail. The trade is
-   * deliberate — see the Change Impact Log for 2026-07-29.
+   * This reverses the 2026-07-29 deliberate-discard decision (which dropped a
+   * mid-trip sign-out's GPS tail forever — an SGI/billing evidence loss the
+   * owner has ruled out: location evidence must never be silently destroyed).
+   * The privacy properties that motivated the old behaviour are kept by
+   * construction instead of by deletion:
+   *   - quarantine rows are NEVER uploaded — no flush path reads the table, so
+   *     the next sign-in on a shared device cannot post another driver's
+   *     points under its own session;
+   *   - no network is needed here (authStore wipes tokens BEFORE logout
+   *     callbacks run, so an upload could not authenticate anyway);
+   *   - retention is bounded: the prune pass TTLs quarantine at 14 days and
+   *     caps it at 5k rows, so the coordinates age off the device.
    *
    * Runs in one exclusive transaction so a concurrent enqueue cannot interleave
    * and leave orphan points behind a deleted session row.
@@ -384,10 +417,129 @@ export class TripLocationOutbox {
   async purgeAll(): Promise<void> {
     const database = await this.getDatabase();
     await database.withExclusiveTransactionAsync(async (transaction) => {
+      await transaction.runAsync(
+        `INSERT INTO trip_location_quarantine (
+          session_id, sequence_number, ride_id, captured_at, monotonic_ms,
+          lat, lng, accuracy, speed, heading, altitude, source, mocked,
+          is_completion_fix, rejection_reason, quarantined_at
+        )
+        SELECT
+          session_id, sequence_number, ride_id, captured_at, monotonic_ms,
+          lat, lng, accuracy, speed, heading, altitude, source, mocked,
+          is_completion_fix, 'signout_unflushed', ?
+        FROM trip_location_outbox
+        ON CONFLICT(session_id, sequence_number) DO NOTHING`,
+        [this.now()],
+      );
       await transaction.runAsync('DELETE FROM trip_location_outbox');
-      await transaction.runAsync('DELETE FROM trip_location_quarantine');
       await transaction.runAsync('DELETE FROM trip_location_sessions');
     });
+  }
+
+  /** Throttled prune — at most once per hour per outbox instance. */
+  async maybePrune(): Promise<void> {
+    const nowMs = Date.now();
+    if (nowMs - this.lastPruneAt < PRUNE_THROTTLE_MS) return;
+    this.lastPruneAt = nowMs;
+    await this.prune();
+  }
+
+  /**
+   * Apply the retention bounds (see the constants block). Counts are read
+   * before the delete transaction — the caps are soft, so a concurrent
+   * enqueue racing the count only defers enforcement to the next prune.
+   * Never throws: retention is best-effort housekeeping.
+   */
+  async prune(): Promise<void> {
+    try {
+      const database = await this.getDatabase();
+      const nowMs = Date.parse(this.now());
+      const quarantineCutoff = new Date(nowMs - QUARANTINE_TTL_MS).toISOString();
+      const sessionCutoff = new Date(nowMs - CLOSED_SESSION_TTL_MS).toISOString();
+      const quarantinedAt = this.now();
+
+      const quarantineTotal =
+        (await database.getFirstAsync<{ total: number }>(
+          'SELECT COUNT(*) AS total FROM trip_location_quarantine',
+        ))?.total ?? 0;
+      const quarantineExcess = Math.max(0, quarantineTotal - this.quarantineMaxRows);
+      const outboxTotal =
+        (await database.getFirstAsync<{ total: number }>(
+          'SELECT COUNT(*) AS total FROM trip_location_outbox',
+        ))?.total ?? 0;
+      const outboxExcess = Math.max(0, outboxTotal - this.outboxSoftCapRows);
+
+      await database.withExclusiveTransactionAsync(async (transaction) => {
+        await transaction.runAsync(
+          'DELETE FROM trip_location_quarantine WHERE quarantined_at < ?',
+          [quarantineCutoff],
+        );
+        if (quarantineExcess > 0) {
+          await transaction.runAsync(
+            `DELETE FROM trip_location_quarantine WHERE rowid IN (
+              SELECT rowid FROM trip_location_quarantine
+              ORDER BY quarantined_at ASC LIMIT ?)`,
+            [quarantineExcess],
+          );
+        }
+        // Expired closed sessions: preserve their leftover points first.
+        await transaction.runAsync(
+          `INSERT INTO trip_location_quarantine (
+            session_id, sequence_number, ride_id, captured_at, monotonic_ms,
+            lat, lng, accuracy, speed, heading, altitude, source, mocked,
+            is_completion_fix, rejection_reason, quarantined_at
+          )
+          SELECT
+            o.session_id, o.sequence_number, o.ride_id, o.captured_at, o.monotonic_ms,
+            o.lat, o.lng, o.accuracy, o.speed, o.heading, o.altitude, o.source, o.mocked,
+            o.is_completion_fix, 'expired_unflushed', ?
+          FROM trip_location_outbox o
+          JOIN trip_location_sessions s ON s.session_id = o.session_id
+          WHERE s.closed_at IS NOT NULL AND s.closed_at < ?
+          ON CONFLICT(session_id, sequence_number) DO NOTHING`,
+          [quarantinedAt, sessionCutoff],
+        );
+        await transaction.runAsync(
+          `DELETE FROM trip_location_outbox WHERE session_id IN (
+            SELECT session_id FROM trip_location_sessions
+            WHERE closed_at IS NOT NULL AND closed_at < ?)`,
+          [sessionCutoff],
+        );
+        await transaction.runAsync(
+          'DELETE FROM trip_location_sessions WHERE closed_at IS NOT NULL AND closed_at < ?',
+          [sessionCutoff],
+        );
+        if (outboxExcess > 0) {
+          await transaction.runAsync(
+            `INSERT INTO trip_location_quarantine (
+              session_id, sequence_number, ride_id, captured_at, monotonic_ms,
+              lat, lng, accuracy, speed, heading, altitude, source, mocked,
+              is_completion_fix, rejection_reason, quarantined_at
+            )
+            SELECT
+              o.session_id, o.sequence_number, o.ride_id, o.captured_at, o.monotonic_ms,
+              o.lat, o.lng, o.accuracy, o.speed, o.heading, o.altitude, o.source, o.mocked,
+              o.is_completion_fix, 'evicted_capacity', ?
+            FROM trip_location_outbox o
+            JOIN trip_location_sessions s ON s.session_id = o.session_id
+            WHERE s.closed_at IS NOT NULL
+            ORDER BY o.enqueued_at ASC LIMIT ?
+            ON CONFLICT(session_id, sequence_number) DO NOTHING`,
+            [quarantinedAt, outboxExcess],
+          );
+          await transaction.runAsync(
+            `DELETE FROM trip_location_outbox WHERE rowid IN (
+              SELECT o.rowid FROM trip_location_outbox o
+              JOIN trip_location_sessions s ON s.session_id = o.session_id
+              WHERE s.closed_at IS NOT NULL
+              ORDER BY o.enqueued_at ASC LIMIT ?)`,
+            [outboxExcess],
+          );
+        }
+      });
+    } catch {
+      // Housekeeping only — never let retention break capture or ack paths.
+    }
   }
 
   private async getDatabase(): Promise<TripLocationOutboxDatabase> {

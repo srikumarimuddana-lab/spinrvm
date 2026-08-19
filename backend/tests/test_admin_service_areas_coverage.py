@@ -708,20 +708,30 @@ class TestAreaFees:
     @pytest.mark.anyio
     async def test_create_area_fee_inserts_and_returns_doc(self):
         insert_one = AsyncMock()
-        with patch("backend.routes.admin.service_areas.db_supabase.insert_one", insert_one):
+        audit_mock = AsyncMock(return_value="audit-1")
+        with (
+            patch("backend.routes.admin.service_areas.db_supabase.insert_one", insert_one),
+            patch("backend.routes.admin.service_areas.log_admin_action", audit_mock),
+        ):
             req = AreaFeeCreateRequest(fee_name="Peak", fee_type="custom", amount=2.5)
-            result = await admin_create_area_fee("area-1", req)
+            result = await admin_create_area_fee("area-1", req, admin=_ADMIN)
 
         assert result["fee_name"] == "Peak"
         assert result["service_area_id"] == "area-1"
         insert_one.assert_awaited_once()
+        audit_mock.assert_awaited_once()
+        assert audit_mock.call_args[0][1] == "area_fee_created"
 
     @pytest.mark.anyio
     async def test_update_area_fee_only_sends_provided_fields(self):
         update_one = AsyncMock()
-        with patch("backend.routes.admin.service_areas.db_supabase.update_one", update_one):
+        audit_mock = AsyncMock(return_value="audit-2")
+        with (
+            patch("backend.routes.admin.service_areas.db_supabase.update_one", update_one),
+            patch("backend.routes.admin.service_areas.log_admin_action", audit_mock),
+        ):
             req = AreaFeeUpdateRequest(amount=9.99)
-            result = await admin_update_area_fee("area-1", "fee-1", req)
+            result = await admin_update_area_fee("area-1", "fee-1", req, admin=_ADMIN)
 
         assert result == {"message": "Area fee updated"}
         table, filters, updates = update_one.await_args.args
@@ -729,25 +739,39 @@ class TestAreaFees:
         assert filters == {"id": "fee-1"}
         assert updates["amount"] == 9.99
         assert "fee_name" not in updates
+        audit_mock.assert_awaited_once()
+        assert audit_mock.call_args[0][1] == "area_fee_updated"
 
     @pytest.mark.anyio
     async def test_update_area_fee_empty_payload_skips_write(self):
         update_one = AsyncMock()
-        with patch("backend.routes.admin.service_areas.db_supabase.update_one", update_one):
+        audit_mock = AsyncMock()
+        with (
+            patch("backend.routes.admin.service_areas.db_supabase.update_one", update_one),
+            patch("backend.routes.admin.service_areas.log_admin_action", audit_mock),
+        ):
             req = AreaFeeUpdateRequest()
-            result = await admin_update_area_fee("area-1", "fee-1", req)
+            result = await admin_update_area_fee("area-1", "fee-1", req, admin=_ADMIN)
 
         update_one.assert_not_awaited()
+        audit_mock.assert_not_awaited()
         assert result == {"message": "Area fee updated"}
 
     @pytest.mark.anyio
     async def test_delete_area_fee(self):
         delete_many = AsyncMock()
-        with patch("backend.routes.admin.service_areas.db_supabase.delete_many", delete_many):
-            result = await admin_delete_area_fee("area-1", "fee-1")
+        audit_mock = AsyncMock(return_value="audit-3")
+        with (
+            patch("backend.routes.admin.service_areas.db_supabase.delete_many", delete_many),
+            patch("backend.routes.admin.service_areas.log_admin_action", audit_mock),
+        ):
+            result = await admin_delete_area_fee("area-1", "fee-1", admin=_ADMIN)
 
         delete_many.assert_awaited_once_with("area_fees", {"id": "fee-1"})
         assert result == {"message": "Area fee deleted"}
+        audit_mock.assert_awaited_once_with(
+            _ADMIN, "area_fee_deleted", "area_fees", "fee-1", {"service_area_id": "area-1"}
+        )
 
 
 # ── area tax config ────────────────────────────────────────────────────────

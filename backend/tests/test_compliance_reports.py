@@ -219,7 +219,7 @@ class TestInsuranceBillingDetailRows:
         first_name/last_name concatenation alone."""
 
         async def get_rows_side(table, filters=None, **kw):
-            if table == "driver_period_distances":
+            if table == "driver_period_distances_current":
                 return [
                     {
                         "driver_id": "d1",
@@ -258,7 +258,7 @@ class TestInsuranceBillingDetailRows:
 
     def test_falls_back_to_first_last_name_when_name_is_null(self):
         async def get_rows_side(table, filters=None, **kw):
-            if table == "driver_period_distances":
+            if table == "driver_period_distances_current":
                 return [
                     {
                         "driver_id": "d1",
@@ -283,7 +283,7 @@ class TestInsuranceBillingDetailRows:
         own distances, not one de-duplicated/summed row."""
 
         async def get_rows_side(table, filters=None, **kw):
-            if table == "driver_period_distances":
+            if table == "driver_period_distances_current":
                 return [
                     {
                         "driver_id": "d1",
@@ -345,7 +345,7 @@ class TestInsuranceBillingDetailRows:
         never silently dropped — using the raw driver_id as a fallback."""
 
         async def get_rows_side(table, filters=None, **kw):
-            if table == "driver_period_distances":
+            if table == "driver_period_distances_current":
                 return [
                     {
                         "driver_id": "d-missing",
@@ -510,7 +510,7 @@ class TestServiceAreaFiltering:
             captured.setdefault(table, []).append(filters)
             if table == "drivers" and "service_area_id" in (filters or {}):
                 return [{"id": "d1"}, {"id": "d2"}]
-            if table == "driver_period_distances":
+            if table == "driver_period_distances_current":
                 return []
             return []
 
@@ -518,7 +518,7 @@ class TestServiceAreaFiltering:
             asyncio.run(compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.11"), ["a1"]))
 
         assert captured["drivers"][0]["service_area_id"] == {"$in": ["a1"]}
-        assert captured["driver_period_distances"][0]["driver_id"] == {"$in": ["d1", "d2"]}
+        assert captured["driver_period_distances_current"][0]["driver_id"] == {"$in": ["d1", "d2"]}
 
     def test_insurance_billing_returns_empty_when_no_driver_is_in_the_selected_areas(self):
         """The load-bearing guard: an empty `$in` list would widen back to
@@ -539,7 +539,7 @@ class TestServiceAreaFiltering:
         assert rows == []
         assert total_km == Decimal("0")
         assert groups == []
-        assert "driver_period_distances" not in tables_queried
+        assert "driver_period_distances_current" not in tables_queried
 
     def test_insurance_billing_unscoped_does_not_resolve_drivers_by_area(self):
         captured = {}
@@ -551,7 +551,7 @@ class TestServiceAreaFiltering:
         with _patch_get_rows(get_rows_side):
             asyncio.run(compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.11")))
 
-        assert "driver_id" not in captured["driver_period_distances"][0]
+        assert "driver_id" not in captured["driver_period_distances_current"][0]
 
     def test_area_driver_scope_truncation_propagates_to_the_report(self):
         """Hitting the driver cap means the driver set is short, so the
@@ -569,3 +569,168 @@ class TestServiceAreaFiltering:
             )
 
         assert truncated is True
+
+
+class TestPeriod1InformationalRows:
+    """Owner decision 2026-08-18: Period-1 km appear only as clearly-labeled
+    informational rows — never billed, never in billed totals."""
+
+    def test_p1_rows_labeled_and_unbilled(self):
+        async def get_rows_side(table, filters=None, **kw):
+            if table == "driver_period_distances_current":
+                assert filters["period"] == 1
+                return [
+                    {
+                        "driver_id": "d1",
+                        "ride_id": None,
+                        "period": 1,
+                        "distance_km": 12.5,
+                        "started_at": "2026-07-02T15:00:00Z",
+                        "source": "gps_scalar_p1",
+                    }
+                ]
+            if table == "drivers":
+                return [{"id": "d1", "name": "Jane Doe"}]
+            return []
+
+        with _patch_get_rows(get_rows_side):
+            rows, total_km, groups, truncated = asyncio.run(
+                compliance._period1_informational_rows(_START, _END)
+            )
+
+        assert not truncated
+        assert total_km == Decimal("12.5")
+        assert rows == [
+            {
+                "driver_name": "Jane Doe",
+                "license_number": "",
+                "vehicle": "",
+                "trip_date": "2026-07-02 15:00 UTC",
+                "phase": "Period 1 — contingent, not billed",
+                "phase_km": "12.500",
+                "rate_per_km": "—",
+                "amount": "Not billed",
+            }
+        ]
+        # xlsx grouping: standalone parents, no children (no ride to group by).
+        assert groups == [(rows[0], [])]
+
+    def test_p1_km_never_reach_the_billed_totals(self):
+        """End-to-end through the render path: the billed total and total_km
+        line come from Periods 2+3 only, even with include_period_1 on."""
+        captured = {}
+
+        def _capture_render(**kwargs):
+            captured.update(kwargs)
+
+            class _Resp:  # noqa: D401 - stub
+                pass
+
+            return _Resp()
+
+        async def get_rows_side(table, filters=None, **kw):
+            if table == "driver_period_distances_current":
+                if filters.get("period") == 1:
+                    return [
+                        {
+                            "driver_id": "d1",
+                            "ride_id": None,
+                            "period": 1,
+                            "distance_km": 100.0,
+                            "started_at": "2026-07-02T15:00:00Z",
+                        }
+                    ]
+                return [
+                    {
+                        "driver_id": "d1",
+                        "ride_id": "r1",
+                        "period": 3,
+                        "distance_km": 10.0,
+                        "started_at": "2026-07-02T16:00:00Z",
+                    }
+                ]
+            if table == "drivers":
+                return [{"id": "d1", "name": "Jane Doe"}]
+            return []
+
+        with (
+            _patch_get_rows(get_rows_side),
+            patch("backend.routes.admin.compliance._render_tabular_report", _capture_render),
+            patch("backend.routes.admin.compliance._check_export_gate", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.compliance._log_compliance_export", AsyncMock()),
+        ):
+            asyncio.run(
+                compliance._render_insurance_billing_report(
+                    {"email": "a@spinr.ca"},
+                    "SGI",
+                    Decimal("0.11"),
+                    "insurance_billing_sgi",
+                    "2026-07-01",
+                    "2026-07-31",
+                    "csv",
+                    None,
+                    include_period_1=True,
+                )
+            )
+
+        rows = captured["rows"]
+        # Billed row first, informational row appended after.
+        assert rows[0]["phase"].startswith("3")
+        assert rows[1]["phase"] == "Period 1 — contingent, not billed"
+        assert rows[1]["amount"] == "Not billed"
+        # 10 km billed at $0.11 = $1.10; the 100 P1 km appear only as context.
+        totals_line = captured["subtitle"][-1]
+        assert "Total: 10.00 km" in totals_line
+        assert "Total billed: $1.10" in totals_line
+        assert "Period 1 (contingent, not billed): 100.00 km" in totals_line
+
+    def test_flag_off_keeps_report_byte_identical(self):
+        """include_period_1=False must not even query Period-1 rows."""
+        captured = {}
+
+        def _capture_render(**kwargs):
+            captured.update(kwargs)
+            return object()
+
+        p1_queries = []
+
+        async def get_rows_side(table, filters=None, **kw):
+            if table == "driver_period_distances_current":
+                if filters.get("period") == 1:
+                    p1_queries.append(filters)
+                    return []
+                return [
+                    {
+                        "driver_id": "d1",
+                        "ride_id": "r1",
+                        "period": 2,
+                        "distance_km": 3.0,
+                        "started_at": "2026-07-02T16:00:00Z",
+                    }
+                ]
+            if table == "drivers":
+                return [{"id": "d1", "name": "Jane Doe"}]
+            return []
+
+        with (
+            _patch_get_rows(get_rows_side),
+            patch("backend.routes.admin.compliance._render_tabular_report", _capture_render),
+            patch("backend.routes.admin.compliance._check_export_gate", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.compliance._log_compliance_export", AsyncMock()),
+        ):
+            asyncio.run(
+                compliance._render_insurance_billing_report(
+                    {"email": "a@spinr.ca"},
+                    "SGI",
+                    Decimal("0.11"),
+                    "insurance_billing_sgi",
+                    "2026-07-01",
+                    "2026-07-31",
+                    "csv",
+                    None,
+                )
+            )
+
+        assert not p1_queries
+        assert all(r["phase"] != "Period 1 — contingent, not billed" for r in captured["rows"])
+        assert "Periods 2+3 only" in captured["subtitle"][0]

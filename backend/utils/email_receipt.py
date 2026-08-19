@@ -633,7 +633,10 @@ async def send_receipt_email(
             from settings_loader import get_app_settings  # type: ignore
         show_pickup_leg = bool(((await get_app_settings()) or {}).get("rider_show_pickup_leg_enabled", False))
     except Exception:
-        logger.warning("pickup-leg receipt flag read failed; omitting the line")
+        # Fail-safe direction: omit the informational line. Still ERROR with
+        # the underlying exception — a settings read failing on the receipt
+        # path must surface loudly (CLAUDE.md: never silently swallow).
+        logger.error("pickup-leg receipt flag read failed; omitting the line", exc_info=True)
     # Private Storage URLs expire. The email body must remain valid long after
     # delivery, so it contains only the quality note; the PDF and PNG contain
     # the immutable bytes downloaded while the signed URL was valid.

@@ -6,22 +6,11 @@ validation, upsert branches, RPC failure handling), audit-log listing
 
 TEST-ONLY change; no application code modified.
 
-NOTE (found, not fixed — see PR description / change log "Bugs found but not
-fixed"): under this repo's test harness, ``backend.routes.admin.maintenance``
-gets aliased to whichever module instance ("routes.admin.maintenance" bare,
-or "backend.routes.admin.maintenance" qualified) loaded first — see
-conftest.py's ``_BareModuleAliasFinder``. When the bare spelling loads first,
-its 3-dot relative import (``from ... import db_supabase`` /
-``from ...db_supabase import run_sync as _run_sync`` /
-``from ...supabase_client import supabase as _supabase_client``) has no
-parent package to resolve against and raises ImportError, so maintenance.py
-falls into its ``except ImportError:`` branch — which only does
-``import db_supabase`` and never binds ``_run_sync`` / ``_supabase_client``
-at all. ``admin_rollup_driver_daily`` then hits a bare ``NameError`` the
-first time it reaches ``_run_sync(_rpc)`` for any driver with day-activity
-(nightly rollup with >=1 active driver). This reproduces deterministically
-in this test environment; the module-level ``_ensure_maint_rpc_bindings``
-fixture below works around it for these tests without touching app code.
+NOTE: the rollup body moved to utils/driver_daily_rollup (shared with the
+scheduled loop), so this file no longer exercises an inline RPC path — the
+former ``_ensure_maint_rpc_bindings`` workaround for maintenance.py's
+dual-import fallback went away with the ``_run_sync`` / ``_supabase_client``
+imports it patched around.
 """
 
 from __future__ import annotations
@@ -35,27 +24,6 @@ from fastapi import HTTPException
 from backend.routes.admin import maintenance as maint
 
 ADMIN = {"id": "admin-1", "role": "super_admin"}
-
-
-@pytest.fixture(autouse=True)
-def _ensure_maint_rpc_bindings():
-    """Work around the ImportError-fallback gap described in the module
-    docstring above (test-harness workaround only — application code is
-    untouched). Without this, every test that reaches the RPC branch of
-    admin_rollup_driver_daily fails with AttributeError/NameError purely as
-    an artifact of module-alias load order, not because of anything these
-    tests are verifying.
-    """
-    added = []
-    if not hasattr(maint, "_run_sync"):
-        maint._run_sync = maint.db_supabase.run_sync
-        added.append("_run_sync")
-    if not hasattr(maint, "_supabase_client"):
-        maint._supabase_client = maint.db_supabase.supabase
-        added.append("_supabase_client")
-    yield
-    for name in added:
-        delattr(maint, name)
 
 
 # ---------------------------------------------------------------------------
@@ -96,12 +64,18 @@ class TestCleanupLocationHistory:
         async def _capture(table, filters):
             calls.append(filters)
 
-        with patch.object(maint.db_supabase, "delete_many", AsyncMock(side_effect=_capture)):
-            result = await maint.admin_cleanup_location_history(days=30)
+        audit_mock = AsyncMock(return_value="audit-1")
+        with (
+            patch.object(maint.db_supabase, "delete_many", AsyncMock(side_effect=_capture)),
+            patch.object(maint, "log_admin_action", audit_mock),
+        ):
+            result = await maint.admin_cleanup_location_history(days=30, admin=ADMIN)
 
         assert len(calls) == 2
         assert "historical_cutoff" in result
         assert "idle_cutoff" in result
+        audit_mock.assert_awaited_once()
+        assert audit_mock.call_args[0][1] == "location_history_cleanup"
 
     @pytest.mark.asyncio
     async def test_cleanup_continues_when_historical_delete_fails(self):
@@ -113,8 +87,11 @@ class TestCleanupLocationHistory:
             if call_count["n"] == 1:
                 raise RuntimeError("db error")
 
-        with patch.object(maint.db_supabase, "delete_many", AsyncMock(side_effect=_side_effect)):
-            result = await maint.admin_cleanup_location_history(days=30)
+        with (
+            patch.object(maint.db_supabase, "delete_many", AsyncMock(side_effect=_side_effect)),
+            patch.object(maint, "log_admin_action", AsyncMock(return_value="audit-2")),
+        ):
+            result = await maint.admin_cleanup_location_history(days=30, admin=ADMIN)
 
         assert call_count["n"] == 2
         assert result["deleted_historical"] == -1
@@ -128,8 +105,11 @@ class TestCleanupLocationHistory:
             if call_count["n"] == 2:
                 raise RuntimeError("db error")
 
-        with patch.object(maint.db_supabase, "delete_many", AsyncMock(side_effect=_side_effect)):
-            result = await maint.admin_cleanup_location_history(days=30)
+        with (
+            patch.object(maint.db_supabase, "delete_many", AsyncMock(side_effect=_side_effect)),
+            patch.object(maint, "log_admin_action", AsyncMock(return_value="audit-3")),
+        ):
+            result = await maint.admin_cleanup_location_history(days=30, admin=ADMIN)
 
         assert call_count["n"] == 2
         assert result["deleted_idle"] == -1
@@ -141,142 +121,105 @@ class TestCleanupLocationHistory:
 
 
 class TestRollupDriverDaily:
+    """Endpoint-layer contract only.
+
+    The rollup body moved to utils/driver_daily_rollup.rollup_driver_day so
+    the manual admin trigger and the scheduled loop share one Regina-day
+    definition. Discovery, per-driver upserts, decline counting and RPC
+    failure handling are pinned against the real implementation in
+    tests/test_driver_daily_rollup.py; what remains here is what the
+    ENDPOINT owns: the completed-day guard, the delegated date, the
+    passthrough result, and main's admin audit row.
+    """
+
+    @staticmethod
+    def _regina_today():
+        """The guard is Regina-date based: between 00:00 and 06:00 UTC the
+        UTC calendar is already a day ahead of Saskatchewan, so asserting on
+        UTC dates would make this suite flaky by wall clock."""
+        try:
+            from backend.utils.driver_activity import REGINA_TZ
+        except ImportError:  # pragma: no cover - dual import path
+            from utils.driver_activity import REGINA_TZ  # type: ignore
+        return datetime.now(timezone.utc).astimezone(REGINA_TZ).date()
+
     @pytest.mark.asyncio
     async def test_rejects_today_or_future_target_date(self):
-        today = datetime.now(timezone.utc).date().isoformat()
+        today = self._regina_today().isoformat()
         with pytest.raises(HTTPException) as exc:
-            await maint.admin_rollup_driver_daily(target_date=today)
+            await maint.admin_rollup_driver_daily(target_date=today, admin=ADMIN)
         assert exc.value.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_defaults_to_yesterday_when_no_target_date(self):
-        # NOTE: `maint.db` is `maint.db_supabase` under a legacy alias (see
-        # staff.py-style "db = db_supabase" pattern) — they are the *same*
-        # object, so only one get_rows patch is needed/possible per test.
-        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
-        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])):
-            result = await maint.admin_rollup_driver_daily(target_date=None)
+    async def test_defaults_to_regina_yesterday_and_writes_the_audit_row(self):
+        yesterday = self._regina_today() - timedelta(days=1)
+        audit_mock = AsyncMock(return_value="audit-4")
+        core_mock = AsyncMock(
+            return_value={
+                "stat_date": yesterday.isoformat(),
+                "drivers_processed": 0,
+                "created": 0,
+                "updated": 0,
+            }
+        )
+        with (
+            patch("utils.driver_daily_rollup.rollup_driver_day", core_mock),
+            patch.object(maint, "log_admin_action", audit_mock),
+        ):
+            result = await maint.admin_rollup_driver_daily(target_date=None, admin=ADMIN)
+
+        core_mock.assert_awaited_once_with(yesterday)
         assert result["stat_date"] == yesterday.isoformat()
         assert result["drivers_processed"] == 0
-
-    @pytest.mark.asyncio
-    async def test_rollup_creates_new_stat_row_for_new_driver(self):
-        target_date = (datetime.now(timezone.utc) - timedelta(days=2)).date().isoformat()
-        ride = {"driver_id": "d1", "status": "completed", "driver_earnings": "10.00", "tip_amount": "2.00"}
-
-        async def _get_rows(table, filters=None, **kwargs):
-            if table == "rides":
-                return [ride]
-            if table == "driver_location_history":
-                return [{"driver_id": "d1"}]
-            if table == "driver_daily_stats":
-                return []  # no existing row -> insert branch
-            if table == "audit_logs":
-                return []
-            return []
-
-        rpc_resp = AsyncMock()
-        rpc_resp.data = [
-            {
-                "idle_km": 1.0,
-                "navigating_km": 2.0,
-                "trip_km": 3.0,
-                "online_minutes": 60,
-                "first_online_at": "2026-01-01T00:00:00Z",
-                "last_online_at": "2026-01-01T01:00:00Z",
-            }
-        ]
-
-        with (
-            patch.object(maint.db_supabase, "get_rows", AsyncMock(side_effect=_get_rows)),
-            patch.object(maint, "_run_sync", AsyncMock(return_value=rpc_resp)),
-            patch.object(maint.db_supabase, "get_driver_by_id", AsyncMock(return_value={"service_area_id": "a1"})),
-            patch.object(maint.db_supabase, "insert_one", AsyncMock()) as insert_mock,
-            patch.object(maint.db_supabase, "update_one", AsyncMock()) as update_mock,
-        ):
-            result = await maint.admin_rollup_driver_daily(target_date=target_date)
-
-        assert result["created"] == 1
-        assert result["updated"] == 0
-        insert_mock.assert_awaited_once()
-        update_mock.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_rollup_updates_existing_stat_row(self):
-        target_date = (datetime.now(timezone.utc) - timedelta(days=2)).date().isoformat()
-        ride = {"driver_id": "d1", "status": "cancelled"}
-
-        async def _get_rows(table, filters=None, **kwargs):
-            if table == "rides":
-                return [ride]
-            if table == "driver_location_history":
-                return [{"driver_id": "d1"}]
-            if table == "driver_daily_stats":
-                return [{"id": f"d1_{target_date}"}]  # existing -> update branch
-            if table == "audit_logs":
-                return []
-            return []
-
-        rpc_resp = AsyncMock()
-        rpc_resp.data = []  # empty rows -> gps_stats defaults
-
-        with (
-            patch.object(maint.db_supabase, "get_rows", AsyncMock(side_effect=_get_rows)),
-            patch.object(maint, "_run_sync", AsyncMock(return_value=rpc_resp)),
-            patch.object(maint.db_supabase, "get_driver_by_id", AsyncMock(return_value=None)),
-            patch.object(maint.db_supabase, "insert_one", AsyncMock()) as insert_mock,
-            patch.object(maint.db_supabase, "update_one", AsyncMock()) as update_mock,
-        ):
-            result = await maint.admin_rollup_driver_daily(target_date=target_date)
-
-        assert result["created"] == 0
-        assert result["updated"] == 1
-        update_mock.assert_awaited_once()
-        insert_mock.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_rollup_rpc_failure_falls_back_to_zero_gps_stats(self):
-        target_date = (datetime.now(timezone.utc) - timedelta(days=2)).date().isoformat()
-        ride = {"driver_id": "d1", "status": "completed", "driver_earnings": "5", "tip_amount": "0"}
-
-        async def _get_rows(table, filters=None, **kwargs):
-            if table == "rides":
-                return [ride]
-            if table == "driver_location_history":
-                return []
-            if table == "driver_daily_stats":
-                return []
-            if table == "audit_logs":
-                return []
-            return []
-
-        with (
-            patch.object(maint.db_supabase, "get_rows", AsyncMock(side_effect=_get_rows)),
-            patch.object(maint, "_run_sync", AsyncMock(side_effect=RuntimeError("rpc down"))),
-            patch.object(maint.db_supabase, "get_driver_by_id", AsyncMock(return_value=None)),
-            patch.object(maint.db_supabase, "insert_one", AsyncMock()) as insert_mock,
-        ):
-            result = await maint.admin_rollup_driver_daily(target_date=target_date)
-
-        assert result["created"] == 1
-        stat_row = insert_mock.call_args.args[1]
-        assert stat_row["online_minutes"] == 0
-        assert stat_row["total_km"] == 0
+        audit_mock.assert_awaited_once()
+        assert audit_mock.call_args[0][1] == "driver_daily_rollup"
 
     @pytest.mark.asyncio
     async def test_rollup_delegates_to_shared_regina_core(self):
-        """The endpoint is a thin wrapper over utils/driver_daily_rollup —
-        one day definition (Regina) shared with the scheduled loop. Decline
-        counting, discovery, and upserts are pinned in
-        tests/test_driver_daily_rollup.py against the core itself."""
-        target_date = (datetime.now(timezone.utc) - timedelta(days=3)).date()
+        """An explicit target_date is passed through verbatim as a date, and
+        the core's own counters are returned unchanged."""
+        target_date = self._regina_today() - timedelta(days=3)
 
-        core_mock = AsyncMock(return_value={"stat_date": target_date.isoformat(), "created": 1})
-        with patch("utils.driver_daily_rollup.rollup_driver_day", core_mock):
-            result = await maint.admin_rollup_driver_daily(target_date=target_date.isoformat())
+        core_mock = AsyncMock(
+            return_value={
+                "stat_date": target_date.isoformat(),
+                "drivers_processed": 2,
+                "created": 1,
+                "updated": 1,
+            }
+        )
+        audit_mock = AsyncMock(return_value="audit-5")
+        with (
+            patch("utils.driver_daily_rollup.rollup_driver_day", core_mock),
+            patch.object(maint, "log_admin_action", audit_mock),
+        ):
+            result = await maint.admin_rollup_driver_daily(target_date=target_date.isoformat(), admin=ADMIN)
 
         core_mock.assert_awaited_once_with(target_date)
-        assert result["stat_date"] == target_date.isoformat()
+        assert result["created"] == 1
+        assert result["updated"] == 1
+        # The audit payload carries the core's counters + the day definition,
+        # so an operator-triggered rollup is attributable after the fact.
+        audit_details = audit_mock.call_args[0][4]
+        assert audit_details["drivers_processed"] == 2
+        assert audit_details["day_tz"] == "regina"
+
+    @pytest.mark.asyncio
+    async def test_core_failure_propagates_and_writes_no_audit_row(self):
+        """A failed rollup must not leave an audit row claiming it ran."""
+        target_date = self._regina_today() - timedelta(days=2)
+        audit_mock = AsyncMock(return_value="audit-6")
+        with (
+            patch(
+                "utils.driver_daily_rollup.rollup_driver_day",
+                AsyncMock(side_effect=RuntimeError("rollup exploded")),
+            ),
+            patch.object(maint, "log_admin_action", audit_mock),
+        ):
+            with pytest.raises(RuntimeError):
+                await maint.admin_rollup_driver_daily(target_date=target_date.isoformat(), admin=ADMIN)
+
+        audit_mock.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

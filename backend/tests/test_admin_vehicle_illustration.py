@@ -21,12 +21,14 @@ class TestVehicleTypeIllustrationPersistence:
         with (
             patch("backend.routes.admin.vehicle_fleet.db_supabase.insert_one", insert_mock),
             patch("backend.routes.admin.vehicle_fleet.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.vehicle_fleet.log_admin_action", AsyncMock(return_value="audit-1")),
         ):
             result = await vehicle_fleet.admin_create_vehicle_type(
                 vehicle_fleet.VehicleTypeCreateRequest(
                     name="Standard",
                     illustration_url="https://example.com/standard.png",
-                )
+                ),
+                admin={"id": "admin-1", "role": "admin"},
             )
 
         assert result == {"type_id": "vt_1"}
@@ -44,12 +46,14 @@ class TestVehicleTypeIllustrationPersistence:
         with (
             patch("backend.routes.admin.vehicle_fleet.db_supabase.update_one", update_mock),
             patch("backend.routes.admin.vehicle_fleet.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.vehicle_fleet.log_admin_action", AsyncMock(return_value="audit-2")),
         ):
             await vehicle_fleet.admin_update_vehicle_type(
                 "vt_1",
                 vehicle_fleet.VehicleTypeUpdateRequest(
                     illustration_url="https://example.com/standard-v2.png",
                 ),
+                admin={"id": "admin-1", "role": "admin"},
             )
 
         update_mock.assert_called_once()
@@ -67,10 +71,12 @@ class TestVehicleTypeIllustrationPersistence:
         with (
             patch("backend.routes.admin.vehicle_fleet.db_supabase.update_one", update_mock),
             patch("backend.routes.admin.vehicle_fleet.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.vehicle_fleet.log_admin_action", AsyncMock(return_value="audit-3")),
         ):
             await vehicle_fleet.admin_update_vehicle_type(
                 "vt_1",
                 vehicle_fleet.VehicleTypeUpdateRequest(illustration_url=""),
+                admin={"id": "admin-1", "role": "admin"},
             )
 
         update_mock.assert_called_once()
@@ -87,10 +93,12 @@ class TestVehicleTypeIllustrationPersistence:
         with (
             patch("backend.routes.admin.vehicle_fleet.db_supabase.update_one", update_mock),
             patch("backend.routes.admin.vehicle_fleet.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.vehicle_fleet.log_admin_action", AsyncMock(return_value="audit-4")),
         ):
             await vehicle_fleet.admin_update_vehicle_type(
                 "vt_1",
                 vehicle_fleet.VehicleTypeUpdateRequest(name="Standard renamed"),
+                admin={"id": "admin-1", "role": "admin"},
             )
 
         update_mock.assert_called_once()

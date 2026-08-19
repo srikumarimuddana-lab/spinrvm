@@ -1913,7 +1913,7 @@ async def admin_get_driver_notes(driver_id: str):
 
 
 @router.post("/drivers/{driver_id}/notes")
-async def admin_add_driver_note(driver_id: str, req: DriverNoteCreate):
+async def admin_add_driver_note(driver_id: str, req: DriverNoteCreate, admin: dict = Depends(get_admin_user)):
     """Add a note to a driver's record."""
     if not req.note.strip():
         raise HTTPException(status_code=400, detail="Note cannot be empty")
@@ -1932,13 +1932,18 @@ async def admin_add_driver_note(driver_id: str, req: DriverNoteCreate):
         req.note[:100],
         {"category": req.category},
     )
+    # _log_driver_activity above writes driver_activity_log (the driver-facing
+    # timeline), a different table from audit_logs (the compliance/security
+    # audit trail every other admin action here writes to) — both are needed.
+    await log_admin_action(admin, "driver_note_added", "driver_notes", doc["id"], {"category": req.category})
     return doc
 
 
 @router.delete("/drivers/notes/{note_id}")
-async def admin_delete_driver_note(note_id: str):
+async def admin_delete_driver_note(note_id: str, admin: dict = Depends(get_admin_user)):
     """Delete a note."""
     await db_supabase.delete_many("driver_notes", {"id": note_id})
+    await log_admin_action(admin, "driver_note_deleted", "driver_notes", note_id, {})
     return {"message": "Note deleted"}
 
 
@@ -3769,7 +3774,7 @@ async def admin_get_driver_daily_stats(
 
 
 @router.put("/drivers/{driver_id}/area")
-async def admin_assign_driver_area(driver_id: str, service_area_id: str):
+async def admin_assign_driver_area(driver_id: str, service_area_id: str, admin: dict = Depends(get_admin_user)):
     """Assign a driver to a specific service area."""
     await db_supabase.update_one(
         "drivers",
@@ -3779,6 +3784,7 @@ async def admin_assign_driver_area(driver_id: str, service_area_id: str):
             "updated_at": datetime.now(timezone.utc).isoformat(),
         },
     )
+    await log_admin_action(admin, "driver_area_assigned", "drivers", driver_id, {"service_area_id": service_area_id})
     return {"message": f"Driver assigned to area {service_area_id}"}
 
 

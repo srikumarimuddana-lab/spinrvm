@@ -13,8 +13,10 @@ except ImportError:
 
 try:
     from ... import db_supabase
+    from ...utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase
+    from utils.audit_logger import log_admin_action  # type: ignore
 
 db = db_supabase  # legacy alias
 
@@ -59,7 +61,10 @@ router = APIRouter()
 
 
 @router.post("/maintenance/cleanup-location-history")
-async def admin_cleanup_location_history(days: int = Query(30, ge=7, le=1095)):
+async def admin_cleanup_location_history(
+    days: int = Query(30, ge=7, le=1095),
+    admin: dict = Depends(get_admin_user),
+):
     """Delete old driver_location_history rows.
 
     By default deletes rows older than 30 days. On ride completion the
@@ -100,6 +105,13 @@ async def admin_cleanup_location_history(days: int = Query(30, ge=7, le=1095)):
         logger.error(f"Cleanup idle GPS failed: {e}", exc_info=True)
 
     logger.info("[CLEANUP] Deleted historical + idle GPS points (counts not tracked — direct delete)")
+    await log_admin_action(
+        admin,
+        "location_history_cleanup",
+        "driver_location_history",
+        "bulk",
+        {"days": days, "historical_cutoff": cutoff_historical, "idle_cutoff": cutoff_idle},
+    )
     return {
         "deleted_historical": deleted_historical,
         "deleted_idle": deleted_idle,
@@ -109,7 +121,7 @@ async def admin_cleanup_location_history(days: int = Query(30, ge=7, le=1095)):
 
 
 @router.post("/maintenance/rollup-driver-daily")
-async def admin_rollup_driver_daily(target_date: Optional[str] = None):
+async def admin_rollup_driver_daily(target_date: Optional[str] = None, admin: dict = Depends(get_admin_user)):
     """Roll up driver activity for one Regina business day into driver_daily_stats.
 
     Delegates to utils/driver_daily_rollup.rollup_driver_day — the same core
@@ -142,7 +154,22 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
     else:
         stat_date = regina_today - timedelta(days=1)
 
-    return await rollup_driver_day(stat_date)
+    result = await rollup_driver_day(stat_date)
+    # Admin audit trail (main's audit-sweep): every operator-triggered
+    # maintenance action is recorded, including this one.
+    await log_admin_action(
+        admin,
+        "driver_daily_rollup",
+        "driver_daily_stats",
+        stat_date.isoformat(),
+        {
+            "drivers_processed": result.get("drivers_processed"),
+            "created": result.get("created"),
+            "updated": result.get("updated"),
+            "day_tz": "regina",
+        },
+    )
+    return result
 
 
 # ============================================================

@@ -41,6 +41,10 @@
 --   (drops planned_route_polyline from Step A's SET clause; the column and
 --   any rows already cleared by this version stay cleared -- rollback of
 --   the function does not restore already-purged data).
+--
+-- migration-override-ok: redefines purge_pii_retention() (RPC-by-name
+-- caller, see migration 289's header for why it can't be renamed) --
+-- same intentional re-fork pattern as migrations 296/321/323/324.
 
 CREATE OR REPLACE FUNCTION purge_pii_retention(p_dry_run BOOLEAN DEFAULT false)
 RETURNS JSONB

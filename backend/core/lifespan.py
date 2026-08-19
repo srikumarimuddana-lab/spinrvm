@@ -458,6 +458,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.opt(exception=True).error(f"Failed to import period1 distance finalizer loop: {e}")
 
+    # Driver daily rollup — keeps driver_daily_stats current on Regina
+    # business days (2 completed days every 30 min, 7-day sweep nightly).
+    # Single replica via Redis leader lock; idempotent upsert per driver-day.
+    try:
+        from utils.driver_daily_rollup import driver_daily_rollup_loop
+
+        _spawn("driver_daily_rollup (30min)", driver_daily_rollup_loop)
+    except Exception as e:
+        logger.opt(exception=True).error(f"Failed to import driver daily rollup loop: {e}")
+
     # Stale Period-3 span closer — alerts on open passenger-aboard insurance
     # spans whose ride is terminal or long-abandoned (misstated SGI commercial
     # exposure); closes them at the evidence-based end time only when
@@ -648,6 +658,7 @@ async def lifespan(app: FastAPI):
             "period1_distance_finalizer (5min)",
             "distance_reconciliation (daily 04:00 UTC)",
             "stale_p3_closer (15min)",
+            "driver_daily_rollup (30min)",
         ]
     )
 

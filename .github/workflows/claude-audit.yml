@@ -81,7 +81,7 @@ jobs:
           test -x .claude/hooks/pre-commit || { echo "pre-commit hook not executable"; exit 1; }
 
       - name: Shellcheck hooks
-        uses: ludeeus/action-shellcheck@master
+        uses: ludeeus/action-shellcheck@00b27aa7cb85167568cb48a3838b75f4265f2bca # master (2026-08-19)
         with:
           scandir: ./.claude/hooks
 

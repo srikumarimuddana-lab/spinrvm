@@ -156,13 +156,14 @@ class TestFirebaseAuthLoginHappyPaths:
         payload = {"uid": "fb-new-1", "phone_number": "+13065550001", "aud": "driver-app"}
         fb_stub = MagicMock()
         fb_stub.verify_id_token.return_value = payload
+        create_user_mock = AsyncMock(return_value=True)
 
         with (
             patch.dict("sys.modules", {"firebase_admin.auth": fb_stub}),
             patch("backend.routes.auth.settings.FIREBASE_DRIVER_APP_ID", "driver-app"),
             patch("backend.routes.auth.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
             patch("backend.routes.auth.db_supabase.get_user_by_phone", AsyncMock(return_value=None)),
-            patch("backend.routes.auth.db_supabase.create_user", AsyncMock(return_value=True)),
+            patch("backend.routes.auth.db_supabase.create_user", create_user_mock),
             patch(
                 "backend.routes.auth.issue_refresh_token",
                 AsyncMock(return_value=("raw-refresh", "hash", datetime.now(timezone.utc) + timedelta(days=30))),
@@ -179,6 +180,17 @@ class TestFirebaseAuthLoginHappyPaths:
         assert result.is_new_user is True
         assert result.token
         assert result.refresh_token == "raw-refresh"
+
+        # Ranked blocker #12 (PIPEDA consent-version stamp on signup) —
+        # written atomically with the initial insert, matching the
+        # terms_accepted_version/terms_accepted_at convention corporate
+        # self-serve signup already uses on corporate_accounts.
+        from backend.routes.auth import CONSENT_VERSION
+
+        create_user_mock.assert_awaited_once()
+        created_payload = create_user_mock.await_args.args[0]
+        assert created_payload["consent_version"] == CONSENT_VERSION
+        assert created_payload["consent_accepted_at"]
 
     @pytest.mark.asyncio
     async def test_existing_user_logged_in(self):

@@ -379,6 +379,95 @@ async def update_driver_status(
                         action_hint="Renew documents in Profile",
                     )
 
+        # Fetch app_settings early — the eligibility re-check below is
+        # flag-gated (see below) and the Spinr Pass block further down also
+        # needs it; one fetch serves both.
+        try:
+            from ...settings_loader import get_app_settings  # type: ignore
+        except ImportError:
+            from settings_loader import get_app_settings  # type: ignore
+        app_settings = await get_app_settings()
+
+        # SK regulatory eligibility re-check (audit finding #10,
+        # docs/audit/2026-08-18-full-fleet-whole-app-audit.md): CLAUDE.md's
+        # driver-eligibility rules (Class 5 licence, vehicle < 10 years old,
+        # minimum 3 years licensed driving experience) were previously
+        # validated once at onboarding only, never re-checked here alongside
+        # the document-expiry gate above. A driver's vehicle can age past 10
+        # years, or a licence-class correction can land, while the driver
+        # keeps going online unchecked indefinitely.
+        #
+        # Flag-gated per CLAUDE.md gate #3 ("feature-flag anything
+        # user-visible and non-trivial ... new validation rules that could
+        # reject previously-valid input"): these two fields (license_class,
+        # vehicle_year) were only ever validated once at onboarding/import,
+        # so an unknown number of currently-active drivers could have stale
+        # or legacy data that would newly fail here. Defaults OFF (dark
+        # ship) via the existing app_settings-in-DB pattern so it can be
+        # verified in staging/canary against real driver data before an
+        # operator flips it on — no redeploy needed either way. See
+        # docs/change-log/2026-08-19-go-online-sk-eligibility-recheck-fix.md
+        # for the rollout recommendation.
+        if bool(app_settings.get("enforce_driver_eligibility_recheck", False)):
+            # License class: Class 5 (standard) is required; Class 1-4 needs
+            # separate approval. There is no dedicated "separately approved
+            # for non-standard class" flag in the schema (checked every
+            # drivers-table migration, notably
+            # 221_drivers_bulk_import_fields.sql which added license_class
+            # itself) — `sgi_approved` ("Whether imported records indicate
+            # SGI approval for passenger-for-hire/rideshare operation", same
+            # migration) is the closest existing signal and is reused here
+            # as an interim proxy for "separately approved". This is a
+            # judgment call, not a confirmed dedicated field — see the
+            # change log. A driver with no license_class on file (never
+            # backfilled — see ACTION_ITEMS.md B14) is left unblocked rather
+            # than guessed at.
+            license_class = (driver.get("license_class") or "").strip().upper()
+            if license_class and license_class not in ("5", "5A", "5-A") and not driver.get("sgi_approved"):
+                raise SpinrException(
+                    message=(
+                        f"Your driver's licence class ({license_class}) requires separate SGI "
+                        "approval to drive for Spinr. Please contact support."
+                    ),
+                    error_code=ErrorCode.DRIVER_LICENSE_CLASS_INELIGIBLE,
+                    status_code=400,
+                    message_key=ErrorKeys.DRIVER_LICENSE_CLASS_INELIGIBLE,
+                    action_hint="Contact support",
+                )
+
+            # Vehicle age: Saskatchewan Transportation Act requires < 10
+            # years old. No vehicle_year on file (never required at
+            # onboarding for every driver) is left unblocked rather than
+            # guessed at.
+            vehicle_year = driver.get("vehicle_year")
+            if vehicle_year:
+                try:
+                    vehicle_age = now.year - int(vehicle_year)
+                except (TypeError, ValueError):
+                    vehicle_age = None
+                if vehicle_age is not None and vehicle_age >= 10:
+                    raise SpinrException(
+                        message=(
+                            f"Your vehicle ({vehicle_year}) is {vehicle_age} years old and no longer "
+                            "eligible to drive for Spinr. Vehicles must be under 10 years old."
+                        ),
+                        error_code=ErrorCode.DRIVER_VEHICLE_TOO_OLD,
+                        status_code=400,
+                        message_key=ErrorKeys.DRIVER_VEHICLE_TOO_OLD,
+                        action_hint="Update vehicle in Profile",
+                    )
+
+            # Minimum 3 years licensed driving experience: intentionally NOT
+            # enforced here even when the flag is on. Repo-wide search
+            # (drivers + driver_documents migrations and every
+            # onboarding/profile route) found no field that records a
+            # licence-issue or experience-start date — the requirement was
+            # never captured at onboarding either, so there is nothing to
+            # re-check on go-online without inventing a new column. Per this
+            # task's instructions and CLAUDE.md's migration conventions,
+            # that schema decision is not this fix's to make silently —
+            # flagged as a follow-up in the change log rather than guessed at.
+
         # is_verified check removed — status field is the single source of truth now.
         # Only status='active' drivers reach this point (blocked above).
 
@@ -388,11 +477,6 @@ async def update_driver_status(
         #   b) the driver's service area has `subscription_required=True`
         # When neither is set (default) we skip the DB query entirely — the
         # driver_subscriptions table may not exist yet pre-launch.
-        try:
-            from ...settings_loader import get_app_settings  # type: ignore
-        except ImportError:
-            from settings_loader import get_app_settings  # type: ignore
-        app_settings = await get_app_settings()
         require_sub = bool(app_settings.get("require_driver_subscription", False))
 
         if not require_sub and driver.get("service_area_id"):

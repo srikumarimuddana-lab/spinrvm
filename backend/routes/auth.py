@@ -121,6 +121,24 @@ logger = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/auth", tags=["Authentication"])
 _CORPORATE_EMAIL_OTP_TABLE = "corporate_email_otp_records"
 
+# PIPEDA (CLAUDE.md "Consent"): "consent language version is stored on
+# signup. Material changes require re-consent." Ranked blocker #12
+# (docs/audit/2026-08-18-full-fleet-whole-app-audit.md): rider/driver
+# signup wrote zero consent_version — corporate self-serve signup
+# (routes/corporate_signup.py's terms_accepted_version, sourced from the
+# admin-dashboard's client-supplied BUSINESS_TERMS_VERSION constant) was the
+# only signup path that stamped one. Mobile signup has no equivalent
+# client-supplied version today (no consent screen sends one), and both
+# apps still render the legacy single-blob /settings/legal text rather than
+# the versioned per-audience legal_documents rows (see
+# docs/legal/terms-of-service.md's own note on this) — so there is no live
+# per-audience version to read at signup time yet. This backend-owned
+# constant is the interim source of truth (mirrors marketing.py's own
+# CONSENT_VERSION constant for CASL consent) until a real consent screen
+# lands; bump it whenever the shipped ToS/Privacy Policy text materially
+# changes.
+CONSENT_VERSION = "consumer-tos-2026-01-draft"
+
 
 class CompanyEmailOtpSendRequest(BaseModel):
     email: EmailStr
@@ -1129,16 +1147,21 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
             logger.info("Creating new user")
             user_id = str(uuid.uuid4())
             session_id = str(uuid.uuid4())
+            now_iso = datetime.now(timezone.utc).isoformat()
             new_user = {
                 "id": user_id,
                 "phone": phone,
                 "role": "rider",
                 "is_rider": True,
                 "is_driver": False,
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": now_iso,
                 "profile_complete": False,
                 "current_session_id": session_id,
                 "token_version": 0,
+                # PIPEDA consent-version stamp (ranked blocker #12) — written
+                # atomically with the initial insert, not a follow-up write.
+                "consent_version": CONSENT_VERSION,
+                "consent_accepted_at": now_iso,
             }
             try:
                 await db_supabase.create_user(new_user)
@@ -1390,16 +1413,23 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
     session_id = str(uuid.uuid4())
     if not user:
         is_new_user = True
+        _now_iso = datetime.now(timezone.utc).isoformat()
         new_user: Dict[str, Any] = {
             "id": uid,
             "phone": phone,
             "role": "rider",
             "is_rider": True,
             "is_driver": False,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": _now_iso,
             "profile_complete": False,
             "current_session_id": session_id,
             "token_version": 0,
+            # PIPEDA consent-version stamp (ranked blocker #12) — written
+            # atomically with the initial insert, not a follow-up write.
+            # This path is audience-bound to the driver app (Firebase
+            # aud == FIREBASE_DRIVER_APP_ID, enforced above).
+            "consent_version": CONSENT_VERSION,
+            "consent_accepted_at": _now_iso,
         }
         try:
             await db_supabase.create_user(new_user)

@@ -791,8 +791,8 @@ function RideOptionsScreenContent() {
             <Polygon
               key={`sa-poly-${idx}`}
               coordinates={coords}
-              strokeColor="rgba(0,212,170,0.65)"
-              fillColor="rgba(0,212,170,0.07)"
+              strokeColor={`${colors.success}A6`}
+              fillColor={`${colors.success}12`}
               strokeWidth={2}
             />
           ))}

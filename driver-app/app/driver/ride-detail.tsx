@@ -208,7 +208,12 @@ export default function RideDetailScreen() {
                             />
                         </MapView>
 
-                        <TouchableOpacity style={[styles.backBtn, { top: insets.top + 12 }]} onPress={() => router.back()}>
+                        <TouchableOpacity
+                            style={[styles.backBtn, { top: insets.top + 12 }]}
+                            onPress={() => router.back()}
+                            accessibilityRole="button"
+                            accessibilityLabel="Go back"
+                        >
                             <Ionicons name="arrow-back" size={22} color="#fff" />
                         </TouchableOpacity>
                         <View style={styles.routeStatusPill}>

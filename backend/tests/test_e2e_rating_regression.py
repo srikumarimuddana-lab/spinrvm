@@ -159,7 +159,10 @@ class TestRatingWithTip:
     async def test_tip_added_to_driver_earnings(self):
         from backend.routes import rides as rides_mod
 
-        ride = _completed_ride(tip_amount=0, driver_earnings=16.0)
+        # driver_earnings_with_tip computes fresh from total_fare - admin_earnings + tip
+        # (fare_service.py) rather than "existing driver_earnings + tip" — set total_fare
+        # so the $16.00 base earnings survive the recompute (no booking/airport fee here).
+        ride = _completed_ride(tip_amount=0, driver_earnings=16.0, total_fare=16.0)
         driver = _driver(total_ratings=5, rating=4.5)
         update_ride_mock = AsyncMock()
 

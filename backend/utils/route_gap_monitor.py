@@ -92,15 +92,36 @@ def _configured_threshold_seconds(settings: dict) -> int:
 
 
 async def _latest_capture_time(ride_id: str) -> Optional[datetime]:
+    """Newest accepted capture time for the ride, ignoring NULL captured_at.
+
+    ``ORDER BY captured_at DESC`` puts NULLs FIRST in Postgres, so a single
+    legacy WS-path breadcrumb (v1 fields, no captured_at) permanently blinded
+    the monitor for the whole ride: every tick fetched the NULL row, parsed it
+    to None, and concluded "no captures yet" — the phantom gap-since-trip-start
+    was opened once and never resolved, and any REAL later blackout could not
+    be distinguished (ride SPR-PE7TTB: 2 of 51 rows NULL, an 11-minute
+    mid-trip outage went undetected). Filter NULLs out, then fall back to the
+    legacy "timestamp" column for rides whose points are all v1-shaped.
+    """
     rows = await db_supabase.get_rows(
         "driver_location_history",
-        {"ride_id": ride_id},
+        {"ride_id": ride_id, "captured_at": {"$notnull": True}},
         order="captured_at",
         desc=True,
         limit=1,
         columns="captured_at",
     )
-    return parse_iso_utc(rows[0].get("captured_at")) if rows else None
+    if rows:
+        return parse_iso_utc(rows[0].get("captured_at"))
+    rows = await db_supabase.get_rows(
+        "driver_location_history",
+        {"ride_id": ride_id, "timestamp": {"$notnull": True}},
+        order="timestamp",
+        desc=True,
+        limit=1,
+        columns="timestamp",
+    )
+    return parse_iso_utc(rows[0].get("timestamp")) if rows else None
 
 
 async def _open_gap_event(ride: dict, decision: GapDecision, threshold_seconds: int, now: datetime) -> bool:
@@ -144,13 +165,19 @@ def location_health_payload(ride_id: str, gap_seconds: int, threshold_seconds: i
 
 
 async def _notify_driver_location_health(ride: dict, decision: GapDecision, threshold_seconds: int) -> None:
-    """Best-effort WS nudge to the driver when a NEW gap opens (once per gap).
+    """Best-effort nudge to the driver when a NEW gap opens (once per gap).
 
-    Fully defensive: a nudge failure (driver lookup, WS delivery) must never
-    fail the monitor tick. The WS connection key is ``driver_{user_id}``, so the
-    drivers-table id on the ride is resolved to its user_id first (same mapping
-    the ride lifecycle uses). A killed-WS driver won't receive this — an FCM
-    data-ping fallback is a follow-up.
+    Fully defensive: a nudge failure (driver lookup, WS delivery, push) must
+    never fail the monitor tick. The WS connection key is ``driver_{user_id}``,
+    so the drivers-table id on the ride is resolved to its user_id first (same
+    mapping the ride lifecycle uses).
+
+    Delivery is two-channel: the WS message reaches a foregrounded app, and —
+    behind ``location_health_push_nudge_enabled`` — a data-only FCM push
+    reaches the backgrounded/killed app the WS cannot (the driver app closes
+    its socket ~3s after backgrounding, which is exactly the state that
+    produces mid-trip GPS gaps). The push payload carries ids and counters
+    only — never a coordinate (PIPEDA).
     """
     driver_id = ride.get("driver_id")
     if not driver_id:
@@ -167,6 +194,32 @@ async def _notify_driver_location_health(ride: dict, decision: GapDecision, thre
         _metric_inc("spinr_rides_gps_gap_nudge_sent_total")
     except Exception:
         logger.warning("location-health driver nudge failed for ride_id=%s", ride.get("id"), exc_info=True)
+        user_id = None
+
+    try:
+        settings = await get_app_settings() or {}
+        if not settings.get("location_health_push_nudge_enabled", False) or not user_id:
+            return
+        try:
+            from ..features import send_push_notification
+        except ImportError:
+            from features import send_push_notification  # type: ignore
+
+        await send_push_notification(
+            user_id,
+            "Spinr",
+            "Restoring trip tracking…",
+            {
+                "type": "location_health",
+                "ride_id": str(ride.get("id")),
+                "gap_seconds": str(int(decision.gap_seconds)),
+            },
+            priority="dispatch",
+            target_app="driver",
+        )
+        _metric_inc("spinr_rides_gps_gap_push_nudge_sent_total")
+    except Exception:
+        logger.warning("location-health push nudge failed for ride_id=%s", ride.get("id"), exc_info=True)
 
 
 async def _resolve_open_gap_event(ride_id: str, now: datetime) -> bool:
@@ -177,6 +230,38 @@ async def _resolve_open_gap_event(ride_id: str, now: datetime) -> bool:
         {"status": "resolved", "gap_resolved_at": now},
     )
     return updated is not None
+
+
+async def _close_orphaned_open_events(now: datetime) -> int:
+    """Terminally close open gap events whose ride is no longer in progress.
+
+    A ride that completes (or is cancelled) mid-gap leaves its event 'open'
+    forever — the tick only scans in_progress rides, so nothing ever touches
+    it again (SPR-PE7TTB's phantom event sat open past completion). Close
+    those with a distinct terminal status so 'open' always means "an active
+    ride is silent right now"; gap_resolved_at stays NULL because capture
+    never actually resumed.
+    """
+    open_events = await db_supabase.get_rows(
+        "ride_location_gap_events", {"status": "open"}, limit=200, columns="id,ride_id"
+    )
+    if not open_events:
+        return 0
+    ride_ids = sorted({e["ride_id"] for e in open_events if e.get("ride_id")})
+    rides = await db_supabase.get_rows("rides", {"id": {"$in": ride_ids}}, limit=len(ride_ids), columns="id,status")
+    still_active = {r["id"] for r in rides if r.get("status") == "in_progress"}
+    closed = 0
+    for event in open_events:
+        if not event.get("ride_id") or event["ride_id"] in still_active:
+            continue
+        updated = await db_supabase.update_one(
+            "ride_location_gap_events",
+            {"id": event["id"], "status": "open"},
+            {"status": "unresolved_at_completion"},
+        )
+        if updated is not None:
+            closed += 1
+    return closed
 
 
 async def route_gap_monitor_tick() -> dict[str, int]:
@@ -196,7 +281,8 @@ async def route_gap_monitor_tick() -> dict[str, int]:
         limit=MAX_ACTIVE_RIDES_PER_TICK,
         columns="id,driver_id,ride_started_at",
     )
-    result = {"scanned": 0, "opened": 0, "resolved": 0, "unknown": 0}
+    result = {"scanned": 0, "opened": 0, "resolved": 0, "unknown": 0, "orphaned_closed": 0}
+    result["orphaned_closed"] = await _close_orphaned_open_events(now)
     current_open_gaps = 0
 
     for ride in rides:

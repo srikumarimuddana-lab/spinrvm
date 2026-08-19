@@ -600,6 +600,18 @@ async def admin_complete_ride(
                 f"driver_{driver_user_id}",
             )
 
+    # GPS geometry settlement (aggregation, ride_routes, period-distance
+    # audit, route finalizer queue) — admin force-complete previously skipped
+    # it entirely, leaving the ride with no actual route and no insurer
+    # distance audit. Replay-safe and never raises; awaited because this
+    # admin action is not latency-critical and this file has no strong-ref
+    # spawn helper (a bare create_task can be GC'd mid-flight).
+    try:
+        from ...utils.ride_settlement import settle_completed_ride_geometry
+    except ImportError:
+        from utils.ride_settlement import settle_completed_ride_geometry  # type: ignore
+    await settle_completed_ride_geometry(ride_id, trigger="admin_complete")
+
     rider_id = ride.get("rider_id")
     if rider_id:
         await manager.send_personal_message(

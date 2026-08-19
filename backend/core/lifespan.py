@@ -465,6 +465,28 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.opt(exception=True).error(f"Failed to import period1 distance finalizer loop: {e}")
 
+    # Driver daily rollup — keeps driver_daily_stats current on Regina
+    # business days (2 completed days every 30 min, 7-day sweep nightly).
+    # Single replica via Redis leader lock; idempotent upsert per driver-day.
+    try:
+        from utils.driver_daily_rollup import driver_daily_rollup_loop
+
+        _spawn("driver_daily_rollup (30min)", driver_daily_rollup_loop)
+    except Exception as e:
+        logger.opt(exception=True).error(f"Failed to import driver daily rollup loop: {e}")
+
+    # Stale Period-3 span closer — alerts on open passenger-aboard insurance
+    # spans whose ride is terminal or long-abandoned (misstated SGI commercial
+    # exposure); closes them at the evidence-based end time only when
+    # stale_p3_autoclose_enabled is set (default off, alert-first). Single
+    # replica via Redis leader lock; touches only the open span's ended_at.
+    try:
+        from utils.stale_p3_closer import stale_p3_closer_loop
+
+        _spawn("stale_p3_closer (15min)", stale_p3_closer_loop)
+    except Exception as e:
+        logger.opt(exception=True).error(f"Failed to import stale P3 closer loop: {e}")
+
     # T4A annual issuance — runs on the last day of February each year at
     # 08:00 UTC. Identifies drivers with ≥ $500 prior-year earnings, sends
     # each a push notification that their T4A slip is available, and logs
@@ -653,6 +675,12 @@ async def lifespan(app: FastAPI):
             "zoho_desk_sync (10min)",
             "capacity_watchdog (60s)",
             "auto_payout (1h, Sundays)",
+            # Insurance/GPS pipeline loops added with the tracking overhaul.
+            # The route finalizer, gap monitor, period-1 finalizer and
+            # distance reconciliation are already listed above (main added
+            # them in the same watchdog-coverage pass); these two are new.
+            "stale_p3_closer (15min)",
+            "driver_daily_rollup (30min)",
         ]
     )
 

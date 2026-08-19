@@ -2,12 +2,19 @@
 
 export type LatLng = readonly [latitude: number, longitude: number];
 
+export type RouteSegmentPhase = 'navigating_to_pickup' | 'arrived_at_pickup' | 'trip_in_progress';
+
 export interface NormalizedRouteSegment {
   id: string;
   coordinates: LatLng[];
   provider?: string;
   geometryKind: 'observed' | 'inferred';
   gapReason?: 'missing_start' | 'internal_gap' | 'missing_tail';
+  /** Tracking phase the segment belongs to. Absent on untagged (pre-phase-
+   * tagging) segments, which are trip_in_progress by construction. Non-trip
+   * phases only arrive when the server's pickup-leg flag is on; surfaces
+   * render them dashed, never joined into the trip line. */
+  phase?: RouteSegmentPhase;
 }
 
 export interface ReactNativeRouteCoordinate {
@@ -21,6 +28,7 @@ export interface ReactNativeRouteSection {
   provider?: string;
   geometryKind: 'observed' | 'inferred';
   gapReason?: 'missing_start' | 'internal_gap' | 'missing_tail';
+  phase?: RouteSegmentPhase;
 }
 
 export interface GeoJsonMultiLineString {
@@ -35,9 +43,11 @@ type RouteSegmentLike = {
   provider?: unknown;
   geometry_kind?: unknown;
   gap_reason?: unknown;
+  phase?: unknown;
 };
 
 const GAP_REASONS = new Set(['missing_start', 'internal_gap', 'missing_tail']);
+const SEGMENT_PHASES = new Set(['navigating_to_pickup', 'arrived_at_pickup', 'trip_in_progress']);
 
 function validCoordinate(value: unknown): value is readonly [number, number] {
   return (
@@ -77,12 +87,17 @@ export function normalizeActualRouteSegments(input: unknown): NormalizedRouteSeg
       geometryKind === 'inferred' && typeof segment?.gap_reason === 'string' && GAP_REASONS.has(segment.gap_reason)
         ? segment.gap_reason as ReactNativeRouteSection['gapReason']
         : undefined;
+    const phase =
+      typeof segment?.phase === 'string' && SEGMENT_PHASES.has(segment.phase)
+        ? (segment.phase as RouteSegmentPhase)
+        : undefined;
     return [{
       id: typeof segment?.id === 'string' && segment.id ? segment.id : `segment-${index}`,
       coordinates: rawCoordinates.map(([latitude, longitude]) => [latitude, longitude] as LatLng),
       provider: typeof segment?.provider === 'string' ? segment.provider : undefined,
       geometryKind,
       gapReason,
+      phase,
     }];
   });
 }
@@ -95,6 +110,7 @@ export function toReactNativeRouteSections(input: unknown): ReactNativeRouteSect
     provider: segment.provider,
     geometryKind: segment.geometryKind,
     gapReason: segment.gapReason,
+    phase: segment.phase,
   }));
 }
 

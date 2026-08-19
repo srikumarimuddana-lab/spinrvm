@@ -5,7 +5,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
 import { RouteLine } from '@shared/components/RouteLine';
 import { RoutePins } from '@shared/components/RoutePins';
 import api, { getApiErrorMessage } from '@shared/api/client';
@@ -222,7 +222,18 @@ export default function RideDetailsScreen() {
     [ride]
   );
 
-  const actualSections = useMemo(() => toReactNativeRouteSections(ride?.actual_route_segments), [ride?.actual_route_segments]);
+  const allSections = useMemo(() => toReactNativeRouteSections(ride?.actual_route_segments), [ride?.actual_route_segments]);
+  // The trip (P3) line and the optional pickup leg (P2 — only arrives when
+  // the server's rider_show_pickup_leg_enabled flag is on) render separately:
+  // the pickup leg is dashed context, never joined into the trip gradient.
+  const actualSections = useMemo(
+    () => allSections.filter((s) => !s.phase || s.phase === 'trip_in_progress'),
+    [allSections],
+  );
+  const pickupLegSections = useMemo(
+    () => allSections.filter((s) => s.phase === 'navigating_to_pickup' || s.phase === 'arrived_at_pickup'),
+    [allSections],
+  );
   const plannedSegments = useMemo(() => {
     // Read the field once so the compiler's inferred dependency matches the
     // declared one exactly (react-hooks/preserve-manual-memoization): the
@@ -339,6 +350,18 @@ export default function RideDetailsScreen() {
               }}
               onMapReady={() => setRouteMapReady(true)}
             >
+              {/* Pickup leg (P2) as dashed grey context UNDER the trip line —
+                  present only when the server flag sends non-trip phases. */}
+              {pickupLegSections.map((s) => (
+                <Polyline
+                  key={`pickup-leg-${s.id}`}
+                  coordinates={s.coordinates}
+                  strokeColor="#9CA3AF"
+                  strokeWidth={3}
+                  lineDashPattern={[6, 6]}
+                  lineCap="round"
+                />
+              ))}
               {/* v2 sections passed SEPARATELY (paths) so a GPS gap is never
                   bridged by a false chord; legacy planned polyline is one path. */}
               {hasActualRoute ? (

@@ -19,10 +19,23 @@ const ACTIVE_TRIP_WATCHDOG_MS = 30_000;
 const COMPLETION_FIX_MAX_AGE_MS = 120_000;
 
 export interface TripLocationBatchRequest {
-  ride_id: string;
+  ride_id?: string;
+  /** Present (as 'online_idle') on Period-1 idle batches — no ride. */
+  session_kind?: 'online_idle';
   recording_session_id: string;
   points: TripLocationPoint[];
 }
+
+// Sentinel ride id for Period-1 idle sessions inside the SQLite outbox (the
+// sessions/outbox tables key on a NOT NULL ride_id). Never sent to the server:
+// flushPending translates sessions with this id into the ride-less
+// `session_kind: 'online_idle'` v2 request shape.
+export const IDLE_RIDE_ID = '@idle';
+
+// Idle capture throttles (data minimization — a parked driver produces almost
+// nothing): minimum interval per producer, or any 100 m of movement.
+const IDLE_MIN_INTERVAL_MS: Record<string, number> = { background: 30_000, foreground: 60_000 };
+const IDLE_MIN_DISPLACEMENT_KM = 0.1;
 
 export interface TripLocationBatchAck {
   recording_session_id: string;
@@ -32,9 +45,43 @@ export interface TripLocationBatchAck {
 
 export type TripLocationTransport = (request: TripLocationBatchRequest) => Promise<TripLocationBatchAck>;
 
+// Server responses that will never succeed on retry for this batch: the ride
+// is gone (404), no longer active (409/410), or the points are permanently
+// rejected, e.g. outside the completed-ride retention window (422). Every
+// transport must DRAIN these instead of throwing — flushPending aborts its
+// whole loop on a transport throw, so one poisoned batch would otherwise
+// head-of-line-block every other pending session forever. Lives here (not in
+// tripLocationTransport.ts) so the headless background transport can share it
+// without pulling the axios/app-shell modules into the background task bundle.
+export const TERMINAL_STATUS_CODES = new Set([404, 409, 410, 422]);
+
+/** Synthesize a full ack for a terminally-rejected batch so the outbox clears it. */
+export function drainTerminalAck(request: TripLocationBatchRequest): TripLocationBatchAck {
+  const lastSequence = request.points[request.points.length - 1]?.sequence_number ?? 0;
+  return {
+    recording_session_id: request.recording_session_id,
+    acked_through: lastSequence,
+  };
+}
+
 export interface FlushPendingOptions {
   force?: boolean;
+  /**
+   * Skip the failure backoff window. ONLY the ride-completion flush may pass
+   * this — the GPS tail must reach settlement immediately even mid-outage.
+   * Every periodic/forced flush respects backoff: without it, the background
+   * task retried every ~4s for the whole duration of a backend outage.
+   */
+  bypassBackoff?: boolean;
 }
+
+// Exponential backoff after a failed upload: 5s, 10s, 20s … capped at 5min,
+// ±20% jitter so a fleet-wide outage doesn't synchronize retries. Per-JS-
+// context state (headless task and foreground app each keep their own clock);
+// worst case a fresh context retries once immediately, then backs off.
+const FLUSH_BACKOFF_BASE_MS = 5_000;
+const FLUSH_BACKOFF_MAX_MS = 300_000;
+const FLUSH_BACKOFF_JITTER = 0.2;
 
 export interface FlushPendingResult {
   uploaded_points: number;
@@ -58,6 +105,9 @@ export interface RecorderHealth {
   lastFlushAt: string | null;
   degraded: boolean;
   degradationReason: 'no_recent_fix' | 'upload_failure' | null;
+  /** Capture-loss visibility: fixes produced vs persisted since ride start. */
+  drops: { droppedNoRide: number; enqueueFailures: number };
+  flushBackoff: { consecutiveFailures: number; notBeforeMs: number };
 }
 
 type TripLocationOutbox = Pick<
@@ -76,6 +126,12 @@ type TripLocationOutbox = Pick<
 export interface TripLocationRecorderOptions {
   outbox?: TripLocationOutbox;
   now?: () => number;
+  /**
+   * Non-fatal telemetry sink (counts only — never coordinates). Injectable so
+   * recorder tests stay free of the firebase-backed crashlytics import chain;
+   * defaults to a lazy require of ./crashlytics at call time.
+   */
+  reportNonFatal?: (error: Error, context: Record<string, string | number>) => void;
 }
 
 type NativeLocationWithElapsedTime = Location.LocationObject & {
@@ -105,10 +161,35 @@ export class TripLocationRecorder {
   private lastFlushAttemptAt: number | null = null;
   private lastUploadFailureAt: number | null = null;
   private flushPromise: Promise<FlushPendingResult> | null = null;
+  private nextFlushNotBefore = 0;
+  private consecutiveFlushFailures = 0;
+  private droppedNoRide = 0;
+  private enqueueFailures = 0;
+  private idleRecordingEnabled = false;
+  private idleSessionOpen = false;
+  private lastIdleFixAtBySource: Record<string, number> = {};
+  private lastIdleLat: number | null = null;
+  private lastIdleLng: number | null = null;
+  private readonly reportNonFatal: (error: Error, context: Record<string, string | number>) => void;
 
   constructor(options: TripLocationRecorderOptions = {}) {
     this.outbox = options.outbox ?? tripLocationOutbox;
     this.now = options.now ?? Date.now;
+    this.reportNonFatal =
+      options.reportNonFatal ??
+      ((error, context) => {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          require('./crashlytics').recordNonFatal(error, context);
+        } catch {
+          // Telemetry must never affect recording.
+        }
+      });
+  }
+
+  private resetDropCounters(): void {
+    this.droppedNoRide = 0;
+    this.enqueueFailures = 0;
   }
 
   async startRide(rideId: string): Promise<PendingTripLocationSession> {
@@ -123,6 +204,9 @@ export class TripLocationRecorder {
     // the background path self-heal regardless of the session pre-create.
     this.activeRideId = rideId;
     this.activeRideStartedAt = this.now();
+    this.resetDropCounters();
+    // A trip starting ends the idle span — the trip session owns fixes now.
+    await this.stopIdleSession();
     await AsyncStorage.setItem(ACTIVE_RIDE_KEY, rideId);
     return this.outbox.startSession(rideId);
   }
@@ -133,8 +217,20 @@ export class TripLocationRecorder {
     rideId?: string,
     isCompletionFix = false,
   ): Promise<TripLocationPoint | null> {
-    const resolvedRideId = rideId ?? await this.resolveActiveRideId();
-    if (!resolvedRideId) return null;
+    let resolvedRideId = rideId ?? await this.resolveActiveRideId();
+    let isIdleFix = false;
+    if (!resolvedRideId) {
+      // Period-1 idle capture: while online with no trip, throttled fixes go
+      // into the open idle session instead of being dropped (SPR-PE7TTB class
+      // loss). Gated on the server flag (setIdleRecordingEnabled).
+      if (this.idleRecordingEnabled && this.idleSessionOpen && this.shouldRecordIdleFix(location, source)) {
+        resolvedRideId = IDLE_RIDE_ID;
+        isIdleFix = true;
+      } else {
+        this.droppedNoRide += 1;
+        return null;
+      }
+    }
 
     const nativeLocation = location as NativeLocationWithElapsedTime;
     const point: TripLocationFix = {
@@ -152,11 +248,63 @@ export class TripLocationRecorder {
       is_completion_fix: isCompletionFix,
     };
 
-    const queued = await this.outbox.enqueue(point);
+    let queued: TripLocationPoint;
+    try {
+      queued = await this.outbox.enqueue(point);
+    } catch (error) {
+      this.enqueueFailures += 1;
+      throw error;
+    }
+    if (isIdleFix) {
+      // Idle bookkeeping only — the '@idle' sentinel must never become the
+      // active ride id or feed the trip staleness watchdog.
+      this.lastIdleFixAtBySource[source] = this.now();
+      this.lastIdleLat = location.coords.latitude;
+      this.lastIdleLng = location.coords.longitude;
+      return queued;
+    }
     this.activeRideId = resolvedRideId;
     this.activeRideStartedAt ??= this.now();
     this.lastCaptureAt = this.now();
     return queued;
+  }
+
+  /** Gate idle capture: per-source minimum interval OR ≥100 m of movement. */
+  private shouldRecordIdleFix(location: Location.LocationObject, source: TripLocationSource): boolean {
+    const minInterval = IDLE_MIN_INTERVAL_MS[source] ?? IDLE_MIN_INTERVAL_MS.foreground;
+    const last = this.lastIdleFixAtBySource[source] ?? 0;
+    if (this.now() - last >= minInterval) return true;
+    if (this.lastIdleLat === null || this.lastIdleLng === null) return true;
+    const dLat = location.coords.latitude - this.lastIdleLat;
+    const dLng = location.coords.longitude - this.lastIdleLng;
+    // Cheap equirectangular displacement — precision is irrelevant at 100 m.
+    const km = Math.sqrt(dLat * dLat + dLng * dLng * 0.45) * 111;
+    return km >= IDLE_MIN_DISPLACEMENT_KM;
+  }
+
+  /** Server-flag gate for idle capture (GET /settings idle_location_v2_enabled). */
+  setIdleRecordingEnabled(enabled: boolean): void {
+    this.idleRecordingEnabled = enabled;
+    if (!enabled) this.idleSessionOpen = false;
+  }
+
+  /** Open the one durable Period-1 session (online, no trip). Idempotent. */
+  async startIdleSession(): Promise<void> {
+    if (!this.idleRecordingEnabled || this.idleSessionOpen) return;
+    await this.outbox.startSession(IDLE_RIDE_ID);
+    this.idleSessionOpen = true;
+  }
+
+  /** Close the idle session (going offline, or a trip starting). Idempotent. */
+  async stopIdleSession(): Promise<void> {
+    if (!this.idleSessionOpen) return;
+    this.idleSessionOpen = false;
+    this.lastIdleFixAtBySource = {};
+    try {
+      await this.outbox.closeSession(IDLE_RIDE_ID);
+    } catch {
+      // Closing is bookkeeping; queued idle points flush regardless.
+    }
   }
 
   async flushPending(
@@ -186,7 +334,7 @@ export class TripLocationRecorder {
     transport: TripLocationTransport | undefined,
     timeoutMs: number,
   ): Promise<BoundedFlushResult> {
-    const flush = this.flushPending(transport, { force: true });
+    const flush = this.flushPending(transport, { force: true, bypassBackoff: true });
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<null>((resolve) => {
       timer = setTimeout(() => resolve(null), timeoutMs);
@@ -272,8 +420,12 @@ export class TripLocationRecorder {
       ? (this.activeRideStartedAt === null ? 0 : now - this.activeRideStartedAt)
       : now - this.lastCaptureAt;
     const noRecentFix = activeRideId !== null && captureAge >= ACTIVE_TRIP_WATCHDOG_MS;
-    const uploadFailure = this.lastUploadFailureAt !== null
-      && now - this.lastUploadFailureAt < ACTIVE_TRIP_WATCHDOG_MS;
+    // A live backoff window counts as upload failure: without the second
+    // clause the degradation banner would flicker off during a 5-minute
+    // backoff while uploads are provably failing.
+    const uploadFailure = (this.lastUploadFailureAt !== null
+      && now - this.lastUploadFailureAt < ACTIVE_TRIP_WATCHDOG_MS)
+      || now < this.nextFlushNotBefore;
 
     return {
       activeRideId,
@@ -282,6 +434,11 @@ export class TripLocationRecorder {
       lastFlushAt: this.lastFlushAt === null ? null : new Date(this.lastFlushAt).toISOString(),
       degraded: noRecentFix || uploadFailure,
       degradationReason: noRecentFix ? 'no_recent_fix' : uploadFailure ? 'upload_failure' : null,
+      drops: { droppedNoRide: this.droppedNoRide, enqueueFailures: this.enqueueFailures },
+      flushBackoff: {
+        consecutiveFailures: this.consecutiveFlushFailures,
+        notBeforeMs: this.nextFlushNotBefore,
+      },
     };
   }
 
@@ -305,6 +462,13 @@ export class TripLocationRecorder {
     this.lastFlushAt = null;
     this.lastFlushAttemptAt = null;
     this.lastUploadFailureAt = null;
+    this.nextFlushNotBefore = 0;
+    this.consecutiveFlushFailures = 0;
+    this.resetDropCounters();
+    this.idleSessionOpen = false;
+    this.lastIdleFixAtBySource = {};
+    this.lastIdleLat = null;
+    this.lastIdleLng = null;
     try {
       await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
     } catch {
@@ -315,6 +479,17 @@ export class TripLocationRecorder {
 
   async closeRide(rideId: string): Promise<void> {
     await this.outbox.closeSession(rideId);
+    // One capture-loss report per ride, counts only — never coordinates.
+    if (this.droppedNoRide + this.enqueueFailures > 0) {
+      this.reportNonFatal(new Error('gps capture drops during ride'), {
+        domain: 'drivers',
+        surface: 'driver-app',
+        reason: 'gps_capture_drops',
+        dropped_no_ride: this.droppedNoRide,
+        enqueue_failures: this.enqueueFailures,
+      });
+    }
+    this.resetDropCounters();
     if (this.activeRideId === rideId) {
       this.activeRideId = null;
       this.activeRideStartedAt = null;
@@ -327,6 +502,12 @@ export class TripLocationRecorder {
     transport: TripLocationTransport,
     options: FlushPendingOptions,
   ): Promise<FlushPendingResult> {
+    // Failure backoff — checked before any SQLite work. `force` does NOT
+    // bypass this (the background task forces every native callback); only
+    // the completion flush passes bypassBackoff.
+    if (!options.bypassBackoff && this.now() < this.nextFlushNotBefore) {
+      return { uploaded_points: 0, acknowledged_points: 0, skipped: true };
+    }
     const sessions = await this.outbox.listPendingSessions();
     if (!sessions.length) return { uploaded_points: 0, acknowledged_points: 0, skipped: true };
 
@@ -348,12 +529,27 @@ export class TripLocationRecorder {
           const points = await this.outbox.peek(session.recording_session_id);
           if (!points.length) break;
 
-          const acknowledgement = await transport({
-            ride_id: session.ride_id,
-            recording_session_id: session.recording_session_id,
-            points,
-          });
+          const isIdleSession = session.ride_id === IDLE_RIDE_ID;
+          const acknowledgement = await transport(
+            isIdleSession
+              ? {
+                  // Ride-less v2 idle shape — the server routes on session_kind.
+                  session_kind: 'online_idle',
+                  recording_session_id: session.recording_session_id,
+                  points,
+                }
+              : {
+                  ride_id: session.ride_id,
+                  recording_session_id: session.recording_session_id,
+                  points,
+                },
+          );
           uploadedPoints += points.length;
+          // The transport resolved — the network path works. Clear backoff
+          // even before validating the ack shape (a malformed ack is a server
+          // bug, not an outage to back off from).
+          this.consecutiveFlushFailures = 0;
+          this.nextFlushNotBefore = 0;
           if (acknowledgement.recording_session_id !== session.recording_session_id) {
             throw new Error('Trip location server acknowledgement referenced a different recording session.');
           }
@@ -379,8 +575,22 @@ export class TripLocationRecorder {
       return { uploaded_points: uploadedPoints, acknowledged_points: acknowledgedPoints, skipped: false };
     } catch (error) {
       this.lastUploadFailureAt = this.now();
+      this.consecutiveFlushFailures += 1;
+      const backoff = Math.min(
+        FLUSH_BACKOFF_BASE_MS * 2 ** (this.consecutiveFlushFailures - 1),
+        FLUSH_BACKOFF_MAX_MS,
+      );
+      const jitter = 1 + FLUSH_BACKOFF_JITTER * (2 * Math.random() - 1);
+      this.nextFlushNotBefore = this.now() + Math.round(backoff * jitter);
       throw error;
     }
+  }
+
+  /** @internal Test-only — clear backoff state on the singleton between cases. */
+  _resetUploadBackoff(): void {
+    this.nextFlushNotBefore = 0;
+    this.consecutiveFlushFailures = 0;
+    this.lastUploadFailureAt = null;
   }
 
   private async resolveActiveRideId(): Promise<string | null> {

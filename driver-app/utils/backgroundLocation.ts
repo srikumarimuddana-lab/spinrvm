@@ -3,8 +3,14 @@ import * as TaskManager from 'expo-task-manager';
 import * as SecureStore from 'expo-secure-store';
 import spinrConfig from '@shared/config/spinr.config';
 import { getAppCheckToken, initFirebaseServices } from '@shared/services/firebase';
-import { tripLocationRecorder, type TripLocationBatchRequest } from './tripLocationRecorder';
-import { checkLocationIntegrity, haversineKm } from './locationIntegrity';
+import {
+  drainTerminalAck,
+  TERMINAL_STATUS_CODES,
+  tripLocationRecorder,
+  type TripLocationBatchRequest,
+} from './tripLocationRecorder';
+import { createLocationIntegrityChecker, haversineKm } from './locationIntegrity';
+import { runExclusive } from './locationTaskArbiter';
 import { recordNonFatal } from './crashlytics';
 import { publishCarFix } from '../lib/androidAuto/carFixChannel';
 import { SESSION_ENDED_KEY } from '@shared/auth/sessionMarker';
@@ -17,6 +23,20 @@ import { SESSION_ENDED_KEY } from '@shared/auth/sessionMarker';
 const API_URL = spinrConfig.backendUrl;
 
 const TASK_NAME = 'spinr-background-location';
+
+// This producer's own anti-spoof state — the teleport comparison is only
+// meaningful between consecutive fixes from the SAME watcher (see
+// locationIntegrity.ts). Gates DISPLAY (the car marker) only, never capture.
+const bgIntegrity = createLocationIntegrityChecker();
+
+// In-handler self-heal cadence (see the block in handleBackgroundLocationTask).
+const ENSURE_PROMOTION_INTERVAL_MS = 60_000;
+let lastEnsureAt = 0;
+
+/** @internal Test-only — reset the self-heal throttle between cases. */
+export function _resetBackgroundSelfHeal(): void {
+  lastEnsureAt = 0;
+}
 
 /**
  * Accent for BOTH Spinr foreground-service notifications — this one and the
@@ -141,9 +161,13 @@ type LocationTaskData = {
  *
  * Every ambiguous state resolves to false ("session still live, keep tracking").
  *
- * Deliberately NOT consulted by startBackgroundLocation: that runs from the
- * foreground where the auth store already knows the session, and gating it here
- * would let a transient SecureStore hiccup block a driver from going online.
+ * Consulted by EVERY capture start/recover path (startBackgroundLocation,
+ * recoverTripLocation, the geofence handler, the car-task start) as well as
+ * the running handlers: recoverTripLocation is reachable headless via the FCM
+ * location_health nudge, so "the foreground auth store knows best" stopped
+ * being true for the start paths. The fail-open-on-store-error design above
+ * means a transient SecureStore hiccup still never blocks a legitimate
+ * go-online — only a positively recorded sign-out refuses a start.
  */
 export async function isSessionEnded(): Promise<boolean> {
   try {
@@ -231,12 +255,27 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
   }
 
   for (const location of data?.locations ?? []) {
-    // Same trust gate as the foreground watcher (useDriverDashboard): a
-    // mocked/teleporting/impossibly-fast sample must not enter the durable
-    // route history from either path. Reason string only — never coordinates.
-    const integrity = checkLocationIntegrity(location);
+    // CAPTURE BEFORE FILTER. Durable persistence comes first, unconditionally:
+    // a fix that never reaches the outbox is route history lost forever
+    // (SPR-PE7TTB lost 83% of a trip to silent client-side drops). The v2
+    // point carries the `mocked` flag to the server, and settlement filtering
+    // (backend utils/trip_distance.py spike/speed/gap caps) owns billing
+    // quality — the client integrity check below gates DISPLAY only.
+    try {
+      // Durable persistence is deliberately before auth/network work. The
+      // recorder keeps every native sample across process restarts.
+      await tripLocationRecorder.recordNativeFix(location, 'background');
+    } catch (e) {
+      // No raw coordinates in logs; a later native callback can still queue.
+      console.warn('[BgLocation] Failed to persist a native location sample');
+      recordNonFatal(e, { domain: 'drivers', surface: 'driver-app' });
+    }
+
+    // Display trust gate — a mocked/teleporting/impossibly-fast sample must
+    // not move the car marker. Reason string only, never coordinates.
+    const integrity = bgIntegrity.check(location);
     if (!integrity.trusted) {
-      console.warn(`[BgLocation] Dropped untrusted sample: ${integrity.reason}`);
+      console.warn(`[BgLocation] Untrusted sample kept for audit, hidden from display: ${integrity.reason}`);
       continue;
     }
     // Feed the Android Auto map. This service already holds a foreground-service
@@ -244,23 +283,23 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
     // carLocationTask.startCarLocationService() defers to it for exactly this
     // reason. Device-local only: publishCarFix updates the in-memory marker and
     // the existing `spinr_driver_last_location` cache, and sends nothing.
-    // Placed after the integrity gate above so an untrusted sample can no more
-    // move the car marker than it can enter the durable route history.
     publishCarFix({
       latitude: location.coords.latitude,
       longitude: location.coords.longitude,
       heading: location.coords.heading ?? null,
     });
+  }
 
-    try {
-      // Durable persistence is deliberately before auth/network work. The
-      // recorder keeps every accepted native sample across process restarts.
-      await tripLocationRecorder.recordNativeFix(location, 'background');
-    } catch (e) {
-      // No raw coordinates in logs; a later native callback can still queue.
-      console.warn('[BgLocation] Failed to persist a native location sample');
-      recordNonFatal(e, { domain: 'drivers', surface: 'driver-app' });
-    }
+  // Periodic self-heal: re-assert this task's options (~1/min) so a demoted
+  // shared service re-promotes even with no Android Auto events and no live
+  // WebSocket — the cross-context repair the per-JS-context arbiter cannot
+  // provide. Runs only on the live-session path (the session-ended gate above
+  // returned already). Cost when healthy: one native probe + one SecureStore
+  // read + one setOptions per minute — the same budget as the AA 60s tick.
+  const ensureNow = Date.now();
+  if (ensureNow - lastEnsureAt >= ENSURE_PROMOTION_INTERVAL_MS) {
+    lastEnsureAt = ensureNow;
+    await reassertDispatchTask().catch(() => {});
   }
 
   const token = await getBackgroundAuthToken();
@@ -281,6 +320,15 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
         },
         body: JSON.stringify(request),
       });
+      // Terminal statuses drain the batch, mirroring apiLocationBatchTransport:
+      // this fetch previously threw on them, and because flushPending aborts
+      // its whole loop on a transport throw, ONE permanently-rejected batch
+      // (e.g. 422 outside the completed-ride retention window) blocked every
+      // other pending session's upload forever from the background path.
+      if (TERMINAL_STATUS_CODES.has(response.status)) {
+        console.warn(`[BgLocation] Draining terminally-rejected batch (${response.status})`);
+        return drainTerminalAck(request);
+      }
       if (!response.ok) throw new Error(`location-batch ${response.status}`);
       return response.json();
     }, { force: true });
@@ -360,12 +408,32 @@ export async function isBackgroundLocationRunning(): Promise<boolean> {
 }
 
 export async function startBackgroundLocation(config?: BgLocationConfig): Promise<boolean> {
+  // A signed-out device must never (re)start location capture, from ANY
+  // caller — go-online, geofence recovery, or the FCM location_health nudge
+  // (which runs headless, where "the foreground auth store knows best" does
+  // not apply). Safe for the legitimate go-online path by construction:
+  // isSessionEnded() fails OPEN on store errors, and setTokens() deletes the
+  // marker on sign-in before any go-online can run. Checked before the
+  // liveness probe and the permission flow so a headless resurrection can
+  // never pop a permission dialog on a signed-out device. If an orphaned
+  // task is somehow still registered, reap it here rather than adopting it.
+  if (await isSessionEnded()) {
+    recordNonFatal(new Error('start refused: session ended'), {
+      domain: 'drivers', surface: 'driver-app', location: 'bg_start_refused_signed_out',
+    });
+    await stopBackgroundLocation().catch(() => {});
+    return false;
+  }
+
   const isRunning = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
   if (isRunning) {
     console.log('[BgLocation] Already running');
     return true;
   }
 
+  // Permission flow stays OUTSIDE the arbiter lock: the request can hold a
+  // system dialog open for minutes, and holding the lock through it would
+  // starve go-offline/AA transitions into the bounded-wait timeout.
   let { status } = await Location.getBackgroundPermissionsAsync();
   if (status !== 'granted') {
     const res = await Location.requestBackgroundPermissionsAsync();
@@ -376,25 +444,66 @@ export async function startBackgroundLocation(config?: BgLocationConfig): Promis
     return false;
   }
 
-  await _applyTaskOptions(config);
+  return runExclusive('bg-start', async () => {
+    // Re-probe under the lock — a queued car-task start may have raced us.
+    if (await Location.hasStartedLocationUpdatesAsync(TASK_NAME)) return true;
 
-  // A driver who plugged in while OFFLINE has the car's display-only service
-  // running; going online replaces it with this one. Stop it here or they end up
-  // with two permanent notifications for the rest of the shift. Lazily required
-  // to keep the module cycle (carLocationTask imports this file) from resolving
-  // at load time. It does NOT no-op on iOS, as this comment used to claim — the
-  // require loads carLocationTask and runs its module-scope defineTask there
-  // too. Harmless, since nothing ever starts that task off Android, but worth
-  // stating plainly rather than asserting a guard that does not exist.
+    // SINGLE-WRITER, order matters: stop the car task BEFORE promoting this
+    // one. expo-location runs ALL location tasks through ONE shared Android
+    // service, and stopping any task demotes it (stopForeground on the shared
+    // instance) — the previous stop-after-promote order un-promoted the
+    // service we had just promoted on the go-online-while-plugged-in path.
+    // Overlap is also actively lossy: a static native dedup discards one
+    // consumer's copy of every fix while two tasks are registered. Lazily
+    // required to keep the module cycle (carLocationTask imports this file)
+    // from resolving at load time; runs on iOS too (harmless — nothing starts
+    // that task off Android).
+    try {
+      // Unlocked variant — we hold the arbiter lock; repairDispatch false
+      // because the promotion on the next line supersedes any repair.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      await require('../lib/androidAuto/carLocationTask').stopCarLocationServiceUnlocked({
+        repairDispatch: false,
+      });
+    } catch {
+      // Android Auto layer absent — nothing to stand down.
+    }
+
+    await _applyTaskOptions(config);
+    console.log('[BgLocation] Started');
+    return true;
+  });
+}
+
+/**
+ * Re-assert the dispatch task's options in place — re-promoting the shared
+ * Android location service if something (an Android Auto task stop, an OS
+ * hiccup) demoted it. Never STARTS the task (that is go-online's job) and
+ * never throws. Composition primitive: callers already holding the arbiter
+ * lock use this; everyone else uses reassertDispatchTask().
+ */
+export async function reassertDispatchTaskUnlocked(): Promise<void> {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    await require('../lib/androidAuto/carLocationTask').stopCarLocationService();
-  } catch {
-    // Android Auto layer absent — nothing to stand down.
+    if (!(await Location.hasStartedLocationUpdatesAsync(TASK_NAME))) return;
+    const { status } = await Location.getBackgroundPermissionsAsync();
+    if (status !== 'granted') return;
+    let tripActive = false;
+    try {
+      tripActive = (await SecureStore.getItemAsync(TRIP_ACTIVE_KEY)) === 'true';
+    } catch {
+      // Unreadable flag → idle cadence; the ride-state effect re-tightens it.
+    }
+    // startLocationUpdatesAsync on a live task replaces options in place and
+    // re-runs the native foreground promotion — the repair we're here for.
+    await _applyTaskOptions(tripActive ? TRIP_CADENCE : IDLE_CADENCE);
+    console.log('[BgLocation] Dispatch task re-asserted');
+  } catch (e) {
+    recordNonFatal(e, { domain: 'drivers', surface: 'driver-app', location: 'reassert_failed' });
   }
+}
 
-  console.log('[BgLocation] Started');
-  return true;
+export function reassertDispatchTask(): Promise<void> {
+  return runExclusive('bg-reassert', reassertDispatchTaskUnlocked);
 }
 
 /**
@@ -406,15 +515,17 @@ export async function startBackgroundLocation(config?: BgLocationConfig): Promis
  * options in place — the task identity and handler are unchanged.
  */
 export async function updateBackgroundLocationCadence(config: BgLocationConfig): Promise<void> {
-  const isRunning = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
-  if (!isRunning) return;
-  const { status } = await Location.getBackgroundPermissionsAsync();
-  if (status !== 'granted') return;
-  await _applyTaskOptions(config);
-  console.log(
-    `[BgLocation] Cadence updated (t=${config.timeInterval ?? IDLE_CADENCE.timeInterval}ms ` +
-      `d=${config.distanceInterval ?? IDLE_CADENCE.distanceInterval}m)`,
-  );
+  return runExclusive('bg-cadence', async () => {
+    const isRunning = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
+    if (!isRunning) return;
+    const { status } = await Location.getBackgroundPermissionsAsync();
+    if (status !== 'granted') return;
+    await _applyTaskOptions(config);
+    console.log(
+      `[BgLocation] Cadence updated (t=${config.timeInterval ?? IDLE_CADENCE.timeInterval}ms ` +
+        `d=${config.distanceInterval ?? IDLE_CADENCE.distanceInterval}m)`,
+    );
+  });
 }
 
 /**
@@ -426,6 +537,19 @@ export async function updateBackgroundLocationCadence(config: BgLocationConfig):
  */
 export async function recoverTripLocation(): Promise<boolean> {
   try {
+    // Reachable HEADLESS (FCM location_health data push) as well as from the
+    // dashboard WS handler. The server's gap monitor does not know the driver
+    // signed out — an abandoned in_progress ride keeps nudging — so without
+    // this gate a push could restart GPS capture on a signed-out device,
+    // repeatedly. startBackgroundLocation now refuses too; this earlier check
+    // also keeps the cadence path from touching an orphaned task.
+    if (await isSessionEnded()) {
+      recordNonFatal(new Error('recover refused: session ended'), {
+        domain: 'drivers', surface: 'driver-app', location: 'recover_refused_signed_out',
+      });
+      await stopBackgroundLocation().catch(() => {});
+      return false;
+    }
     const isRunning = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
     if (!isRunning) {
       return await startBackgroundLocation(TRIP_CADENCE);
@@ -439,6 +563,10 @@ export async function recoverTripLocation(): Promise<boolean> {
 }
 
 export async function stopBackgroundLocation(): Promise<void> {
+  return runExclusive('bg-stop', stopBackgroundLocationUnlocked);
+}
+
+async function stopBackgroundLocationUnlocked(): Promise<void> {
   // The native stop is conditional (stopLocationUpdatesAsync throws when the
   // task was never started) but the key cleanup is NOT. It used to sit behind
   // the same early return, so a stop that ran while the task happened to be

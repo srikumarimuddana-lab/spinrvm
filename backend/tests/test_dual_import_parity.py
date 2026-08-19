@@ -58,9 +58,9 @@ EXTRA_GUARDED_MODULES = [
 
 # Pre-existing fallback gaps (file → names missing from the except branch).
 # Each is a latent NameError in top-level import mode; fix in scoped changes.
-KNOWN_LEGACY_VIOLATIONS = {
-    "routes/admin/maintenance.py": {"_run_sync", "_supabase_client"},
-}
+# (maintenance.py's _run_sync/_supabase_client entries cleared 2026-08-19:
+# the rollup refactor removed those imports entirely.)
+KNOWN_LEGACY_VIOLATIONS: dict[str, set[str]] = {}
 
 
 def _bound_names(stmts) -> set[str]:

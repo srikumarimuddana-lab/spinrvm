@@ -283,6 +283,14 @@ def _boundary_reason(previous: _ParsedPoint, current: _ParsedPoint) -> tuple[str
         return "session_boundary", max(0, int((current.captured_at - previous.captured_at).total_seconds()))
 
     elapsed_seconds = max(0, int((current.captured_at - previous.captured_at).total_seconds()))
+    # Insurance-period boundary: never draw one line across a phase change
+    # (P2 pickup leg → P3 passenger trip). Inert for P3-only inputs — every
+    # point carries the same tracking_phase there. Only splits when BOTH
+    # points are tagged; untagged legacy rows keep today's behaviour.
+    previous_phase = previous.point.get("tracking_phase")
+    current_phase = current.point.get("tracking_phase")
+    if previous_phase and current_phase and previous_phase != current_phase:
+        return "phase_change", elapsed_seconds
     if elapsed_seconds > MAX_CONTINUOUS_GAP_SECONDS:
         return "time_gap", elapsed_seconds
     displacement_meters = _distance_meters(previous.point, current.point)

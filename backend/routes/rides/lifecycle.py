@@ -139,8 +139,12 @@ async def rider_complete_ride(
 
     The rider pays the full agreed fare. We mark the ride completed and
     free the driver, mirroring the essential parts of
-    drivers.py::complete_ride but skipping GPS aggregation (that data
-    is still captured and available for admin review).
+    drivers.py::complete_ride. GPS geometry settlement (breadcrumb
+    aggregation, ride_routes, period-distance audit, route finalizer
+    queue) runs fire-and-forget after the status flip — it previously
+    didn't run at all on this path, which left rider-ended rides with no
+    actual route, gps_points_count=0, and no insurer distance audit
+    (ride SPR-PE7TTB). The billed fare is untouched by settlement.
     """
     ride = await _deps.db_supabase.get_ride(ride_id)
     if not ride:
@@ -182,6 +186,22 @@ async def rider_complete_ride(
             )
         driver_row = await _deps.db_supabase.get_driver_by_id(driver_id)
         driver_user_id = driver_row.get("user_id") if driver_row else None
+
+        # GPS geometry settlement for the rider-ended ride: aggregation,
+        # ride_routes payload, P2/P3 period-distance audit, and the v2 route
+        # finalizer queue. Fire-and-forget — must not delay the rider's
+        # completion response; the util is replay-safe and never raises.
+        try:
+            from ...utils.ride_settlement import settle_completed_ride_geometry
+        except ImportError:
+            from utils.ride_settlement import settle_completed_ride_geometry  # type: ignore
+        try:
+            _deps.spawn(settle_completed_ride_geometry(ride_id, trigger="rider_end"))
+        except Exception:
+            # The backstop sweep in route_finalizer re-settles any completed
+            # ride left without a ride_routes row, so a failed spawn here is
+            # recovered within minutes.
+            logger.error("rider_complete_ride: settlement spawn failed for ride %s", ride_id, exc_info=True)
 
         # Daily Spinr Pass allowance: flip the driver offline now (DB-level) if
         # this completion used their last ride for the day. Driver WS notice is

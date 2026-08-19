@@ -34,7 +34,12 @@ import {
   IDLE_CADENCE,
 } from '../utils/backgroundLocation';
 import { consumePendingRideOffer } from '../services/pendingRideOffer';
-import { checkLocationIntegrity, resetLocationIntegrity } from '../utils/locationIntegrity';
+import { createLocationIntegrityChecker, resetLocationIntegrity } from '../utils/locationIntegrity';
+
+// This producer's own anti-spoof state (see locationIntegrity.ts) — module
+// scope so it survives watcher re-subscriptions on ride-state changes. Gates
+// DISPLAY (markers, UI state) only, never durable capture.
+const fgIntegrity = createLocationIntegrityChecker();
 import { startSensorMonitoring, stopSensorMonitoring, checkMovementConsistency } from '../utils/sensorIntegrity';
 import { attestDeviceIntegrity } from '../utils/deviceIntegrity';
 import {
@@ -588,8 +593,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         const health = await tripLocationRecorder.getRecorderHealth(rideId);
         if (health.degradationReason !== 'no_recent_fix') return;
         const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-        const integrity = checkLocationIntegrity(loc);
-        if (!integrity.trusted) return;
+        // Capture-before-filter: no integrity gate here. The heartbeat's only
+        // output is the durable recorder — there is no display surface to
+        // protect — and a false teleport/speed verdict deleting the one fix
+        // that plugs a 30s trail gap is exactly the SPR-PE7TTB failure. The
+        // point carries `mocked`; server settlement filters own quality.
         await tripLocationRecorder.recordNativeFix(loc, 'foreground', rideId);
         tripLocationRecorder.flushPending(foregroundLocationTransport).then(() => {
           batchUploadHealthyRef.current = true;
@@ -671,36 +679,18 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
             distanceInterval: config.distanceInterval,
           },
           (loc) => {
-          const integrity = checkLocationIntegrity(loc);
-          if (!integrity.trusted) {
-            console.warn(`[Location] Spoofed/invalid fix rejected: ${integrity.reason}`);
-            return;
-          }
-          // Sensor mismatch: tag the payload instead of dropping the location.
-          // Dropping made the driver invisible to dispatch on false positives
-          // (phone on soft mount, smooth highway, cup holder vibration).
-          const sensorCheck = checkMovementConsistency(loc.coords.speed);
-          if (!sensorCheck.consistent) {
-            console.warn(`[Location] Sensor suspect: variance=${sensorCheck.variance.toFixed(4)}`);
-          }
-
-          locationRef.current = loc;
-          const now = Date.now();
-          // Tighten the render cadence during active trip phases so the driver
-          // UI distance counter and map marker stay responsive; coarse throttle
-          // is fine when idle to avoid unnecessary re-renders.
-          const renderThrottleMs = inTripPhase ? 3000 : 10000;
-          if (now - lastRenderMsRef.current >= renderThrottleMs) {
-            lastRenderMsRef.current = now;
-            setLocation(loc);
-          }
-
+          // CAPTURE BEFORE FILTER (SPR-PE7TTB): durable trip capture happens
+          // first and unconditionally — a client-side integrity drop is route
+          // history lost forever. The verdict below gates DISPLAY surfaces
+          // (WS marker, map state, idle breadcrumb) only; the point carries
+          // `mocked` and server settlement filters own billing quality.
+          const integrity = fgIntegrity.check(loc);
           const currentActiveRide = useDriverStore.getState().activeRide;
           const rideId = currentActiveRide?.ride?.id;
           if (rideId && inTripPhase) {
             void tripLocationRecorder.recordNativeFix(loc, 'foreground', rideId).then((point) => {
               if (!point) return;
-              if (wsRef.current?.readyState === WebSocket.OPEN) {
+              if (integrity.trusted && wsRef.current?.readyState === WebSocket.OPEN) {
                 // Send v1 fields only — never spread the full TripLocationPoint.
                 // v2 fields (recording_session_id, sequence_number) redirect the
                 // WS handler to persist_trip_location_batch, which requires a DB
@@ -734,7 +724,33 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
                 setWsError('Trip location recording needs attention. Points will retry automatically.');
               }
             });
-          } else if (wsRef.current?.readyState === WebSocket.OPEN) {
+          }
+
+          // ── Display trust gate — everything below moves markers/UI state. ──
+          if (!integrity.trusted) {
+            console.warn(`[Location] Untrusted fix kept for audit, hidden from display: ${integrity.reason}`);
+            return;
+          }
+          // Sensor mismatch: tag the payload instead of dropping the location.
+          // Dropping made the driver invisible to dispatch on false positives
+          // (phone on soft mount, smooth highway, cup holder vibration).
+          const sensorCheck = checkMovementConsistency(loc.coords.speed);
+          if (!sensorCheck.consistent) {
+            console.warn(`[Location] Sensor suspect: variance=${sensorCheck.variance.toFixed(4)}`);
+          }
+
+          locationRef.current = loc;
+          const now = Date.now();
+          // Tighten the render cadence during active trip phases so the driver
+          // UI distance counter and map marker stay responsive; coarse throttle
+          // is fine when idle to avoid unnecessary re-renders.
+          const renderThrottleMs = inTripPhase ? 3000 : 10000;
+          if (now - lastRenderMsRef.current >= renderThrottleMs) {
+            lastRenderMsRef.current = now;
+            setLocation(loc);
+          }
+
+          if (!(rideId && inTripPhase) && wsRef.current?.readyState === WebSocket.OPEN) {
             // Phase 1 (online, no ride). The live marker fans out on every fix
             // for a smooth map, but is ephemeral (durable:false) so it never
             // fills the trail. Separately, ~once a minute we send ONE durable
@@ -776,6 +792,30 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       }
     };
   }, [activeRide?.ride?.id, foregroundLocationTransport, isOnline, rideState, uploadLocationBatch]);
+
+  // Period-1 idle durable recording: while online with no trip, keep ONE idle
+  // outbox session open (the recorder throttles fixes to ≥30s/60s or 100m).
+  // Gated on the server flag from GET /settings — the ingest endpoint is
+  // authoritative regardless. Trip start / going offline closes the session.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!isOnline || TRACKED_TRIP_PHASES.includes(rideState)) {
+        await tripLocationRecorder.stopIdleSession().catch(() => {});
+        return;
+      }
+      try {
+        const res = await api.get<{ idle_location_v2_enabled?: boolean }>('/settings');
+        if (cancelled) return;
+        const enabled = res.data?.idle_location_v2_enabled === true;
+        tripLocationRecorder.setIdleRecordingEnabled(enabled);
+        if (enabled) await tripLocationRecorder.startIdleSession();
+      } catch {
+        // Flag unreadable — leave idle recording off; next transition retries.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isOnline, rideState]);
 
   // ─── WebSocket Message Handler ───────────────────────────────────
   const handleWSMessage = useCallback((data: any) => {

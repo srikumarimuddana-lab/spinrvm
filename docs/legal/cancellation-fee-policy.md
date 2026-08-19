@@ -37,9 +37,12 @@ app will always show you whether a fee applies to that specific cancellation
 before you confirm the cancellation — you will never be charged a fee you
 weren't told about in advance.
 
-The cancellation fee is [AMOUNT, E.G. A FLAT $X OR A FORMULA] and goes to
-the driver, consistent with Spinr's no-commission model — Spinr does not
-keep any part of a cancellation fee.
+The cancellation fee is a flat amount, currently $4.50 by default (admin-
+configurable). $4.00 goes to the driver to compensate the time and travel
+already spent reaching you, and $0.50 is a Spinr service portion. This fee
+is separate from — and does not change — Spinr's 0% commission on the fare
+of a completed ride: drivers still keep 100% of every fare they actually
+drive.
 
 NO-SHOW FEES
 
@@ -75,12 +78,25 @@ incorrectly.
 
 ## Pre-publication notes
 
-1. **Every dollar amount and time window is a placeholder** — pull the real
-   figures from `services/fare_service.py` / the cancellation-fee
-   configuration, and keep this page in sync if those figures change (this
-   is exactly the kind of drift risk a standalone reference page creates —
-   worth a code comment pointing back here if feasible).
-2. Confirm this doesn't duplicate content already correct in
+1. **Fixed 2026-08-19**: the dollar-amount paragraph previously claimed
+   "Spinr does not keep any part of a cancellation fee" — that was factually
+   wrong. `backend/schemas.py` defines both `cancellation_fee_driver`
+   (default $4.00) and `cancellation_fee_admin` (default $0.50), both
+   admin-configurable (`routes/admin/settings.py`), and
+   `routes/rides/cancellation.py` actually charges and records both amounts
+   on every fee-eligible cancellation. Corrected the paragraph to state the
+   real split rather than a false no-commission claim, and to make clear
+   this fee is distinct from the 0%-commission fare itself.
+2. **Still open — genuinely unverified, do not invent**: the specific time
+   windows (`[NUMBER, E.G. 2 MINUTES]` for the post-acceptance cancellation
+   grace period, `[NUMBER, E.G. 5 MINUTES]` for the no-show wait, `[NUMBER,
+   E.G. 60 DAYS]` for the dispute window) — searched
+   `backend/routes/rides/cancellation.py` and `services/cancellation_service.py`
+   for a hardcoded constant and found none; these thresholds appear to be
+   configured elsewhere (per-service-area settings) or not yet formalized as
+   a fixed number. Confirm the actual values with product/fare-config before
+   publishing — do not guess.
+3. Confirm this doesn't duplicate content already correct in
    `docs/legal/terms-of-service.md` §5 in a way that could drift out of
    sync — consider this page authoritative on specifics, and simplify §5 in
    the Terms of Service to reference it, next time that document is revised.

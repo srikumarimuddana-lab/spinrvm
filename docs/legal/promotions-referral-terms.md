@@ -51,9 +51,12 @@ trips as a new driver).
 
 To qualify: the person referred must be a genuinely new Spinr user — you may
 not refer an account you already control, a household member's duplicate
-account, or an account created to farm referral bonuses; and the referral
-bonus is credited only after the qualifying action is verified, which may
-take up to [NUMBER, E.G. 7 DAYS].
+account, or an account created to farm referral bonuses; and the person you
+referred has 30 days from applying your referral code to complete the
+qualifying action (1 ride for a rider referral, 10 rides for a driver
+referral) — after 30 days with no qualifying action, the referral expires
+unpaid. Once the qualifying action is completed, the bonus is credited to
+both accounts.
 
 Spinr monitors referral activity for abuse, including unusual referral
 velocity from a single device, phone number, or payment method. An account
@@ -80,10 +83,30 @@ yet earned as of the date an offer changes or ends.
 
 ## Pre-publication notes
 
-1. Cross-reference `backend/utils/referral_terms.py` and migration 176 for
+1. **Fixed 2026-08-19**: the "credited only after the qualifying action is
+   verified, which may take up to [NUMBER, E.G. 7 DAYS]" placeholder
+   described the wrong mechanism — there's no separate post-completion
+   verification-lag constant in the codebase. The real, code-backed figure
+   is `REFERRAL_WINDOW_DAYS` / `RIDER_REFERRAL_WINDOW_DAYS`
+   (`backend/routes/drivers/referrals.py`, `backend/routes/users.py`) — both
+   default to **30 days**, and both measure the deadline for the *referred
+   person* to complete their qualifying rides before the referral expires
+   unpaid, not a bonus-processing delay after completion. Also pulled in the
+   real ride thresholds (rider: 1 ride, driver: 10 rides,
+   `RIDER_REFERRAL_RIDES_REQUIRED` / `REFERRAL_RIDES_REQUIRED`) to replace
+   the vague "first ride... minimum number of trips" phrasing. These are
+   **global defaults** — `service_areas.rider_referral_window_days` /
+   `driver_referral_window_days` (migration 189) and the sibling
+   rides-required/reward columns (migrations 173, 201) let an admin override
+   them per service area. Checked directly against the live database: every
+   service area with an explicit override set (Regina, Saskatoon, their
+   airport variants, and one non-SK area) matches the global default
+   exactly — 30 days, 1 ride, $0 driver-referee-reward — so stating these as
+   universal is accurate today. Re-check before publication if that changes.
+2. Cross-reference `backend/utils/referral_terms.py` and migration 176 for
    the actual per-service-area terms already configured, and make sure this
    public page doesn't promise something broader than what's enforced.
-2. The anti-abuse language here should match, not exceed, the actual
+3. The anti-abuse language here should match, not exceed, the actual
    referral-velocity and self-referral guards CLAUDE.md's fraud-auditor
    context describes — this page states policy; enforcement is a separate,
    already-built concern.

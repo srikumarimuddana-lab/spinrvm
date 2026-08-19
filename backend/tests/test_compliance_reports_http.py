@@ -485,17 +485,59 @@ def test_t4a_filer_handoff_never_includes_sin(admin_client):
     assert "Jane A. Doe" in body
     assert "123 Main St" in body
     assert "750.00" in body
-    # Only readiness metadata may appear: a Yes/No flag and a collection
-    # timestamp. Never the number, and never any part of it — not even the
-    # last 4, which internal admin views do show but this export must not,
-    # because it leaves Spinr for a third-party filer.
-    allowed = {"sin_on_file", "sin_collected_at"}
+    # Only readiness metadata may appear: a Yes/No flag, a collection
+    # timestamp, and (as of the is_reconstructed/sin_source transparency
+    # fix) a provenance label ("legacy_import"/"self_entry"). Never the
+    # number, and never any part of it — not even the last 4, which internal
+    # admin views do show but this export must not, because it leaves Spinr
+    # for a third-party filer.
+    allowed = {"sin_on_file", "sin_collected_at", "sin_source"}
     header = body.splitlines()[0] if body.splitlines() else ""
     sin_columns = {c for c in header.split(",") if "sin" in c.lower()}
     assert sin_columns <= allowed, f"unexpected SIN column(s): {sin_columns - allowed}"
     assert "last4" not in body.lower()
     # And no 9-digit run anywhere in the payload, whatever it is called.
     assert not re.search(r"(?<!\d)\d{9}(?!\d)", body)
+
+
+def test_t4a_filer_handoff_marks_legacy_imported_sin_provenance(admin_client):
+    """Finding #2, docs/audit/2026-08-19-legacy-migration-data-quality-audit.md:
+    a SIN backfilled from the banks.csv legacy import must not read as
+    indistinguishable driver self-entry in the T4A filer handoff."""
+    legacy_driver_row = dict(
+        _T4A_DRIVER_ROW,
+        sin="vault-uuid",
+        sin_collected_at="2026-08-19T00:00:00Z",
+        legacy_import_metadata={
+            "legacy_mongo_banks_sin_dob_import": {
+                "batch": "b1",
+                "imported_at": "2026-08-19T00:00:00Z",
+                "sin_written": True,
+            }
+        },
+    )
+
+    async def get_rows_side(table, filters=None, **kw):
+        if table == "rides":
+            return [_T4A_RIDE_ROW]
+        if table == "drivers":
+            return [legacy_driver_row]
+        return []
+
+    with (
+        patch("backend.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)),
+        patch("backend.db_supabase.insert_one", AsyncMock(return_value="audit-1")),
+        patch(
+            "backend.routes.admin.compliance.get_legal_name_and_address_from_stripe",
+            AsyncMock(return_value=dict(_STRIPE_ADDRESS)),
+        ),
+    ):
+        resp = admin_client.get("/api/admin/compliance/t4a-filer-handoff?year=2026&format=csv")
+    assert resp.status_code == 200
+    body = resp.content.decode("utf-8")
+    header = body.splitlines()[0].split(",")
+    row = body.splitlines()[1].split(",")
+    assert row[header.index("sin_source")] == "legacy_import"
 
 
 def test_t4a_filer_handoff_filters_by_500_threshold(admin_client):

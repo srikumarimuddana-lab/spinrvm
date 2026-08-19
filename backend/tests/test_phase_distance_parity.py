@@ -2,12 +2,14 @@
 
 Two independent implementations measure per-phase GPS distance:
   - utils/trip_distance.compute_trip_distances (settlement + finalizer), and
-  - compute_driver_phase_distances (migration 54_gps_daily_rollup_fn.sql,
-    used by the admin daily rollup in routes/admin/maintenance.py).
+  - compute_driver_phase_distances v2 (migration 336_phase_distances_fn_v2.sql,
+    used by the daily rollup — routes/admin/maintenance.py and the scheduled
+    driver_daily_rollup loop).
 
-These tests run the SAME synthetic trace through both and assert the
-per-phase totals agree on clean data, and explicitly pin the one known
-divergence (the SQL rollup applies no anomaly/spike filter).
+These tests run the SAME synthetic trace through both and assert per-phase
+totals AND seconds agree on clean data, and that both now reject the same
+anomalous segments (v1's known no-spike-filter divergence was closed by
+migration 336, which mirrors trip_distance.py's 5 km / 300 s / 150 km/h caps).
 
 Integration-marked: requires a reachable Postgres (SPINR_PG_TEST_DSN, or the
 local spinr_parity_test database); skipped otherwise.
@@ -31,7 +33,12 @@ _DSN = (
     or os.environ.get("PG_CONNECTION_STRING")
     or "host=127.0.0.1 dbname=spinr_parity_test user=spinr_test password=spinr_test"
 )
-_MIGRATION = os.path.join(os.path.dirname(__file__), "..", "migrations", "54_gps_daily_rollup_fn.sql")
+# Applied in production order: v1 defines the function + index, v2 (336)
+# drops and recreates it with the anomaly filter and per-phase seconds.
+_MIGRATIONS = [
+    os.path.join(os.path.dirname(__file__), "..", "migrations", "54_gps_daily_rollup_fn.sql"),
+    os.path.join(os.path.dirname(__file__), "..", "migrations", "336_phase_distances_fn_v2.sql"),
+]
 
 DAY_START = datetime(2026, 7, 19, 0, 0, 0, tzinfo=timezone.utc)
 DAY_END = DAY_START + timedelta(days=1)
@@ -59,11 +66,12 @@ def pg():
             )
             """
         )
-        with open(_MIGRATION) as migration:
-            sql = migration.read()
-        # SECURITY DEFINER needs ownership rights the test role lacks for the
-        # index; the function body is what parity cares about.
-        cursor.execute(sql.replace("SECURITY DEFINER", ""))
+        for path in _MIGRATIONS:
+            with open(path) as migration:
+                sql = migration.read()
+            # SECURITY DEFINER needs ownership rights the test role lacks for
+            # the index; the function body is what parity cares about.
+            cursor.execute(sql.replace("SECURITY DEFINER", ""))
     yield connection
     connection.close()
 
@@ -92,11 +100,20 @@ def _trace(driver_id, *, spike=False):
 def _sql_phases(pg, driver_id):
     with pg.cursor() as cursor:
         cursor.execute(
-            "SELECT navigating_km, trip_km, point_count FROM compute_driver_phase_distances(%s, %s, %s)",
+            "SELECT navigating_km, trip_km, point_count, navigating_seconds,"
+            " trip_seconds, rejected_segments"
+            " FROM compute_driver_phase_distances(%s, %s, %s)",
             (driver_id, DAY_START, DAY_END),
         )
-        navigating_km, trip_km, point_count = cursor.fetchone()
-    return float(navigating_km), float(trip_km), int(point_count)
+        nav_km, trip_km, points, nav_s, trip_s, rejected = cursor.fetchone()
+    return {
+        "navigating_km": float(nav_km),
+        "trip_km": float(trip_km),
+        "point_count": int(points),
+        "navigating_seconds": int(nav_s),
+        "trip_seconds": int(trip_s),
+        "rejected_segments": int(rejected),
+    }
 
 
 def _insert(pg, rows):
@@ -123,37 +140,42 @@ def _python_phases(rows):
     return result
 
 
-def test_clean_trace_per_phase_totals_agree(pg):
+def test_clean_trace_per_phase_totals_and_seconds_agree(pg):
     driver_id = str(uuid4())
     rows = _trace(driver_id)
     _insert(pg, rows)
 
-    navigating_sql, trip_sql, point_count = _sql_phases(pg, driver_id)
+    sql = _sql_phases(pg, driver_id)
     python = _python_phases(rows)
 
-    assert point_count == len(rows)
+    assert sql["point_count"] == len(rows)
+    assert sql["rejected_segments"] == 0
     # Same haversine, same current-point phase attribution: the transition
     # segment (nav point 19 -> trip point 20) bills to trip_in_progress in
     # both implementations. Tolerance covers Python's round(v, 3) only.
-    assert python.phase_distances["navigating_to_pickup"] == pytest.approx(navigating_sql, abs=5e-4)
-    assert python.phase_distances["trip_in_progress"] == pytest.approx(trip_sql, abs=5e-4)
-    assert python.actual_distance_km == pytest.approx(trip_sql, abs=0.02)
+    assert python.phase_distances["navigating_to_pickup"] == pytest.approx(sql["navigating_km"], abs=5e-4)
+    assert python.phase_distances["trip_in_progress"] == pytest.approx(sql["trip_km"], abs=5e-4)
+    assert python.actual_distance_km == pytest.approx(sql["trip_km"], abs=0.02)
+    # v2 seconds mirror trip_distance.py's accepted-gap sums exactly.
+    assert python.phase_durations["navigating_to_pickup"] == sql["navigating_seconds"]
+    assert python.phase_durations["trip_in_progress"] == sql["trip_seconds"]
 
 
-def test_known_divergence_sql_rollup_has_no_spike_filter(pg):
-    """Pin the documented difference: the admin daily rollup sums a teleport
-    spike that settlement's anomaly filter rejects. If this ever starts
-    failing because the SQL function gained a filter, update the admin
-    rollup docs and the settlement comparison guidance together."""
+def test_spike_filter_parity_sql_rejects_same_segments_as_settlement(pg):
+    """v1's documented divergence (SQL summed a ~230 km teleport round trip
+    that settlement rejected) was closed by migration 336: both
+    implementations now reject the two segments touching the spike and
+    report near-identical trip_km."""
     driver_id = str(uuid4())
     rows = _trace(driver_id, spike=True)
     _insert(pg, rows)
 
-    _, trip_sql, _ = _sql_phases(pg, driver_id)
+    sql = _sql_phases(pg, driver_id)
     python = _python_phases(rows)
 
     # Python rejects both segments touching the spike (> MAX_SEG_KM).
     assert python.rejected_segments == 2
+    assert sql["rejected_segments"] == 2
     assert python.phase_distances["trip_in_progress"] < 5.0
-    # SQL sums the full teleport round trip (~230 km on a ~4 km trip).
-    assert trip_sql > 200.0
+    assert sql["trip_km"] < 5.0
+    assert python.phase_distances["trip_in_progress"] == pytest.approx(sql["trip_km"], abs=5e-4)

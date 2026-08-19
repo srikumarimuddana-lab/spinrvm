@@ -256,6 +256,128 @@ async def test_add_tip_after_paid_wallet_zero_collected_still_absorbs_no_rejecti
     assert Decimal(result["tip_amount"]) == Decimal("5.00")
 
 
+# ── Late-tip absorption monitoring (fare-payout-audit finding, 2026-08-19) ──
+
+
+async def test_late_tip_absorption_recorded_and_alerted_past_threshold():
+    """A partial/zero collection on a wallet or company_allowance late tip
+    must record the absorbed shortfall for monitoring — and log an alert
+    once the rider's cumulative absorbed amount in the window crosses the
+    threshold — WITHOUT ever blocking or changing the tip's own outcome
+    (still 'absorb + alert', never 'stop absorbing past a cap')."""
+    from backend.routes.rides import payments as payments_mod
+    from backend.routes.rides.payments import TipRequest, add_tip
+
+    ride = _completed_ride(payment_status="paid", payment_method="wallet")
+
+    with (
+        patch("backend.routes.rides.payments._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.rides.payments._deps.db_supabase.update_ride", AsyncMock(return_value=None)),
+        patch("backend.routes.rides.payments.charge_late_wallet_tip", AsyncMock(return_value=Decimal("0"))),
+        # $60 cumulative >= the $50 alert threshold — this event's own
+        # absorbed amount ($5.00) is what gets passed as the delta;
+        # redis_incrby's return value IS the running cumulative total, so
+        # mocking it directly is the correct way to simulate "this is not
+        # the rider's first absorption event in the window."
+        patch("backend.routes.rides.payments.redis_incrby", AsyncMock(return_value=6000)) as mock_incrby,
+        patch("backend.routes.rides.payments.redis_expire", AsyncMock()) as mock_expire,
+        patch("backend.routes.rides.payments._metric_inc") as mock_metric,
+        patch("backend.routes.rides.payments.logger") as mock_logger,
+    ):
+        req = TipRequest(amount=Decimal("5.00"))
+        result = await add_tip(RIDE_ID, req, current_user={"id": RIDER_ID})
+
+    # The tip itself is completely unaffected — still succeeds, driver still
+    # credited in full, regardless of the alert firing.
+    assert result["success"] is True
+    assert Decimal(result["tip_amount"]) == Decimal("5.00")
+
+    mock_incrby.assert_awaited_once_with(
+        payments_mod._LATE_TIP_ABSORBED_KEY.format(RIDER_ID), 500  # $5.00 absorbed, in cents
+    )
+    # Cumulative (6000) != this event's own delta (500), so expiry must NOT
+    # be (re)set — this isn't the first event in a fresh window.
+    mock_expire.assert_not_awaited()
+    mock_metric.assert_any_call("spinr_payment_late_tip_absorption_alert_total")
+    assert any(
+        "LATE_TIP_ABSORPTION_THRESHOLD" in str(call.args[0]) for call in mock_logger.error.call_args_list
+    )
+
+
+async def test_late_tip_absorption_first_event_sets_window_expiry():
+    """The very first absorption event for a rider in a fresh window must
+    set the Redis key's TTL (redis_incrby's return equals this event's own
+    delta, meaning the key was just created)."""
+    from backend.routes.rides import payments as payments_mod
+    from backend.routes.rides.payments import TipRequest, add_tip
+
+    ride = _completed_ride(payment_status="paid", payment_method="wallet")
+
+    with (
+        patch("backend.routes.rides.payments._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.rides.payments._deps.db_supabase.update_ride", AsyncMock(return_value=None)),
+        patch("backend.routes.rides.payments.charge_late_wallet_tip", AsyncMock(return_value=Decimal("2.00"))),
+        # Cumulative == this event's own delta (300 cents = $3.00 absorbed
+        # of the $5.00 tip) — first event in the window.
+        patch("backend.routes.rides.payments.redis_incrby", AsyncMock(return_value=300)),
+        patch("backend.routes.rides.payments.redis_expire", AsyncMock()) as mock_expire,
+        patch("backend.routes.rides.payments._metric_inc") as mock_metric,
+    ):
+        req = TipRequest(amount=Decimal("5.00"))
+        result = await add_tip(RIDE_ID, req, current_user={"id": RIDER_ID})
+
+    assert result["success"] is True
+    mock_expire.assert_awaited_once_with(
+        payments_mod._LATE_TIP_ABSORBED_KEY.format(RIDER_ID),
+        payments_mod._LATE_TIP_ABSORPTION_WINDOW_SECONDS,
+    )
+    # $3.00 absorbed is under the $50 threshold — no alert.
+    assert (
+        "spinr_payment_late_tip_absorption_alert_total" not in [c.args[0] for c in mock_metric.call_args_list]
+    )
+
+
+async def test_late_tip_absorption_redis_failure_never_blocks_tip():
+    """A Redis outage during the monitoring write must be swallowed —
+    the tip itself already succeeded from the rider's perspective and must
+    never fail because a monitoring side-effect couldn't run."""
+    from backend.routes.rides.payments import TipRequest, add_tip
+
+    ride = _completed_ride(payment_status="paid", payment_method="wallet")
+
+    with (
+        patch("backend.routes.rides.payments._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.rides.payments._deps.db_supabase.update_ride", AsyncMock(return_value=None)),
+        patch("backend.routes.rides.payments.charge_late_wallet_tip", AsyncMock(return_value=Decimal("0"))),
+        patch("backend.routes.rides.payments.redis_incrby", AsyncMock(side_effect=Exception("redis down"))),
+    ):
+        req = TipRequest(amount=Decimal("5.00"))
+        result = await add_tip(RIDE_ID, req, current_user={"id": RIDER_ID})
+
+    assert result["success"] is True
+    assert Decimal(result["tip_amount"]) == Decimal("5.00")
+
+
+async def test_late_tip_full_collection_does_not_record_absorption():
+    """A fully-collected late tip has nothing to absorb — the monitoring
+    write must not even be attempted."""
+    from backend.routes.rides.payments import TipRequest, add_tip
+
+    ride = _completed_ride(payment_status="paid", payment_method="wallet")
+
+    with (
+        patch("backend.routes.rides.payments._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.rides.payments._deps.db_supabase.update_ride", AsyncMock(return_value=None)),
+        patch("backend.routes.rides.payments.charge_late_wallet_tip", AsyncMock(return_value=Decimal("5.00"))),
+        patch("backend.routes.rides.payments.redis_incrby", AsyncMock()) as mock_incrby,
+    ):
+        req = TipRequest(amount=Decimal("5.00"))
+        result = await add_tip(RIDE_ID, req, current_user={"id": RIDER_ID})
+
+    assert result["success"] is True
+    mock_incrby.assert_not_awaited()
+
+
 async def test_add_tip_after_paid_company_allowance_fully_collected():
     from backend.routes.rides.payments import TipRequest, add_tip
 

@@ -2,6 +2,15 @@
 
 **Date:** 2026-08-15 · **Posture:** AUDIT-ONLY — mapping plan is a **draft to review**, nothing executed. Access boundary unchanged: the raw `Mongo.zip` export is not on this machine, so 2.1's inventory is doc-derived, not re-verified against the files.
 
+> **Update (2026-08-19):** the access boundary above no longer holds — the user supplied the raw
+> `Mongo.zip` directly. See `docs/audit/2026-08-19-full-mongodb-export-collection-inventory.md` for
+> the full collection-by-collection re-analysis against the actual file; it re-scores most of §2.2's
+> table below against real data (short version: the 6 "never opened" collections are now opened, and
+> most of them are either empty or too small to be the blocker they looked like on paper). That doc
+> also notes what's still unresolved by this same-vintage (2026-07-26) file and needs the fresh
+> Oct-30 pull instead — treat this file's §2.1/§2.2 as superseded where the two disagree, not as a
+> duplicate source of truth.
+
 ---
 
 ## Plain-English summary

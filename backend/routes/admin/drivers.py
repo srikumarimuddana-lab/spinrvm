@@ -15,6 +15,7 @@ try:
     from ...routes.drivers._shared import _encrypt_driver_pii, _vault_decrypt
     from ...routes.users import store_profile_image
     from ...services import lms_service
+    from ...services.driver_import_service import sin_source
     from ...utils.audit_logger import log_admin_action
     from ...utils.datetime_utils import parse_iso_utc
     from ...utils.driver_status_notifications import (
@@ -33,6 +34,7 @@ except ImportError:
     from routes.drivers._shared import _encrypt_driver_pii, _vault_decrypt  # type: ignore
     from routes.users import store_profile_image  # type: ignore
     from services import lms_service  # type: ignore
+    from services.driver_import_service import sin_source  # type: ignore
     from utils.audit_logger import log_admin_action  # noqa: F401
     from utils.datetime_utils import parse_iso_utc
     from utils.driver_status_notifications import (  # type: ignore
@@ -2118,6 +2120,11 @@ async def admin_get_driver_live_stats(driver_id: str):
         "sin_last4": (drv or {}).get("sin_last4"),
         "sin_on_file": bool(drv and drv.get("sin")),
         "sin_collected_at": (drv or {}).get("sin_collected_at"),
+        # "legacy_import" | "self_entry" | None — see sin_source() docstring.
+        # sin_collected_at alone can't distinguish a banks.csv backfill from
+        # driver self-entry (both stamp the same field); this derived value
+        # doesn't change what sin_collected_at means or stores.
+        "sin_source": sin_source(drv),
     }
 
 

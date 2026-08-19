@@ -1186,14 +1186,55 @@ class TestAdminAddDriverNote:
         from backend.routes.admin.drivers import DriverNoteCreate
 
         note = {"id": "note_2", "driver_id": DRIVER_ID, "note": "Important note"}
+        audit_mock = AsyncMock(return_value="audit-1")
 
         with (
             patch("backend.routes.admin.drivers.db_supabase.insert_one", AsyncMock(return_value=note)),
+            patch("backend.routes.admin.drivers._log_driver_activity", AsyncMock()),
+            patch("backend.routes.admin.drivers.log_admin_action", audit_mock),
         ):
             req = DriverNoteCreate(note="Important note", author="Admin")
-            result = asyncio.run(admin_drivers.admin_add_driver_note(driver_id=DRIVER_ID, req=req))
+            result = asyncio.run(admin_drivers.admin_add_driver_note(driver_id=DRIVER_ID, req=req, admin=ADMIN_USER))
 
         assert result is not None
+        audit_mock.assert_awaited_once()
+        assert audit_mock.call_args[0][1] == "driver_note_added"
+
+
+class TestAdminDeleteDriverNote:
+    def test_deletes_note_and_audits(self):
+        from backend.routes.admin import drivers as admin_drivers
+
+        audit_mock = AsyncMock(return_value="audit-2")
+        with (
+            patch("backend.routes.admin.drivers.db_supabase.delete_many", AsyncMock()) as delete_mock,
+            patch("backend.routes.admin.drivers.log_admin_action", audit_mock),
+        ):
+            result = asyncio.run(admin_drivers.admin_delete_driver_note(note_id="note_2", admin=ADMIN_USER))
+
+        assert result == {"message": "Note deleted"}
+        delete_mock.assert_awaited_once_with("driver_notes", {"id": "note_2"})
+        audit_mock.assert_awaited_once_with(ADMIN_USER, "driver_note_deleted", "driver_notes", "note_2", {})
+
+
+class TestAdminAssignDriverArea:
+    def test_assigns_area_and_audits(self):
+        from backend.routes.admin import drivers as admin_drivers
+
+        audit_mock = AsyncMock(return_value="audit-3")
+        with (
+            patch("backend.routes.admin.drivers.db_supabase.update_one", AsyncMock()) as update_mock,
+            patch("backend.routes.admin.drivers.log_admin_action", audit_mock),
+        ):
+            result = asyncio.run(
+                admin_drivers.admin_assign_driver_area(driver_id=DRIVER_ID, service_area_id="area-9", admin=ADMIN_USER)
+            )
+
+        assert result == {"message": "Driver assigned to area area-9"}
+        update_mock.assert_awaited_once()
+        audit_mock.assert_awaited_once_with(
+            ADMIN_USER, "driver_area_assigned", "drivers", DRIVER_ID, {"service_area_id": "area-9"}
+        )
 
 
 class TestAdminGetDriverRides:

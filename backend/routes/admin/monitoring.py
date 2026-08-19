@@ -316,6 +316,13 @@ async def migrate_profile_images(
             failed += 1
 
     remaining = await count_documents("users", {"profile_image": {"$regex": "data:"}})
+    await log_admin_action(
+        current_admin,
+        "profile_images_migrated",
+        "users",
+        "bulk",
+        {"migrated": migrated, "failed": failed, "remaining": remaining, "limit": limit},
+    )
     return {"migrated": migrated, "failed": failed, "remaining": remaining}
 
 

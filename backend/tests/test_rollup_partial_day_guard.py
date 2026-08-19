@@ -59,7 +59,7 @@ async def test_rollup_rejects_future_date():
 async def test_rollup_accepts_regina_yesterday():
     yesterday = (_regina_today() - timedelta(days=1)).isoformat()
     with patch.object(maintenance_mod.db_supabase, "get_rows", AsyncMock(return_value=[])):
-        result = await maintenance_mod.admin_rollup_driver_daily(target_date=yesterday)
+        result = await maintenance_mod.admin_rollup_driver_daily(target_date=yesterday, admin={"id": "test_admin"})
     assert result.get("stat_date") == yesterday
 
 
@@ -69,5 +69,5 @@ async def test_rollup_default_is_regina_yesterday():
     day, never the in-progress one."""
     yesterday = (_regina_today() - timedelta(days=1)).isoformat()
     with patch.object(maintenance_mod.db_supabase, "get_rows", AsyncMock(return_value=[])):
-        result = await maintenance_mod.admin_rollup_driver_daily(target_date=None)
+        result = await maintenance_mod.admin_rollup_driver_daily(target_date=None, admin={"id": "test_admin"})
     assert result.get("stat_date") == yesterday

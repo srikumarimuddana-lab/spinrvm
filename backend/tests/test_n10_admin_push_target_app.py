@@ -117,9 +117,12 @@ async def test_broadcast_to_riders_targets_rider_app():
     with (
         patch.object(admin_faqs.db, "get_rows", AsyncMock(return_value=[{"id": "usr-1"}, {"id": "usr-2"}])),
         patch("features.send_push_notification", push),
+        patch.object(admin_faqs, "log_admin_action", AsyncMock(return_value="audit-1")),
     ):
         await admin_faqs.admin_send_notification(
-            request=None, notification=admin_faqs.NotificationRequest(title="t", body="b", audience="riders")
+            request=None,
+            notification=admin_faqs.NotificationRequest(title="t", body="b", audience="riders"),
+            admin={"id": "adm-1", "role": "super_admin"},
         )
 
     assert push.await_count == 2
@@ -134,9 +137,12 @@ async def test_broadcast_to_drivers_targets_driver_app():
     with (
         patch.object(admin_faqs.db, "get_rows", AsyncMock(return_value=[{"id": "usr-1"}])),
         patch("features.send_push_notification", push),
+        patch.object(admin_faqs, "log_admin_action", AsyncMock(return_value="audit-2")),
     ):
         await admin_faqs.admin_send_notification(
-            request=None, notification=admin_faqs.NotificationRequest(title="t", body="b", audience="drivers")
+            request=None,
+            notification=admin_faqs.NotificationRequest(title="t", body="b", audience="drivers"),
+            admin={"id": "adm-1", "role": "super_admin"},
         )
 
     push.assert_awaited_once()
@@ -154,9 +160,12 @@ async def test_broadcast_to_all_leaves_target_app_unset():
     with (
         patch.object(admin_faqs.db, "get_rows", AsyncMock(return_value=[{"id": "usr-1"}])),
         patch("features.send_push_notification", push),
+        patch.object(admin_faqs, "log_admin_action", AsyncMock(return_value="audit-3")),
     ):
         await admin_faqs.admin_send_notification(
-            request=None, notification=admin_faqs.NotificationRequest(title="t", body="b", audience="all")
+            request=None,
+            notification=admin_faqs.NotificationRequest(title="t", body="b", audience="all"),
+            admin={"id": "adm-1", "role": "super_admin"},
         )
 
     push.assert_awaited_once()
@@ -215,9 +224,12 @@ async def test_lost_and_found_push_targets_driver_app():
         patch.object(admin_fleet.db_supabase, "get_user_by_id", AsyncMock(return_value=driver_user)),
         patch.object(admin_fleet.db_supabase, "update_lost_and_found", AsyncMock()),
         patch("features.send_push_notification", push),
+        patch.object(admin_fleet, "log_admin_action", AsyncMock(return_value="audit-4")),
     ):
         await admin_fleet.admin_report_lost_item(
-            "ride-1", admin_fleet.LostAndFoundRequest(item_description="wallet")
+            "ride-1",
+            admin_fleet.LostAndFoundRequest(item_description="wallet"),
+            admin={"id": "adm-1", "role": "super_admin"},
         )
 
     push.assert_awaited_once()

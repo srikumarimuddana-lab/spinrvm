@@ -30,8 +30,8 @@ in a published legal document is worse than an honest delay.
 | `driver-deactivation-appeals-policy.md` | ☐ Counsel review · ☐ Real SLA timeframes from safety team (bracketed placeholders filled) · ☐ In-app appeal channel built | Draft |
 | `accessibility-statement.md` | ☐ Counsel review · ☐ `accessibility@spinr.ca` live and monitored · ☐ "What we've built so far" verified against `docs/ACCESSIBILITY.md`, not aspirational | Draft |
 | `insurance-coverage-periods.md` | ☐ Counsel review · ☐ Consistency check against ToS §6/§13 | Draft |
-| `cancellation-fee-policy.md` | ☐ Counsel review · ☐ Dollar amounts/time windows pulled from actual `services/fare_service.py` config | Draft |
-| `promotions-referral-terms.md` | ☐ Counsel review · ☐ Terms cross-checked against `backend/utils/referral_terms.py` and migration 176 | Draft |
+| `cancellation-fee-policy.md` | ☐ Counsel review · ☑ Fee split pulled from real config (2026-08-19: was factually wrong — claimed Spinr keeps no part of the fee; corrected to the real $4.00 driver / $0.50 admin default split from `schemas.py`/`routes/admin/settings.py`) · ☐ Time-window brackets (cancel grace period, no-show wait, dispute window) still genuinely unverified — no hardcoded constant found in `routes/rides/cancellation.py` | Draft |
+| `promotions-referral-terms.md` | ☐ Counsel review · ☑ Terms cross-checked against `backend/utils/referral_terms.py`, `routes/drivers/referrals.py`, `routes/users.py`, and migration 176 (2026-08-19: real numbers pulled in — 30-day completion window and 1/10-ride thresholds for rider/driver referrals — replacing a placeholder that described the wrong mechanism; verified no live service-area override diverges from the global default) | Draft |
 | `background-check-consent.md` | ☐ Counsel review · ☐ Real CRC/VSC vendor name filled in · ☐ Consent-capture screen built in driver onboarding | Draft |
 
 ### Corporate / B2B

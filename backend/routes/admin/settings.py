@@ -753,4 +753,11 @@ async def admin_update_heatmap_settings(data: HeatmapSettingsRequest, admin: dic
     else:
         await db_supabase.insert_one("settings", payload)
 
+    await log_admin_action(
+        admin,
+        "heatmap_settings_updated",
+        "settings",
+        _HEATMAP_SETTINGS_ID,
+        {"fields": sorted(k for k in payload if k not in ("id", "updated_at"))},
+    )
     return {"message": "Heat map settings updated"}

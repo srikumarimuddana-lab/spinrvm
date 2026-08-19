@@ -517,6 +517,13 @@ async def admin_cancel_ride(
     except Exception as e:  # pragma: no cover - best effort
         logger.warning(f"admin_cancel_ride: admin broadcast failed: {e}")
 
+    await log_admin_action(
+        admin_user,
+        "ride_cancelled_by_admin",
+        "rides",
+        ride_id,
+        {"reason": reason, "prior_status": ride.get("status")},
+    )
     return {"success": True, "ride_id": ride_id, "status": "cancelled"}
 
 
@@ -3318,6 +3325,9 @@ async def admin_retry_payout(payout_id: str, admin: dict = Depends(get_admin_use
         },
     )
     logger.info(f"Payout {payout_id} queued for retry by admin {admin.get('id')}")
+    await log_admin_action(
+        admin, "payout_retry_requested", "payouts", payout_id, {"prior_status": payout.get("status")}
+    )
     return {"success": True, "payout_id": payout_id, "status": "pending"}
 
 
@@ -3432,6 +3442,13 @@ async def admin_bulk_retry_payouts(
     logger.info(
         f"Bulk retry by admin {admin.get('id')}: retried={retried} "
         f"skipped={skipped} failed_to_initiate={failed_to_initiate}"
+    )
+    await log_admin_action(
+        admin,
+        "payout_bulk_retry_requested",
+        "payouts",
+        "bulk",
+        {"retried": retried, "skipped": skipped, "failed_to_initiate": failed_to_initiate},
     )
     return {
         "retried": retried,
@@ -3690,6 +3707,13 @@ async def admin_regenerate_imported_snapshots(
         success,
         failed,
         len(rides),
+    )
+    await log_admin_action(
+        admin,
+        "ride_snapshots_regenerated",
+        "rides",
+        "bulk",
+        {"total": len(rides), "success": success, "failed": failed, "force": body.force},
     )
     return {
         "total": len(rides),

@@ -420,7 +420,22 @@ async def _supersede_and_flag_pending_review(
             "driver_documents", query, {"status": "superseded", "updated_at": datetime.now(timezone.utc)}
         )
     except Exception as e:
-        logger.warning(f"Could not supersede prior docs for driver {driver_id}: {e}")
+        # Audit finding #13/#19 (2026-08-18 fleet audit) — same class N13 fixed in
+        # routes/drivers/ride_cancel.py's auth_status=released write: a failed
+        # supersede here silently leaves the prior "approved"/"pending" docs
+        # active, so a driver could re-appear as verified against a document
+        # that was actually just replaced. logger.warning + continue on a DB
+        # write is exactly what CLAUDE.md's "Do not silently swallow errors"
+        # section forbids. For DatabaseError, str(e) alone collapses to
+        # "Database operation failed" — include e.details["original"].
+        _original = e.details.get("original") if hasattr(e, "details") and isinstance(e.details, dict) else None
+        logger.error(
+            "Could not supersede prior docs for driver %s: %s%s",
+            driver_id,
+            e,
+            f" — {_original}" if _original else "",
+            exc_info=True,
+        )
 
     if not flag_review:
         # Admin uploaded an already-approved doc — supersede prior docs but keep

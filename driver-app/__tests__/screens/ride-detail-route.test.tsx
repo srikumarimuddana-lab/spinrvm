@@ -21,7 +21,11 @@ describe('driver ride detail route presentation contract', () => {
     expect(source).not.toContain('actualSections.map((section) => (');
     expect(source).not.toContain('INFERRED_ROUTE_STROKE');
     expect(source).not.toContain('ACTUAL_ROUTE_STROKE');
-    expect(source).not.toContain('<Polyline');
+    // The ONE sanctioned raw-Polyline use: the dashed Period-2 pickup leg
+    // (server-flag-gated) as separate grey context under the trip gradient.
+    expect(source.match(/<Polyline/g) ?? []).toHaveLength(1);
+    expect(source).toContain('pickupLegSections.map');
+    expect(source).toContain('lineDashPattern={[6, 6]}');
     expect(source).not.toContain('{routeSnapshotUrl ? (');
     expect(source).toContain('ride.actual_completion_point');
     expect(source).toContain('useCompletedRouteRefresh(ride, loadRide)');

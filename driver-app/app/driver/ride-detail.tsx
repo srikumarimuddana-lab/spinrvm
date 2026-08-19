@@ -8,7 +8,7 @@ import {
     ActivityIndicator,
     TouchableOpacity,
 } from 'react-native';
-import MapView, { PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -93,9 +93,20 @@ export default function RideDetailScreen() {
         };
     }, [ride, hasPickup, hasDropoff]);
 
-    const actualSections = useMemo(
+    const allSections = useMemo(
         () => toReactNativeRouteSections(ride?.actual_route_segments),
         [ride?.actual_route_segments],
+    );
+    // Trip (P3) line vs. optional dashed pickup leg (P2 — only present when
+    // the server's rider_show_pickup_leg_enabled flag is on). Filtering here
+    // keeps the trip gradient honest even when the server sends both.
+    const actualSections = useMemo(
+        () => allSections.filter((s) => !s.phase || s.phase === 'trip_in_progress'),
+        [allSections],
+    );
+    const pickupLegSections = useMemo(
+        () => allSections.filter((s) => s.phase === 'navigating_to_pickup' || s.phase === 'arrived_at_pickup'),
+        [allSections],
     );
     const plannedSegments = useMemo(() => {
         // Read the property once (rather than once via `ride?.X` in the
@@ -190,6 +201,19 @@ export default function RideDetailScreen() {
                             rotateEnabled={false}
                             onMapReady={() => setRouteMapReady(true)}
                         >
+                            {/* Pickup leg (P2) as dashed grey context UNDER the
+                                trip line — present only when the server flag
+                                sends non-trip phases. */}
+                            {pickupLegSections.map((s) => (
+                                <Polyline
+                                    key={`pickup-leg-${s.id}`}
+                                    coordinates={s.coordinates}
+                                    strokeColor="#9CA3AF"
+                                    strokeWidth={3}
+                                    lineDashPattern={[6, 6]}
+                                    lineCap="round"
+                                />
+                            ))}
                             {/* THE uniform route line: the flattened REAL actual-
                                 route coords (v2 segments joined in order, or the
                                 legacy planned line for pre-v2 rides) drawn as one

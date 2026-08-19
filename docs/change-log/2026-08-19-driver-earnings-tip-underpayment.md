@@ -48,7 +48,7 @@ no dependency on call order or which path ran last. Replaced all three
 write sites (`rating.py`, `payments.py`'s `add_tip` and `process_payment`'s
 in-memory receipt mirror, `payment_service.py`'s `_tip_ride_update`) and
 the `settle_ride_card_payment` RPC (migration 337) to use this formula.
-Migration 335 is a narrow, one-off data correction for the single affected
+Migration 338 is a narrow, one-off data correction for the single affected
 production ride (SPR-8X2GTY), guarded on its exact stale values so it can
 only ever match that one row.
 
@@ -130,11 +130,11 @@ v_earnings := v_base_earnings + COALESCE(p_tip_amount, 0);
 - Code paths (rating.py / payments.py / payment_service.py): straightforward
   `git revert` is safe here — these are pure computation-path changes with
   no data migration attached, so a code revert alone reverts behavior.
-- Migration 334 (RPC): `app_settings.ledger_atomic_settle_enabled = false`
+- Migration 337 (RPC): `app_settings.ledger_atomic_settle_enabled = false`
   routes callers to the legacy Python fallback (`_tip_ride_update`, fixed
   in the same change) without a second deploy. To fully remove the new RPC
   version: `DROP FUNCTION IF EXISTS settle_ride_card_payment(text, uuid, text, bigint, text, numeric, jsonb, text);` then re-apply migration 288's body (not recommended — reintroduces the bug).
-- Migration 335 (one-off data fix): re-run the same `UPDATE` with
+- Migration 338 (one-off data fix): re-run the same `UPDATE` with
   `driver_earnings = 0.17` in place of `0.67` to revert the single
   corrected row back to its prior (wrong) value. This is a data-level
   remediation, not a code revert — `git revert` alone does not undo an
@@ -147,8 +147,8 @@ v_earnings := v_base_earnings + COALESCE(p_tip_amount, 0);
 - [ ] Manual repro steps followed in staging — **not verified**, no staging DB access in this session; verified only against real production `financial_events`/`rides` data pasted by the user from Supabase SQL Editor.
 - [x] Blast-radius grep performed — see §4 (writers vs. 40+ readers of `driver_earnings`).
 - [x] Reviewed against relevant `CLAUDE.md` conventions — money arithmetic (Decimal-only, `_d`/`_round`/`_f`), migration numbering/append-only, Stripe idempotency (unaffected — `financial_events` untouched).
-- [ ] Feature-flagged — not flagged; this is a bugfix to money-correctness math with no new user-visible behavior to gate, and the delta-vs-fresh computation is not something a flag can safely dual-run (there's no meaningful "old" behavior to preserve, it was silently wrong). Migration 334's RPC already sits behind the pre-existing `ledger_atomic_settle_enabled` flag as its rollback path.
-- Migration 334 has **not been applied to any database** (no live DB access in this session) — it is a code change pending the normal migration pipeline. Migration 335 likewise unapplied.
+- [ ] Feature-flagged — not flagged; this is a bugfix to money-correctness math with no new user-visible behavior to gate, and the delta-vs-fresh computation is not something a flag can safely dual-run (there's no meaningful "old" behavior to preserve, it was silently wrong). Migration 337's RPC already sits behind the pre-existing `ledger_atomic_settle_enabled` flag as its rollback path.
+- [x] Migrations 337 and 338 applied directly via the Supabase SQL Editor by the user (this session has no DB connection). Order run: (1) `SELECT` pre-check confirming ride SPR-8X2GTY still held the stale values the migration 338 guard expects (`tip_amount=0.50, total_fare=0.17, driver_earnings=0.17`); (2) migration 337's `CREATE OR REPLACE FUNCTION` + `COMMENT ON FUNCTION` — succeeded; (3) migration 338's guarded `UPDATE` — succeeded (guard matched, row updated); (4) a manual `INSERT INTO schema_migrations` recording both filenames so `run_migrations.py`'s tracker treats them as already-applied on the next run. Not yet independently re-verified with a post-update `SELECT` in this conversation — recommend a final read-back of `rides.driver_earnings` for SPR-8X2GTY to confirm it now shows `0.67` before considering this fully closed.
 
 ## 10. Sign-off
 

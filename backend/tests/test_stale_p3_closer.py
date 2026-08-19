@@ -33,14 +33,29 @@ def _span(ride_id="ride-1", started_hours_ago=14.0, span_id="span-1"):
     }
 
 
-def _patches(*, spans, ride, settings, last_capture=None, close_result=True):
-    """Common patch stack for _tick tests. get_rows serves spans then the ride."""
+def _patches(
+    *,
+    spans,
+    ride,
+    settings,
+    last_capture=None,
+    close_result=True,
+    orphan_rides=None,
+    open_rows_for_driver=None,
+):
+    """Common patch stack for _tick tests. get_rows branches on filters:
+    span listing vs per-driver open-row check (driver_insurance_periods),
+    by-id lookup vs the orphan in_progress sweep (rides)."""
 
     async def _get_rows(table, filters, **kwargs):
         if table == "driver_insurance_periods":
+            if "driver_id" in (filters or {}):
+                return open_rows_for_driver or []
             return spans
         if table == "rides":
-            return [ride] if ride else []
+            if "id" in (filters or {}):
+                return [ride] if ride else []
+            return orphan_rides or []
         raise AssertionError(f"unexpected table {table}")
 
     return (
@@ -75,7 +90,7 @@ async def test_terminal_ride_alerts_but_does_not_close_when_flag_off():
     with patches[0], patches[1], patches[2], patches[3] as close_mock, patches[4]:
         result = await _run_tick()
 
-    assert result == {"detected": 1, "closed": 0}
+    assert result == {"detected": 1, "closed": 0, "orphaned": 0}
     close_mock.assert_not_awaited()
 
 
@@ -87,7 +102,7 @@ async def test_terminal_ride_closes_at_ride_end_time_when_flag_on():
     with patches[0], patches[1], patches[2], patches[3] as close_mock, patches[4]:
         result = await _run_tick()
 
-    assert result == {"detected": 1, "closed": 1}
+    assert result == {"detected": 1, "closed": 1, "orphaned": 0}
     close_mock.assert_awaited_once()
     _span_arg, end_time, reason = close_mock.await_args.args
     assert end_time == ended
@@ -107,7 +122,7 @@ async def test_terminal_ride_within_grace_is_skipped():
     with patches[0], patches[1], patches[2], patches[3] as close_mock, patches[4]:
         result = await _run_tick()
 
-    assert result == {"detected": 0, "closed": 0}
+    assert result == {"detected": 0, "closed": 0, "orphaned": 0}
     close_mock.assert_not_awaited()
 
 
@@ -124,7 +139,7 @@ async def test_abandoned_ride_closes_at_last_breadcrumb_time():
     with patches[0], patches[1], patches[2], patches[3] as close_mock, patches[4]:
         result = await _run_tick()
 
-    assert result == {"detected": 1, "closed": 1}
+    assert result == {"detected": 1, "closed": 1, "orphaned": 0}
     _span_arg, end_time, reason = close_mock.await_args.args
     assert end_time == last_fix
     assert reason == "ride_abandoned"
@@ -144,7 +159,7 @@ async def test_abandoned_ride_with_recent_breadcrumbs_is_left_alone():
     with patches[0], patches[1], patches[2], patches[3] as close_mock, patches[4]:
         result = await _run_tick()
 
-    assert result == {"detected": 0, "closed": 0}
+    assert result == {"detected": 0, "closed": 0, "orphaned": 0}
     close_mock.assert_not_awaited()
 
 
@@ -160,7 +175,7 @@ async def test_young_in_progress_ride_is_skipped_without_breadcrumb_lookup():
     with patches[0], patches[1], patches[2] as capture_mock, patches[3] as close_mock, patches[4]:
         result = await _run_tick()
 
-    assert result == {"detected": 0, "closed": 0}
+    assert result == {"detected": 0, "closed": 0, "orphaned": 0}
     capture_mock.assert_not_awaited()
     close_mock.assert_not_awaited()
 
@@ -173,7 +188,7 @@ async def test_contract_violation_statuses_alert_without_closing():
     with patches[0], patches[1], patches[2], patches[3] as close_mock, patches[4]:
         result = await _run_tick()
 
-    assert result == {"detected": 0, "closed": 0}
+    assert result == {"detected": 0, "closed": 0, "orphaned": 0}
     close_mock.assert_not_awaited()
 
 
@@ -187,7 +202,7 @@ async def test_missing_ride_and_missing_ride_id_never_close():
     with patches[0], patches[1], patches[2], patches[3] as close_mock, patches[4]:
         result = await _run_tick()
 
-    assert result == {"detected": 0, "closed": 0}
+    assert result == {"detected": 0, "closed": 0, "orphaned": 0}
     close_mock.assert_not_awaited()
 
 
@@ -222,3 +237,51 @@ async def test_close_span_is_conditional_on_open_row():
     assert closed is False
     chain.is_.assert_called_once_with("ended_at", "null")
     chain.update.assert_called_once_with({"ended_at": NOW.isoformat()})
+
+
+@pytest.mark.asyncio
+async def test_orphaned_in_progress_ride_alerts_every_tick():
+    """After a class-B autoclose, the ride stays in_progress with no open
+    period row — invisible to the span sweep. The orphan detector must keep
+    alerting until an admin resolves the ride. Alert-only, never mutates."""
+    patches = _patches(
+        spans=[],
+        ride=None,
+        settings={},
+        orphan_rides=[
+            {
+                "id": "ride-9",
+                "driver_id": "drv-9",
+                "ride_started_at": _iso(NOW - timedelta(hours=20)),
+            }
+        ],
+        open_rows_for_driver=[],  # no open insurance-period row at all
+    )
+    with patches[0], patches[1], patches[2], patches[3] as close_mock, patches[4]:
+        result = await _run_tick()
+
+    assert result == {"detected": 0, "closed": 0, "orphaned": 1}
+    close_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_in_progress_ride_with_an_open_row_is_not_orphaned():
+    """A driver with ANY open period row (even Period 0) is visible to the
+    normal audit trail — not this detector's business."""
+    patches = _patches(
+        spans=[],
+        ride=None,
+        settings={},
+        orphan_rides=[
+            {
+                "id": "ride-9",
+                "driver_id": "drv-9",
+                "ride_started_at": _iso(NOW - timedelta(hours=20)),
+            }
+        ],
+        open_rows_for_driver=[{"id": "row-1", "period": 3}],
+    )
+    with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        result = await _run_tick()
+
+    assert result == {"detected": 0, "closed": 0, "orphaned": 0}

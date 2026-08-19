@@ -1549,7 +1549,15 @@ async def admin_send_payable_invoice(
     # Terminal payment states must never be re-invoiced. 'refunded' is set by the
     # charge.refunded webhook — re-collecting an intentionally refunded fare would
     # be a chargeback/PR incident. 'paid'/'waived_admin' are already settled.
-    if ride.get("payment_status") in ("paid", "waived_admin", "refunded"):
+    # 'partially_refunded' is blocked here too — NOT because collecting the
+    # un-refunded remainder is wrong in principle, but because this endpoint
+    # invoices `grand_total + tip_amount` (the ORIGINAL full total, see
+    # amount_cents below), which is not remainder-aware: sending it on a
+    # partially-refunded ride would re-bill the rider for the portion they
+    # already paid and never had refunded, not just the outstanding gap. A
+    # remainder-aware invoice flow would need its own amount calculation —
+    # out of scope here; track separately if that need comes up.
+    if ride.get("payment_status") in ("paid", "waived_admin", "refunded", "partially_refunded"):
         raise HTTPException(
             status_code=409,
             detail=f"Ride is in terminal payment state '{ride.get('payment_status')}' — cannot invoice",
@@ -1722,7 +1730,7 @@ async def admin_send_payable_invoice(
             {
                 "id": ride_id,
                 "stripe_invoice_id": existing_id,
-                "payment_status": {"$nin": ["processing", "paid", "waived_admin", "refunded"]},
+                "payment_status": {"$nin": ["processing", "paid", "waived_admin", "refunded", "partially_refunded"]},
             },
             {"stripe_invoice_id": invoice_claim_sentinel},
         )

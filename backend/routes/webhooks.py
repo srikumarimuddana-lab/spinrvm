@@ -258,10 +258,11 @@ async def _handle_ride_invoice_paid(invoice: dict, ride_id: str, event_id: str, 
         )
         raise HTTPException(status_code=500, detail="Ride not found for paid invoice — Stripe will retry")
     _pstatus = ride.get("payment_status")
-    # 'refunded' is terminal too: if charge.refunded marked the ride refunded
-    # before a delayed invoice.paid lands, re-settling here would append another
-    # ledger row and flip payment_status back to 'paid', erasing the refund.
-    if _pstatus in ("paid", "waived_admin", "refunded"):
+    # 'refunded' and 'partially_refunded' are terminal too: if charge.refunded
+    # marked the ride (fully or partially) refunded before a delayed
+    # invoice.paid lands, re-settling here would append another ledger row and
+    # flip payment_status back to 'paid', erasing the refund record.
+    if _pstatus in ("paid", "waived_admin", "refunded", "partially_refunded"):
         logger.info(
             "invoice.paid: ride %s already settled (%s) — skipping",
             ride_id,
@@ -1039,11 +1040,34 @@ async def stripe_webhook(request: Request):
                 refunded_cents = int(charge.get("amount_refunded", 0))
                 refunded_amount = Decimal(str(refunded_cents)) / Decimal("100")
                 refunded_amount = refunded_amount.quantize(_TWO_PLACES, rounding=ROUND_HALF_UP)
+                # A partial refund must NOT collapse into the same 'refunded'
+                # status as a full one — 'refunded' is treated as terminal
+                # (never re-invoiceable, never re-settled by a delayed
+                # invoice.paid) elsewhere in this file and in admin/rides.py.
+                # Marking a partial refund 'refunded' silently drops the fact
+                # that the platform still retained (amount - amount_refunded)
+                # of the fare, corrupting any report keyed off payment_status.
+                #
+                # Prefer Stripe's own authoritative `refunded` boolean (only
+                # true once cumulative refunds reach the full charge amount);
+                # fall back to comparing amount_refunded against amount when
+                # `refunded` isn't present. If neither is present (shouldn't
+                # happen on a real Stripe payload — both are always sent —
+                # only on incomplete synthetic test data), default to the
+                # prior full-refund behavior rather than guessing partial.
+                is_full_refund: bool
+                if isinstance(charge.get("refunded"), bool):
+                    is_full_refund = charge["refunded"]
+                elif charge.get("amount") is not None:
+                    is_full_refund = refunded_cents >= int(charge["amount"])
+                else:
+                    is_full_refund = True
+                new_payment_status = "refunded" if is_full_refund else "partially_refunded"
                 await db_supabase.update_one(
                     "rides",
                     {"id": ride_id},
                     {
-                        "payment_status": "refunded",
+                        "payment_status": new_payment_status,
                         "refund_amount": str(refunded_amount),
                         "updated_at": datetime.now(timezone.utc).isoformat(),
                     },
@@ -1066,7 +1090,7 @@ async def stripe_webhook(request: Request):
                     ride=ride,
                 )
                 logger.info(
-                    f"Stripe refund: ride {ride_id} marked refunded (${refunded_amount:.2f}); "
+                    f"Stripe refund: ride {ride_id} marked {new_payment_status} (${refunded_amount:.2f}); "
                     f"driver pay retained, ledger + GST reversal recorded",
                     extra={
                         "domain": "payments",

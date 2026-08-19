@@ -445,6 +445,10 @@ class TestAdminCancelRide:
                 "backend.routes.admin.rides.send_push_notification",
                 send_push_mock,
             ),
+            patch(
+                "backend.routes.admin.rides.log_admin_action",
+                AsyncMock(return_value="audit-1"),
+            ) as audit_mock,
         ):
             from backend.routes.admin.rides import AdminCancelRideRequest
 
@@ -458,6 +462,8 @@ class TestAdminCancelRide:
 
         assert result["success"] is True
         assert result["status"] == "cancelled"
+        audit_mock.assert_awaited_once()
+        assert audit_mock.call_args[0][1] == "ride_cancelled_by_admin"
 
         # The write must set status=cancelled + stamp the reason + admin id
         update_payload = update_ride_mock.call_args.args[1]

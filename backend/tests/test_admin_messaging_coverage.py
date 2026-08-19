@@ -24,6 +24,8 @@ try:
 except ImportError:
     import backend.routes.admin.messaging as messaging  # type: ignore[no-redef]
 
+ADMIN = {"id": "admin-1", "role": "admin"}
+
 
 # ---------------------------------------------------------------------------
 # _resolve_recipients
@@ -398,17 +400,22 @@ async def test_send_cloud_message_service_area_ignored_for_all_audience():
     background_tasks = BackgroundTasks()
     response = Response()
 
+    audit_mock = AsyncMock(return_value="audit-1")
     with (
         patch.object(messaging.db_supabase, "insert_one", AsyncMock(return_value=None)),
         patch.object(messaging, "_resolve_recipients", AsyncMock(return_value=[{"id": "u1"}])) as resolve_mock,
+        patch.object(messaging, "log_admin_action", audit_mock),
     ):
         await messaging.admin_send_cloud_message(
             payload=messaging.CloudMessageRequest(title="T", description="D", audience="all", service_area_id="area-x"),
             background_tasks=background_tasks,
             response=response,
+            admin=ADMIN,
         )
     # audience="all" is not in ("customers", "drivers") so service_area_id must be dropped to None
     assert resolve_mock.await_args.args[2] is None
+    audit_mock.assert_awaited_once()
+    assert audit_mock.call_args[0][1] == "cloud_message_sent"
 
 
 @pytest.mark.anyio
@@ -535,13 +542,16 @@ async def test_delete_cloud_message_already_sent_rejected():
 @pytest.mark.anyio
 async def test_delete_cloud_message_cancels_scheduled():
     update_mock = AsyncMock(return_value=None)
+    audit_mock = AsyncMock(return_value="audit-2")
     with (
         patch.object(messaging.db_supabase, "get_rows", AsyncMock(return_value=[{"id": "m1", "status": "scheduled"}])),
         patch.object(messaging.db_supabase, "update_one", update_mock),
+        patch.object(messaging, "log_admin_action", audit_mock),
     ):
-        out = await messaging.admin_delete_cloud_message("m1")
+        out = await messaging.admin_delete_cloud_message("m1", admin=ADMIN)
     assert out == {"message": "Message cancelled"}
     update_mock.assert_awaited_once_with("cloud_messages", {"id": "m1"}, {"status": "cancelled"})
+    audit_mock.assert_awaited_once_with(ADMIN, "cloud_message_cancelled", "cloud_messages", "m1", {})
 
 
 # ---------------------------------------------------------------------------
@@ -569,12 +579,24 @@ async def test_list_marketing_suppressions_query_failure_returns_empty():
 @pytest.mark.anyio
 async def test_add_marketing_suppression_delegates_to_service():
     add_mock = AsyncMock(return_value=True)
-    with patch("services.marketing_consent.add_marketing_suppression", add_mock, create=True):
+    audit_mock = AsyncMock(return_value="audit-3")
+    with (
+        patch("services.marketing_consent.add_marketing_suppression", add_mock, create=True),
+        patch.object(messaging, "log_admin_action", audit_mock),
+    ):
         out = await messaging.admin_add_marketing_suppression(
-            messaging.ManualSuppressionRequest(channel="email", target="a@b.com", reason="bounce")
+            messaging.ManualSuppressionRequest(channel="email", target="a@b.com", reason="bounce"),
+            admin=ADMIN,
         )
     assert out == {"success": True, "added": True}
     add_mock.assert_awaited_once_with("email", "a@b.com", reason="bounce", source="admin")
+    audit_mock.assert_awaited_once_with(
+        ADMIN,
+        "marketing_suppression_added",
+        "marketing_suppressions",
+        "a@b.com",
+        {"channel": "email", "reason": "bounce"},
+    )
 
 
 @pytest.mark.anyio
@@ -590,10 +612,23 @@ async def test_delete_marketing_suppression_not_found_raises_404():
 @pytest.mark.anyio
 async def test_delete_marketing_suppression_removes_existing():
     delete_mock = AsyncMock(return_value=None)
+    audit_mock = AsyncMock(return_value="audit-4")
     with (
-        patch.object(messaging.db_supabase, "find_one", AsyncMock(return_value={"id": "s1"})),
+        patch.object(
+            messaging.db_supabase,
+            "find_one",
+            AsyncMock(return_value={"id": "s1", "target": "a@b.com", "channel": "email"}),
+        ),
         patch.object(messaging.db_supabase, "delete_many", delete_mock),
+        patch.object(messaging, "log_admin_action", audit_mock),
     ):
-        out = await messaging.admin_delete_marketing_suppression("s1")
+        out = await messaging.admin_delete_marketing_suppression("s1", admin=ADMIN)
     assert out == {"success": True}
     delete_mock.assert_awaited_once_with("marketing_suppressions", {"id": "s1"})
+    audit_mock.assert_awaited_once_with(
+        ADMIN,
+        "marketing_suppression_deleted",
+        "marketing_suppressions",
+        "s1",
+        {"target": "a@b.com", "channel": "email"},
+    )

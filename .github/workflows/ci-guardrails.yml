@@ -232,6 +232,73 @@ jobs:
             --coverage-json ../corp-coverage.json \
             --changed-files-file /tmp/changed_files.txt
 
+  # ─── 1c. Money-path per-module coverage floor ────────────────────────────
+  # CLAUDE.md's coverage-minimums table names >=90% for routes/payments.py,
+  # services/fare_service.py, utils/crypto.py, and >=80% for routes/rides.py
+  # (now the routes/rides/ package) + services/dispatch_service.py -- a
+  # *higher*-priority tier than corporate_*.py's, which already got a gate
+  # above. Ranked blocker #30, docs/audit/2026-08-18-full-fleet-whole-app-
+  # audit.md. Same scoped-and-blocking-but-only-for-touched-files shape as
+  # corporate-coverage-floor-gate above; see backend/scripts/
+  # check_money_path_coverage_floor.py's docstring for floor provenance and
+  # docs/change-log/2026-08-19-money-path-coverage-floor-gate-fix.md for the
+  # 2026-08-19 measurement this gate's floors are derived from.
+  #
+  # Unlike corporate_*.py, these 5 files/package aren't cleanly separable by
+  # a `-k` keyword filter (they're exercised across most of the suite), so
+  # this job runs the full suite with coverage rather than a scoped subset
+  # -- a real cost (duplicates ci.yml's backend-test full run) accepted
+  # deliberately over a cross-workflow artifact-sharing setup for a first
+  # version; see the change-log entry's Risk section.
+  money-path-coverage-floor-gate:
+    name: Money-path coverage floor check
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: List changed files
+        run: |
+          BASE="${{ github.event.pull_request.base.sha || 'origin/main' }}"
+          git diff --name-only "$BASE"...HEAD > /tmp/changed_files_money.txt || true
+          echo "Changed files in this PR:"
+          cat /tmp/changed_files_money.txt
+
+      - name: Install backend deps
+        working-directory: backend
+        # See coverage-regression-gate above for why this step tolerates a
+        # transient install failure: the blocking backend-test job in ci.yml
+        # already surfaces a real dependency problem.
+        continue-on-error: true
+        run: |
+          pip install --require-hashes -r requirements-locked.txt --quiet \
+            || pip install -r requirements-locked.txt --quiet || true
+
+      - name: Run full backend test suite with coverage
+        working-directory: backend
+        env:
+          SUPABASE_URL: https://test.supabase.co
+          SUPABASE_SERVICE_ROLE_KEY: test_key
+          JWT_SECRET: ci-only-not-a-real-secret-000000000000
+          ADMIN_PASSWORD: ci-placeholder-password
+          ENV: test
+        run: |
+          pytest --cov=. --cov-report=json:../money-coverage.json -q --no-header 2>/dev/null || true
+
+      - name: Check per-module floors
+        working-directory: backend
+        run: |
+          python3 scripts/check_money_path_coverage_floor.py \
+            --coverage-json ../money-coverage.json \
+            --changed-files-file /tmp/changed_files_money.txt
+
   # ─── 2. Lint warning count gate ───────────────────────────────────────────
   lint-trend-gate:
     name: Lint warning trend check
@@ -939,6 +1006,7 @@ jobs:
     needs:
       - coverage-regression-gate
       - corporate-coverage-floor-gate
+      - money-path-coverage-floor-gate
       - lint-trend-gate
       - security-posture-gate
       - migration-safety-gate
@@ -954,6 +1022,7 @@ jobs:
             const jobs = {
               'Coverage Regression':  '${{ needs.coverage-regression-gate.result }}',
               'Corporate Coverage Floor': '${{ needs.corporate-coverage-floor-gate.result }}',
+              'Money-Path Coverage Floor': '${{ needs.money-path-coverage-floor-gate.result }}',
               'Lint Trend':           '${{ needs.lint-trend-gate.result }}',
               'Security Posture':     '${{ needs.security-posture-gate.result }}',
               'Migration Safety':     '${{ needs.migration-safety-gate.result }}',

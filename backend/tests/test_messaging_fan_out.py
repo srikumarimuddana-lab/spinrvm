@@ -141,6 +141,7 @@ async def test_send_cloud_message_returns_202_for_immediate_send():
         patch("backend.routes.admin.messaging.db_supabase.insert_one", insert_mock),
         patch("backend.routes.admin.messaging.db_supabase.count_documents", count_mock),
         patch("backend.routes.admin.messaging.db.get_rows", get_rows_mock),
+        patch("backend.routes.admin.messaging.log_admin_action", AsyncMock(return_value="audit-1")),
     ):
         result = await _messaging_module.admin_send_cloud_message(
             payload=CloudMessageRequest(
@@ -150,6 +151,7 @@ async def test_send_cloud_message_returns_202_for_immediate_send():
             ),
             background_tasks=background_tasks,
             response=response,
+            admin={"id": "admin-1", "role": "admin"},
         )
 
     assert response.status_code == 202
@@ -175,6 +177,7 @@ async def test_scheduled_send_returns_200_no_background_task():
     with (
         patch("backend.routes.admin.messaging.db_supabase.insert_one", AsyncMock()),
         patch("backend.routes.admin.messaging.db_supabase.count_documents", AsyncMock(return_value=5)),
+        patch("backend.routes.admin.messaging.log_admin_action", AsyncMock(return_value="audit-2")),
     ):
         result = await _messaging_module.admin_send_cloud_message(
             payload=CloudMessageRequest(
@@ -185,6 +188,7 @@ async def test_scheduled_send_returns_200_no_background_task():
             ),
             background_tasks=background_tasks,
             response=response,
+            admin={"id": "admin-1", "role": "admin"},
         )
 
     # Default Response status_code is 200 (not overridden for scheduled sends)

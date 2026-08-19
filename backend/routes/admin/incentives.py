@@ -2,13 +2,17 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 try:
     from ... import db_supabase
+    from ...dependencies import get_admin_user
+    from ...utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase  # type: ignore
+    from dependencies import get_admin_user  # type: ignore
+    from utils.audit_logger import log_admin_action  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +121,7 @@ async def get_incentive(incentive_id: str):
 
 
 @router.post("")
-async def create_incentive(req: IncentiveCreateRequest):
+async def create_incentive(req: IncentiveCreateRequest, admin: dict = Depends(get_admin_user)):
     row: Dict[str, Any] = {
         "name": req.name,
         "description": req.description or "",
@@ -143,14 +147,23 @@ async def create_incentive(req: IncentiveCreateRequest):
         result = await db_supabase.run_sync(db_supabase.supabase.table("ride_incentives").insert(row).execute)
         created = (result.data or [{}])[0]
         logger.info(f"[INCENTIVES] created incentive {created.get('id')} name={req.name}")
+        await log_admin_action(
+            admin,
+            "incentive_created",
+            "ride_incentives",
+            str(created.get("id") or ""),
+            {"name": req.name, "incentive_type": req.incentive_type, "bonus_amount": req.bonus_amount},
+        )
         return created
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[INCENTIVES] create failed: {e}", exc_info=True)
         raise HTTPException(status_code=503, detail="Failed to create incentive") from e
 
 
 @router.patch("/{incentive_id}")
-async def update_incentive(incentive_id: str, req: IncentiveUpdateRequest):
+async def update_incentive(incentive_id: str, req: IncentiveUpdateRequest, admin: dict = Depends(get_admin_user)):
     updates: Dict[str, Any] = {}
     for field, value in req.model_dump(exclude_none=True).items():
         updates[field] = value
@@ -166,6 +179,13 @@ async def update_incentive(incentive_id: str, req: IncentiveUpdateRequest):
         if not result.data:
             raise HTTPException(status_code=404, detail="Incentive not found")
         logger.info(f"[INCENTIVES] updated {incentive_id} fields={list(updates.keys())}")
+        await log_admin_action(
+            admin,
+            "incentive_updated",
+            "ride_incentives",
+            incentive_id,
+            {"fields": sorted(k for k in updates if k != "updated_at")},
+        )
         return result.data[0]
     except HTTPException:
         raise
@@ -175,7 +195,7 @@ async def update_incentive(incentive_id: str, req: IncentiveUpdateRequest):
 
 
 @router.patch("/{incentive_id}/toggle")
-async def toggle_incentive(incentive_id: str):
+async def toggle_incentive(incentive_id: str, admin: dict = Depends(get_admin_user)):
     try:
         current = await db_supabase.run_sync(
             db_supabase.supabase.table("ride_incentives")
@@ -195,6 +215,13 @@ async def toggle_incentive(incentive_id: str):
             .execute
         )
         logger.info(f"[INCENTIVES] toggled {incentive_id} is_active={new_active}")
+        await log_admin_action(
+            admin,
+            "incentive_toggled",
+            "ride_incentives",
+            incentive_id,
+            {"is_active": new_active},
+        )
         return result.data[0] if result.data else {"id": incentive_id, "is_active": new_active}
     except HTTPException:
         raise
@@ -204,7 +231,7 @@ async def toggle_incentive(incentive_id: str):
 
 
 @router.delete("/{incentive_id}")
-async def delete_incentive(incentive_id: str):
+async def delete_incentive(incentive_id: str, admin: dict = Depends(get_admin_user)):
     try:
         result = await db_supabase.run_sync(
             db_supabase.supabase.table("ride_incentives").delete().eq("id", incentive_id).execute
@@ -212,6 +239,7 @@ async def delete_incentive(incentive_id: str):
         if not result.data:
             raise HTTPException(status_code=404, detail="Incentive not found")
         logger.info(f"[INCENTIVES] deleted {incentive_id}")
+        await log_admin_action(admin, "incentive_deleted", "ride_incentives", incentive_id, {})
         return {"deleted": True}
     except HTTPException:
         raise

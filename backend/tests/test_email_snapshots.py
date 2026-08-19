@@ -30,9 +30,9 @@ from utils.email_receipt import generate_receipt_html, generate_receipt_text
 pytestmark = [pytest.mark.unit, pytest.mark.anyio]
 
 _COMPANY = CompanyDetails(
-    name="Spinr Technologies Inc.",
+    name="Spinr Mobility Inc.",
     address="220 3rd Ave S, Saskatoon SK S7K 1M1",
-    identity_line="Spinr Technologies Inc. — 220 3rd Ave S, Saskatoon SK S7K 1M1",
+    identity_line="Spinr Mobility Inc. — 220 3rd Ave S, Saskatoon SK S7K 1M1",
     contact_line="help@spinr.ca · https://spinr.ca · +1 306 555 0100",
     support_email="help@spinr.ca",
     logo_url="https://api-spinr.spinr.ca/api/v1/branding/spinr-logo.png",

@@ -462,6 +462,45 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   All 4 independently tested (targeted + regression suites, ruff clean;
   `npm run build` for the admin-dashboard change per CLAUDE.md's explicit
   requirement).
+  **FIXED 2026-08-19** (4 more, from the ranked blocker register, again run
+  in parallel across disjoint files): **#16/N5** the shared Toast/toastConfig
+  component (rider-app + driver-app, the single error-announcement path for
+  nearly every form/failure in both apps) had zero screen-reader wiring —
+  now fires `AccessibilityInfo.announceForAccessibility(...)` on toast show
+  plus `accessibilityRole="alert"` and `accessibilityLiveRegion`
+  (`"assertive"` for error/danger, `"polite"` otherwise) on the outer
+  container; no visual/timing/dismiss change, no flag needed (screen-reader
+  only, zero effect for sighted users). No real VoiceOver/TalkBack device
+  test performed. See `docs/change-log/2026-08-19-toast-screen-reader-fix.md`.
+  **#20** (baseline #14) the corporate statement PDF's rare combined-tax
+  fallback label corrected from `"Tax (GST/PST)"` to plain `"Tax"`
+  (matching `receipt_pdf.py`'s own convention for the same situation — the
+  normal per-tax-type path was already correct, only a genuine data-gap
+  fallback mislabeled itself); month bounds now anchor to
+  `ZoneInfo("America/Regina")` (fixed UTC-6, no DST) instead of naive UTC,
+  reusing the existing `STATEMENT_TZ` convention from `driver_statement.py`.
+  See `docs/change-log/2026-08-19-corporate-statement-tax-timezone-fix.md`.
+  **#26/N14** emailed/PDF receipts (a 7-year-retained legal record) now show
+  surge as a real `Decimal` dollar line item (`"Surge (X.XX×)"`) instead of
+  only a text footnote, reusing the exact `_build_fare_breakdown` formula
+  the in-app UI already used so the number can't disagree with what the
+  rider saw live; footnote text kept alongside as supplementary context;
+  Subtotal/Total unchanged (same-sum plug). Flagged: neither
+  `receipt_pdf.py` nor `email_receipt.py` is in the `spinr-no-float-in-money`
+  Semgrep gate's protected-path list despite being money-rendering code —
+  recommended as a follow-up. See
+  `docs/change-log/2026-08-19-receipt-surge-line-item-fix.md`. **N15** two
+  `round()`-on-Decimal slips (`routes/admin/support.py`,
+  `routes/admin/rides.py` — actual location `:2498/2500`, a few lines past
+  the audit's cited range) now use `utils/money.to_decimal()`
+  (`ROUND_HALF_UP`) instead of bare `round()` (banker's rounding);
+  display-only, no DB/API write affected. 4 more same-pattern instances
+  found elsewhere in `rides.py` (lines 3031/3039/3181/3241) — not fixed in
+  this pass, flagged as a fast-follow rather than silently left. See
+  `docs/change-log/2026-08-19-admin-decimal-round-convention-fix.md`. All 4
+  independently tested (targeted + regression suites, ruff clean; real Jest
+  runs for both mobile apps — rider-app 530/530, driver-app 555/555 with 1
+  pre-existing unrelated flake confirmed passing in isolation).
   Full ranked blocker register (30 items) and decision log (10 items, each
   with a suggested owner/due date) are in the audit doc — see there before
   re-deriving. Verdict at time of the 08-18 audit run: **FIX BLOCKERS** (17

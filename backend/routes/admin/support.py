@@ -17,6 +17,7 @@ try:
         create_ticket_for_flag,
     )
     from ...utils.audit_logger import log_admin_action
+    from ...utils.money import to_decimal
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user  # noqa: F401
@@ -26,6 +27,7 @@ except ImportError:
         create_ticket_for_flag,
     )
     from utils.audit_logger import log_admin_action  # noqa: F401
+    from utils.money import to_decimal  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +178,7 @@ async def admin_get_dispute_stats():
                 total_refunded += Decimal(str(d.get("refund_amount") or 0))
             except (TypeError, ValueError):
                 pass
-    return {**counts, "total_refunded": float(round(total_refunded, 2))}
+    return {**counts, "total_refunded": float(to_decimal(total_refunded))}
 
 
 @router.get("/disputes/chargebacks")

@@ -28,7 +28,7 @@ try:
     )
     from ...utils.insurance_periods import record_period_transition
     from ...utils.legacy_rides import drop_legacy_rides, legacy_tax_note_for_ride, tax_basis_for_ride
-    from ...utils.money import dollars_to_cents
+    from ...utils.money import dollars_to_cents, to_decimal
     from ...utils.rate_limiter import default_limiter as limiter
 except ImportError:
     import db_supabase
@@ -50,7 +50,7 @@ except ImportError:
     )
     from utils.insurance_periods import record_period_transition
     from utils.legacy_rides import drop_legacy_rides, legacy_tax_note_for_ride, tax_basis_for_ride
-    from utils.money import dollars_to_cents
+    from utils.money import dollars_to_cents, to_decimal
     from utils.rate_limiter import default_limiter as limiter
 
 from .drivers import _batch_fetch_drivers_and_users, _user_display_name
@@ -2495,9 +2495,9 @@ async def admin_get_earnings_overview(
         sr = by_day.get(key) or {}
         daily[key] = {
             "date": key,
-            "gbv": round(float(Decimal(str(sr.get("gbv") or 0))), 2),
+            "gbv": float(to_decimal(sr.get("gbv") or 0)),
             "trips": int(sr.get("trips") or 0),
-            "net_revenue": round(float(Decimal(str(sr.get("net_revenue") or 0))), 2),
+            "net_revenue": float(to_decimal(sr.get("net_revenue") or 0)),
         }
         cursor += timedelta(days=1)
     daily_series = list(daily.values())

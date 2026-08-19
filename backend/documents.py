@@ -428,13 +428,17 @@ async def _supersede_and_flag_pending_review(
         # write is exactly what CLAUDE.md's "Do not silently swallow errors"
         # section forbids. For DatabaseError, str(e) alone collapses to
         # "Database operation failed" — include e.details["original"].
+        # This module logs via loguru (`from loguru import logger` above), not
+        # stdlib logging — loguru formats with str.format ({}), has no
+        # `exc_info` kwarg, and attaches the traceback via
+        # `logger.opt(exception=True)` instead (see
+        # test_loguru_call_conventions.py).
         _original = e.details.get("original") if hasattr(e, "details") and isinstance(e.details, dict) else None
-        logger.error(
-            "Could not supersede prior docs for driver %s: %s%s",
+        logger.opt(exception=True).error(
+            "Could not supersede prior docs for driver {}: {}{}",
             driver_id,
             e,
             f" — {_original}" if _original else "",
-            exc_info=True,
         )
 
     if not flag_review:

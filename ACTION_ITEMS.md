@@ -11413,6 +11413,24 @@ how much they de-risk a public launch._
     most sensitive PIPEDA-class field for this population. Needs a legal
     decision (does the old app's `pages.csv` consent transfer, or is
     re-consent required) before the SIN/DOB importer's `--apply` step runs.
+    **In progress (2026-08-19, same day):** entity-identity question
+    resolved by the user — the old app's `pages.csv` legal entity, "Spinr
+    Mobility Inc.," **is** Spinr's correct, unchanged legal name (confirmed
+    by the user directly; see the corrected finding immediately below —
+    "Spinr Technologies Inc.," used in ~25 other files, is the wrong name,
+    not the other way around as this session first assumed). Given same
+    entity, old-app consent has a real basis to stand on, but the
+    sufficiency-for-this-use call is still the user's/counsel's, not
+    assumed here. Regardless of that call, the user approved building the
+    reusable remediation: a dark-shipped, flagged one-time consent-refresh
+    notice (`legacy_consent_notice_enabled`, default off) — closes both this
+    gap and LGL-3 (below) with the same mechanism. Backend shipped
+    (`docs/change-log/2026-08-19-legacy-consent-notice.md`:
+    `routes/legacy_consent.py`, `GET/POST /consent/*`, 8 tests, all passing,
+    no other reader of `consent_version` affected). **Still open:**
+    rider-app/driver-app UI to actually show the notice (not built yet —
+    the flag is a safe no-op until they ship), and the underlying legal
+    sufficiency-of-old-consent judgment itself.
   - `driver_insurance_periods.is_reconstructed` (migration 332) is invisible
     to `backend/scripts/compliance_export.py` — a regulator subpoena
     response today would hand over reconstructed insurance-period data with
@@ -11462,6 +11480,46 @@ how much they de-risk a public launch._
   reports not separately filed — see that doc for the complete, unedited
   per-finding detail) and `docs/runbooks/legacy-migration-playbook.md`
   (the requested repeatable future-migration strategy for Oct 30).
+
+### A42. Wrong legal entity name in ~25 files — "Spinr Technologies Inc." should be "Spinr Mobility Inc."
+- [ ] **Status:** open, not fixed — found while resolving A41's consent-basis
+  blocker (cross-checking the old app's `pages.csv` ToS/Privacy Policy
+  entity name against the current codebase), user-confirmed 2026-08-19.
+- **What:** The correct, unchanged-since-incorporation legal name is
+  **"Spinr Mobility Inc."** (user confirmed directly). The current codebase
+  uses **"Spinr Technologies Inc."** in ~25 files instead — including
+  real financial/tax documents: `backend/utils/t4a_pdf.py` (payer name on
+  T4A slips filed with CRA), `backend/utils/receipt_pdf.py`/`email_receipt.py`
+  (rider receipts), `backend/utils/subscription_invoice_pdf.py`, plus
+  `backend/schemas.py`, `backend/utils/company_details.py`,
+  `backend/utils/report_branding.py`, `backend/routes/drivers/subscriptions.py`,
+  `admin-dashboard/src/app/dashboard/rides/_components/ride-invoice.tsx`,
+  `rider-app/app/ride-details.tsx`, and every drafted legal doc in
+  `docs/legal/` (terms-of-service.md, privacy-policy.md,
+  corporate-master-services-agreement.md, independent-contractor-agreement.md,
+  website-terms-of-use.md, and others). "Spinr Mobility Inc." — the correct
+  name — appears in only two places: `backend/services/data_transfer/sgi_form_filler.py`
+  (the SGI regulatory form filler — correctly named) and
+  `docs/change-log/2026-07-30-report-header-footer-consistency-pass.md`,
+  where a prior session flagged the *opposite* direction as the bug
+  ("`render_branded_pdf_footer()`... said 'Spinr Mobility Inc.' instead of
+  the 'Spinr Technologies Inc.' name used everywhere else") and "fixed" it
+  by changing the correct name to the wrong one.
+- **Why this matters:** a T4A slip or receipt with the wrong legal payer
+  name is a real compliance defect, not cosmetic — CRA filings and consumer
+  receipts should name the actual registered entity. Every corporate legal
+  document in `docs/legal/` (MSA, independent-contractor agreement, ToS,
+  privacy policy) also carries the wrong counterparty name, which matters
+  the moment any of them moves from draft to signed/published.
+- **Not fixed here** — deliberately out of scope for A41's consent-notice
+  work (different surface, ~25-file blast radius needs its own careful
+  pass, not a drive-by rename). Flagging so the 2026-07-30 "fix" isn't
+  mistaken for settled, and so a future session doesn't have to
+  re-discover which direction is correct.
+- **Acceptance:** every file above renamed to "Spinr Mobility Inc.", with a
+  specific check on `docs/legal/*.md` (any that have moved toward
+  publication/counsel review need the correction before that happens) and
+  the T4A/receipt PDFs re-verified against a sample render.
 - **Acceptance:** each STILL OPEN item above either fixed with its own
   Change Impact Log, or explicitly risk-accepted/scheduled by the product
   owner with a dated note here.

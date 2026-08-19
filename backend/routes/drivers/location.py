@@ -5,6 +5,7 @@ motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
 import uuid
+from typing import Literal
 
 from pydantic import ValidationError, model_validator
 
@@ -82,12 +83,38 @@ class LocationBatchRequest(BaseModel):
         return self
 
 
-def _parse_v2_location_batch(batch: Union[List[dict], dict, LocationBatchRequest]) -> LocationBatchRequest | None:
+class IdleLocationBatchRequest(BaseModel):
+    """Strict v2 idle payload: one ordered Period-1 recording session, no ride."""
+
+    session_kind: Literal["online_idle"]
+    recording_session_id: uuid.UUID
+    ride_id: None = None
+    points: List[TripLocationPoint] = Field(min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def _sequences_are_contiguous(self):
+        sequences = [point.sequence_number for point in self.points]
+        if len(set(sequences)) != len(sequences):
+            raise ValueError("sequence_number values must be unique")
+        expected = list(range(sequences[0], sequences[0] + len(sequences)))
+        if sequences != expected:
+            raise ValueError("sequence_number values must be contiguous and ordered")
+        return self
+
+
+def _parse_v2_location_batch(
+    batch: Union[List[dict], dict, LocationBatchRequest],
+) -> LocationBatchRequest | IdleLocationBatchRequest | None:
     """Identify v2 bodies while preserving historical list/points payloads."""
     if isinstance(batch, LocationBatchRequest):
         return batch
     if not isinstance(batch, dict) or not ({"ride_id", "recording_session_id"} & set(batch)):
         return None
+    if batch.get("session_kind") == "online_idle" or ("recording_session_id" in batch and not batch.get("ride_id")):
+        try:
+            return IdleLocationBatchRequest.model_validate({**batch, "session_kind": "online_idle"})
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=exc.errors()) from exc
     try:
         return LocationBatchRequest.model_validate(batch)
     except ValidationError as exc:
@@ -104,6 +131,81 @@ def _completed_batch_is_within_retention(request: LocationBatchRequest, ride: di
         (window_start is None or point.captured_at >= window_start) and point.captured_at <= completed_at
         for point in request.points
     )
+
+
+async def _persist_v2_idle_batch(request: IdleLocationBatchRequest, current_user: dict) -> dict:
+    """Authorize and persist one durable Period-1 (online-idle) outbox batch.
+
+    409s are TERMINAL for the client outbox (it drains the batch), so they are
+    reserved for states where these points can never be accepted: the feature
+    flag off, or the driver offline. A driver with an active ride still gets a
+    per-point 'ride_active' rejection path inside the persist call instead —
+    pre-assignment points in the same batch must not be lost.
+    """
+    driver_rows = await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    if not driver_rows:
+        raise HTTPException(status_code=403, detail="Driver profile required")
+    driver = driver_rows[0]
+
+    try:
+        try:
+            from ...settings_loader import get_app_settings
+        except ImportError:
+            from settings_loader import get_app_settings  # type: ignore
+        settings = await get_app_settings() or {}
+    except Exception:
+        logger.error("idle batch settings read failed; rejecting batch as retryable", exc_info=True)
+        raise HTTPException(status_code=503, detail="Settings unavailable")
+    if not settings.get("idle_location_v2_enabled", False):
+        raise HTTPException(status_code=409, detail="Idle location recording is not enabled")
+    if not driver.get("is_online"):
+        raise HTTPException(status_code=409, detail="Driver is not online")
+
+    try:
+        from ...utils.breadcrumbs import persist_idle_location_batch, resolve_active_ride
+    except ImportError:
+        from utils.breadcrumbs import persist_idle_location_batch, resolve_active_ride  # type: ignore
+
+    active_ride = await resolve_active_ride(driver["id"])
+    try:
+        result, accepted_rows = await persist_idle_location_batch(
+            driver["id"],
+            str(request.recording_session_id),
+            [point.model_dump(mode="json") for point in request.points],
+            active_ride=active_ride,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("idle location-batch persistence failed for driver_id=%s", driver["id"], exc_info=True)
+        raise HTTPException(status_code=503, detail="Location persistence unavailable") from exc
+
+    # Live marker from the newest accepted point (same contract as trips).
+    if accepted_rows:
+        latest = accepted_rows[-1]
+        update_data: dict = {"lat": latest["lat"], "lng": latest["lng"], "updated_at": datetime.now(timezone.utc)}
+        if latest.get("heading") is not None:
+            update_data["heading"] = latest["heading"] % 360
+        # Period-1 deadhead accumulator (same flag as the legacy v1 path). The
+        # v1 path skips v2-shaped batches, so this is the single writer for
+        # idle sessions — no double count.
+        if settings.get("period1_distance_tracking_enabled", False):
+            try:
+                try:
+                    from ...utils.period1_distance import batch_incremental_distance_km
+                except ImportError:
+                    from utils.period1_distance import batch_incremental_distance_km  # type: ignore
+                _p1_delta = batch_incremental_distance_km(accepted_rows)
+                if _p1_delta > 0:
+                    update_data["period1_accum_km"] = round(float(driver.get("period1_accum_km") or 0) + _p1_delta, 3)
+                    if not driver.get("period1_accum_since"):
+                        update_data["period1_accum_since"] = datetime.now(timezone.utc)
+            except Exception:
+                logger.error("period1 accumulator update failed for driver %s", driver["id"], exc_info=True)
+        await db_supabase.update_one("drivers", {"id": driver["id"]}, update_data)
+
+    await _deps.mark_present(driver["id"])
+    return result.ack.to_dict()
 
 
 async def _persist_v2_location_batch(request: LocationBatchRequest, current_user: dict) -> dict:
@@ -423,6 +525,8 @@ async def update_location_batch(
     # driver's coordinates.
     await _guard_revoked_session(token_session_id)
     v2_request = _parse_v2_location_batch(batch)
+    if isinstance(v2_request, IdleLocationBatchRequest):
+        return await _persist_v2_idle_batch(v2_request, current_user)
     if v2_request is not None:
         return await _persist_v2_location_batch(v2_request, current_user)
 
@@ -480,7 +584,10 @@ async def update_location_batch(
         # into the same driver update — never the coordinates. resolve_active_ride
         # and get_app_settings are cached, so this stays cheap on the hot path.
         driver_row = driver_rows[0] if driver_rows else None
-        if driver_row is not None and driver_row.get("is_online"):
+        # v2-shaped points (sequence_number markers) belong to the v2 idle
+        # session path, which feeds this same accumulator — never both.
+        _has_v2_markers = any(isinstance(p, dict) and "sequence_number" in p for p in points)
+        if driver_row is not None and driver_row.get("is_online") and not _has_v2_markers:
             try:
                 from ...settings_loader import get_app_settings
                 from ...utils.breadcrumbs import resolve_active_ride

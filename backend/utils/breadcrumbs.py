@@ -397,6 +397,130 @@ async def persist_trip_location_batch(
     return LocationBatchPersistResult(ack=ack, inserted_count=len(inserted))
 
 
+async def persist_idle_location_batch(
+    driver_id: str,
+    recording_session_id: str,
+    points: List[Dict[str, Any]],
+    *,
+    active_ride: Optional[Dict[str, Any]] = None,
+) -> tuple["LocationBatchPersistResult", List[Dict[str, Any]]]:
+    """Persist one durable Period-1 ("driving around") outbox batch.
+
+    Same ack contract as persist_trip_location_batch, for rows with
+    ``ride_id NULL`` / ``tracking_phase 'online_idle'``. Differences by design:
+      * ``mocked`` points are rejected terminally (``mocked_fix``) — idle rows
+        feed the deadhead audit and the daily rollup, and this path is new, so
+        it starts strict rather than shadowing.
+      * Points captured at/after the driver's active ride window (if any) are
+        rejected as ``ride_active`` — the trip recorder owns those; accepting
+        them here would double-write the trip leg as deadhead.
+    Returns the persist result plus the accepted rows so the route layer can
+    feed the Period-1 distance accumulator without re-validating.
+    """
+    normalized_session_id = str(uuid.UUID(str(recording_session_id)))
+    if not isinstance(points, list) or not points:
+        raise ValueError("location batch requires a non-empty list of points")
+    if len(points) > MAX_BREADCRUMB_BATCH:
+        raise ValueError("location batch exceeds the maximum batch size")
+
+    ride_window_start = None
+    if isinstance(active_ride, dict):
+        ride_window_start = (
+            parse_iso_utc(active_ride.get("driver_accepted_at"))
+            or parse_iso_utc(active_ride.get("assigned_at"))
+            or parse_iso_utc(active_ride.get("created_at"))
+        )
+
+    received_at = datetime.now(timezone.utc)
+    rows: List[Dict[str, Any]] = []
+    rejections: List[LocationPointRejection] = []
+    sequence_numbers: List[int] = []
+    seen_sequences: set = set()
+
+    for point in points:
+        if not isinstance(point, dict):
+            raise TypeError("location batch points must be objects")
+        sequence_number = point.get("sequence_number")
+        if isinstance(sequence_number, bool) or not isinstance(sequence_number, int) or sequence_number < 0:
+            raise ValueError("sequence_number must be a non-negative integer")
+        if sequence_number in seen_sequences:
+            raise ValueError("sequence_number must be unique within a batch")
+        seen_sequences.add(sequence_number)
+        sequence_numbers.append(sequence_number)
+
+        if bool(point.get("mocked", False)):
+            rejections.append(LocationPointRejection(sequence_number, "mocked_fix"))
+            continue
+        lat = _coord(point, "lat", "latitude")
+        lng = _coord(point, "lng", "longitude")
+        if lat is None or lng is None or not _valid_lat_lng(lat, lng):
+            rejections.append(LocationPointRejection(sequence_number, "invalid_coordinate"))
+            continue
+        captured_at = _point_capture_time(point)
+        if captured_at is None:
+            rejections.append(LocationPointRejection(sequence_number, "invalid_capture_time"))
+            continue
+        if captured_at > received_at + _MAX_ACTIVE_TRIP_FUTURE_SKEW:
+            rejections.append(LocationPointRejection(sequence_number, "future_capture_time"))
+            continue
+        if ride_window_start is not None and captured_at >= ride_window_start:
+            rejections.append(LocationPointRejection(sequence_number, "ride_active"))
+            continue
+        monotonic_ms = point.get("monotonic_ms")
+        if monotonic_ms is not None and (isinstance(monotonic_ms, bool) or not isinstance(monotonic_ms, int)):
+            rejections.append(LocationPointRejection(sequence_number, "invalid_monotonic_time"))
+            continue
+
+        rows.append(
+            {
+                "driver_id": driver_id,
+                "ride_id": None,
+                "recording_session_id": normalized_session_id,
+                "sequence_number": sequence_number,
+                "captured_at": captured_at,
+                "received_at": received_at,
+                "timestamp": captured_at,
+                "monotonic_ms": monotonic_ms,
+                "source": point.get("source") or "driver_app",
+                "mocked": False,
+                "is_completion_fix": False,
+                "lat": lat,
+                "lng": lng,
+                "speed": point.get("speed"),
+                "heading": point.get("heading"),
+                "accuracy": point.get("accuracy"),
+                "altitude": point.get("altitude"),
+                "tracking_phase": "online_idle",
+            }
+        )
+
+    inserted: list = []
+    if rows:
+        try:
+            inserted = await db_supabase.insert_many_ignore_conflicts(
+                "driver_location_history",
+                rows,
+                on_conflict="driver_id,recording_session_id,sequence_number",
+            )
+        except Exception:
+            # Requires the migration-333 unique index; fall back to a plain
+            # insert so idle points still land (finalizer/rollup de-dup later).
+            logger.warning(
+                "idle insert_many_ignore_conflicts failed for driver %s — "
+                "falling back to plain insert (migration 333 may be missing)",
+                driver_id,
+            )
+            inserted = await db_supabase.insert_many("driver_location_history", rows)
+
+    ack = LocationBatchAck(
+        recording_session_id=normalized_session_id,
+        acked_through=_batch_acked_through(sequence_numbers),
+        accepted_count=len(rows),
+        rejected=tuple(rejections),
+    )
+    return LocationBatchPersistResult(ack=ack, inserted_count=len(inserted)), rows
+
+
 async def persist_ride_breadcrumbs(
     driver_id: str,
     points: List[Dict[str, Any]],

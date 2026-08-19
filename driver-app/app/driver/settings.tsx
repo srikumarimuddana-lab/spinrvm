@@ -233,6 +233,9 @@ export default function SettingsScreen() {
             <TouchableOpacity
                 activeOpacity={0.8}
                 onPress={() => onToggle(!value)}
+                accessibilityRole="switch"
+                accessibilityLabel={label}
+                accessibilityState={{ checked: value }}
                 style={[
                     styles.toggle,
                     { backgroundColor: value ? `${colors.primary}60` : colors.surfaceLight },

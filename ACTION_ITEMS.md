@@ -312,9 +312,9 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   re-verified together: full backend suite after integration —
   **12,177 passed, 8 skipped, 1 xfailed, 0 failed** (up from the 12,159
   pre-fix baseline, +18 new tests across the 6 fixes).
-  **FIXED 2026-08-19**: finding #13/#19's still-open twin — the identical
-  swallowed-DB-error pattern N13 (above) fixed in `ride_cancel.py` also
-  existed in `_supersede_and_flag_pending_review`
+  **FIXED 2026-08-19** (parallel session): finding #13/#19's still-open twin
+  — the identical swallowed-DB-error pattern N13 (above) fixed in
+  `ride_cancel.py` also existed in `_supersede_and_flag_pending_review`
   (`backend/documents.py`), unfixed by that pass since it's a different
   file. Same remedy: `logger.error(..., exc_info=True)` with
   `e.details["original"]` when available, replacing the swallowed
@@ -336,6 +336,11 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   `logger.opt(exception=True).error("...{}...", ...)`, matching this same
   file's own existing loguru call sites. See
   `docs/change-log/2026-08-19-documents-loguru-call-convention-fix.md`.
+  A second, independent session hit this same loguru bug the same way while
+  fixing a different ranked-#7 GPS-batch PR that also touched `documents.py`
+  indirectly via a rebase — no functional difference between the two
+  fixes, both converged on `logger.opt(exception=True).error(...)`; this
+  session's version (above) is the one that landed.
   **FIXED 2026-08-19**: ranked blocker #4/#11 — `purge_pii_retention()`'s
   Step A anonymizes ride GPS at the 3-year regulatory window
   (`pickup_lat/lng`, `dropoff_lat/lng`, `route_polyline`,
@@ -368,6 +373,56 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   this migration lands get the new column cleared; a one-time backfill
   UPDATE for already-anonymized rows was deliberately left out of scope to
   keep this fix purely additive.
+  A third, independent session was concurrently working the exact same
+  ranked #4/#11 finding and had already built its own migration 335 (see
+  `docs/change-log/2026-08-19-gps-polyline-purge-fix.md`, superseded) plus
+  its own combined referral-velocity-cap migration — all functionally
+  equivalent to the version above. Once this session's PR (#4255) merged
+  first, the other PR (#4254) rebased onto it, dropped its now-redundant
+  335 content and test/change-log files in favor of this entry, and kept
+  only its two genuinely unique fixes: the referral fraud guard (#6/N2,
+  migration 336, see below) and the v2 GPS-batch breadcrumb-level
+  plausibility check (#7, complementary to the marker-level fix below, not
+  duplicative — see next entry).
+  The same parallel session (PR #4255) also independently fixed ranked #7
+  (v2 GPS location-batch spoofing gap) by gating the batch's live-marker
+  write (`_persist_v2_location_batch` in `routes/drivers/location.py`)
+  behind the existing `check_location_integrity()` Redis-backed check — see
+  `docs/change-log/2026-08-19-v2-location-batch-integrity-check.md`. That
+  fix only covers the batch's *last* point (the one used for the live
+  marker); the fix below covers every point in the batch for the
+  breadcrumb/trip-location record itself — the two are additive, not
+  duplicative, and both are now merged.
+  **FIXED 2026-08-19** (2 more, from a separately-run batch of this
+  session's ranked-blocker fixes, done in parallel across disjoint files
+  before rebasing onto PR #4255 above — the third fix in that original
+  batch, #11/polyline-purge, turned out to duplicate PR #4255's work above
+  and was dropped in favor of it during the rebase): **#6/N2** the
+  `$0`-cost `first_ride_only` promo-ride referral loophole —
+  `_process_one`/`_count_prefetched_rides` (`utils/referral_payout.py`) and
+  `routes/users.py`'s display count now require `grand_total > 0` to
+  qualify a completed ride toward referral credit, and a new rolling
+  velocity cap (`app_settings.referral_payout_velocity_cap_per_day`,
+  default 5/referrer/24h, admin-tunable, migration 336 — free-standing, no
+  collision with #4255's 335) mirrors the existing OTP-lockout Redis
+  pattern — see `docs/change-log/2026-08-19-referral-fraud-fix.md`. **#7**
+  (see the parallel-session note above for the sibling live-marker fix) the
+  v2 GPS location-BATCH path
+  (`utils/breadcrumbs.py::persist_trip_location_batch`) now ALSO runs a new
+  pure `evaluate_gps_plausibility()` check across every consecutive point
+  pair in the batch (plus the boundary pair from the driver's pre-batch
+  last-known position), matching what v1/WS already did per-point — this
+  closes the breadcrumb-persist side of the gap that the marker-only fix
+  above didn't cover; a related, explicitly out-of-scope gap was found and
+  flagged rather than fixed — the WebSocket `location_batch` handler only
+  checks the *last* point of a WS batch, so earlier WS-batch points still
+  bypass the check (the audit named only the REST v2 path) — see
+  `docs/change-log/2026-08-19-v2-location-batch-spoofing-fix.md`. Neither
+  migration (335 or 336) has been applied to any database yet, both
+  required before/with the next deploy. Both fixes independently tested
+  (targeted + regression suites, ruff clean) and re-verified together with
+  PR #4255's fixes after the rebase: full backend suite —
+  **[pending re-run post-rebase; see the next entry if this line is stale]**.
   Full ranked blocker register (30 items) and decision log (10 items, each
   with a suggested owner/due date) are in the audit doc — see there before
   re-deriving. Verdict at time of the 08-18 audit run: **FIX BLOCKERS** (17

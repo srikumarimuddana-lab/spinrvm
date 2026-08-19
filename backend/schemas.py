@@ -365,6 +365,17 @@ class AppSettings(BaseModel):
     # incident that caused this switch to be flipped off, and blocking that
     # path would work against the person responding to the incident.
     corporate_billing_enabled: bool = True
+    # Fraud guard for the referral payout loop (utils/referral_payout.py,
+    # ranked blocker #6 / audit finding N2, 2026-08-19): caps how many
+    # referrer_reward payouts a single referrer can earn in a rolling 24h
+    # window, regardless of how many distinct referee accounts (e.g. throwaway
+    # phone numbers) reach the ride-count threshold. Ships un-flagged (no
+    # separate on/off switch) because the un-capped behavior is the real-money
+    # leak being fixed, but the THRESHOLD is admin-tunable without a redeploy.
+    # <= 0 explicitly disables the cap (documented escape hatch, not a bug) —
+    # only turn it off with a legal/fraud sign-off. Conservative starting
+    # default (5/referrer/24h); tune from real referral volume once observed.
+    referral_payout_velocity_cap_per_day: int = 5
     # New driver-facing behavior (scheduled-rides gap review, Finding #06):
     # a best-effort heads-up push to already-online drivers near an upcoming
     # scheduled pickup, ~60 minutes out. Unlike scheduled_dispatch_enabled

@@ -36,20 +36,37 @@ from decimal import ROUND_HALF_UP, Decimal
 
 try:
     from .. import db_supabase  # type: ignore
+    from ..settings_loader import get_app_settings  # type: ignore
     from ..utils.error_handling import DuplicateRecordError  # type: ignore
-    from ..utils.redis_client import redis_set_nx  # type: ignore
+    from ..utils.redis_client import (  # type: ignore
+        redis_expire,
+        redis_get,
+        redis_incr,
+        redis_set_nx,
+    )
     from ..utils.referral_terms import (  # type: ignore
         area_id_for_rider,
         resolve_referral_terms,
     )
 except ImportError:
     import db_supabase  # type: ignore
+    from settings_loader import get_app_settings  # type: ignore
     from utils.error_handling import DuplicateRecordError  # type: ignore
-    from utils.redis_client import redis_set_nx  # type: ignore
+    from utils.redis_client import (  # type: ignore
+        redis_expire,
+        redis_get,
+        redis_incr,
+        redis_set_nx,
+    )
     from utils.referral_terms import (  # type: ignore
         area_id_for_rider,
         resolve_referral_terms,
     )
+
+try:
+    from .metrics import inc as _metric_inc  # type: ignore
+except ImportError:
+    from utils.metrics import inc as _metric_inc  # type: ignore
 
 try:
     from .loop_monitor import record_heartbeat as _record_heartbeat  # type: ignore
@@ -74,6 +91,22 @@ _CLAIM_LOOKUP_CHUNK = 200
 # (an undercount at the deadline could wrongly expire a qualified referral).
 _RIDES_FETCH_LIMIT = 10_000
 
+# ── Fraud guards (ranked blocker #6 / audit finding N2, 2026-08-19) ─────────
+# A $0-cost first_ride_only/free_ride promo ride otherwise satisfies rider-
+# referral qualification on its own, making the referrer_reward farmable at
+# zero marginal cost via throwaway phone numbers, with no cap on how many
+# times one referrer could cash in. Two independent, complementary guards:
+#   1. a completed ride only counts toward the rider-referral threshold when
+#      grand_total > 0 (see _process_one / _count_prefetched_rides below and
+#      the matching filter in routes/users.py::_rider_referral_summary);
+#   2. a rolling-window velocity cap on referrer_reward payouts per referrer,
+#      below.
+# Fixed window anchored on the referrer's first payout in the window (mirrors
+# the OTP brute-force lockout convention in routes/auth.py: redis_incr, then
+# redis_expire only on the first increment of a key).
+_VELOCITY_WINDOW_SECONDS = 24 * 60 * 60  # 24h
+_DEFAULT_VELOCITY_CAP_PER_REFERRER = 5  # app_settings.referral_payout_velocity_cap_per_day overrides
+
 
 def _d(v) -> Decimal:
     return Decimal(str(v or 0)).quantize(_TWO, rounding=ROUND_HALF_UP)
@@ -81,6 +114,82 @@ def _d(v) -> Decimal:
 
 def _f(v: Decimal) -> str:
     return str(v)
+
+
+def _velocity_key(referrer_user_id: str, kind: str) -> str:
+    return f"spinr:referral_payout:velocity:{kind}:{referrer_user_id}"
+
+
+async def _velocity_cap_for(kind: str) -> int:
+    """Admin-tunable cap (app_settings.referral_payout_velocity_cap_per_day);
+    falls back to the conservative default when unset/unparseable. <= 0
+    explicitly disables the cap (documented escape hatch)."""
+    try:
+        settings = await get_app_settings() or {}
+    except Exception as e:
+        # Settings lookup failing loudly matters here too (it usually means the
+        # DB is down), but this is a rate-limit knob, not the payout itself —
+        # log and fall back to the safe default rather than blocking every
+        # referral payout tick on a settings-table hiccup.
+        logger.error(f"referral_payout: app_settings lookup failed, using default velocity cap: {e}", exc_info=True)
+        settings = {}
+    raw = settings.get("referral_payout_velocity_cap_per_day", _DEFAULT_VELOCITY_CAP_PER_REFERRER)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_VELOCITY_CAP_PER_REFERRER
+
+
+async def _referrer_velocity_capped(referrer_user_id: str, kind: str) -> bool:
+    """True when this referrer has already hit the rolling-window cap on
+    referrer_reward payouts (kind='rider'|'driver', tracked separately).
+
+    Read-only (does not increment) so a still-capped referrer can be re-checked
+    every tick without inflating the counter; _record_referrer_payout_velocity
+    is what actually advances it, and only after a real credit succeeds.
+
+    A Redis error fails OPEN (returns False / not capped): this loop already
+    tolerates a Redis outage for its leader-election lock (see referral_payout_loop
+    above) by degrading to per-replica ticks, and the velocity cap is a fraud
+    throttle layered on top of the correctness-critical UNIQUE(referee_user_id)
+    claim, not a substitute for it — refusing every payout during a Redis blip
+    would incorrectly freeze legitimate referrers. Logged at error (not
+    swallowed) so a sustained outage that silently disables the cap is visible.
+    """
+    cap = await _velocity_cap_for(kind)
+    if cap <= 0:
+        return False
+    try:
+        current = await redis_get(_velocity_key(referrer_user_id, kind))
+    except Exception as e:
+        logger.error(
+            f"referral_payout: velocity-cap Redis read failed for referrer {referrer_user_id} — "
+            f"failing open (not capping this tick): {e}",
+            exc_info=True,
+        )
+        return False
+    return int(current or 0) >= cap
+
+
+async def _record_referrer_payout_velocity(referrer_user_id: str, kind: str) -> None:
+    """Advance the rolling-window counter after a referrer credit has actually
+    succeeded. Best-effort by design: this must never raise into the caller's
+    try/except, because that block's failure path marks the referral_payouts
+    claim 'failed' for manual reconciliation — and the money has already moved
+    at this point, so mis-marking a real payout as 'failed' would be actively
+    wrong. A Redis failure here is logged loudly (not silently swallowed) since
+    it degrades the fraud guard for this referrer's next payout, but it cannot
+    be allowed to misreport a real, completed credit."""
+    try:
+        count = await redis_incr(_velocity_key(referrer_user_id, kind))
+        if count == 1:
+            await redis_expire(_velocity_key(referrer_user_id, kind), _VELOCITY_WINDOW_SECONDS)
+    except Exception as e:
+        logger.error(
+            f"referral_payout: velocity-cap increment failed for referrer {referrer_user_id} "
+            f"(payout still succeeded): {e}",
+            exc_info=True,
+        )
 
 
 def _parse_iso(value: str) -> datetime:
@@ -265,7 +374,9 @@ async def _prefetch_chunk(chunk: list, terms_cache: dict) -> dict:
         rides = await db_supabase.get_rows(
             "rides",
             {"rider_id": {"$in": rider_ids}, "status": "completed"},
-            columns="rider_id,created_at,service_area_id",
+            # grand_total needed so _count_prefetched_rides can exclude a $0
+            # promo-covered ride from qualifying the referral on its own.
+            columns="rider_id,created_at,service_area_id,grand_total",
             limit=_RIDES_FETCH_LIMIT,
         )
         ctx["riders_truncated"] = len(rides) >= _RIDES_FETCH_LIMIT
@@ -295,9 +406,15 @@ def _area_from_prefetched_rides(rides: list, since_iso) -> str | None:
     return None
 
 
-def _count_prefetched_rides(rides: list, applied_at, deadline) -> int:
+def _count_prefetched_rides(rides: list, applied_at, deadline, *, exclude_zero_fare: bool = False) -> int:
     """Count prefetched completed rides within [applied_at, deadline] — the same
-    inclusive bounds count_documents applied server-side."""
+    inclusive bounds count_documents applied server-side.
+
+    exclude_zero_fare=True (rider referrals only) additionally requires
+    grand_total > 0, so a ride fully covered by a first_ride_only/free_ride
+    promo ($0 to the rider) does not by itself satisfy referral qualification
+    — ranked blocker #6 / audit finding N2, 2026-08-19. Decimal comparison
+    (never float) per house money-arithmetic convention."""
     applied = _parse_iso(applied_at) if applied_at else None
     n = 0
     for r in rides:
@@ -305,6 +422,8 @@ def _count_prefetched_rides(rides: list, applied_at, deadline) -> int:
         if applied is not None and dt < applied:
             continue
         if deadline is not None and dt > deadline:
+            continue
+        if exclude_zero_fare and _d(r.get("grand_total")) <= 0:
             continue
         n += 1
     return n
@@ -347,7 +466,12 @@ async def _process_one(referee: dict, code: str, ctx: dict | None = None) -> Non
             area_id = _area_from_prefetched_rides(prefetched_rides, applied_at)
         else:
             area_id = await area_id_for_rider(referee_id, applied_at)
-        ride_filter: dict = {"rider_id": referee_id, "status": "completed"}
+        # grand_total > 0: a ride fully covered by a first_ride_only/free_ride
+        # promo ($0 to the rider) must not by itself satisfy qualification —
+        # ranked blocker #6 / audit finding N2, 2026-08-19. Mirrored on the
+        # prefetched-rows path via _count_prefetched_rides(exclude_zero_fare=True)
+        # below, and in routes/users.py::_rider_referral_summary's display count.
+        ride_filter: dict = {"rider_id": referee_id, "status": "completed", "grand_total": {"$gt": 0}}
     else:
         if ctx is not None:
             ref_as_driver = ctx["driver_row_by_user"].get(referee_id)
@@ -391,7 +515,7 @@ async def _process_one(referee: dict, code: str, ctx: dict | None = None) -> Non
     # translator honours only one operator per field, so AND the two bounds via
     # $and (see repositories/_base._apply_filters).
     if prefetched_rides is not None:
-        completed = _count_prefetched_rides(prefetched_rides, applied_at, deadline)
+        completed = _count_prefetched_rides(prefetched_rides, applied_at, deadline, exclude_zero_fare=is_rider)
     else:
         bounds = []
         if applied_at:
@@ -423,6 +547,25 @@ async def _process_one(referee: dict, code: str, ctx: dict | None = None) -> Non
     # this referral becomes payable again on a future tick. (A one-sided 0 still
     # claims-and-pays the non-zero side below.)
     if referrer_reward <= 0 and referee_reward <= 0:
+        return
+
+    # Fraud guard (ranked blocker #6 / audit finding N2, 2026-08-19): cap how
+    # many referrer_reward payouts a single referrer can earn in a rolling
+    # window, regardless of how many distinct referee accounts (e.g. throwaway
+    # phone numbers) hit the ride threshold. Checked (not incremented) here so
+    # a still-capped referrer keeps being retried every tick without inflating
+    # the counter — _record_referrer_payout_velocity below is what actually
+    # advances it, and only after a real credit succeeds. Defers the WHOLE
+    # claim (not just the referrer side): opening a claim now would burn the
+    # UNIQUE(referee_user_id) and permanently lose the referrer's reward for
+    # this referee once the claim can no longer be re-attempted, instead of
+    # simply paying it on a later tick once the window clears.
+    if referrer_reward > 0 and await _referrer_velocity_capped(referrer_user_id, kind):
+        logger.info(
+            f"referral_payout: referrer {referrer_user_id} ({kind}) hit the velocity cap — "
+            f"deferring referee {referee_id}'s payout to a later tick"
+        )
+        _metric_inc("spinr_referral_payout_velocity_capped_total", {"kind": kind})
         return
 
     # Atomic claim: the UNIQUE(referee_user_id) means only one replica/tick wins
@@ -475,6 +618,7 @@ async def _process_one(referee: dict, code: str, ctx: dict | None = None) -> Non
         if referrer_reward > 0:
             await _credit(referrer_user_id, referrer_reward, kind, referee_id, "referral_reward", meta)
             referrer_paid = True
+            await _record_referrer_payout_velocity(referrer_user_id, kind)
         if referee_reward > 0:
             await _credit(referee_id, referee_reward, kind, referee_id, "referral_bonus", meta)
             referee_paid = True

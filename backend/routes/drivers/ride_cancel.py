@@ -139,6 +139,8 @@ async def cancel_ride(
             status_code=409,
             detail="Ride can no longer be cancelled (it has started or already ended)",
         )
+    # 2026-08-18 fleet audit: ride-state-transition metric.
+    _deps._metric_inc("spinr_rides_state_transition_total", {"to_status": "cancelled"})
 
     # Saskatchewan Regulatory / Accessibility: service animal accommodation
     # is mandatory and a driver refusal is a tracked terms violation subject
@@ -321,6 +323,8 @@ async def mark_rider_noshow(
             status_code=409,
             detail="Ride can no longer be marked no-show (it has started or already ended)",
         )
+    # 2026-08-18 fleet audit: ride-state-transition metric.
+    _deps._metric_inc("spinr_rides_state_transition_total", {"to_status": "cancelled"})
 
     try:
         from ...services.cancellation_service import (

@@ -28,6 +28,7 @@ def _period_row(
     started="2026-07-05T10:00:00Z",
     ended="2026-07-05T10:20:00Z",
     ride=None,
+    is_reconstructed=False,
 ):
     return {
         "id": "p1",
@@ -36,6 +37,7 @@ def _period_row(
         "started_at": started,
         "ended_at": ended,
         "ride_id": ride_id,
+        "is_reconstructed": is_reconstructed,
         "rides": ride
         if ride is not None
         else {
@@ -60,6 +62,21 @@ class TestRedactRow:
         assert record["actual_distance_km"] == 5.6
         assert record["total_fare_cad"] == "18.75"
         assert json.loads(record["phase_distances"]) == {"trip_in_progress": 5.6}
+        assert record["is_reconstructed"] is False
+
+    def test_is_reconstructed_true_is_surfaced(self):
+        # Migration 332: a legacy-import-backfilled period must not export
+        # indistinguishably from a contemporaneously-logged one (audit BLOCKER).
+        record = redact_row(_period_row(is_reconstructed=True))
+        assert record["is_reconstructed"] is True
+
+    def test_is_reconstructed_defaults_false_when_column_absent(self):
+        # Defensive: a row shaped without the column (e.g. an older fixture)
+        # must not be misrepresented as reconstructed.
+        row = _period_row()
+        del row["is_reconstructed"]
+        record = redact_row(row)
+        assert record["is_reconstructed"] is False
 
     def test_no_rider_or_address_fields_leak(self):
         record = redact_row(_period_row())
@@ -213,6 +230,7 @@ class TestOutputRendering:
 
         content = out_file.read_text()
         assert "ride_id" in content.splitlines()[0]
+        assert "is_reconstructed" in content.splitlines()[0]
         assert "r1" in content
         assert summary["output"] == str(out_file)
 

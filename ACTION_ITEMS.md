@@ -11427,10 +11427,21 @@ how much they de-risk a public launch._
     gap and LGL-3 (below) with the same mechanism. Backend shipped
     (`docs/change-log/2026-08-19-legacy-consent-notice.md`:
     `routes/legacy_consent.py`, `GET/POST /consent/*`, 8 tests, all passing,
-    no other reader of `consent_version` affected). **Still open:**
-    rider-app/driver-app UI to actually show the notice (not built yet —
-    the flag is a safe no-op until they ship), and the underlying legal
-    sufficiency-of-old-consent judgment itself.
+    no other reader of `consent_version` affected). **Mobile UI shipped, same
+    day, scoped down deliberately** (user chose "safe subset" over full
+    wiring, `docs/change-log/2026-08-19-legacy-consent-notice-mobile.md`):
+    new `legacy-consent-notice.tsx` screen in both rider-app and driver-app,
+    wired into each app's existing post-login redirect check in `otp.tsx`
+    (fresh-login path only). `tsc --noEmit` clean on both full apps, ESLint
+    clean. **No simulator/device available this session — screens are
+    unverified visually**, stated explicitly rather than implied checked.
+    **Still open:** the cold-start/session-restore path (`shared/store/authStore.ts`
+    + each app's `_layout.tsx` — deliberately not touched blind, no way to
+    verify a navigation change against either live app without a device);
+    `profile-setup.tsx`'s own completion redirect (a pre-existing account
+    with an incomplete profile bypasses this integration entirely); real
+    device/visual verification before the flag is ever turned on; and the
+    underlying legal sufficiency-of-old-consent judgment itself.
   - `driver_insurance_periods.is_reconstructed` (migration 332) is invisible
     to `backend/scripts/compliance_export.py` — a regulator subpoena
     response today would hand over reconstructed insurance-period data with

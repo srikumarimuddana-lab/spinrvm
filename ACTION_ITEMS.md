@@ -632,7 +632,25 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     they're test data); `wallets` quantified at $900 customer + $60 driver
     real prepaid balance; `banks.csv` confirmed to hold **plaintext SIN +
     full bank routing for 157 drivers** — flagged, not yet given a
-    minimization decision. Also: the Mongo-ObjectId half of the
+    minimization decision.
+    **Decision made (2026-08-19, same session, business-owner call via
+    `AskUserQuestion`):** import SIN + DOB only, encrypted at rest via the
+    existing vault RPC; explicitly exclude raw account/transit/institute
+    numbers — nothing in the live payout path reads them today (Stripe
+    Connect collects banking directly from the driver; the local
+    `bank_accounts` table already discards the full account number to
+    last4, and its only payout consumer is hardcoded
+    `_STANDARD_CASHOUT_DISABLED = True`). Built and unit-tested (not yet
+    run against production): `plan_legacy_sin_dob_import`/
+    `apply_legacy_sin_dob_import` in `driver_import_service.py`,
+    `backend/scripts/backfill_legacy_driver_sin_dob.py` CLI, 15 new tests
+    (`test_legacy_sin_dob_import_service.py`, 15/15 pass; 108/108 existing
+    driver-import tests still pass). Full Change Impact Log:
+    `docs/change-log/2026-08-19-legacy-sin-dob-import.md`. **Still open**:
+    actually running `--apply` against production needs the CSV files
+    staged where the backend can reach them, live Supabase access, and a
+    separate explicit go-ahead — not sought or given this session.
+    Also: the Mongo-ObjectId half of the
     driver/customer crosswalk is now buildable (`bookings.driver_id`↔
     `drivers._id` 96/96, `bookings.customer_id`↔`customers._id` 172/173) —
     the numeric-ID Saskatoon CSV side still isn't in this zip, so the full

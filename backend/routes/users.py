@@ -885,7 +885,17 @@ async def _rider_referral_summary(user: dict, *, include_referees: bool) -> dict
     referees: list = []
     qualified = 0
     for u in referred:
-        completed = await db_supabase.count_documents("rides", {"rider_id": u["id"], "status": "completed"})
+        # grand_total > 0 excludes a ride that cost the rider $0 (fully covered
+        # by a first_ride_only / free_ride promo) from counting toward
+        # qualification on its own — a $0 ride is otherwise a free, unlimited
+        # way to farm this display AND the real payout in referral_payout.py
+        # via throwaway phone numbers (ranked blocker #6 / audit finding N2,
+        # 2026-08-19). Mirrors the same filter in referral_payout._process_one,
+        # which is what actually pays; kept in sync here so this summary never
+        # shows "qualified" for a referee the payout loop will not pay.
+        completed = await db_supabase.count_documents(
+            "rides", {"rider_id": u["id"], "status": "completed", "grand_total": {"$gt": 0}}
+        )
         is_qualified = completed >= rides_required
         if is_qualified:
             qualified += 1

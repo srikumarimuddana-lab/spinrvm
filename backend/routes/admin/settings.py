@@ -374,6 +374,14 @@ class SettingsUpdateRequest(BaseModel):
     surge_engine_enabled: Optional[bool] = None
     promo_redemption_enabled: Optional[bool] = None
     corporate_billing_enabled: Optional[bool] = None
+    # Rolling-window cap on referrer_reward payouts per referrer
+    # (utils/referral_payout.py, ranked blocker #6 / audit finding N2,
+    # 2026-08-19) — closes a real-money leak (a $0-cost first_ride_only promo
+    # ride otherwise satisfied rider-referral qualification with no cap on
+    # repeat payouts to one referrer). 0 explicitly disables the cap
+    # (documented escape hatch — only with a legal/fraud sign-off); plain
+    # numeric threshold, no credential masking/super-admin gate needed.
+    referral_payout_velocity_cap_per_day: Optional[int] = Field(default=None, ge=0, le=1000)
     # Dual-approval gate for large PII-bearing exports (migration 268,
     # routes/admin/compliance.py, routes/admin/data_transfer_export.py) —
     # requires a second super_admin to approve before a large driver/rider

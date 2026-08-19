@@ -184,38 +184,65 @@ only a *floor* of `measured - 5` rounded down (80%) to stop further erosion — 
 the CLAUDE.md-documented 90% target and was explicitly designed not to be read as "coverage is fine
 now" (see `docs/change-log/2026-08-19-money-path-coverage-floor-gate-fix.md`).
 
-The 62 uncovered lines, read directly:
-- **Lines 11-25** — the `except ImportError:` half of the repo's intentional dual-import pattern
-  (`try: from .. import ...` / `except ImportError: from ... import ...`, CLAUDE.md's documented
-  convention). Structurally untestable in a single test process that always takes one branch —
-  **not a real gap**, ~15 of the 62 lines.
-- **Lines 378-407** — `_sync_rider_email_to_stripe_if_needed` (a background Stripe-customer
-  directory-sync helper, both its success path and its `except Exception` error path) — genuinely
-  untested, but not a fare/settlement path; a customer-record sync, not money movement.
-- **Lines 601-609** — the mock-payment-intent-rejected-in-production safety guard inside
-  `confirm_payment` — genuinely untested, and this one **is** worth closing: it's a
-  production-safety rail (rejects `pi_mock_*` intents outside dev/review), exactly the kind of
-  branch CLAUDE.md's money-arithmetic testing rules care about.
-- **Lines 630-636** — the C-3 idempotency early-return in `confirm_payment` (already-settled ride
-  short-circuits to `{"status": "already_processed"}`) — genuinely untested, and also worth closing:
-  this is the exact idempotency guard CLAUDE.md calls out ("Stripe idempotency" convention) as a
-  must-test surface.
-- Remaining scattered single-line/small-range misses (`163-168, 321, 328-329, 351-354, 473, 506,
-  565-566, 571-573, 663, 682, 687, 785, 834, 907, 1090-1091, 1095, 1130, 1139, 1150, 1222, 1325,
-  1358`) — mostly narrow error-branch/log-line misses, not reviewed line-by-line here but none
-  individually large enough to move the needle much; a handful likely land in the same
-  "defensive branch, low value to force-cover" bucket as the import fallback.
+The 62 uncovered lines, classified against a full read of every range (a second, independent
+line-by-line pass over the same file confirms this breakdown and adds detail beyond the summary
+below):
+
+- **Lines 11-25** — the `except ImportError:` half of the repo's intentional dual-import pattern.
+  Structurally untestable in a single test process that always takes one branch — **not a real
+  gap**, ~15 of the 62 lines.
+- **Lines 159-241, 288, 351-354, 378-407** — `_reprovision_stripe_customer`,
+  `sync_stripe_customer_email`, and the `with_customer_repair` retry branch (Stripe test↔live
+  mode-drift repair + best-effort email sync). **Already covered indirectly** by
+  `test_stripe_customer_email_mapping.py`'s dedicated suite — just not counted when coverage is run
+  scoped to only the payments-tagged test files. Not a real gap in the full-suite number; a
+  measurement artifact when scoped narrowly.
+- **Lines 601-606** — the mock-payment-intent-rejected-in-production safety guard inside
+  `confirm_payment` — **genuine gap**, worth closing: a production-safety rail (rejects
+  `pi_mock_*` intents outside dev/review).
+- **Lines 631-636** — the C-3 idempotency early-return in `confirm_payment` (already-settled ride
+  short-circuits to `{"status": "already_processed"}`) — **genuine gap**, worth closing: the exact
+  Stripe-idempotency guard CLAUDE.md's conventions call out as a must-test surface. Gates whether a
+  ride gets marked `paid` without re-running the underpayment check — a correctness/state-machine
+  risk (double-settle or free-ride potential), not a Decimal-precision one.
+- **Lines 473, 506, 565-573** — `create_payment_intent`'s ride-id-only idempotency-key branch, the
+  3DS `requires_action` 402 shape, and the generic `StripeError`/catch-all `Exception` handlers
+  (only `CardError`/`RateLimitError` are currently tested) — **genuine gaps**, each small (1-8
+  lines).
+- **Lines 663, 682, 687** — `confirm_payment`'s ownership-mismatch 403s (mock-path ride mismatch,
+  non-mock intent-metadata `user_id` mismatch, non-mock ride ownership) — **genuine gaps**,
+  security-relevant (unauthorized settlement-confirmation attempts).
+- **Lines 1090-1091, 1130, 1150, 1222, 1325** — `add_card`'s generic `StripeError` handler, and
+  `set_default_card`/`delete_card`'s card-not-found 404 ownership checks (WS-18) — **genuine gaps**,
+  security-relevant (cross-account card manipulation guards).
+- **Lines 785, 834, 907, 1095, 1139, 1358** — bare `raise` re-propagation inside
+  `except HTTPException:` blocks — defensive/trivial pass-through control flow, low value to chase
+  in isolation (each already gets exercised transitively once the 4xx-raising branch above it in
+  the same function is covered).
+
+**Confirmed: zero uncovered lines touch money arithmetic.** The actual dollar-computation code
+(`_q2`, `_authoritative_ride_charge`, `dollars_to_cents` calls, the underpayment-guard comparison
+of `owed_cents` vs. `intent.amount_received`) is fully covered. The highest-priority true gaps are
+correctness/idempotency/ownership branches, not Decimal-precision risk.
 
 ### Options
 
 **A — Write tests to close the gap to 90%+**
-- Rough estimate: closing just the two flagged real gaps (mock-payment-production-guard,
-  C-3 idempotency early-return — 2 test cases) plus a handful of the scattered small misses gets
-  meaningfully closer to 90%; the import-fallback 15 lines are structurally uncoverable and should
-  be excluded from the target's denominator if possible (`# pragma: no cover` on that block, a
-  pattern presumably already used elsewhere for the same reason across this codebase — worth
-  checking before writing throwaway tests just to hit a number).
-- Estimated size: **S** — 2-4 focused test cases for the genuine gaps, not a large effort.
+- Roughly **8-10 targeted unit tests** close essentially all genuine (non-measurement-artifact,
+  non-defensive) gaps, prioritized: (1) `confirm_payment`'s production mock-guard + C-3 idempotency
+  early-return — 2 tests, highest priority per CLAUDE.md's idempotency convention; (2)
+  `confirm_payment`'s three ownership-mismatch 403s — 2-3 tests, security-relevant; (3)
+  `create_payment_intent`'s StripeError/Exception handlers — 2 tests; (4)
+  `set_default_card`/`delete_card`/`add_card` card-ownership 404s and StripeError handler — 3
+  tests. A smaller subset (~5-6, focused on 1-2) is likely enough to cross the 90% line on its own.
+- Separately, fix the coverage *measurement*: confirm the reprovision/email-sync lines
+  (159-241, 288, 351-354, 378-407 — the single largest chunk of the "missing" total) are actually
+  counted when the full suite runs `test_stripe_customer_email_mapping.py` alongside this file,
+  rather than assuming they need new tests — some of the apparent 86.1% may already be closer to
+  correct once that's confirmed, separate from the ~15-line import-fallback exclusion.
+- Estimated size: **S** — the true remaining gap is real but narrow; none of it requires new
+  money-arithmetic test scaffolding, just Stripe-error-branch and ownership/idempotency-branch
+  coverage.
 
 **B — Revise the 90% target for this file**
 - Only defensible if the target itself is wrong for this file's actual risk profile — it isn't;

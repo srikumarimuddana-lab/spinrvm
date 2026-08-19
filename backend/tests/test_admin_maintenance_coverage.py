@@ -264,33 +264,19 @@ class TestRollupDriverDaily:
         assert stat_row["total_km"] == 0
 
     @pytest.mark.asyncio
-    async def test_rollup_counts_declines_by_actor_id(self):
-        target_date = (datetime.now(timezone.utc) - timedelta(days=2)).date().isoformat()
+    async def test_rollup_delegates_to_shared_regina_core(self):
+        """The endpoint is a thin wrapper over utils/driver_daily_rollup —
+        one day definition (Regina) shared with the scheduled loop. Decline
+        counting, discovery, and upserts are pinned in
+        tests/test_driver_daily_rollup.py against the core itself."""
+        target_date = (datetime.now(timezone.utc) - timedelta(days=3)).date()
 
-        async def _get_rows(table, filters=None, **kwargs):
-            if table == "rides":
-                return []
-            if table == "driver_location_history":
-                return [{"driver_id": "d1"}]
-            if table == "driver_daily_stats":
-                return []
-            if table == "audit_logs":
-                return [{"actor_id": "d1"}, {"actor_id": "d1"}]
-            return []
+        core_mock = AsyncMock(return_value={"stat_date": target_date.isoformat(), "created": 1})
+        with patch("utils.driver_daily_rollup.rollup_driver_day", core_mock):
+            result = await maint.admin_rollup_driver_daily(target_date=target_date.isoformat())
 
-        rpc_resp = AsyncMock()
-        rpc_resp.data = []
-
-        with (
-            patch.object(maint.db_supabase, "get_rows", AsyncMock(side_effect=_get_rows)),
-            patch.object(maint, "_run_sync", AsyncMock(return_value=rpc_resp)),
-            patch.object(maint.db_supabase, "get_driver_by_id", AsyncMock(return_value=None)),
-            patch.object(maint.db_supabase, "insert_one", AsyncMock()) as insert_mock,
-        ):
-            await maint.admin_rollup_driver_daily(target_date=target_date)
-
-        stat_row = insert_mock.call_args.args[1]
-        assert stat_row["rides_declined"] == 2
+        core_mock.assert_awaited_once_with(target_date)
+        assert result["stat_date"] == target_date.isoformat()
 
 
 # ---------------------------------------------------------------------------

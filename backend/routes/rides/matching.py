@@ -1385,6 +1385,11 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
             except Exception as _col_exc:
                 logger.error(f"[AUTO-CANCEL] attribution write failed ({_col_exc}); retrying minimal", exc_info=True)
                 await _deps.db_supabase.update_ride(r_id, base_update)
+            # 2026-08-18 fleet audit: ride-state-transition metric — one of
+            # the most common real cancellation reasons ("no drivers found"),
+            # so leaving it uncounted would materially undercount the
+            # cancellation-rate KPI, not just miss an edge case.
+            _metric_inc("spinr_rides_state_transition_total", {"to_status": "cancelled"})
             await _deps.manager.send_personal_message(
                 {
                     "type": "ride_cancelled",

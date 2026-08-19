@@ -197,15 +197,29 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   gap for every regex-detectable PII category on every current and future
   tool, not just this one field. See
   `docs/change-log/2026-08-18-ai-tool-result-pii-scrub-fix.md`.
-  One structural (not one-off) finding remains open: no Prometheus metric
-  exists for any ride-state transition after offer acceptance
+  **FIXED 2026-08-18**: the observability gap — no Prometheus metric existed
+  for any ride-state transition after offer acceptance
   (arrival/start/completion/cancellation), leaving the match-rate and
-  cancellation-rate KPIs invisible to any dashboard. Full ranked blocker
-  register (30 items) and decision log (10 items, each with a suggested
-  owner/due date) are in the audit doc — see there before re-deriving.
-  Verdict at time of the 08-18 audit run: **FIX BLOCKERS** (17 of 21 domains;
-  3 NEEDS HUMAN REVIEW — migration, admin-rbac, test-coverage; 1 SAFE TO
-  LAUNCH — corporate-billing).
+  cancellation-rate KPIs invisible to any dashboard. Fixed by emitting
+  `spinr_rides_state_transition_total{to_status="driver_arrived"|"in_progress"|
+  "completed"|"cancelled"}` (matching the existing
+  `spinr_payment_settlement_total{outcome=...}` label convention) at every
+  production-reachable write site: `routes/drivers/ride_flow.py`
+  (`arrive_at_pickup`, `verify_pickup_otp`), `routes/rides/lifecycle.py`
+  (`rider_start_ride`, `rider_complete_ride`), `routes/drivers/ride_complete.py`
+  (`complete_ride`), `routes/rides/cancellation.py` (`cancel_ride_rider`,
+  `cancel_scheduled_ride`), `routes/drivers/ride_cancel.py` (driver `cancel_ride`,
+  `mark_rider_noshow`), and `routes/rides/matching.py` (`ride_search_timeout`
+  auto-cancel — deliberately included since "no drivers found" is one of the
+  most common real cancellation reasons, not an edge case). Two explicitly
+  dev-only/non-production-gated paths (`lifecycle.py::simulate_driver_arrival`,
+  `ride_flow.py::start_ride`) were deliberately left uninstrumented. See
+  `docs/change-log/2026-08-18-ride-state-transition-metrics.md`.
+  Full ranked blocker register (30 items) and decision log (10 items, each
+  with a suggested owner/due date) are in the audit doc — see there before
+  re-deriving. Verdict at time of the 08-18 audit run: **FIX BLOCKERS** (17
+  of 21 domains; 3 NEEDS HUMAN REVIEW — migration, admin-rbac, test-coverage;
+  1 SAFE TO LAUNCH — corporate-billing).
 
 ### A34. Dual-run cutover readiness audit (2026-08-15) — decommission blockers and required decisions
 > **Note:** there is a second, unrelated `### A34` further down this file

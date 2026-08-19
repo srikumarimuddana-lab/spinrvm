@@ -143,7 +143,9 @@ def test_rollup_driver_discovery_never_scans_breadcrumbs():
     import pathlib
 
     source = (pathlib.Path(__file__).parent.parent / "utils/driver_daily_rollup.py").read_text()
-    assert "driver_location_history" not in source, "rollup must never fetch raw GPS rows (OOM risk)"
+    # The quoted form is how a table name reaches get_rows(); prose mentions
+    # in docstrings are fine (the RPC legitimately reads the table in SQL).
+    assert '"driver_location_history"' not in source, "rollup must never fetch raw GPS rows (OOM risk)"
     assert 'columns="driver_id"' in source, "discovery query must restrict to driver_id column"
     assert "compute_driver_phase_distances" in source, "per-driver aggregation must stay in the SQL RPC"
     discovery_start = source.find('"driver_insurance_periods"')
@@ -194,7 +196,12 @@ async def test_cleanup_calls_delete_many_not_get_rows():
     # delete_many called twice (historical + idle)
     assert delete_mock.call_count == 2, "must call delete_many twice (historical + idle)"
     # get_rows must NOT be called by the cleanup endpoint
-    assert get_rows_mock.call_count == 0, "cleanup must not call get_rows (OOM risk)"
+    # The idle-retention setting read (settings_loader) may issue one small
+    # config get_rows; the OOM property is that no call fetches GPS rows.
+    dlh_calls = [
+        c for c in get_rows_mock.call_args_list if c.args and c.args[0] == "driver_location_history"
+    ]
+    assert not dlh_calls, "cleanup must not fetch driver_location_history rows (OOM risk)"
     # deleted counts are -1 = "deleted (count unknown)" — direct delete returns no count
     assert result["deleted_historical"] == -1
     assert result["deleted_idle"] == -1

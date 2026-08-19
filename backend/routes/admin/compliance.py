@@ -1011,31 +1011,10 @@ async def _insurance_billing_detail_rows(
         return [], Decimal("0"), truncated, []
 
     driver_ids = sorted({d["driver_id"] for d in distances if d.get("driver_id")})
-    driver_names: dict[str, str] = {}
-    driver_licenses: dict[str, str] = {}
-    driver_vehicles: dict[str, str] = {}
-    for i in range(0, len(driver_ids), 200):
-        batch = driver_ids[i : i + 200]
-        driver_rows = await db_supabase.get_rows(
-            "drivers",
-            {"id": {"$in": batch}},
-            columns="id,name,first_name,last_name,license_number,license_plate,vehicle_make,vehicle_model,vehicle_color",
-            limit=len(batch),
-        )
-        # license_number is vault-encrypted at rest — same decrypt helper
-        # Driver Roster/T4A use, since either insurer may need it to match
-        # this report's driver against their own on-file roster.
-        driver_rows = [await _decrypt_driver_pii(d) for d in driver_rows]
-        for d in driver_rows:
-            driver_names[d["id"]] = (
-                d.get("name") or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip() or d["id"]
-            )
-            driver_licenses[d["id"]] = d.get("license_number") or ""
-            vehicle_desc = " ".join(
-                part for part in (d.get("vehicle_color"), d.get("vehicle_make"), d.get("vehicle_model")) if part
-            )
-            plate = d.get("license_plate") or ""
-            driver_vehicles[d["id"]] = f"{vehicle_desc} — {plate}".strip(" —") if vehicle_desc or plate else ""
+    # license_number is vault-encrypted at rest — the identity helper uses the
+    # same decrypt path Driver Roster/T4A use, since either insurer may need
+    # it to match this report's driver against their own on-file roster.
+    driver_names, driver_licenses, driver_vehicles = await _driver_billing_identity(driver_ids)
 
     grand_total_km = Decimal("0")
     rows: list[dict] = []
@@ -1102,6 +1081,97 @@ async def _insurance_billing_detail_rows(
     return rows, grand_total_km, truncated, groups
 
 
+_P1_PHASE_LABEL = "Period 1 — contingent, not billed"
+
+
+async def _driver_billing_identity(driver_ids: list[str]) -> tuple[dict, dict, dict]:
+    """Batch-resolve driver name / license / vehicle for billing rows.
+    Extracted verbatim from _insurance_billing_detail_rows so the Period-1
+    informational section resolves identities identically."""
+    driver_names: dict[str, str] = {}
+    driver_licenses: dict[str, str] = {}
+    driver_vehicles: dict[str, str] = {}
+    for i in range(0, len(driver_ids), 200):
+        batch = driver_ids[i : i + 200]
+        driver_rows = await db_supabase.get_rows(
+            "drivers",
+            {"id": {"$in": batch}},
+            columns="id,name,first_name,last_name,license_number,license_plate,vehicle_make,vehicle_model,vehicle_color",
+            limit=len(batch),
+        )
+        driver_rows = [await _decrypt_driver_pii(d) for d in driver_rows]
+        for d in driver_rows:
+            driver_names[d["id"]] = (
+                d.get("name") or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip() or d["id"]
+            )
+            driver_licenses[d["id"]] = d.get("license_number") or ""
+            vehicle_desc = " ".join(
+                part for part in (d.get("vehicle_color"), d.get("vehicle_make"), d.get("vehicle_model")) if part
+            )
+            plate = d.get("license_plate") or ""
+            driver_vehicles[d["id"]] = f"{vehicle_desc} — {plate}".strip(" —") if vehicle_desc or plate else ""
+    return driver_names, driver_licenses, driver_vehicles
+
+
+async def _period1_informational_rows(
+    start_date: datetime,
+    end_date: datetime,
+    service_area_ids: Optional[list[str]] = None,
+) -> tuple[list[dict], Decimal, list[tuple[dict, list[dict]]], bool]:
+    """Informational Period-1 (online, no passenger) km for insurer context.
+
+    Owner decision 2026-08-18: P1 deadhead km appear ONLY as clearly-labeled
+    informational rows — never billed, never in billed totals. Kept as a
+    separate helper (rather than a mode of _insurance_billing_detail_rows)
+    so the billed pipeline cannot be contaminated by P1 rows under any
+    parameter combination."""
+    filters: dict = {
+        "period": 1,
+        "started_at": {"$gte": start_date.isoformat(), "$lte": end_date.isoformat()},
+    }
+    truncated_scope = False
+    if service_area_ids:
+        scoped_driver_ids, truncated_scope = await _driver_ids_in_service_areas(service_area_ids)
+        if not scoped_driver_ids:
+            return [], Decimal("0"), [], truncated_scope
+        filters["driver_id"] = {"$in": scoped_driver_ids}
+
+    distances = await db_supabase.get_rows(
+        "driver_period_distances_current",
+        filters,
+        columns="driver_id,ride_id,period,distance_km,started_at,source",
+        order="started_at",
+        desc=True,
+        limit=_ROW_LIMIT,
+    )
+    truncated = _check_truncated(len(distances), "insurance_billing_period1") or truncated_scope
+    if not distances:
+        return [], Decimal("0"), [], truncated
+
+    driver_ids = sorted({d["driver_id"] for d in distances if d.get("driver_id")})
+    driver_names, driver_licenses, driver_vehicles = await _driver_billing_identity(driver_ids)
+
+    total_km = Decimal("0")
+    rows: list[dict] = []
+    for d in distances:
+        km = _d(d.get("distance_km"))
+        total_km += km
+        rows.append(
+            {
+                "driver_name": driver_names.get(d.get("driver_id"), d.get("driver_id") or ""),
+                "license_number": driver_licenses.get(d.get("driver_id"), ""),
+                "vehicle": driver_vehicles.get(d.get("driver_id"), ""),
+                "trip_date": report_branding.format_report_timestamp(d.get("started_at")),
+                "phase": _P1_PHASE_LABEL,
+                "phase_km": f"{km:.3f}",
+                "rate_per_km": "—",
+                "amount": "Not billed",
+            }
+        )
+    groups = [(row, []) for row in rows]
+    return rows, total_km, groups, truncated
+
+
 async def _render_insurance_billing_report(
     admin: dict,
     insurer_label: str,
@@ -1111,6 +1181,7 @@ async def _render_insurance_billing_report(
     date_to: Optional[str],
     format: str,
     service_area_ids: Optional[str] = None,
+    include_period_1: bool = False,
 ) -> Response:
     """Shared handler body for the SGI and Knight Archer billing endpoints
     below — same query, same row shape, only the insurer label and
@@ -1127,6 +1198,25 @@ async def _render_insurance_billing_report(
         _capture_export_failure(report_type, e)
         metrics.inc("spinr_admin_compliance_export_total", {"report_type": report_type, "outcome": "error"})
         raise HTTPException(status_code=503, detail="Compliance report data unavailable — database error") from e
+
+    # Period-1 informational section (owner decision 2026-08-18): appended
+    # AFTER the billed rows, clearly labeled, and excluded from every billed
+    # figure — grand_total_km and total_amount come from Periods 2+3 only.
+    p1_rows: list[dict] = []
+    p1_total_km = Decimal("0")
+    if include_period_1:
+        try:
+            p1_rows, p1_total_km, p1_groups, p1_truncated = await _period1_informational_rows(
+                start_date, end_date, area_ids
+            )
+            rows = rows + p1_rows
+            groups = groups + p1_groups
+            truncated = truncated or p1_truncated
+        except Exception as e:
+            logger.error(f"Period-1 informational section failed for {report_type}: {e}", exc_info=True)
+            _capture_export_failure(report_type, e)
+            metrics.inc("spinr_admin_compliance_export_total", {"report_type": report_type, "outcome": "error"})
+            raise HTTPException(status_code=503, detail="Compliance report data unavailable — database error") from e
 
     gate_response = await _check_export_gate(
         admin,
@@ -1148,14 +1238,17 @@ async def _render_insurance_billing_report(
         "amount",
     ]
     total_amount = (grand_total_km * rate_per_km).quantize(Decimal("0.01"))
+    scope_line = "Periods 2+3 billed + Period 1 informational (not billed)" if include_period_1 else "Periods 2+3 only"
     subtitle = [
-        f"{start_date.date().isoformat()} to {end_date.date().isoformat()} — {insurer_label} — Periods 2+3 only",
+        f"{start_date.date().isoformat()} to {end_date.date().isoformat()} — {insurer_label} — {scope_line}",
         # Scoping is by the driver's home area, so say so on the document:
         # an insurer reconciling this against their own per-area policy
         # count must not read it as "trips that happened in these areas".
         await _service_area_scope_label(area_ids) + (" (by driver's home area)" if area_ids else ""),
         f"Total: {grand_total_km:.2f} km  ·  Rate: ${rate_per_km:.3f}/km  ·  Total billed: ${total_amount}",
     ]
+    if include_period_1:
+        subtitle[-1] += f"  ·  Period 1 (contingent, not billed): {p1_total_km:.2f} km"
     if truncated:
         subtitle[-1] += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rows; narrow the date range"
 
@@ -1191,6 +1284,11 @@ async def get_insurance_billing_sgi(
         None, description="Comma-separated service_area ids; matches the driver's home area. Omit for every area"
     ),
     format: str = Query("pdf", pattern="^(pdf|csv|xlsx|docx)$"),
+    include_period_1: bool = Query(
+        False,
+        description="Append informational Period-1 (online, no passenger) km rows — "
+        "clearly labeled, never billed, excluded from all billed totals",
+    ),
     admin: dict = Depends(get_admin_user),
 ):
     """SGI usage-based insurance billing — per-trip, per-phase insured km
@@ -1198,7 +1296,15 @@ async def get_insurance_billing_sgi(
     Spinr-branded; this is Spinr's own reconciliation report, not a fixed
     insurer form."""
     return await _render_insurance_billing_report(
-        admin, "SGI", _SGI_RATE_PER_KM, "insurance_billing_sgi", date_from, date_to, format, service_area_ids
+        admin,
+        "SGI",
+        _SGI_RATE_PER_KM,
+        "insurance_billing_sgi",
+        date_from,
+        date_to,
+        format,
+        service_area_ids,
+        include_period_1=include_period_1,
     )
 
 
@@ -1212,6 +1318,11 @@ async def get_insurance_billing_knight_archer(
         None, description="Comma-separated service_area ids; matches the driver's home area. Omit for every area"
     ),
     format: str = Query("pdf", pattern="^(pdf|csv|xlsx|docx)$"),
+    include_period_1: bool = Query(
+        False,
+        description="Append informational Period-1 (online, no passenger) km rows — "
+        "clearly labeled, never billed, excluded from all billed totals",
+    ),
     admin: dict = Depends(get_admin_user),
 ):
     """Knight Archer usage-based insurance billing — per-trip, per-phase
@@ -1226,6 +1337,7 @@ async def get_insurance_billing_knight_archer(
         date_to,
         format,
         service_area_ids,
+        include_period_1=include_period_1,
     )
 
 

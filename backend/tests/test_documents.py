@@ -530,7 +530,11 @@ class TestDocumentRegressions:
 
         documents.py logs via loguru (not stdlib logging), which pytest's
         caplog does not capture — patch documents.logger directly instead,
-        same approach this module needs for any loguru call site.
+        same approach this module needs for any loguru call site. loguru
+        also has no `exc_info` kwarg and formats with str.format ({}), not
+        %-style — the fix (and this test) must go through
+        `logger.opt(exception=True).error(...)`, not `logger.error(...,
+        exc_info=True)`, per test_loguru_call_conventions.py.
         """
         from documents import _supersede_and_flag_pending_review
 
@@ -554,10 +558,11 @@ class TestDocumentRegressions:
         assert mock_logger.warning.call_count == 0, (
             "Should no longer log at WARNING level on this failure — see finding #13/#19"
         )
-        mock_logger.error.assert_called_once()
-        error_args, error_kwargs = mock_logger.error.call_args
-        assert "driver_1" in error_args
-        assert error_kwargs.get("exc_info") is True, "full exception traceback must be attached"
+        mock_logger.error.assert_not_called()  # must go through .opt(exception=True), not bare .error
+        mock_logger.opt.assert_called_once_with(exception=True)
+        mock_logger.opt.return_value.error.assert_called_once()
+        error_args, _error_kwargs = mock_logger.opt.return_value.error.call_args
+        assert "driver_1" in error_args, "no exc_info kwarg for loguru — traceback comes from .opt(exception=True)"
 
     @pytest.mark.asyncio
     async def test_get_driver_documents_no_driver_returns_empty_list(self):

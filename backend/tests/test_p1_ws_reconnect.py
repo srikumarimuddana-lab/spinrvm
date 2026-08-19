@@ -116,6 +116,57 @@ class TestConnectionManagerReconnect:
         assert mgr.active_connections["rider_abc"] is ws2
 
     @pytest.mark.asyncio
+    async def test_reconnect_closes_stale_connection_with_replaced_code(self):
+        """Ranked blocker #15: the OLD connection must get an explicit close
+        signal (not just be silently dropped from the registry) when a second
+        device/tab registers under the same client_id, so a stale tab doesn't
+        sit open believing it's still receiving live updates."""
+        from backend.socket_manager import WS_CLOSE_REPLACED_BY_NEW_CONNECTION, ConnectionManager
+
+        mgr = ConnectionManager()
+        ws1, ws2 = AsyncMock(), AsyncMock()
+        await mgr.connect(ws1, "rider_abc")
+        await mgr.connect(ws2, "rider_abc")
+
+        # New connection is the one left registered and receiving fan-out.
+        assert mgr.active_connections["rider_abc"] is ws2
+        # Old connection gets an explicit close with the replaced-connection code.
+        ws1.close.assert_awaited_once_with(
+            code=WS_CLOSE_REPLACED_BY_NEW_CONNECTION, reason="replaced_by_new_connection"
+        )
+        # The new connection must never be touched by the old-connection cleanup.
+        ws2.close.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_reconnect_when_old_connection_already_dead_does_not_raise(self):
+        """The old socket may already be gone (network drop, backgrounded app)
+        by the time the second device connects — closing it must not raise or
+        block the new connection from being registered."""
+        from backend.socket_manager import ConnectionManager
+
+        mgr = ConnectionManager()
+        ws1, ws2 = AsyncMock(), AsyncMock()
+        ws1.close = AsyncMock(side_effect=RuntimeError('Cannot call "close" once a close message has been sent'))
+        await mgr.connect(ws1, "rider_abc")
+
+        # Must not raise despite the old socket's close() blowing up.
+        await mgr.connect(ws2, "rider_abc")
+
+        assert mgr.active_connections["rider_abc"] is ws2
+        ws1.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_reconnect_first_connect_has_no_old_socket_to_close(self):
+        """The very first connect() for a client_id has no predecessor —
+        must not attempt to close anything."""
+        from backend.socket_manager import ConnectionManager
+
+        mgr = ConnectionManager()
+        ws = AsyncMock()
+        await mgr.connect(ws, "rider_abc")
+        ws.close.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_message_to_disconnected_client_does_not_raise(self):
         """Server sends a WS event to a disconnected client — must not crash.
 

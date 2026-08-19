@@ -22,10 +22,13 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
+  Image,
+  Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useFocusEffect } from 'expo-router/react-navigation';
+import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../../hooks/useToast';
@@ -48,6 +51,10 @@ interface Message {
   sender_role: 'rider' | 'driver' | 'admin' | 'system';
   message: string;
   created_at: string;
+  /** Short-lived signed URL, minted per read by the backend (bucket is private). */
+  image_url?: string;
+  /** Local file URI while an optimistic image message is still uploading. */
+  local_image_uri?: string;
 }
 
 const VALID_CATEGORIES = ['electronics', 'clothing', 'bag', 'document', 'keys', 'other'] as const;
@@ -85,6 +92,8 @@ export default function DriverLostAndFoundChatScreen() {
   // Chat state
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [previewUri, setPreviewUri] = useState<string | null>(null);
   const flatRef = useRef<FlatList>(null);
 
   const loadCase = useCallback(async (id: string) => {
@@ -242,6 +251,72 @@ export default function DriverLostAndFoundChatScreen() {
     }
   };
 
+  // — Photo attachment —
+  // A picture of what was actually found is the most useful thing a driver can
+  // give a rider trying to identify their property, so this sits next to the
+  // text input rather than behind a support flow.
+  const attachPhoto = () => {
+    if (!lostCase || isClosed) return;
+    Alert.alert('Add a Photo', 'Show the rider what you found', [
+      { text: 'Camera', onPress: () => pickPhoto('camera') },
+      { text: 'Photo Library', onPress: () => pickPhoto('library') },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
+  const pickPhoto = async (source: 'camera' | 'library') => {
+    const perm = source === 'camera'
+      ? await ImagePicker.requestCameraPermissionsAsync()
+      : await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (perm.status !== 'granted') {
+      showToast('error', 'Permission Needed',
+        source === 'camera' ? 'Camera access is needed to take a photo.' : 'Photo access is needed to attach an image.');
+      return;
+    }
+    const result = source === 'camera'
+      ? await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.7 })
+      : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.7 });
+    if (result.canceled || !result.assets?.[0]) return;
+    await uploadPhoto(result.assets[0].uri);
+  };
+
+  const uploadPhoto = async (uri: string) => {
+    if (!lostCase || uploadingPhoto) return;
+    setUploadingPhoto(true);
+
+    const optimistic: Message = {
+      id: `local-img-${Date.now()}`,
+      lost_and_found_id: lostCase.id,
+      sender_id: 'me',
+      sender_role: 'driver',
+      message: '',
+      local_image_uri: uri,
+      created_at: new Date().toISOString(),
+    };
+    setMessages(prev => [...prev, optimistic]);
+
+    try {
+      const fd = new FormData();
+      fd.append('file', { uri, name: 'item.jpg', type: 'image/jpeg' } as any);
+      // api.post carries the auth + App Check headers and now passes FormData
+      // through untouched; a hand-rolled fetch() here would skip App Check.
+      const res = await api.post<{ message: Message }>(
+        `/lost-and-found/${lostCase.id}/messages/image`,
+        fd,
+      );
+      if (res.data?.message) {
+        setMessages(prev => prev.filter(m => m.id !== optimistic.id).concat(res.data.message));
+      }
+    } catch (e: any) {
+      // Drop the optimistic bubble — leaving it would tell the driver the
+      // rider can see a photo that was never stored.
+      setMessages(prev => prev.filter(m => m.id !== optimistic.id));
+      showToast('error', 'Upload Failed', getApiErrorMessage(e, 'Could not send the photo. Please try again.'));
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
   const renderMessage = ({ item }: { item: Message }) => {
     const isSystem = item.sender_role === 'system' || item.sender_role === 'admin';
     const isMe = item.sender_role === 'driver';
@@ -257,6 +332,8 @@ export default function DriverLostAndFoundChatScreen() {
     const time = new Date(item.created_at).toLocaleTimeString([], {
       hour: 'numeric', minute: '2-digit',
     });
+    const photoUri = item.local_image_uri ?? item.image_url;
+    const hasText = !!item.message?.trim();
 
     return (
       <View style={[styles.msgRow, isMe && styles.msgRowMe]}>
@@ -266,7 +343,24 @@ export default function DriverLostAndFoundChatScreen() {
           </View>
         )}
         <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleThem]}>
-          <Text style={[styles.bubbleText, isMe && styles.bubbleTextMe]}>{item.message}</Text>
+          {photoUri && (
+            <TouchableOpacity
+              activeOpacity={0.9}
+              onPress={() => setPreviewUri(photoUri)}
+              accessibilityRole="imagebutton"
+              accessibilityLabel="Item photo — tap to enlarge"
+            >
+              <Image source={{ uri: photoUri }} style={styles.msgImage} resizeMode="cover" />
+              {!!item.local_image_uri && (
+                <View style={styles.msgImagePending}>
+                  <ActivityIndicator size="small" color="#fff" />
+                </View>
+              )}
+            </TouchableOpacity>
+          )}
+          {hasText && (
+            <Text style={[styles.bubbleText, isMe && styles.bubbleTextMe]}>{item.message}</Text>
+          )}
           <Text style={[styles.timeText, isMe && styles.timeTextMe]}>{time}</Text>
         </View>
       </View>
@@ -413,6 +507,17 @@ export default function DriverLostAndFoundChatScreen() {
             </View>
           ) : (
             <View style={styles.inputRow}>
+              <TouchableOpacity
+                style={[styles.attachBtn, { opacity: uploadingPhoto ? 0.4 : 1 }]}
+                onPress={attachPhoto}
+                disabled={uploadingPhoto}
+                accessibilityRole="button"
+                accessibilityLabel="Attach a photo of the item"
+              >
+                {uploadingPhoto
+                  ? <ActivityIndicator size="small" color={colors.primary} />
+                  : <Ionicons name="camera" size={20} color={colors.primary} />}
+              </TouchableOpacity>
               <TextInput
                 style={styles.input}
                 value={text}
@@ -437,6 +542,27 @@ export default function DriverLostAndFoundChatScreen() {
           )}
         </KeyboardAvoidingView>
       )}
+
+      {/* Full-screen photo preview — item photos are often small details
+          (a phone case, a name on a tag) that a chat-sized thumbnail hides. */}
+      <Modal
+        visible={!!previewUri}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPreviewUri(null)}
+      >
+        <TouchableOpacity
+          style={styles.previewBackdrop}
+          activeOpacity={1}
+          onPress={() => setPreviewUri(null)}
+          accessibilityRole="button"
+          accessibilityLabel="Close photo preview"
+        >
+          {!!previewUri && (
+            <Image source={{ uri: previewUri }} style={styles.previewImage} resizeMode="contain" />
+          )}
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -597,5 +723,39 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center',
       justifyContent: 'center',
     },
+    attachBtn: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: `${colors.primary}18`,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+
+    // Image messages
+    msgImage: {
+      width: 200,
+      height: 200,
+      borderRadius: 10,
+      backgroundColor: colors.surfaceLight,
+    },
+    msgImagePending: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      borderRadius: 10,
+      backgroundColor: 'rgba(0,0,0,0.35)',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    previewBackdrop: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.92)',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    previewImage: { width: '100%', height: '80%' },
   });
 }

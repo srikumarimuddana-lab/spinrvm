@@ -100,7 +100,7 @@ const NAV_GROUPS: NavGroup[] = [
         items: [
             { href: "/dashboard/service-areas", label: "Service Areas", icon: MapPin, module: "service_areas" },
             { href: "/dashboard/venues", label: "Pickup Venues", icon: MapPin, module: "service_areas" },
-            { href: "/dashboard/vehicle-types", label: "Vehicle Types", icon: Car, module: "pricing" },
+            { href: "/dashboard/vehicle-types", label: "Vehicle Types", icon: Car, module: "vehicle_types" },
             // Pricing & Billing, including surge, is managed per-area under
             // Service Areas → Vehicle Pricing. No standalone pricing page.
             { href: "/dashboard/promotions", label: "Promotions", icon: Ticket, module: "promotions" },
@@ -145,7 +145,7 @@ const NAV_GROUPS: NavGroup[] = [
             // require_super_admin (raw production error data), so an
             // "admin"-role user would see the entry and 403 on every call.
             { href: "/dashboard/sentry-logs", label: "Sentry Issues", icon: Bug, module: "settings", superAdminOnly: true },
-            { href: "/dashboard/audit-logs", label: "Audit Logs", icon: Shield, module: "settings" },
+            { href: "/dashboard/audit-logs", label: "Audit Logs", icon: Shield, module: "audit" },
             { href: "/dashboard/settings", label: "Settings", icon: Settings, module: "settings" },
             // Super-admin-only, stated with the flag rather than implied by a
             // module string no role can hold. The previous spelling —

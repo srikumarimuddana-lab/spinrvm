@@ -11,6 +11,7 @@ from ._deps import (  # noqa: F401
     AccountDisabledException,
     APIRouter,
     Depends,
+    DriverOfflineException,
     ErrorCode,
     ErrorKeys,
     HTTPException,
@@ -61,6 +62,26 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
             message_key=ErrorKeys.AUTH_ACCOUNT_SUSPENDED,
             action_hint="Contact support",
         )
+
+    # Offline re-check (2026-08-18 whole-app fleet audit, ranked blocker #4):
+    # accept_ride never re-read is_online, so a driver who went offline (via
+    # POST /drivers/status or an app-kill that already recorded is_online=False
+    # some other way) after being claimed for an offer could still accept it —
+    # a stale queued push-notification tap, an app resume with cached UI state,
+    # or a plain retry would all still succeed, stranding the rider with a
+    # driver who never shows up. Uses the `driver` row already fetched above
+    # (no extra round-trip); is_online is driver-toggled, so this is the same
+    # field go_online's own eligibility gates key off of. `is_available` is
+    # NOT the right check here — it's already False for any driver mid-offer
+    # by design (claim_driver_atomic), so checking it would reject every
+    # legitimate accept. DriverOfflineException was defined for exactly this
+    # case (backend/utils/error_handling.py) but had never been raised anywhere.
+    if not driver.get("is_online"):
+        diag_logger.info(
+            f"[ACCEPT] rejected: driver_id={driver['id']} is offline "
+            f"ride_id={ride_id} pre_ride_status={ride.get('status') if ride else None}"
+        )
+        raise DriverOfflineException(driver["id"])
 
     # Mid-session document-expiry re-check (P1 #12): go_online fail-closes on
     # expired license/insurance/inspection/CRC-VSC documents, but that's only
@@ -362,13 +383,18 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
     # and reach the rider, instead of being served a stale empty list.
     await invalidate_active_rides_cache(driver["id"])
 
-    # Insurance Period 2 (en route to pickup — TNC primary commercial coverage).
-    # In the batch-offer dispatch model the driver becomes obligated to the ride
-    # at acceptance (searching/driver_assigned → driver_accepted), so Period 2
-    # begins here, not at a separate driver_assigned step. It stays open through
-    # driver_arrived until verify-otp/start flips the driver to Period 3
-    # (passenger aboard). record_period_transition is compliance-grade — it logs
-    # at ERROR and swallows on failure so it never blocks acceptance.
+    # Insurance Period 2 (en route to pickup — TNC primary commercial coverage)
+    # was already opened for this driver+ride at claim/offer time, in
+    # match_driver_to_ride (routes/rides/matching.py) — the driver becomes
+    # obligated to the ride the instant claim_driver_atomic succeeds and the
+    # offer is live, not only once they tap Accept. This call is now a
+    # redundant safety net: record_period_transition no-ops if Period 2 with
+    # this ride_id is already open (the normal case), and re-confirms it's open
+    # with the right ride_id if anything closed it between claim and accept.
+    # It stays open through driver_arrived until verify-otp/start flips the
+    # driver to Period 3 (passenger aboard). record_period_transition is
+    # compliance-grade — it logs at ERROR and swallows on failure so it never
+    # blocks acceptance.
     await _deps.record_period_transition(driver["id"], 2, ride_id=ride_id)
 
     # ── Batch dispatch: resolve offers for this ride ──────────────
@@ -602,9 +628,17 @@ async def decline_ride(
 
     await update_acceptance_rate(driver["id"], accepted=False)
 
-    # Release this driver back to available
-    await db_supabase.set_driver_available(driver["id"], True)
-    await _deps.record_period_transition(driver["id"], 1)
+    # Release this driver back to available. Only record Period 1 (online, no
+    # ride) if the release actually made the driver available — if they went
+    # offline between the offer being sent and this decline, set_driver_available
+    # clamps is_available->False and their go-offline already logged Period 0;
+    # recording Period 1 here would falsely reopen a commercial-insurance window
+    # for an offline driver. Mirrors the same guard in process_expired_offer
+    # (routes/rides/matching.py) — both close out the Period 2 that opened at
+    # claim/offer time in match_driver_to_ride.
+    released = await db_supabase.set_driver_available(driver["id"], True)
+    if isinstance(released, dict) and released.get("is_available"):
+        await _deps.record_period_transition(driver["id"], 1)
     await reset_miss_streak(driver["id"])
 
     # Record the decline in audit_logs so daily stats can count it. `reason`
@@ -739,6 +773,13 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
     if guard is None:
         raise HTTPException(status_code=409, detail="Ride is not in driver_accepted state")
 
+    # 2026-08-18 fleet audit: no ride-state-transition metric existed for any
+    # transition after offer-acceptance, leaving the match-rate/cancellation-
+    # rate KPIs (CLAUDE.md) invisible to any dashboard — only queryable by
+    # hand. One counter, one label per transition, matching the existing
+    # spinr_payment_settlement_total{outcome=...} convention.
+    _metric_inc("spinr_rides_state_transition_total", {"to_status": "driver_arrived"})
+
     if ride.get("rider_id"):
         await _deps.manager.send_personal_message(
             {"type": "driver_arrived", "ride_id": ride_id}, f"rider_{ride['rider_id']}"
@@ -805,6 +846,7 @@ async def verify_pickup_otp(
     # M-5: SGI insurance period audit — in_progress = period 3 (passenger
     # aboard, full TNC commercial coverage). Only record when transition took effect.
     await _deps.record_period_transition(driver["id"], 3, ride_id=ride_id)
+    _metric_inc("spinr_rides_state_transition_total", {"to_status": "in_progress"})
 
     if ride.get("rider_id"):
         await _deps.manager.send_personal_message(

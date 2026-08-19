@@ -134,6 +134,417 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 
 ## P0 — Launch gating (code)
 
+### A40. Whole-app fleet audit (2026-08-18, Part A) — 3-day drift check vs. 2026-08-15 baseline
+> Companion to A34 above — A34 tracks the Part B dual-run cutover seam audit;
+> this tracks Part A, the whole-app fleet audit (all 21 `spinr-*` reviewers,
+> not a diff). Full report: `docs/audit/2026-08-18-full-fleet-whole-app-audit.md`.
+> Baseline: `docs/audit/2026-08-15-full-fleet-launch-readiness.md`.
+> **Note:** there is a second, unrelated `### A40` further down this file
+> ("Old app confirmed still live... CLOSED") from a session the next day —
+> same duplicate-number pattern as the two `A34`s above; not renumbered
+> because this one had already merged. Treat the heading text as the
+> disambiguator.
+- [ ] **Status:** open, 2 of 17 baseline blockers fixed 2026-08-18 (same day,
+  later sessions), plus the finding #11 unpinned-actions regression fixed
+  2026-08-19 — see below. Of the baseline's 17 ranked blockers as
+  originally reported: 13 STILL-OPEN unchanged (no commits touching them
+  since 08-15), 2 now FIXED 2026-08-18 (below), 1 REGRESSED-then-FIXED
+  2026-08-19 (finding #11, below),
+  2 partially mitigated but not resolved (corporate PDF tax-line fallback now
+  logged/Sentry-alerted but still ships; emergency-contacts doc corrected to
+  be honest about plaintext storage, underlying decision still open).
+  **FIXED 2026-08-19**: finding #11, "Unpinned GitHub Actions in
+  deploy/security gates" — pinned all 6 remaining unpinned `uses:` refs to
+  their current release/branch-HEAD commit SHA, following this repo's
+  established `@<sha> # <vX-or-branch> (date)` convention (already the
+  dominant pattern in `ci-guardrails.yml` and partially applied elsewhere):
+  `deploy-metrics-agent.yml:36` (`actions/checkout@v7`, the High-severity
+  live-`FLY_API_TOKEN`-exposure instance that regressed past the earlier
+  C18b sweep) and `:49` (`superfly/flyctl-actions/setup-flyctl@master`);
+  `bootstrap-metrics-agent.yml:57` (`actions/checkout@v7`, the "partially
+  fixed" file where only the flyctl step below it had been pinned);
+  `claude-audit.yml:84` (`ludeeus/action-shellcheck@master`);
+  `ci-guardrails.yml:389` (`trufflesecurity/trufflehog@main`, the one
+  pre-existing unpinned line in an otherwise fully-pinned file); and
+  `deploy-driver-play-testing.yml:55,57,61` (`actions/checkout@v7`,
+  `actions/setup-node@v7`, `expo/expo-github-action@v8`). SHAs resolved via
+  `git ls-remote --tags`/`--heads` against each upstream repo (GitHub MCP
+  was scoped to this repo only, so tag/release lookup tools weren't usable
+  for third-party repos) and cross-checked against SHAs this repo had
+  already pinned elsewhere for the same tag (`actions/checkout@v7` and
+  `flyctl-actions@master` both matched the SHA already in use in
+  `ci-guardrails.yml`/`bootstrap-metrics-agent.yml`, confirming the
+  resolution method). All 5 files re-validated with `yaml.safe_load` after
+  editing. Six independent single-line/few-line diffs across 5
+  non-overlapping files — no shared code path, no behavior change (same
+  action version, just SHA-pinned), low risk; not a live-tested surface
+  per CLAUDE.md's `SENSITIVE_MARKERS` so no Change Impact Log required.
+  **FIXED 2026-08-19**: finding #7, "v2 GPS location-batch path skips the
+  spoofing/integrity check" — `_persist_v2_location_batch`
+  (`backend/routes/drivers/location.py`) now runs the same
+  `check_location_integrity()` guard (mock flag, impossible speed, low/zero
+  accuracy, teleport-via-Redis) the legacy v1 path already ran, before
+  trusting a point for the driver's live `drivers.lat/lng` marker —
+  previously a spoofed/mocked v2 point could move the driver's real-time
+  position on the rider map/dispatch/admin view unchecked, even though
+  `persist_trip_location_batch` recorded the `mocked` flag as inert data.
+  Additive-only: on rejection only the live-marker write is skipped, not the
+  breadcrumb persist or batch ack, so regulatory GPS-trace retention and the
+  independent settlement-time anomaly filter (`utils/trip_distance.py`,
+  which already protected billed distance regardless of this gap) are
+  untouched. Grepped `_persist_v2_location_batch`'s only caller
+  (`update_location_batch`) to confirm isolation. New regression test in
+  `backend/tests/test_location_batch.py` asserts the marker write is skipped
+  while the breadcrumb persist still runs on a rejected point.
+  `pytest tests/test_location_batch.py tests/test_location_batch_revoked_session.py
+  -q --no-cov` → 20 passed. See
+  `docs/change-log/2026-08-19-v2-location-batch-integrity-check.md`.
+  **Not verified:** no live Supabase/Redis check (mocked only, per this
+  module's existing test convention); no live spoofed-device/emulator
+  end-to-end test.
+  **FIXED 2026-08-18**: ranked blocker #1/#2 — `docs/legal/insurance-coverage-periods.md`
+  (a rider/driver-facing legal draft, and the already-published
+  `terms-of-service.md` §13) stated insurance coverage "starts as soon as the
+  driver is assigned — even before they've accepted," which was the opposite
+  of what the code did (Period 2 opened at `driver_accepted`, not at
+  offer/claim, because the production batch-offer dispatch model never writes
+  a `driver_assigned` ride status). Fixed by opening Period 2 for every
+  claimed driver immediately after their `ride_offers` row is persisted in
+  `match_driver_to_ride` (`backend/routes/rides/matching.py`) — the moment
+  `claim_driver_atomic` succeeds and the driver is obligated/unavailable for
+  any other ride, matching CLAUDE.md's own stated rule. `decline_ride`
+  (`backend/routes/drivers/ride_flow.py`) now guards its Period-1 close on
+  `set_driver_available`'s actual result, mirroring `process_expired_offer`'s
+  existing guard, so a driver who went offline mid-offer doesn't get a false
+  Period-1 reopen. `assign_driver_to_ride` remains confirmed dead code
+  (unrelated cleanup, not touched). See
+  `docs/change-log/2026-08-18-period-2-insurance-timing-fix.md` for tests and
+  verification detail.
+  **FIXED 2026-08-18**: ranked blocker #4 — `accept_ride`
+  (`backend/routes/drivers/ride_flow.py`) never re-checked `is_online`, so a
+  driver who went offline (via `POST /drivers/status` or otherwise) after
+  being claimed for an offer could still accept it via a stale queued
+  push-notification tap or a plain retry, stranding the rider. Fixed by
+  raising `DriverOfflineException` (already defined in
+  `backend/utils/error_handling.py`/`ErrorCode.DRIVER_OFFLINE` for exactly
+  this case, but never previously raised anywhere in the codebase) when the
+  already-fetched driver row shows `is_online=False` — no extra DB round-trip.
+  `is_available` was deliberately NOT used for this check (it's already False
+  for every driver mid-offer by design; checking it would reject every
+  legitimate accept). See
+  `docs/change-log/2026-08-18-driver-accept-while-offline-fix.md`.
+  **FIXED 2026-08-18**: the AI tool-result PII scrub gap (ranked blocker
+  #5/#6) — no AI tool RESULT was ever PII-scrubbed anywhere in the codebase,
+  only the user's own message and the model's final reply text. Two-part
+  fix: `ai/tools_rides.py::_driver_public` now returns `first_name_only`
+  (reusing this codebase's established driver-name-minimization convention
+  from `utils/pii.py`) instead of the full legal name — closes the actual
+  leak at its source, since a plain name isn't regex-detectable by any
+  scrub; and `ai/tools.py::_cap_result` — the single choke point both
+  `execute_tool()` and `/mcp` funnel through — now runs a new recursive
+  `scrub_pii_deep` (`ai/pii.py`) on every tool result, closing the general
+  gap for every regex-detectable PII category on every current and future
+  tool, not just this one field. See
+  `docs/change-log/2026-08-18-ai-tool-result-pii-scrub-fix.md`.
+  **FIXED 2026-08-18**: the observability gap — no Prometheus metric existed
+  for any ride-state transition after offer acceptance
+  (arrival/start/completion/cancellation), leaving the match-rate and
+  cancellation-rate KPIs invisible to any dashboard. Fixed by emitting
+  `spinr_rides_state_transition_total{to_status="driver_arrived"|"in_progress"|
+  "completed"|"cancelled"}` (matching the existing
+  `spinr_payment_settlement_total{outcome=...}` label convention) at every
+  production-reachable write site: `routes/drivers/ride_flow.py`
+  (`arrive_at_pickup`, `verify_pickup_otp`), `routes/rides/lifecycle.py`
+  (`rider_start_ride`, `rider_complete_ride`), `routes/drivers/ride_complete.py`
+  (`complete_ride`), `routes/rides/cancellation.py` (`cancel_ride_rider`,
+  `cancel_scheduled_ride`), `routes/drivers/ride_cancel.py` (driver `cancel_ride`,
+  `mark_rider_noshow`), and `routes/rides/matching.py` (`ride_search_timeout`
+  auto-cancel — deliberately included since "no drivers found" is one of the
+  most common real cancellation reasons, not an edge case). Two explicitly
+  dev-only/non-production-gated paths (`lifecycle.py::simulate_driver_arrival`,
+  `ride_flow.py::start_ride`) were deliberately left uninstrumented. See
+  `docs/change-log/2026-08-18-ride-state-transition-metrics.md`.
+  **FIXED 2026-08-19** (6 more, from the ranked blocker register, run in
+  parallel since each touched a disjoint file set): **#3/#17** unpinned
+  GitHub Actions across 5 workflow files (`deploy-metrics-agent.yml`,
+  `bootstrap-metrics-agent.yml`, `claude-audit.yml`,
+  `deploy-driver-play-testing.yml`, `ci-guardrails.yml`'s trufflehog step)
+  now pinned to commit SHA — see
+  `docs/change-log/2026-08-19-ci-actions-pinning-fix.md`. **#8/N11**
+  `POST /admin/redis/flush-prefix` now writes an audit row via the existing
+  `log_admin_action()` convention (act-then-log, since key count is only
+  known post-hoc) instead of leaving zero forensic trail — see
+  `docs/change-log/2026-08-19-redis-flush-prefix-audit-log-fix.md`. **#10**
+  go-online now re-checks license class (Class 5, or Class 1-4 with
+  `drivers.sgi_approved`) and vehicle age (<10yr) alongside the existing
+  document-expiry check, gated dark behind a new
+  `app_settings.enforce_driver_eligibility_recheck` flag (default `false`)
+  per the feature-flag gate, since these fields were never validated
+  post-onboarding and could otherwise lock out active drivers with
+  legacy/unvalidated data; the 3rd sub-check (3-year minimum driving
+  experience) was **not** implemented — no schema field records a
+  license-issue/experience-start date anywhere, and inventing one wasn't in
+  scope — flagged as a required follow-up, not silently skipped. See
+  `docs/change-log/2026-08-19-go-online-sk-eligibility-recheck-fix.md`.
+  **#12** rider/driver signup (`verify_otp`, `firebase_auth_login`) now
+  stamps `consent_version`/`consent_accepted_at` on the `users` insert
+  (migration 334, additive/nullable), matching the versioning convention
+  corporate signup already had; the corporate-portal company-email-OTP
+  signup path was deliberately left untouched (out of scope) — see
+  `docs/change-log/2026-08-19-consent-version-signup-fix.md`. **#21** the
+  admin manual surge-override endpoint
+  (`routes/admin/service_areas.py::admin_update_surge_pricing`) now stamps
+  `surge_source="manual"` on both activate/deactivate branches, matching the
+  correctly-wired sibling endpoint, so the auto surge engine (which treats a
+  missing/non-`"manual"` stamp as `"auto"` and silently overwrites it) can no
+  longer clobber an override made through this route; confirmed this route
+  is currently unreachable from the live admin-dashboard UI (dead-code
+  finding, not an active incident) but still fixed since it's live/callable
+  — see `docs/change-log/2026-08-19-admin-surge-source-stamp-fix.md`. **N13**
+  (same pattern as baseline #13) the Stripe-hold-release DB write in driver
+  `cancel_ride` (`routes/drivers/ride_cancel.py`) now logs at `error` with
+  the full exception (incl. `DatabaseError.details["original"]`) instead of
+  a swallowed `logger.warning`, so a failure is loud enough for
+  `orphaned_hold_reconciler`'s existing self-heal to be noticed rather than
+  silently retried forever with no trace — see
+  `docs/change-log/2026-08-19-ride-cancel-hold-release-error-fix.md`. All 6
+  independently tested (targeted + regression suites, ruff clean) and
+  re-verified together: full backend suite after integration —
+  **12,177 passed, 8 skipped, 1 xfailed, 0 failed** (up from the 12,159
+  pre-fix baseline, +18 new tests across the 6 fixes).
+  **FIXED 2026-08-19** (parallel session): finding #13/#19's still-open twin
+  — the identical swallowed-DB-error pattern N13 (above) fixed in
+  `ride_cancel.py` also existed in `_supersede_and_flag_pending_review`
+  (`backend/documents.py`), unfixed by that pass since it's a different
+  file. Same remedy: `logger.error(..., exc_info=True)` with
+  `e.details["original"]` when available, replacing the swallowed
+  `logger.warning`. No behavior change beyond the log — still doesn't
+  re-raise, all 3 callers (2 in `documents.py`, 1 in
+  `routes/admin/documents.py`) unaffected. New regression test asserts
+  `logger.error` fires (not `.warning`) with `exc_info=True`; had to patch
+  `documents.logger` directly rather than use `caplog`, since this module
+  logs via loguru (not stdlib `logging`), which `caplog` doesn't capture.
+  `pytest tests/test_documents.py -q --no-cov` → 48 passed. See
+  `docs/change-log/2026-08-19-documents-supersede-error-swallow-fix.md`.
+  **CORRECTED same day:** the fix above used `%s` placeholders and
+  `exc_info=True` — the stdlib `logging` convention, correct for N13's
+  `ride_cancel.py` but wrong here, since `documents.py` logs via loguru
+  (`str.format` `{}` placeholders, no `exc_info` param — traceback comes
+  from `logger.opt(exception=True)`). Caught immediately by this repo's
+  pre-existing `tests/test_loguru_call_conventions.py` gate on the very
+  next PR's `backend-test` run, before it could ship further. Fixed to
+  `logger.opt(exception=True).error("...{}...", ...)`, matching this same
+  file's own existing loguru call sites. See
+  `docs/change-log/2026-08-19-documents-loguru-call-convention-fix.md`.
+  A second, independent session hit this same loguru bug the same way while
+  fixing a different ranked-#7 GPS-batch PR that also touched `documents.py`
+  indirectly via a rebase — no functional difference between the two
+  fixes, both converged on `logger.opt(exception=True).error(...)`; this
+  session's version (above) is the one that landed.
+  **FIXED 2026-08-19**: ranked blocker #4/#11 — `purge_pii_retention()`'s
+  Step A anonymizes ride GPS at the 3-year regulatory window
+  (`pickup_lat/lng`, `dropoff_lat/lng`, `route_polyline`,
+  `phase_polylines`, `route_snapshot_url`) but never touched
+  `rides.planned_route_polyline` (migration 100, the Google Directions
+  polyline captured at booking time) — a ride older than 3 years still had
+  its full planned route live even after `gps_anonymized_at` was stamped.
+  New migration 335 re-forks `purge_pii_retention` verbatim from its
+  current definition (324) and adds `planned_route_polyline = '[]'::jsonb`
+  to Step A's `SET` clause, following the exact same-file precedent as
+  321/323/324. `spinr-migration-reviewer` pass: numbering/append-only/
+  reversibility/forward-compat all clean, diffed programmatically against
+  324 to confirm every other step is byte-for-byte unchanged — verdict SAFE
+  TO APPLY. New regression test suite (textual SQL-contract pinning, same
+  convention as the 321/323/324 test files, since CI has no live Postgres).
+  `pytest tests/test_step_a_planned_route_polyline_purge_migration.py
+  tests/test_retention_purge.py tests/test_retention_purge_coverage.py
+  tests/test_step_f_stripe_events_column_fix_migration.py
+  tests/test_step_d_ride_messages_column_fix_migration.py
+  tests/test_step_h_driver_rides_guard_migration.py -q --no-cov` → 56
+  passed. See
+  `docs/change-log/2026-08-19-purge-pii-planned-route-polyline-fix.md`.
+  **Not applied to production** — per this repo's standing convention,
+  applying a migration to live data needs explicit confirmation, not sought
+  this session; ships as a file for the normal deploy pipeline. **Known
+  residual gap, explicitly not silently left out:** the unchanged
+  `gps_anonymized_at IS NULL` guard means rides already anonymized under
+  the *old* function body are not retroactively re-swept to clear
+  `planned_route_polyline` — only rides that hit the 3-year window *after*
+  this migration lands get the new column cleared; a one-time backfill
+  UPDATE for already-anonymized rows was deliberately left out of scope to
+  keep this fix purely additive.
+  A third, independent session was concurrently working the exact same
+  ranked #4/#11 finding and had already built its own migration 335 (see
+  `docs/change-log/2026-08-19-gps-polyline-purge-fix.md`, superseded) plus
+  its own combined referral-velocity-cap migration — all functionally
+  equivalent to the version above. Once this session's PR (#4255) merged
+  first, the other PR (#4254) rebased onto it, dropped its now-redundant
+  335 content and test/change-log files in favor of this entry, and kept
+  only its two genuinely unique fixes: the referral fraud guard (#6/N2,
+  migration 336, see below) and the v2 GPS-batch breadcrumb-level
+  plausibility check (#7, complementary to the marker-level fix below, not
+  duplicative — see next entry).
+  The same parallel session (PR #4255) also independently fixed ranked #7
+  (v2 GPS location-batch spoofing gap) by gating the batch's live-marker
+  write (`_persist_v2_location_batch` in `routes/drivers/location.py`)
+  behind the existing `check_location_integrity()` Redis-backed check — see
+  `docs/change-log/2026-08-19-v2-location-batch-integrity-check.md`. That
+  fix only covers the batch's *last* point (the one used for the live
+  marker); the fix below covers every point in the batch for the
+  breadcrumb/trip-location record itself — the two are additive, not
+  duplicative, and both are now merged.
+  **FIXED 2026-08-19** (2 more, from a separately-run batch of this
+  session's ranked-blocker fixes, done in parallel across disjoint files
+  before rebasing onto PR #4255 above — the third fix in that original
+  batch, #11/polyline-purge, turned out to duplicate PR #4255's work above
+  and was dropped in favor of it during the rebase): **#6/N2** the
+  `$0`-cost `first_ride_only` promo-ride referral loophole —
+  `_process_one`/`_count_prefetched_rides` (`utils/referral_payout.py`) and
+  `routes/users.py`'s display count now require `grand_total > 0` to
+  qualify a completed ride toward referral credit, and a new rolling
+  velocity cap (`app_settings.referral_payout_velocity_cap_per_day`,
+  default 5/referrer/24h, admin-tunable, migration 336 — free-standing, no
+  collision with #4255's 335) mirrors the existing OTP-lockout Redis
+  pattern — see `docs/change-log/2026-08-19-referral-fraud-fix.md`. **#7**
+  (see the parallel-session note above for the sibling live-marker fix) the
+  v2 GPS location-BATCH path
+  (`utils/breadcrumbs.py::persist_trip_location_batch`) now ALSO runs a new
+  pure `evaluate_gps_plausibility()` check across every consecutive point
+  pair in the batch (plus the boundary pair from the driver's pre-batch
+  last-known position), matching what v1/WS already did per-point — this
+  closes the breadcrumb-persist side of the gap that the marker-only fix
+  above didn't cover; a related, explicitly out-of-scope gap was found and
+  flagged rather than fixed — the WebSocket `location_batch` handler only
+  checks the *last* point of a WS batch, so earlier WS-batch points still
+  bypass the check (the audit named only the REST v2 path) — see
+  `docs/change-log/2026-08-19-v2-location-batch-spoofing-fix.md`. Neither
+  migration (335 or 336) has been applied to any database yet, both
+  required before/with the next deploy. Both fixes independently tested
+  (targeted + regression suites, ruff clean) and re-verified together with
+  PR #4255's fixes after the rebase: full backend suite —
+  **12,223 passed, 8 skipped, 1 xfailed, 0 failed** (confirmed on the merged
+  state, PR #4254).
+  **FIXED 2026-08-19** (4 more, from the ranked blocker register, again run
+  in parallel across disjoint files): **#14** the safety check-in "sent"
+  flag (a Redis key, not a DB column) was read-then-written non-atomically —
+  `utils/safety_checkin_loop.py` now uses `redis_set_nx` (the same atomic
+  `SET ... NX` claim primitive ~15 other background loops already use) so
+  only one concurrent caller can ever win the claim and send the
+  notification; a lost claim is expected contention, logged at `debug`, not
+  an error. See `docs/change-log/2026-08-19-safety-checkin-atomic-claim-fix.md`.
+  **#15** `ConnectionManager.connect()` (`socket_manager.py`) silently
+  overwrote a second device's WS connection with no signal to the
+  now-orphaned first connection; it now explicitly closes the old
+  connection with a new close code (4409, RFC 6455 private-use range,
+  echoing HTTP 409 Conflict) before the new one takes the registry slot —
+  client-side handling of the new close code was not verified (backend-only
+  fix). See `docs/change-log/2026-08-19-ws-second-device-reconnect-fix.md`.
+  **#27** 13 of ~18 background loops spawned in `core/lifespan.py` were
+  never registered with the loop watchdog (5 of them had no heartbeat call
+  at all) — fixed by adding the missing heartbeats/registrations, plus a
+  new startup self-check that raises `RuntimeError` in production (logs
+  `error` always) if the spawned-loop set and the watched-loop set ever
+  diverge again, backed by a new AST-based static drift-detector test
+  (`test_lifespan_watchdog_coverage.py`) that source-parses `lifespan.py`
+  rather than importing/running it. See
+  `docs/change-log/2026-08-19-background-loop-watchdog-coverage-fix.md`.
+  **#28** (audit N16) the admin-dashboard frontend's Vehicle Types page and
+  sidebar entry checked module string `"pricing"` (should be
+  `"vehicle_types"`) and the Audit Logs sidebar entry checked `"settings"`
+  (should be `"audit"`) — both silently locked out legitimately-permissioned
+  staff, the opposite failure direction from a security hole. Fixed as a
+  3-line frontend-only change; confirmed `"pricing"` is legitimately used
+  elsewhere (a real tab key + `ROLE_PRESETS.finance` entry) so the fix was
+  scoped to only the two broken gate sites, not a blanket find-replace. A
+  real production `npm run build` (Turbopack) was run and completed
+  successfully. See
+  `docs/change-log/2026-08-19-admin-rbac-module-string-mismatch-fix.md`.
+  All 4 independently tested (targeted + regression suites, ruff clean;
+  `npm run build` for the admin-dashboard change per CLAUDE.md's explicit
+  requirement).
+  **FIXED 2026-08-19** (4 more, from the ranked blocker register, again run
+  in parallel across disjoint files): **#16/N5** the shared Toast/toastConfig
+  component (rider-app + driver-app, the single error-announcement path for
+  nearly every form/failure in both apps) had zero screen-reader wiring —
+  now fires `AccessibilityInfo.announceForAccessibility(...)` on toast show
+  plus `accessibilityRole="alert"` and `accessibilityLiveRegion`
+  (`"assertive"` for error/danger, `"polite"` otherwise) on the outer
+  container; no visual/timing/dismiss change, no flag needed (screen-reader
+  only, zero effect for sighted users). No real VoiceOver/TalkBack device
+  test performed. See `docs/change-log/2026-08-19-toast-screen-reader-fix.md`.
+  **#20** (baseline #14) the corporate statement PDF's rare combined-tax
+  fallback label corrected from `"Tax (GST/PST)"` to plain `"Tax"`
+  (matching `receipt_pdf.py`'s own convention for the same situation — the
+  normal per-tax-type path was already correct, only a genuine data-gap
+  fallback mislabeled itself); month bounds now anchor to
+  `ZoneInfo("America/Regina")` (fixed UTC-6, no DST) instead of naive UTC,
+  reusing the existing `STATEMENT_TZ` convention from `driver_statement.py`.
+  See `docs/change-log/2026-08-19-corporate-statement-tax-timezone-fix.md`.
+  **#26/N14** emailed/PDF receipts (a 7-year-retained legal record) now show
+  surge as a real `Decimal` dollar line item (`"Surge (X.XX×)"`) instead of
+  only a text footnote, reusing the exact `_build_fare_breakdown` formula
+  the in-app UI already used so the number can't disagree with what the
+  rider saw live; footnote text kept alongside as supplementary context;
+  Subtotal/Total unchanged (same-sum plug). Flagged: neither
+  `receipt_pdf.py` nor `email_receipt.py` is in the `spinr-no-float-in-money`
+  Semgrep gate's protected-path list despite being money-rendering code —
+  recommended as a follow-up. See
+  `docs/change-log/2026-08-19-receipt-surge-line-item-fix.md`. **N15** two
+  `round()`-on-Decimal slips (`routes/admin/support.py`,
+  `routes/admin/rides.py` — actual location `:2498/2500`, a few lines past
+  the audit's cited range) now use `utils/money.to_decimal()`
+  (`ROUND_HALF_UP`) instead of bare `round()` (banker's rounding);
+  display-only, no DB/API write affected. 4 more same-pattern instances
+  found elsewhere in `rides.py` (lines 3031/3039/3181/3241) — not fixed in
+  this pass, flagged as a fast-follow rather than silently left. See
+  `docs/change-log/2026-08-19-admin-decimal-round-convention-fix.md`. All 4
+  independently tested (targeted + regression suites, ruff clean; real Jest
+  runs for both mobile apps — rider-app 530/530, driver-app 555/555 with 1
+  pre-existing unrelated flake confirmed passing in isolation).
+  **FIXED 2026-08-19** (3 more, from the ranked blocker register, again run
+  in parallel across disjoint files — 2 frontend, 1 backend): **#22** (baseline
+  #16, audit N6) 4 unlabeled icon-only buttons across rider-app/driver-app now
+  have `accessibilityLabel`s; driver-app `settings.tsx`'s shared
+  `renderToggle()` helper now has `accessibilityRole="switch"` +
+  `accessibilityState={{checked}}` — an additive fix to WAV plus the other 8
+  toggles the same helper backs; the admin document-reviewer modal's
+  remaining gap (focus-trap-in/restore-out) is now closed, with Tab/Shift+Tab
+  cycling and no new dependency (none existed, hand-implemented). See
+  `docs/change-log/2026-08-19-icon-buttons-wav-toggle-focus-trap-fix.md`.
+  **#23** (baseline #17, audit N7) all off-brand teal instances — driver
+  `(tabs)/index.tsx`, `subscription.tsx` (N7's 3rd instance), plus 2 more
+  found via grepping the same literal color value in `driver-arriving.tsx`
+  and `ride-options.tsx` (neither named in the audit) — now reuse
+  `CustomAlert.tsx`'s already-fixed color tokenization instead of an ad hoc
+  value; `payment-confirm.tsx` now renders a distinct "Couldn't load your
+  cards — Tap to retry" state, mutually exclusive with the genuine
+  empty-cards state, matching the existing retry pattern in `referral.tsx`.
+  A much broader, unrelated Tailwind-emerald palette used elsewhere was
+  deliberately left untouched (out of scope per the fix's own scoping),
+  flagged as a follow-up candidate. See
+  `docs/change-log/2026-08-19-off-brand-teal-payment-error-state-fix.md`.
+  **#25** (audit N10) the driver-location-write path's (tightest 150ms SLA
+  budget in the system) duplicate DB fetch — actually in the legacy v1
+  handler, not exactly where the audit's line numbers pointed after this
+  session's earlier GPS-plausibility-check work moved things around — is
+  now eliminated: the second `drivers` row fetch (used only to check
+  `is_online` before `mark_present`) reuses the row already fetched earlier
+  in the same request, since nothing writes `is_online` between the two
+  reads. Verified via a call-count assertion (exactly one fetch instead of
+  two), not a live timing measurement — no load-test harness available in
+  this sandbox, stated explicitly. See
+  `docs/change-log/2026-08-19-location-write-duplicate-fetch-fix.md`. All 3
+  independently tested: backend targeted + regression suites via
+  `/tmp/spinr-venv/bin/pytest`, ruff clean; real Jest/Vitest full-suite runs
+  for all 3 frontend surfaces (driver-app 558/558, rider-app 532/532,
+  admin-dashboard 329/329) plus a real production `npm run build` for the
+  admin-dashboard change, per CLAUDE.md's explicit requirement.
+  Full ranked blocker register (30 items) and decision log (10 items, each
+  with a suggested owner/due date) are in the audit doc — see there before
+  re-deriving. Verdict at time of the 08-18 audit run: **FIX BLOCKERS** (17
+  of 21 domains; 3 NEEDS HUMAN REVIEW — migration, admin-rbac, test-coverage;
+  1 SAFE TO LAUNCH — corporate-billing).
+
 ### A34. Dual-run cutover readiness audit (2026-08-15) — decommission blockers and required decisions
 > **Note:** there is a second, unrelated `### A34` further down this file
 > ("Legacy-imported ride count dropped 224 → 186 in production — CLOSED") from
@@ -3227,9 +3638,13 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     accounts active, offsetting `legacy_import` payout rows present and
     correctly amounted) — the visibility mechanism works correctly for
     matched records.
-  - **Follow-up (not yet done):** backfill a short change-log note
-    recording when/how the real production commit happened, since nothing
-    in the repo currently documents it.
+  - **Follow-up: DONE (2026-08-18).** Recovered the exact commit record
+    from `audit_logs` itself (the only source that had it): `action:
+    legacy_booking_import`, `2026-07-29 18:48:11 UTC`, `admin-001`
+    (super_admin), 224 rides imported, 60 offsetting payout rows
+    ($2,179.66 total) — matches the original importer doc's documented
+    scope exactly. Written up at
+    `docs/change-log/2026-08-18-a30-legacy-import-production-commit-note.md`.
 - **Finding 1 — real phone-match rate.**
   - [x] **Status:** measured (2026-08-13, live query). **100% of legacy
     rides have a matched rider** (0/224 NULL), **94.2% have a matched
@@ -3326,15 +3741,22 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   (`test_earnings_coverage.py::TestGetDriverEarningsLegacyActivityStats`).
   Full Change Impact Log at
   `docs/change-log/2026-08-13-driver-earnings-legacy-activity-stats.md`.
-- **Follow-up (not yet done):** `GET /drivers/balance`
-  (`get_driver_balance`, same file) has the identical `total_rides =
+- [x] **Follow-up: DONE (2026-08-18).** `GET /drivers/balance`
+  (`get_driver_balance`, same file) had the identical `total_rides =
   len(rides)` pattern on its own legacy-excluded query — same latent bug,
-  left unfixed here because its `total_rides` response field has no
-  frontend consumer today (`DriverBalance` TS type in
-  `driver-app/store/driverStore.ts` doesn't include it). Fix opportunistically
-  if/when a frontend surface starts reading `/balance`'s `total_rides`, or
-  proactively for consistency — low priority since no one currently sees
-  the wrong number.
+  left unfixed at first because its `total_rides` response field had no
+  frontend consumer (`DriverBalance` TS type in `driver-app/store/
+  driverStore.ts` still doesn't include it — re-confirmed 2026-08-18, no
+  regression in fixing it now). Fixed for consistency: added a second,
+  unfiltered "all completed rides" query; `total_rides` now sources from
+  it. Every money figure (`payable_balance`, `total_earnings`, etc.) is
+  untouched and stays on the `EXCLUDE_LEGACY_RIDES`-filtered query, per
+  A32's explicit decision that `/balance` (unlike `/earnings`) keeps money
+  legacy-excluded. 2 new regression tests
+  (`test_earnings_coverage.py::TestGetDriverBalanceLegacyActivityStats`).
+  Purely preventative — no visible behavior change today, since no
+  frontend reads the field. Full Change Impact Log at
+  `docs/change-log/2026-08-18-a31-driver-balance-legacy-total-rides.md`.
 - **Superseded by A32:** the note above about `average_per_ride` staying
   divided by the money-rides count "so it isn't diluted by $0-earning
   legacy trips" described the state as of this entry's date. A32
@@ -3901,6 +4323,11 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   directly.
 
 ### A40. Old app confirmed still live, issuing real Stripe charges on the shared Stripe account (webhook-payload evidence, 2026-08-17) — CLOSED, dual-run confirmed intentional
+> **Note:** there is a second, unrelated `### A40` earlier in this file
+> ("Whole-app fleet audit (2026-08-18, Part A)") added a day after this one —
+> same duplicate-number pattern as the two `A34`s above, caught too late here
+> (after the newer A40 had already merged) to renumber without chasing
+> cross-references. Treat the heading text as the disambiguator.
 
 - **Source:** surfaced while closing A36 (above) — inspecting real
   `stripe_events` payloads to explain why `financial_events` was empty.
@@ -4764,7 +5191,9 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   the commit") — met; all four listed files reach ≥90% coverage — met.
 
 ### B13. 22 drivers have no `regulatory_authority`/`regulatory_region` set (blocks the SGI-forms segregation guard from covering them)
-- [x] **Status:** backfill done (2026-07-28, migration
+- [ ] **Status:** partially done — see Round 2 below; migration 333 not
+  yet applied and the guard tightening is still pending on that. Original
+  Round 1: backfill done (2026-07-28, migration
   `265_drivers_regulatory_authority_backfill.sql`) — all 22 rows verified
   by `id` against the real project (`soavhtdhefowwvforzwb`) and confirmed
   to resolve to `service_areas` 'Regina' or 'Saskatoon' (both real
@@ -4806,6 +5235,30 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 - **Files:** `backend/routes/admin/sgi_forms.py` (unchanged — tightening
   still pending), `backend/migrations/265_drivers_regulatory_authority_backfill.sql`
   (new, applied).
+- **Round 2 (2026-08-18) — the "not blocking, dead code" call above turned
+  out to be wrong within 3 weeks.** Re-checked production before doing the
+  planned guard-tightening: 212 drivers now exist (was 209), and **7 more
+  had NULL `regulatory_authority`** — real Saskatchewan signups from
+  2026-07-30 through 2026-08-16, all resolving to Saskatoon/Regina.
+  Root cause: the actual driver self-signup/creation write paths
+  (`routes/drivers/profile.py`'s two auto-create branches,
+  `documents.py`'s document-upload auto-create, `routes/drivers/
+  location.py`'s admin `POST /drivers`) never set these two fields at
+  all — only the bulk CSV `driver_import_service.py` path did. Migration
+  265 backfilled the 22 *legacy* rows but nothing stopped the same gap
+  from regrowing on every new signup. **Fixed at the root**: new shared
+  `_resolve_regulatory_defaults()` helper in `routes/drivers/_shared.py`
+  (reuses `driver_import_service.regulatory_authority_defaults`, single
+  source of truth), wired into all four write paths; new migration
+  `333_drivers_regulatory_authority_backfill_round2.sql` backfills the 7
+  rows the bug already produced (not yet applied to production — normal
+  manual-apply process, same as 265). **Guard tightening is still NOT
+  done** — intentionally deferred until 333 is confirmed applied (doing it
+  first would re-block real drivers). `spinr-migration-reviewer`: SAFE TO
+  APPLY, no blockers; one WARNING (the single-market SGI/SK fallback needs
+  revisiting before a second province launches — not urgent, no non-SK
+  driver exists yet). Full Change Impact Log:
+  `docs/change-log/2026-08-18-b13-driver-regulatory-authority-write-paths.md`.
 
 ### B14. SGI form company address split across dedicated fields + driver licence-number/class data gap
 - [x] **Status:** address bug DONE (2026-07-29). Licence-number/class
@@ -4851,17 +5304,30 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   PIPEDA violation per that module's own docstring. Fixed before building
   anything on top of that endpoint, with a regression test asserting the
   raw value never reaches the DB write.
-- **Immediate remediation — tooling DONE, data entry still open:** (1)
-  `/dashboard/driver-license-backfill` (new admin page) lists exactly the
-  drivers missing licence data via a new `missing_license` filter on
-  `GET /admin/drivers`, lets an admin open the existing `DocumentReviewer`
-  to view each driver's already-uploaded licence photo, and save via the
-  now-fixed encrypting update path — an admin still needs to actually work
-  through the queue (this session cannot reliably read government ID
-  photos); (2) make licence-number/class entry a required part of the
-  admin document-review "approve" action going forward, so this gap can't
-  grow — small scoped change, still open, own PR + Change Impact Log (it
-  changes an existing live admin workflow).
+- **Immediate remediation — tooling DONE, gate DONE, data entry still
+  open:** (1) `/dashboard/driver-license-backfill` (new admin page) lists
+  exactly the drivers missing licence data via a new `missing_license`
+  filter on `GET /admin/drivers`, lets an admin open the existing
+  `DocumentReviewer` to view each driver's already-uploaded licence photo,
+  and save via the now-fixed encrypting update path — an admin still needs
+  to actually work through the queue (this session cannot reliably read
+  government ID photos); (2) **DONE (2026-08-18):** `POST
+  /api/admin/documents/{document_id}/review` (`backend/routes/admin/
+  documents.py::admin_review_driver_document` — the endpoint behind the
+  `DocumentReviewer` component's Approve action, used from both the main
+  drivers screen and the backfill queue) now rejects approving a driver's
+  licence document (422, before any write) unless `license_number` and
+  `license_class` are both already on the driver row. Approving any other
+  document type, or a licence document for a driver who already has both
+  fields on file (the common case — 187 of 209 drivers), is unaffected.
+  No UI code changed — the existing generic error-toast plumbing in
+  `document-reviewer.tsx` already surfaces the backend's 422 `detail`
+  verbatim, so a proactive client-side check was judged unnecessary
+  duplication rather than skipped for being too large. Tests:
+  `backend/tests/test_admin_document_review_license_gate.py`. Full
+  Change Impact Log:
+  `docs/change-log/2026-08-18-b14-require-license-at-approve.md`. Data
+  entry itself (the 22 drivers) remains open, unchanged by this.
 - **Larger proposal (not started, needs a decision):** OCR-assisted
   document intake with client-side capture guidance (Expo camera +
   quality gate), a purpose-built ID-OCR vendor (buy, not build — see
@@ -5959,7 +6425,7 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   met; a regression test asserting no writer calls `float()` on a
   `payouts.amount` value — met.
 
-### B29. `booking_import_service.py` calls `float()` on several `rides` columns that are already `NUMERIC`/`DECIMAL` — same landmine class as B28, different table
+### B29. `booking_import_service.py` calls `float()` on several `rides` columns that are already `NUMERIC`/`DECIMAL` — same landmine class as B28, different table — CLOSED (2026-08-18)
 
 - **Source:** `spinr-money-auditor`'s review of B28 (2026-08-18) — flagged
   while confirming B28's own scoping claim that its untouched `float()`
@@ -5970,31 +6436,87 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   `discount_amount`, `driver_earnings`, `admin_earnings`,
   `old_payout_gst_amount`) actually write to **scalar `rides` columns**, not
   the jsonb `fare_breakdown_snapshot`/`tax_breakdown`/`area_fees_breakdown`
-  fields (only those three are genuinely jsonb). Several of the scalar
-  targets are already `NUMERIC`/`DECIMAL(10,2)` per migration 46
-  (`area_fees_total`, `tax_amount`, `grand_total`) and migration 82
-  (`discount_amount`) — meaning `float()` is applied immediately before a
-  value lands in a real NUMERIC column, reintroducing binary rounding error
-  Postgres would otherwise never see. `rides.driver_earnings` is confirmed
-  genuinely `FLOAT8` (same migration 159/303 comments B28 relied on), so
-  that one at least matches its column type, but still violates the
-  Decimal-only rule in spirit.
-- **Status:** open, no owner assigned, not investigated further than the
-  money-auditor's flag above — needs the same treatment as B28: confirm
-  each target column's actual current type (some may already be safe, some
-  may need the same `float()` → `str()` swap this item's sibling made), and
-  whether any of these particular columns have ever accumulated multiple
-  additions before their final `float()` cast (which is the actual
-  precision-loss trigger — a single value round-tripped through `float()`
-  once is usually fine; the risk is arithmetic *done in float* before the
-  cast, not the cast itself. this needs the same file-by-file read B28 did,
-  not assumed from the finding alone).
-- **Files:** `backend/services/booking_import_service.py`.
+  fields (only those three are genuinely jsonb).
+- **Status: DONE (2026-08-18).** Verified every candidate column's real type
+  against `information_schema.columns` (project `soavhtdhefowwvforzwb`)
+  before touching anything, per B28's precedent — the money-auditor's
+  original candidate list turned out to be only partially right. Confirmed
+  NUMERIC and fixed (`float()` → `str()`): `grand_total` (`numeric(10,2)`),
+  `tax_amount` (`numeric(8,2)`), `area_fees_total` (`numeric(8,2)`),
+  `discount_amount` (`numeric(10,2)`). Confirmed genuinely `double
+  precision` (FLOAT8) and correctly left unchanged: `base_fare`,
+  `distance_km`, `total_fare`, `tip_amount`, `driver_earnings`,
+  `admin_earnings`, `distance_fare`, `time_fare`, `booking_fee`,
+  `airport_fee`, `surge_multiplier` — five of these
+  (`base_fare`/`distance_km`/`total_fare`/`tip_amount`/`driver_earnings`)
+  were on the original candidate list but are NOT NUMERIC, so this item's
+  own acceptance criteria ("that is `NUMERIC`/`DECIMAL` at the DB level")
+  correctly excludes them. `old_payout_gst_amount` is a key inside the
+  jsonb `legacy_import_metadata` column, not a scalar `rides` column at
+  all — out of scope, same category as the three jsonb fields B28 already
+  carved out. No arithmetic changed: every fixed value was already
+  `Decimal` end-to-end; only the final serialization moved from `float()`
+  to `str()`. New regression test
+  (`backend/tests/test_booking_import_rides_numeric_no_float_cast.py`,
+  sibling of B28's `test_payouts_amount_no_float_cast.py`) — depth-aware
+  static scan of the `ride` insert dict (needed because it has a nested,
+  differently-scoped `"grand_total"` key inside its own
+  `fare_breakdown_snapshot` jsonb sub-dict, which a naive scan would
+  false-positive on) plus a negative control asserting the FLOAT8 columns
+  are never wrapped in `str()`. Verified the test catches the regression:
+  reverted one fix, confirmed failure, restored it. Three existing
+  `test_booking_import_service.py` assertions updated from
+  `pytest.approx(float)` to string/`Decimal` comparisons to match. Money-
+  auditor review was **self-performed**, not run via a spawned subagent —
+  this session had no Agent/Task tool available to invoke
+  `spinr-money-auditor` (confirmed via `ToolSearch`); reasoned through
+  Decimal-only discipline, no float reintroduction, and no pre-cast
+  summation in float directly instead, and said so explicitly rather than
+  silently skipping the step. Full detail: `docs/change-log/
+  2026-08-18-b29-booking-import-rides-numeric.md`.
+- **Spun off (found during this fix, NOT fixed here — see B30 below):**
+  `backend/routes/rides/_shared.py` independently builds these same four
+  column names (`grand_total`, `tax_amount`, `area_fees_total`,
+  `discount_amount`) via `float(_round(...))` in its own fare-snapshot
+  builder — the identical bug class, on the live booking path rather than
+  the offline legacy importer, and out of scope for this diff per its file
+  boundary.
+- **Files:** `backend/services/booking_import_service.py`,
+  `backend/tests/test_booking_import_rides_numeric_no_float_cast.py`,
+  `backend/tests/test_booking_import_service.py`.
 - **Acceptance:** every `rides` column written by `booking_import_service.py`
   that is `NUMERIC`/`DECIMAL` at the DB level receives a `str(Decimal)` (or
-  equivalent Decimal-exact) value, not `float()`, at the write boundary; a
-  regression test extending `test_payouts_amount_no_float_cast.py`'s pattern
-  (or a new sibling file) to cover the `rides` writes this item closes.
+  equivalent Decimal-exact) value, not `float()`, at the write boundary —
+  met; a regression test covering the `rides` writes this item closes —
+  met.
+
+### B30. `routes/rides/_shared.py` casts `grand_total`/`tax_amount`/`area_fees_total`/`discount_amount` with `float(_round(...))` into the same `NUMERIC` `rides` columns B29 just fixed
+
+- **Source:** found while fixing B29 (2026-08-18) — the blast-radius grep
+  for other writers of these four column names surfaced this file as a
+  second, independent instance of the same bug class, this time on the
+  **live** ride-booking path (`routes/rides/_shared.py` is the shared
+  fare-snapshot builder used by booking/estimates/stops, not an offline
+  import script), which raises the stakes relative to B29's legacy-importer
+  scope.
+- **Status:** open, no owner assigned, not investigated beyond the grep hit
+  (`backend/routes/rides/_shared.py:424,426,436`) that found it. Needs the
+  same treatment as B28/B29: confirm the values being cast are `Decimal`
+  all the way through `_round()` (this repo's `_round`/`_d`/`_f` helpers
+  suggest yes, but verify rather than assume), then swap `float()` → `str()`
+  at the write boundary, then extend the regression-test pattern to cover
+  this file too. Given this is a live-booking-path file (not an offline
+  import), this needs the full pre-merge release gate treatment (dry run
+  against `mock_supabase_client`, before/after scenario) per CLAUDE.md's
+  "State-machine and money changes need a dry run" rule — do not treat it
+  as a copy-paste of B28/B29's diff without that.
+- **Files:** `backend/routes/rides/_shared.py`.
+- **Acceptance:** `grand_total`/`tax_amount`/`area_fees_total`/
+  `discount_amount` in `_shared.py`'s fare-snapshot builder are serialized
+  via `str(Decimal)`, not `float()`, at the write boundary; a regression
+  test (extending B28/B29's static-scan pattern, or a new one) covers it;
+  a dry-run scenario against `mock_supabase_client` is described in the
+  closing Change Impact Log, not just "tests pass."
 
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
@@ -8152,6 +8674,32 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       this round's explicit instruction, given the risk profile).
     - Full Change Impact Log:
       `docs/change-log/2026-08-12-c20-lint-tier4-rider-app.md`.
+  - **Round 5 (2026-08-18, both apps)**: rounds 1–4 above closed the
+    *original* backlog to near-zero; this round confirmed that with a
+    fresh `eslint --no-cache` (not trusted from this document) and found
+    the debt had **regrown from new code shipped after 2026-08-12**, not
+    from any of rounds 1–4 being wrong. Every flagged file was confirmed
+    via `git log` to be new or modified after the rounds above closed:
+    `rider-app/app/safety-hub.tsx` (new 2026-08-17, F2 Safety Hub — 5
+    `react-hooks/static-components`, a rule the earlier rounds never
+    encountered since this screen didn't exist yet), `driver-app/
+    components/dashboard/HeatmapCells.tsx` (new 2026-08-13 — 1
+    `react/display-name`), `driver-app/app/legal.tsx` (modified
+    2026-08-17, #4042 — 1 `exhaustive-deps` on a new closure), `driver-app/
+    app/appeal.tsx` (new 2026-08-17, #4050 — 2
+    `react/no-unescaped-entities`), and 2 stale `eslint-disable` comments
+    in `rider-app/app/payment-confirm.tsx` / `ride-options.tsx` (both
+    touched 2026-08-16/17 by unrelated payment fixes, leaving the
+    suppression orphaned). Fixed all of the above; re-verified
+    `rider-app/app/work-profile.tsx`'s 2 pre-existing deferred findings
+    still need the same human decision documented in round 3/4 and left
+    them untouched. `eslint --no-cache`: rider-app 9→2 (both deferred),
+    driver-app 4→0. `tsc --noEmit` clean both apps. Real production build
+    (`yarn build:web`) run on both apps (not just dev/tsc). Full Change
+    Impact Log: `docs/change-log/2026-08-18-c20-lint-round5-post-round4-regrowth.md`.
+  - **Takeaway for future rounds**: mobile lint is still not a CI gate
+    (noted above), so debt will keep regrowing between manual sweeps —
+    this is expected, not evidence the tracking here is unreliable.
 - [ ] **LogRocket major-version split**: rider `@logrocket/react-native`
   ^2.3.1 vs driver ^3.7.0 — two different native binaries of the same vendor
   SDK across the fleet, both still gated OFF on Android (hidden-API hang, see

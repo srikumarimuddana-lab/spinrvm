@@ -100,6 +100,10 @@ async def cancel_ride_rider(
             status_code=409,
             detail="Ride can no longer be cancelled (it has started or already ended)",
         )
+    # 2026-08-18 fleet audit: ride-state-transition metric — the one write
+    # here that actually flips status; the fee/attribution update further
+    # below re-writes the same already-cancelled row and must NOT double-count.
+    _deps._metric_inc("spinr_rides_state_transition_total", {"to_status": "cancelled"})
 
     driver_id = ride.get("driver_id")
 
@@ -740,6 +744,8 @@ async def cancel_scheduled_ride(
             )
             claimed = await _deps.db_supabase.update_one("rides", _claim_filter, _base)
         if claimed is not None:
+            # 2026-08-18 fleet audit: ride-state-transition metric.
+            _deps._metric_inc("spinr_rides_state_transition_total", {"to_status": "cancelled"})
             # Pre-dispatch there is no driver, offer, or card hold to unwind;
             # notify the rider's own devices and any watching admin console.
             # Notice-window fee (Finding #01): flag-gated, defaulted off; a

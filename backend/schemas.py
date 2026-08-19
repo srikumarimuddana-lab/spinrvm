@@ -280,6 +280,14 @@ class AppSettings(BaseModel):
     # this to true to enforce the subscription gate at the "go online" call.
     # Defaults to false so the product works out of the box pre-launch.
     require_driver_subscription: bool = False
+    # When true, PUT /drivers/{id}/status (go-online) re-checks SK regulatory
+    # driver eligibility (licence class must be Class 5 or SGI-approved
+    # non-standard, vehicle < 10 years old) on every call, not just at
+    # onboarding. Defaults to false (dark ship) — flip on only after
+    # verifying against real driver data in staging/canary, since drivers
+    # were never previously blocked on these fields. See CLAUDE.md gate #3
+    # and docs/change-log/2026-08-19-go-online-sk-eligibility-recheck-fix.md.
+    enforce_driver_eligibility_recheck: bool = False
     # When true, suspending/closing a corporate account auto-cancels its
     # employees' pre-pickup rides (searching/driver_assigned/driver_accepted/
     # driver_arrived) instead of leaving them to run to completion as if the
@@ -357,6 +365,17 @@ class AppSettings(BaseModel):
     # incident that caused this switch to be flipped off, and blocking that
     # path would work against the person responding to the incident.
     corporate_billing_enabled: bool = True
+    # Fraud guard for the referral payout loop (utils/referral_payout.py,
+    # ranked blocker #6 / audit finding N2, 2026-08-19): caps how many
+    # referrer_reward payouts a single referrer can earn in a rolling 24h
+    # window, regardless of how many distinct referee accounts (e.g. throwaway
+    # phone numbers) reach the ride-count threshold. Ships un-flagged (no
+    # separate on/off switch) because the un-capped behavior is the real-money
+    # leak being fixed, but the THRESHOLD is admin-tunable without a redeploy.
+    # <= 0 explicitly disables the cap (documented escape hatch, not a bug) —
+    # only turn it off with a legal/fraud sign-off. Conservative starting
+    # default (5/referrer/24h); tune from real referral volume once observed.
+    referral_payout_velocity_cap_per_day: int = 5
     # New driver-facing behavior (scheduled-rides gap review, Finding #06):
     # a best-effort heads-up push to already-online drivers near an upcoming
     # scheduled pickup, ~60 minutes out. Unlike scheduled_dispatch_enabled

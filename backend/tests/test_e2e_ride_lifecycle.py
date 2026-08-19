@@ -78,6 +78,10 @@ def _driver_row() -> dict:
         "vehicle_year": 2022,
         "lat": 52.13,
         "lng": -106.67,
+        # is_online=True: this fixture is the legitimately-online driver on
+        # the happy-path lifecycle walk; accept_ride now rejects offline
+        # drivers (2026-08-18 fleet audit ranked blocker #4).
+        "is_online": True,
     }
 
 
@@ -185,8 +189,8 @@ class TestRideLifecycleConcurrency:
         # Distinct driver rows per user — a blanket mock returning one driver
         # for both users would turn the loser into the winner replaying their
         # own accept, which is an idempotent 200 by design, not this race.
-        driver_a = {"id": "driver_a", "user_id": "user_a"}
-        driver_b = {"id": "driver_b", "user_id": "user_b"}
+        driver_a = {"id": "driver_a", "user_id": "user_a", "is_online": True}
+        driver_b = {"id": "driver_b", "user_id": "user_b", "is_online": True}
         ride = {"id": RIDE_ID, "status": "searching", "driver_id": None, "rider_id": RIDER_ID}
         accepted = {**ride, "status": "driver_accepted", "driver_id": "driver_a"}
 

@@ -103,6 +103,10 @@ async def rider_start_ride(
     # Only recorded once the transition actually took effect. Compliance-grade:
     # record_period_transition logs+swallows on failure, never blocks the start.
     await _deps.record_period_transition(driver_row["id"], 3, ride_id=ride_id)
+    # 2026-08-18 fleet audit: ride-state-transition metric (see ride_flow.py's
+    # verify_pickup_otp for the driver-app OTP path — this is the alternate
+    # rider-visible /rides/{id}/start route to the same in_progress state).
+    _deps._metric_inc("spinr_rides_state_transition_total", {"to_status": "in_progress"})
 
     # Every state change must emit a WS event to both parties (CLAUDE.md). Without
     # this the rider's client stays on "driver arrived" until its next poll.
@@ -164,6 +168,10 @@ async def rider_complete_ride(
     )
     if guard is None:
         raise HTTPException(status_code=409, detail="Ride is not in progress")
+    # 2026-08-18 fleet audit: ride-state-transition metric (see
+    # routes/drivers/ride_complete.py::complete_ride for the driver-initiated
+    # completion path's counterpart).
+    _deps._metric_inc("spinr_rides_state_transition_total", {"to_status": "completed"})
 
     driver_id = ride.get("driver_id")
     driver_user_id = None

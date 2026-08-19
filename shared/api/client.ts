@@ -1092,8 +1092,13 @@ const client = {
 
   async post<T = unknown>(url: string, body?: unknown, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
     const token = await getAuthHeader();
+    // Mirrors the FormData handling in put(): without it a multipart upload
+    // was JSON.stringify'd into "{}" and the file never left the device.
+    // Callers that hand-rolled a raw fetch() to work around this skipped the
+    // App Check header and 401'd under enforcement — see report-safety.tsx.
+    const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
+      ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
       'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
       ...traceparentHeader(),
@@ -1101,6 +1106,10 @@ const client = {
       ...appVersionHeader(),
       ...config?.headers,
     };
+    // Strip any Content-Type for FormData so fetch can set the multipart boundary itself.
+    if (isFormData) {
+      delete headers['Content-Type'];
+    }
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -1111,7 +1120,7 @@ const client = {
     const response = await fetchWithTimeout(`${API_URL}/api/v1${url}`, {
       method: 'POST',
       headers,
-      body: body ? JSON.stringify(body) : undefined,
+      body: isFormData ? (body as FormData) : (body ? JSON.stringify(body) : undefined),
     });
 
     if (!response.ok) return await handleApiError(response, 'POST', url, () => client.post(url, body, config));

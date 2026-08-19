@@ -12,6 +12,7 @@ import logging
 import time
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -801,12 +802,28 @@ async def patch_policy(
 # ---------- Billing (Plan 6) ----------
 
 
+_SK_TZ = ZoneInfo("America/Regina")
+
+
 def _month_bounds(month: str) -> tuple[str, str]:
-    """Return (from_iso, to_iso) [inclusive-exclusive] bounds for YYYY-MM."""
+    """Return (from_iso, to_iso) [inclusive-exclusive] bounds for YYYY-MM,
+    anchored to Saskatchewan local time (America/Regina, fixed UTC-6,
+    no DST — matches utils/driver_statement.py's STATEMENT_TZ convention).
+
+    Previously these bounds were built from a naive (tz-less) datetime,
+    which PostgREST/Postgres implicitly treats as UTC when comparing
+    against `ride_payment_sources.created_at` (a `timestamptz` column). A
+    ride that happened late on the last SK-local day of a month but was
+    still within the same UTC day (or the reverse, near local midnight)
+    could land in the wrong month's statement. Anchoring to SK local time
+    and letting `.isoformat()` carry the `-06:00` offset makes the
+    boundary match the wall-clock month a Saskatchewan-based company
+    actually experienced.
+    """
     from datetime import datetime as _dt
 
     try:
-        anchor = _dt.strptime(month, "%Y-%m")
+        anchor = _dt.strptime(month, "%Y-%m").replace(tzinfo=_SK_TZ)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="month must be YYYY-MM") from exc
     if anchor.month == 12:

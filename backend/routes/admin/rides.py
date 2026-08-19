@@ -28,7 +28,7 @@ try:
     )
     from ...utils.insurance_periods import record_period_transition
     from ...utils.legacy_rides import drop_legacy_rides, legacy_tax_note_for_ride, tax_basis_for_ride
-    from ...utils.money import dollars_to_cents
+    from ...utils.money import dollars_to_cents, to_decimal
     from ...utils.rate_limiter import default_limiter as limiter
 except ImportError:
     import db_supabase
@@ -50,7 +50,7 @@ except ImportError:
     )
     from utils.insurance_periods import record_period_transition
     from utils.legacy_rides import drop_legacy_rides, legacy_tax_note_for_ride, tax_basis_for_ride
-    from utils.money import dollars_to_cents
+    from utils.money import dollars_to_cents, to_decimal
     from utils.rate_limiter import default_limiter as limiter
 
 from .drivers import _batch_fetch_drivers_and_users, _user_display_name
@@ -1561,7 +1561,15 @@ async def admin_send_payable_invoice(
     # Terminal payment states must never be re-invoiced. 'refunded' is set by the
     # charge.refunded webhook — re-collecting an intentionally refunded fare would
     # be a chargeback/PR incident. 'paid'/'waived_admin' are already settled.
-    if ride.get("payment_status") in ("paid", "waived_admin", "refunded"):
+    # 'partially_refunded' is blocked here too — NOT because collecting the
+    # un-refunded remainder is wrong in principle, but because this endpoint
+    # invoices `grand_total + tip_amount` (the ORIGINAL full total, see
+    # amount_cents below), which is not remainder-aware: sending it on a
+    # partially-refunded ride would re-bill the rider for the portion they
+    # already paid and never had refunded, not just the outstanding gap. A
+    # remainder-aware invoice flow would need its own amount calculation —
+    # out of scope here; track separately if that need comes up.
+    if ride.get("payment_status") in ("paid", "waived_admin", "refunded", "partially_refunded"):
         raise HTTPException(
             status_code=409,
             detail=f"Ride is in terminal payment state '{ride.get('payment_status')}' — cannot invoice",
@@ -1734,7 +1742,7 @@ async def admin_send_payable_invoice(
             {
                 "id": ride_id,
                 "stripe_invoice_id": existing_id,
-                "payment_status": {"$nin": ["processing", "paid", "waived_admin", "refunded"]},
+                "payment_status": {"$nin": ["processing", "paid", "waived_admin", "refunded", "partially_refunded"]},
             },
             {"stripe_invoice_id": invoice_claim_sentinel},
         )
@@ -2499,9 +2507,9 @@ async def admin_get_earnings_overview(
         sr = by_day.get(key) or {}
         daily[key] = {
             "date": key,
-            "gbv": round(float(Decimal(str(sr.get("gbv") or 0))), 2),
+            "gbv": float(to_decimal(sr.get("gbv") or 0)),
             "trips": int(sr.get("trips") or 0),
-            "net_revenue": round(float(Decimal(str(sr.get("net_revenue") or 0))), 2),
+            "net_revenue": float(to_decimal(sr.get("net_revenue") or 0)),
         }
         cursor += timedelta(days=1)
     daily_series = list(daily.values())

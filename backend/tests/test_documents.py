@@ -520,6 +520,51 @@ class TestDocumentRegressions:
         )
 
     @pytest.mark.asyncio
+    async def test_supersede_prior_docs_logs_error_not_warning_on_db_failure(self):
+        """Audit finding #13/#19 (2026-08-18 fleet audit): a failed supersede
+        write must surface loudly (logger.error + full exception), not be
+        silently swallowed with logger.warning — the same class N13 already
+        fixed for routes/drivers/ride_cancel.py's auth_status write. Left
+        unfixed, a driver's prior "approved"/"pending" docs stay active
+        after a re-upload with no signal anything went wrong.
+
+        documents.py logs via loguru (not stdlib logging), which pytest's
+        caplog does not capture — patch documents.logger directly instead,
+        same approach this module needs for any loguru call site. loguru
+        also has no `exc_info` kwarg and formats with str.format ({}), not
+        %-style — the fix (and this test) must go through
+        `logger.opt(exception=True).error(...)`, not `logger.error(...,
+        exc_info=True)`, per test_loguru_call_conventions.py.
+        """
+        from documents import _supersede_and_flag_pending_review
+
+        async def failing_update_one(*args, **kwargs):
+            raise RuntimeError("db unavailable")
+
+        with (
+            patch("documents.db_supabase.update_one", AsyncMock(side_effect=failing_update_one)),
+            patch("documents.logger") as mock_logger,
+        ):
+            # flag_review=False returns right after the supersede attempt, so
+            # this exercises only the code path under test.
+            await _supersede_and_flag_pending_review(
+                driver_id="driver_1",
+                requirement_id="license_front",
+                side=None,
+                document_type="license",
+                flag_review=False,
+            )
+
+        assert mock_logger.warning.call_count == 0, (
+            "Should no longer log at WARNING level on this failure — see finding #13/#19"
+        )
+        mock_logger.error.assert_not_called()  # must go through .opt(exception=True), not bare .error
+        mock_logger.opt.assert_called_once_with(exception=True)
+        mock_logger.opt.return_value.error.assert_called_once()
+        error_args, _error_kwargs = mock_logger.opt.return_value.error.call_args
+        assert "driver_1" in error_args, "no exc_info kwarg for loguru — traceback comes from .opt(exception=True)"
+
+    @pytest.mark.asyncio
     async def test_get_driver_documents_no_driver_returns_empty_list(self):
         """Regression: GET /drivers/documents must return [] (not 404) when the
         authenticated user has no driver profile yet.
@@ -573,6 +618,34 @@ class TestDocumentRegressions:
         # A minimal drivers row must have been auto-created for this user.
         inserted_tables = [c.args[0] for c in insert_one.call_args_list]
         assert "drivers" in inserted_tables, "Expected a drivers row to be auto-created during onboarding upload"
+
+    @pytest.mark.asyncio
+    async def test_link_document_autocreate_sets_regulatory_defaults(self):
+        # ACTION_ITEMS.md B13: this is the third of three real driver
+        # auto-create paths found leaving regulatory_authority/
+        # regulatory_region NULL. Confirms the fix reaches this path too.
+        from documents import LinkDocumentRequest, link_driver_document
+
+        mock_user = {"id": "user_888", "is_driver": False, "first_name": "C", "last_name": "D", "phone": "+1"}
+        doc = LinkDocumentRequest(
+            requirement_id="drivers_license",
+            document_url="https://test.supabase.co/storage/v1/object/sign/driver-documents/license.jpg",
+            side="front",
+            document_type="image/jpeg",
+        )
+
+        with (
+            patch("documents.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("documents.db_supabase.insert_one", AsyncMock(return_value={})) as insert_one,
+            patch("documents.db_supabase.update_one", AsyncMock(return_value={})),
+            patch("documents._supersede_and_flag_pending_review", AsyncMock(return_value=None)),
+        ):
+            await link_driver_document(doc_data=doc, current_user=mock_user)
+
+        driver_call = next(c for c in insert_one.call_args_list if c.args[0] == "drivers")
+        inserted_driver = driver_call.args[1]
+        assert inserted_driver["regulatory_authority"] == "SGI"
+        assert inserted_driver["regulatory_region"] == "SK"
 
     @pytest.mark.asyncio
     async def test_link_document_uses_service_area_requirement(self):

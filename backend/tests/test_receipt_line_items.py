@@ -179,6 +179,58 @@ class TestSurgeDisclosure:
         assert "2.50" in html
 
 
+class TestSurgeDollarLineItem:
+    """Ranked #26 / audit N14: surge must show as a real dollar line item, not
+    just a text footnote — using the exact same Decimal formula as the
+    in-app fare breakdown (routes/rides/_shared.py::_build_fare_breakdown).
+
+    Default fixture: base=3.50, distance=6.30 (surged), time=2.50 (surged),
+    booking=0.50 → components sum to 12.80 == total_fare, so surge=1.5x is
+    NOT minimum-fare clamped. surged_dt=8.80, unsurged_dt=round(8.80/1.5)=5.87,
+    surge_delta=round(8.80-5.87)=2.93.
+    """
+
+    def test_surge_renders_real_dollar_amount_not_just_footnote(self):
+        html = generate_receipt_html(_ride(surge_multiplier=1.5), _RIDER, _DRIVER)
+        assert "Surge (1.50×)" in html
+        assert "$2.93" in html
+        # Footnote stays alongside the dollar line as supplementary context.
+        assert "Surge pricing 1.50× was in effect at booking time." in html
+
+    def test_no_surge_line_item_when_multiplier_is_one(self):
+        html = generate_receipt_html(_ride(surge_multiplier=1.0), _RIDER, _DRIVER)
+        assert "Surge" not in html
+        assert "$2.93" not in html
+
+    def test_surge_line_item_zero_when_minimum_fare_absorbs_it(self):
+        """A tiny surged ride floored to the minimum fare shows the Surge
+        line at $0.00 (disclosure) rather than a fabricated non-zero delta —
+        matches the in-app breakdown's minimum-fare-clamp behaviour."""
+        ride = _ride(
+            base_fare=1.00,
+            distance_fare=1.00,
+            time_fare=0.40,
+            booking_fee=0.00,
+            surge_multiplier=2.0,
+            total_fare=20.00,
+            grand_total=20.00,
+            tax_amount=0,
+            tax_breakdown={},
+        )
+        html = generate_receipt_html(ride, _RIDER, _DRIVER)
+        assert "Surge (2.00×)" in html
+        assert "$0.00" in html
+        assert "Minimum fare adjustment" in html
+
+    def test_total_still_reconciles_with_surge_line_added(self):
+        """The header total (grand_total + tip) is unaffected by inserting
+        the new Surge line — it's a decomposition of distance/time, not an
+        additive charge."""
+        ride = _ride(surge_multiplier=1.5)
+        html = generate_receipt_html(ride, _RIDER, _DRIVER, tip=2.00)
+        assert "$16.21" in html  # 14.21 + 2.00, unchanged by the surge split
+
+
 # ── Decimal correctness ─────────────────────────────────────────────────
 
 

@@ -133,6 +133,21 @@ def test_dispute_stats_table_missing(client, _set_admin, monkeypatch):
     assert resp.json()["total_refunded"] == 0
 
 
+def test_dispute_stats_total_refunded_uses_round_half_up(client, _set_admin, monkeypatch):
+    """N15 regression: total_refunded must use the codebase's ROUND_HALF_UP
+    convention (`to_decimal`), not Python's bare `round()` (which defaults to
+    banker's rounding, ROUND_HALF_EVEN, for Decimal input). "10.125" is a
+    deliberate .5-boundary value where the two conventions diverge:
+    round(Decimal("10.125"), 2) == 10.12 (HALF_EVEN), while ROUND_HALF_UP
+    quantize gives 10.13 — this pins the correct one.
+    """
+    rows = [{"status": "resolved", "refund_amount": "10.125"}]
+    monkeypatch.setattr(m.db_supabase, "get_rows", AsyncMock(return_value=rows))
+    resp = client.get("/api/admin/disputes/stats")
+    assert resp.status_code == 200
+    assert resp.json()["total_refunded"] == 10.13
+
+
 def test_create_dispute(client, _set_admin, monkeypatch):
     monkeypatch.setattr(m.db_supabase, "insert_one", AsyncMock(return_value=None))
     resp = client.post(

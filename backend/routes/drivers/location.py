@@ -9,7 +9,7 @@ from typing import Literal
 
 from pydantic import ValidationError, model_validator
 
-from . import _deps
+from . import _deps, _shared
 from ._deps import (  # noqa: F401
     APIRouter,
     BaseModel,
@@ -241,6 +241,14 @@ async def _persist_v2_location_batch(request: LocationBatchRequest, current_user
             str(request.recording_session_id),
             [point.model_dump(mode="json") for point in request.points],
             active_ride=ride,
+            # Already-fetched row above -- no extra DB read. Anchors the
+            # plausibility chain's boundary pair (driver's last known
+            # position -> this batch's first point).
+            driver_last_known={
+                "lat": driver.get("lat"),
+                "lng": driver.get("lng"),
+                "updated_at": driver.get("updated_at"),
+            },
         )
     except HTTPException:
         raise
@@ -262,10 +270,40 @@ async def _persist_v2_location_batch(request: LocationBatchRequest, current_user
         lat = latest.latitude if latest.latitude is not None else latest.lat
         lng = latest.longitude if latest.longitude is not None else latest.lng
         if lat is not None and lng is not None:
-            update_data = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc)}
-            if latest.heading is not None:
-                update_data["heading"] = latest.heading % 360
-            await db_supabase.update_one("drivers", {"id": driver["id"]}, update_data)
+            # Same GPS spoofing/teleport guard the legacy (v1) path already
+            # runs before trusting a point for the driver's LIVE marker — see
+            # ACTION_ITEMS.md A40 finding #7. Historical breadcrumbs are
+            # already persisted above (raw `mocked` flag kept for the
+            # settlement-time anomaly filter in utils/trip_distance.py, and
+            # for the regulatory GPS-trace record); this only gates whether a
+            # spoofed point is allowed to move `drivers.lat/lng`, which
+            # dispatch, the rider map, and admin all read as the driver's
+            # real-time position.
+            try:
+                from ...utils.location_integrity import check_location_integrity
+            except ImportError:
+                from utils.location_integrity import check_location_integrity  # type: ignore
+
+            trusted, reason = await check_location_integrity(
+                driver["id"],
+                lat,
+                lng,
+                speed=latest.speed,
+                accuracy=latest.accuracy,
+                mocked=latest.mocked,
+            )
+            if not trusted:
+                logger.warning(
+                    "location-batch v2: rejected live marker update for driver_id=%s ride_id=%s reason=%s",
+                    driver["id"],
+                    request.ride_id,
+                    reason,
+                )
+            else:
+                update_data = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc)}
+                if latest.heading is not None:
+                    update_data["heading"] = latest.heading % 360
+                await db_supabase.update_one("drivers", {"id": driver["id"]}, update_data)
 
     if driver.get("is_online"):
         await _deps.mark_present(driver["id"])
@@ -453,6 +491,11 @@ async def create_driver(driver: Driver, admin_user: dict = Depends(get_admin_use
 
     row = driver.dict()
     row.setdefault("driver_code", generate_driver_code())
+    # regulatory_authority/regulatory_region must never be left NULL on a
+    # new driver row — see ACTION_ITEMS.md B13. The `Driver` schema has no
+    # `service_area_id` field, so this always resolves via the single-market
+    # (SGI/SK) fallback — correct for this repo's current SK-only footprint.
+    row["regulatory_authority"], row["regulatory_region"] = await _shared._resolve_regulatory_defaults(None)
     await db_supabase.insert_one("drivers", row)
     return row
 
@@ -639,9 +682,16 @@ async def update_location_batch(
         # Keep presence alive even when the driver's WebSocket briefly
         # drops but the REST location batch keeps flowing (e.g. phone on
         # cellular switching towers).
-        driver_row = (lambda _r: _r[0] if _r else None)(
-            await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
-        )
+        #
+        # Reuses `driver_row` fetched above (~line 525) instead of issuing a
+        # second `drivers` fetch for the same `user_id` in this same
+        # sequential await chain (ranked #25 / audit N10 — driver-location
+        # write is the tightest SLA budget in the system at <150ms). Safe
+        # because the only field read here is `is_online`, and the sole
+        # write to this row between the two points (`update_one` just
+        # above) only ever touches lat/lng/updated_at/heading/
+        # period1_accum_* -- never `is_online` -- so a second read could not
+        # observe a different value than the first.
         if driver_row and driver_row.get("is_online"):
             await _deps.mark_present(driver_row["id"])
 

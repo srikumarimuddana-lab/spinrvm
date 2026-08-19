@@ -4,6 +4,13 @@ Split from ``backend/routes/rides.py`` (god-file refactor). Pure code
 motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
+try:
+    from ...services.fare_service import driver_earnings_with_tip
+    from ...utils.redis_client import redis_expire, redis_incrby
+except ImportError:
+    from services.fare_service import driver_earnings_with_tip  # type: ignore
+    from utils.redis_client import redis_expire, redis_incrby  # type: ignore
+
 from . import _deps
 from ._deps import (  # noqa: F401
     ROUND_HALF_UP,
@@ -46,6 +53,63 @@ from ._shared import (  # noqa: F401
 )
 
 router = APIRouter()
+
+
+# ── Late-tip absorption monitoring (fare-payout-audit finding, 2026-08-19) ──
+# The 2026-08-17 trust-first product decision means a late tip on an
+# already-paid wallet/company_allowance ride NEVER surfaces a rider-facing
+# error — any shortfall between what's actually collected and tip_amount is
+# silently absorbed by the platform (driver still credited in full). That's
+# a deliberate, signed-off policy, not a bug. But per-tip it's bounded only
+# by TipRequest's $500 cap, with no limit on how many absorption events one
+# rider can rack up. This does NOT change that policy or add a rider-facing
+# block (still "absorb + alert", not "stop absorbing past a cap") — it adds
+# a monitoring trip-wire so unusual cumulative absorption per rider surfaces
+# to a human instead of accumulating silently forever.
+#
+# Redis-backed rolling window (falls back to an in-process dict when
+# REDIS_URL is unset per utils/redis_client.py — rate-limit-style state is
+# lost on restart in that mode, same as OTP lockout; acceptable for a
+# monitoring signal, not a security control). Mirrors routes/auth.py's
+# _record_otp_failure pattern: increment-then-set-expiry-on-first-write,
+# best-effort, never raises — a Redis outage must never block a tip.
+_LATE_TIP_ABSORBED_KEY = "late_tip_absorbed_cents:{}"
+_LATE_TIP_ABSORPTION_WINDOW_SECONDS = 30 * 24 * 3600  # 30 days
+# $50 CAD cumulative absorbed per rider per window. A monitoring threshold,
+# not a hard business rule — tune freely; crossing it only logs + alerts.
+_LATE_TIP_ABSORPTION_ALERT_CENTS = 5000
+
+
+async def _record_late_tip_absorption(rider_id: str, ride_id: str, absorbed: Decimal) -> None:
+    """Track cumulative late-tip absorption per rider; alert past the
+    threshold. Best-effort — never raises, never blocks the tip response."""
+    if absorbed <= 0 or not rider_id:
+        return
+    key = _LATE_TIP_ABSORBED_KEY.format(rider_id)
+    try:
+        absorbed_cents = int((absorbed * 100).to_integral_value(rounding=ROUND_HALF_UP))
+        total_cents = await redis_incrby(key, absorbed_cents)
+        if total_cents == absorbed_cents:
+            # First absorption event in a fresh window — start the clock.
+            await redis_expire(key, _LATE_TIP_ABSORPTION_WINDOW_SECONDS)
+        if total_cents >= _LATE_TIP_ABSORPTION_ALERT_CENTS:
+            # Security/finance-relevant signal, not a security failure —
+            # logger.error routes to Sentry per this repo's existing
+            # convention (see routes/auth.py's OTP_LOCKOUT_TRIGGERED). Rider
+            # identified by id only, never phone/email/name, per PIPEDA
+            # logging rules.
+            logger.error(
+                f"[TIP] LATE_TIP_ABSORPTION_THRESHOLD rider={rider_id} "
+                f"cumulative_absorbed=${_money_str(_d(total_cents) / 100)} "
+                f"in {_LATE_TIP_ABSORPTION_WINDOW_SECONDS // 86400}d window "
+                f"(this event: ride={ride_id} absorbed=${_money_str(absorbed)})"
+            )
+            _metric_inc("spinr_payment_late_tip_absorption_alert_total")
+    except Exception as exc:
+        # Redis unavailable or any other failure: log and move on. This is a
+        # monitoring signal, not a payment step — it must never affect the
+        # tip that already succeeded from the rider's perspective.
+        logger.error(f"_record_late_tip_absorption failed for rider {rider_id}: {exc}", exc_info=True)
 
 
 class TipRequest(BaseModel):
@@ -151,15 +215,22 @@ async def add_tip(
                 outcome = "absorbed"
             _metric_inc("spinr_payment_late_tip_total", {"outcome": outcome})
             if outcome != "success":
+                absorbed_this_event = _round(tip_amount - collected)
                 logger.info(
                     f"[TIP] late tip on already-paid {payment_method} ride {ride_id}: "
                     f"collected ${_money_str(collected)} of ${_money_str(tip_amount)} for real, "
                     "absorbing the rest per product decision (driver credited in full either way)"
                 )
+                await _record_late_tip_absorption(current_user["id"], ride_id, absorbed_this_event)
 
-    existing_earnings = _d(ride.get("driver_earnings") or 0)
     new_tip = _round(existing_tip + tip_amount)
-    new_driver_earnings = _round(existing_earnings + tip_amount)
+    # Canonical, idempotent calc (fare-payout-audit follow-up, 2026-08-19) —
+    # never "existing driver_earnings + tip_amount". See
+    # fare_service.driver_earnings_with_tip's docstring for why: this exact
+    # accumulate pattern caused a real production underpayment when a ride
+    # touched more than one tip-writing code path (rating.py, here, and the
+    # settlement RPC each mutated relative to their own view of "current").
+    new_driver_earnings = driver_earnings_with_tip(ride, new_tip)
 
     update_payload = {"tip_amount": _f(new_tip), "driver_earnings": _f(new_driver_earnings)}
 
@@ -472,7 +543,13 @@ async def process_payment(
             _tip_db_update["fare_breakdown_snapshot"] = snapshot
         ride["tip_amount"] = _f(tip_d)
         if tip_delta > 0:
-            ride["driver_earnings"] = _f(_round(_d(ride.get("driver_earnings") or 0) + tip_delta))
+            # Canonical, idempotent calc (fare-payout-audit follow-up,
+            # 2026-08-19) — never "existing driver_earnings + delta". This is
+            # the in-memory mirror only (the authoritative DB write happens
+            # inside settle_card/_finalize_card_settlement below), but it
+            # feeds the receipt email fired right after settlement, so it
+            # must show the same number the DB ends up with.
+            ride["driver_earnings"] = _f(driver_earnings_with_tip(ride, tip_d))
 
     _snap = ride.get("fare_breakdown_snapshot")
     _snap_lines = (_snap.get("lines") if isinstance(_snap, dict) else None) if _snap else None

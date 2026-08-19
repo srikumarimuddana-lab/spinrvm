@@ -85,7 +85,18 @@ class _Patches:
 
 
 def _driver(**kw):
-    base = {"id": _DRIVER_ID, "user_id": _USER_ID, "lat": 52.1, "lng": -106.6, "status": "active"}
+    # is_online=True by default: this fixture represents the normal,
+    # legitimately-online driver on every accept/decline/arrive path in this
+    # file. Tests exercising the offline-rejection guard (accept_ride) pass
+    # is_online=False explicitly — see TestAcceptRideGuards.
+    base = {
+        "id": _DRIVER_ID,
+        "user_id": _USER_ID,
+        "lat": 52.1,
+        "lng": -106.6,
+        "status": "active",
+        "is_online": True,
+    }
     base.update(kw)
     return base
 
@@ -155,6 +166,44 @@ class TestAcceptRideGuards:
             with pytest.raises(HTTPException) as exc:
                 await accept_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
         assert exc.value.status_code == 404
+
+    async def test_rejects_accept_from_an_offline_driver(self):
+        """2026-08-18 fleet audit ranked blocker #4: a driver who went
+        offline (is_online=False) after being claimed for an offer must not
+        be able to accept it — a stale queued push-notification tap or a
+        plain retry must not strand the rider with a driver who never
+        shows up."""
+        from backend.routes.drivers.ride_flow import accept_ride
+        from backend.utils.error_handling import DriverOfflineException
+
+        with (
+            patch(
+                "backend.routes.drivers._deps.db_supabase.get_rows",
+                AsyncMock(return_value=[_driver(is_online=False)]),
+            ),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=_ride())),
+        ):
+            with pytest.raises(DriverOfflineException) as exc:
+                await accept_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+        assert exc.value.details == {"driver_id": _DRIVER_ID}
+
+    async def test_offline_check_runs_before_the_ride_lookup(self):
+        """The offline check uses only the already-fetched driver row, so it
+        must reject even when the ride itself doesn't exist yet (no wasted
+        work, and no accidental information leak about ride existence to an
+        offline driver)."""
+        from backend.routes.drivers.ride_flow import accept_ride
+        from backend.utils.error_handling import DriverOfflineException
+
+        with (
+            patch(
+                "backend.routes.drivers._deps.db_supabase.get_rows",
+                AsyncMock(return_value=[_driver(is_online=False)]),
+            ),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=None)),
+        ):
+            with pytest.raises(DriverOfflineException):
+                await accept_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
 
     async def test_403_cannot_accept_own_ride(self):
         from fastapi import HTTPException
@@ -710,6 +759,42 @@ class TestDeclineRideSuccessBranches:
         ):
             result = await decline_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
         assert result == {"success": True}
+
+    async def test_period_1_recorded_when_release_leaves_driver_available(self):
+        """Insurance Period 2 opens at claim/offer time (matching.py); decline
+        must close it back to Period 1 — but only when the driver is actually
+        still online. Mirrors process_expired_offer's guard."""
+        from backend.routes.drivers.ride_flow import decline_ride
+
+        ride = _ride(status="driver_assigned")
+        patches = list(self._base_patches(ride, run_sync_side_effect=RuntimeError("no offer row")))
+        patches[4] = patch(
+            "backend.routes.drivers._deps.db_supabase.set_driver_available",
+            AsyncMock(return_value={"id": _DRIVER_ID, "is_available": True, "is_online": True}),
+        )
+        with _Patches(*patches) as mocks:
+            period_transition = mocks[5]
+            result = await decline_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+        assert result == {"success": True}
+        period_transition.assert_awaited_once_with(_DRIVER_ID, 1)
+
+    async def test_period_1_skipped_when_driver_went_offline_before_decline(self):
+        """A driver who toggled offline between the offer being sent and this
+        decline must NOT get a Period 1 row falsely reopened — they're
+        already Period 0 from their own go-offline call."""
+        from backend.routes.drivers.ride_flow import decline_ride
+
+        ride = _ride(status="driver_assigned")
+        patches = list(self._base_patches(ride, run_sync_side_effect=RuntimeError("no offer row")))
+        patches[4] = patch(
+            "backend.routes.drivers._deps.db_supabase.set_driver_available",
+            AsyncMock(return_value={"id": _DRIVER_ID, "is_available": False, "is_online": False}),
+        )
+        with _Patches(*patches) as mocks:
+            period_transition = mocks[5]
+            result = await decline_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+        assert result == {"success": True}
+        period_transition.assert_not_awaited()
 
 
 # ============================================================

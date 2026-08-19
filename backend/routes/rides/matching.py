@@ -766,6 +766,22 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
         # recovery shell re-arms the retry chain instead of stranding the
         # ride in `searching` (the old `return` armed nothing).
         raise
+
+    # Insurance Period 2 (en route to pickup — TNC primary commercial coverage)
+    # opens HERE, at claim/offer time, not at acceptance. The batch-offer model
+    # already makes each claimed driver unavailable for any other ride the
+    # instant claim_driver_atomic succeeds — they're obligated to this ride the
+    # moment the offer is live, exactly as CLAUDE.md's "Period 2 starts on
+    # driver_assigned... because the driver is already obligated" rule requires
+    # for a batch-offer dispatch model with no separate driver_assigned DB write.
+    # If the driver declines/times out, the decline/expiry paths revert them to
+    # Period 1 (or 0). If they accept, ride_flow.py's accept_ride calls this
+    # again with the same period+ride_id as a no-op safety net. record_period_
+    # transition is compliance-grade — logs at ERROR and swallows on failure so
+    # it never blocks dispatch.
+    for d, _ in claimed_drivers:
+        await _deps.record_period_transition(d["id"], 2, ride_id=ride_id)
+
     _metric_inc("spinr_dispatch_offer_sent_total", by=len(offer_rows))
 
     # ── Parallel enrichment (shared across all drivers) ───────────
@@ -1369,6 +1385,11 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
             except Exception as _col_exc:
                 logger.error(f"[AUTO-CANCEL] attribution write failed ({_col_exc}); retrying minimal", exc_info=True)
                 await _deps.db_supabase.update_ride(r_id, base_update)
+            # 2026-08-18 fleet audit: ride-state-transition metric — one of
+            # the most common real cancellation reasons ("no drivers found"),
+            # so leaving it uncounted would materially undercount the
+            # cancellation-rate KPI, not just miss an edge case.
+            _metric_inc("spinr_rides_state_transition_total", {"to_status": "cancelled"})
             await _deps.manager.send_personal_message(
                 {
                     "type": "ride_cancelled",

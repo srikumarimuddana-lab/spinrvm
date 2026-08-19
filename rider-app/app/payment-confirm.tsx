@@ -106,6 +106,14 @@ function PaymentConfirmScreenContent() {
     // Both are zustand store actions (stable references).
   }, [fetchWorkProfiles, fetchWallet]);
 
+  // Whether the last /payments/cards fetch failed. Kept distinct from
+  // savedCards.length === 0 — that condition is also true for a rider who
+  // genuinely has no cards on file, and a fetch failure must never render
+  // identically to that genuine-empty state (a rider who can't tell "we
+  // failed to load your cards" from "you have none" has no way to know a
+  // retry might fix it).
+  const [cardsLoadError, setCardsLoadError] = useState(false);
+
   // Refetch saved cards on focus so a card added on /manage-cards (pushed,
   // then returned via router.back()) shows up and is auto-selected without
   // remounting this screen. Keep an explicit still-valid selection; otherwise
@@ -115,8 +123,10 @@ function PaymentConfirmScreenContent() {
       const cards: SavedCard[] = Array.isArray(res.data) ? res.data : [];
       setSavedCards(cards);
       setSelectedCardId((prev) => selectDefaultCardId(prev, cards));
+      setCardsLoadError(false);
     }).catch((e) => {
       console.warn('[PaymentConfirm] Failed to load saved cards:', e);
+      setCardsLoadError(true);
     });
   }, []);
 
@@ -147,7 +157,6 @@ function PaymentConfirmScreenContent() {
       // elsewhere; neither useCorporate nor selectedCorporateId is a dep of
       // this effect (workModeEnabled/corporateAccounts.length are), so no
       // loop.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setUseCorporate(true);
       setSelectedCorporateId(prev => prev ?? activeCompanyId ?? firstCorporateAccountId ?? null);
     }
@@ -360,10 +369,32 @@ function PaymentConfirmScreenContent() {
             );
           })}
 
-          {/* No saved cards yet: tapping "Credit Card" takes the rider
-              straight to the add-card screen instead of selecting an empty
-              option. On return, the focus refetch auto-selects the new card. */}
-          {savedCards.length === 0 && (
+          {/* Cards fetch failed: distinct from the genuine-empty state below —
+              a real error message plus a retry action, matching the
+              cloud-offline / "Try Again" convention used on referral.tsx. */}
+          {cardsLoadError && (
+            <TouchableOpacity
+              style={styles.paymentOption}
+              onPress={loadSavedCards}
+              accessibilityRole="button"
+              accessibilityLabel="Couldn't load your payment methods, tap to retry"
+            >
+              <View style={styles.paymentIconContainer}>
+                <Ionicons name="cloud-offline-outline" size={24} color={colors.danger} />
+              </View>
+              <View style={styles.paymentInfo}>
+                <Text style={[styles.paymentName, { color: colors.danger }]}>Couldn&apos;t load your cards</Text>
+                <Text style={styles.paymentDetails}>Tap to retry</Text>
+              </View>
+              <Ionicons name="refresh" size={18} color={colors.danger} />
+            </TouchableOpacity>
+          )}
+
+          {/* No saved cards yet (and the last fetch succeeded): tapping
+              "Credit Card" takes the rider straight to the add-card screen
+              instead of selecting an empty option. On return, the focus
+              refetch auto-selects the new card. */}
+          {!cardsLoadError && savedCards.length === 0 && (
             <TouchableOpacity
               style={styles.paymentOption}
               onPress={() => { riderChosePaymentRef.current = true; setSelectedPayment('card'); setUseCorporate(false); router.push('/manage-cards' as any); }}

@@ -994,10 +994,14 @@ async def _insurance_billing_detail_rows(
             return [], Decimal("0"), area_scope_truncated, []
         distance_filters["driver_id"] = {"$in": scoped_driver_ids}
 
+    # The _current view (migration 334) serves the LATEST revision per
+    # (ride, period): late-GPS corrections append revision rows to the
+    # append-only base table, and reading the base here would double-count
+    # every corrected ride in insurer billing.
     distances = await db_supabase.get_rows(
-        "driver_period_distances",
+        "driver_period_distances_current",
         distance_filters,
-        columns="driver_id,ride_id,period,distance_km,started_at",
+        columns="driver_id,ride_id,period,distance_km,started_at,source",
         order="started_at",
         desc=True,
         limit=_ROW_LIMIT,

@@ -219,7 +219,7 @@ class TestInsuranceBillingDetailRows:
         first_name/last_name concatenation alone."""
 
         async def get_rows_side(table, filters=None, **kw):
-            if table == "driver_period_distances":
+            if table == "driver_period_distances_current":
                 return [
                     {
                         "driver_id": "d1",
@@ -258,7 +258,7 @@ class TestInsuranceBillingDetailRows:
 
     def test_falls_back_to_first_last_name_when_name_is_null(self):
         async def get_rows_side(table, filters=None, **kw):
-            if table == "driver_period_distances":
+            if table == "driver_period_distances_current":
                 return [
                     {
                         "driver_id": "d1",
@@ -283,7 +283,7 @@ class TestInsuranceBillingDetailRows:
         own distances, not one de-duplicated/summed row."""
 
         async def get_rows_side(table, filters=None, **kw):
-            if table == "driver_period_distances":
+            if table == "driver_period_distances_current":
                 return [
                     {
                         "driver_id": "d1",
@@ -345,7 +345,7 @@ class TestInsuranceBillingDetailRows:
         never silently dropped — using the raw driver_id as a fallback."""
 
         async def get_rows_side(table, filters=None, **kw):
-            if table == "driver_period_distances":
+            if table == "driver_period_distances_current":
                 return [
                     {
                         "driver_id": "d-missing",
@@ -510,7 +510,7 @@ class TestServiceAreaFiltering:
             captured.setdefault(table, []).append(filters)
             if table == "drivers" and "service_area_id" in (filters or {}):
                 return [{"id": "d1"}, {"id": "d2"}]
-            if table == "driver_period_distances":
+            if table == "driver_period_distances_current":
                 return []
             return []
 
@@ -518,7 +518,7 @@ class TestServiceAreaFiltering:
             asyncio.run(compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.11"), ["a1"]))
 
         assert captured["drivers"][0]["service_area_id"] == {"$in": ["a1"]}
-        assert captured["driver_period_distances"][0]["driver_id"] == {"$in": ["d1", "d2"]}
+        assert captured["driver_period_distances_current"][0]["driver_id"] == {"$in": ["d1", "d2"]}
 
     def test_insurance_billing_returns_empty_when_no_driver_is_in_the_selected_areas(self):
         """The load-bearing guard: an empty `$in` list would widen back to
@@ -539,7 +539,7 @@ class TestServiceAreaFiltering:
         assert rows == []
         assert total_km == Decimal("0")
         assert groups == []
-        assert "driver_period_distances" not in tables_queried
+        assert "driver_period_distances_current" not in tables_queried
 
     def test_insurance_billing_unscoped_does_not_resolve_drivers_by_area(self):
         captured = {}
@@ -551,7 +551,7 @@ class TestServiceAreaFiltering:
         with _patch_get_rows(get_rows_side):
             asyncio.run(compliance._insurance_billing_detail_rows(_START, _END, Decimal("0.11")))
 
-        assert "driver_id" not in captured["driver_period_distances"][0]
+        assert "driver_id" not in captured["driver_period_distances_current"][0]
 
     def test_area_driver_scope_truncation_propagates_to_the_report(self):
         """Hitting the driver cap means the driver set is short, so the

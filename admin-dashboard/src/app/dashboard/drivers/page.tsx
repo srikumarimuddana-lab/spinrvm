@@ -1494,7 +1494,7 @@ export default function DriversPage() {
                                         rides={driverRides}
                                         totalCount={driverRidesTotalCount}
                                         loading={ridesLoading}
-                                        driverName={`${selected.first_name || ""} ${selected.last_name || ""}`.trim()}
+                                        driverName={driverDisplayName(selected) || "this driver"}
                                         fmtDate={fmtDate}
                                     />
                                 </TabsContent>

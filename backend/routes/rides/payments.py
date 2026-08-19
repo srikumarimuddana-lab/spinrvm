@@ -141,6 +141,18 @@ async def add_tip(
     if ride.get("status") != RideStatus.COMPLETED:
         raise HTTPException(status_code=400, detail="Can only tip completed rides")
 
+    # Rides imported from the previous app are historical records, not real
+    # in-app trips: their fare fields (total_fare/base_fare) are a
+    # reconstruction for receipt display, not the live components
+    # driver_earnings_with_tip() assumes (booking_fee/airport_fee always 0,
+    # total_fare is a residual that includes the OLD app's admin commission).
+    # Tipping one would fire a real Stripe charge against a rider's card for
+    # a pre-Spinr trip AND silently inflate driver_earnings by that
+    # commission amount. Same guard as rating.py's tip-while-rating path —
+    # mirrored here because this is the only other tip-writing entry point.
+    if ride.get("legacy_import_metadata"):
+        raise HTTPException(status_code=400, detail="Imported historical rides cannot be tipped")
+
     # R-P1-20: Block duplicate tips — one tip per ride.
     existing_tip = _d(ride.get("tip_amount") or 0)
     if existing_tip > 0:

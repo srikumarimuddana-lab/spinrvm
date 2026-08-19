@@ -1,9 +1,9 @@
 """N17: rider email BODY copy uses the `company_app_name` setting, not a
 literal "Spinr".
 
-`company_name` (the legal entity, e.g. "Spinr Technologies Inc.") already
+`company_name` (the legal entity, e.g. "Spinr Mobility Inc.") already
 drives the footer/mailing-address/logo-alt-text — see
-`utils/company_details.py` — and stays "Spinr Technologies Inc." in these
+`utils/company_details.py` — and stays "Spinr Mobility Inc." in these
 tests on purpose, so a footer assertion can't be confused with a body-copy
 one. `company_app_name` is the separate, independently-configurable
 product/brand name for inline body copy ("Open the {app_name} driver app",
@@ -118,7 +118,7 @@ async def test_app_name_is_independent_of_the_legal_entity_name_in_the_footer():
     # name the footer independently reads from `company_name`.
     kwargs = await _capture(
         lambda: re_mod.send_welcome_email(_USER),
-        settings={"company_app_name": "Northern Rides", "company_name": "Spinr Technologies Inc."},
+        settings={"company_app_name": "Northern Rides", "company_name": "Spinr Mobility Inc."},
     )
     assert kwargs["subject"] == "Welcome to Northern Rides"
-    assert "Spinr Technologies Inc." in kwargs["rendered"].html
+    assert "Spinr Mobility Inc." in kwargs["rendered"].html

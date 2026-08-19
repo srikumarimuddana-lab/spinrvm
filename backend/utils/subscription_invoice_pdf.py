@@ -87,7 +87,7 @@ def generate_subscription_invoice_pdf(
     pdf.set_xy(110, 7)
     pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(230, 230, 230)
-    pdf.cell(85, 5, to_latin1(company.name if company is not None else "Spinr Technologies Inc."), align="R", ln=True)
+    pdf.cell(85, 5, to_latin1(company.name if company is not None else "Spinr Mobility Inc."), align="R", ln=True)
     pdf.set_x(110)
     pdf.cell(
         85,
@@ -228,13 +228,13 @@ def generate_subscription_invoice_pdf(
     pdf.multi_cell(
         W,
         4.5,
-        "This invoice is issued by Spinr Technologies Inc. in connection with the Spinr Pass subscription service. "
+        "This invoice is issued by Spinr Mobility Inc. in connection with the Spinr Pass subscription service. "
         "GST/PST/HST amounts are computed based on the service area province at the time of charge. "
         "Please retain this invoice for your records.",
         border=0,
     )
     pdf.ln(4)
     pdf.set_font("Helvetica", "", 8)
-    pdf.cell(0, 5, "Spinr Technologies Inc. · Saskatoon, SK · support@spinr.ca", align="C", ln=True)
+    pdf.cell(0, 5, "Spinr Mobility Inc. · Saskatoon, SK · support@spinr.ca", align="C", ln=True)
 
     return bytes(pdf.output())

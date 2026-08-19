@@ -44,10 +44,17 @@ _ASSET_DIR = Path(__file__).resolve().parents[1] / "static" / "branding"
 LOGO_PATH = _ASSET_DIR / "spinr_logo.png"
 
 # Same company identity line used in the rider receipt footer
-# (utils/receipt_pdf.py's "Spinr Technologies Inc. - Saskatoon, SK") — kept
-# identical here (previously this module's own footer said "Spinr Mobility
-# Inc." instead, a naming inconsistency between two Spinr-generated PDFs).
-COMPANY_LINE = "Spinr Technologies Inc. - Saskatoon, SK"
+# (utils/receipt_pdf.py's "Spinr Mobility Inc. - Saskatoon, SK") — kept
+# identical here. NOTE: the confirmed, correct legal entity name is
+# "Spinr Mobility Inc." (ACTION_ITEMS.md A42, product owner confirmed
+# 2026-08-19). A 2026-07-30 pass (docs/change-log/2026-07-30-report-header-
+# footer-consistency-pass.md) found this constant said "Spinr Mobility
+# Inc." while receipt_pdf.py said "Spinr Technologies Inc.", called that an
+# inconsistency, and "fixed" it by changing this line TO "Spinr
+# Technologies Inc." — that direction was backwards; "Spinr Technologies
+# Inc." was never a real Spinr entity name. This line has been corrected
+# back to "Spinr Mobility Inc." rather than re-flipped again.
+COMPANY_LINE = "Spinr Mobility Inc. - Saskatoon, SK"
 COMPANY_CONTACT_LINE = "support@spinr.ca - www.spinr.ca"
 
 # Mirrors services/data_transfer/tabular_writer.py's _sanitize_csv_cell

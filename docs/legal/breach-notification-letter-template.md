@@ -72,7 +72,7 @@ our response.
 We take the security of your information seriously, and we're sorry this
 happened.
 
-Spinr Technologies Inc.
+Spinr Mobility Inc.
 
 ---
 
@@ -82,7 +82,7 @@ Per PIPEDA's breach-of-security-safeguards reporting requirements. Submit
 via the OPC's Breach Report Form (priv.gc.ca) using the following as source
 content:
 
-- **Organization:** Spinr Technologies Inc.
+- **Organization:** Spinr Mobility Inc.
 - **Date breach occurred / was discovered:** [DATES — these are often
   different; report both accurately]
 - **Description of the breach:** [SAME FACTUAL DESCRIPTION AS SECTION A,

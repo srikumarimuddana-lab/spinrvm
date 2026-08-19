@@ -280,6 +280,14 @@ class AppSettings(BaseModel):
     # this to true to enforce the subscription gate at the "go online" call.
     # Defaults to false so the product works out of the box pre-launch.
     require_driver_subscription: bool = False
+    # When true, PUT /drivers/{id}/status (go-online) re-checks SK regulatory
+    # driver eligibility (licence class must be Class 5 or SGI-approved
+    # non-standard, vehicle < 10 years old) on every call, not just at
+    # onboarding. Defaults to false (dark ship) — flip on only after
+    # verifying against real driver data in staging/canary, since drivers
+    # were never previously blocked on these fields. See CLAUDE.md gate #3
+    # and docs/change-log/2026-08-19-go-online-sk-eligibility-recheck-fix.md.
+    enforce_driver_eligibility_recheck: bool = False
     # When true, suspending/closing a corporate account auto-cancels its
     # employees' pre-pickup rides (searching/driver_assigned/driver_accepted/
     # driver_arrived) instead of leaving them to run to completion as if the

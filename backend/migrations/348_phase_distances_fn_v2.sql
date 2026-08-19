@@ -1,4 +1,4 @@
--- 344_phase_distances_fn_v2.sql
+-- 348_phase_distances_fn_v2.sql
 --
 -- Rollback: DROP FUNCTION IF EXISTS compute_driver_phase_distances(UUID, TIMESTAMPTZ, TIMESTAMPTZ);
 --           then re-apply the CREATE OR REPLACE FUNCTION body from
@@ -154,7 +154,7 @@ CROSS JOIN time_bounds tb;
 $$;
 
 COMMENT ON FUNCTION compute_driver_phase_distances IS
-  'v2 (migration 344): per-phase km AND seconds for one driver-day, with the '
+  'v2 (migration 348): per-phase km AND seconds for one driver-day, with the '
   'same segment anomaly caps as settlement (5 km / 300 s / 150 km/h). '
   'arrived_at_pickup folds into navigating_to_pickup. Always returns one row.';
 

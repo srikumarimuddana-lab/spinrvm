@@ -1,4 +1,4 @@
-"""Revision-aware corrections for the per-period distance audit (migration 342).
+"""Revision-aware corrections for the per-period distance audit (migration 346).
 
 Contract (record_period_distance_revision):
   - appends revision = max(existing)+1 with a supersedes_id back-pointer —

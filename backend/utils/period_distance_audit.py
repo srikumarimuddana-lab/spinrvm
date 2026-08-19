@@ -108,7 +108,7 @@ async def record_period_distance_revision(
 ) -> bool:
     """Append a corrected audit row as a NEW revision (append-only-safe).
 
-    The base table is immutable (migration 249 trigger); migration 342 keys
+    The base table is immutable (migration 249 trigger); migration 346 keys
     uniqueness on (ride_id, period, revision) so corrections are inserts at
     revision+1 with a ``supersedes_id`` back-pointer. Readers use the
     ``driver_period_distances_current`` view. Skips when the change is inside

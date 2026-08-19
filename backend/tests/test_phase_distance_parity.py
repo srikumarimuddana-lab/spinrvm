@@ -2,14 +2,14 @@
 
 Two independent implementations measure per-phase GPS distance:
   - utils/trip_distance.compute_trip_distances (settlement + finalizer), and
-  - compute_driver_phase_distances v2 (migration 344_phase_distances_fn_v2.sql,
+  - compute_driver_phase_distances v2 (migration 348_phase_distances_fn_v2.sql,
     used by the daily rollup — routes/admin/maintenance.py and the scheduled
     driver_daily_rollup loop).
 
 These tests run the SAME synthetic trace through both and assert per-phase
 totals AND seconds agree on clean data, and that both now reject the same
 anomalous segments (v1's known no-spike-filter divergence was closed by
-migration 344, which mirrors trip_distance.py's 5 km / 300 s / 150 km/h caps).
+migration 348, which mirrors trip_distance.py's 5 km / 300 s / 150 km/h caps).
 
 Integration-marked: requires a reachable Postgres (SPINR_PG_TEST_DSN, or the
 local spinr_parity_test database); skipped otherwise.
@@ -33,11 +33,11 @@ _DSN = (
     or os.environ.get("PG_CONNECTION_STRING")
     or "host=127.0.0.1 dbname=spinr_parity_test user=spinr_test password=spinr_test"
 )
-# Applied in production order: v1 defines the function + index, v2 (344)
+# Applied in production order: v1 defines the function + index, v2 (348)
 # drops and recreates it with the anomaly filter and per-phase seconds.
 _MIGRATIONS = [
     os.path.join(os.path.dirname(__file__), "..", "migrations", "54_gps_daily_rollup_fn.sql"),
-    os.path.join(os.path.dirname(__file__), "..", "migrations", "344_phase_distances_fn_v2.sql"),
+    os.path.join(os.path.dirname(__file__), "..", "migrations", "348_phase_distances_fn_v2.sql"),
 ]
 
 DAY_START = datetime(2026, 7, 19, 0, 0, 0, tzinfo=timezone.utc)
@@ -54,7 +54,7 @@ def pg():
         pytest.skip(f"integration Postgres not available: {exc}")
     connection.autocommit = True
     with connection.cursor() as cursor:
-        # 344's REVOKE/GRANT lockdown references Supabase's roles; create
+        # 348's REVOKE/GRANT lockdown references Supabase's roles; create
         # them locally so the migration applies verbatim.
         for role in ("anon", "authenticated", "service_role"):
             cursor.execute(
@@ -172,7 +172,7 @@ def test_clean_trace_per_phase_totals_and_seconds_agree(pg):
 
 def test_spike_filter_parity_sql_rejects_same_segments_as_settlement(pg):
     """v1's documented divergence (SQL summed a ~230 km teleport round trip
-    that settlement rejected) was closed by migration 344: both
+    that settlement rejected) was closed by migration 348: both
     implementations now reject the two segments touching the spike and
     report near-identical trip_km."""
     driver_id = str(uuid4())

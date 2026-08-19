@@ -37,8 +37,18 @@ router = APIRouter()
 # client-side. They must NOT be listed here — projecting a non-existent column
 # makes Postgres raise 42703 ("column does not exist") and the endpoint 503s.
 # The single-user detail endpoint (admin_get_user_details) still selects *.
+#
+# legacy_import_metadata is included so an admin can recognize a legacy-
+# imported rider profile the same way the driver list already can — the
+# driver-list equivalent (admin_get_drivers) projects no restrictive
+# `columns=` at all and so has always carried this column
+# (docs/audit/2026-08-19-legacy-migration-data-quality-audit.md, "No admin
+# screen marks a driver or rider profile record as legacy-imported"). This
+# only exposes the column to the API response; admin_export_users below
+# builds its CSV row from an explicit field list and is unaffected.
 _USER_LIST_COLUMNS = (
-    "id,first_name,last_name,email,phone,role,created_at,is_rider,is_driver,status,status_reason,suspended_until"
+    "id,first_name,last_name,email,phone,role,created_at,is_rider,is_driver,status,status_reason,"
+    "suspended_until,legacy_import_metadata"
 )
 
 

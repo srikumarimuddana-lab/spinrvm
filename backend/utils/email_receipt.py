@@ -12,16 +12,26 @@ maps to a disclosed line item: base fare, distance, time, booking fee,
 surge, tax, tip", we render:
 
     base_fare, distance_fare, time_fare, booking_fee
+    [+ Surge line, when surge_multiplier > 1]     ← real dollar delta, see below
     [+ each area fee from area_fees_breakdown]   ← airport, night, …
     subtotal
     [+ each tax from tax_breakdown]              ← GST, PST, HST
     [+ tip]
     total
 
-Surge is folded into ``distance_fare`` / ``time_fare`` at fare-calc time
-so we surface it as a small "Surge X.X× applied" notice rather than a
-recomputed line item — re-deriving the uplift would round-trip through
-floats and risk a 1¢ mismatch on the rendered total.
+Surge is folded into ``distance_fare`` / ``time_fare`` at fare-calc time.
+Ranked #26 / audit N14 (2026-08-19): this used to surface only as a text
+footnote with no dollar figure — a 7-year-retained financial record that
+never showed surge as money, unlike the in-app fare breakdown. We now split
+the persisted (already-surged) distance/time fares back into pre-surge
+display amounts + a real "Surge (X.XX×)" dollar line, using the exact same
+Decimal formula as the in-app breakdown
+(``routes/rides/_shared.py::_build_fare_breakdown``): the split is
+constructed as a plug (``distance_display + time_display + surge_delta ==
+distance_fare + time_fare`` exactly), so the rendered total is unchanged —
+only the disclosure improves. The footnote stays as supplementary
+explanation of the multiplier alongside the new line, not a replacement
+for it.
 """
 
 import asyncio
@@ -122,10 +132,45 @@ def _build_fare_rows(
 
     airport_fee = _d(ride.get("airport_fee") or 0)
 
+    # Minimum-fare adjustment: when total_fare was clamped up to the floor at
+    # booking, the amount above the itemised components (which the driver keeps
+    # — 0% commission) must appear as its own disclosed line so the rendered
+    # rows reconcile to the charged total. Every charge maps to a line item
+    # (CLAUDE.md: "not a hidden-fee operator"). Legacy rows without total_fare
+    # yield 0. Excludes taxes/area fees, which are added below the subtotal.
+    # Computed before the surge split below so the split knows whether the
+    # floor already absorbed the surge uplift.
+    total_fare = _d(ride.get("total_fare") or 0)
+    min_fare_uplift = max(
+        Decimal("0"),
+        total_fare - (base_fare + distance_fare + time_fare + booking_fee + airport_fee),
+    )
+
+    # Surge as a real dollar line item (ranked #26 / audit N14), not just a
+    # footnote. Surge multiplies only distance+time (see fare_service.calculate_fare),
+    # so — matching the exact formula the in-app fare breakdown uses
+    # (routes/rides/_shared.py::_build_fare_breakdown) — split the persisted
+    # (already-surged) distance/time fares back into pre-surge display amounts
+    # + the surge delta. distance_display + time_display + surge_delta always
+    # equals distance_fare + time_fare exactly, so the split never changes the
+    # reconciled total. When the minimum-fare floor already absorbed the
+    # surge, the delta is $0.00 (still shown) rather than double-billed via
+    # the Minimum fare adjustment line above.
+    surge_delta = Decimal("0")
+    distance_display = distance_fare
+    time_display = time_fare
+    if surge > Decimal("1.0"):
+        surged_dt = distance_fare + time_fare
+        if min_fare_uplift <= Decimal("0.005"):
+            unsurged_dt = _q(surged_dt / surge) if surge > 0 else surged_dt
+            distance_display = _q(distance_fare / surge) if surged_dt > 0 and surge > 0 else distance_fare
+            time_display = unsurged_dt - distance_display
+            surge_delta = max(Decimal("0"), _q(surged_dt - unsurged_dt))
+
     rows: list[str] = []
     rows.append(_line("Base fare", f"${_fmt(base_fare)}"))
-    rows.append(_line(f"Distance ({distance_km:.1f} km)", f"${_fmt(distance_fare)}"))
-    rows.append(_line(f"Time ({duration_min} min)", f"${_fmt(time_fare)}"))
+    rows.append(_line(f"Distance ({distance_km:.1f} km)", f"${_fmt(distance_display)}"))
+    rows.append(_line(f"Time ({duration_min} min)", f"${_fmt(time_display)}"))
     if booking_fee > 0:
         rows.append(_line("Booking fee", f"${_fmt(booking_fee)}"))
     # Airport surcharge is inside total_fare (calculate_fare) but is a distinct
@@ -134,17 +179,11 @@ def _build_fare_rows(
     if airport_fee > 0:
         rows.append(_line("Airport surcharge", f"${_fmt(airport_fee)}"))
 
-    # Minimum-fare adjustment: when total_fare was clamped up to the floor at
-    # booking, the amount above the itemised components (which the driver keeps
-    # — 0% commission) must appear as its own disclosed line so the rendered
-    # rows reconcile to the charged total. Every charge maps to a line item
-    # (CLAUDE.md: "not a hidden-fee operator"). Legacy rows without total_fare
-    # yield 0. Excludes taxes/area fees, which are added below the subtotal.
-    total_fare = _d(ride.get("total_fare") or 0)
-    min_fare_uplift = max(
-        Decimal("0"),
-        total_fare - (base_fare + distance_fare + time_fare + booking_fee + airport_fee),
-    )
+    if surge > Decimal("1.0"):
+        rows.append(
+            _line(f"Surge ({surge:.2f}×)", f"${_fmt(surge_delta)}", label_color="#b45309", amount_color="#b45309")
+        )
+
     if min_fare_uplift > 0:
         rows.append(_line("Minimum fare adjustment", f"${_fmt(min_fare_uplift)}"))
 
@@ -188,8 +227,8 @@ def _build_fare_rows(
     if tip > 0:
         rows.append(_line("Tip", f"${_fmt(tip)}", label_color="#10b981", amount_color="#10b981"))
 
-    # Surge notice — surge is folded into distance/time fares, so we
-    # surface it as a disclosure note instead of as a separate amount.
+    # Surge footnote — supplementary context alongside the Surge dollar line
+    # item above (not a replacement for it; ranked #26 / audit N14).
     if surge > Decimal("1.0"):
         rows.append(
             '<tr><td colspan="2" style="padding:6px 0 0;font-size:11px;color:#b45309;">'

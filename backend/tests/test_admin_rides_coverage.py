@@ -961,6 +961,31 @@ class TestAdminRidesReadEndpointsSmoke:
         resp = client.get("/api/admin/earnings/overview", params={"period": "decade"})
         assert resp.status_code == 422
 
+    def test_get_earnings_overview_daily_series_uses_round_half_up(self, client, as_super_admin):
+        """N15 regression: daily_series gbv/net_revenue must use the codebase's
+        ROUND_HALF_UP convention (`to_decimal`), not Python's bare `round()`
+        (which defaults to banker's rounding, ROUND_HALF_EVEN, for Decimal
+        input). "10.125" is a deliberate .5-boundary value where the two
+        conventions diverge: round(Decimal("10.125"), 2) == 10.12 (HALF_EVEN),
+        while ROUND_HALF_UP quantize gives 10.13 — this pins the correct one.
+        """
+        today_key = datetime.now(timezone.utc).date().isoformat()
+
+        async def _rpc(name, params=None, **kw):
+            if name == "admin_earnings_daily_series":
+                return [{"day": today_key, "gbv": "10.125", "trips": 1, "net_revenue": "10.125"}]
+            return []
+
+        with (
+            patch("db_supabase.rpc", AsyncMock(side_effect=_rpc)),
+            patch("db_supabase.get_rows", AsyncMock(return_value=[])),
+        ):
+            resp = client.get("/api/admin/earnings/overview", params={"period": "7d"})
+        assert resp.status_code == 200
+        daily = {d["date"]: d for d in resp.json()["daily_series"]}
+        assert daily[today_key]["gbv"] == 10.13
+        assert daily[today_key]["net_revenue"] == 10.13
+
     def test_export_rides_happy_path(self, client, as_super_admin):
         rides = [
             {

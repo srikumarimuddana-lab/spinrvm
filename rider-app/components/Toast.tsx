@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef } from 'react';
 import {
+  AccessibilityInfo,
   Animated,
   PanResponder,
   StyleSheet,
@@ -19,6 +20,13 @@ const VARIANT_CONFIG: Record<ToastVariant, { bg: string; icon: string }> = {
 };
 
 const DEFAULT_DURATION = 4000;
+
+// danger toasts are urgent/error content — interrupt whatever the screen
+// reader is currently announcing. Everything else (info/success/warning) is
+// informational and should queue politely behind other speech.
+function liveRegionFor(variant: ToastVariant): 'assertive' | 'polite' {
+  return variant === 'danger' ? 'assertive' : 'polite';
+}
 
 export default function Toast() {
   const insets = useSafeAreaInsets();
@@ -83,6 +91,19 @@ export default function Toast() {
     // translateY/opacity are stable Animated.Values.
   }, [current?.id, translateY, opacity]);
 
+  // Screen-reader announcement — fired imperatively (rather than relying
+  // solely on the declarative accessibilityLiveRegion prop below) because a
+  // transient view that mounts and unmounts quickly is a known weak spot for
+  // live-region announcements on both iOS/Android. Runs once per new toast
+  // (id change), not on every re-render.
+  useEffect(() => {
+    if (current?.id == null) return;
+    const announcement = current.message ? `${current.title}. ${current.message}` : current.title;
+    AccessibilityInfo.announceForAccessibility(announcement);
+    // current.title/message are read but id is the trigger — a deduped
+    // repeat (same id) intentionally does not re-announce.
+  }, [current?.id]);
+
   // Auto-dismiss timer — (re)armed for a new toast OR when a deduped repeat
   // extends it (shownAt bumps). Kept separate from the enter animation so
   // refreshing the timer never restarts the slide-in.
@@ -109,6 +130,9 @@ export default function Toast() {
         styles.container,
         { top: insets.top + 8, backgroundColor: config.bg, transform: [{ translateY }], opacity },
       ]}
+      accessible
+      accessibilityRole="alert"
+      accessibilityLiveRegion={liveRegionFor(current.variant)}
       {...panResponder.panHandlers}
     >
       <Ionicons name={config.icon as any} size={20} color="#FFF" style={styles.icon} />

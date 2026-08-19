@@ -156,7 +156,13 @@ def generate_corporate_statement_pdf(company: dict, statement: dict) -> bytes:
     else:
         tax_total_str = money("tax_total")
         _log_combined_tax_fallback(company, statement, tax_total_str, tax_by_type)
-        line_item("Tax (GST/PST)", tax_total_str)
+        # Do NOT label this "Tax (GST/PST)" — that implies a known mix of
+        # both taxes, which is exactly what we don't have here (see
+        # _log_combined_tax_fallback's docstring). Mirror
+        # utils/receipt_pdf.py's own breakdown-unavailable fallback (plain
+        # "Tax", not a tax-type claim) rather than shipping a customer-
+        # facing line that misrepresents itself as a GST/PST split.
+        line_item("Tax", tax_total_str)
     pdf.ln(1)
     pdf.set_draw_color(*rule)
     pdf.line(15, pdf.get_y(), 15 + W, pdf.get_y())

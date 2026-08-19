@@ -466,7 +466,7 @@ class TestAdminSendPayableInvoiceGuards:
             resp = client.post("/api/admin/rides/ride-9/send-invoice")
         assert resp.status_code == 409
 
-    @pytest.mark.parametrize("terminal_status", ["paid", "waived_admin", "refunded"])
+    @pytest.mark.parametrize("terminal_status", ["paid", "waived_admin", "refunded", "partially_refunded"])
     def test_send_invoice_terminal_payment_status_409(self, client, as_super_admin, terminal_status):
         ride = {**self._COMPLETED_UNPAID, "payment_status": terminal_status}
         with patch("db_supabase.get_ride", AsyncMock(return_value=ride)):

@@ -98,3 +98,85 @@ def test_no_minimum_fare_row_when_not_clamped_pdf():
     # Default _RIDE: total_fare 11.00 == component sum → no adjustment row.
     rows, _grand = _fare_lines(_RIDE, Decimal("0"))
     assert "Minimum fare adjustment" not in [r[0] for r in rows]
+
+
+# ── Surge as a real dollar line item (ranked #26 / audit N14) ─────────────
+#
+# Before this fix the PDF receipt never disclosed surge at all (no footnote,
+# no line item). Now it must show a real Decimal dollar amount, matching the
+# in-app fare breakdown's calculation (routes/rides/_shared.py::_build_fare_breakdown):
+# surge_delta = surged(distance+time) - unsurged(distance+time), $0 when the
+# minimum-fare floor already absorbed it.
+
+
+def test_surge_renders_real_dollar_line_item_not_just_footnote():
+    # base=3.50, distance=6.30 (surged), time=2.50 (surged), booking=1.00.
+    # Components sum to 13.30 == total_fare → not min-fare clamped.
+    # surge=1.5x → surged_dt=8.80, unsurged_dt=round(8.80/1.5)=5.87,
+    # surge_delta=round(8.80-5.87)=2.93.
+    ride = {
+        **_RIDE,
+        "base_fare": "3.50",
+        "distance_fare": "6.30",
+        "time_fare": "2.50",
+        "booking_fee": "1.00",
+        "surge_multiplier": "1.5",
+        "total_fare": "13.30",
+        "grand_total": "13.30",
+        "tax_breakdown": {},
+    }
+    rows, _grand = _fare_lines(ride, Decimal("0"))
+    labels = [r[0] for r in rows]
+    assert "Surge (1.50×)" in labels
+    assert ("Surge (1.50×)", "$2.93") in rows
+    # Footnote stays alongside as supplementary context, not a replacement.
+    notes = [a for lbl, a in rows if lbl == "__note__"]
+    assert any("1.50" in n and "surge" in n.lower() for n in notes)
+
+    # Reconciliation: rendered fare rows (excluding the footnote note and the
+    # divider) still sum to the printed Subtotal — no double counting from
+    # inserting the Surge line.
+    subtotal_idx = labels.index("Subtotal")
+    fare_sum = sum(
+        (_amt(a) for lbl, a in rows[:subtotal_idx] if a and lbl != "__note__"),
+        Decimal("0"),
+    )
+    assert fare_sum == _amt(dict((lbl, a) for lbl, a in rows if lbl != "__note__")["Subtotal"])
+
+    # The PDF itself must actually generate (real amount renders in latin-1).
+    pdf = generate_receipt_pdf(ride, _RIDER, _DRIVER, Decimal("0"))
+    assert bytes(pdf).startswith(b"%PDF")
+
+
+def test_no_surge_line_when_multiplier_is_one_pdf():
+    rows, _grand = _fare_lines(_RIDE, Decimal("0"))  # default surge_multiplier absent → 1
+    labels = [r[0] for r in rows]
+    assert not [lbl for lbl in labels if lbl.startswith("Surge")]
+    assert "__note__" not in labels
+
+
+def test_surge_delta_is_zero_when_minimum_fare_absorbs_it():
+    # Tiny surged ride, but floored up to a high minimum — surge added $0 on
+    # top of the floor, so the line still appears (disclosure) but at $0.00,
+    # matching the in-app fare breakdown's behaviour on a min-fare ride.
+    ride = {
+        **_RIDE,
+        "base_fare": "1.00",
+        "distance_fare": "1.00",
+        "time_fare": "0.40",
+        "booking_fee": "0.00",
+        "surge_multiplier": "2.0",
+        "total_fare": "20.00",
+        "grand_total": "20.00",
+        "tax_breakdown": {},
+    }
+    rows, _grand = _fare_lines(ride, Decimal("0"))
+    assert ("Surge (2.00×)", "$0.00") in rows
+    assert ("Minimum fare adjustment", "$17.60") in rows  # 20.00 - 2.40
+    labels = [r[0] for r in rows]
+    subtotal_idx = labels.index("Subtotal")
+    fare_sum = sum(
+        (_amt(a) for lbl, a in rows[:subtotal_idx] if a and lbl != "__note__"),
+        Decimal("0"),
+    )
+    assert fare_sum == Decimal("20.00")

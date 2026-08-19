@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -170,7 +170,40 @@ export default function ActivityView() {
   // Referral-only slice, shown as its own line; the remainder is quest bonuses.
   const totalReferralBonuses = parseMoney(shownEarnings?.total_referral_bonuses);
   const totalTax = parseMoney(shownEarnings?.total_tax);
-  const fareEarnings = Math.max(totalEarnings - totalTips - totalIncentives - totalBonuses - totalTax, 0);
+  // Cancellation/no-show fees the driver earned — backend/routes/drivers/
+  // earnings.py folds this into total_earnings alongside tips/incentives/
+  // bonuses/tax (see _total_with_extras there), so it must be subtracted
+  // here too or every ride with a cancel fee inflates the client-computed
+  // "Fare" line by that amount.
+  const totalCancelFees = parseMoney(shownEarnings?.total_cancel_fees);
+  const fareEarningsRaw = totalEarnings - totalTips - totalIncentives - totalBonuses - totalTax - totalCancelFees;
+  // Money values here are 2-decimal strings from the backend parsed through
+  // parseFloat, so a few subtractions can leave a sub-cent float artifact
+  // (e.g. -1e-13) even when the components genuinely reconcile — round that
+  // noise to 0 rather than treating it as a real mismatch. Anything beyond
+  // half a cent negative is a genuine drift between the components and the
+  // headline total: surface it instead of silently clamping to a
+  // plausible-but-wrong "$0.00" (same failure shape the 2026-08-19 tip-
+  // underpayment incident found — components disagreeing with the total).
+  const fareMismatch = fareEarningsRaw < -0.005;
+  const fareEarnings = fareMismatch ? 0 : Math.max(fareEarningsRaw, 0);
+  // Not a swallowed error (fareMismatch is rendered, not hidden) — just make
+  // sure a real drift is loud in logs too, not only visible if someone
+  // happens to look at this one screen.
+  useEffect(() => {
+    if (fareMismatch) {
+      console.warn('[DriverActivity] Fare breakdown does not reconcile with Total Earned', {
+        period,
+        totalEarnings,
+        totalTips,
+        totalIncentives,
+        totalBonuses,
+        totalTax,
+        totalCancelFees,
+        fareEarningsRaw,
+      });
+    }
+  }, [fareMismatch, period, totalEarnings, totalTips, totalIncentives, totalBonuses, totalTax, totalCancelFees, fareEarningsRaw]);
   const totalRides = Number(shownEarnings?.total_rides ?? 0);
   const totalDistanceKm = parseMoney(shownEarnings?.total_distance_km);
   const totalDurationMinutes = Number(shownEarnings?.total_duration_minutes ?? 0);
@@ -420,7 +453,13 @@ export default function ActivityView() {
               <View style={styles.breakdownRow}>
                 <Ionicons name="cash-outline" size={18} color="#ef4444" style={styles.breakdownIcon} />
                 <Text style={styles.label}>Fare</Text>
-                <Text style={styles.value} numberOfLines={1}>${toMoney(fareEarnings)}</Text>
+                {fareMismatch ? (
+                  <Text style={[styles.value, styles.valueMismatch]} numberOfLines={1}>
+                    Doesn&apos;t match total
+                  </Text>
+                ) : (
+                  <Text style={styles.value} numberOfLines={1}>${toMoney(fareEarnings)}</Text>
+                )}
               </View>
               <View style={[styles.breakdownRow, styles.breakdownRowBorder]}>
                 <Ionicons name="gift-outline" size={18} color="#f59e0b" style={styles.breakdownIcon} />
@@ -762,6 +801,15 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
     marginLeft: 12,
+  },
+  // Fare row only, when the component breakdown doesn't reconcile with Total
+  // Earned by more than rounding noise — signals a real discrepancy instead
+  // of a plausible-but-wrong "$0.00".
+  valueMismatch: {
+    color: '#f59e0b',
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'right',
   },
   // Stats grid
   statsGrid: {

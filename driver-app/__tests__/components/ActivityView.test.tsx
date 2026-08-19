@@ -262,6 +262,67 @@ describe('ActivityView', () => {
     expect(getByText('1h')).toBeTruthy();
   });
 
+  // Audit finding 2 (docs/audit/2026-08-19-legacy-migration-data-quality-
+  // audit.md, "Not fixed — driver-app display"): the backend's total_earnings
+  // includes total_cancel_fees (backend/routes/drivers/earnings.py's
+  // _total_with_extras), so the client-computed "Fare" line must subtract it
+  // too or a ride with a cancel fee silently inflates Fare.
+  it('subtracts total_cancel_fees from the Fare line, matching the backend total composition', async () => {
+    mockStore = makeStore({
+      earnings: {
+        total_earnings: 120, // fare(100) + cancel_fees(20)
+        total_tips: 0,
+        total_incentives: 0,
+        total_bonuses: 0,
+        total_tax: 0,
+        total_cancel_fees: 20,
+        total_rides: 5,
+        total_distance_km: 25,
+        total_duration_minutes: 600,
+        elapsed_days: 10,
+      },
+    });
+    mockUseDriverStore.mockReturnValue(mockStore);
+
+    const { getByText } = render(<ActivityView />);
+    await waitFor(() => expect(getByText('123 Main St')).toBeTruthy());
+
+    // Total Earned is the raw backend figure ($120); Fare is $120 - $20 cancel
+    // fees = $100 — before this fix, the missing subtraction left Fare at $120,
+    // silently overstating the fare component by the cancel-fee amount.
+    expect(getByText('$100.00')).toBeTruthy();
+  });
+
+  it('signals a discrepancy instead of clamping to a fabricated $0.00 when the Fare components do not reconcile', async () => {
+    mockStore = makeStore({
+      earnings: {
+        // Deliberately inconsistent: components sum to more than total_earnings
+        // (a data-quality bug, not a real-world case once cancel fees are
+        // subtracted correctly) — must not render as a plausible "$0.00".
+        total_earnings: 50,
+        total_tips: 40,
+        total_incentives: 0,
+        total_bonuses: 0,
+        total_tax: 0,
+        total_cancel_fees: 20,
+        total_rides: 1,
+        total_distance_km: 5,
+        total_duration_minutes: 20,
+        elapsed_days: 1,
+      },
+    });
+    mockUseDriverStore.mockReturnValue(mockStore);
+
+    const { getByText } = render(<ActivityView />);
+    await waitFor(() => expect(getByText('123 Main St')).toBeTruthy());
+
+    // The Fare row itself must read as a flagged discrepancy, not a dollar
+    // amount at all (let alone a fabricated-looking "$0.00") — the other
+    // breakdown rows (Bonus/Referral/Tax) are legitimately $0.00 in this
+    // fixture, so this only asserts on the Fare row's own text.
+    expect(getByText("Doesn't match total")).toBeTruthy();
+  });
+
   it('refetches only earnings on a period change (list re-filters client-side)', async () => {
     const { getByText } = render(<ActivityView />);
 

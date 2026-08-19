@@ -773,6 +773,13 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
     if guard is None:
         raise HTTPException(status_code=409, detail="Ride is not in driver_accepted state")
 
+    # 2026-08-18 fleet audit: no ride-state-transition metric existed for any
+    # transition after offer-acceptance, leaving the match-rate/cancellation-
+    # rate KPIs (CLAUDE.md) invisible to any dashboard — only queryable by
+    # hand. One counter, one label per transition, matching the existing
+    # spinr_payment_settlement_total{outcome=...} convention.
+    _metric_inc("spinr_rides_state_transition_total", {"to_status": "driver_arrived"})
+
     if ride.get("rider_id"):
         await _deps.manager.send_personal_message(
             {"type": "driver_arrived", "ride_id": ride_id}, f"rider_{ride['rider_id']}"
@@ -839,6 +846,7 @@ async def verify_pickup_otp(
     # M-5: SGI insurance period audit — in_progress = period 3 (passenger
     # aboard, full TNC commercial coverage). Only record when transition took effect.
     await _deps.record_period_transition(driver["id"], 3, ride_id=ride_id)
+    _metric_inc("spinr_rides_state_transition_total", {"to_status": "in_progress"})
 
     if ride.get("rider_id"):
         await _deps.manager.send_personal_message(

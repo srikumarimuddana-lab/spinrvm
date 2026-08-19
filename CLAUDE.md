@@ -295,6 +295,11 @@ write alerts against it):
 - `spinr_fare_calc_duration_ms`
 - `spinr_payment_settlement_total{outcome=success|failed|retry}`
 - `spinr_ws_fanout_duration_ms`
+- `spinr_rides_state_transition_total{to_status=driver_arrived|in_progress|completed|cancelled}`
+  (KPI: match rate, cancellation rate — every production-reachable write of
+  each of these four `rides.status` values increments it; the batch-offer
+  `driver_assigned`/pre-acceptance states are covered separately by the
+  `spinr_dispatch_offer_*` counters above, not this one)
 
 What to log vs metric vs Sentry:
 - State transitions → info log + metric

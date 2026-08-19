@@ -671,6 +671,10 @@ async def complete_ride(
         raise RideStateError(
             f"Ride {ride_id} is no longer in_progress — completion already processed by a concurrent request"
         )
+    # 2026-08-18 fleet audit: ride-state-transition metric (see
+    # routes/rides/lifecycle.py::rider_complete_ride for the rider-initiated
+    # early-end counterpart).
+    _deps._metric_inc("spinr_rides_state_transition_total", {"to_status": "completed"})
 
     # Regulatory audit (SGI / Saskatchewan Transportation Act): record the
     # GPS-measured distance the driver actually drove in each ride-scoped

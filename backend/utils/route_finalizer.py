@@ -39,12 +39,23 @@ try:
 except ImportError:
     from geo_utils import calculate_distance  # type: ignore
 
+try:
+    from .loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:  # pragma: no cover
+    try:
+        from utils.loop_monitor import record_heartbeat as _record_heartbeat  # type: ignore
+    except ImportError:  # pragma: no cover
+
+        def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+            pass
+
 
 logger = logging.getLogger(__name__)
 
 ROUTE_FINALIZER_INTERVAL_SECONDS = 15
 ROUTE_CLAIM_STALE_SECONDS = 5 * 60
 MAX_ROUTE_FINALIZER_RETRIES = 5
+_LOOP_NAME = "route_finalizer (15s)"
 
 # Minimum change in measured distance before the stats columns on the rides
 # row are rewritten. Keeps idempotent replays (same evidence, new revision)
@@ -420,6 +431,7 @@ async def route_finalizer_loop(interval_seconds: int = ROUTE_FINALIZER_INTERVAL_
             raise
         except Exception:
             logger.error("route finalizer tick failed", exc_info=True)
+        _record_heartbeat(_LOOP_NAME)
         await asyncio.sleep(interval_seconds)
 
 

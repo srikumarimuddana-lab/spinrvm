@@ -187,12 +187,12 @@ does not implement, and it must not go live without a legal/SGI decision one way
 | 11 | ~~`planned_route_polyline` escapes 3-yr GPS purge~~ | regulatory | Eng — Data/Retention | **RESOLVED 2026-08-19** — see `docs/change-log/2026-08-19-gps-polyline-purge-fix.md`; migration 335 not yet applied to any DB |
 | 12 | ~~No consent-version on rider/driver signup~~ | regulatory | Eng — Auth + Legal | **RESOLVED 2026-08-19** — see `docs/change-log/2026-08-19-consent-version-signup-fix.md` |
 | 13 | Emergency contacts stored plaintext (needs decision, not just fix) | safety-sos, security | Privacy/Legal | Decision by 2026-08-25 |
-| 14 | Safety check-in "sent" flag non-atomic (duplicate push risk) | realtime | Eng — Safety | 2026-08-22 |
-| 15 | Second device silently steals WS connection | realtime, edge-case, security, dispatch | Eng — Realtime | 2026-08-25 |
+| 14 | ~~Safety check-in "sent" flag non-atomic (duplicate push risk)~~ | realtime | Eng — Safety | **RESOLVED 2026-08-19** — see `docs/change-log/2026-08-19-safety-checkin-atomic-claim-fix.md` |
+| 15 | ~~Second device silently steals WS connection~~ | realtime, edge-case, security, dispatch | Eng — Realtime | **RESOLVED 2026-08-19** — see `docs/change-log/2026-08-19-ws-second-device-reconnect-fix.md`; client-side close-code handling not verified |
 | 16 | Shared Toast component has zero screen-reader wiring (fleet-wide blast radius) | accessibility | Eng — Mobile/Shared UI | 2026-08-29 |
 | 17 | ~~Unpinned trufflehog inside the security gate itself + Expo/Play workflow~~ | cicd-infra | Eng — Platform/CI | **RESOLVED 2026-08-19** — same fix as #3, see `docs/change-log/2026-08-19-ci-actions-pinning-fix.md` |
 | 18 | Admin actions with no audit trail (~12 endpoints + 2 new) | observability | Eng — Admin/Platform | 2026-08-29 (note: the highest-severity instance, `redis/flush-prefix`, resolved via #8 above — the broader sweep is still open) |
-| 19 | Document-upload / ride-cancel DB-error swallow (2 instances) | edge-case, observability | Eng — Backend | 2026-08-25 (note: the ride-cancel/Stripe-hold instance **RESOLVED 2026-08-19**, see `docs/change-log/2026-08-19-ride-cancel-hold-release-error-fix.md`; the document-upload instance is still open) |
+| 19 | ~~Document-upload / ride-cancel DB-error swallow (2 instances)~~ | edge-case, observability | Eng — Backend | **RESOLVED 2026-08-19** — both instances fixed: ride-cancel/Stripe-hold (see `docs/change-log/2026-08-19-ride-cancel-hold-release-error-fix.md`) and document-upload's `_supersede_and_flag_pending_review` (`backend/documents.py`, PR #4253, `docs/change-log/2026-08-19-documents-supersede-error-swallow-fix.md`) |
 | 20 | Corporate PDF combined-tax line + UTC month bounds | corporate-reporting | Eng — Corporate Billing | 2026-09-02 |
 | 21 | ~~Admin surge endpoint missing `surge_source` stamp~~ | surge | Eng — Pricing | **RESOLVED 2026-08-19** — see `docs/change-log/2026-08-19-admin-surge-source-stamp-fix.md` |
 | 22 | 4 unlabeled icon buttons + WAV toggle accessibility gap | accessibility | Eng — Mobile UI | 2026-08-29 |
@@ -200,8 +200,8 @@ does not implement, and it must not go live without a legal/SGI decision one way
 | 24 | Fare-estimate 3.5s Directions wait undocumented in SLA table | performance | Eng — Pricing + doc owner | 2026-08-22 (doc), decision on ceiling |
 | 25 | Driver-location-write duplicate DB fetch | performance | Eng — Driver Location | 2026-08-22 |
 | 26 | Receipts never itemize surge as a $ line (7-yr retained record) | money | Eng — Payments | 2026-08-29 |
-| 27 | 13 background loops absent from the watchdog list | realtime, observability | Eng — Platform | 2026-08-29 |
-| 28 | Admin-RBAC frontend/backend module-string mismatches (access bugs) | admin-rbac | Eng — Admin Dashboard | 2026-08-29 |
+| 27 | ~~13 background loops absent from the watchdog list~~ | realtime, observability | Eng — Platform | **RESOLVED 2026-08-19** — see `docs/change-log/2026-08-19-background-loop-watchdog-coverage-fix.md`; new startup self-check prevents recurrence |
+| 28 | ~~Admin-RBAC frontend/backend module-string mismatches (access bugs)~~ | admin-rbac | Eng — Admin Dashboard | **RESOLVED 2026-08-19** — see `docs/change-log/2026-08-19-admin-rbac-module-string-mismatch-fix.md` |
 | 29 | No RLS DB-role-level test coverage | test-coverage | Eng — Backend/QA | 2026-09-05 |
 | 30 | Money-path coverage floors unenforced beyond corporate_* | test-coverage | Eng — Backend/QA | 2026-09-05 |
 

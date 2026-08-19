@@ -16,6 +16,19 @@ _BROADCAST_SEND_TIMEOUT = 2.0
 # #3: min seconds between admin location-fan-out messages per driver.
 _ADMIN_LOC_MIN_INTERVAL = 3.0
 
+# Ranked blocker #15 (docs/audit/2026-08-18-full-fleet-whole-app-audit.md):
+# close code sent to a connection that just got silently replaced by a
+# second device/tab registering under the same active_connections key
+# (rider_{user_id} / driver_{user_id}). RFC 6455 reserves 4000-4999 for
+# private/application use; nothing else in this codebase currently
+# defines a code in that range (existing closes all use standard codes:
+# 1001 going away, 1008 policy violation, 1011 internal error — see
+# routes/websocket.py), so this is a fresh app-specific code, not a
+# collision with an existing convention. Chosen to echo HTTP 409
+# Conflict, since the situation is exactly that: two connections
+# conflicting for the same registry slot.
+WS_CLOSE_REPLACED_BY_NEW_CONNECTION = 4409
+
 try:
     from .logging_utils import diag_logger  # type: ignore
     from .utils.metrics import observe as _metric_observe  # type: ignore
@@ -62,7 +75,15 @@ class ConnectionManager:
         self._admin_loc_last: Dict[str, float] = {}
 
     async def connect(self, websocket: WebSocket, client_id: str):
-        # WebSocket is already accepted in the endpoint handler
+        # WebSocket is already accepted in the endpoint handler.
+        #
+        # Ranked blocker #15: a second device/tab for the same
+        # rider_{user_id}/driver_{user_id} used to silently steal this slot —
+        # the old WebSocket object was simply dropped from the dict with no
+        # signal sent to it, so a stale tab sat open believing it was still
+        # live. Grab the old entry BEFORE overwriting so we can explicitly
+        # close it after the new one takes the slot.
+        old_websocket = self.active_connections.get(client_id)
         self.active_connections[client_id] = websocket
         logger.info(f"WebSocket connected: {client_id}")
         diag_logger.info(
@@ -70,6 +91,35 @@ class ConnectionManager:
             f"total_connections={len(self.active_connections)} "
             f"all_keys={list(self.active_connections.keys())}"
         )
+        if old_websocket is not None and old_websocket is not websocket:
+            # The registry slot is already reassigned to the new socket above,
+            # so closing the old one here cannot race away the new
+            # registration: routes/websocket.py's disconnect handlers check
+            # ``manager.active_connections.get(key) is websocket`` before
+            # calling manager.disconnect(), so the old socket's own
+            # WebSocketDisconnect handling (triggered by this close) will see
+            # it's no longer the registered socket and skip cleanup.
+            #
+            # This registration path is purely local (this replica's
+            # in-process dict) — Redis pub/sub delegation only affects
+            # message fan-out (send_personal_message/broadcast_to_admins),
+            # not connect()/active_connections, so this close behaves the
+            # same whether or not WS_REDIS_URL is set.
+            try:
+                await old_websocket.close(
+                    code=WS_CLOSE_REPLACED_BY_NEW_CONNECTION,
+                    reason="replaced_by_new_connection",
+                )
+                logger.info(
+                    f"WebSocket replaced: closed stale connection for {client_id} (second device/tab connected)"
+                )
+            except Exception as e:
+                # Expected/narrow case: the old socket may already be dead
+                # (network drop, app backgrounded) — not a silent swallow,
+                # just not error-worthy since we're closing it anyway.
+                logger.debug(
+                    f"WebSocket replace: closing stale connection for {client_id} failed (already closed?): {e}"
+                )
 
     def disconnect(self, client_id: str):
         if client_id in self.active_connections:

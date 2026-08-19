@@ -79,7 +79,14 @@ def _enforced_module_gates() -> set[str]:
 # are pinned here rather than deleted as a side effect of the heatmap work.
 # Surfaced by this test on 2026-08-14; see the change log entry.
 _KNOWN_UNGATED_GRANTS = {
-    "pricing",  # gates the Vehicle Types sidebar link; that page's API uses vehicle_types
+    # Ranked blocker #28 / audit finding N16 (2026-08-19): "pricing" used to
+    # gate the Vehicle Types sidebar link and page-level check, but that
+    # page's API has always used require_module("vehicle_types") — the
+    # mismatch silently locked out staff granted "vehicle_types" (no
+    # sidebar link, page-level denial) while a "pricing"-only grant looked
+    # like access but 403'd on every API call. Both frontend sites were
+    # repointed to "vehicle_types"; "pricing" itself now gates nothing.
+    "pricing",
     "surge",  # surge endpoints live on the service_areas router and use that gate
 }
 
@@ -201,6 +208,52 @@ def test_sidebar_links_gate_on_grantable_modules():
 
     assert not unknown, (
         f"sidebar entries gate on non-grantable module(s): {unknown}. Non-super_admin staff can never see those links."
+    )
+
+
+_VEHICLE_TYPES_PAGE = _REPO_ROOT / "admin-dashboard" / "src" / "app" / "dashboard" / "vehicle-types" / "page.tsx"
+
+
+def test_vehicle_types_and_audit_logs_frontend_strings_match_backend_gate():
+    """Regression pin for ranked blocker #28 / audit finding N16 (2026-08-19).
+
+    Two frontend/backend module-string mismatches silently locked out staff
+    who legitimately held the module: the sidebar and the Vehicle Types page
+    checked "pricing" while the backend router is mounted behind
+    require_module("vehicle_types") (routes/admin/__init__.py); the sidebar's
+    Audit Logs entry checked "settings" while the audit-log endpoints are
+    gated by require_module("audit") (routes/admin/maintenance.py). Neither
+    mismatch was a security hole (nothing became reachable that shouldn't
+    be) — the opposite failure direction: a staff member granted the correct
+    backend module still couldn't see or use the page.
+
+    This pins the corrected strings so a future edit that reintroduces
+    either mismatch fails here first instead of silently locking someone
+    out again.
+    """
+    sidebar_src = _SIDEBAR.read_text(encoding="utf-8")
+    sidebar_code = "\n".join(line for line in sidebar_src.splitlines() if not line.lstrip().startswith("//"))
+
+    vehicle_types_sidebar = re.search(r'href:\s*"/dashboard/vehicle-types".*?module:\s*"([^"]+)"', sidebar_code)
+    assert vehicle_types_sidebar, "could not locate the Vehicle Types sidebar entry"
+    assert vehicle_types_sidebar.group(1) == "vehicle_types", (
+        f"sidebar's Vehicle Types entry gates on {vehicle_types_sidebar.group(1)!r}, "
+        'not the backend\'s require_module("vehicle_types")'
+    )
+
+    audit_logs_sidebar = re.search(r'href:\s*"/dashboard/audit-logs".*?module:\s*"([^"]+)"', sidebar_code)
+    assert audit_logs_sidebar, "could not locate the Audit Logs sidebar entry"
+    assert audit_logs_sidebar.group(1) == "audit", (
+        f"sidebar's Audit Logs entry gates on {audit_logs_sidebar.group(1)!r}, "
+        'not the backend\'s require_module("audit")'
+    )
+
+    page_src = _VEHICLE_TYPES_PAGE.read_text(encoding="utf-8")
+    page_gate = re.search(r'useRequireModule\("([^"]+)"\)', page_src)
+    assert page_gate, "could not locate the useRequireModule() call in the Vehicle Types page"
+    assert page_gate.group(1) == "vehicle_types", (
+        f"Vehicle Types page gates on useRequireModule({page_gate.group(1)!r}), "
+        'not the backend\'s require_module("vehicle_types")'
     )
 
 

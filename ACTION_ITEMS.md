@@ -422,7 +422,46 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   required before/with the next deploy. Both fixes independently tested
   (targeted + regression suites, ruff clean) and re-verified together with
   PR #4255's fixes after the rebase: full backend suite —
-  **[pending re-run post-rebase; see the next entry if this line is stale]**.
+  **12,223 passed, 8 skipped, 1 xfailed, 0 failed** (confirmed on the merged
+  state, PR #4254).
+  **FIXED 2026-08-19** (4 more, from the ranked blocker register, again run
+  in parallel across disjoint files): **#14** the safety check-in "sent"
+  flag (a Redis key, not a DB column) was read-then-written non-atomically —
+  `utils/safety_checkin_loop.py` now uses `redis_set_nx` (the same atomic
+  `SET ... NX` claim primitive ~15 other background loops already use) so
+  only one concurrent caller can ever win the claim and send the
+  notification; a lost claim is expected contention, logged at `debug`, not
+  an error. See `docs/change-log/2026-08-19-safety-checkin-atomic-claim-fix.md`.
+  **#15** `ConnectionManager.connect()` (`socket_manager.py`) silently
+  overwrote a second device's WS connection with no signal to the
+  now-orphaned first connection; it now explicitly closes the old
+  connection with a new close code (4409, RFC 6455 private-use range,
+  echoing HTTP 409 Conflict) before the new one takes the registry slot —
+  client-side handling of the new close code was not verified (backend-only
+  fix). See `docs/change-log/2026-08-19-ws-second-device-reconnect-fix.md`.
+  **#27** 13 of ~18 background loops spawned in `core/lifespan.py` were
+  never registered with the loop watchdog (5 of them had no heartbeat call
+  at all) — fixed by adding the missing heartbeats/registrations, plus a
+  new startup self-check that raises `RuntimeError` in production (logs
+  `error` always) if the spawned-loop set and the watched-loop set ever
+  diverge again, backed by a new AST-based static drift-detector test
+  (`test_lifespan_watchdog_coverage.py`) that source-parses `lifespan.py`
+  rather than importing/running it. See
+  `docs/change-log/2026-08-19-background-loop-watchdog-coverage-fix.md`.
+  **#28** (audit N16) the admin-dashboard frontend's Vehicle Types page and
+  sidebar entry checked module string `"pricing"` (should be
+  `"vehicle_types"`) and the Audit Logs sidebar entry checked `"settings"`
+  (should be `"audit"`) — both silently locked out legitimately-permissioned
+  staff, the opposite failure direction from a security hole. Fixed as a
+  3-line frontend-only change; confirmed `"pricing"` is legitimately used
+  elsewhere (a real tab key + `ROLE_PRESETS.finance` entry) so the fix was
+  scoped to only the two broken gate sites, not a blanket find-replace. A
+  real production `npm run build` (Turbopack) was run and completed
+  successfully. See
+  `docs/change-log/2026-08-19-admin-rbac-module-string-mismatch-fix.md`.
+  All 4 independently tested (targeted + regression suites, ruff clean;
+  `npm run build` for the admin-dashboard change per CLAUDE.md's explicit
+  requirement).
   Full ranked blocker register (30 items) and decision log (10 items, each
   with a suggested owner/due date) are in the audit doc — see there before
   re-deriving. Verdict at time of the 08-18 audit run: **FIX BLOCKERS** (17

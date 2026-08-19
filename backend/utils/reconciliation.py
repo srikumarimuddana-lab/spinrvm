@@ -23,7 +23,20 @@ try:
 except ImportError:
     from utils.redis_client import redis_set_nx  # type: ignore
 
+try:
+    from .loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:  # pragma: no cover
+    try:
+        from utils.loop_monitor import record_heartbeat as _record_heartbeat  # type: ignore
+    except ImportError:  # pragma: no cover
+
+        def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+            pass
+
+
 logger = logging.getLogger(__name__)
+
+_LOOP_NAME = "reconciliation (daily 02:00 UTC)"
 
 # Run once per day; loop wakes every 60 s to stay aligned to 02:00 UTC.
 _LOOP_POLL_SECONDS = 60
@@ -52,6 +65,7 @@ async def reconciliation_loop() -> None:
             await _maybe_run_tick()
         except Exception:
             logger.error("reconciliation_loop tick failed", exc_info=True)
+        _record_heartbeat(_LOOP_NAME)
         await asyncio.sleep(_LOOP_POLL_SECONDS)
 
 

@@ -145,14 +145,40 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 > because this one had already merged. Treat the heading text as the
 > disambiguator.
 - [ ] **Status:** open, 2 of 17 baseline blockers fixed 2026-08-18 (same day,
-  later sessions) — see below. Of the baseline's 17 ranked blockers as
+  later sessions), plus the finding #11 unpinned-actions regression fixed
+  2026-08-19 — see below. Of the baseline's 17 ranked blockers as
   originally reported: 13 STILL-OPEN unchanged (no commits touching them
-  since 08-15), 2 now FIXED (below), 1
-  REGRESSED (`deploy-metrics-agent.yml` unpinned actions with a live
-  `FLY_API_TOKEN` — missed by the C18b sweep that claimed this class fixed),
+  since 08-15), 2 now FIXED 2026-08-18 (below), 1 REGRESSED-then-FIXED
+  2026-08-19 (finding #11, below),
   2 partially mitigated but not resolved (corporate PDF tax-line fallback now
   logged/Sentry-alerted but still ships; emergency-contacts doc corrected to
   be honest about plaintext storage, underlying decision still open).
+  **FIXED 2026-08-19**: finding #11, "Unpinned GitHub Actions in
+  deploy/security gates" — pinned all 6 remaining unpinned `uses:` refs to
+  their current release/branch-HEAD commit SHA, following this repo's
+  established `@<sha> # <vX-or-branch> (date)` convention (already the
+  dominant pattern in `ci-guardrails.yml` and partially applied elsewhere):
+  `deploy-metrics-agent.yml:36` (`actions/checkout@v7`, the High-severity
+  live-`FLY_API_TOKEN`-exposure instance that regressed past the earlier
+  C18b sweep) and `:49` (`superfly/flyctl-actions/setup-flyctl@master`);
+  `bootstrap-metrics-agent.yml:57` (`actions/checkout@v7`, the "partially
+  fixed" file where only the flyctl step below it had been pinned);
+  `claude-audit.yml:84` (`ludeeus/action-shellcheck@master`);
+  `ci-guardrails.yml:389` (`trufflesecurity/trufflehog@main`, the one
+  pre-existing unpinned line in an otherwise fully-pinned file); and
+  `deploy-driver-play-testing.yml:55,57,61` (`actions/checkout@v7`,
+  `actions/setup-node@v7`, `expo/expo-github-action@v8`). SHAs resolved via
+  `git ls-remote --tags`/`--heads` against each upstream repo (GitHub MCP
+  was scoped to this repo only, so tag/release lookup tools weren't usable
+  for third-party repos) and cross-checked against SHAs this repo had
+  already pinned elsewhere for the same tag (`actions/checkout@v7` and
+  `flyctl-actions@master` both matched the SHA already in use in
+  `ci-guardrails.yml`/`bootstrap-metrics-agent.yml`, confirming the
+  resolution method). All 5 files re-validated with `yaml.safe_load` after
+  editing. Six independent single-line/few-line diffs across 5
+  non-overlapping files — no shared code path, no behavior change (same
+  action version, just SHA-pinned), low risk; not a live-tested surface
+  per CLAUDE.md's `SENSITIVE_MARKERS` so no Change Impact Log required.
   **FIXED 2026-08-18**: ranked blocker #1/#2 — `docs/legal/insurance-coverage-periods.md`
   (a rider/driver-facing legal draft, and the already-published
   `terms-of-service.md` §13) stated insurance coverage "starts as soon as the

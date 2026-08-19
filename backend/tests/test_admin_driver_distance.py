@@ -225,6 +225,43 @@ async def test_distance_logs_joins_spans_with_current_distances():
 
 
 @pytest.mark.asyncio
+async def test_distance_logs_open_span_never_fabricates_an_end_or_distance():
+    """An ended_at-IS-NULL span (trip still running or abandoned) must render
+    to=None / open=True / distance_km=None — never a concrete end time or a
+    stale 'final' distance for an ongoing trip."""
+    ws = datetime(2026, 8, 10, 6, 0, 0, tzinfo=timezone.utc)
+    spans = [
+        {
+            "period": 3,
+            "started_at": (ws + timedelta(hours=2)).isoformat(),
+            "ended_at": None,
+            "ride_id": "ride-open",
+        }
+    ]
+
+    async def _get_rows(table, filters=None, **kw):
+        if table == "driver_insurance_periods":
+            return spans
+        if table == "driver_period_distances_current":
+            return []
+        if table == "rides":
+            return [{"id": "ride-open", "ride_code": "SPR-OPEN1"}]
+        return []
+
+    with patch.object(mod.db_supabase, "get_rows", AsyncMock(side_effect=_get_rows)):
+        out = await mod.admin_driver_distance_logs(driver_id="drv-1", date=DAY, admin_user=ADMIN)
+
+    assert len(out["logs"]) == 1
+    row = out["logs"][0]
+    assert row["open"] is True
+    assert row["to"] is None
+    assert row["distance_km"] is None
+    assert row["ride_code"] == "SPR-OPEN1"
+    # Duration is the clipped in-window time so far, never beyond the day end.
+    assert row["seconds"] == 22 * 3600
+
+
+@pytest.mark.asyncio
 async def test_distance_logs_clips_spans_to_the_regina_day():
     ws = datetime(2026, 8, 10, 6, 0, 0, tzinfo=timezone.utc)
     spans = [

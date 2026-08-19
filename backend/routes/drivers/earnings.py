@@ -78,7 +78,25 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         # should match earnings' full composition, not the other way round).
         ride_earnings = sum((_ride_income(r) for r in rides), Decimal("0"))
         total_tips = sum((_d(r.get("tip_amount") or 0) for r in rides), Decimal("0"))
-        total_rides = len(rides)
+        # total_rides is an ACTIVITY count, not money — must NOT go through
+        # EXCLUDE_LEGACY_RIDES. Same bug/fix as get_driver_earnings (A31,
+        # 2026-08-13): utils/legacy_rides.py's own docstring says the
+        # exclusion "only governs money math" and imported rides "remain
+        # fully visible in ride history." A driver whose only completed
+        # rides are legacy-imported would otherwise show total_rides=0 here
+        # even though payable_balance is correctly $0 too (that part IS
+        # money and stays legacy-excluded below, unchanged). Second,
+        # unfiltered query — every money computation below still reads
+        # `rides` (legacy-excluded), untouched.
+        all_completed_rides = await db_supabase.get_rows(
+            "rides",
+            {
+                "driver_id": driver["id"],
+                "status": RideStatus.COMPLETED,
+            },
+            limit=10000,
+        )
+        total_rides = len(all_completed_rides)
 
         # GST/PST collected from riders, passed through to the driver as
         # income (utils/driver_statement.py and /earnings already include

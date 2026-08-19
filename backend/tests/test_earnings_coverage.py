@@ -71,6 +71,92 @@ def _ride(**extra) -> dict:
 # ============================================================
 
 
+class TestGetDriverBalanceLegacyActivityStats:
+    """Regression for A31's follow-up (2026-08-18): get_driver_balance had
+    the identical `total_rides = len(rides)` bug that get_driver_earnings
+    had (fixed 2026-08-13) — total_rides was summed from the same
+    EXCLUDE_LEGACY_RIDES-filtered `rides` list used for money, so a driver
+    whose completed rides were entirely legacy-imported showed
+    total_rides=0 despite real ride history. Unlike get_driver_earnings,
+    get_driver_balance's MONEY fields (payable_balance etc.) are meant to
+    stay legacy-excluded (A32 explicitly kept `/balance` on the old
+    behaviour) — only the activity count moves to an unfiltered query."""
+
+    def _get_rows(self, legacy_rides, real_rides):
+        def get_rows(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                if filters and str(filters.get("status")) == "cancelled":
+                    return []
+                # EXCLUDE_LEGACY_RIDES adds a `legacy_import_metadata` leaf —
+                # present => the money-path query, absent => the new
+                # unfiltered activity-count query.
+                if filters and "legacy_import_metadata" in filters:
+                    return list(real_rides)
+                return list(legacy_rides) + list(real_rides)
+            if table == "payouts":
+                return []
+            if table == "driver_bonuses":
+                return []
+            return []
+
+        return get_rows
+
+    async def test_all_legacy_rides_show_real_trip_count_but_zero_balance(self):
+        from backend.routes.drivers import get_driver_balance
+
+        legacy_rides = [
+            _ride(
+                id=f"legacy-{i}",
+                legacy_import_metadata={"source": "previous_app"},
+                driver_earnings=15.00,
+                tip_amount=0,
+            )
+            for i in range(3)
+        ]
+
+        with patch(
+            "backend.db_supabase.get_rows",
+            AsyncMock(side_effect=self._get_rows(legacy_rides, [])),
+        ):
+            with patch("backend.db_supabase.supabase") as mock_supabase:
+                mock_supabase.table.return_value.select.return_value.in_.return_value.execute.return_value = MagicMock(
+                    data=[]
+                )
+                result = await get_driver_balance(current_user={"id": USER_ID})
+
+        # Activity count now reflects all completed rides, legacy included.
+        assert result["total_rides"] == 3
+        # Money stays legacy-excluded (A32 decision) — no non-legacy rides
+        # in scope, so payable_balance/total_earnings are correctly zero.
+        assert result["payable_balance"] == "0.00"
+        assert result["total_earnings"] == "0.00"
+
+    async def test_mixed_legacy_and_real_rides_count_all_but_pay_only_real(self):
+        from backend.routes.drivers import get_driver_balance
+
+        legacy_rides = [_ride(id="legacy-1", legacy_import_metadata={"source": "previous_app"}, driver_earnings=20.00)]
+        real_rides = [_ride(id="real-1", driver_earnings=15.00, tip_amount=3.00)]
+
+        with patch(
+            "backend.db_supabase.get_rows",
+            AsyncMock(side_effect=self._get_rows(legacy_rides, real_rides)),
+        ):
+            with patch("backend.db_supabase.supabase") as mock_supabase:
+                mock_supabase.table.return_value.select.return_value.in_.return_value.execute.return_value = MagicMock(
+                    data=[]
+                )
+                result = await get_driver_balance(current_user={"id": USER_ID})
+
+        # total_rides counts both (activity, unfiltered).
+        assert result["total_rides"] == 2
+        # payable_balance/total_earnings only count the real (non-legacy)
+        # ride's $15 driver_earnings — unchanged legacy-excluded behaviour.
+        assert result["total_earnings"] == "15.00"
+        assert result["payable_balance"] == "15.00"
+
+
 class TestGetDriverBalanceBonusFetchFailure:
     async def test_bonus_fetch_error_raises_503(self):
         from backend.routes.drivers import get_driver_balance

@@ -210,3 +210,41 @@ async def test_tick_sweeps_seven_days_once_per_regina_date():
         await mod._tick(datetime(2026, 8, 18, 7, 0, 0, tzinfo=timezone.utc))
         assert len(rolled) == 2
     mod._last_sweep_for = None
+
+
+@pytest.mark.asyncio
+async def test_nightly_sweep_backfills_legacy_utc_days_within_retention():
+    """Mixed utc/regina history mis-totals range sums at the seam, so the
+    sweep converts legacy rows newest-first — but never days older than the
+    GPS retention window (breadcrumbs purged → re-derive would zero km)."""
+    import utils.driver_daily_rollup as mod
+
+    now = datetime(2026, 8, 17, 9, 0, 0, tzinfo=timezone.utc)  # 03:00 Regina
+    legacy_dates = ["2026-08-01", "2026-07-20", "2026-05-01"]  # last is > 90d old
+
+    async def _get_rows(table, filters, **kw):
+        assert table == "driver_daily_stats"
+        assert filters["day_tz"] == "utc"
+        cutoff = filters["stat_date"]["$gte"]
+        return [{"stat_date": d} for d in legacy_dates if d >= cutoff]
+
+    rolled: list = []
+
+    async def _fake_rollup(d):
+        rolled.append(d)
+        return {"stat_date": d.isoformat()}
+
+    mod._last_sweep_for = None
+    with (
+        patch("utils.driver_daily_rollup.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+        patch("utils.driver_daily_rollup.rollup_driver_day", AsyncMock(side_effect=_fake_rollup)),
+    ):
+        await mod._tick(now)
+    mod._last_sweep_for = None
+
+    # 7 recent completed Regina days + the two in-retention legacy dates;
+    # the 2026-05-01 row (past the 90-day GPS window) is left as-is.
+    assert len(rolled) == 9
+    assert date(2026, 8, 1) in rolled
+    assert date(2026, 7, 20) in rolled
+    assert date(2026, 5, 1) not in rolled

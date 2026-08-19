@@ -54,6 +54,13 @@ _ROW_LIMIT = 10000
 # quiet hours; catches late GPS tails and any missed intermediate days).
 _SWEEP_AFTER_LOCAL_HOUR = 2
 _SWEEP_DAYS = 7
+# Legacy day_tz='utc' rows are progressively re-derived on Regina bounds,
+# newest-first, this many per nightly sweep — a mixed-boundary history makes
+# range sums (weekly earnings, leaderboard) mis-total by up to 6h at the seam.
+_BACKFILL_PER_NIGHT = 14
+# Never recompute days older than the GPS retention window: their breadcrumbs
+# are purged, so a re-derive would zero the km columns instead of fixing them.
+_GPS_RETENTION_DAYS = 90
 
 _last_sweep_for: Optional[date_cls] = None  # module state; reset on restart is harmless
 
@@ -227,8 +234,29 @@ def _completed_regina_days(now_utc: datetime, count: int) -> List[date_cls]:
     return [today_regina - timedelta(days=i) for i in range(1, count + 1)]
 
 
+async def _legacy_utc_dates_within_retention(now_utc: datetime) -> List[date_cls]:
+    """Oldest-seam candidates: day_tz='utc' dates young enough to re-derive."""
+    cutoff = (now_utc - timedelta(days=_GPS_RETENTION_DAYS)).date().isoformat()
+    rows = (
+        await db_supabase.get_rows(
+            "driver_daily_stats",
+            {"day_tz": "utc", "stat_date": {"$gte": cutoff}},
+            columns="stat_date",
+            order="stat_date",
+            desc=True,
+            limit=_ROW_LIMIT,
+        )
+        or []
+    )
+    seen = {str(r.get("stat_date"))[:10] for r in rows if r.get("stat_date")}
+    today_regina = now_utc.astimezone(REGINA_TZ).date()
+    dates = sorted((date_cls.fromisoformat(d) for d in seen), reverse=True)
+    return [d for d in dates if d < today_regina][:_BACKFILL_PER_NIGHT]
+
+
 async def _tick(now_utc: Optional[datetime] = None) -> Dict[str, Any]:
-    """Recompute the last 2 completed Regina days; once nightly, the last 7."""
+    """Recompute the last 2 completed Regina days; once nightly, the last 7
+    plus a bounded batch of legacy UTC-boundary days (newest first)."""
     global _last_sweep_for
     now_utc = now_utc or datetime.now(timezone.utc)
     now_regina = now_utc.astimezone(REGINA_TZ)
@@ -236,6 +264,11 @@ async def _tick(now_utc: Optional[datetime] = None) -> Dict[str, Any]:
     days = _completed_regina_days(now_utc, 2)
     if now_regina.hour >= _SWEEP_AFTER_LOCAL_HOUR and _last_sweep_for != now_regina.date():
         days = _completed_regina_days(now_utc, _SWEEP_DAYS)
+        try:
+            legacy = await _legacy_utc_dates_within_retention(now_utc)
+            days.extend(d for d in legacy if d not in days)
+        except Exception:
+            logger.error("daily_rollup: legacy-utc backfill discovery failed", exc_info=True)
         _last_sweep_for = now_regina.date()
 
     results = []

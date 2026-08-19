@@ -179,6 +179,29 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   non-overlapping files — no shared code path, no behavior change (same
   action version, just SHA-pinned), low risk; not a live-tested surface
   per CLAUDE.md's `SENSITIVE_MARKERS` so no Change Impact Log required.
+  **FIXED 2026-08-19**: finding #7, "v2 GPS location-batch path skips the
+  spoofing/integrity check" — `_persist_v2_location_batch`
+  (`backend/routes/drivers/location.py`) now runs the same
+  `check_location_integrity()` guard (mock flag, impossible speed, low/zero
+  accuracy, teleport-via-Redis) the legacy v1 path already ran, before
+  trusting a point for the driver's live `drivers.lat/lng` marker —
+  previously a spoofed/mocked v2 point could move the driver's real-time
+  position on the rider map/dispatch/admin view unchecked, even though
+  `persist_trip_location_batch` recorded the `mocked` flag as inert data.
+  Additive-only: on rejection only the live-marker write is skipped, not the
+  breadcrumb persist or batch ack, so regulatory GPS-trace retention and the
+  independent settlement-time anomaly filter (`utils/trip_distance.py`,
+  which already protected billed distance regardless of this gap) are
+  untouched. Grepped `_persist_v2_location_batch`'s only caller
+  (`update_location_batch`) to confirm isolation. New regression test in
+  `backend/tests/test_location_batch.py` asserts the marker write is skipped
+  while the breadcrumb persist still runs on a rejected point.
+  `pytest tests/test_location_batch.py tests/test_location_batch_revoked_session.py
+  -q --no-cov` → 20 passed. See
+  `docs/change-log/2026-08-19-v2-location-batch-integrity-check.md`.
+  **Not verified:** no live Supabase/Redis check (mocked only, per this
+  module's existing test convention); no live spoofed-device/emulator
+  end-to-end test.
   **FIXED 2026-08-18**: ranked blocker #1/#2 — `docs/legal/insurance-coverage-periods.md`
   (a rider/driver-facing legal draft, and the already-published
   `terms-of-service.md` §13) stated insurance coverage "starts as soon as the

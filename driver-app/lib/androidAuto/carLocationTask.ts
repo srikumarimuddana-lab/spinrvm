@@ -35,24 +35,45 @@
  * here touches `is_online`, so no insurance-period transition is implied: an
  * offline driver watching this map stays in Period 0.
  *
- * ─── One service, never two ─────────────────────────────────────────────────
- * expo-location mints a separate LocationTaskService instance per task name
- * (`LocationTaskService.kt`: `mServiceId = sServiceId++`, channel `appId:taskName`),
- * so running this alongside `spinr-background-location` would put TWO permanent
- * Spinr notifications in the driver's shade. It therefore refuses to start while
- * that one is running — and in that case it isn't needed anyway, because that
- * task publishes to the same channel.
+ * ─── One task, never two (single-writer invariant) ──────────────────────────
+ * expo-location runs ALL location tasks through ONE shared Android
+ * LocationTaskService (single manifest <service>; LocationTaskConsumer.kt
+ * builds an explicit component intent — one instance, ONE notification id;
+ * an earlier version of this comment claimed one service per task, which is
+ * wrong). Two consequences make overlap with `spinr-background-location`
+ * actively destructive, not just cosmetic:
+ *   1. Stopping EITHER task runs `stopForeground(true); stopSelf()` on the
+ *      shared instance — stripping the other task's foreground promotion,
+ *      which is what lets Android throttle background GPS. Every stop here
+ *      therefore repairs the dispatch task (reassertDispatchTaskUnlocked).
+ *   2. A STATIC `sLastTimestamp` in LocationTaskConsumer dedups fixes across
+ *      ALL consumers: with both tasks registered, each fix is delivered to
+ *      both and the losing copy is silently discarded before JS. This 2s
+ *      watcher out-races the 4s dispatch task and starves the durable route
+ *      stream (how ride SPR-PE7TTB lost 83% of a trip).
+ * So this task runs ONLY while dispatch tracking is not registered, all
+ * start/stops are serialized through the locationTaskArbiter, and while the
+ * driver is online the dispatch task feeds the same carFixChannel instead.
  */
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import { recordNonFatal } from '../../utils/crashlytics';
-import { checkLocationIntegrity } from '../../utils/locationIntegrity';
+import { createLocationIntegrityChecker } from '../../utils/locationIntegrity';
+import { runExclusive } from '../../utils/locationTaskArbiter';
 import {
   FOREGROUND_NOTIFICATION_COLOR,
   isBackgroundLocationRunning,
   isSessionEnded,
+  reassertDispatchTaskUnlocked,
 } from '../../utils/backgroundLocation';
 import { publishCarFix } from './carFixChannel';
+
+// This producer's own anti-spoof state. The 2s car watcher used to share one
+// module-global last-location with the trip recorders — its dense cadence
+// stomped their teleport baseline and could falsely reject legitimate trip
+// fixes (see locationIntegrity.ts). Display-only gate: this task never
+// persists or uploads, so filtering here is correct (unlike capture paths).
+const carIntegrity = createLocationIntegrityChecker();
 
 export const CAR_LOCATION_TASK = 'spinr-car-location';
 
@@ -160,10 +181,11 @@ export async function handleCarLocationTask({
   const latest = locations[locations.length - 1];
   if (!latest?.coords) return;
 
-  // Same trust gate as the dispatch watcher. Display-only or not, a mock-location
-  // app should not be able to drive where Spinr says the driver is — including in
-  // the shared last-location cache that the phone dashboard reads back.
-  const integrity = checkLocationIntegrity(latest);
+  // Display trust gate: a mock-location app must not be able to drive where
+  // Spinr says the driver is — including in the shared last-location cache
+  // that the phone dashboard reads back. Filtering is CORRECT here (display
+  // only, nothing durable) — the capture paths persist first instead.
+  const integrity = carIntegrity.check(latest);
   if (!integrity.trusted) {
     console.warn(`[CarLocation] dropped untrusted sample: ${integrity.reason}`);
     return;
@@ -203,8 +225,13 @@ const FOREGROUND_SERVICE_OPTIONS: Location.LocationTaskOptions = {
     notificationTitle: 'Spinr',
     notificationBody: 'Showing your location on the car screen',
     notificationColor: FOREGROUND_NOTIFICATION_COLOR,
-    // The car screen is gone once the app is; so is the reason for this.
-    killServiceOnDestroy: true,
+    // NO killServiceOnDestroy. The flag is stored on the SHARED
+    // LocationTaskService instance (LocationTaskService.kt onStartCommand
+    // overwrites mKillService), so setting it here made swipe-from-recents
+    // kill the dispatch task's on-trip tracking too — a flag that task never
+    // opted into. Accepted residual: on an AA-only session, a swipe-away
+    // leaves this display-only service (and its notification) until
+    // didDisconnect or OS reclaim — it makes no network calls either way.
   },
 };
 
@@ -235,6 +262,10 @@ export function _carLocationMode(): typeof currentMode {
  * upgrade is not worth an alert on a screen someone is driving in front of.
  */
 export async function startCarLocationService(): Promise<CarLocationStart> {
+  return runExclusive('car-start', startCarLocationServiceUnlocked);
+}
+
+async function startCarLocationServiceUnlocked(): Promise<CarLocationStart> {
   try {
     const alreadyRunning = await Location.hasStartedLocationUpdatesAsync(CAR_LOCATION_TASK);
 
@@ -243,7 +274,9 @@ export async function startCarLocationService(): Promise<CarLocationStart> {
     // sign-out that happened while plugged in can then be reaped here, on the
     // 60s tick. Checking first would return 'session-ended' and stop nothing.
     if (await isSessionEnded()) {
-      if (alreadyRunning) await stopCarLocationService();
+      // No dispatch repair: a signed-out device has no dispatch tracking to
+      // re-promote (teardown stopped it, or the bg handler is about to).
+      if (alreadyRunning) await stopCarLocationServiceUnlocked({ repairDispatch: false });
       return 'session-ended';
     }
     // Running WITH a notification is finished business. Running without one is
@@ -254,15 +287,19 @@ export async function startCarLocationService(): Promise<CarLocationStart> {
     // on), so the upgrade needs no stop/start and never drops a fix.
     if (alreadyRunning && currentMode !== 'no-notification') return 'already-running';
 
-    // The online driver's dispatch service is already up and already publishing
-    // to carFixChannel — a second service would only add a second notification.
+    // SINGLE-WRITER: the online driver's dispatch task is already up and
+    // already publishing to carFixChannel — this task must not compete with
+    // it (shared-service demotion + native fix dedup, see file header). Under
+    // the arbiter lock this check is atomic with go-online's own sequence,
+    // closing the race where the 60s car-session tick started this task in
+    // the gap before startBackgroundLocation finished.
     if (await isBackgroundLocationRunning()) {
-      // …and if OUR task is somehow still registered, stop it. Reachable since
-      // a degraded ('no-notification') task deliberately falls past the
-      // already-running check above to look for an upgrade: if the driver went
-      // online in the meantime, this is where it lands, and returning without
-      // stopping would leave two live location subscriptions.
-      if (alreadyRunning) await stopCarLocationService();
+      // …and if OUR task is somehow still registered, stop it AND repair the
+      // dispatch task the stop just demoted. Reachable since a degraded
+      // ('no-notification') task deliberately falls past the already-running
+      // check above to look for an upgrade: if the driver went online in the
+      // meantime, this is where it lands.
+      if (alreadyRunning) await stopCarLocationServiceUnlocked({ repairDispatch: true });
       return 'piggyback';
     }
 
@@ -318,14 +355,34 @@ export async function startCarLocationService(): Promise<CarLocationStart> {
 
 /**
  * Stop it. Unconditional and silent — `stopLocationUpdatesAsync` throws when the
- * task was never started, which is the normal case on most disconnects.
+ * task was never started, which is the normal case on most disconnects. The
+ * public form repairs the dispatch task afterwards: stopping ANY location task
+ * demotes the SHARED Android service (see file header), and the AA-disconnect
+ * path was exactly how an on-trip driver's tracking lost its foreground
+ * promotion (SPR-PE7TTB).
  */
 export async function stopCarLocationService(): Promise<void> {
+  return runExclusive('car-stop', () => stopCarLocationServiceUnlocked({ repairDispatch: true }));
+}
+
+/** @internal Composition primitive for callers already holding the arbiter lock. */
+export async function stopCarLocationServiceUnlocked(
+  options: { repairDispatch: boolean },
+): Promise<void> {
   currentMode = 'none';
   try {
     await Location.stopLocationUpdatesAsync(CAR_LOCATION_TASK);
     console.log('[CarLocation] display service stopped');
   } catch {
     // Not running — nothing to do.
+  }
+  if (options.repairDispatch) {
+    try {
+      if (await isBackgroundLocationRunning()) {
+        await reassertDispatchTaskUnlocked();
+      }
+    } catch {
+      // Repair is best-effort; the 60s in-handler self-heal is the backstop.
+    }
   }
 }

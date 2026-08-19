@@ -22,7 +22,11 @@ describe('completed ride route presentation contract', () => {
     expect(screenSource).toContain('<RouteLine path={mapCoordinates} />');
     expect(screenSource).toContain('<RoutePins');
     expect(screenSource).toContain('completion={currentRide.actual_completion_point || null}');
-    expect(screenSource).not.toContain('Polyline');
+    // The ONE sanctioned raw-Polyline use: the dashed Period-2 pickup leg
+    // (server-flag-gated) as separate grey context under the trip gradient.
+    expect(screenSource.match(/<Polyline/g) ?? []).toHaveLength(1);
+    expect(screenSource).toContain('pickupLegSections.map');
+    expect(screenSource).toContain('lineDashPattern={[6, 6]}');
     expect(screenSource).not.toContain('INFERRED_ROUTE_STROKE');
     expect(screenSource).not.toContain('ACTUAL_ROUTE_STROKE');
     expect(screenSource).not.toContain('{routeSnapshotUrl ? (');

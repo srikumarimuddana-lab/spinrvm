@@ -21,12 +21,18 @@ except ImportError:
 
 try:
     from .datetime_utils import parse_iso_utc
+    from .loop_monitor import record_heartbeat as _record_heartbeat
+    from .metrics import inc as _metric_inc
+    from .metrics import observe as _metric_observe
     from .route_distance import compute_segmented_road_route
     from .route_reconstruction import reconstruct_completed_route
     from .route_segments import SegmentedRoute, segment_route
     from .trip_distance import compute_trip_distances, load_ride_breadcrumbs
 except ImportError:
     from utils.datetime_utils import parse_iso_utc  # type: ignore
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat  # type: ignore
+    from utils.metrics import inc as _metric_inc  # type: ignore
+    from utils.metrics import observe as _metric_observe  # type: ignore
     from utils.route_distance import compute_segmented_road_route  # type: ignore
     from utils.route_reconstruction import reconstruct_completed_route  # type: ignore
     from utils.route_segments import SegmentedRoute, segment_route  # type: ignore
@@ -77,11 +83,22 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _phase_3_points(points: list[Any], ride: Dict[str, Any]) -> list[Any]:
-    """Select passenger-trip evidence while preserving invalid rows for rejection."""
-    started_at = parse_iso_utc(ride.get("ride_started_at") or ride.get("started_at"))
+def _route_window_points(points: list[Any], ride: Dict[str, Any], *, include_pickup_leg: bool = False) -> list[Any]:
+    """Select route evidence for the finalization window.
+
+    Default window is the passenger trip (Period 3). With ``include_pickup_leg``
+    (settings.p2_route_geometry_enabled) it widens to acceptance→completion so
+    the Period-2 pickup leg finalizes too — segments carry per-point
+    ``tracking_phase`` and segment_route splits at phase changes, so the two
+    legs never merge into one line. Rider-facing readers filter to P3.
+    """
+    window_start = parse_iso_utc(ride.get("ride_started_at") or ride.get("started_at"))
+    if include_pickup_leg:
+        window_start = (
+            parse_iso_utc(ride.get("driver_accepted_at")) or parse_iso_utc(ride.get("assigned_at")) or window_start
+        )
     completed_at = parse_iso_utc(ride.get("ride_completed_at") or ride.get("completed_at"))
-    if started_at is None or completed_at is None or completed_at < started_at:
+    if window_start is None or completed_at is None or completed_at < window_start:
         raise ValueError("ride_lifecycle_timestamp_missing")
 
     selected: list[Any] = []
@@ -89,9 +106,14 @@ def _phase_3_points(points: list[Any], ride: Dict[str, Any]) -> list[Any]:
         captured_at = (
             parse_iso_utc(point.get("captured_at") or point.get("timestamp")) if isinstance(point, dict) else None
         )
-        if captured_at is None or started_at <= captured_at <= completed_at:
+        if captured_at is None or window_start <= captured_at <= completed_at:
             selected.append(point)
     return selected
+
+
+def _phase_3_points(points: list[Any], ride: Dict[str, Any]) -> list[Any]:
+    """Back-compat alias: passenger-trip (Period 3) evidence only."""
+    return _route_window_points(points, ride, include_pickup_leg=False)
 
 
 async def _get_route_row(ride_id: str) -> Optional[Dict[str, Any]]:
@@ -122,11 +144,23 @@ async def mark_route_pending(ride_id: str, completion_point: Optional[Dict[str, 
     )
 
 
+def _segment_phase(points: tuple | list) -> str:
+    """A segment's insurance-phase tag — segments never span phases
+    (segment_route splits at phase_change), so the first tagged point speaks
+    for the whole segment; untagged legacy evidence is the passenger trip."""
+    for point in points:
+        phase = point.get("tracking_phase") if isinstance(point, dict) else None
+        if phase:
+            return str(phase)
+    return "trip_in_progress"
+
+
 def _observed_projection(segmented: SegmentedRoute) -> list[dict]:
     """Persist coordinates in their original segments, never as one flat line."""
     return [
         {
             "boundary_reason": segment.boundary_reason,
+            "phase": _segment_phase(segment.points),
             "coordinates": [[round(float(point["lat"]), 6), round(float(point["lng"]), 6)] for point in segment.points],
         }
         for segment in segmented.observed_segments
@@ -153,6 +187,7 @@ def _matched_projection(segmented: SegmentedRoute, matched_route: Dict[str, Any]
                 {
                     "source_segment_index": observed_index,
                     "provider": "observed_fallback",
+                    "phase": _segment_phase(observed_segment.points),
                     "coordinates": [
                         [round(float(point["lat"]), 6), round(float(point["lng"]), 6)]
                         for point in observed_segment.points
@@ -169,6 +204,7 @@ def _matched_projection(segmented: SegmentedRoute, matched_route: Dict[str, Any]
                     "source_segment_index": observed_index,
                     "chunk_index": matched.get("chunk_index"),
                     "provider": matched.get("provider"),
+                    "phase": _segment_phase(observed_segment.points),
                     "coordinates": coordinates,
                 }
             )
@@ -412,6 +448,68 @@ async def recover_stale_route_claims() -> int:
     return recovered
 
 
+BACKSTOP_SWEEP_EVERY_TICKS = 20  # ~5 min at the 15 s tick
+BACKSTOP_GRACE_SECONDS = 5 * 60
+BACKSTOP_LOOKBACK_DAYS = 7
+BACKSTOP_BATCH_LIMIT = 25
+
+
+async def sweep_unsettled_completed_rides() -> int:
+    """Settle completed rides that have no ride_routes row (missed settlement).
+
+    Every completion writer is supposed to create the ride_routes row and queue
+    finalization; the rider-end and admin force-complete paths historically
+    didn't (ride SPR-PE7TTB: 51 breadcrumbs stored, gps_points_count=0, no
+    route, no period-distance audit). This sweep heals recent history and any
+    future missed writer. Replay-safe: settle_completed_ride_geometry skips
+    rides that already have a ride_routes row, and its underlying writers are
+    idempotent, so concurrent replicas collapse harmlessly.
+    """
+    # Lazy import: ride_settlement imports mark_route_pending from this module.
+    try:
+        from .ride_settlement import settle_completed_ride_geometry
+    except ImportError:
+        from utils.ride_settlement import settle_completed_ride_geometry  # type: ignore
+
+    now = _now()
+    rides = await db_supabase.get_rows(
+        "rides",
+        {
+            "status": "completed",
+            "ride_completed_at": {
+                "$gte": (now - timedelta(days=BACKSTOP_LOOKBACK_DAYS)).isoformat(),
+                # Grace window so a normal driver completion (which writes the
+                # row synchronously) is never raced by the sweep.
+                "$lte": (now - timedelta(seconds=BACKSTOP_GRACE_SECONDS)).isoformat(),
+            },
+            "driver_id": {"$notnull": True},
+        },
+        order="ride_completed_at",
+        desc=True,
+        limit=200,
+        columns="id",
+    )
+    if not rides:
+        return 0
+    ride_ids = [r["id"] for r in rides if r.get("id")]
+    settled_rows = await db_supabase.get_rows(
+        "ride_routes", {"ride_id": {"$in": ride_ids}}, limit=len(ride_ids), columns="ride_id"
+    )
+    already = {r.get("ride_id") for r in settled_rows}
+    missing = [rid for rid in ride_ids if rid not in already]
+    settled = 0
+    for rid in missing[:BACKSTOP_BATCH_LIMIT]:
+        if await settle_completed_ride_geometry(rid, trigger="backstop_sweep"):
+            settled += 1
+    if missing:
+        logger.info(
+            "settlement backstop: %d/%d unsettled completed rides handled this sweep",
+            settled,
+            len(missing),
+        )
+    return settled
+
+
 async def route_finalizer_tick() -> int:
     """Recover stale work, atomically claim one route, then finalize it."""
     await recover_stale_route_claims()
@@ -424,13 +522,25 @@ async def route_finalizer_tick() -> int:
 
 async def route_finalizer_loop(interval_seconds: int = ROUTE_FINALIZER_INTERVAL_SECONDS) -> None:
     """Replay-safe 15-second loop for versioned route finalization."""
+    tick = 0
     while True:
         try:
+            # Backstop first on the sweep ticks so a healed ride can be
+            # claimed by this same tick's finalization pass.
+            if tick % BACKSTOP_SWEEP_EVERY_TICKS == 0:
+                try:
+                    await sweep_unsettled_completed_rides()
+                except Exception:
+                    logger.error("settlement backstop sweep failed", exc_info=True)
             await route_finalizer_tick()
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.error("route finalizer tick failed", exc_info=True)
+        tick += 1
+        # Heartbeat AFTER the except (main's placement): a tick that raises
+        # must still show the loop alive, or the watchdog pages for a loop
+        # that is running fine and merely hit a bad ride.
         _record_heartbeat(_LOOP_NAME)
         await asyncio.sleep(interval_seconds)
 
@@ -641,6 +751,34 @@ async def _recompute_ride_distance_stats(
         distance_basis,
     )
 
+    # Insurer audit correction: the SGI per-period distances were frozen at
+    # settlement; late evidence that shifted the measured distance beyond the
+    # epsilon appends revision rows (append-only-safe, migration 346). Readers
+    # use the driver_period_distances_current view. Best-effort.
+    driver_id = ride.get("driver_id")
+    if driver_id:
+        try:
+            try:
+                from .metrics import inc as _rev_metric_inc
+                from .period_distance_audit import record_period_distance_revision
+            except ImportError:
+                from utils.metrics import inc as _rev_metric_inc  # type: ignore
+                from utils.period_distance_audit import record_period_distance_revision  # type: ignore
+
+            revised_p3 = await record_period_distance_revision(
+                driver_id=driver_id, ride_id=ride_id, period=3, distance_km=round(new_actual, 3)
+            )
+            revised_p2 = await record_period_distance_revision(
+                driver_id=driver_id,
+                ride_id=ride_id,
+                period=2,
+                distance_km=round(float(distances.pickup_to_driver_km or 0), 3),
+            )
+            if revised_p3 or revised_p2:
+                _rev_metric_inc("spinr_insurance_period_distance_rederived_total")
+        except Exception:
+            logger.error("period-distance revision append failed for ride %s", ride_id, exc_info=True)
+
 
 async def finalize_route(ride_id: str) -> Dict[str, Any]:
     """Produce a revisioned route projection from durable evidence only.
@@ -666,6 +804,11 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
             limit=10_000,
         )
         completion_point = (route_row or {}).get("completion_point")
+        # The MAIN pipeline stays strictly Period-3: distance recompute,
+        # reconstruction, coverage/quality, and the incomplete ladder are all
+        # passenger-trip contracts. The pickup leg (flag-gated) is computed
+        # separately below as an ADDITIVE display artifact so it can never
+        # contaminate measured distance or route quality.
         segmented = segment_route(_phase_3_points(points, ride), ride, completion_point)
         matched_route = await compute_segmented_road_route(list(segmented.observed_segments))
         reconstructed: Optional[Dict[str, Any]] = None
@@ -685,9 +828,42 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
         display_segments = (
             reconstructed["segments"] if reconstructed is not None else _matched_projection(segmented, matched_route)
         )
+        # Drawability/status/quality are judged on the P3 leg BEFORE the
+        # pickup leg is appended — a ride whose passenger trip has no evidence
+        # must stay "incomplete" even if its pickup leg drew fine.
         drawable = _has_drawable_route(display_segments)
         processing_status = _final_status(segmented, matched_route, drawable, reconstructed)
         quality = _quality_projection(segmented, matched_route, drawable, reconstructed)
+
+        # Flag-gated ADDITIVE pickup-leg (Period 2) geometry: observed-only (no
+        # road matching — no extra provider spend), phase-tagged segments
+        # PREPENDED to the projections. Rider-facing readers filter to P3
+        # (ride_repo) and the receipt snapshot renders P3 only, preserving the
+        # 2026-07-20 actual-route-only contract; admin maps gain the leg.
+        observed_projection_segments = _observed_projection(segmented)
+        try:
+            _p2_enabled = bool(((await get_app_settings()) or {}).get("p2_route_geometry_enabled", False))
+        except Exception:
+            _p2_enabled = False
+        if _p2_enabled:
+            try:
+                p2_window = _route_window_points(points, ride, include_pickup_leg=True)
+                started_at = parse_iso_utc(ride.get("ride_started_at") or ride.get("started_at"))
+                p2_points = [
+                    point
+                    for point in p2_window
+                    if isinstance(point, dict)
+                    and (parse_iso_utc(point.get("captured_at") or point.get("timestamp")) or started_at) < started_at
+                ]
+                if p2_points:
+                    p2_segmented = segment_route(p2_points, ride, None)
+                    p2_projection = _observed_projection(p2_segmented)
+                    if p2_projection:
+                        display_segments = [*p2_projection, *display_segments]
+                        observed_projection_segments = [*p2_projection, *observed_projection_segments]
+                        _metric_inc("spinr_rides_route_p2_segments_total", by=len(p2_projection))
+            except Exception:
+                logger.error("pickup-leg (P2) geometry build failed for ride %s", ride_id, exc_info=True)
         # Corroborate the gap-aware coverage with the active-trip gap monitor's
         # record: how many dead zones opened during the ride and their total
         # duration. Timestamp-only rows (no coordinates); best-effort so a read
@@ -733,7 +909,7 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
             "route_schema_version": 2,
             "route_revision": revision,
             "processing_status": processing_status,
-            "observed_segments": _observed_projection(segmented),
+            "observed_segments": observed_projection_segments,
             "road_matched_segments": display_segments,
             "route_quality": quality,
             "processing_claimed_at": None,
@@ -759,6 +935,19 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
         )
         if updated is None:
             return {"processing_status": "superseded"}
+        # Fleet-health signal: outcome mix (complete / incomplete / pending
+        # retry) and the coverage distribution. A rising incomplete share or a
+        # sagging coverage histogram is the earliest sign of capture loss —
+        # both were invisible when SPR-PE7TTB-class failures happened.
+        _metric_inc("spinr_rides_route_finalized_total", {"status": str(processing_status)})
+        _cov = quality.get("coverage_ratio")
+        if isinstance(_cov, (int, float)):
+            # Ratio-scaled buckets (observe() defaults to millisecond buckets).
+            _metric_observe(
+                "spinr_rides_route_coverage_ratio",
+                float(_cov),
+                buckets=(0.1, 0.25, 0.5, 0.7, 0.85, 0.95, 1.0),
+            )
         if processing_status == "complete":
             try:
                 # Stats-only follow-up: late tail evidence changes the *measured*
@@ -778,11 +967,18 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
                     exc_info=True,
                 )
         if processing_status == "complete" and drawable:
+            # Receipt snapshot is rider-facing: render the passenger trip only
+            # (actual-route-only contract) — never the P2 pickup leg.
+            snapshot_segments = [
+                segment
+                for segment in display_segments
+                if not isinstance(segment, dict) or segment.get("phase") in (None, "trip_in_progress")
+            ]
             await _publish_finalized_snapshot(
                 ride_id,
                 ride,
                 revision,
-                display_segments,
+                snapshot_segments,
                 quality,
                 completion_point,
                 finalized_at=now,

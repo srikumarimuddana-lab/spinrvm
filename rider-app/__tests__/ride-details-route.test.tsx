@@ -14,7 +14,14 @@ describe('ride-details v2 route rendering contract', () => {
     expect(source).toContain('<RouteLine path={mapCoordinates} />');
     expect(source).toContain('<RoutePins');
     expect(source).toContain('completion={ride.actual_completion_point || null}');
-    expect(source).not.toContain('Polyline');
+    // The ONE sanctioned raw-Polyline use: the dashed Period-2 pickup leg
+    // (server-flag-gated) rendered as separate grey context, never joined
+    // into the RouteLine trip gradient. Any other raw Polyline is a
+    // regression to the per-section stroke rendering this contract retired.
+    expect(source.match(/<Polyline/g) ?? []).toHaveLength(1);
+    expect(source).toContain('pickupLegSections.map');
+    expect(source).toContain('lineDashPattern={[6, 6]}');
+    expect(source).toContain("s.phase === 'trip_in_progress'");
     expect(source).not.toContain('INFERRED_ROUTE_STROKE');
     expect(source).not.toContain('ACTUAL_ROUTE_STROKE');
     expect(source).not.toContain('{routeSnapshotUrl ? (');

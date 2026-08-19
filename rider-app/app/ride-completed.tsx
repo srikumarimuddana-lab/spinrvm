@@ -8,7 +8,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
 import { RouteLine } from '@shared/components/RouteLine';
 import { RoutePins } from '@shared/components/RoutePins';
 import { useRideStore } from '../store/rideStore';
@@ -86,9 +86,19 @@ function RideCompletedScreenContent() {
   const successScale = useAnimatedValue(0);
   const successOpacity = useAnimatedValue(0);
 
-  const actualSections = useMemo(
+  const allSections = useMemo(
     () => toReactNativeRouteSections(currentRide?.actual_route_segments),
     [currentRide?.actual_route_segments],
+  );
+  // Trip (P3) line vs. optional dashed pickup leg (P2 — only present when the
+  // server's rider_show_pickup_leg_enabled flag is on).
+  const actualSections = useMemo(
+    () => allSections.filter((s) => !s.phase || s.phase === 'trip_in_progress'),
+    [allSections],
+  );
+  const pickupLegSections = useMemo(
+    () => allSections.filter((s) => s.phase === 'navigating_to_pickup' || s.phase === 'arrived_at_pickup'),
+    [allSections],
   );
   const plannedSegments = useMemo(() => {
     // Read the field once so the compiler's inferred dependency matches the
@@ -667,6 +677,18 @@ function RideCompletedScreenContent() {
               }}
               onMapReady={() => setRouteMapReady(true)}
             >
+              {/* Pickup leg (P2) as dashed grey context UNDER the trip line —
+                  present only when the server flag sends non-trip phases. */}
+              {pickupLegSections.map((s) => (
+                <Polyline
+                  key={`pickup-leg-${s.id}`}
+                  coordinates={s.coordinates}
+                  strokeColor="#9CA3AF"
+                  strokeWidth={3}
+                  lineDashPattern={[6, 6]}
+                  lineCap="round"
+                />
+              ))}
               {/* Real reconstructed route as one shared orange→red gradient.
                   v2 sections are passed SEPARATELY (paths) so a GPS gap is never
                   bridged by a false chord; the legacy planned polyline is one

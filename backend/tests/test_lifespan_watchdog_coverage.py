@@ -122,17 +122,19 @@ class TestWatchdogCoversEverySpawnedLoop:
 
     def test_watched_loop_count_matches_spawned_loop_count(self, _lifespan_fn):
         """Explicit count assertion (not just set-equality) — 24 previously
-        watched + the 13 loops this fix adds = 37 (38 total _spawn() calls,
-        including loop_watchdog itself, which does not watch itself)."""
+        watched + the 13 loops the watchdog-coverage fix added = 37, plus the
+        2 tracking-overhaul loops (stale_p3_closer, driver_daily_rollup) = 39
+        (40 total _spawn() calls, including loop_watchdog itself, which does
+        not watch itself)."""
         spawned = _spawned_loop_names(_lifespan_fn)
         watched = _watchdog_loop_names(_lifespan_fn)
 
-        assert len(spawned) == 38, (
-            f"expected 38 total _spawn() calls (37 loops + loop_watchdog itself), got {len(spawned)} — "
+        assert len(spawned) == 40, (
+            f"expected 40 total _spawn() calls (39 loops + loop_watchdog itself), got {len(spawned)} — "
             "update this test's expected count deliberately if a loop was intentionally added/removed, "
             "and update _WATCHDOG_LOOP_NAMES in the same change."
         )
-        assert len(watched) == 37, f"expected 37 watched loop names, got {len(watched)}"
+        assert len(watched) == 39, f"expected 39 watched loop names, got {len(watched)}"
 
     def test_previously_missing_13_loops_are_now_registered(self, _lifespan_fn):
         """Names the audit found spawned-but-unwatched (ranked blocker #27).

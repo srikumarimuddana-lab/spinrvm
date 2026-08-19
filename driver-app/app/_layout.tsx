@@ -191,7 +191,10 @@ if (Notifications) {
       // the plain native banner so the driver doesn't see both.
       // Ride status changes (completed, cancelled, etc.) are handled in-app
       // via WS + the dashboard panels — no native notification needed.
-      const suppressTypes = ['new_ride_assignment', 'ride_completed', 'ride_cancelled', 'ride_status_changed'];
+      // location_health is a silent ops recovery ping (backgroundMessaging
+      // re-asserts GPS tracking) — a visible banner would only alarm a driver
+      // whose app is about to self-heal.
+      const suppressTypes = ['new_ride_assignment', 'ride_completed', 'ride_cancelled', 'ride_status_changed', 'location_health'];
       if (suppressTypes.includes(data?.type)) {
         return { shouldShowBanner: false, shouldShowList: false, shouldPlaySound: false, shouldSetBadge: false, shouldShowAlert: false };
       }

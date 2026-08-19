@@ -11,7 +11,7 @@
 The rollup was built as a one-off admin maintenance tool, not a product data layer; settlement's anomaly-filter learnings never propagated to the SQL function.
 
 ## Fix/remediation (by commit)
-1. `ddf1340` — migration 343 (idle/navigating/trip **seconds** + `day_tz` on driver_daily_stats), migration 344 (function v2: settlement's exact caps 5 km/300 s/150 km/h, per-phase seconds, `arrived_at_pickup` folded into the pickup-way bucket, always-one-row); parity suite rewritten — spike-filter parity now **asserted**, verified on a real Postgres 16.
+1. `ddf1340` — migration 347 (idle/navigating/trip **seconds** + `day_tz` on driver_daily_stats), migration 348 (function v2: settlement's exact caps 5 km/300 s/150 km/h, per-phase seconds, `arrived_at_pickup` folded into the pickup-way bucket, always-one-row); parity suite rewritten — spike-filter parity now **asserted**, verified on a real Postgres 16.
 2. `aae36c8` — migration-review blocker: `REVOKE EXECUTE ... FROM PUBLIC, anon, authenticated` on the SECURITY DEFINER function (it takes an arbitrary driver_id over RLS-protected GPS data; v1 was exposed via `/rest/v1/rpc/` since migration 54) + `day_tz` CHECK constraint.
 3. `613b4d8` — `utils/driver_daily_rollup.py`: shared Regina-day core; discovery via insurance-period overlap ∪ rides-that-day; scheduler (2 completed days per 30-min tick, 7-day sweep nightly after 02:00 Regina, never a partial today).
 4. `dc13272` — loop registered in lifespan + `_WATCHDOG_LOOP_NAMES` + `LOOP_THRESHOLDS` (90 min).
@@ -43,12 +43,12 @@ after:  30-min loop + endpoint on one Regina core, settlement-filtered, km + sec
 ```
 
 ## Rollback plan
-Loop: it has no flag, but is inert-safe to stop — remove is a one-line lifespan revert; rows already written are data. Migration 343 columns: additive, `DROP COLUMN` per rollback comment. Migration 344: re-apply 54's body (documented in-file). Boundary fix (commit 6): revert restores UTC-midnight top-up — only correct if the loop is also stopped; revert the two together. No live-data mutation beyond recomputed stat rows (always re-derivable from retained GPS/rides).
+Loop: it has no flag, but is inert-safe to stop — remove is a one-line lifespan revert; rows already written are data. Migration 347 columns: additive, `DROP COLUMN` per rollback comment. Migration 348: re-apply 54's body (documented in-file). Boundary fix (commit 6): revert restores UTC-midnight top-up — only correct if the loop is also stopped; revert the two together. No live-data mutation beyond recomputed stat rows (always re-derivable from retained GPS/rides).
 
 ## Verification performed
-- New/updated suites: test_driver_daily_rollup.py (7), test_phase_distance_parity.py (2, against a **real Postgres 16** applying 54→344 in order), test_rollup_partial_day_guard.py (4), test_admin_maintenance_coverage.py (26 total), test_referrals_coverage.py (21, incl. explicit Regina-boundary pin), test_driver_activity.py (6).
+- New/updated suites: test_driver_daily_rollup.py (7), test_phase_distance_parity.py (2, against a **real Postgres 16** applying 54→348 in order), test_rollup_partial_day_guard.py (4), test_admin_maintenance_coverage.py (26 total), test_referrals_coverage.py (21, incl. explicit Regina-boundary pin), test_driver_activity.py (6).
 - Full fast backend suite run before push (see PR/commit thread for count).
-- Migrations 343/344 reviewed by `spinr-migration-reviewer`; the one blocker (EXECUTE lockdown) and both actionable warnings (CHECK constraint, mixed-boundary seam plan) addressed in-batch.
+- Migrations 347/348 reviewed by `spinr-migration-reviewer`; the one blocker (EXECUTE lockdown) and both actionable warnings (CHECK constraint, mixed-boundary seam plan) addressed in-batch.
 
 ## What was NOT verified
 - Not run against live Supabase; PostgREST behavior mocked except the parity tests' real-Postgres function checks.

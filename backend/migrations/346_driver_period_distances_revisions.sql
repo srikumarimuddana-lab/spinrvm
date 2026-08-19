@@ -1,4 +1,4 @@
--- 342: Append-only-safe corrections for driver_period_distances.
+-- 346: Append-only-safe corrections for driver_period_distances.
 --
 -- WHY: the per-insurance-period distance audit is frozen at settlement — when
 -- late GPS arrives (offline tail delivered after completion) the route

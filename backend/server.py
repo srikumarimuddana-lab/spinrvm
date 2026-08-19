@@ -131,6 +131,7 @@ from routes.disputes import api_router as disputes_router
 from routes.drivers import api_router as drivers_router
 from routes.fares import api_router as fares_router
 from routes.favorites import api_router as favorites_router
+from routes.legacy_consent import api_router as legacy_consent_router
 from routes.legal_documents import api_router as legal_documents_router
 from routes.lost_and_found import api_router as lost_and_found_router
 from routes.loyalty import api_router as loyalty_router
@@ -345,6 +346,7 @@ v1_api_router.include_router(wallet_router)
 v1_api_router.include_router(quests_router)
 v1_api_router.include_router(webhooks_router)
 v1_api_router.include_router(marketing_router)
+v1_api_router.include_router(legacy_consent_router)
 v1_api_router.include_router(upload_router)
 v1_api_router.include_router(support_router)
 v1_api_router.include_router(admin_support_router)

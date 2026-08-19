@@ -228,7 +228,21 @@ async def get_ride(ride_id: str, *, include_route: bool = False) -> Optional[Dic
         lambda: _single_row_from_res(supabase.table("ride_routes").select("*").eq("ride_id", ride_id).execute())
     )
     if route:
-        await _project_route_detail(ride, route)
+        # rider_show_pickup_leg_enabled (default off) extends the rider/driver
+        # detail with the observed Period-2 pickup leg. Display-only: fares,
+        # distance stats, and the P3 main pipeline are untouched; clients
+        # render non-trip phases dashed. Settings failure → flag off (the
+        # 2026-07-20 actual-route-only contract stays the safe default).
+        include_pickup_leg = False
+        try:
+            try:
+                from ..settings_loader import get_app_settings  # type: ignore
+            except ImportError:
+                from settings_loader import get_app_settings  # type: ignore
+            include_pickup_leg = bool(((await get_app_settings()) or {}).get("rider_show_pickup_leg_enabled", False))
+        except Exception:
+            logger.warning("rider pickup-leg flag read failed; defaulting off")
+        await _project_route_detail(ride, route, include_pickup_leg=include_pickup_leg)
     return ride
 
 

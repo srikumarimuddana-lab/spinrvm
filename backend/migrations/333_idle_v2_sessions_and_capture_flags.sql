@@ -10,7 +10,7 @@
 -- Distance Logs + map replay), rollout via flags below.
 --
 -- Rollback:
---   DROP INDEX IF EXISTS uq_dlh_session_sequence;
+--   DROP INDEX CONCURRENTLY IF EXISTS uq_dlh_session_sequence;
 --   ALTER TABLE settings
 --     DROP COLUMN IF EXISTS idle_location_v2_enabled,
 --     DROP COLUMN IF EXISTS idle_breadcrumb_retention_hours,
@@ -19,8 +19,15 @@
 --     DROP COLUMN IF EXISTS location_health_push_nudge_enabled,
 --     DROP COLUMN IF EXISTS stale_p3_autoclose_enabled;
 --
--- Forward-compatible: additive defaulted columns + a partial index; the old
--- backend ignores both. All flags default OFF so deploy order is free.
+-- Forward-compatible: additive defaulted columns + a NON-partial unique index
+-- (see the ON CONFLICT rationale below); the old backend ignores both. All
+-- flags default OFF so deploy order is free.
+--
+-- Production pre-flight (a CONCURRENTLY build that hits a duplicate fails and
+-- leaves an INVALID index to drop manually — verify uniqueness first):
+--   SELECT driver_id, recording_session_id, sequence_number, COUNT(*)
+--   FROM driver_location_history WHERE recording_session_id IS NOT NULL
+--   GROUP BY 1,2,3 HAVING COUNT(*) > 1;
 
 -- Idempotent replay for idle batches: the migration-239 unique index keys on
 -- (ride_id, driver_id, recording_session_id, sequence_number), and Postgres

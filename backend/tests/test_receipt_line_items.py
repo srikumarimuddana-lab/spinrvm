@@ -275,3 +275,40 @@ class TestMinimumFareAdjustment:
         assert "Airport surcharge" in html
         assert "$4.00" in html
         assert "Minimum fare adjustment" not in html  # not clamped, only airport
+
+
+class TestPickupLegContextLine:
+    """Phase 4: the driver's approach distance may appear as flag-gated
+    CONTEXT — never as a fare row, always explicitly 'not charged'."""
+
+    def test_off_by_default_renders_nothing(self):
+        html = generate_receipt_html(
+            _ride(phase_distances={"navigating_to_pickup": 2.4}), _RIDER, _DRIVER
+        )
+        assert "approach to pickup" not in html
+
+    def test_on_renders_outside_fare_rows_and_marked_not_charged(self):
+        html = generate_receipt_html(
+            _ride(phase_distances={"navigating_to_pickup": 2.4, "arrived_at_pickup": 0.1}),
+            _RIDER,
+            _DRIVER,
+            show_pickup_leg=True,
+        )
+        assert "Driver&#x27;s approach to pickup: 2.5 km — not charged." in html or (
+            "Driver's approach to pickup: 2.5 km — not charged." in html
+        )
+        # Never a dollar amount attached to the pickup leg.
+        assert "approach to pickup: 2.5 km — not charged" in html.replace("&#x27;", "'")
+
+    def test_on_with_no_phase_data_renders_nothing(self):
+        html = generate_receipt_html(_ride(), _RIDER, _DRIVER, show_pickup_leg=True)
+        assert "approach to pickup" not in html
+
+    def test_fare_total_is_identical_with_and_without_the_line(self):
+        ride = _ride(phase_distances={"navigating_to_pickup": 2.4})
+        assert _receipt_total(ride, Decimal("0")) == _receipt_total(dict(ride), Decimal("0"))
+        html_on = generate_receipt_html(ride, _RIDER, _DRIVER, show_pickup_leg=True)
+        html_off = generate_receipt_html(ride, _RIDER, _DRIVER)
+        # The charged figures render identically either way.
+        for token in ("Base fare", "Distance (", "Time ("):
+            assert token in html_on and token in html_off

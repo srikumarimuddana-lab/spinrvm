@@ -333,6 +333,7 @@ def generate_receipt_html(
     *,
     include_route_snapshot: bool = True,
     company: Optional["CompanyDetails"] = None,
+    show_pickup_leg: bool = False,
 ) -> str:
     """Generate HTML receipt for a completed ride.
 
@@ -389,6 +390,21 @@ def generate_receipt_html(
         route_snapshot_html = f"""
         <tr><td style="padding:0 24px 16px;">
           <p style="font-size:12px;color:#8a3412;margin:0;">{route_snapshot_note}{attached_copy_note}</p>
+        </td></tr>
+        """
+
+    # Pickup-leg context (flag-gated): the driver's approach distance, shown
+    # as plain information NEXT TO the map — deliberately outside the fare
+    # table, and explicitly marked not charged, so it can never read as a
+    # hidden fee (CLAUDE.md: every charged amount maps to a fare line; this
+    # is not one). Fare math above is untouched.
+    if show_pickup_leg:
+        _pd = ride.get("phase_distances") or {}
+        pickup_leg_km = _d(_pd.get("navigating_to_pickup") or 0) + _d(_pd.get("arrived_at_pickup") or 0)
+        if pickup_leg_km > 0:
+            route_snapshot_html += f"""
+        <tr><td style="padding:0 24px 12px;">
+          <p style="font-size:12px;color:#666;margin:0;">Driver's approach to pickup: {pickup_leg_km:.1f} km — not charged.</p>
         </td></tr>
         """
 
@@ -608,10 +624,28 @@ async def send_receipt_email(
     snapshot_url, snapshot_note, snapshot_is_actual = _route_snapshot_presentation(ride)
     snapshot_bytes = await _download_route_snapshot(snapshot_url) if snapshot_url else None
     company = await _branded_company()
+    # Pickup-leg context line (flag-gated, informational — never a fare row).
+    show_pickup_leg = False
+    try:
+        try:
+            from ..settings_loader import get_app_settings  # type: ignore
+        except ImportError:
+            from settings_loader import get_app_settings  # type: ignore
+        show_pickup_leg = bool(((await get_app_settings()) or {}).get("rider_show_pickup_leg_enabled", False))
+    except Exception:
+        logger.warning("pickup-leg receipt flag read failed; omitting the line")
     # Private Storage URLs expire. The email body must remain valid long after
     # delivery, so it contains only the quality note; the PDF and PNG contain
     # the immutable bytes downloaded while the signed URL was valid.
-    html = generate_receipt_html(ride, rider, driver, tip, include_route_snapshot=False, company=company)
+    html = generate_receipt_html(
+        ride,
+        rider,
+        driver,
+        tip,
+        include_route_snapshot=False,
+        company=company,
+        show_pickup_leg=show_pickup_leg,
+    )
     total = _receipt_total(ride, tip)
     # The receipt shipped HTML-only, so a text-only client, a screen reader or a
     # blocked-image view got nothing at all — on the one email that doubles as a

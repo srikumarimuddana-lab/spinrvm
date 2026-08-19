@@ -446,6 +446,8 @@ def test_epoch_ms_timestamps_are_converted_to_iso_utc(monkeypatch):
     assert ride["created_at"].endswith("+00:00")
     # 10 minutes between start and completion
     assert ride["duration_minutes"] == 10
+    # A real measured duration must not be marked as estimated.
+    assert ride["legacy_import_metadata"]["duration_estimated"] is False
 
 
 def test_missing_start_timestamp_estimates_duration(monkeypatch):
@@ -455,6 +457,10 @@ def test_missing_start_timestamp_estimates_duration(monkeypatch):
     assert "ride_started_at" not in ride
     assert ride["duration_minutes"] >= 1
     assert plan.stats["missing_start_rows"] == 1
+    # Finding #3, docs/audit/2026-08-19-legacy-migration-data-quality-audit.md:
+    # an estimated duration must be marked so it isn't mistaken for a real
+    # measured one once committed.
+    assert ride["legacy_import_metadata"]["duration_estimated"] is True
 
 
 def test_missing_completion_timestamp_is_an_error(monkeypatch):

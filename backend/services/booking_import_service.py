@@ -612,6 +612,15 @@ def build_plan(
                 # eventual business/legal decision on historical GST
                 # treatment doesn't have to re-derive it from the CSV again.
                 "old_payout_gst_amount": float(payout_gst_amount),
+                # True when this row has no start_ride_at and duration_minutes
+                # was estimated from distance/FALLBACK_SPEED_KMH instead of
+                # measured -- otherwise indistinguishable from a real duration
+                # once committed (docs/audit/2026-08-19-legacy-migration-data-
+                # quality-audit.md, "Legacy rides' estimated duration_minutes
+                # carries no per-row marker"). Any consumer of duration_minutes
+                # (e.g. the driver Activity screen's "Total Duration" stat)
+                # can check this key to exclude/flag estimated rows.
+                "duration_estimated": not bool(started_at),
             },
         }
         if started_at:

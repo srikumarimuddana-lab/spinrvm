@@ -236,7 +236,7 @@ insert for driver kind) — both paths are unchanged by this fix; only the
 | `backend/routes/users.py` | `_rider_referral_summary`'s completed-rides count now also filters `grand_total > 0` | Mirror the payout loop's qualification logic on the rider-facing display so it never shows "qualified" for a referee the loop will not pay |
 | `backend/schemas.py` | Added `AppSettings.referral_payout_velocity_cap_per_day: int = 5` with rationale comment | Config default + documentation, per CLAUDE.md's "Settings in DB" convention |
 | `backend/routes/admin/settings.py` | Added `SettingsUpdateRequest.referral_payout_velocity_cap_per_day: Optional[int]` (`ge=0, le=1000`) | Makes the threshold genuinely admin-settable (required by this repo's settings-column-parity contract — see risk section) |
-| `backend/migrations/335_referral_payout_velocity_cap_setting.sql` | `ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS referral_payout_velocity_cap_per_day INTEGER NOT NULL DEFAULT 5` | Backing column for the admin-settable field above; additive, matches the code default exactly so applying it changes no behavior |
+| `backend/migrations/336_referral_payout_velocity_cap_setting.sql` | `ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS referral_payout_velocity_cap_per_day INTEGER NOT NULL DEFAULT 5` | Backing column for the admin-settable field above; additive, matches the code default exactly so applying it changes no behavior |
 | `backend/tests/test_referral_payout_batching.py` | Two existing fixture ride dicts gained an explicit non-zero `grand_total` | These tests represent real, paid rides and were previously failing to specify `grand_total` at all — after the fix, an unset `grand_total` reads as `$0` and would have made these fixtures fail as false negatives; not a behavior change to the tests' intent |
 | `backend/tests/test_routes_users_coverage.py` | Added 2 tests to `TestRiderReferralSummary`: filter-wiring assertion, and a $0-ride-does-not-qualify case | New coverage for the display-side fix |
 | `backend/tests/test_referral_payout_fraud_guards.py` (new) | 14 tests: `_count_prefetched_rides(exclude_zero_fare=...)` unit coverage, `_process_one` end-to-end $0-ride / real-fare / mixed-rides cases, and the full velocity-cap suite (N vs N+1, no-claim-on-cap, cap=0 disables, read-only check doesn't increment, Redis-failure fail-open/no-raise) | New coverage for both guards, per task's required test scenarios |
@@ -309,7 +309,7 @@ completed = await db_supabase.count_documents(
   needed (unlike a fix that had already applied wallet deltas, which per
   CLAUDE.md a `git revert` alone would not be a sufficient rollback plan
   for).
-- **Migration 335:** reversible per its own header —
+- **Migration 336:** reversible per its own header —
   `ALTER TABLE public.settings DROP COLUMN IF EXISTS referral_payout_velocity_cap_per_day;`
   — dropping it does not disable the cap itself (the code falls back to the
   `schemas.py` default of 5 when the column/row is absent), only removes the

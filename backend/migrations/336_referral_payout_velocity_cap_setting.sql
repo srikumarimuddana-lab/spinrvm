@@ -1,4 +1,4 @@
--- 335_referral_payout_velocity_cap_setting.sql
+-- 336_referral_payout_velocity_cap_setting.sql
 --
 -- Rollback:
 --   ALTER TABLE public.settings

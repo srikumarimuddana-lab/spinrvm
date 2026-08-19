@@ -38,9 +38,14 @@
 -- then re-apply migration 288's original body if the RPC itself must be
 -- reverted (not recommended — reintroduces the underpayment bug).
 --
--- Forward-compatible: function redefinition only (migration-override-ok,
--- same class of change as migration 214/319's CREATE OR REPLACE precedent
--- for money RPCs). No table altered, no backfill.
+-- Forward-compatible: function redefinition only, same class of change as
+-- migration 214/319's CREATE OR REPLACE precedent for money RPCs. No table
+-- altered, no backfill.
+--
+-- migration-override-ok: intentional CREATE OR REPLACE of
+-- settle_ride_card_payment (originally defined in migration 288) — this is
+-- the structural fix itself, not an accidental redefinition. See the
+-- context block above for the production incident this closes.
 
 CREATE OR REPLACE FUNCTION settle_ride_card_payment(
     p_ride_id           text,

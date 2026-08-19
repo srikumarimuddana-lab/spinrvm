@@ -8,7 +8,7 @@ TEST-ONLY change — no application code touched.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -169,7 +169,9 @@ class TestCreateIncentive:
             "end_date": "2026-08-31",
             "max_budget": 1000.0,
         }
-        resp = admin_client.post("/api/admin/incentives", json=payload)
+        audit_mock = AsyncMock(return_value="audit-1")
+        with patch("backend.routes.admin.incentives.log_admin_action", audit_mock):
+            resp = admin_client.post("/api/admin/incentives", json=payload)
         assert resp.status_code == 200
         assert resp.json()["id"] == "inc-new"
 
@@ -178,6 +180,11 @@ class TestCreateIncentive:
         assert row["bonus_amount"] == 15.0
         assert row["service_area_id"] == "area-1"
         assert row["max_budget"] == 1000.0
+
+        audit_mock.assert_awaited_once()
+        assert audit_mock.call_args[0][1] == "incentive_created"
+        assert audit_mock.call_args[0][2] == "ride_incentives"
+        assert audit_mock.call_args[0][3] == "inc-new"
 
     def test_bonus_amount_over_500_rejected_by_validation(self, admin_client):
         payload = {"name": "Too big", "incentive_type": "flat", "bonus_amount": 501}
@@ -216,7 +223,9 @@ class TestUpdateIncentive:
         updated = {"id": "inc-1", "bonus_amount": 20.0}
         db_supabase.supabase.table.return_value.update.return_value.eq.return_value.execute = _mock_execute([updated])
 
-        resp = admin_client.patch("/api/admin/incentives/inc-1", json={"bonus_amount": 20.0})
+        audit_mock = AsyncMock(return_value="audit-2")
+        with patch("backend.routes.admin.incentives.log_admin_action", audit_mock):
+            resp = admin_client.patch("/api/admin/incentives/inc-1", json={"bonus_amount": 20.0})
         assert resp.status_code == 200
         assert resp.json()["bonus_amount"] == 20.0
 
@@ -224,6 +233,10 @@ class TestUpdateIncentive:
         updates = update_call.args[0]
         assert updates["bonus_amount"] == 20.0
         assert "updated_at" in updates
+
+        audit_mock.assert_awaited_once()
+        assert audit_mock.call_args[0][1] == "incentive_updated"
+        assert audit_mock.call_args[0][3] == "inc-1"
 
     def test_empty_body_returns_400(self, admin_client):
         resp = admin_client.patch("/api/admin/incentives/inc-1", json={})
@@ -271,9 +284,16 @@ class TestToggleIncentive:
         table.execute = MagicMock(return_value=select_result)
         table.update.return_value.eq.return_value.execute = MagicMock(return_value=update_result)
 
-        resp = admin_client.patch("/api/admin/incentives/inc-1/toggle")
+        audit_mock = AsyncMock(return_value="audit-3")
+        with patch("backend.routes.admin.incentives.log_admin_action", audit_mock):
+            resp = admin_client.patch("/api/admin/incentives/inc-1/toggle")
         assert resp.status_code == 200
         assert resp.json()["is_active"] is False
+
+        audit_mock.assert_awaited_once()
+        assert audit_mock.call_args[0][1] == "incentive_toggled"
+        assert audit_mock.call_args[0][3] == "inc-1"
+        assert audit_mock.call_args[0][4] == {"is_active": False}
 
     def test_not_found_returns_404(self, admin_client):
         from backend import db_supabase
@@ -305,9 +325,13 @@ class TestDeleteIncentive:
             [{"id": "inc-1"}]
         )
 
-        resp = admin_client.delete("/api/admin/incentives/inc-1")
+        audit_mock = AsyncMock(return_value="audit-4")
+        with patch("backend.routes.admin.incentives.log_admin_action", audit_mock):
+            resp = admin_client.delete("/api/admin/incentives/inc-1")
         assert resp.status_code == 200
         assert resp.json() == {"deleted": True}
+
+        audit_mock.assert_awaited_once_with(dict(_ADMIN), "incentive_deleted", "ride_incentives", "inc-1", {})
 
     def test_not_found_returns_404(self, admin_client):
         from backend import db_supabase

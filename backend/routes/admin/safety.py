@@ -20,20 +20,27 @@ from pydantic import BaseModel, Field
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
+    from ...documents import _extract_signed_url
+    from ...supabase_client import supabase
     from ...utils.audit_logger import log_admin_action
     from .drivers import _batch_fetch_drivers_and_users, _user_display_name
 except ImportError:
     import db_supabase  # type: ignore
     from dependencies import get_admin_user  # type: ignore
+    from documents import _extract_signed_url  # type: ignore
     from routes.admin.drivers import (  # type: ignore
         _batch_fetch_drivers_and_users,
         _user_display_name,
     )
+    from supabase_client import supabase  # type: ignore
     from utils.audit_logger import log_admin_action  # type: ignore
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/safety", tags=["Admin · Safety"])
+
+_SAFETY_BUCKET = "safety-evidence"
+_SAFETY_SIGNED_URL_TTL_SECONDS = 3600
 
 
 # ---------- List ----------
@@ -195,6 +202,42 @@ async def admin_get_safety_incident(incident_id: str):
         except Exception:
             logger.error("safety_incidents ride snapshot lookup failed", exc_info=True)
 
+    # Evidence photos. Stored keys are useless to the dashboard on their own
+    # (the bucket is private), so each gets a short-lived signed URL here.
+    # A signing failure drops that one photo rather than 500-ing the whole
+    # detail view — the reviewer still needs the incident text.
+    photos: List[Dict[str, Any]] = []
+    try:
+        photo_rows = await db_supabase.get_rows(
+            "safety_incident_photos",
+            {"incident_id": incident_id},
+            order="created_at",
+            limit=20,
+        )
+        for row in photo_rows or []:
+            entry = {
+                "id": row.get("id"),
+                "content_type": row.get("content_type"),
+                "created_at": row.get("created_at"),
+                "url": None,
+            }
+            key = row.get("storage_key")
+            if key and supabase:
+                try:
+                    res = await db_supabase.run_sync(
+                        lambda k=key: supabase.storage.from_(_SAFETY_BUCKET).create_signed_url(
+                            k, _SAFETY_SIGNED_URL_TTL_SECONDS
+                        )
+                    )
+                    entry["url"] = _extract_signed_url(res)
+                except Exception:
+                    logger.error(
+                        "safety_incident_photos signing failed for photo %s", row.get("id"), exc_info=True
+                    )
+            photos.append(entry)
+    except Exception:
+        logger.error("safety_incident_photos lookup failed", exc_info=True)
+
     return {
         "incident": incident,
         "reporter": {
@@ -207,6 +250,7 @@ async def admin_get_safety_incident(incident_id: str):
         if reporter
         else None,
         "ride": ride_summary,
+        "photos": photos,
     }
 
 

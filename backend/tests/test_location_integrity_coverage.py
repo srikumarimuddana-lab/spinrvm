@@ -368,6 +368,108 @@ def test_haversine_km_same_point_is_zero():
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# evaluate_gps_plausibility -- pure (no I/O) sibling used by the v2
+# location-batch path (ranked blocker #7, 2026-08-19) so a batch of up to
+# 500 points can be checked without one Redis round trip per point. Same
+# thresholds/reasons as check_location_integrity above, just with the
+# "previous point" passed in explicitly instead of read from Redis.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_evaluate_plausibility_mock_flag_short_circuits():
+    trusted, reason = li.evaluate_gps_plausibility(50.0, -104.0, mocked=True)
+    assert (trusted, reason) == (False, "mock_location")
+
+
+def test_evaluate_plausibility_zero_accuracy_is_rejected():
+    trusted, reason = li.evaluate_gps_plausibility(50.0, -104.0, accuracy=0)
+    assert (trusted, reason) == (False, "zero_accuracy")
+
+
+def test_evaluate_plausibility_accuracy_above_max_is_rejected():
+    trusted, reason = li.evaluate_gps_plausibility(50.0, -104.0, accuracy=li.MAX_ACCURACY_METERS + 1)
+    assert (trusted, reason) == (False, "low_accuracy")
+
+
+def test_evaluate_plausibility_impossible_speed_is_rejected():
+    trusted, reason = li.evaluate_gps_plausibility(50.0, -104.0, speed=(li.MAX_SPEED_KMH / 3.6) + 10)
+    assert (trusted, reason) == (False, "impossible_speed")
+
+
+def test_evaluate_plausibility_no_prev_point_skips_teleport_check():
+    """No previous point supplied (e.g. first-ever point for a driver with
+    no last-known DB position) -- nothing to compare against, so trusted."""
+    trusted, reason = li.evaluate_gps_plausibility(52.1332, -106.6700)
+    assert (trusted, reason) == (True, None)
+
+
+def test_evaluate_plausibility_teleport_detected_with_explicit_prev():
+    trusted, reason = li.evaluate_gps_plausibility(
+        52.1332,
+        -106.6700,
+        prev_lat=50.4452,
+        prev_lng=-104.6189,
+        elapsed_seconds=5.0,
+    )
+    assert (trusted, reason) == (False, "teleport")
+
+
+def test_evaluate_plausibility_small_movement_is_not_a_teleport():
+    trusted, reason = li.evaluate_gps_plausibility(
+        50.4460,
+        -104.6195,
+        prev_lat=50.4452,
+        prev_lng=-104.6189,
+        elapsed_seconds=5.0,
+    )
+    assert (trusted, reason) == (True, None)
+
+
+def test_evaluate_plausibility_elapsed_outside_window_skips_teleport_check():
+    """>= TELEPORT_MIN_SECONDS elapsed disables the check even for a huge
+    jump -- mirrors check_location_integrity's Redis-backed teleport window."""
+    trusted, reason = li.evaluate_gps_plausibility(
+        52.1332,
+        -106.6700,
+        prev_lat=50.4452,
+        prev_lng=-104.6189,
+        elapsed_seconds=li.TELEPORT_MIN_SECONDS,
+    )
+    assert (trusted, reason) == (True, None)
+
+
+def test_evaluate_plausibility_zero_elapsed_skips_teleport_check():
+    """elapsed_seconds must be strictly > 0, same as check_location_integrity's
+    `0 < elapsed` guard -- a duplicate/same-timestamp point isn't flagged."""
+    trusted, reason = li.evaluate_gps_plausibility(
+        52.1332,
+        -106.6700,
+        prev_lat=50.4452,
+        prev_lng=-104.6189,
+        elapsed_seconds=0.0,
+    )
+    assert (trusted, reason) == (True, None)
+
+
+def test_evaluate_plausibility_never_touches_redis():
+    """Pure function: no Redis calls, regardless of outcome -- this is the
+    whole point of using it (vs check_location_integrity) inside a batch
+    loop that must not do per-point I/O."""
+    with (
+        patch.object(li, "redis_get", AsyncMock(side_effect=AssertionError("must not call redis_get"))),
+        patch.object(li, "redis_set", AsyncMock(side_effect=AssertionError("must not call redis_set"))),
+    ):
+        trusted, reason = li.evaluate_gps_plausibility(
+            52.1332,
+            -106.6700,
+            prev_lat=50.4452,
+            prev_lng=-104.6189,
+            elapsed_seconds=5.0,
+        )
+    assert (trusted, reason) == (False, "teleport")
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # Dual-import fallback branch (lines 23-24)
 # ─────────────────────────────────────────────────────────────────────────
 

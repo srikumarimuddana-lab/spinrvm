@@ -46,9 +46,11 @@ except ImportError:
 
 try:
     from .datetime_utils import parse_iso_utc
+    from .location_integrity import evaluate_gps_plausibility
     from .redis_client import redis_delete, redis_get, redis_set
 except ImportError:
     from utils.datetime_utils import parse_iso_utc  # type: ignore
+    from utils.location_integrity import evaluate_gps_plausibility  # type: ignore
     from utils.redis_client import redis_delete, redis_get, redis_set  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -250,12 +252,32 @@ async def persist_trip_location_batch(
     points: List[Dict[str, Any]],
     *,
     active_ride: Optional[Dict[str, Any]] | object = _ACTIVE_RIDE_NOT_PROVIDED,
+    driver_last_known: Optional[Dict[str, Any]] = None,
 ) -> LocationBatchPersistResult:
     """Persist one v2 active-trip location batch with an idempotent acknowledgement.
 
     The server-provided ``ride_id`` and ``active_ride`` are authoritative. Client
     phase and ride fields are intentionally ignored, while the immutable sensor
     timestamp is kept in ``captured_at`` and server receipt in ``received_at``.
+
+    Every accepted point is run through the same GPS plausibility heuristic
+    (mock flag / impossible speed / accuracy sanity / teleportation) as the v1
+    REST and WebSocket single-ping paths (``utils/location_integrity``), but
+    chained across the WHOLE batch — each point is checked against the last
+    point *accepted* before it, not just once for the batch as a whole. The
+    boundary pair (driver's last known DB position -> this batch's first
+    point) is covered too when the caller passes ``driver_last_known`` (the
+    already-fetched ``drivers`` row's ``lat``/``lng``/``updated_at`` — see
+    ``routes/drivers/location.py::_persist_v2_location_batch``, which already
+    has that row in hand, so this costs no extra DB read).
+
+    Deliberately uses ``evaluate_gps_plausibility`` (pure, no I/O) rather than
+    ``check_location_integrity`` (Redis-backed) for the per-point loop: a
+    batch capped at 500 points must not turn into up to 500 sequential Redis
+    round trips on this endpoint. A rejected point does not become the new
+    "last known" baseline — later points are still compared against the last
+    point that actually passed, mirroring how ``check_location_integrity``
+    never overwrites its cached point on a failed check.
     """
     if not isinstance(points, list) or not points:
         raise ValueError("points must be a non-empty list")
@@ -278,6 +300,19 @@ async def persist_trip_location_batch(
     rejections: List[LocationPointRejection] = []
     sequence_numbers: List[int] = []
     seen_sequences = set()
+
+    # Seed the chain with the driver's last known DB position (if the caller
+    # has one) so the boundary pair -- pre-batch position -> this batch's
+    # first point -- is checked too, not just pairs within the batch.
+    prev_lat: Optional[float] = None
+    prev_lng: Optional[float] = None
+    prev_captured_at: Optional[datetime] = None
+    if driver_last_known:
+        _last_lat = _coord(driver_last_known, "lat", "latitude")
+        _last_lng = _coord(driver_last_known, "lng", "longitude")
+        _last_ts = parse_iso_utc(driver_last_known.get("updated_at"))
+        if _last_lat is not None and _last_lng is not None and _valid_lat_lng(_last_lat, _last_lng) and _last_ts:
+            prev_lat, prev_lng, prev_captured_at = _last_lat, _last_lng, _last_ts
 
     for point in points:
         if not isinstance(point, dict):
@@ -317,6 +352,37 @@ async def persist_trip_location_batch(
         if monotonic_ms is not None and (isinstance(monotonic_ms, bool) or not isinstance(monotonic_ms, int)):
             rejections.append(LocationPointRejection(sequence_number, "invalid_monotonic_time"))
             continue
+
+        elapsed_seconds = (captured_at - prev_captured_at).total_seconds() if prev_captured_at is not None else None
+        trusted, integrity_reason = evaluate_gps_plausibility(
+            lat,
+            lng,
+            prev_lat=prev_lat,
+            prev_lng=prev_lng,
+            elapsed_seconds=elapsed_seconds,
+            speed=point.get("speed"),
+            accuracy=point.get("accuracy"),
+            mocked=point.get("mocked"),
+        )
+        if not trusted:
+            # No raw lat/lng in the log -- integrity_reason is one of a fixed
+            # set of short codes (mock_location / zero_accuracy / low_accuracy
+            # / impossible_speed / teleport), never a coordinate.
+            logger.warning(
+                "location-batch point failed GPS plausibility check "
+                "driver_id=%s ride_id=%s sequence_number=%s reason=%s",
+                driver_id,
+                ride_id,
+                sequence_number,
+                integrity_reason,
+            )
+            rejections.append(LocationPointRejection(sequence_number, integrity_reason or "gps_implausible"))
+            continue
+
+        # Only a point that actually passed becomes the next comparison
+        # baseline -- a rejected point must not let a spoofed jump "reset"
+        # the trusted trail for the points that follow it in the batch.
+        prev_lat, prev_lng, prev_captured_at = lat, lng, captured_at
 
         rows.append(
             {

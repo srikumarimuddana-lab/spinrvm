@@ -93,8 +93,9 @@ def _rider(uid, referred_by="referrer_1", applied_at=None):
 
 def test_batched_tick_pays_qualified_rider_without_per_referee_queries():
     users = [_rider("u1"), _rider("u2")]
-    # u1 has a qualifying completed ride inside the window; u2 has none.
-    rides = [{"rider_id": "u1", "created_at": _iso(-9), "service_area_id": None}]
+    # u1 has a qualifying completed ride inside the window (real fare, not a
+    # $0 promo-covered ride); u2 has none.
+    rides = [{"rider_id": "u1", "created_at": _iso(-9), "service_area_id": None, "grand_total": 12.5}]
     db = _db(users=users, rides_by_table_filters=rides)
     credit = AsyncMock()
 
@@ -188,7 +189,10 @@ def test_driver_kind_uses_batched_driver_lookups():
 
 def test_terms_resolved_once_per_area_kind_for_the_whole_tick():
     users = [_rider("u1"), _rider("u2"), _rider("u3")]
-    rides = [{"rider_id": uid, "created_at": _iso(-9), "service_area_id": "area1"} for uid in ("u1", "u2", "u3")]
+    rides = [
+        {"rider_id": uid, "created_at": _iso(-9), "service_area_id": "area1", "grand_total": 12.5}
+        for uid in ("u1", "u2", "u3")
+    ]
     areas = [{"id": "area1", "rider_referrer_reward": 7, "rider_referee_reward": 0}]
     db = _db(users=users, rides_by_table_filters=rides, service_areas=areas)
     credit = AsyncMock()

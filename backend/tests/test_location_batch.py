@@ -87,11 +87,14 @@ def test_v2_batch_persists_before_updating_the_live_marker(monkeypatch: pytest.M
     events = []
     update_one = _install_driver_and_ride(monkeypatch, _ride())
 
-    async def persist(driver_id, ride_id, session_id, points, *, active_ride):
+    async def persist(driver_id, ride_id, session_id, points, *, active_ride, driver_last_known=None):
         events.append("persist")
         assert driver_id == "driver_1"
         assert ride_id == "ride_1"
         assert active_ride["id"] == "ride_1"
+        # The caller passes the already-fetched driver row's position (no
+        # extra DB read) so the batch's first point is checked against it.
+        assert driver_last_known == {"lat": None, "lng": None, "updated_at": None}
         return _result()
 
     async def update(*args, **kwargs):
@@ -112,7 +115,7 @@ def test_v2_batch_skips_live_marker_update_when_integrity_check_rejects(monkeypa
     events = []
     update_one = _install_driver_and_ride(monkeypatch, _ride())
 
-    async def persist(driver_id, ride_id, session_id, points, *, active_ride):
+    async def persist(driver_id, ride_id, session_id, points, *, active_ride, driver_last_known=None):
         events.append("persist")
         return _result()
 

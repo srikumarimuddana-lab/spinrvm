@@ -40,6 +40,59 @@ def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     return R * 2 * math.asin(math.sqrt(a))
 
 
+def evaluate_gps_plausibility(
+    lat: float,
+    lng: float,
+    *,
+    prev_lat: Optional[float] = None,
+    prev_lng: Optional[float] = None,
+    elapsed_seconds: Optional[float] = None,
+    speed: Optional[float] = None,
+    accuracy: Optional[float] = None,
+    mocked: Optional[bool] = None,
+) -> tuple[bool, Optional[str]]:
+    """Pure (no I/O) plausibility check — same rules as
+    ``check_location_integrity`` below (mock flag, impossible speed, accuracy
+    sanity, teleportation) but with the "previous point" passed in explicitly
+    instead of read from Redis.
+
+    ``check_location_integrity`` is the right call for a single live-ping
+    caller (v1 REST, WS single-ping) that has no other source for "the
+    driver's last point" and needs Redis to supply it. A caller that already
+    knows its own point ordering and a same-request last-known point — e.g.
+    the v2 location-batch path, checking N consecutive points against each
+    other and against the driver's already-fetched last DB position — should
+    call this instead: it lets the batch loop run purely in memory, with zero
+    Redis round trips per point (a batch capped at 500 points must not turn
+    into up to 500 sequential Redis calls on the 150ms-budget location-write
+    path). Same thresholds and constants as ``check_location_integrity``, so
+    the two never drift.
+    """
+    if mocked:
+        return False, "mock_location"
+
+    if accuracy is not None:
+        if accuracy == 0:
+            return False, "zero_accuracy"
+        if accuracy > MAX_ACCURACY_METERS:
+            return False, "low_accuracy"
+
+    if speed is not None and speed > (MAX_SPEED_KMH / 3.6):
+        return False, "impossible_speed"
+
+    if (
+        prev_lat is not None
+        and prev_lng is not None
+        and elapsed_seconds is not None
+        and 0 < elapsed_seconds < TELEPORT_MIN_SECONDS
+    ):
+        dist = _haversine_km(prev_lat, prev_lng, lat, lng)
+        if dist > TELEPORT_THRESHOLD_KM:
+            return False, "teleport"
+
+    return True, None
+
+
 async def check_location_integrity(
     driver_id: str,
     lat: float,

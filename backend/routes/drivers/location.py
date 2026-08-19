@@ -139,6 +139,14 @@ async def _persist_v2_location_batch(request: LocationBatchRequest, current_user
             str(request.recording_session_id),
             [point.model_dump(mode="json") for point in request.points],
             active_ride=ride,
+            # Already-fetched row above -- no extra DB read. Anchors the
+            # plausibility chain's boundary pair (driver's last known
+            # position -> this batch's first point).
+            driver_last_known={
+                "lat": driver.get("lat"),
+                "lng": driver.get("lng"),
+                "updated_at": driver.get("updated_at"),
+            },
         )
     except HTTPException:
         raise

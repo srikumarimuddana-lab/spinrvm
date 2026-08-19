@@ -85,13 +85,16 @@ safety team before deploy.
 - **Driver**: photos actually attach. If some fail, they are told which count
   failed instead of being falsely reassured. The report itself still submits —
   a photo failure never blocks filing a safety report.
-- **Internal admin (trust & safety)**: incident detail now carries evidence
-  photos. Reviewers who have been working without them will start seeing them
-  on **new** reports.
-- **Visible mid-session?** Yes for a driver filing a report.
+- **Internal admin (trust & safety)**: the incident detail drawer now shows an
+  "Evidence photos (N)" grid under the description, with click-to-enlarge,
+  prev/next paging, and an "Open full size" link. Reviewers who have been
+  working without evidence will start seeing it on **new** reports.
+- **Visible mid-session?** Yes for a driver filing a report, and for any admin
+  with the `support` module open on an incident.
 - **Copy**: one new toast, "Report Sent — Photos Failed", with a specific count
-  and what happens next ("Our team may contact you for them"). Non-technical
-  and actionable.
+  and what happens next ("Our team may contact you for them"). Plus the admin
+  note "Links expire after 1 hour — reopen the incident to refresh", which
+  pre-empts the "the image broke" support ticket. Non-technical and actionable.
 - **Historic photos are NOT recoverable** — they were never uploaded. Nothing
   to backfill.
 
@@ -104,6 +107,11 @@ safety team before deploy.
 | `backend/routes/admin/safety.py` | `photos[]` w/ signed URLs on incident detail | Otherwise evidence is write-only |
 | `backend/tests/test_safety_incident_photos.py` | 8 new tests | Guard rails incl. a route-exists regression test |
 | `driver-app/app/report-safety.tsx` | `api.post`, correct URL, failures surfaced | Uploads work and stop being silent |
+| `admin-dashboard/src/app/dashboard/safety/_components/incident-evidence-photos.tsx` | new component: grid + lightbox | Reviewers can actually see the evidence |
+| `admin-dashboard/src/app/dashboard/safety/_components/incident-evidence-photos.test.tsx` | 8 unit tests | Locks in "an unshowable photo still surfaces" |
+| `admin-dashboard/src/app/dashboard/safety/page.tsx` | renders the new component in the detail drawer | Wires it into the triage flow |
+| `admin-dashboard/src/lib/api/safety-disputes.ts`, `src/lib/api.ts` | `SafetyIncidentPhoto` type, optional `photos` | Types the new response key |
+| `admin-dashboard/e2e/safety.spec.ts` | 4 new E2E cases | Covers the drawer end-to-end in CI |
 
 ## 7. Before / after
 
@@ -151,11 +159,19 @@ if (failedPhotos > 0) showToast('warning', 'Report Sent — Photos Failed', ...)
       storage key, 404 unknown incident, 403 non-reporter, photo-cap, empty file,
       non-image, and storage-failure → 502 with no row written.
 - [x] Related suites green: safety + admin-safety + L&F = **113 passed**.
+- [x] **8 new admin-dashboard unit tests** (`incident-evidence-photos.test.tsx`):
+      renders nothing with no photos, a tile per photo with the total count, an
+      unsignable photo still surfacing, a count that includes photos none of
+      which can be shown, lightbox open, prev/next with the ends disabled,
+      index mapping that skips unsignable entries, and the injected timestamp
+      formatter. admin-dashboard `vitest` **335 passed** (34 files).
 - [x] driver-app `jest` **552 passed** (64 suites); rider-app `jest` **527 passed**.
-- [x] `tsc --noEmit` and `eslint` clean on driver-app; `ruff check` clean on all
+- [x] `tsc --noEmit` and `eslint` clean on driver-app and admin-dashboard
+      (admin lint: 0 errors; warnings went 328 → 326); `ruff check` clean on all
       three backend files.
-- [x] **Real production build run** — `npx expo export --platform android`
-      succeeded for driver-app.
+- [x] **Real production builds run** — `npx expo export --platform android`
+      succeeded for driver-app, and `npm run build` (Next.js production build)
+      succeeded for admin-dashboard. Not a dev server, not `tsc` alone.
 - [x] Blast-radius grep — `safety_incidents` readers, `report-safety.tsx`
       callers, admin dashboard consumers of the incident-detail response,
       existing storage bucket names.
@@ -171,11 +187,20 @@ if (failedPhotos > 0) showToast('warning', 'Report Sent — Photos Failed', ...)
   not exist until migration 335 is applied — until then every upload returns
   502.** Apply the migration before deploying the client change, or drivers
   trade a silent failure for a visible one.
-- **No admin-dashboard UI renders `photos[]` yet.** The API returns them; the
-  React admin page does not display them. A reviewer will not see evidence in
-  the browser until that UI is built — **this change alone does not close the
-  loop for trust & safety.** I did not build it because it is a separate surface
-  and was not part of the ask. This is the most important open gap here.
+- **The admin E2E specs could not be run locally.** 4 new cases were added to
+  `e2e/safety.spec.ts`, but every test in that file — including the six
+  pre-existing ones that predate this work — fails in this container with
+  "Access Denied", because the `useRequireModule("support")` gate never passes
+  against the local mock auth. That is environmental, not a defect in the specs
+  or the UI: the same failure hits tests that do not touch photos at all. **The
+  new E2E cases are therefore unverified** and rest on CI to actually exercise
+  them. The 8 vitest unit tests are the coverage that was genuinely run, and
+  they cover the same behaviours at component level.
+- **The UI was never seen rendered.** No screenshot, no browser. The layout,
+  grid sizing, dark-mode contrast on the amber "Preview unavailable" tile, and
+  lightbox sizing were reasoned about and asserted at DOM level, not looked at.
+  This repo has no visual-regression tooling for admin (standing gap), so there
+  is no automated backstop for that either.
 - **No backfill is possible** — the historic photos were never uploaded
   anywhere. Any incident filed before this deploy has no evidence to recover.
 - **The 4-photo cap is not race-safe.** Two concurrent uploads could both read
@@ -189,4 +214,9 @@ if (failedPhotos > 0) showToast('warning', 'Report Sent — Photos Failed', ...)
   deliberately rather than defaulted.
 - **Not tested end-to-end from a real device** — the driver-side flow was
   verified by unit tests and a production bundle build, not by filing an actual
-  report on hardware.
+  report on hardware. Nothing has exercised the full chain (driver attaches →
+  storage → admin views) against a live environment.
+- **The admin UI has no way to add or delete a photo.** It is read-only, which
+  matches the endpoint (attachment is reporter-only). If trust & safety needs to
+  remove a photo — a mis-upload, or a takedown request — there is no path short
+  of direct storage access.

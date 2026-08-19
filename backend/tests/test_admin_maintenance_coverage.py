@@ -96,12 +96,18 @@ class TestCleanupLocationHistory:
         async def _capture(table, filters):
             calls.append(filters)
 
-        with patch.object(maint.db_supabase, "delete_many", AsyncMock(side_effect=_capture)):
-            result = await maint.admin_cleanup_location_history(days=30)
+        audit_mock = AsyncMock(return_value="audit-1")
+        with (
+            patch.object(maint.db_supabase, "delete_many", AsyncMock(side_effect=_capture)),
+            patch.object(maint, "log_admin_action", audit_mock),
+        ):
+            result = await maint.admin_cleanup_location_history(days=30, admin=ADMIN)
 
         assert len(calls) == 2
         assert "historical_cutoff" in result
         assert "idle_cutoff" in result
+        audit_mock.assert_awaited_once()
+        assert audit_mock.call_args[0][1] == "location_history_cleanup"
 
     @pytest.mark.asyncio
     async def test_cleanup_continues_when_historical_delete_fails(self):
@@ -113,8 +119,11 @@ class TestCleanupLocationHistory:
             if call_count["n"] == 1:
                 raise RuntimeError("db error")
 
-        with patch.object(maint.db_supabase, "delete_many", AsyncMock(side_effect=_side_effect)):
-            result = await maint.admin_cleanup_location_history(days=30)
+        with (
+            patch.object(maint.db_supabase, "delete_many", AsyncMock(side_effect=_side_effect)),
+            patch.object(maint, "log_admin_action", AsyncMock(return_value="audit-2")),
+        ):
+            result = await maint.admin_cleanup_location_history(days=30, admin=ADMIN)
 
         assert call_count["n"] == 2
         assert result["deleted_historical"] == -1
@@ -128,8 +137,11 @@ class TestCleanupLocationHistory:
             if call_count["n"] == 2:
                 raise RuntimeError("db error")
 
-        with patch.object(maint.db_supabase, "delete_many", AsyncMock(side_effect=_side_effect)):
-            result = await maint.admin_cleanup_location_history(days=30)
+        with (
+            patch.object(maint.db_supabase, "delete_many", AsyncMock(side_effect=_side_effect)),
+            patch.object(maint, "log_admin_action", AsyncMock(return_value="audit-3")),
+        ):
+            result = await maint.admin_cleanup_location_history(days=30, admin=ADMIN)
 
         assert call_count["n"] == 2
         assert result["deleted_idle"] == -1
@@ -154,10 +166,16 @@ class TestRollupDriverDaily:
         # staff.py-style "db = db_supabase" pattern) — they are the *same*
         # object, so only one get_rows patch is needed/possible per test.
         yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
-        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])):
-            result = await maint.admin_rollup_driver_daily(target_date=None)
+        audit_mock = AsyncMock(return_value="audit-4")
+        with (
+            patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])),
+            patch.object(maint, "log_admin_action", audit_mock),
+        ):
+            result = await maint.admin_rollup_driver_daily(target_date=None, admin=ADMIN)
         assert result["stat_date"] == yesterday.isoformat()
         assert result["drivers_processed"] == 0
+        audit_mock.assert_awaited_once()
+        assert audit_mock.call_args[0][1] == "driver_daily_rollup"
 
     @pytest.mark.asyncio
     async def test_rollup_creates_new_stat_row_for_new_driver(self):
@@ -193,13 +211,15 @@ class TestRollupDriverDaily:
             patch.object(maint.db_supabase, "get_driver_by_id", AsyncMock(return_value={"service_area_id": "a1"})),
             patch.object(maint.db_supabase, "insert_one", AsyncMock()) as insert_mock,
             patch.object(maint.db_supabase, "update_one", AsyncMock()) as update_mock,
+            patch.object(maint, "log_admin_action", AsyncMock(return_value="audit-5")) as audit_mock,
         ):
-            result = await maint.admin_rollup_driver_daily(target_date=target_date)
+            result = await maint.admin_rollup_driver_daily(target_date=target_date, admin=ADMIN)
 
         assert result["created"] == 1
         assert result["updated"] == 0
         insert_mock.assert_awaited_once()
         update_mock.assert_not_awaited()
+        audit_mock.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_rollup_updates_existing_stat_row(self):
@@ -226,8 +246,9 @@ class TestRollupDriverDaily:
             patch.object(maint.db_supabase, "get_driver_by_id", AsyncMock(return_value=None)),
             patch.object(maint.db_supabase, "insert_one", AsyncMock()) as insert_mock,
             patch.object(maint.db_supabase, "update_one", AsyncMock()) as update_mock,
+            patch.object(maint, "log_admin_action", AsyncMock(return_value="audit-6")),
         ):
-            result = await maint.admin_rollup_driver_daily(target_date=target_date)
+            result = await maint.admin_rollup_driver_daily(target_date=target_date, admin=ADMIN)
 
         assert result["created"] == 0
         assert result["updated"] == 1
@@ -255,11 +276,15 @@ class TestRollupDriverDaily:
             patch.object(maint, "_run_sync", AsyncMock(side_effect=RuntimeError("rpc down"))),
             patch.object(maint.db_supabase, "get_driver_by_id", AsyncMock(return_value=None)),
             patch.object(maint.db_supabase, "insert_one", AsyncMock()) as insert_mock,
+            patch.object(maint, "log_admin_action", AsyncMock(return_value="audit-7")),
         ):
-            result = await maint.admin_rollup_driver_daily(target_date=target_date)
+            result = await maint.admin_rollup_driver_daily(target_date=target_date, admin=ADMIN)
 
         assert result["created"] == 1
-        stat_row = insert_mock.call_args.args[1]
+        # call_args_list[0]: the driver_daily_stats insert. log_admin_action
+        # is separately mocked here so it never touches insert_one, but this
+        # still guards against the ordering assumption.
+        stat_row = insert_mock.call_args_list[0].args[1]
         assert stat_row["online_minutes"] == 0
         assert stat_row["total_km"] == 0
 
@@ -286,10 +311,11 @@ class TestRollupDriverDaily:
             patch.object(maint, "_run_sync", AsyncMock(return_value=rpc_resp)),
             patch.object(maint.db_supabase, "get_driver_by_id", AsyncMock(return_value=None)),
             patch.object(maint.db_supabase, "insert_one", AsyncMock()) as insert_mock,
+            patch.object(maint, "log_admin_action", AsyncMock(return_value="audit-8")),
         ):
-            await maint.admin_rollup_driver_daily(target_date=target_date)
+            await maint.admin_rollup_driver_daily(target_date=target_date, admin=ADMIN)
 
-        stat_row = insert_mock.call_args.args[1]
+        stat_row = insert_mock.call_args_list[0].args[1]
         assert stat_row["rides_declined"] == 2
 
 

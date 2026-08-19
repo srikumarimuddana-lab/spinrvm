@@ -131,26 +131,30 @@ def test_cleanup_uses_delete_many_not_get_rows_for_counting():
     assert "len(old_rows" not in cleanup_block, "cleanup block must not count rows via len()"
 
 
-def test_presence_rows_uses_bounded_limit():
-    """Verify presence_rows query uses a bounded limit, not an unbounded fetch.
+def test_rollup_driver_discovery_never_scans_breadcrumbs():
+    """Guard the original OOM's root cause in the rollup's NEW home.
 
-    The original OOM loaded every GPS row for a day into memory to discover
-    which drivers were active. The fix caps the presence discovery query at
-    10 000 rows (enough to identify all active drivers within a single day)
-    and delegates per-driver aggregation to the SQL RPC.
-    """
+    The rollup moved to utils/driver_daily_rollup.py, which discovers active
+    drivers from driver_insurance_periods (columns="driver_id", bounded
+    limit) — never by fetching raw GPS rows. Per-driver aggregation stays in
+    the SQL RPC (11 scalars per call). If someone reintroduces a
+    driver_location_history fetch into the rollup, that's the OOM pattern
+    coming back."""
     import pathlib
 
-    source = (pathlib.Path(__file__).parent.parent / "routes/admin/maintenance.py").read_text()
-    # Ensure presence_rows fetch is bounded — the old code had no limit at all.
-    assert "presence_rows" in source, "presence_rows variable must exist"
-    presence_block_start = source.find("presence_rows = await db_supabase.get_rows")
-    assert presence_block_start != -1, "presence_rows must use get_rows"
-    presence_block = source[presence_block_start : presence_block_start + 400]
-    assert "limit=" in presence_block, "presence_rows get_rows must have a limit"
-    assert "limit=100000" not in presence_block, "presence_rows must not fetch 100k rows"
-    # And restrict to driver_id column to avoid pulling lat/lng/metadata
-    assert 'columns="driver_id"' in source, "presence query must restrict to driver_id column"
+    source = (pathlib.Path(__file__).parent.parent / "utils/driver_daily_rollup.py").read_text()
+    assert "driver_location_history" not in source, "rollup must never fetch raw GPS rows (OOM risk)"
+    assert 'columns="driver_id"' in source, "discovery query must restrict to driver_id column"
+    assert "compute_driver_phase_distances" in source, "per-driver aggregation must stay in the SQL RPC"
+    discovery_start = source.find('"driver_insurance_periods"')
+    assert discovery_start != -1, "discovery must come from insurance periods"
+    assert "limit=_ROW_LIMIT" in source[discovery_start : discovery_start + 600], "discovery fetch must be bounded"
+
+    # And the endpoint is now a thin wrapper — the old inline implementation
+    # (whose presence_rows fetch this test used to pin) must not creep back.
+    endpoint_source = (pathlib.Path(__file__).parent.parent / "routes/admin/maintenance.py").read_text()
+    assert "rollup_driver_day" in endpoint_source, "endpoint must delegate to the shared rollup core"
+    assert "presence_rows" not in endpoint_source, "inline presence scan must not return to the endpoint"
 
 
 # ---------------------------------------------------------------------------

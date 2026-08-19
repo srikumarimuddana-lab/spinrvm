@@ -237,3 +237,92 @@ async def test_leader_lock_blocks_second_acquirer(mock_redis):
 
     assert first is True
     assert second is False
+
+
+# ---------------------------------------------------------------------------
+# Idle-breadcrumb supplementary retention (settings.idle_breadcrumb_retention_hours)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_idle_purge_skips_at_default_retention():
+    """At the 2160h (90d) default the blanket purge_pii_retention() step
+    already covers idle rows — no extra delete must be issued."""
+    delete_mock = AsyncMock()
+    with (
+        patch("settings_loader.get_app_settings", AsyncMock(return_value={})),
+        patch("utils.retention_purge.delete_many", delete_mock),
+    ):
+        from utils.retention_purge import _purge_idle_breadcrumbs_below_default
+
+        await _purge_idle_breadcrumbs_below_default()
+
+    delete_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_idle_purge_deletes_online_idle_rows_when_configured_tighter():
+    """retention_hours below 2160 → online_idle rows older than the cutoff are
+    deleted; ride-attached rows are untouched (tracking_phase filter)."""
+    delete_mock = AsyncMock(return_value=[{"id": 1}, {"id": 2}])
+    with (
+        patch(
+            "settings_loader.get_app_settings",
+            AsyncMock(return_value={"idle_breadcrumb_retention_hours": 168}),
+        ),
+        patch("utils.retention_purge.delete_many", delete_mock),
+    ):
+        from utils.retention_purge import _purge_idle_breadcrumbs_below_default
+
+        await _purge_idle_breadcrumbs_below_default()
+
+    delete_mock.assert_awaited_once()
+    table, filters = delete_mock.await_args.args
+    assert table == "driver_location_history"
+    assert filters["tracking_phase"] == "online_idle"
+    assert "$lt" in filters["timestamp"]
+
+
+@pytest.mark.asyncio
+async def test_idle_purge_failure_does_not_raise():
+    """A delete failure logs and returns — it must never mask the main
+    purge tick that already completed."""
+    with (
+        patch(
+            "settings_loader.get_app_settings",
+            AsyncMock(return_value={"idle_breadcrumb_retention_hours": 24}),
+        ),
+        patch(
+            "utils.retention_purge.delete_many",
+            AsyncMock(side_effect=RuntimeError("db down")),
+        ),
+    ):
+        from utils.retention_purge import _purge_idle_breadcrumbs_below_default
+
+        await _purge_idle_breadcrumbs_below_default()  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_tick_runs_idle_step_after_main_purge(mock_redis):
+    """_tick order: main RPC purge first, idle supplementary step second,
+    both only under the leader lock."""
+    calls: list[str] = []
+
+    async def _main(dry_run):
+        calls.append("main")
+
+    async def _idle():
+        calls.append("idle")
+
+    with (
+        patch("utils.retention_purge.run_retention_purge_tick", side_effect=_main),
+        patch(
+            "utils.retention_purge._purge_idle_breadcrumbs_below_default",
+            side_effect=_idle,
+        ),
+    ):
+        from utils.retention_purge import _tick
+
+        await _tick()
+
+    assert calls == ["main", "idle"]

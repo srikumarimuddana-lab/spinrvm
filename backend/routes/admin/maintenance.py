@@ -69,12 +69,23 @@ async def admin_cleanup_location_history(days: int = Query(30, ge=7, le=1095)):
     aggregated data (phase distances, route polyline) is already stored on
     the ride row, so the raw GPS points are only needed for recent disputes.
 
-    Also deletes online_idle points older than 24 hours regardless (they are
-    never useful for historical analysis).
+    Idle (online_idle) points use the configurable retention from
+    settings.idle_breadcrumb_retention_hours (default 2160h = 90 days per the
+    owner's 2026-08-18 decision — idle history now feeds per-day Distance
+    Logs and map replay; the old hardcoded 24h purge silently destroyed it).
     """
     now = datetime.now(timezone.utc)
     cutoff_historical = (now - timedelta(days=days)).isoformat()
-    cutoff_idle = (now - timedelta(hours=24)).isoformat()
+    idle_hours = 2160
+    try:
+        try:
+            from ...settings_loader import get_app_settings
+        except ImportError:
+            from settings_loader import get_app_settings  # type: ignore
+        idle_hours = int(((await get_app_settings()) or {}).get("idle_breadcrumb_retention_hours", 2160))
+    except Exception:
+        logger.error("idle retention setting read failed; using 2160h default", exc_info=True)
+    cutoff_idle = (now - timedelta(hours=max(1, idle_hours))).isoformat()
 
     deleted_historical = -1
     deleted_idle = -1

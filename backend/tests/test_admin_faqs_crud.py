@@ -39,7 +39,11 @@ def _faq_payload(**overrides):
 
 
 def test_create_faq_success(test_client):
-    with patch("backend.db_supabase.insert_one", new=AsyncMock(return_value={"id": "faq-1"})) as mock_insert:
+    audit_mock = AsyncMock(return_value="audit-1")
+    with (
+        patch("backend.db_supabase.insert_one", new=AsyncMock(return_value={"id": "faq-1"})) as mock_insert,
+        patch("backend.routes.admin.faqs.log_admin_action", new=audit_mock),
+    ):
         resp = test_client.post("/api/admin/faqs", json=_faq_payload())
 
     assert resp.status_code == 200
@@ -47,6 +51,10 @@ def test_create_faq_success(test_client):
     doc = mock_insert.call_args[0][1]
     assert doc["question"] == "How do I book a ride?"
     assert doc["audience"] == "rider"
+    audit_mock.assert_awaited_once()
+    assert audit_mock.call_args[0][1] == "faq_created"
+    assert audit_mock.call_args[0][2] == "faqs"
+    assert audit_mock.call_args[0][3] == "faq-1"
 
 
 def test_create_faq_requires_valid_audience(test_client):
@@ -62,24 +70,31 @@ def test_create_faq_falls_back_to_generated_id_when_row_missing_id(test_client):
 
 
 def test_create_faq_defaults_sort_order_to_zero(test_client):
+    # call_args_list[0]: the "faqs" insert. log_admin_action (unmocked here)
+    # goes through the same patched db_supabase.insert_one for its own
+    # "audit_logs" row, so call_args (the *last* call) would be that row.
     with patch("backend.db_supabase.insert_one", new=AsyncMock(return_value={"id": "faq-1"})) as mock_insert:
         resp = test_client.post("/api/admin/faqs", json=_faq_payload())
     assert resp.status_code == 200
-    assert mock_insert.call_args[0][1]["sort_order"] == 0
+    assert mock_insert.call_args_list[0][0][1]["sort_order"] == 0
 
 
 def test_create_faq_accepts_explicit_sort_order(test_client):
     with patch("backend.db_supabase.insert_one", new=AsyncMock(return_value={"id": "faq-1"})) as mock_insert:
         resp = test_client.post("/api/admin/faqs", json=_faq_payload(sort_order=5))
     assert resp.status_code == 200
-    assert mock_insert.call_args[0][1]["sort_order"] == 5
+    assert mock_insert.call_args_list[0][0][1]["sort_order"] == 5
 
 
 # ---------- update ----------
 
 
 def test_update_faq_partial_fields_only(test_client):
-    with patch("backend.db_supabase.update_one", new=AsyncMock()) as mock_update:
+    audit_mock = AsyncMock(return_value="audit-2")
+    with (
+        patch("backend.db_supabase.update_one", new=AsyncMock()) as mock_update,
+        patch("backend.routes.admin.faqs.log_admin_action", new=audit_mock),
+    ):
         resp = test_client.put("/api/admin/faqs/faq-1", json={"question": "New question?"})
 
     assert resp.status_code == 200
@@ -89,6 +104,9 @@ def test_update_faq_partial_fields_only(test_client):
     # editing the question invalidates the stored embedding
     assert updates["embedding"] is None
     assert updates["embedding_model"] is None
+    audit_mock.assert_awaited_once()
+    assert audit_mock.call_args[0][1] == "faq_updated"
+    assert audit_mock.call_args[0][3] == "faq-1"
 
 
 def test_update_faq_service_area_ids_explicit_null_clears_scope(test_client):
@@ -111,11 +129,17 @@ def test_update_faq_omitted_service_area_ids_not_touched(test_client):
 
 
 def test_update_faq_no_changes_skips_write(test_client):
-    with patch("backend.db_supabase.update_one", new=AsyncMock()) as mock_update:
+    audit_mock = AsyncMock()
+    with (
+        patch("backend.db_supabase.update_one", new=AsyncMock()) as mock_update,
+        patch("backend.routes.admin.faqs.log_admin_action", new=audit_mock),
+    ):
         resp = test_client.put("/api/admin/faqs/faq-1", json={})
 
     assert resp.status_code == 200
     mock_update.assert_not_awaited()
+    # No-op update -> no audit row either; nothing actually changed.
+    audit_mock.assert_not_awaited()
 
 
 def test_update_faq_sort_order(test_client):
@@ -139,12 +163,17 @@ def test_update_faq_sort_order_omitted_not_touched(test_client):
 
 
 def test_delete_faq(test_client):
-    with patch("backend.db_supabase.delete_many", new=AsyncMock()) as mock_delete:
+    audit_mock = AsyncMock(return_value="audit-3")
+    with (
+        patch("backend.db_supabase.delete_many", new=AsyncMock()) as mock_delete,
+        patch("backend.routes.admin.faqs.log_admin_action", new=audit_mock),
+    ):
         resp = test_client.delete("/api/admin/faqs/faq-1")
 
     assert resp.status_code == 200
     assert resp.json() == {"message": "FAQ deleted"}
     mock_delete.assert_awaited_once_with("faqs", {"id": "faq-1"})
+    audit_mock.assert_awaited_once_with(_ADMIN, "faq_deleted", "faqs", "faq-1", {})
 
 
 # ---------- list ----------
@@ -190,7 +219,11 @@ def test_list_faqs_missing_sort_order_treated_as_zero(test_client):
 
 
 def test_send_notification_to_specific_user(test_client):
-    with patch("backend.db_supabase.insert_one", new=AsyncMock(return_value={"id": "n-1"})) as mock_insert:
+    audit_mock = AsyncMock(return_value="audit-4")
+    with (
+        patch("backend.db_supabase.insert_one", new=AsyncMock(return_value={"id": "n-1"})) as mock_insert,
+        patch("backend.routes.admin.faqs.log_admin_action", new=audit_mock),
+    ):
         resp = test_client.post(
             "/api/admin/notifications/send",
             json={"user_id": "user-1", "title": "Hi", "body": "Hello there"},
@@ -200,6 +233,9 @@ def test_send_notification_to_specific_user(test_client):
     assert resp.json()["success"] is True
     mock_insert.assert_awaited_once()
     assert mock_insert.call_args[0][1]["sent_count"] == 1
+    audit_mock.assert_awaited_once()
+    assert audit_mock.call_args[0][1] == "notification_sent"
+    assert audit_mock.call_args[0][4]["target_user_id"] == "user-1"
 
 
 def test_send_notification_broadcast_all(test_client):

@@ -565,6 +565,17 @@ class AppSettings(BaseModel):
     # — this flag is read by driver-app only. Not a credential/destination
     # field, no masking/super-admin gate needed.
     driver_discreet_sos_enabled: bool = False
+    # ── Legacy/re-consent notice (2026-08-19 legacy-migration audit) ─────
+    # Dark-launch gate for GET/POST /consent/* (routes/legacy_consent.py).
+    # Off (default): endpoint reports needs_notice=false unconditionally and
+    # POST /accept 404s — no client shows or records acceptance of a notice
+    # that isn't live. On: any user whose users.consent_version (migration
+    # 334) is behind routes/auth.py's CONSENT_VERSION — legacy-imported
+    # riders/drivers who never saw a Spinr consent flow, and organic users
+    # who predate consent-version tracking — is shown the one-time notice.
+    # Neither app has the notice screen wired to check this endpoint yet;
+    # flipping this on ahead of that shipping is a no-op, not a live risk.
+    legacy_consent_notice_enabled: bool = False
     # ── Demand heatmap v2 (P1 HM-10/HM-13) ──────────────────────────────
     # v2 adds per-cell {live, baseline, scheduled} components + surge mirror
     # to the driver heatmap endpoint. Gated by this flag; legacy `points`

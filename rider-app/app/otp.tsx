@@ -79,7 +79,23 @@ export default function OtpScreen() {
       const hasProfileData = !!(user.first_name && user.last_name && user.email);
       const profileComplete = !!user.profile_complete || hasProfileData;
       if (profileComplete) {
-        router.replace('/(tabs)' as any);
+        // A brand-new signup already gets a current consent_version stamped
+        // at creation (routes/auth.py's verify_otp), so this check only
+        // ever fires true for a pre-existing account with no recorded
+        // consent — a legacy-imported rider, or one that predates
+        // consent-version tracking. Dark-shipped: while
+        // app_settings.legacy_consent_notice_enabled is off, /consent/status
+        // always reports needs_notice: false, so this is a no-op today.
+        api.get('/consent/status').then(
+          (res) => {
+            if ((res.data as any)?.needs_notice) {
+              router.replace('/legacy-consent-notice' as any);
+            } else {
+              router.replace('/(tabs)' as any);
+            }
+          },
+          () => router.replace('/(tabs)' as any), // fail open — never block login on this check
+        );
       } else {
         router.replace('/profile-setup');
       }

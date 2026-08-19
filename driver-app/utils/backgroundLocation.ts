@@ -161,9 +161,13 @@ type LocationTaskData = {
  *
  * Every ambiguous state resolves to false ("session still live, keep tracking").
  *
- * Deliberately NOT consulted by startBackgroundLocation: that runs from the
- * foreground where the auth store already knows the session, and gating it here
- * would let a transient SecureStore hiccup block a driver from going online.
+ * Consulted by EVERY capture start/recover path (startBackgroundLocation,
+ * recoverTripLocation, the geofence handler, the car-task start) as well as
+ * the running handlers: recoverTripLocation is reachable headless via the FCM
+ * location_health nudge, so "the foreground auth store knows best" stopped
+ * being true for the start paths. The fail-open-on-store-error design above
+ * means a transient SecureStore hiccup still never blocks a legitimate
+ * go-online — only a positively recorded sign-out refuses a start.
  */
 export async function isSessionEnded(): Promise<boolean> {
   try {
@@ -404,6 +408,23 @@ export async function isBackgroundLocationRunning(): Promise<boolean> {
 }
 
 export async function startBackgroundLocation(config?: BgLocationConfig): Promise<boolean> {
+  // A signed-out device must never (re)start location capture, from ANY
+  // caller — go-online, geofence recovery, or the FCM location_health nudge
+  // (which runs headless, where "the foreground auth store knows best" does
+  // not apply). Safe for the legitimate go-online path by construction:
+  // isSessionEnded() fails OPEN on store errors, and setTokens() deletes the
+  // marker on sign-in before any go-online can run. Checked before the
+  // liveness probe and the permission flow so a headless resurrection can
+  // never pop a permission dialog on a signed-out device. If an orphaned
+  // task is somehow still registered, reap it here rather than adopting it.
+  if (await isSessionEnded()) {
+    recordNonFatal(new Error('start refused: session ended'), {
+      domain: 'drivers', surface: 'driver-app', location: 'bg_start_refused_signed_out',
+    });
+    await stopBackgroundLocation().catch(() => {});
+    return false;
+  }
+
   const isRunning = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
   if (isRunning) {
     console.log('[BgLocation] Already running');
@@ -516,6 +537,19 @@ export async function updateBackgroundLocationCadence(config: BgLocationConfig):
  */
 export async function recoverTripLocation(): Promise<boolean> {
   try {
+    // Reachable HEADLESS (FCM location_health data push) as well as from the
+    // dashboard WS handler. The server's gap monitor does not know the driver
+    // signed out — an abandoned in_progress ride keeps nudging — so without
+    // this gate a push could restart GPS capture on a signed-out device,
+    // repeatedly. startBackgroundLocation now refuses too; this earlier check
+    // also keeps the cadence path from touching an orphaned task.
+    if (await isSessionEnded()) {
+      recordNonFatal(new Error('recover refused: session ended'), {
+        domain: 'drivers', surface: 'driver-app', location: 'recover_refused_signed_out',
+      });
+      await stopBackgroundLocation().catch(() => {});
+      return false;
+    }
     const isRunning = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
     if (!isRunning) {
       return await startBackgroundLocation(TRIP_CADENCE);

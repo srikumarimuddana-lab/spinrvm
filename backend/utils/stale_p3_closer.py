@@ -186,12 +186,65 @@ async def _classify(span: Dict[str, Any], now: datetime) -> Optional[tuple[str, 
     return None
 
 
+async def _alert_orphaned_in_progress_rides(now: datetime) -> int:
+    """Alert on in_progress rides whose driver has NO open period row at all.
+
+    This is the state a class-B autoclose leaves behind when the abandoned
+    ride never gets completed: the span is closed, the ride row still says
+    in_progress, and nothing else watches that combination — an insurance
+    classification hole that must stay loudly visible every tick until an
+    admin resolves the ride. Alert-only; never mutates anything."""
+    cutoff = (now - timedelta(hours=ABANDONED_RIDE_HOURS)).isoformat()
+    rides = (
+        await db_supabase.get_rows(
+            "rides",
+            {"status": "in_progress", "ride_started_at": {"$lt": cutoff}},
+            columns="id,driver_id,ride_started_at",
+            order="ride_started_at",
+            desc=False,
+            limit=BATCH_LIMIT,
+        )
+        or []
+    )
+    orphaned = 0
+    for ride in rides:
+        driver_id = ride.get("driver_id")
+        if not driver_id:
+            continue
+        try:
+            open_rows = await db_supabase.get_rows(
+                "driver_insurance_periods",
+                {"driver_id": driver_id, "ended_at": None},
+                columns="id,period",
+                limit=1,
+            )
+        except Exception:
+            logger.error(
+                "stale_p3_closer: open-row check failed for driver=%s (skipped)",
+                driver_id,
+                exc_info=True,
+            )
+            continue
+        if open_rows:
+            continue
+        orphaned += 1
+        logger.error(
+            "stale_p3_closer: ORPHANED in_progress ride %s — driver %s has no open "
+            "insurance-period row (started=%s); force-complete the ride via admin",
+            ride.get("id"),
+            driver_id,
+            ride.get("ride_started_at"),
+        )
+        _metric_inc("spinr_insurance_stale_p3_detected_total", {"class": "orphaned_no_open_row"})
+    return orphaned
+
+
 async def _tick() -> Dict[str, int]:
     """One detection pass. Alerts always; closes only when the flag is on."""
     settings = await get_app_settings() or {}
     autoclose = bool(settings.get("stale_p3_autoclose_enabled", False))
     now = datetime.now(timezone.utc)
-    result = {"detected": 0, "closed": 0}
+    result = {"detected": 0, "closed": 0, "orphaned": 0}
 
     for span in await _open_p3_spans():
         try:
@@ -222,6 +275,11 @@ async def _tick() -> Dict[str, int]:
                 span.get("id"),
                 exc_info=True,
             )
+
+    try:
+        result["orphaned"] = await _alert_orphaned_in_progress_rides(now)
+    except Exception:
+        logger.error("stale_p3_closer: orphan detection failed", exc_info=True)
     return result
 
 

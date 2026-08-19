@@ -258,3 +258,93 @@ describe('TripLocationRecorder drop telemetry', () => {
     expect(health.drops.enqueueFailures).toBe(1);
   });
 });
+
+describe('TripLocationRecorder Period-1 idle sessions', () => {
+  const loc = (lat = 52.1, ts = 1_000) => ({
+    timestamp: ts,
+    coords: { latitude: lat, longitude: -106.6, accuracy: 5, speed: 8, heading: 0, altitude: null },
+  }) as any;
+
+  function idleHarness() {
+    let nowMs = 1_000_000;
+    const outbox = createOutbox();
+    outbox.startSession.mockResolvedValue({
+      recording_session_id: 'idle-session', ride_id: '@idle',
+      opened_at: '2026-08-18T12:00:00.000Z', closed_at: null,
+    });
+    outbox.enqueue.mockImplementation(async (fix) => ({
+      ...fix, recording_session_id: 'idle-session', sequence_number: 0,
+    }));
+    const recorder = createTripLocationRecorder({ outbox: outbox as any, now: () => nowMs });
+    mockAsyncStorage.getItem.mockResolvedValue(null); // no active trip
+    return { outbox, recorder, advance: (ms: number) => { nowMs += ms; } };
+  }
+
+  test('records throttled idle fixes into the @idle session when enabled', async () => {
+    const { outbox, recorder, advance } = idleHarness();
+    recorder.setIdleRecordingEnabled(true);
+    await recorder.startIdleSession();
+    expect(outbox.startSession).toHaveBeenCalledWith('@idle');
+
+    const first = await recorder.recordNativeFix(loc(), 'background');
+    expect(first?.ride_id).toBe('@idle');
+
+    // Inside the 30s background throttle and <100m moved: dropped (counted).
+    advance(5_000);
+    expect(await recorder.recordNativeFix(loc(52.1001), 'background')).toBeNull();
+
+    // Past the throttle: recorded.
+    advance(30_000);
+    expect((await recorder.recordNativeFix(loc(52.101), 'background'))?.ride_id).toBe('@idle');
+
+    // Large movement bypasses the interval throttle.
+    advance(1_000);
+    expect((await recorder.recordNativeFix(loc(52.15), 'background'))?.ride_id).toBe('@idle');
+  });
+
+  test('idle fixes are dropped when the flag is off or no session is open', async () => {
+    const { outbox, recorder } = idleHarness();
+    expect(await recorder.recordNativeFix(loc(), 'background')).toBeNull();
+    recorder.setIdleRecordingEnabled(true); // enabled but session not opened
+    expect(await recorder.recordNativeFix(loc(), 'background')).toBeNull();
+    expect(outbox.enqueue).not.toHaveBeenCalled();
+  });
+
+  test('flush translates the @idle session into the ride-less session_kind shape', async () => {
+    const { outbox, recorder } = idleHarness();
+    const idlePoint = { ...point, ride_id: '@idle', recording_session_id: 'idle-session', sequence_number: 0 };
+    outbox.listPendingSessions.mockResolvedValue([
+      { recording_session_id: 'idle-session', ride_id: '@idle', opened_at: 'x', closed_at: null },
+    ]);
+    let pending = [idlePoint];
+    outbox.peek.mockImplementation(async () => pending as any);
+    outbox.acknowledge.mockImplementation(async () => { pending = []; });
+    const transport = jest.fn().mockResolvedValue({
+      recording_session_id: 'idle-session', acked_through: 0, rejected: [],
+    });
+
+    await recorder.flushPending(transport, { force: true });
+
+    const request = transport.mock.calls[0][0];
+    expect(request.session_kind).toBe('online_idle');
+    expect(request.recording_session_id).toBe('idle-session');
+    expect(request).not.toHaveProperty('ride_id');
+  });
+
+  test('startRide closes the idle session (the trip owns fixes now)', async () => {
+    const { outbox, recorder } = idleHarness();
+    recorder.setIdleRecordingEnabled(true);
+    await recorder.startIdleSession();
+    outbox.startSession.mockResolvedValue({
+      recording_session_id: 'trip-session', ride_id: 'ride-1', opened_at: 'x', closed_at: null,
+    });
+
+    await recorder.startRide('ride-1');
+
+    expect(outbox.closeSession).toHaveBeenCalledWith('@idle');
+    // With a trip active, a no-throttle idle fix would now resolve to the ride.
+    mockAsyncStorage.getItem.mockResolvedValue('ride-1');
+    const recorded = await recorder.recordNativeFix(loc(), 'background');
+    expect(recorded?.ride_id).toBe('ride-1');
+  });
+});

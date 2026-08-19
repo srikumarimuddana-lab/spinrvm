@@ -72,6 +72,10 @@ async def get_public_settings():
         # panel look emptier than the product actually is.
         "sos_show_share_trip": bool(settings.get("sos_show_share_trip", True)),
         "sos_show_report_issue": bool(settings.get("sos_show_report_issue", True)),
+        # Period-1 ("driving around") durable GPS capture via the v2 outbox
+        # (migration 333). Driver-app reads this to open/close idle recording
+        # sessions; the server-side ingest gate is authoritative either way.
+        "idle_location_v2_enabled": bool(settings.get("idle_location_v2_enabled", False)),
     }
 
 

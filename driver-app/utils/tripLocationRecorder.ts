@@ -19,10 +19,23 @@ const ACTIVE_TRIP_WATCHDOG_MS = 30_000;
 const COMPLETION_FIX_MAX_AGE_MS = 120_000;
 
 export interface TripLocationBatchRequest {
-  ride_id: string;
+  ride_id?: string;
+  /** Present (as 'online_idle') on Period-1 idle batches — no ride. */
+  session_kind?: 'online_idle';
   recording_session_id: string;
   points: TripLocationPoint[];
 }
+
+// Sentinel ride id for Period-1 idle sessions inside the SQLite outbox (the
+// sessions/outbox tables key on a NOT NULL ride_id). Never sent to the server:
+// flushPending translates sessions with this id into the ride-less
+// `session_kind: 'online_idle'` v2 request shape.
+export const IDLE_RIDE_ID = '@idle';
+
+// Idle capture throttles (data minimization — a parked driver produces almost
+// nothing): minimum interval per producer, or any 100 m of movement.
+const IDLE_MIN_INTERVAL_MS: Record<string, number> = { background: 30_000, foreground: 60_000 };
+const IDLE_MIN_DISPLACEMENT_KM = 0.1;
 
 export interface TripLocationBatchAck {
   recording_session_id: string;
@@ -152,6 +165,11 @@ export class TripLocationRecorder {
   private consecutiveFlushFailures = 0;
   private droppedNoRide = 0;
   private enqueueFailures = 0;
+  private idleRecordingEnabled = false;
+  private idleSessionOpen = false;
+  private lastIdleFixAtBySource: Record<string, number> = {};
+  private lastIdleLat: number | null = null;
+  private lastIdleLng: number | null = null;
   private readonly reportNonFatal: (error: Error, context: Record<string, string | number>) => void;
 
   constructor(options: TripLocationRecorderOptions = {}) {
@@ -187,6 +205,8 @@ export class TripLocationRecorder {
     this.activeRideId = rideId;
     this.activeRideStartedAt = this.now();
     this.resetDropCounters();
+    // A trip starting ends the idle span — the trip session owns fixes now.
+    await this.stopIdleSession();
     await AsyncStorage.setItem(ACTIVE_RIDE_KEY, rideId);
     return this.outbox.startSession(rideId);
   }
@@ -197,12 +217,19 @@ export class TripLocationRecorder {
     rideId?: string,
     isCompletionFix = false,
   ): Promise<TripLocationPoint | null> {
-    const resolvedRideId = rideId ?? await this.resolveActiveRideId();
+    let resolvedRideId = rideId ?? await this.resolveActiveRideId();
+    let isIdleFix = false;
     if (!resolvedRideId) {
-      // Counted, not silent: until idle sessions land (Phase 1), a no-ride fix
-      // has nowhere durable to go — this counter is how that loss stays visible.
-      this.droppedNoRide += 1;
-      return null;
+      // Period-1 idle capture: while online with no trip, throttled fixes go
+      // into the open idle session instead of being dropped (SPR-PE7TTB class
+      // loss). Gated on the server flag (setIdleRecordingEnabled).
+      if (this.idleRecordingEnabled && this.idleSessionOpen && this.shouldRecordIdleFix(location, source)) {
+        resolvedRideId = IDLE_RIDE_ID;
+        isIdleFix = true;
+      } else {
+        this.droppedNoRide += 1;
+        return null;
+      }
     }
 
     const nativeLocation = location as NativeLocationWithElapsedTime;
@@ -228,10 +255,56 @@ export class TripLocationRecorder {
       this.enqueueFailures += 1;
       throw error;
     }
+    if (isIdleFix) {
+      // Idle bookkeeping only — the '@idle' sentinel must never become the
+      // active ride id or feed the trip staleness watchdog.
+      this.lastIdleFixAtBySource[source] = this.now();
+      this.lastIdleLat = location.coords.latitude;
+      this.lastIdleLng = location.coords.longitude;
+      return queued;
+    }
     this.activeRideId = resolvedRideId;
     this.activeRideStartedAt ??= this.now();
     this.lastCaptureAt = this.now();
     return queued;
+  }
+
+  /** Gate idle capture: per-source minimum interval OR ≥100 m of movement. */
+  private shouldRecordIdleFix(location: Location.LocationObject, source: TripLocationSource): boolean {
+    const minInterval = IDLE_MIN_INTERVAL_MS[source] ?? IDLE_MIN_INTERVAL_MS.foreground;
+    const last = this.lastIdleFixAtBySource[source] ?? 0;
+    if (this.now() - last >= minInterval) return true;
+    if (this.lastIdleLat === null || this.lastIdleLng === null) return true;
+    const dLat = location.coords.latitude - this.lastIdleLat;
+    const dLng = location.coords.longitude - this.lastIdleLng;
+    // Cheap equirectangular displacement — precision is irrelevant at 100 m.
+    const km = Math.sqrt(dLat * dLat + dLng * dLng * 0.45) * 111;
+    return km >= IDLE_MIN_DISPLACEMENT_KM;
+  }
+
+  /** Server-flag gate for idle capture (GET /settings idle_location_v2_enabled). */
+  setIdleRecordingEnabled(enabled: boolean): void {
+    this.idleRecordingEnabled = enabled;
+    if (!enabled) this.idleSessionOpen = false;
+  }
+
+  /** Open the one durable Period-1 session (online, no trip). Idempotent. */
+  async startIdleSession(): Promise<void> {
+    if (!this.idleRecordingEnabled || this.idleSessionOpen) return;
+    await this.outbox.startSession(IDLE_RIDE_ID);
+    this.idleSessionOpen = true;
+  }
+
+  /** Close the idle session (going offline, or a trip starting). Idempotent. */
+  async stopIdleSession(): Promise<void> {
+    if (!this.idleSessionOpen) return;
+    this.idleSessionOpen = false;
+    this.lastIdleFixAtBySource = {};
+    try {
+      await this.outbox.closeSession(IDLE_RIDE_ID);
+    } catch {
+      // Closing is bookkeeping; queued idle points flush regardless.
+    }
   }
 
   async flushPending(
@@ -392,6 +465,10 @@ export class TripLocationRecorder {
     this.nextFlushNotBefore = 0;
     this.consecutiveFlushFailures = 0;
     this.resetDropCounters();
+    this.idleSessionOpen = false;
+    this.lastIdleFixAtBySource = {};
+    this.lastIdleLat = null;
+    this.lastIdleLng = null;
     try {
       await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
     } catch {
@@ -452,11 +529,21 @@ export class TripLocationRecorder {
           const points = await this.outbox.peek(session.recording_session_id);
           if (!points.length) break;
 
-          const acknowledgement = await transport({
-            ride_id: session.ride_id,
-            recording_session_id: session.recording_session_id,
-            points,
-          });
+          const isIdleSession = session.ride_id === IDLE_RIDE_ID;
+          const acknowledgement = await transport(
+            isIdleSession
+              ? {
+                  // Ride-less v2 idle shape — the server routes on session_kind.
+                  session_kind: 'online_idle',
+                  recording_session_id: session.recording_session_id,
+                  points,
+                }
+              : {
+                  ride_id: session.ride_id,
+                  recording_session_id: session.recording_session_id,
+                  points,
+                },
+          );
           uploadedPoints += points.length;
           // The transport resolved — the network path works. Clear backoff
           // even before validating the ack shape (a malformed ack is a server

@@ -793,6 +793,30 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     };
   }, [activeRide?.ride?.id, foregroundLocationTransport, isOnline, rideState, uploadLocationBatch]);
 
+  // Period-1 idle durable recording: while online with no trip, keep ONE idle
+  // outbox session open (the recorder throttles fixes to ≥30s/60s or 100m).
+  // Gated on the server flag from GET /settings — the ingest endpoint is
+  // authoritative regardless. Trip start / going offline closes the session.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!isOnline || TRACKED_TRIP_PHASES.includes(rideState)) {
+        await tripLocationRecorder.stopIdleSession().catch(() => {});
+        return;
+      }
+      try {
+        const res = await api.get<{ idle_location_v2_enabled?: boolean }>('/settings');
+        if (cancelled) return;
+        const enabled = res.data?.idle_location_v2_enabled === true;
+        tripLocationRecorder.setIdleRecordingEnabled(enabled);
+        if (enabled) await tripLocationRecorder.startIdleSession();
+      } catch {
+        // Flag unreadable — leave idle recording off; next transition retries.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isOnline, rideState]);
+
   // ─── WebSocket Message Handler ───────────────────────────────────
   const handleWSMessage = useCallback((data: any) => {
     switch (data.type) {

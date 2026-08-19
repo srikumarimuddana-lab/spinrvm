@@ -77,6 +77,39 @@ export const getDriverRides = (id: string, limit = 500) =>
 export const getDriverDailyActivity = (id: string, date?: string) =>
     request<any>(`/api/admin/drivers/${id}/daily-activity${date ? `?date=${date}` : ""}`);
 
+// Distance Travelled (per-Regina-day phase km + durations) and its per-day
+// Distance Logs drill-down (insurance-period spans joined with the audited,
+// revision-current distances). Insurance/ops figures — never billing.
+export const getDriverDistanceTravelled = (id: string, start?: string, end?: string) => {
+    const qs = new URLSearchParams();
+    if (start) qs.set("start", start);
+    if (end) qs.set("end", end);
+    const q = qs.toString();
+    return request<any>(`/api/admin/drivers/${id}/distance-travelled${q ? `?${q}` : ""}`);
+};
+
+export const getDriverDistanceLogs = (id: string, date: string) =>
+    request<any>(`/api/admin/drivers/${id}/distance-logs?date=${date}`);
+
+// Blob-fetch a branded export (csv/pdf/xlsx) — same pattern as
+// fetchKybDocumentBlob: the endpoint needs the bearer token, so a plain
+// <a href> can't be used.
+export async function fetchDriverDistanceExport(
+    id: string,
+    start: string,
+    end: string,
+    format: "csv" | "pdf" | "xlsx"
+): Promise<Blob> {
+    const { useAuthStore } = await import("@/store/authStore");
+    const token = useAuthStore.getState().token;
+    const res = await fetch(
+        `/api/admin/drivers/${id}/distance-travelled?start=${start}&end=${end}&format=${format}`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+    );
+    if (!res.ok) throw new Error(`Export failed (${res.status})`);
+    return res.blob();
+}
+
 export interface DriverLiveStats {
     total_rides: number;
     total_earnings: number;

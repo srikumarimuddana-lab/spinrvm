@@ -160,10 +160,40 @@ async def _persist_v2_location_batch(request: LocationBatchRequest, current_user
         lat = latest.latitude if latest.latitude is not None else latest.lat
         lng = latest.longitude if latest.longitude is not None else latest.lng
         if lat is not None and lng is not None:
-            update_data = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc)}
-            if latest.heading is not None:
-                update_data["heading"] = latest.heading % 360
-            await db_supabase.update_one("drivers", {"id": driver["id"]}, update_data)
+            # Same GPS spoofing/teleport guard the legacy (v1) path already
+            # runs before trusting a point for the driver's LIVE marker — see
+            # ACTION_ITEMS.md A40 finding #7. Historical breadcrumbs are
+            # already persisted above (raw `mocked` flag kept for the
+            # settlement-time anomaly filter in utils/trip_distance.py, and
+            # for the regulatory GPS-trace record); this only gates whether a
+            # spoofed point is allowed to move `drivers.lat/lng`, which
+            # dispatch, the rider map, and admin all read as the driver's
+            # real-time position.
+            try:
+                from ...utils.location_integrity import check_location_integrity
+            except ImportError:
+                from utils.location_integrity import check_location_integrity  # type: ignore
+
+            trusted, reason = await check_location_integrity(
+                driver["id"],
+                lat,
+                lng,
+                speed=latest.speed,
+                accuracy=latest.accuracy,
+                mocked=latest.mocked,
+            )
+            if not trusted:
+                logger.warning(
+                    "location-batch v2: rejected live marker update for driver_id=%s ride_id=%s reason=%s",
+                    driver["id"],
+                    request.ride_id,
+                    reason,
+                )
+            else:
+                update_data = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc)}
+                if latest.heading is not None:
+                    update_data["heading"] = latest.heading % 360
+                await db_supabase.update_one("drivers", {"id": driver["id"]}, update_data)
 
     if driver.get("is_online"):
         await _deps.mark_present(driver["id"])

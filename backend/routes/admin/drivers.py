@@ -3851,6 +3851,37 @@ async def admin_driver_daily_activity(
     report = build_daily_activity(periods, rides, win_start, win_end)
     report["date"] = d.isoformat()
     report["tz"] = "America/Regina"
+
+    # For a CLOSED day the scheduled rollup's GPS-derived summary is the
+    # authoritative distance record (it includes Period-1 roaming km, which
+    # the per-ride phase_distances can never show). Merge it in additively —
+    # the live per-ride list above stays untouched — and label the source so
+    # the dashboard can show live vs rolled-up.
+    report["day_source"] = "live"
+    if d < datetime.now(REGINA_TZ).date():
+        try:
+            stats = await db_supabase.get_rows(
+                "driver_daily_stats",
+                {"id": f"{driver_id}_{d.isoformat()}", "day_tz": "regina"},
+                limit=1,
+            )
+        except Exception:
+            logger.error("daily-activity: stats lookup failed (serving live)", exc_info=True)
+            stats = []
+        if stats:
+            s = stats[0]
+            report["day_source"] = "rollup"
+            report["summary"]["gps_km"] = {
+                "idle": s.get("idle_km") or 0,
+                "navigating": s.get("navigating_km") or 0,
+                "trip": s.get("trip_km") or 0,
+                "total": s.get("total_km") or 0,
+            }
+            report["summary"]["gps_seconds"] = {
+                "idle": s.get("idle_seconds") or 0,
+                "navigating": s.get("navigating_seconds") or 0,
+                "trip": s.get("trip_seconds") or 0,
+            }
     return report
 
 

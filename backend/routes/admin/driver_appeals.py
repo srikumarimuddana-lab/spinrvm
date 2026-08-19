@@ -22,10 +22,12 @@ from pydantic import BaseModel
 try:
     from ...dependencies import get_admin_user
     from ...services import driver_appeals as appeals_service
+    from ...utils.audit_logger import log_admin_action
     from .drivers import DriverActionRequest, admin_driver_action
 except ImportError:  # pragma: no cover - direct module imports in tests
     from dependencies import get_admin_user  # type: ignore
     from services import driver_appeals as appeals_service  # type: ignore
+    from utils.audit_logger import log_admin_action  # type: ignore
 
     from .drivers import DriverActionRequest, admin_driver_action  # type: ignore
 
@@ -103,8 +105,28 @@ async def admin_resolve_driver_appeal(
         resolved_by=admin.get("id") or admin.get("email") or "admin",
     )
 
+    # Appeal-decision audit trail. The driver-status side (approve ->
+    # reactivate/unban) is already audited by admin_driver_action above when
+    # applicable; this row covers the appeal decision itself, including the
+    # 'denied' path and 'needs_review'/'other' appeal_types where no driver
+    # status transition happens at all.
+    audit_id = await log_admin_action(
+        admin,
+        f"driver_appeal_{req.decision}",
+        "driver_appeals",
+        appeal_id,
+        {
+            "decision": req.decision,
+            "admin_note": req.admin_note,
+            "appeal_type": appeal.get("appeal_type"),
+            "driver_id": appeal.get("driver_id"),
+            "driver_reactivated": reactivation_result is not None,
+        },
+    )
+
     return {
         "appeal_id": appeal_id,
         "status": req.decision,
         "driver_reactivated": reactivation_result is not None,
+        "audit_log_id": audit_id,
     }

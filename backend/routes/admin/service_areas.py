@@ -995,7 +995,7 @@ async def admin_get_area_fees(area_id: str):
 
 
 @router.post("/areas/{area_id}/fees")
-async def admin_create_area_fee(area_id: str, fee: AreaFeeCreateRequest):
+async def admin_create_area_fee(area_id: str, fee: AreaFeeCreateRequest, admin: dict = Depends(get_admin_user)):
     """Create a new fee for a service area."""
     doc = {
         "id": str(uuid.uuid4()),
@@ -1011,11 +1011,16 @@ async def admin_create_area_fee(area_id: str, fee: AreaFeeCreateRequest):
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.insert_one("area_fees", doc)
+    await log_admin_action(
+        admin, "area_fee_created", "area_fees", doc["id"], {"service_area_id": area_id, "fee_name": fee.fee_name}
+    )
     return doc
 
 
 @router.put("/areas/{area_id}/fees/{fee_id}")
-async def admin_update_area_fee(area_id: str, fee_id: str, fee: AreaFeeUpdateRequest):
+async def admin_update_area_fee(
+    area_id: str, fee_id: str, fee: AreaFeeUpdateRequest, admin: dict = Depends(get_admin_user)
+):
     """Update an area fee."""
     updates: Dict[str, Any] = {}
     if fee.fee_name is not None:
@@ -1035,13 +1040,17 @@ async def admin_update_area_fee(area_id: str, fee_id: str, fee: AreaFeeUpdateReq
     if updates:
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         await db_supabase.update_one("area_fees", {"id": fee_id}, updates)
+        await log_admin_action(
+            admin, "area_fee_updated", "area_fees", fee_id, {"fields": sorted(k for k in updates if k != "updated_at")}
+        )
     return {"message": "Area fee updated"}
 
 
 @router.delete("/areas/{area_id}/fees/{fee_id}")
-async def admin_delete_area_fee(area_id: str, fee_id: str):
+async def admin_delete_area_fee(area_id: str, fee_id: str, admin: dict = Depends(get_admin_user)):
     """Delete an area fee."""
     await db_supabase.delete_many("area_fees", {"id": fee_id})
+    await log_admin_action(admin, "area_fee_deleted", "area_fees", fee_id, {"service_area_id": area_id})
     return {"message": "Area fee deleted"}
 
 

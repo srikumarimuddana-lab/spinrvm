@@ -263,7 +263,7 @@ async def admin_get_chargebacks(
 
 
 @router.post("/disputes")
-async def admin_create_dispute(dispute: DisputeCreateRequest):
+async def admin_create_dispute(dispute: DisputeCreateRequest, admin: dict = Depends(get_admin_user)):
     """Create a dispute manually from admin."""
     doc = {
         "id": str(uuid.uuid4()),
@@ -281,6 +281,7 @@ async def admin_create_dispute(dispute: DisputeCreateRequest):
     }
     await db_supabase.insert_one("disputes", doc)
     asyncio.create_task(create_ticket_for_dispute(doc))
+    await log_admin_action(admin, "dispute_created", "disputes", doc["id"], {"ride_id": dispute.ride_id})
     return {"success": True, "dispute": doc}
 
 
@@ -296,7 +297,7 @@ async def admin_get_dispute_details(dispute_id: str):
 
 
 @router.put("/disputes/{dispute_id}")
-async def admin_update_dispute(dispute_id: str, dispute: DisputeUpdateRequest):
+async def admin_update_dispute(dispute_id: str, dispute: DisputeUpdateRequest, admin: dict = Depends(get_admin_user)):
     """Update a dispute."""
     updates: Dict[str, Any] = {}
     if dispute.reason is not None:
@@ -312,6 +313,13 @@ async def admin_update_dispute(dispute_id: str, dispute: DisputeUpdateRequest):
     if updates:
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         await db_supabase.update_one("disputes", {"id": dispute_id}, updates)
+        await log_admin_action(
+            admin,
+            "dispute_updated",
+            "disputes",
+            dispute_id,
+            {"fields": sorted(k for k in updates if k != "updated_at")},
+        )
     return {"message": "Dispute updated"}
 
 
@@ -340,9 +348,10 @@ async def admin_resolve_dispute(
 
 
 @router.delete("/disputes/{dispute_id}")
-async def admin_delete_dispute(dispute_id: str):
+async def admin_delete_dispute(dispute_id: str, admin: dict = Depends(get_admin_user)):
     """Delete a dispute."""
     await db_supabase.delete_many("disputes", {"id": dispute_id})
+    await log_admin_action(admin, "dispute_deleted", "disputes", dispute_id, {})
     return {"message": "Dispute deleted"}
 
 
@@ -374,7 +383,7 @@ async def admin_get_tickets(
 
 
 @router.post("/tickets")
-async def admin_create_ticket(ticket: TicketCreateRequest):
+async def admin_create_ticket(ticket: TicketCreateRequest, admin: dict = Depends(get_admin_user)):
     """Create a support ticket manually from admin."""
     doc = {
         "id": str(uuid.uuid4()),
@@ -390,6 +399,7 @@ async def admin_create_ticket(ticket: TicketCreateRequest):
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.insert_one("support_tickets", doc)
+    await log_admin_action(admin, "ticket_created", "support_tickets", doc["id"], {"subject": ticket.subject})
     return {"success": True, "ticket": doc}
 
 
@@ -439,18 +449,19 @@ async def admin_reply_to_ticket(ticket_id: str, reply: TicketReplyRequest, admin
 
 
 @router.post("/tickets/{ticket_id}/close")
-async def admin_close_ticket(ticket_id: str):
+async def admin_close_ticket(ticket_id: str, admin: dict = Depends(get_admin_user)):
     """Close a support ticket."""
     await db_supabase.update_one(
         "support_tickets",
         {"id": ticket_id},
         {"status": "closed", "closed_at": datetime.now(timezone.utc).isoformat()},
     )
+    await log_admin_action(admin, "ticket_closed", "support_tickets", ticket_id, {})
     return {"message": "Ticket closed"}
 
 
 @router.put("/tickets/{ticket_id}")
-async def admin_update_ticket(ticket_id: str, ticket: TicketUpdateRequest):
+async def admin_update_ticket(ticket_id: str, ticket: TicketUpdateRequest, admin: dict = Depends(get_admin_user)):
     """Update a support ticket."""
     updates: Dict[str, Any] = {}
     if ticket.subject is not None:
@@ -464,13 +475,21 @@ async def admin_update_ticket(ticket_id: str, ticket: TicketUpdateRequest):
     if updates:
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         await db_supabase.update_one("support_tickets", {"id": ticket_id}, updates)
+        await log_admin_action(
+            admin,
+            "ticket_updated",
+            "support_tickets",
+            ticket_id,
+            {"fields": sorted(k for k in updates if k != "updated_at")},
+        )
     return {"message": "Ticket updated"}
 
 
 @router.delete("/tickets/{ticket_id}")
-async def admin_delete_ticket(ticket_id: str):
+async def admin_delete_ticket(ticket_id: str, admin: dict = Depends(get_admin_user)):
     """Delete a support ticket."""
     await db_supabase.delete_many("support_tickets", {"id": ticket_id})
+    await log_admin_action(admin, "ticket_deleted", "support_tickets", ticket_id, {})
     return {"message": "Ticket deleted"}
 
 
@@ -549,9 +568,10 @@ async def admin_deactivate_flag(flag_id: str, admin: dict = Depends(get_admin_us
 
 
 @router.delete("/flags/{flag_id}")
-async def admin_delete_flag(flag_id: str):
+async def admin_delete_flag(flag_id: str, admin: dict = Depends(get_admin_user)):
     """Permanently delete a flag."""
     await db_supabase.delete_one("flags", {"id": flag_id})
+    await log_admin_action(admin, "flag_deleted", "flags", flag_id, {})
     return {"message": "Flag deleted"}
 
 
@@ -559,7 +579,7 @@ async def admin_delete_flag(flag_id: str):
 
 
 @router.post("/rides/{ride_id}/complaint")
-async def admin_create_complaint(ride_id: str, req: ComplaintRequest):
+async def admin_create_complaint(ride_id: str, req: ComplaintRequest, admin: dict = Depends(get_admin_user)):
     """Create a complaint against a rider or driver from a ride."""
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
@@ -585,6 +605,9 @@ async def admin_create_complaint(ride_id: str, req: ComplaintRequest):
     complaint = await db_supabase.create_complaint(complaint_data)
     # Raise a Zoho Desk ticket for support — fire-and-forget, no-op if disabled.
     asyncio.create_task(create_ticket_for_complaint(complaint or complaint_data, ride))
+    await log_admin_action(
+        admin, "complaint_created", "complaints", complaint_data["id"], {"against_type": req.against_type}
+    )
     return complaint
 
 
@@ -636,7 +659,8 @@ async def admin_list_complaints(
 
 
 @router.delete("/complaints/{complaint_id}")
-async def admin_delete_complaint(complaint_id: str):
+async def admin_delete_complaint(complaint_id: str, admin: dict = Depends(get_admin_user)):
     """Delete a complaint."""
     await db_supabase.delete_one("complaints", {"id": complaint_id})
+    await log_admin_action(admin, "complaint_deleted", "complaints", complaint_id, {})
     return {"message": "Complaint deleted"}

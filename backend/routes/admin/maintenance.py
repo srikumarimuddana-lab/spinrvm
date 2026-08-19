@@ -16,8 +16,10 @@ try:
     from ... import db_supabase
     from ...db_supabase import run_sync as _run_sync
     from ...supabase_client import supabase as _supabase_client
+    from ...utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase
+    from utils.audit_logger import log_admin_action  # type: ignore
 
 db = db_supabase  # legacy alias
 
@@ -62,7 +64,10 @@ router = APIRouter()
 
 
 @router.post("/maintenance/cleanup-location-history")
-async def admin_cleanup_location_history(days: int = Query(30, ge=7, le=1095)):
+async def admin_cleanup_location_history(
+    days: int = Query(30, ge=7, le=1095),
+    admin: dict = Depends(get_admin_user),
+):
     """Delete old driver_location_history rows.
 
     By default deletes rows older than 30 days. On ride completion the
@@ -92,6 +97,13 @@ async def admin_cleanup_location_history(days: int = Query(30, ge=7, le=1095)):
         logger.error(f"Cleanup idle GPS failed: {e}", exc_info=True)
 
     logger.info("[CLEANUP] Deleted historical + idle GPS points (counts not tracked — direct delete)")
+    await log_admin_action(
+        admin,
+        "location_history_cleanup",
+        "driver_location_history",
+        "bulk",
+        {"days": days, "historical_cutoff": cutoff_historical, "idle_cutoff": cutoff_idle},
+    )
     return {
         "deleted_historical": deleted_historical,
         "deleted_idle": deleted_idle,
@@ -101,7 +113,7 @@ async def admin_cleanup_location_history(days: int = Query(30, ge=7, le=1095)):
 
 
 @router.post("/maintenance/rollup-driver-daily")
-async def admin_rollup_driver_daily(target_date: Optional[str] = None):
+async def admin_rollup_driver_daily(target_date: Optional[str] = None, admin: dict = Depends(get_admin_user)):
     """Roll up driver activity for a single day into driver_daily_stats.
 
     Captures:
@@ -269,6 +281,13 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
             created += 1
 
     logger.info(f"[ROLLUP] driver_daily_stats for {stat_date}: created={created} updated={updated}")
+    await log_admin_action(
+        admin,
+        "driver_daily_rollup",
+        "driver_daily_stats",
+        stat_date.isoformat(),
+        {"drivers_processed": len(all_driver_ids), "created": created, "updated": updated},
+    )
     return {
         "stat_date": stat_date.isoformat(),
         "drivers_processed": len(all_driver_ids),

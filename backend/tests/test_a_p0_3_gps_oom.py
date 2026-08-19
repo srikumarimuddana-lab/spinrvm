@@ -185,7 +185,7 @@ async def test_cleanup_calls_delete_many_not_get_rows():
         patch("backend.routes.admin.maintenance.db_supabase.delete_many", delete_mock),
         patch("backend.routes.admin.maintenance.db_supabase.get_rows", get_rows_mock),
     ):
-        result = await _maintenance_module.admin_cleanup_location_history(days=30)
+        result = await _maintenance_module.admin_cleanup_location_history(days=30, admin={"id": "test_admin"})
 
     # delete_many called twice (historical + idle)
     assert delete_mock.call_count == 2, "must call delete_many twice (historical + idle)"
@@ -205,7 +205,7 @@ async def test_cleanup_returns_correct_structure():
     with (
         patch("backend.routes.admin.maintenance.db_supabase.delete_many", AsyncMock(return_value=None)),
     ):
-        result = await _maintenance_module.admin_cleanup_location_history(days=30)
+        result = await _maintenance_module.admin_cleanup_location_history(days=30, admin={"id": "test_admin"})
 
     assert "deleted_historical" in result
     assert "deleted_idle" in result
@@ -222,7 +222,7 @@ async def test_cleanup_continues_on_delete_error():
     delete_mock = AsyncMock(side_effect=[Exception("timeout"), None])
 
     with patch("backend.routes.admin.maintenance.db_supabase.delete_many", delete_mock):
-        result = await _maintenance_module.admin_cleanup_location_history(days=30)
+        result = await _maintenance_module.admin_cleanup_location_history(days=30, admin={"id": "test_admin"})
 
     # Both delete_many calls must have been attempted regardless of first failure
     assert delete_mock.call_count == 2, "second delete_many must run even after first fails"

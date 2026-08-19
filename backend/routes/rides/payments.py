@@ -5,8 +5,10 @@ motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
 try:
+    from ...services.fare_service import driver_earnings_with_tip
     from ...utils.redis_client import redis_expire, redis_incrby
 except ImportError:
+    from services.fare_service import driver_earnings_with_tip  # type: ignore
     from utils.redis_client import redis_expire, redis_incrby  # type: ignore
 
 from . import _deps
@@ -221,9 +223,14 @@ async def add_tip(
                 )
                 await _record_late_tip_absorption(current_user["id"], ride_id, absorbed_this_event)
 
-    existing_earnings = _d(ride.get("driver_earnings") or 0)
     new_tip = _round(existing_tip + tip_amount)
-    new_driver_earnings = _round(existing_earnings + tip_amount)
+    # Canonical, idempotent calc (fare-payout-audit follow-up, 2026-08-19) —
+    # never "existing driver_earnings + tip_amount". See
+    # fare_service.driver_earnings_with_tip's docstring for why: this exact
+    # accumulate pattern caused a real production underpayment when a ride
+    # touched more than one tip-writing code path (rating.py, here, and the
+    # settlement RPC each mutated relative to their own view of "current").
+    new_driver_earnings = driver_earnings_with_tip(ride, new_tip)
 
     update_payload = {"tip_amount": _f(new_tip), "driver_earnings": _f(new_driver_earnings)}
 
@@ -536,7 +543,13 @@ async def process_payment(
             _tip_db_update["fare_breakdown_snapshot"] = snapshot
         ride["tip_amount"] = _f(tip_d)
         if tip_delta > 0:
-            ride["driver_earnings"] = _f(_round(_d(ride.get("driver_earnings") or 0) + tip_delta))
+            # Canonical, idempotent calc (fare-payout-audit follow-up,
+            # 2026-08-19) — never "existing driver_earnings + delta". This is
+            # the in-memory mirror only (the authoritative DB write happens
+            # inside settle_card/_finalize_card_settlement below), but it
+            # feeds the receipt email fired right after settlement, so it
+            # must show the same number the DB ends up with.
+            ride["driver_earnings"] = _f(driver_earnings_with_tip(ride, tip_d))
 
     _snap = ride.get("fare_breakdown_snapshot")
     _snap_lines = (_snap.get("lines") if isinstance(_snap, dict) else None) if _snap else None

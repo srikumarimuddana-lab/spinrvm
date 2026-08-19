@@ -4,6 +4,11 @@ Split from ``backend/routes/rides.py`` (god-file refactor). Pure code
 motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
+try:
+    from ...services.fare_service import driver_earnings_with_tip
+except ImportError:
+    from services.fare_service import driver_earnings_with_tip  # type: ignore
+
 from . import _deps
 from ._deps import (  # noqa: F401
     ROUND_HALF_UP,
@@ -83,7 +88,10 @@ async def rate_driver(
 
     if rating_data.tip_amount > 0:
         tip = _round(_d(rating_data.tip_amount))
-        new_driver_earnings = _round(_d(ride.get("driver_earnings") or 0) + tip)
+        # Canonical, idempotent calc (fare-payout-audit follow-up,
+        # 2026-08-19) — never "existing driver_earnings + tip". See
+        # fare_service.driver_earnings_with_tip's docstring for why.
+        new_driver_earnings = driver_earnings_with_tip(ride, tip)
         _rate_update: dict = {"tip_amount": _f(tip), "driver_earnings": _f(new_driver_earnings)}
         des = ride.get("driver_earnings_snapshot")
         if des and isinstance(des, dict):

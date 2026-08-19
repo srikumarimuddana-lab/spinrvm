@@ -1,4 +1,4 @@
--- 334_settle_ride_card_payment_idempotent_earnings.sql
+-- 337_settle_ride_card_payment_idempotent_earnings.sql
 -- Replaces settle_ride_card_payment's tip-delta driver_earnings math with a
 -- fresh, idempotent recompute — closing a real production underpayment
 -- (2026-08-19 live-testing incident).
@@ -136,7 +136,7 @@ COMMENT ON FUNCTION settle_ride_card_payment(text, uuid, text, bigint, text, num
     'and inserts the financial_events header in the same transaction. '
     'driver_earnings is computed fresh every call from total_fare - '
     '(booking_fee + airport_fee) + tip_amount -- idempotent by construction, '
-    'no delta/existing-value bookkeeping (migration 334 fix, closing a real '
+    'no delta/existing-value bookkeeping (migration 337 fix, closing a real '
     'production underpayment caused by migration 288''s delta-based version). '
     'Returns the event id, or NULL when the ride was already paid. Called '
     'behind the ledger_atomic_settle_enabled app-settings flag with legacy '

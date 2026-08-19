@@ -1,7 +1,7 @@
--- 335_fix_ride2_underpaid_tip_2026_08_19.sql
+-- 338_fix_ride2_underpaid_tip_2026_08_19.sql
 -- One-off data correction for a single, specific live-testing ride whose
 -- driver_earnings missed a $0.50 tip credit due to the delta-based bug
--- fixed structurally in migration 334 / backend/services/fare_service.py's
+-- fixed structurally in migration 337 / backend/services/fare_service.py's
 -- driver_earnings_with_tip().
 --
 -- Ride: 4a8a0767-72de-40c7-abb7-6038b7c0b4ba (SPR-8X2GTY)

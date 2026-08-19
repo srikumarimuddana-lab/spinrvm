@@ -47,7 +47,7 @@ Added one canonical, idempotent function,
 no dependency on call order or which path ran last. Replaced all three
 write sites (`rating.py`, `payments.py`'s `add_tip` and `process_payment`'s
 in-memory receipt mirror, `payment_service.py`'s `_tip_ride_update`) and
-the `settle_ride_card_payment` RPC (migration 334) to use this formula.
+the `settle_ride_card_payment` RPC (migration 337) to use this formula.
 Migration 335 is a narrow, one-off data correction for the single affected
 production ride (SPR-8X2GTY), guarded on its exact stale values so it can
 only ever match that one row.
@@ -78,7 +78,7 @@ only ever match that one row.
 - **Driver-facing**: a driver whose ride previously under-credited a tip
   will now see the correct (higher) `driver_earnings` reflected in the
   Activity panel and earnings statements once this ships and the one-off
-  correction (migration 335) is applied. For all other rides, no visible
+  correction (migration 338) is applied. For all other rides, no visible
   change — the new formula reproduces the same output as the old delta
   math whenever a ride only ever went through one tip-writing path (the
   overwhelming majority of rides).
@@ -96,8 +96,8 @@ only ever match that one row.
 | `backend/routes/rides/rating.py` | Tip-while-rating path now calls the canonical helper instead of accumulating | Root-cause fix, path 1 |
 | `backend/routes/rides/payments.py` | `add_tip` and `process_payment`'s in-memory receipt mirror now call the canonical helper | Root-cause fix, path 2 |
 | `backend/services/payment_service.py` | `_tip_ride_update()` now calls the canonical helper | Root-cause fix, path 3 (legacy fallback) |
-| `backend/migrations/334_settle_ride_card_payment_idempotent_earnings.sql` | `settle_ride_card_payment` RPC recomputes `driver_earnings` fresh instead of via delta | Root-cause fix, path 4 (RPC/primary settlement) |
-| `backend/migrations/335_fix_ride2_underpaid_tip_2026_08_19.sql` | One-off, narrowly-guarded `UPDATE` correcting SPR-8X2GTY's `driver_earnings` from 0.17 to 0.67 | Data correction for the one real underpaid ride |
+| `backend/migrations/337_settle_ride_card_payment_idempotent_earnings.sql` | `settle_ride_card_payment` RPC recomputes `driver_earnings` fresh instead of via delta | Root-cause fix, path 4 (RPC/primary settlement) |
+| `backend/migrations/338_fix_ride2_underpaid_tip_2026_08_19.sql` | One-off, narrowly-guarded `UPDATE` correcting SPR-8X2GTY's `driver_earnings` from 0.17 to 0.67 | Data correction for the one real underpaid ride |
 | `backend/tests/test_e2e_rating_regression.py` | Updated `test_tip_added_to_driver_earnings` fixture to set `total_fare` so the new fresh-computation formula still produces the test's intended $16 base | Test now encodes new (correct) behavior instead of old delta behavior |
 
 ## 7. Before / after
@@ -120,7 +120,7 @@ new_driver_earnings = driver_earnings_with_tip(ride, new_tip)
 -- Before (migration 288's settle_ride_card_payment)
 v_earnings := COALESCE(v_driver_earnings, 0) + (p_tip_amount - COALESCE(v_tip_amount, 0));
 
--- After (migration 334)
+-- After (migration 337)
 v_base_earnings := GREATEST(v_total_fare - (v_booking_fee + v_airport_fee), 0);
 v_earnings := v_base_earnings + COALESCE(p_tip_amount, 0);
 ```

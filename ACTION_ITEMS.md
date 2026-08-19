@@ -368,6 +368,30 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   this migration lands get the new column cleared; a one-time backfill
   UPDATE for already-anonymized rows was deliberately left out of scope to
   keep this fix purely additive.
+  **FIXED 2026-08-19**: ranked blocker #9/#14 — `safety_checkin_loop._tick()`'s
+  push-send path was check-then-act: read `safety:checkin:sent:{ride_id}`,
+  then a network round-trip to `send_push_notification`, then write the key
+  — two replicas racing the same 30s tick on the same ride could both read
+  "not sent" and both fire the "are you okay?" safety check-in push before
+  either claimed the key. Fixed by claiming the key atomically via
+  `redis_set_nx` (`SET NX`, the same primitive already used elsewhere in
+  this codebase for leader-election/dedupe locks, e.g.
+  `utils/referral_payout.py`) *before* sending; on a failed send the claim
+  is released via `redis_delete` so the next tick still retries a genuine
+  failure, not just a duplicate. The escalation path (`_escalate`,
+  `safety_incidents` insert) was separately confirmed already-safe by the
+  audit and is untouched. Isolated: `safety_checkin_loop()` has exactly one
+  caller (`core/lifespan.py`'s `_spawn`). Updated 5 existing tests + 2 new
+  regression tests (claim-lost-to-another-replica,
+  claim-released-on-failed-push).
+  `pytest tests/test_safety_checkin_loop.py -q --no-cov` → 20 passed. Full
+  backend unit suite re-verified clean after the change:
+  `pytest -q --no-cov -m unit` → 2874 passed, 1 skipped (same baseline as
+  before this fix — no regression). See
+  `docs/change-log/2026-08-19-safety-checkin-atomic-claim-fix.md`.
+  **Not verified:** no live multi-replica race reproduction (inherently
+  timing-dependent, not reproducible in the mocked-Redis unit harness —
+  verified by contract instead); no live Redis instance exercised.
   Full ranked blocker register (30 items) and decision log (10 items, each
   with a suggested owner/due date) are in the audit doc — see there before
   re-deriving. Verdict at time of the 08-18 audit run: **FIX BLOCKERS** (17

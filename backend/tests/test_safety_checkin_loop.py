@@ -45,14 +45,15 @@ def _now_iso() -> str:
 
 @pytest.mark.asyncio
 async def test_tick_sends_checkin_for_overdue_ride():
-    """Ride >20 min old with no prior check-in → push sent + sent_key written."""
+    """Ride >20 min old with no prior check-in → the sent_key is claimed
+    atomically (SET NX, not a separate GET-then-SET) before the push fires."""
     push = AsyncMock()
-    rset = AsyncMock()
+    rset_nx = AsyncMock(return_value=True)
 
     with (
         patch("utils.safety_checkin_loop._supabase_db") as db,
         patch("utils.safety_checkin_loop.redis_get", AsyncMock(return_value=None)),
-        patch("utils.safety_checkin_loop.redis_set", rset),
+        patch("utils.safety_checkin_loop.redis_set_nx", rset_nx),
         patch("utils.safety_checkin_loop.send_push_notification", push),
     ):
         db.get_rows = AsyncMock(return_value=[_ride()])
@@ -60,12 +61,58 @@ async def test_tick_sends_checkin_for_overdue_ride():
 
         await _tick()
 
+    rset_nx.assert_awaited_once()
+    key_claimed = rset_nx.call_args[0][0]
+    assert "safety:checkin:sent:r1" == key_claimed
     push.assert_awaited_once()
     push_call = push.call_args
     assert push_call[0][0] == "u1"
-    rset.assert_awaited_once()
-    key_written = rset.call_args[0][0]
-    assert "safety:checkin:sent:r1" == key_written
+
+
+@pytest.mark.asyncio
+async def test_tick_skips_push_when_claim_lost_to_another_replica():
+    """A40 finding #9/#14: redis_set_nx returning False means another
+    replica already won the claim this tick — this replica must not send a
+    second push for the same ride."""
+    push = AsyncMock()
+
+    with (
+        patch("utils.safety_checkin_loop._supabase_db") as db,
+        patch("utils.safety_checkin_loop.redis_get", AsyncMock(return_value=None)),
+        patch("utils.safety_checkin_loop.redis_set_nx", AsyncMock(return_value=False)),
+        patch("utils.safety_checkin_loop.send_push_notification", push),
+    ):
+        db.get_rows = AsyncMock(return_value=[_ride()])
+        from utils.safety_checkin_loop import _tick
+
+        await _tick()
+
+    push.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_tick_releases_claim_when_push_send_fails():
+    """A push failure after a successful claim must release the claim (not
+    leave it set for the full 4h TTL) so the next tick retries — matching
+    this loop's pre-existing retry behavior for a genuinely failed send."""
+    rdel = AsyncMock()
+
+    async def failing_push(*args, **kwargs):
+        raise RuntimeError("FCM down")
+
+    with (
+        patch("utils.safety_checkin_loop._supabase_db") as db,
+        patch("utils.safety_checkin_loop.redis_get", AsyncMock(return_value=None)),
+        patch("utils.safety_checkin_loop.redis_set_nx", AsyncMock(return_value=True)),
+        patch("utils.safety_checkin_loop.redis_delete", rdel),
+        patch("utils.safety_checkin_loop.send_push_notification", side_effect=failing_push),
+    ):
+        db.get_rows = AsyncMock(return_value=[_ride()])
+        from utils.safety_checkin_loop import _tick
+
+        await _tick()  # must not raise
+
+    rdel.assert_awaited_once_with("safety:checkin:sent:r1")
 
 
 @pytest.mark.asyncio
@@ -76,7 +123,7 @@ async def test_tick_skips_ride_newer_than_20_minutes():
     with (
         patch("utils.safety_checkin_loop._supabase_db") as db,
         patch("utils.safety_checkin_loop.redis_get", AsyncMock(return_value=None)),
-        patch("utils.safety_checkin_loop.redis_set", AsyncMock()),
+        patch("utils.safety_checkin_loop.redis_set_nx", AsyncMock(return_value=True)),
         patch("utils.safety_checkin_loop.send_push_notification", push),
     ):
         db.get_rows = AsyncMock(return_value=[_ride(minutes_ago=5)])
@@ -96,7 +143,7 @@ async def test_tick_skips_ride_with_no_id():
     with (
         patch("utils.safety_checkin_loop._supabase_db") as db,
         patch("utils.safety_checkin_loop.redis_get", AsyncMock(return_value=None)),
-        patch("utils.safety_checkin_loop.redis_set", AsyncMock()),
+        patch("utils.safety_checkin_loop.redis_set_nx", AsyncMock(return_value=True)),
         patch("utils.safety_checkin_loop.send_push_notification", push),
     ):
         db.get_rows = AsyncMock(return_value=[ride])
@@ -117,7 +164,7 @@ async def test_tick_skips_ride_with_unparseable_started_at():
     with (
         patch("utils.safety_checkin_loop._supabase_db") as db,
         patch("utils.safety_checkin_loop.redis_get", AsyncMock(return_value=None)),
-        patch("utils.safety_checkin_loop.redis_set", AsyncMock()),
+        patch("utils.safety_checkin_loop.redis_set_nx", AsyncMock(return_value=True)),
         patch("utils.safety_checkin_loop.send_push_notification", push),
     ):
         db.get_rows = AsyncMock(return_value=[ride])
@@ -137,7 +184,7 @@ async def test_tick_skips_ride_with_no_ride_started_at():
     with (
         patch("utils.safety_checkin_loop._supabase_db") as db,
         patch("utils.safety_checkin_loop.redis_get", AsyncMock(return_value=None)),
-        patch("utils.safety_checkin_loop.redis_set", AsyncMock()),
+        patch("utils.safety_checkin_loop.redis_set_nx", AsyncMock(return_value=True)),
         patch("utils.safety_checkin_loop.send_push_notification", push),
     ):
         db.get_rows = AsyncMock(return_value=[ride])
@@ -150,16 +197,16 @@ async def test_tick_skips_ride_with_no_ride_started_at():
 
 @pytest.mark.asyncio
 async def test_tick_skips_push_when_no_rider_id():
-    """Ride without rider_id → redis sent_key still written, push not sent."""
+    """Ride without rider_id → sent_key still claimed, push not sent."""
     push = AsyncMock()
-    rset = AsyncMock()
+    rset_nx = AsyncMock(return_value=True)
     ride = _ride(rider_id=None)  # type: ignore[arg-type]
     ride["rider_id"] = None
 
     with (
         patch("utils.safety_checkin_loop._supabase_db") as db,
         patch("utils.safety_checkin_loop.redis_get", AsyncMock(return_value=None)),
-        patch("utils.safety_checkin_loop.redis_set", rset),
+        patch("utils.safety_checkin_loop.redis_set_nx", rset_nx),
         patch("utils.safety_checkin_loop.send_push_notification", push),
     ):
         db.get_rows = AsyncMock(return_value=[ride])
@@ -168,9 +215,9 @@ async def test_tick_skips_push_when_no_rider_id():
         await _tick()
 
     push.assert_not_awaited()
-    # sent_key IS written even without rider_id — prevents re-processing this ride
-    rset.assert_awaited_once()
-    assert "safety:checkin:sent:r1" in rset.call_args[0][0]
+    # sent_key IS claimed even without rider_id — prevents re-processing this ride
+    rset_nx.assert_awaited_once()
+    assert "safety:checkin:sent:r1" in rset_nx.call_args[0][0]
 
 
 # ── _tick: no-duplicate-push path ─────────────────────────────────────────
@@ -329,7 +376,8 @@ async def test_tick_continues_after_fcm_failure():
     with (
         patch("utils.safety_checkin_loop._supabase_db") as db,
         patch("utils.safety_checkin_loop.redis_get", AsyncMock(return_value=None)),
-        patch("utils.safety_checkin_loop.redis_set", AsyncMock()),
+        patch("utils.safety_checkin_loop.redis_set_nx", AsyncMock(return_value=True)),
+        patch("utils.safety_checkin_loop.redis_delete", AsyncMock()),
         patch("utils.safety_checkin_loop.send_push_notification", side_effect=flaky_push),
     ):
         db.get_rows = AsyncMock(return_value=[_ride("r1", "u1"), _ride("r2", "u2")])

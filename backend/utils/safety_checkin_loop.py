@@ -11,7 +11,10 @@ State is tracked in Redis to avoid re-sending or re-escalating:
   ``safety:checkin:escalated:{ride_id}`` — set after escalation (TTL: 4 h)
 
 Replay-safety: all three Redis keys prevent duplicate actions on replicas
-running the same loop concurrently.
+running the same loop concurrently. ``safety:checkin:sent`` is claimed
+atomically via ``SET NX`` *before* the push is sent (not read-then-write
+after), so two replicas racing the same tick can't both fire the push —
+see A40 finding #9/#14.
 
 Interval: 30 seconds.
 """
@@ -28,9 +31,9 @@ _CHECKIN_AFTER_MINUTES = 20  # send push after this many minutes in_progress
 _ESCALATE_AFTER_SECONDS = 90  # escalate if no response within this window
 
 try:
-    from .redis_client import redis_get, redis_set
+    from .redis_client import redis_delete, redis_get, redis_set, redis_set_nx
 except ImportError:
-    from utils.redis_client import redis_get, redis_set  # type: ignore
+    from utils.redis_client import redis_delete, redis_get, redis_set, redis_set_nx  # type: ignore
 
 try:
     from ..db import db as _supabase_db
@@ -104,7 +107,20 @@ async def _tick() -> None:
         sent_ts_str = await redis_get(_sent_key(ride_id))
 
         if not sent_ts_str:
-            # Haven't sent a check-in yet — send one now.
+            # A40 finding #9/#14 (2026-08-18 fleet audit): this used to be
+            # check-then-act — read _sent_key, THEN send the push, THEN set
+            # _sent_key — with a network round-trip (send_push_notification)
+            # sitting in between the read and the write. Two replicas
+            # polling the same ride in the same 30s tick could both read "not
+            # sent" and both fire the FCM push before either wrote the claim.
+            # Claim the key atomically FIRST via SET NX (same primitive this
+            # codebase already uses elsewhere for leader-election/dedupe
+            # locks, e.g. utils/referral_payout.py) so only one replica ever
+            # proceeds to send.
+            claimed = await redis_set_nx(_sent_key(ride_id), now.isoformat(), ttl=4 * 3600)
+            if not claimed:
+                continue  # another replica already claimed this check-in
+
             rider_id = ride.get("rider_id")
             if rider_id:
                 try:
@@ -119,11 +135,18 @@ async def _tick() -> None:
                         f"[SAFETY_CHECKIN] FCM push failed ride_id={ride_id}",
                         exc_info=True,
                     )
+                    # Release the claim so a genuinely failed send (not a
+                    # duplicate) still gets retried on the next tick, same
+                    # retry behavior this loop had before this fix.
+                    try:
+                        await redis_delete(_sent_key(ride_id))
+                    except Exception:
+                        logger.error(
+                            f"[SAFETY_CHECKIN] could not release claim after failed push ride_id={ride_id}",
+                            exc_info=True,
+                        )
                     continue
 
-            # Record that we sent the push; TTL = 4 h so the key expires
-            # well after the ride ends and won't accumulate indefinitely.
-            await redis_set(_sent_key(ride_id), now.isoformat(), ttl=4 * 3600)
             logger.info(f"[SAFETY_CHECKIN] Check-in sent for ride {ride_id}")
             continue
 

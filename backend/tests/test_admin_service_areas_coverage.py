@@ -531,6 +531,11 @@ class TestUpdateSurgePricing:
         assert area_call.args[0] == "service_areas"
         assert area_call.args[2]["surge_enabled"] is True
         assert area_call.args[2]["surge_active"] is True
+        # Ranked blocker #21 (docs/audit/2026-08-18-full-fleet-whole-app-audit.md):
+        # without this stamp surge_engine.py treats the row as surge_source
+        # unset -> defaults to "auto" -> the auto engine silently overwrites
+        # this manual override on its next 2-minute pass.
+        assert area_call.args[2]["surge_source"] == "manual"
         insert_one.assert_awaited_once()
 
     @pytest.mark.anyio
@@ -562,6 +567,8 @@ class TestUpdateSurgePricing:
 
         # The only update_one is the authoritative service_areas write.
         assert [c.args[0] for c in update_one.await_args_list] == ["service_areas"]
+        area_call = update_one.await_args_list[0]
+        assert area_call.args[2]["surge_source"] == "manual"
         # History is appended, never rewritten.
         insert_one.assert_awaited_once()
         table, doc = insert_one.await_args.args
@@ -569,6 +576,45 @@ class TestUpdateSurgePricing:
         assert doc["source"] == "manual"
         assert doc["is_active"] is False
         assert "id" not in doc, "let the DB generate the PK; a client-set id is what collided"
+
+    @pytest.mark.anyio
+    async def test_surge_source_stamped_matches_sibling_endpoint(self):
+        """Regression test for ranked blocker #21: this endpoint's
+        service_areas write must stamp surge_source="manual", the exact
+        value admin_update_service_area's GeneralTabForm-driven path already
+        writes (see TestUpdateServiceArea's surge tests). surge_engine.py
+        defaults a missing/unset surge_source to "auto" and only skips rows
+        stamped "manual" -- an unstamped row from this route would be
+        silently overwritten by the auto engine's next 2-minute pass.
+        """
+        update_one = AsyncMock()
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=update_one,
+                insert_one=AsyncMock(),
+                get_rows=AsyncMock(return_value=[]),
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            req = SurgePricingRequest(multiplier=2.0, is_active=True)
+            await admin_update_surge_pricing("area-1", req, admin=_ADMIN)
+
+        area_call = update_one.await_args_list[0]
+        assert area_call.args[0] == "service_areas"
+        assert area_call.args[2]["surge_source"] == "manual"
+
+    def test_surge_multiplier_hard_capped_at_2_5_by_pydantic(self):
+        """SurgePricingRequest.multiplier is Field(ge=1.0, le=2.5) -- unlike
+        ServiceAreaUpdateRequest.surge_multiplier (le=10.0, with a >2.5
+        justification gate in admin_update_service_area), this dedicated
+        /surge endpoint structurally cannot accept an above-cap value at all,
+        so there is no reachable justification check to add here: pydantic's
+        422 already blocks it before the handler runs.
+        """
+        with pytest.raises(pydantic.ValidationError):
+            SurgePricingRequest(multiplier=2.51, is_active=True)
 
 
 # ── admin_get_surge_status ────────────────────────────────────────────────

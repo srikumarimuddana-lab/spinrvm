@@ -90,7 +90,9 @@
       "documents_rejected": "Some of your documents were rejected. Please review and resubmit.",
       "subscription_required": "An active Spinr Pass subscription is required to continue.",
       "not_available": "This driver isn't available right now.",
-      "offline": "The driver is currently offline."
+      "offline": "The driver is currently offline.",
+      "license_class_ineligible": "This driver's licence class requires separate approval.",
+      "vehicle_too_old": "This driver's vehicle no longer meets Spinr's eligibility requirements."
     },
     "ride": {
       "not_found": "We couldn't find that ride. It may have been removed.",

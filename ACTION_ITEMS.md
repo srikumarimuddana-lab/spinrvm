@@ -215,6 +215,54 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   dev-only/non-production-gated paths (`lifecycle.py::simulate_driver_arrival`,
   `ride_flow.py::start_ride`) were deliberately left uninstrumented. See
   `docs/change-log/2026-08-18-ride-state-transition-metrics.md`.
+  **FIXED 2026-08-19** (6 more, from the ranked blocker register, run in
+  parallel since each touched a disjoint file set): **#3/#17** unpinned
+  GitHub Actions across 5 workflow files (`deploy-metrics-agent.yml`,
+  `bootstrap-metrics-agent.yml`, `claude-audit.yml`,
+  `deploy-driver-play-testing.yml`, `ci-guardrails.yml`'s trufflehog step)
+  now pinned to commit SHA — see
+  `docs/change-log/2026-08-19-ci-actions-pinning-fix.md`. **#8/N11**
+  `POST /admin/redis/flush-prefix` now writes an audit row via the existing
+  `log_admin_action()` convention (act-then-log, since key count is only
+  known post-hoc) instead of leaving zero forensic trail — see
+  `docs/change-log/2026-08-19-redis-flush-prefix-audit-log-fix.md`. **#10**
+  go-online now re-checks license class (Class 5, or Class 1-4 with
+  `drivers.sgi_approved`) and vehicle age (<10yr) alongside the existing
+  document-expiry check, gated dark behind a new
+  `app_settings.enforce_driver_eligibility_recheck` flag (default `false`)
+  per the feature-flag gate, since these fields were never validated
+  post-onboarding and could otherwise lock out active drivers with
+  legacy/unvalidated data; the 3rd sub-check (3-year minimum driving
+  experience) was **not** implemented — no schema field records a
+  license-issue/experience-start date anywhere, and inventing one wasn't in
+  scope — flagged as a required follow-up, not silently skipped. See
+  `docs/change-log/2026-08-19-go-online-sk-eligibility-recheck-fix.md`.
+  **#12** rider/driver signup (`verify_otp`, `firebase_auth_login`) now
+  stamps `consent_version`/`consent_accepted_at` on the `users` insert
+  (migration 334, additive/nullable), matching the versioning convention
+  corporate signup already had; the corporate-portal company-email-OTP
+  signup path was deliberately left untouched (out of scope) — see
+  `docs/change-log/2026-08-19-consent-version-signup-fix.md`. **#21** the
+  admin manual surge-override endpoint
+  (`routes/admin/service_areas.py::admin_update_surge_pricing`) now stamps
+  `surge_source="manual"` on both activate/deactivate branches, matching the
+  correctly-wired sibling endpoint, so the auto surge engine (which treats a
+  missing/non-`"manual"` stamp as `"auto"` and silently overwrites it) can no
+  longer clobber an override made through this route; confirmed this route
+  is currently unreachable from the live admin-dashboard UI (dead-code
+  finding, not an active incident) but still fixed since it's live/callable
+  — see `docs/change-log/2026-08-19-admin-surge-source-stamp-fix.md`. **N13**
+  (same pattern as baseline #13) the Stripe-hold-release DB write in driver
+  `cancel_ride` (`routes/drivers/ride_cancel.py`) now logs at `error` with
+  the full exception (incl. `DatabaseError.details["original"]`) instead of
+  a swallowed `logger.warning`, so a failure is loud enough for
+  `orphaned_hold_reconciler`'s existing self-heal to be noticed rather than
+  silently retried forever with no trace — see
+  `docs/change-log/2026-08-19-ride-cancel-hold-release-error-fix.md`. All 6
+  independently tested (targeted + regression suites, ruff clean) and
+  re-verified together: full backend suite after integration —
+  **12,177 passed, 8 skipped, 1 xfailed, 0 failed** (up from the 12,159
+  pre-fix baseline, +18 new tests across the 6 fixes).
   Full ranked blocker register (30 items) and decision log (10 items, each
   with a suggested owner/due date) are in the audit doc — see there before
   re-deriving. Verdict at time of the 08-18 audit run: **FIX BLOCKERS** (17

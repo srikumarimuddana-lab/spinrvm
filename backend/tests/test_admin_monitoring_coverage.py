@@ -254,10 +254,93 @@ async def test_flush_redis_prefix_rejects_non_allowlisted_prefix():
 
 @pytest.mark.anyio
 async def test_flush_redis_prefix_deletes_allowlisted_prefix():
-    with patch.object(monitoring, "redis_delete_pattern", AsyncMock(return_value=12)):
+    audit_mock = AsyncMock(return_value="audit-123")
+    with (
+        patch.object(monitoring, "redis_delete_pattern", AsyncMock(return_value=12)),
+        patch.object(monitoring, "log_admin_action", audit_mock),
+    ):
         body = monitoring.FlushPrefixRequest(prefix="cache:user:", confirm="FLUSH")
         out = await monitoring.flush_redis_prefix(body, current_admin={"id": "admin-9"})
-    assert out == {"prefix": "cache:user:", "deleted_keys": 12, "admin_id": "admin-9"}
+    assert out == {
+        "prefix": "cache:user:",
+        "deleted_keys": 12,
+        "admin_id": "admin-9",
+        "audit_id": "audit-123",
+    }
+    # N11 (audit blocker #8): a successful flush must write an audit row --
+    # admin id + prefix + deleted-key count, no PII (no admin name/email).
+    audit_mock.assert_awaited_once_with(
+        {"id": "admin-9"},
+        "redis_flush_prefix",
+        "redis",
+        "cache:user:",
+        {"prefix": "cache:user:", "outcome": "success", "deleted_keys": 12},
+    )
+
+
+@pytest.mark.anyio
+async def test_flush_redis_prefix_admin_auth_gate_unchanged():
+    """Regression guard: the confirm/allowlist gates still run before any
+    Redis or audit call — unchanged by the N11 audit-logging fix."""
+    from fastapi import HTTPException
+
+    audit_mock = AsyncMock()
+    redis_mock = AsyncMock()
+    with (
+        patch.object(monitoring, "redis_delete_pattern", redis_mock),
+        patch.object(monitoring, "log_admin_action", audit_mock),
+    ):
+        with pytest.raises(HTTPException) as ei:
+            body = monitoring.FlushPrefixRequest(prefix="cache:user:", confirm="nope")
+            await monitoring.flush_redis_prefix(body, current_admin={"id": "admin"})
+    assert ei.value.status_code == 400
+    redis_mock.assert_not_awaited()
+    audit_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_flush_redis_prefix_redis_failure_is_audited_and_surfaced():
+    """A Redis error during the flush must not be silently swallowed
+    (CLAUDE.md: DB/auth/payment/dispatch errors surface loudly) -- it is
+    audited as a failure outcome and re-raised as a 503, not masked as a
+    200 with deleted_keys=0."""
+    from fastapi import HTTPException
+
+    audit_mock = AsyncMock(return_value="audit-999")
+    with (
+        patch.object(monitoring, "redis_delete_pattern", AsyncMock(side_effect=RuntimeError("redis down"))),
+        patch.object(monitoring, "log_admin_action", audit_mock),
+    ):
+        body = monitoring.FlushPrefixRequest(prefix="cache:user:", confirm="FLUSH")
+        with pytest.raises(HTTPException) as ei:
+            await monitoring.flush_redis_prefix(body, current_admin={"id": "admin-9"})
+    assert ei.value.status_code == 503
+    audit_mock.assert_awaited_once_with(
+        {"id": "admin-9"},
+        "redis_flush_prefix",
+        "redis",
+        "cache:user:",
+        {"prefix": "cache:user:", "outcome": "failure", "error": "redis down"},
+    )
+
+
+@pytest.mark.anyio
+async def test_flush_redis_prefix_audit_write_failure_does_not_block_response():
+    """An audit-write failure must surface loudly (error log) but must not
+    corrupt or block the flush endpoint's own success response -- the flush
+    already happened and the caller needs to know that."""
+    with (
+        patch.object(monitoring, "redis_delete_pattern", AsyncMock(return_value=3)),
+        patch.object(monitoring, "log_admin_action", AsyncMock(return_value=None)),
+    ):
+        body = monitoring.FlushPrefixRequest(prefix="cache:user:", confirm="FLUSH")
+        out = await monitoring.flush_redis_prefix(body, current_admin={"id": "admin-9"})
+    assert out == {
+        "prefix": "cache:user:",
+        "deleted_keys": 3,
+        "admin_id": "admin-9",
+        "audit_id": None,
+    }
 
 
 # ---------------------------------------------------------------------------

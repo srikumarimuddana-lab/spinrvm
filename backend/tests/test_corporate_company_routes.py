@@ -665,9 +665,10 @@ def test_billing_summary_defaults_to_current_month(test_client, rider_override):
     ):
         resp = test_client.get("/company/c1/billing/summary")
     assert resp.status_code == 200, resp.text
-    # month bounds were derived from a YYYY-MM string (first of the month)
+    # month bounds were derived from a YYYY-MM string (first of the month),
+    # anchored to Saskatchewan local time (fixed UTC-6, no DST).
     kwargs = list_mock.await_args.kwargs
-    assert kwargs["from_iso"].endswith("-01T00:00:00")
+    assert kwargs["from_iso"].endswith("-01T00:00:00-06:00")
 
 
 def test_billing_summary_rejects_non_admin(test_client, rider_override):

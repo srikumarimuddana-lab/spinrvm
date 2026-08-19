@@ -44,6 +44,39 @@ def _money(v: Any) -> str:
     return f"${_q(_d(v)):.2f}"
 
 
+def _split_surge_delta(
+    dist: Decimal, time_: Decimal, surge: Decimal, min_fare_uplift: Decimal
+) -> tuple[Decimal, Decimal, Decimal]:
+    """Split (surged) distance/time fares into pre-surge display amounts + the
+    surge dollar delta, using the exact formula the in-app fare breakdown uses
+    (``routes/rides/_shared.py::_build_fare_breakdown``): surge multiplies only
+    distance+time, so the delta is ``surged(distance+time) − unsurged(distance+time)``,
+    both derived from the persisted (already-surged) columns — there is no
+    separate pre-surge column stored on the ride row to read instead.
+
+    When the minimum-fare floor already absorbed the surge (``min_fare_uplift``
+    > 0), the in-app calc shows surge as a $0.00 line rather than double-billing
+    it via the "Minimum fare adjustment" line — mirrored here.
+
+    Returns ``(distance_display, time_display, surge_delta)`` such that
+    ``distance_display + time_display + surge_delta == dist + time_`` exactly,
+    so inserting the Surge line never changes the reconciled total.
+    """
+    if surge <= Decimal("1"):
+        return dist, time_, Decimal("0")
+
+    surged_dt = dist + time_
+    if min_fare_uplift > Decimal("0.005"):
+        # Minimum fare already covers the uplift; surge contributed $0 on top.
+        return dist, time_, Decimal("0")
+
+    unsurged_dt = _q(surged_dt / surge) if surge > 0 else surged_dt
+    dist_display = _q(dist / surge) if surged_dt > 0 and surge > 0 else dist
+    time_display = unsurged_dt - dist_display
+    surge_delta = max(Decimal("0"), _q(surged_dt - unsurged_dt))
+    return dist_display, time_display, surge_delta
+
+
 def _fare_lines(ride: Dict[str, Any], tip: Decimal) -> tuple[list[tuple[str, str]], Decimal]:
     """Build (label, amount) rows + the grand total, mirroring email_receipt."""
     base = _d(ride.get("base_fare"))
@@ -52,20 +85,39 @@ def _fare_lines(ride: Dict[str, Any], tip: Decimal) -> tuple[list[tuple[str, str
     booking = _d(ride.get("booking_fee"))
     distance_km = _d(ride.get("distance_km"))
     duration_min = ride.get("duration_minutes") or 0
-
-    rows: list[tuple[str, str]] = [
-        ("Base fare", _money(base)),
-        (f"Distance ({distance_km:.1f} km)", _money(dist)),
-        (f"Time ({int(duration_min)} min)", _money(time_)),
-    ]
-    if booking > 0:
-        rows.append(("Booking fee", _money(booking)))
+    surge = _d(ride.get("surge_multiplier") or 1)
 
     # Airport surcharge is inside total_fare (calculate_fare) but is a distinct
     # column from area_fees_breakdown — itemise it or the fare rows under-sum.
     airport = _d(ride.get("airport_fee"))
+
+    # Minimum-fare uplift, computed early so the surge split below knows
+    # whether the floor already absorbed the surge.
+    core = base + dist + time_ + booking + airport
+    total_fare_val = _d(ride.get("total_fare"))
+    min_fare_uplift = max(Decimal("0"), total_fare_val - core) if total_fare_val > 0 else Decimal("0")
+
+    dist_display, time_display, surge_delta = _split_surge_delta(dist, time_, surge, min_fare_uplift)
+
+    rows: list[tuple[str, str]] = [
+        ("Base fare", _money(base)),
+        (f"Distance ({distance_km:.1f} km)", _money(dist_display)),
+        (f"Time ({int(duration_min)} min)", _money(time_display)),
+    ]
+    if booking > 0:
+        rows.append(("Booking fee", _money(booking)))
     if airport > 0:
         rows.append(("Airport surcharge", _money(airport)))
+
+    # Surge as a real dollar line item (ranked #26 / audit N14) — not just a
+    # footnote — using the exact delta computed above (same formula as the
+    # in-app fare breakdown). Shown whenever surge_multiplier > 1, even when
+    # the minimum-fare floor clamped it to $0.00, matching the in-app view.
+    # The footnote note below stays as supplementary context, not a
+    # replacement for the dollar figure.
+    if surge > Decimal("1"):
+        rows.append((f"Surge ({surge:.2f}×)", _money(surge_delta)))
+        rows.append(("__note__", f"{surge:.2f}× surge pricing was in effect at booking time."))
 
     area_fees = ride.get("area_fees_breakdown") or []
     area_total = Decimal("0")
@@ -82,9 +134,8 @@ def _fare_lines(ride: Dict[str, Any], tip: Decimal) -> tuple[list[tuple[str, str
     # base+dist+time+booking+airport up to the minimum, and the driver keeps
     # the uplift (0% commission). Itemise it so the fare rows reconcile to the
     # Subtotal — every charge maps to a disclosed line (CLAUDE.md).
-    core = base + dist + time_ + booking + airport
-    total_fare_val = _d(ride.get("total_fare"))
-    min_fare_uplift = max(Decimal("0"), total_fare_val - core) if total_fare_val > 0 else Decimal("0")
+    # (core/total_fare_val/min_fare_uplift already computed above, before the
+    # surge split, so both use the same numbers.)
     if min_fare_uplift > 0:
         rows.append(("Minimum fare adjustment", _money(min_fare_uplift)))
 
@@ -238,6 +289,14 @@ def generate_receipt_pdf(
             y = pdf.get_y() + 1
             pdf.line(left, y, left + W, y)
             pdf.ln(3)
+            continue
+        if label == "__note__":
+            # Supplementary footnote alongside the Surge dollar line above —
+            # explains the multiplier, does not replace the amount.
+            pdf.set_font("Helvetica", "", 8)
+            pdf.set_text_color(180, 120, 30)
+            pdf.multi_cell(W, 4, to_latin1(amount))
+            pdf.set_text_color(0, 0, 0)
             continue
         pdf.set_font("Helvetica", "", 10)
         pdf.set_text_color(90, 90, 90)

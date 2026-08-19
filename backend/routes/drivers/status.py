@@ -212,7 +212,14 @@ async def update_driver_status(
                 {
                     "driver_id": driver_id,
                     "status": {
+                        # DRIVER_ASSIGNED included: the driver is already
+                        # obligated to the ride (Period 2 starts at assignment
+                        # per CLAUDE.md), so going offline here would drop them
+                        # to Period 0 personal-auto coverage mid-obligation.
+                        # Matches the online-path busy-ride list below. To go
+                        # offline during an offer, decline it first.
                         "$in": [
+                            RideStatus.DRIVER_ASSIGNED,
                             RideStatus.DRIVER_ACCEPTED,
                             RideStatus.DRIVER_ARRIVED,
                             RideStatus.IN_PROGRESS,
@@ -551,6 +558,10 @@ async def update_driver_status(
     # either lookup propagates (503) rather than guessing: dispatch
     # double-booking is worse than one failed toggle.
     is_available = is_online
+    # The busy ride (if any) also decides which insurance period a go-online
+    # flip opens below — Period 2/3 keyed to the ride's own status, never a
+    # blanket Period 1 while a passenger or assignment is in play.
+    _busy_ride_row = None
     if is_online:
         _busy_ride = await db_supabase.get_rows(
             "rides",
@@ -569,6 +580,7 @@ async def update_driver_status(
         )
         if _busy_ride:
             is_available = False
+            _busy_ride_row = _busy_ride[0]
         else:
             # Batch dispatch holds no ride row pre-acceptance — the claim
             # lives in ride_offers (claim_driver already set
@@ -674,7 +686,17 @@ async def update_driver_status(
     # period row; the helper's no-op branch would absorb it but we save
     # the round-trip by gating on status_flipped.
     if status_flipped:
-        await _deps.record_period_transition(driver_id, 1 if is_online else 0)
+        if is_online and _busy_ride_row:
+            # A driver coming online while a ride is still theirs (app
+            # relaunch mid-trip, admin force-offline undone) is in Period 2/3
+            # per the ride's own status — never blanket Period 1, which would
+            # misstate SGI commercial coverage while a passenger/assignment
+            # is in play.
+            _busy_status = _busy_ride_row.get("status")
+            _busy_period = 3 if _busy_status == RideStatus.IN_PROGRESS else 2
+            await _deps.record_period_transition(driver_id, _busy_period, ride_id=_busy_ride_row.get("id"))
+        else:
+            await _deps.record_period_transition(driver_id, 1 if is_online else 0)
 
     # Dual-run cutover monitoring (A34/P3.1): on an actual offline→online
     # flip, emit the labeled go-online counter and — once per legacy-imported

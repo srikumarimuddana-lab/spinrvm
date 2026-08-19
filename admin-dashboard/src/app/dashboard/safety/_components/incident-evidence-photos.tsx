@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Evidence photos attached to a safety incident (backend migration 335).
+ * Evidence photos attached to a safety incident (backend migration 340).
  *
  * Extracted from the incident detail drawer rather than inlined so it can be
  * unit-tested: the drawer itself is a private component inside a ~900-line

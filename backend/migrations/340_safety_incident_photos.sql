@@ -1,4 +1,4 @@
--- 335_safety_incident_photos.sql
+-- 340_safety_incident_photos.sql
 --
 -- Storage for evidence photos attached to a safety incident.
 --

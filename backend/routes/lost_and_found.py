@@ -42,7 +42,7 @@ api_router = APIRouter(prefix="/lost-and-found", tags=["Lost & Found"])
 
 _VALID_CATEGORIES = {"electronics", "clothing", "bag", "document", "keys", "other"}
 
-# Item photos get their own private bucket (migration 334) rather than reusing
+# Item photos get their own private bucket (migration 339) rather than reusing
 # driver-documents: that bucket holds driver identity documents, and putting
 # rider-visible item photos beside licences and insurance slips widens who can
 # be handed a signed URL into that namespace.
@@ -532,7 +532,7 @@ async def send_message_image(
             "lost_and_found_id": case_id,
             "sender_id": user_id,
             "sender_role": sender_role,
-            # Image-only message: the CHECK constraint added in migration 334
+            # Image-only message: the CHECK constraint added in migration 339
             # permits an empty message precisely when image_key is present.
             "message": "",
             "image_key": storage_key,

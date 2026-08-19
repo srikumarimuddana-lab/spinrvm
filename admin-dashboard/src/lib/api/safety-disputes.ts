@@ -174,7 +174,7 @@ export interface SafetyIncidentListResponse {
     open_count: number | null;
 }
 
-// Evidence photo attached to an incident (migration 335). `url` is a
+// Evidence photo attached to an incident (migration 340). `url` is a
 // short-lived signed URL minted per request — the backend stores only the
 // storage key, so these expire and must not be cached or persisted.
 // `url` is null when signing failed: the photo EXISTS but could not be
@@ -207,7 +207,7 @@ export interface SafetyIncidentDetail {
         started_at: string | null;
         completed_at: string | null;
     } | null;
-    // Optional: an older backend (pre-migration-335 deploy) omits this key
+    // Optional: an older backend (pre-migration-340 deploy) omits this key
     // entirely, so every consumer must tolerate undefined.
     photos?: SafetyIncidentPhoto[];
 }

@@ -994,7 +994,7 @@ async def _insurance_billing_detail_rows(
             return [], Decimal("0"), area_scope_truncated, []
         distance_filters["driver_id"] = {"$in": scoped_driver_ids}
 
-    # The _current view (migration 334) serves the LATEST revision per
+    # The _current view (migration 342) serves the LATEST revision per
     # (ride, period): late-GPS corrections append revision rows to the
     # append-only base table, and reading the base here would double-count
     # every corrected ride in insurer billing.

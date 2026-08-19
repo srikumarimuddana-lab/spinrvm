@@ -1,4 +1,4 @@
--- 333: Idle (Period-1) v2 recording sessions + Phase-1 capture/rollout flags.
+-- 341: Idle (Period-1) v2 recording sessions + Phase-1 capture/rollout flags.
 --
 -- WHY: "driving around" (online, no ride) GPS was only persisted through one
 -- narrow WebSocket single-ping path; the modern v2 outbox protocol could not

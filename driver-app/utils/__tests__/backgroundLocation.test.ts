@@ -423,6 +423,53 @@ describe('recoverTripLocation (P3.2 — location_health nudge)', () => {
   });
 });
 
+describe('signed-out resurrection refusal (owner report: capture after sign-out)', () => {
+  // The server's gap monitor does not know a driver signed out — an abandoned
+  // in_progress ride keeps sending location_health nudges. Neither the nudge
+  // (recoverTripLocation, reachable HEADLESS via FCM) nor any other caller of
+  // startBackgroundLocation may restart GPS capture once the sign-out marker
+  // is recorded.
+  const mockGetItem = SecureStore.getItemAsync as jest.Mock;
+  const mockGetPerms = Location.getBackgroundPermissionsAsync as jest.Mock;
+  const mockReqPerms = Location.requestBackgroundPermissionsAsync as jest.Mock;
+
+  beforeEach(() => {
+    mockStartUpdates.mockClear();
+    mockGetPerms.mockClear();
+    mockReqPerms.mockClear();
+    mockHasStartedLocationUpdates.mockReset();
+    mockHasStartedLocationUpdates.mockResolvedValue(false);
+    mockGetItem.mockImplementation((key: string) =>
+      Promise.resolve(key === 'spinr_session_ended' ? '1' : null),
+    );
+  });
+
+  afterEach(() => {
+    mockGetItem.mockImplementation(() => Promise.resolve(null));
+  });
+
+  it('recoverTripLocation refuses and never starts the task', async () => {
+    await expect(recoverTripLocation()).resolves.toBe(false);
+    expect(mockStartUpdates).not.toHaveBeenCalled();
+  });
+
+  it('recoverTripLocation reaps an orphaned running task instead of adopting it', async () => {
+    mockHasStartedLocationUpdates.mockResolvedValue(true);
+    await expect(recoverTripLocation()).resolves.toBe(false);
+    expect(mockStartUpdates).not.toHaveBeenCalled();
+    expect(Location.stopLocationUpdatesAsync).toHaveBeenCalledWith('spinr-background-location');
+  });
+
+  it('startBackgroundLocation refuses without even prompting for permission', async () => {
+    // A headless resurrection on a signed-out device must not pop a system
+    // permission dialog — the gate sits before the permission flow.
+    await expect(startBackgroundLocation()).resolves.toBe(false);
+    expect(mockStartUpdates).not.toHaveBeenCalled();
+    expect(mockGetPerms).not.toHaveBeenCalled();
+    expect(mockReqPerms).not.toHaveBeenCalled();
+  });
+});
+
 describe('geofence re-arm gating (NSRangeException fix)', () => {
   const mockStartGeofencing = Location.startGeofencingAsync as jest.Mock;
   const mockStopGeofencing = Location.stopGeofencingAsync as jest.Mock;

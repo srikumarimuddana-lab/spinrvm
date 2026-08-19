@@ -619,9 +619,38 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     Period 2 starts from `driver_arrived_at`, not the true (never-captured)
     `driver_assigned` moment, so the true Period-1→2 boundary is understated
     for these 182 rows.
-  - **STILL OPEN, unchanged**: fresh final old-app export (unblocks the true
-    pending-money figure, the full identity map, and the corporate-money
-    unknown); no
+  - **PARTIALLY RESOLVED (2026-08-19)**: the user supplied the raw
+    `Mongo.zip` export directly (same 2026-07-26 vintage as the production
+    cut, not a fresh Oct-30 pull) — full collection-by-collection analysis
+    in `docs/audit/2026-08-19-full-mongodb-export-collection-inventory.md`.
+    Closes the "6 unopened / ~23 unclassified collections" gap: 15
+    collections confirmed empty (`restaurants`/`vendors`/`fleets`/
+    `companies` included — the other-tenant-marketplace risk is resolved,
+    there's no data to be anyone's); `subscriptions`/`driversubscriptions`/
+    `userpasses`/`passtypes` downgraded from "could be a blocker" to 6 rows
+    total, mostly `isActive: false` (pending a business-owner confirmation
+    they're test data); `wallets` quantified at $900 customer + $60 driver
+    real prepaid balance; `banks.csv` confirmed to hold **plaintext SIN +
+    full bank routing for 157 drivers** — flagged, not yet given a
+    minimization decision. Also: the Mongo-ObjectId half of the
+    driver/customer crosswalk is now buildable (`bookings.driver_id`↔
+    `drivers._id` 96/96, `bookings.customer_id`↔`customers._id` 172/173) —
+    the numeric-ID Saskatoon CSV side still isn't in this zip, so the full
+    three-way crosswalk remains open. New, previously-unscoped finding:
+    `driverlocationlogs.csv` has real Period-boundary phase timestamps
+    (`idle`/`going_to_pickup`/`on_ride`, keyed to `ride_id` = `bookings._id`
+    100% of the time) that could tighten migration 332's insurance-period
+    reconstruction beyond its `driver_arrived_at` approximation. Also found:
+    `vehicle_details.csv` (355 rows, VIN/insurance/registration) is the
+    direct source for the P0 §0.4 `driver_vehicle_history` gap;
+    `customer_addresses.csv` (301 rows, saved favorites) matches CLAUDE.md's
+    own address-minimization rule directly; `pages.csv` appears to hold
+    Spinr's actual current ToS/Privacy Policy text, worth diffing against
+    what the live apps serve. **Still open, unaffected by this file**: true
+    current pending-money figure, anything post-2026-07-26, Stripe-side
+    everything, and the numeric-ID crosswalk half — all need the Oct-30
+    fresh export the user says is coming.
+  - **STILL OPEN, unchanged**: no
     final-export/teardown runbook owner/dates (draft exists,
     `docs/runbooks/full-app-audit.md` Part B §3.2); double-dispatch/
     double-payout structural risk (needs an operational roster policy — code
@@ -629,7 +658,8 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     `dual_run_monitoring_enabled`, verify still live rather than treating as
     a to-do); open $16.63 Stripe dispute needs a response; rider-referral
     velocity/identity-cross-check gap unchanged; 22 unmarked drivers; two
-    incompatible legacy-ID namespaces still need a crosswalk table.
+    incompatible legacy-ID namespaces still need a crosswalk table (now
+    half-closed, see above).
 - **Files:** `docs/audit/2026-08-15-dual-run-cutover/` (4 phase reports),
   `docs/runbooks/full-app-audit.md` (repeatable master audit prompt — supersedes
   ad-hoc scratch prompts for future runs), PR #3946 (merged, dry-run-only as

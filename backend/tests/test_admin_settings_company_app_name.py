@@ -2,7 +2,7 @@
 
 `company_app_name` is the product/brand name used in email BODY copy ("Open
 the {app_name} driver app"), deliberately separate from `company_name` (the
-legal entity, e.g. "Spinr Technologies Inc.") which drives the footer,
+legal entity, e.g. "Spinr Mobility Inc.") which drives the footer,
 mailing address, and logo alt text — see `utils/company_details.py` and
 ACTION_ITEMS.md N17.
 

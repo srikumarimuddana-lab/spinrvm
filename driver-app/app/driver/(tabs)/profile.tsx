@@ -459,7 +459,15 @@ function ProfileScreenInner() {
                 <View style={styles.cardInfo}>
                     <Text style={styles.cardLabel}>Vehicle</Text>
                     <Text style={styles.cardValue}>
-                    {driverData?.vehicle_color} {driverData?.vehicle_make} {driverData?.vehicle_model}
+                    {/* Every other field on this screen falls back to 'N/A'
+                        (Phone, Email, License Plate below) when blank — this
+                        row didn't, so a legacy driver with unpopulated
+                        vehicle_color/make/model saw an empty row instead.
+                        filter(Boolean) also avoids a run of bare spaces when
+                        only some of the three fields are populated. */}
+                    {[driverData?.vehicle_color, driverData?.vehicle_make, driverData?.vehicle_model]
+                        .filter(Boolean)
+                        .join(' ') || 'N/A'}
                     </Text>
                 </View>
                 </View>

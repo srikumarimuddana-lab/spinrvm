@@ -36,6 +36,17 @@ except ImportError:  # pragma: no cover - allow direct module imports
     from services.zoho_desk_service import ZohoDeskError
     from utils.redis_client import redis_set_nx
 
+try:
+    from .loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:  # pragma: no cover
+    try:
+        from utils.loop_monitor import record_heartbeat as _record_heartbeat  # type: ignore
+    except ImportError:  # pragma: no cover
+
+        def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+            pass
+
+
 logger = logging.getLogger(__name__)
 
 _TABLE = "zoho_desk_tickets"
@@ -43,6 +54,7 @@ _CONFIG_TABLE = "zoho_desk_config"
 _CONFIG_ID = "default"
 
 SYNC_INTERVAL_SECONDS = 600  # 10 minutes
+_LOOP_NAME = "zoho_desk_sync (10min)"
 SEED_MAX_PAGES = 500  # first run: full backfill (safety cap ~50k tickets)
 INCREMENTAL_MAX_PAGES = 50  # safety cap; incremental runs stop at the cursor
 
@@ -215,4 +227,5 @@ async def zoho_desk_sync_loop() -> None:
             logger.warning("Zoho Desk sync skipped: %s", e.message)
         except Exception:
             logger.error("zoho_desk_sync tick failed", exc_info=True)
+        _record_heartbeat(_LOOP_NAME)
         await asyncio.sleep(SYNC_INTERVAL_SECONDS)

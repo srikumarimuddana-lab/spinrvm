@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import {
     View,
     Text,
@@ -63,7 +63,7 @@ export default function LegalScreen() {
     // server-side when no per-audience row exists yet, so this is a
     // non-breaking switch — same displayed content today, correct content
     // once the admin dashboard publishes per-audience rows.
-    const fetchLegalContent = async () => {
+    const fetchLegalContent = useCallback(async () => {
         try {
             if (singleDocType) {
                 const res = await fetch(
@@ -91,17 +91,20 @@ export default function LegalScreen() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [singleDocType]);
 
     useEffect(() => {
         // Re-fetches if the route param switches between single-doc mode
         // and the combined view (e.g. navigating from one policies.tsx link
         // to another without unmounting). fetchLegalContent sets state
         // after its own await (or in its catch fallback), not synchronously
-        // at the top of the effect.
+        // at the top of the effect. fetchLegalContent is now a useCallback
+        // keyed on the same [singleDocType], so including it here doesn't
+        // change when this effect re-runs — it closes the exhaustive-deps
+        // finding honestly instead of suppressing it.
         // eslint-disable-next-line react-hooks/set-state-in-effect
         fetchLegalContent();
-    }, [singleDocType]);
+    }, [singleDocType, fetchLegalContent]);
 
     useEffect(() => {
         if (!loading && type && scrollRef.current) {

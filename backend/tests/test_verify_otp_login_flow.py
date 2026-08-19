@@ -9,7 +9,6 @@ had zero direct coverage.
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -306,6 +305,14 @@ async def test_new_user_created_and_logged_in():
     assert created_payload["phone"] == PHONE
     assert created_payload["role"] == "rider"
     assert created_payload["token_version"] == 0
+    # Ranked blocker #12 (PIPEDA consent-version stamp on signup) —
+    # written atomically with the initial insert, matching the
+    # terms_accepted_version/terms_accepted_at convention corporate
+    # self-serve signup already uses on corporate_accounts.
+    from backend.routes.auth import CONSENT_VERSION
+
+    assert created_payload["consent_version"] == CONSENT_VERSION
+    assert created_payload["consent_accepted_at"]
 
 
 @pytest.mark.asyncio

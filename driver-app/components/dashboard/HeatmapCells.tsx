@@ -111,3 +111,4 @@ export const HeatmapCells: React.FC<HeatmapCellsProps> = React.memo(
   );
   },
 );
+HeatmapCells.displayName = 'HeatmapCells';

@@ -87,11 +87,14 @@ def test_v2_batch_persists_before_updating_the_live_marker(monkeypatch: pytest.M
     events = []
     update_one = _install_driver_and_ride(monkeypatch, _ride())
 
-    async def persist(driver_id, ride_id, session_id, points, *, active_ride):
+    async def persist(driver_id, ride_id, session_id, points, *, active_ride, driver_last_known=None):
         events.append("persist")
         assert driver_id == "driver_1"
         assert ride_id == "ride_1"
         assert active_ride["id"] == "ride_1"
+        # The caller passes the already-fetched driver row's position (no
+        # extra DB read) so the batch's first point is checked against it.
+        assert driver_last_known == {"lat": None, "lng": None, "updated_at": None}
         return _result()
 
     async def update(*args, **kwargs):
@@ -104,6 +107,34 @@ def test_v2_batch_persists_before_updating_the_live_marker(monkeypatch: pytest.M
 
     assert response == _result().ack.to_dict()
     assert events == ["persist", "marker"]
+
+
+def test_v2_batch_skips_live_marker_update_when_integrity_check_rejects(monkeypatch: pytest.MonkeyPatch):
+    """A38/A40 finding #7: v2 must run the same spoofing/teleport guard as v1
+    before trusting a point for the driver's live `lat`/`lng` marker."""
+    events = []
+    update_one = _install_driver_and_ride(monkeypatch, _ride())
+
+    async def persist(driver_id, ride_id, session_id, points, *, active_ride, driver_last_known=None):
+        events.append("persist")
+        return _result()
+
+    async def update(*args, **kwargs):
+        events.append("marker")
+
+    async def untrusted(*args, **kwargs):
+        return False, "mock_location"
+
+    update_one.side_effect = update
+    monkeypatch.setattr("utils.breadcrumbs.persist_trip_location_batch", persist)
+    monkeypatch.setattr("utils.location_integrity.check_location_integrity", untrusted)
+
+    response = _run(location.update_location_batch(_payload(), current_user={"id": "user_1"}))
+
+    assert response == _result().ack.to_dict()
+    # Breadcrumbs/ack still land (regulatory GPS trace + settlement anomaly
+    # filter own that job); only the real-time marker write is skipped.
+    assert events == ["persist"]
 
 
 @pytest.mark.parametrize("payload", [_payload([_point(1), _point(3)]), _payload([_point(i) for i in range(501)])])

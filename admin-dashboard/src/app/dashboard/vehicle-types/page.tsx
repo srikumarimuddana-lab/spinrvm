@@ -71,7 +71,7 @@ const EMPTY_FORM: Omit<VehicleType, "id" | "created_at"> = {
 };
 
 export default function VehicleTypesPage() {
-    const { allowed } = useRequireModule("pricing");
+    const { allowed } = useRequireModule("vehicle_types");
     const { toast } = useToast();
     const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
     const [types, setTypes] = useState<VehicleType[]>([]);

@@ -180,4 +180,46 @@ describe('DocumentReviewer', () => {
       ),
     );
   });
+
+  describe('focus trap (ranked blocker #22)', () => {
+    it('moves focus into the modal dialog when it opens', async () => {
+      const trigger = document.createElement('button');
+      trigger.textContent = 'Review documents';
+      document.body.appendChild(trigger);
+      trigger.focus();
+      expect(document.activeElement).toBe(trigger);
+
+      await renderWithDocs([licenseDoc]);
+
+      await waitFor(() => {
+        expect(document.activeElement).not.toBe(trigger);
+        expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+      });
+
+      document.body.removeChild(trigger);
+    });
+
+    it('restores focus to the triggering element when the modal closes', async () => {
+      const trigger = document.createElement('button');
+      trigger.textContent = 'Review documents';
+      document.body.appendChild(trigger);
+      trigger.focus();
+
+      getDriverDocuments.mockResolvedValue([licenseDoc]);
+      const { rerender, unmount } = render(
+        <DocumentReviewer open driverId="d1" driverName="Ada" onClose={() => {}} />,
+      );
+      await waitFor(() => expect(getDriverDocuments).toHaveBeenCalledWith('d1'));
+      await screen.findAllByText(/Driver License/);
+      await waitFor(() => expect(document.activeElement).not.toBe(trigger));
+
+      // Closing = parent re-renders with open=false.
+      rerender(<DocumentReviewer open={false} driverId="d1" driverName="Ada" onClose={() => {}} />);
+
+      await waitFor(() => expect(document.activeElement).toBe(trigger));
+
+      unmount();
+      document.body.removeChild(trigger);
+    });
+  });
 });

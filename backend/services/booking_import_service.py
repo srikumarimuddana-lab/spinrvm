@@ -562,16 +562,23 @@ def build_plan(
             "surge_multiplier": 1.0,
             "total_fare": float(residual),
             "tip_amount": float(tip),
-            "grand_total": float(total_amount - tip),
+            # str() only at the serialization boundary (rides.grand_total is
+            # NUMERIC(10,2) -- str(Decimal) round-trips exact, unlike
+            # float()). Verified against information_schema 2026-08-18; see
+            # ACTION_ITEMS.md B29 / docs/change-log/2026-08-18-b29-*.md.
+            "grand_total": str(total_amount - tip),
             # tax_amount/tax_breakdown are commission-GST, not fare-GST -- see
             # the "gst"-parsing comment above. `rate: 5.0` reflects Canada's
             # actual GST rate (correct regardless of the base it's applied
             # to); it is NOT a claim that this amount is 5% of the fare.
-            "tax_amount": float(gst),
+            # rides.tax_amount is NUMERIC(8,2) -- str(Decimal), not float().
+            "tax_amount": str(gst),
             "tax_breakdown": {"GST": {"rate": 5.0, "amount": float(gst)}} if gst > ZERO else {},
             "area_fees_breakdown": fees,
-            "area_fees_total": float(fees_total),
-            "discount_amount": float(discount),
+            # rides.area_fees_total is NUMERIC(8,2) -- str(Decimal), not float().
+            "area_fees_total": str(fees_total),
+            # rides.discount_amount is NUMERIC(10,2) -- str(Decimal), not float().
+            "discount_amount": str(discount),
             "payment_method": "card",
             "payment_status": "paid",
             "paid_at": completed_at,

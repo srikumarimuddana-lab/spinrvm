@@ -111,14 +111,14 @@ export default function AppealScreen() {
                         <View style={styles.pendingBanner}>
                             <Ionicons name="time" size={18} color={colors.primary} />
                             <Text style={styles.pendingBannerText}>
-                                Your appeal is under review. We'll notify you once a decision is made.
+                                Your appeal is under review. We&apos;ll notify you once a decision is made.
                             </Text>
                         </View>
                     ) : (
                         <>
                             <Text style={styles.sectionTitle}>Submit an appeal</Text>
                             <Text style={styles.helperText}>
-                                Tell us why you believe your account's current status should be reviewed. A different
+                                Tell us why you believe your account&apos;s current status should be reviewed. A different
                                 reviewer than the one who made the original decision will look at your appeal.
                             </Text>
                             <TextInput

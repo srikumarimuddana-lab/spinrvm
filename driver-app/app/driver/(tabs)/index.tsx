@@ -769,8 +769,11 @@ function DriverDashboard() {
           if (!rawPoly || rawPoly.length < 3) return null;
 
           const sm = heatmapSurge?.active ? (heatmapSurge?.multiplier ?? surgeMultiplier) : surgeMultiplier;
-          let surgeFill = 'rgba(0,212,170,0.07)';
-          let surgeStroke = 'rgba(0,212,170,0.65)';
+          // Below the first surge tier: use the brand success token (not an
+          // off-brand ad hoc teal) to read as "calm/no surge", same
+          // colors.success/successBg convention CustomAlert.tsx established.
+          let surgeFill = `${colors.success}12`;
+          let surgeStroke = `${colors.success}A6`;
           if (sm >= 1.25) {
             const rampIdx = sm >= 2.0 ? 4 : sm >= 1.75 ? 3 : sm >= 1.5 ? 2 : 2;
             const hex = colors.heatmapRamp[rampIdx];
@@ -1157,7 +1160,7 @@ function createStyles(colors: ThemeColors) {
       borderColor: colors.primary,
       justifyContent: 'center',
       alignItems: 'center',
-      backgroundColor: 'rgba(0,212,170,0.06)',
+      backgroundColor: `${colors.success}0F`,
     },
     countdownText: {
       fontSize: 22,

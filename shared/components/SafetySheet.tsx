@@ -26,6 +26,7 @@
  */
 import React, { useRef, useState } from 'react';
 import { View, Text, StyleSheet, Modal, Pressable, Linking, Animated, Share, ScrollView } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useHoldToConfirm } from '../hooks/useHoldToConfirm';
 import { useSafetyPanelConfig } from '../hooks/useSafetyPanelConfig';
@@ -62,6 +63,7 @@ export function SafetySheet({
   lat,
   lng,
 }: SafetySheetProps) {
+  const insets = useSafeAreaInsets();
   const cfg = useSafetyPanelConfig(lat, lng, visible);
   const [alertState, setAlertState] = useState<AlertState>('idle');
   const [outcome, setOutcome] = useState<string | null>(null);
@@ -133,7 +135,9 @@ export function SafetySheet({
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.backdrop}>
-        <View style={styles.sheet}>
+        {/* Bottom inset so the home indicator never sits on top of the last
+            row. Capped: on devices with no inset this stays at the base 16. */}
+        <View style={[styles.sheet, { paddingBottom: Math.max(16, insets.bottom + 8) }]}>
           <View style={styles.grabber} />
           <View style={styles.headerRow}>
             <Text style={styles.title}>Safety</Text>
@@ -292,8 +296,14 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 20,
     paddingHorizontal: 16,
     paddingTop: 8,
-    paddingBottom: 24,
     maxHeight: '88%',
+    // Full width regardless of what encloses it. Belt-and-braces against the
+    // regression this component already hit once: rendered inside the map's
+    // absolutely-positioned SOS overlay it inherited a 20pt left offset and
+    // ran off the right edge. It is now root-mounted (SafetySheetHost), and
+    // this keeps it correct even if something re-parents it later.
+    width: '100%',
+    alignSelf: 'stretch',
   },
   grabber: { alignSelf: 'center', width: 36, height: 4, borderRadius: 2, backgroundColor: '#E5E7EB', marginBottom: 10 },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },

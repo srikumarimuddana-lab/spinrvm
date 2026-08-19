@@ -44,8 +44,8 @@ async def test_no_double_accept(client, ride_id, driver_1_headers, driver_2_head
     # same driver for both users would make the loser look like the WINNER
     # replaying their own accept — which is (correctly) an idempotent 200 now,
     # not the distinct-driver race this test pins.
-    driver_1 = {"id": "driver_001", "user_id": "user_driver_001"}
-    driver_2 = {"id": "driver_002", "user_id": "user_driver_002"}
+    driver_1 = {"id": "driver_001", "user_id": "user_driver_001", "is_online": True}
+    driver_2 = {"id": "driver_002", "user_id": "user_driver_002", "is_online": True}
     ride = {"id": ride_id, "status": "searching", "driver_id": None, "rider_id": "rider_001"}
 
     # The real accept_ride runs a conditional UPDATE ({'status': 'searching'})
@@ -179,6 +179,7 @@ async def test_full_ride_lifecycle():
         "user_id": user_driver_id,
         "lat": 52.1333,  # Same coords as pickup – passes 200 m geofence check.
         "lng": -106.6667,
+        "is_online": True,
     }
 
     async def fake_get_rows(table, filters=None, **kw):

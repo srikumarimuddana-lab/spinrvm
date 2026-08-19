@@ -45,12 +45,23 @@ try:
 except ImportError:
     from geo_utils import calculate_distance  # type: ignore
 
+try:
+    from .loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:  # pragma: no cover
+    try:
+        from utils.loop_monitor import record_heartbeat as _record_heartbeat  # type: ignore
+    except ImportError:  # pragma: no cover
+
+        def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+            pass
+
 
 logger = logging.getLogger(__name__)
 
 ROUTE_FINALIZER_INTERVAL_SECONDS = 15
 ROUTE_CLAIM_STALE_SECONDS = 5 * 60
 MAX_ROUTE_FINALIZER_RETRIES = 5
+_LOOP_NAME = "route_finalizer (15s)"
 
 # Minimum change in measured distance before the stats columns on the rides
 # row are rewritten. Keeps idempotent replays (same evidence, new revision)
@@ -522,12 +533,15 @@ async def route_finalizer_loop(interval_seconds: int = ROUTE_FINALIZER_INTERVAL_
                 except Exception:
                     logger.error("settlement backstop sweep failed", exc_info=True)
             await route_finalizer_tick()
-            _record_heartbeat("route_finalizer (15s)")
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.error("route finalizer tick failed", exc_info=True)
         tick += 1
+        # Heartbeat AFTER the except (main's placement): a tick that raises
+        # must still show the loop alive, or the watchdog pages for a loop
+        # that is running fine and merely hit a bad ride.
+        _record_heartbeat(_LOOP_NAME)
         await asyncio.sleep(interval_seconds)
 
 

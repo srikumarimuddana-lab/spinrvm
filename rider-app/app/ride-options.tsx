@@ -449,7 +449,6 @@ function RideOptionsScreenContent() {
       // elsewhere; neither useCorporate nor selectedCorporateId is a dep of
       // this effect (workModeEnabled/corporateAccounts.length are), so no
       // loop.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setUseCorporate(true);
       setSelectedCorporateId(prev => prev ?? activeCompanyId ?? corporateAccounts[0]?.id ?? null);
     }
@@ -792,8 +791,8 @@ function RideOptionsScreenContent() {
             <Polygon
               key={`sa-poly-${idx}`}
               coordinates={coords}
-              strokeColor="rgba(0,212,170,0.65)"
-              fillColor="rgba(0,212,170,0.07)"
+              strokeColor={`${colors.success}A6`}
+              fillColor={`${colors.success}12`}
               strokeWidth={2}
             />
           ))}

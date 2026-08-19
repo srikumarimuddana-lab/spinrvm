@@ -236,6 +236,46 @@ def calculate_fare(
     )
 
 
+def driver_earnings_with_tip(ride: Dict[str, Any], tip_amount: Any) -> Decimal:
+    """Canonical, idempotent driver_earnings — the ONLY way any code path
+    should compute it once a tip is involved.
+
+    ``driver_earnings = (total_fare - admin_earnings) + tip_amount``, always
+    computed FRESH from the ride's own persisted fare columns — never
+    "existing driver_earnings + tip delta". That accumulate-style pattern is
+    what caused a real production underpayment (2026-08-19 live-testing
+    incident): three independent call sites (routes/rides/rating.py's
+    tip-while-rating, routes/rides/payments.py's add_tip late-tip flow, and
+    the settlement RPC's tip-delta logic in migration 288) each mutated
+    driver_earnings relative to whatever value they read, with no shared
+    source of truth. A ride that touched more than one of those paths (e.g.
+    tipped via /rate before paying, then the payment request ALSO carried
+    the same tip amount) landed on whichever path ran last, and that path's
+    view of "current earnings" didn't necessarily include what an earlier
+    path had already added — a driver was credited $0.17 instead of $0.67
+    on a real, live-charged ride.
+
+    ``admin_earnings`` is strictly booking_fee + airport_fee (CLAUDE.md: "the
+    driver keeps 100% of the fare" — 0% commission model). See
+    calculate_fare()'s own docstring for why the minimum-fare uplift is
+    deliberately the driver's, not admin's.
+
+    Every call site that credits a tip to driver_earnings — rating.py,
+    add_tip, and the settlement RPC's Python-side legacy fallback — must call
+    this instead of reading and incrementing the existing column. It is
+    naturally idempotent: calling it twice with the same ride+tip produces
+    the same answer, so call order and staleness stop mattering.
+    """
+    # fare_service._d has no None/""-guard by design (its other callers only
+    # ever pass already-defaulted fare_info values) — this function reads
+    # directly from a `rides` row instead, where NULL/missing is routine, so
+    # guard explicitly here rather than weakening _d for every other caller.
+    total_fare = _d(ride.get("total_fare") or 0)
+    admin_earnings = _round(_d(ride.get("booking_fee") or 0) + _d(ride.get("airport_fee") or 0))
+    base_earnings = _round(total_fare - admin_earnings)
+    return _round(max(base_earnings, Decimal("0")) + _d(tip_amount or 0))
+
+
 def build_fare_breakdown_lines(
     fb: FareBreakdown,
     distance_km: float,

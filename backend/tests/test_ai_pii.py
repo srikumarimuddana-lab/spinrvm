@@ -288,6 +288,88 @@ class TestFilterToolLeakage:
         once = filter_tool_leakage("calling propose_ride_booking now")
         assert filter_tool_leakage(once) == once
 
+
+class TestScrubPiiDeep:
+    """2026-08-18 fleet audit — the structural gap: no AI tool RESULT was
+    ever PII-scrubbed anywhere in the codebase before this fix, only the
+    user's own message and the model's final reply text. scrub_pii_deep is
+    the recursive-value scrub wired into tools.py::_cap_result, the single
+    choke point both execute_tool() (chat loop) and /mcp funnel through."""
+
+    def test_scrubs_a_string_leaf_nested_in_a_dict(self):
+        from backend.ai.pii import scrub_pii_deep
+
+        result = {"driver": {"phone": "306-555-1234"}}
+        assert scrub_pii_deep(result) == {"driver": {"phone": "[PHONE]"}}
+
+    def test_scrubs_string_leaves_inside_a_list(self):
+        from backend.ai.pii import scrub_pii_deep
+
+        result = {"notes": ["call me at 306-555-1234", "no PII here"]}
+        assert scrub_pii_deep(result) == {"notes": ["call me at [PHONE]", "no PII here"]}
+
+    def test_non_string_leaves_pass_through_unchanged(self):
+        from backend.ai.pii import scrub_pii_deep
+
+        result = {"count": 3, "active": True, "amount": 18.5, "note": None}
+        assert scrub_pii_deep(result) == result
+
+    def test_does_not_mutate_the_input(self):
+        from backend.ai.pii import scrub_pii_deep
+
+        original = {"driver": {"phone": "306-555-1234"}}
+        scrub_pii_deep(original)
+        assert original == {"driver": {"phone": "306-555-1234"}}
+
+    def test_depth_limit_stops_a_pathological_structure_without_raising(self):
+        from backend.ai.pii import scrub_pii_deep
+
+        deep = {"phone": "306-555-1234"}
+        for _ in range(20):
+            deep = {"nested": deep}
+        # Must never raise, regardless of how deep the structure recurses.
+        scrub_pii_deep(deep)
+
+    def test_a_bare_name_key_is_not_caught_here_by_design(self):
+        """scrub_pii_deep is value-pattern-only, deliberately NOT key-name
+        based like utils/sentry_scrub.py's _scrub_deep (whose KEY_ALLOWLIST
+        treats a bare "name" key as a benign symbol). A plain name is not
+        regex-detectable either way -- the real fix for a tool leaking a
+        person's name is data minimization at the source, not this scrub.
+        See tools_rides.py::_driver_public for the concrete example."""
+        from backend.ai.pii import scrub_pii_deep
+
+        result = {"name": "Nighil Kumar"}
+        assert scrub_pii_deep(result) == {"name": "Nighil Kumar"}
+
+
+class TestCapResultScrubsToolResults:
+    """The wiring in tools.py::_cap_result — the structural fix itself."""
+
+    def test_cap_result_scrubs_regex_detectable_pii_in_a_tool_result(self):
+        from backend.ai.tools import _cap_result
+
+        result = _cap_result({"driver_phone": "306-555-1234", "ok": True})
+        assert result == {"driver_phone": "[PHONE]", "ok": True}
+
+    def test_cap_result_scrubs_client_action_too(self):
+        """/mcp serializes _client_action verbatim with no further
+        processing (mcp_server.py's _call_tool), so it must be scrubbed
+        here too, not just the model-facing portion."""
+        from backend.ai.tools import _cap_result
+
+        result = _cap_result({"ok": True, "_client_action": {"contact_email": "jane@example.ca"}})
+        assert result["_client_action"] == {"contact_email": "[EMAIL]"}
+
+    def test_cap_result_scrub_survives_truncation(self):
+        from backend.ai.tools import TOOL_RESULT_MAX_CHARS, _cap_result
+
+        huge_with_pii = "306-555-1234 " + ("x" * TOOL_RESULT_MAX_CHARS)
+        result = _cap_result({"blob": huge_with_pii})
+        assert result.get("_truncated") is True
+        assert "[PHONE]" in result["preview"]
+        assert "306-555-1234" not in result["preview"]
+
     def test_does_not_interfere_with_pii_placeholders(self):
         # scrub_pii's own placeholder tokens are uppercase, no underscore --
         # confirm chaining the two scrubbers doesn't cross-contaminate.

@@ -922,17 +922,28 @@ async def admin_update_surge_pricing(area_id: str, surge: SurgePricingRequest, a
     # builders (fare_service.py, routes/fares.py, features.py) and the surge
     # engine actually read. Without this the call only logged a history row and
     # left every ride priced at 1.0× regardless of the requested surge.
+    # surge_source="manual" must be stamped on every write here, matching
+    # admin_update_service_area's GeneralTabForm-driven path (the endpoint the
+    # live admin-dashboard UI actually uses — see GeneralTabForm's `updates.
+    # surge_source = "manual"` in admin-dashboard/src/app/dashboard/
+    # service-areas/page.tsx). Without it, surge_engine.py treats a missing/
+    # unset surge_source as "auto" (surge_engine.py: `area.get("surge_source",
+    # "auto")`) and will silently overwrite this override on its next
+    # 2-minute pass — the opposite of what a manual override is supposed to
+    # do (ranked blocker #21, docs/audit/2026-08-18-full-fleet-whole-app-audit.md).
     if surge.is_active:
         area_update: Dict[str, Any] = {
             "surge_enabled": True,
             "surge_active": surge.multiplier > 1.0,
             "surge_multiplier": surge.multiplier,
+            "surge_source": "manual",
         }
     else:
         area_update = {
             "surge_enabled": False,
             "surge_active": False,
             "surge_multiplier": 1.0,
+            "surge_source": "manual",
         }
     await db_supabase.update_one("service_areas", {"id": area_id}, area_update)
 

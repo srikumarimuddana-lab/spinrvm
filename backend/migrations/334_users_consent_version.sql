@@ -1,0 +1,52 @@
+-- 334_users_consent_version.sql
+--
+-- Ranked blocker #12 (docs/audit/2026-08-18-full-fleet-whole-app-audit.md):
+-- `routes/auth.py` writes zero `consent_version` on rider/driver signup —
+-- corporate self-serve signup (migration 224, `terms_accepted_version` /
+-- `terms_accepted_at` on `corporate_accounts`) was the only signup path that
+-- stamped a consent version at all. CLAUDE.md's PIPEDA section promises
+-- "consent language version is stored on signup" and "material changes
+-- require re-consent" for every user, not just corporate signups.
+--
+-- Adds to `users` (mirrors the corporate_accounts naming/shape from
+-- migration 224 — same two-column consent-version + consent-timestamp
+-- pattern, applied here to the table rider/driver signup actually writes):
+--   * consent_version     — the platform ToS/Privacy Policy consent version
+--                           in effect at signup (TEXT, free-form version
+--                           tag — e.g. "consumer-tos-2026-01-draft" — not an
+--                           FK; mirrors terms_accepted_version's own choice
+--                           not to reference legal_documents.version, since
+--                           both mobile apps currently render the legacy
+--                           single-blob /settings/legal text, not the
+--                           versioned per-audience legal_documents rows —
+--                           see docs/legal/terms-of-service.md's own note on
+--                           this)
+--   * consent_accepted_at — when that consent was recorded (TIMESTAMPTZ)
+--
+-- Nullable, no default: every pre-existing rider/driver row predates this
+-- column and legitimately has no recorded consent version — NULL is the
+-- honest value, not a fabricated backfill. See routes/auth.py for the write
+-- site (rider/driver phone-OTP and Firebase signup) and
+-- docs/change-log/2026-08-19-consent-version-signup-fix.md for the full
+-- blast-radius/rollback writeup.
+--
+-- Forward-compatible: metadata-only nullable ADD COLUMNs (no table rewrite,
+-- no backfill, no lock beyond the brief DDL catalog update) — safe against
+-- in-flight signup traffic. No RLS change: `users` RLS is unchanged by this
+-- migration (existing policies already cover row-level access; these two
+-- columns carry no new access surface).
+--
+-- Rollback (on paper): additive/nullable, so rollback is simply not
+-- applying this migration, or a follow-up migration:
+--   ALTER TABLE users
+--     DROP COLUMN IF EXISTS consent_version,
+--     DROP COLUMN IF EXISTS consent_accepted_at;
+-- No live data is destroyed by leaving the columns in place unpopulated;
+-- dropping them only loses the consent-version audit trail collected since
+-- this migration shipped, which is why the log above frames rollback as
+-- "prefer not applying / a follow-up migration", never a destructive
+-- same-deploy revert of already-recorded consent.
+
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS consent_version     TEXT,
+    ADD COLUMN IF NOT EXISTS consent_accepted_at  TIMESTAMPTZ;

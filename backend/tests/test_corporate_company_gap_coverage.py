@@ -540,6 +540,62 @@ def test_month_bounds_invalid_string_is_422():
     assert exc_info.value.status_code == 422
 
 
+def test_month_bounds_are_saskatchewan_local_not_utc():
+    """Ranked #20/baseline #14: bounds must be anchored to America/Regina
+    (fixed UTC-6, no DST) rather than a naive/UTC midnight, or a ride late
+    in an SK-local month can land in the wrong month's statement."""
+    from datetime import datetime
+
+    from routes.corporate_company import _month_bounds
+
+    from_iso, to_iso = _month_bounds("2026-07")
+    from_dt = datetime.fromisoformat(from_iso)
+    to_dt = datetime.fromisoformat(to_iso)
+
+    # Both bounds must be timezone-aware and carry SK's fixed -06:00 offset,
+    # not a naive datetime (which PostgREST/Postgres would otherwise treat
+    # as UTC when comparing against a timestamptz column).
+    assert from_dt.utcoffset().total_seconds() == -6 * 3600
+    assert to_dt.utcoffset().total_seconds() == -6 * 3600
+    assert from_dt.isoformat() == "2026-07-01T00:00:00-06:00"
+    assert to_dt.isoformat() == "2026-08-01T00:00:00-06:00"
+
+
+def test_month_bounds_boundary_ride_lands_in_correct_sk_local_month():
+    """Concrete before/after dry run (CLAUDE.md money/state dry-run rule).
+
+    A ride created at 2026-07-31T23:30:00-06:00 (Saskatchewan local) is
+    2026-08-01T05:30:00 UTC — still safely within SK-local July, but into
+    UTC's August 1st. Before this fix, `_month_bounds` built naive
+    datetime(2026, 8, 1) as the "to" bound for the July statement, which
+    Postgres/PostgREST would read as UTC 2026-08-01T00:00:00Z — EXCLUDING
+    this ride from July's statement (it fell after that naive UTC boundary)
+    even though the ride happened, wall-clock, on July 31st in Saskatchewan.
+    After this fix the "to" bound is 2026-08-01T00:00:00-06:00 ==
+    2026-08-01T06:00:00Z, so the ride's UTC timestamp
+    (2026-08-01T05:30:00Z) correctly falls BEFORE the bound and is included
+    in July's statement."""
+    from datetime import datetime, timezone
+
+    from routes.corporate_company import _month_bounds
+
+    ride_created_at_sk_local = "2026-07-31T23:30:00-06:00"
+    ride_created_at_utc = datetime.fromisoformat(ride_created_at_sk_local).astimezone(timezone.utc)
+    assert ride_created_at_utc.isoformat() == "2026-08-01T05:30:00+00:00"
+
+    _from_iso, to_iso_july = _month_bounds("2026-07")
+    to_bound_utc = datetime.fromisoformat(to_iso_july).astimezone(timezone.utc)
+
+    # Before the fix (naive UTC bound at 2026-08-01T00:00:00Z) this ride's
+    # 05:30 UTC timestamp would NOT be < the bound -> wrongly excluded.
+    naive_utc_bound_before_fix = datetime(2026, 8, 1, 0, 0, 0, tzinfo=timezone.utc)
+    assert not (ride_created_at_utc < naive_utc_bound_before_fix)
+
+    # After the fix, the SK-local bound (06:00 UTC) correctly includes it.
+    assert ride_created_at_utc < to_bound_utc
+    assert to_bound_utc.isoformat() == "2026-08-01T06:00:00+00:00"
+
+
 # ── billing pagination (offset += page_size continuation branch) ───────
 
 

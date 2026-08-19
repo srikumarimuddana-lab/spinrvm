@@ -230,3 +230,68 @@ def test_driver_noshow_returns_409_and_charges_nothing_on_race():
     assert exc_info.value.status_code == 409
     fee_calc.assert_not_called()  # nothing charged — claim failed before fee calc
     assert upd.await_count == 1  # only the atomic claim ran (no wallet debit)
+
+
+def test_driver_cancel_logs_hold_release_db_error_loudly(caplog):
+    """Audit N13: Stripe releases the booking-time hold successfully, but the
+    DB write recording auth_status='released' fails. The ride cancellation
+    itself must still succeed (the hold write is a side effect, not the
+    primary transition) — but the failure must be surfaced at error level
+    with the underlying DatabaseError detail, not swallowed as a warning.
+    orphaned_hold_reconciler relies on auth_status staying at its prior open
+    value (authorized/fare_only) to re-find and retry this ride; this test
+    also confirms the write failure does not corrupt that field into a false
+    'released' state.
+    """
+    import logging
+
+    from backend.routes import drivers as drv
+    from backend.utils.error_handling import DatabaseError
+
+    driver = {"id": "drv-1", "user_id": "user-1"}
+    ride = {
+        "id": "ride-1",
+        "status": "driver_accepted",
+        "rider_id": "rider-1",
+        "driver_id": "drv-1",
+        "payment_intent_id": "pi_123",
+        "auth_status": "authorized",
+    }
+
+    db_error = DatabaseError(details={"original": "connection reset by peer"})
+
+    with (
+        patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+        patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value={"id": "ride-1"})),
+        patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()),
+        patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+        patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+        patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+        patch("backend.routes.drivers._deps.manager.broadcast_to_admins", AsyncMock()),
+        patch("backend.routes.drivers._deps.spawn", side_effect=lambda coro: coro.close()),
+        patch("backend.routes.drivers._deps.cancel_authorization", AsyncMock(return_value=True)),
+        patch("backend.routes.drivers._deps.db_supabase.update_ride", AsyncMock(side_effect=db_error)) as upd_ride,
+    ):
+        with caplog.at_level(logging.ERROR, logger="backend.routes.drivers.ride_cancel"):
+            result = asyncio.run(
+                drv.cancel_ride(ride_id="ride-1", reason="", request=None, current_user={"id": "user-1"})
+            )
+
+    # Ride cancellation still succeeds — the hold-release bookkeeping is a
+    # side effect, not the primary transition.
+    assert result == {"success": True}
+    upd_ride.assert_awaited_once_with("ride-1", {"auth_status": "released"})
+
+    # The failure must be logged at ERROR (not WARNING) with the underlying
+    # DatabaseError detail included, per CLAUDE.md's "Do not silently swallow
+    # errors" convention.
+    error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    hold_release_errors = [r for r in error_records if "auth_status=released write failed" in r.getMessage()]
+    assert hold_release_errors, f"expected an ERROR log for the failed hold-release write; got: {caplog.records}"
+    assert "connection reset by peer" in hold_release_errors[0].getMessage()
+    assert hold_release_errors[0].exc_info is not None  # full exception traceback attached
+
+    # No stray WARNING-level log for this same failure (the old swallow path).
+    warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert not any("auth_status=released write failed" in r.getMessage() for r in warning_records)

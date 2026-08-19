@@ -36,12 +36,24 @@ except ImportError:  # pragma: no cover - dual import path
     from utils.loop_monitor import record_heartbeat as _record_heartbeat  # type: ignore
     from utils.redis_client import redis_set_nx  # type: ignore
 
+try:
+    from .loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:  # pragma: no cover
+    try:
+        from utils.loop_monitor import record_heartbeat as _record_heartbeat  # type: ignore
+    except ImportError:  # pragma: no cover
+
+        def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+            pass
+
+
 logger = logging.getLogger(__name__)
 
 INTERVAL_SECONDS = 300  # 5 min — deadhead spans end often; keep the audit fresh.
 BATCH_LIMIT = 500
 _LOCK_KEY = "spinr:lock:period1_finalizer"
 _LOCK_TTL_SECONDS = 290  # just under the interval, re-acquired each tick.
+_LOOP_NAME = "period1_distance_finalizer (5min)"
 
 
 async def _driver_left_period1(driver_row: Dict[str, Any]) -> bool:
@@ -157,5 +169,5 @@ async def period1_distance_finalizer_loop() -> None:
         # Every iteration, lock or not — the watchdog is per-replica, so a
         # non-leader replica must still show its loop alive (same pattern as
         # retention_purge).
-        _record_heartbeat("period1_distance_finalizer (5min)")
+        _record_heartbeat(_LOOP_NAME)
         await asyncio.sleep(INTERVAL_SECONDS)

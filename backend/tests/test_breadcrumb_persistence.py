@@ -518,3 +518,125 @@ def test_duplicate_late_completed_replay_does_not_requeue_route():
 
     assert result.inserted_count == 0
     update.assert_not_awaited()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# GPS plausibility check applied across a v2 batch (ranked blocker #7,
+# 2026-08-19) -- previously the v2 location-batch path ran no integrity
+# check at all; see docs/change-log/2026-08-19-v2-location-batch-spoofing-fix.md
+# ─────────────────────────────────────────────────────────────────────────
+
+# Regina and Saskatoon are ~230km apart (well over TELEPORT_THRESHOLD_KM),
+# matching the fixture distance already used in test_location_integrity*.py.
+_REGINA = (50.4452, -104.6189)
+_SASKATOON = (52.1332, -106.6700)
+
+
+def test_v2_batch_rejects_a_physically_implausible_jump_between_its_own_points():
+    """A jump between two of the BATCH'S OWN points (no driver_last_known
+    supplied) must now be caught -- this is exactly the gap ranked blocker #7
+    flagged: the v2 path validated coordinates/timestamps/windows per point
+    but never ran the mock/speed/accuracy/teleport heuristic at all."""
+    captured = {}
+
+    async def _insert_many_ignore_conflicts(table, docs, on_conflict):
+        captured["docs"] = docs
+        return docs
+
+    with patch(
+        "backend.utils.breadcrumbs.db_supabase.insert_many_ignore_conflicts",
+        _insert_many_ignore_conflicts,
+    ):
+        result = _run(
+            persist_trip_location_batch(
+                "drv_1",
+                "ride_1",
+                "6fe8dc5c-3448-46a1-aa7c-d081ce7f1d9f",
+                [
+                    _v2_point(1, lat=_REGINA[0], lng=_REGINA[1], captured_at="2026-06-01T23:06:00Z"),
+                    # 3s later but ~230km away -- physically impossible.
+                    _v2_point(2, lat=_SASKATOON[0], lng=_SASKATOON[1], captured_at="2026-06-01T23:06:03Z"),
+                ],
+                active_ride=_ride(),
+            )
+        )
+
+    assert result.ack.accepted_count == 1
+    assert result.ack.to_dict()["rejected"] == [{"sequence_number": 2, "reason": "teleport"}]
+    assert [row["sequence_number"] for row in captured["docs"]] == [1]
+
+
+def test_v2_batch_with_all_plausible_points_still_succeeds():
+    """No regression: a batch of ordinary, closely-spaced points (small
+    movement, normal speed) is unaffected by the new check."""
+    captured = {}
+
+    async def _insert_many_ignore_conflicts(table, docs, on_conflict):
+        captured["docs"] = docs
+        return docs
+
+    with patch(
+        "backend.utils.breadcrumbs.db_supabase.insert_many_ignore_conflicts",
+        _insert_many_ignore_conflicts,
+    ):
+        result = _run(
+            persist_trip_location_batch(
+                "drv_1",
+                "ride_1",
+                "6fe8dc5c-3448-46a1-aa7c-d081ce7f1d9f",
+                [
+                    _v2_point(1, lat=50.4452, lng=-104.6189, captured_at="2026-06-01T23:06:00Z"),
+                    _v2_point(2, lat=50.4460, lng=-104.6195, captured_at="2026-06-01T23:06:05Z"),
+                    _v2_point(3, lat=50.4470, lng=-104.6205, captured_at="2026-06-01T23:06:10Z"),
+                ],
+                active_ride=_ride(),
+            )
+        )
+
+    assert result.ack.accepted_count == 3
+    assert result.ack.to_dict()["rejected"] == []
+    assert len(captured["docs"]) == 3
+
+
+def test_v2_batch_rejects_first_point_that_jumps_from_driver_last_known_location():
+    """The boundary pair -- driver's last known DB position (before this
+    batch) -> the batch's first point -- must be checked too, not just pairs
+    within the batch itself. A rejected point also must not become the new
+    comparison baseline: the second point here is close to the first (both
+    near Saskatoon) but is still checked against the last known-GOOD point
+    (Regina), so it is rejected too, not silently let through because "the
+    previous point in the batch" was close."""
+    captured = {}
+
+    async def _insert_many_ignore_conflicts(table, docs, on_conflict):
+        captured["docs"] = docs
+        return docs
+
+    with patch(
+        "backend.utils.breadcrumbs.db_supabase.insert_many_ignore_conflicts",
+        _insert_many_ignore_conflicts,
+    ):
+        result = _run(
+            persist_trip_location_batch(
+                "drv_1",
+                "ride_1",
+                "6fe8dc5c-3448-46a1-aa7c-d081ce7f1d9f",
+                [
+                    _v2_point(1, lat=_SASKATOON[0], lng=_SASKATOON[1], captured_at="2026-06-01T23:06:03Z"),
+                    _v2_point(2, lat=52.1335, lng=-106.6705, captured_at="2026-06-01T23:06:04Z"),
+                ],
+                active_ride=_ride(),
+                driver_last_known={
+                    "lat": _REGINA[0],
+                    "lng": _REGINA[1],
+                    "updated_at": "2026-06-01T23:06:00Z",  # 3s / 4s before the batch's points
+                },
+            )
+        )
+
+    assert result.ack.accepted_count == 0
+    assert result.ack.to_dict()["rejected"] == [
+        {"sequence_number": 1, "reason": "teleport"},
+        {"sequence_number": 2, "reason": "teleport"},
+    ]
+    assert "docs" not in captured

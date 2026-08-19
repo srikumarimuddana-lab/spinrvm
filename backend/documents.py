@@ -420,7 +420,26 @@ async def _supersede_and_flag_pending_review(
             "driver_documents", query, {"status": "superseded", "updated_at": datetime.now(timezone.utc)}
         )
     except Exception as e:
-        logger.warning(f"Could not supersede prior docs for driver {driver_id}: {e}")
+        # Audit finding #13/#19 (2026-08-18 fleet audit) — same class N13 fixed in
+        # routes/drivers/ride_cancel.py's auth_status=released write: a failed
+        # supersede here silently leaves the prior "approved"/"pending" docs
+        # active, so a driver could re-appear as verified against a document
+        # that was actually just replaced. logger.warning + continue on a DB
+        # write is exactly what CLAUDE.md's "Do not silently swallow errors"
+        # section forbids. For DatabaseError, str(e) alone collapses to
+        # "Database operation failed" — include e.details["original"].
+        # This module logs via loguru (`from loguru import logger` above), not
+        # stdlib logging — loguru formats with str.format ({}), has no
+        # `exc_info` kwarg, and attaches the traceback via
+        # `logger.opt(exception=True)` instead (see
+        # test_loguru_call_conventions.py).
+        _original = e.details.get("original") if hasattr(e, "details") and isinstance(e.details, dict) else None
+        logger.opt(exception=True).error(
+            "Could not supersede prior docs for driver {}: {}{}",
+            driver_id,
+            e,
+            f" — {_original}" if _original else "",
+        )
 
     if not flag_review:
         # Admin uploaded an already-approved doc — supersede prior docs but keep
@@ -735,6 +754,15 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
         # before the driver has completed the vehicle-info step.
         first = current_user.get("first_name", "")
         last = current_user.get("last_name", "")
+        # regulatory_authority/regulatory_region must never be left NULL on a
+        # new driver row — see ACTION_ITEMS.md B13. This is a third live
+        # driver auto-create path (document upload before vehicle-info is
+        # completed) with the same gap the other two had.
+        try:
+            from .routes.drivers._shared import _resolve_regulatory_defaults
+        except ImportError:  # pragma: no cover - dual-import pattern
+            from routes.drivers._shared import _resolve_regulatory_defaults  # type: ignore
+        _reg_authority, _reg_region = await _resolve_regulatory_defaults(None)
         driver = {
             "id": str(uuid.uuid4()),
             "user_id": current_user["id"],
@@ -749,6 +777,8 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
             "lat": 0,
             "lng": 0,
             "created_at": datetime.now(timezone.utc).isoformat(),
+            "regulatory_authority": _reg_authority,
+            "regulatory_region": _reg_region,
         }
         await db.insert_one("drivers", driver)
         await db.update_one(

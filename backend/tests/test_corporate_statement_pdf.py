@@ -137,7 +137,8 @@ def test_empty_tax_by_type_with_zero_tax_renders_combined_line_silently(caplog):
     fixture = {**_FIXTURE, "summary": {**_FIXTURE["summary"], "tax_by_type": {}, "tax_total": "0.00"}}
     with caplog.at_level("ERROR", logger="utils.corporate_statement_pdf"):
         text = _pdf_text(generate_corporate_statement_pdf(_COMPANY, fixture))
-    assert "Tax (GST/PST)" in text
+    assert "Tax" in text
+    assert "Tax (GST/PST)" not in text
     assert not any("combined GST/PST fallback" in rec.message for rec in caplog.records)
 
 
@@ -154,7 +155,8 @@ def test_empty_tax_by_type_with_nonzero_tax_logs_loudly(caplog):
 
     assert pdf.startswith(b"%PDF")
     text = _pdf_text(pdf)
-    assert "Tax (GST/PST)" in text
+    assert "Tax" in text
+    assert "Tax (GST/PST)" not in text
     assert "1.25" in text
 
     error_records = [rec for rec in caplog.records if rec.levelname == "ERROR"]
@@ -164,6 +166,47 @@ def test_empty_tax_by_type_with_nonzero_tax_logs_loudly(caplog):
     assert "company_id=c1" in message
     assert "month=2026-07" in message
     assert "tax_total=1.25" in message
+
+
+def test_gst_and_pst_render_as_two_separate_line_items():
+    """CLAUDE.md: GST (5%) and PST (6% where applicable) must ship as
+    separate line items, never combined into one number. When the
+    aggregator's tax_by_type carries both, the PDF must show two distinct
+    lines with their own Decimal-correct amounts, not a merged total."""
+    fixture = {
+        **_FIXTURE,
+        "summary": {
+            **_FIXTURE["summary"],
+            "tax_total": "1.65",
+            "tax_by_type": {"GST": "0.93", "PST": "0.72"},
+        },
+    }
+    text = _pdf_text(generate_corporate_statement_pdf(_COMPANY, fixture))
+    assert "GST" in text
+    assert "0.93" in text
+    assert "PST" in text
+    assert "0.72" in text
+    # The two must appear as separate rows, not summed into one "1.65" line
+    # under a combined label.
+    assert "Tax (GST/PST)" not in text
+
+
+def test_gst_only_area_shows_no_pst_line():
+    """Saskatchewan is currently GST-only (features.py: pst_enabled=False
+    by default — see the "SK rideshare is GST-only" comment there). When
+    tax_by_type only ever contains "GST" for a period, the statement must
+    not fabricate a $0.00 PST line: utils/receipt_pdf.py and
+    utils/subscription_invoice_pdf.py both only render a tax-type row when
+    that type actually has a nonzero amount for the period, and the
+    corporate statement mirrors that same convention rather than inventing
+    a new one."""
+    text = _pdf_text(generate_corporate_statement_pdf(_COMPANY, _FIXTURE))
+    # NOTES has a fixed disclosure sentence that mentions "GST/PST" by name
+    # (not a line item) — scope the assertion to everything before it so a
+    # fabricated PST *line item* is still caught.
+    before_notes = text.split("NOTES", 1)[0]
+    assert "GST" in before_notes
+    assert "PST" not in before_notes
 
 
 def test_missing_tax_by_type_key_with_nonzero_tax_logs_loudly(caplog):

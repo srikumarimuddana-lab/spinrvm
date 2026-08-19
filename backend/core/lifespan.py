@@ -186,7 +186,14 @@ async def lifespan(app: FastAPI):
                 logger.opt(exception=True).error(f"Background task {name!r} crashed — restarting in 5s")
                 await asyncio.sleep(5)
 
+    # Every name ever passed to _spawn(), tracked unconditionally (even under
+    # ENV=test's skip-spawn path) so the watchdog-coverage check below can
+    # verify every loop is registered regardless of whether this process
+    # actually ran them.
+    _spawned_loop_names: list[str] = []
+
     def _spawn(name: str, coro_factory):
+        _spawned_loop_names.append(name)
         if _skip_background_loops:
             logger.info(f"Skipped background task in ENV=test: {name}")
             return
@@ -624,39 +631,54 @@ async def lifespan(app: FastAPI):
     # Loop watchdog — scans heartbeats every 5 minutes and posts a
     # Slack-compatible alert when any loop has gone stale.  No-op when
     # ALERT_WEBHOOK_URL is unset.
+    # This list must contain every loop name passed to _spawn() above (minus
+    # loop_watchdog itself, which watches the others rather than watching
+    # itself) — see test_lifespan_watchdog_coverage.py for a regression guard
+    # that fails the build if a spawned loop is added here without also being
+    # registered below, or vice versa.
     _WATCHDOG_LOOP_NAMES = list(
         [
             "subscription_expiry (6h)",
             "surge_engine (2min)",
             "scheduled_dispatcher (60s)",
             "payment_retry (5min)",
+            "preauth_capture (5min)",
+            "referral_payout (5min)",
+            "driver_claim_reaper (60s)",
             "document_expiry (12h)",
             "driver_onboarding_reminders (15min)",
-            "stale_intent_reconciler (15min)",
             "corporate_autotopup (10min)",
             "corporate_low_balance (1h)",
             "allowance_reset (1h)",
+            "kyb_reverification (24h)",
+            "route_finalizer (15s)",
+            "route_gap_monitor (15s)",
+            "stale_intent_reconciler (15min)",
+            "safety_checkin (30s)",
             "retention_purge (24h)",
             "data_export_purge (1h)",
+            "reconciliation (daily 02:00 UTC)",
             "stripe_reconcile (24h)",
             "dispute_evidence_reminder (6h)",
             "ledger_projection (15min)",
+            "distance_reconciliation (daily 04:00 UTC)",
+            "period1_distance_finalizer (5min)",
             "t4a_annual_job (yearly Feb 28)",
             "driver_statements (30min)",
             "stuck_ride_sweeper (60s)",
             "stale_in_progress_ride_alerter (5min)",
+            "retention_guard_monitor (6h)",
+            "orphaned_hold_reconciler (15m)",
             "offer_expiry_reaper (10s)",
+            "suspension_reactivation (10min)",
             "push_retry (30s)",
+            "zoho_desk_sync (10min)",
             "capacity_watchdog (60s)",
             "auto_payout (1h, Sundays)",
-            "retention_guard_monitor (6h)",
-            # Route/GPS pipeline loops — a wedged finalizer or gap monitor
-            # means routes silently stop being produced (SPR-PE7TTB class),
-            # so their staleness must page like every other loop.
-            "route_finalizer (15s)",
-            "route_gap_monitor (15s)",
-            "period1_distance_finalizer (5min)",
-            "distance_reconciliation (daily 04:00 UTC)",
+            # Insurance/GPS pipeline loops added with the tracking overhaul.
+            # The route finalizer, gap monitor, period-1 finalizer and
+            # distance reconciliation are already listed above (main added
+            # them in the same watchdog-coverage pass); these two are new.
             "stale_p3_closer (15min)",
             "driver_daily_rollup (30min)",
         ]
@@ -684,6 +706,34 @@ async def lifespan(app: FastAPI):
             await _asyncio.sleep(300)
 
     _spawn("loop_watchdog (5min)", _loop_watchdog)
+
+    # Watchdog-coverage self-check: every loop that was actually _spawn()-ed
+    # above (the watchdog itself excluded — it watches the others, not
+    # itself) must appear in _WATCHDOG_LOOP_NAMES exactly once. A silently
+    # unregistered or duplicated loop name defeats the entire point of the
+    # watchdog (ranked audit blocker #27), so this must surface loudly rather
+    # than be swallowed like a soft warning.
+    _watchable_names = [n for n in _spawned_loop_names if n != "loop_watchdog (5min)"]
+    _watched_counts: dict[str, int] = {}
+    for _n in _WATCHDOG_LOOP_NAMES:
+        _watched_counts[_n] = _watched_counts.get(_n, 0) + 1
+    _duplicate_names = sorted(n for n, count in _watched_counts.items() if count > 1)
+    _missing_names = sorted(set(_watchable_names) - set(_WATCHDOG_LOOP_NAMES))
+    _unknown_names = sorted(set(_WATCHDOG_LOOP_NAMES) - set(_watchable_names))
+    if _duplicate_names or _missing_names or _unknown_names:
+        _problems = []
+        if _missing_names:
+            _problems.append(f"spawned but NOT watched: {_missing_names}")
+        if _duplicate_names:
+            _problems.append(f"registered more than once (naming collision): {_duplicate_names}")
+        if _unknown_names:
+            _problems.append(f"watched but never spawned (stale/typo'd name): {_unknown_names}")
+        _msg = "loop_watchdog registration mismatch — " + "; ".join(_problems)
+        logger.error(_msg)
+        if settings.ENV.lower() == "production":
+            raise RuntimeError(_msg)
+    else:
+        logger.info(f"loop_watchdog registration verified: {len(_WATCHDOG_LOOP_NAMES)} loops watched")
 
     app.state.background_tasks = background_tasks
 

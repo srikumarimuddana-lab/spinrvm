@@ -17,7 +17,7 @@ driver-notify exception, and the offer-skip Redis-set exception.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
 
 import pytest
 
@@ -630,6 +630,105 @@ async def test_max_offers_breaks_claim_loop():
     # Only one driver claimed even though two were eligible — the loop broke
     # once max_offers was reached.
     mock_db.claim_driver_atomic.assert_awaited_once_with("drv-1")
+
+
+# ── Insurance Period 2 opens at claim/offer time ────────────────────────
+
+
+async def test_period_2_opened_for_each_claimed_driver_after_offer_insert():
+    """Period 2 (TNC primary commercial coverage) must open the moment a
+    driver is claimed and their offer is live — not only at acceptance —
+    because the batch-offer model never writes a driver_assigned ride
+    status. See docs/audit/2026-08-18-full-fleet-whole-app-audit.md #1/#2."""
+    ride = _make_ride(service_area_id=None)
+    d1, d2 = _make_driver("drv-1"), _make_driver("drv-2")
+
+    from backend.routes.rides.matching import _match_driver_to_ride_attempt
+
+    with (
+        patch("backend.routes.rides.matching._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides.matching._deps.record_period_transition", AsyncMock()) as period,
+        patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
+        patch(
+            "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
+            AsyncMock(return_value=("nearest", 0, 10.0, 5, False)),  # max_offers=5, both drivers claimed
+        ),
+        patch(
+            "backend.routes.rides.matching._deps.filter_and_rank_drivers",
+            side_effect=lambda ride, drivers, *a, **kw: [(d, float(i)) for i, d in enumerate(drivers)],
+        ),
+        patch(
+            "backend.utils.driver_presence.present_driver_ids_checked",
+            AsyncMock(return_value=(set(), False)),
+        ),
+        patch("backend.utils.redis_client.redis_mget", AsyncMock(return_value=[None, None])),
+        patch("backend.routes.rides.matching._deps.manager.send_personal_message", AsyncMock()),
+        patch("backend.routes.rides.matching._deps.send_push_notification", AsyncMock()),
+        patch("backend.routes.rides.matching._deps.spawn", side_effect=lambda coro: coro.close()),
+        patch("backend.routes.rides.matching.sign_offer_card_token", return_value="tok"),
+    ):
+        mock_db.get_rows = AsyncMock(return_value=[d1, d2])
+        mock_db.find_one = AsyncMock(return_value=None)
+        mock_db.claim_driver_atomic = AsyncMock(return_value=True)
+        mock_db.get_driver_by_id = AsyncMock(side_effect=[d1, d2])
+        mock_db.set_driver_available = AsyncMock()
+        mock_db.run_sync = AsyncMock(return_value=None)
+        mock_db.get_user_by_id = AsyncMock(return_value={"first_name": "Jamie"})
+
+        await _match_driver_to_ride_attempt("ride-1", ride=ride)
+
+    # Both claimed drivers get Period 2 opened for THIS ride, before
+    # acceptance — the "obligated the instant the offer is live" rule.
+    assert period.await_args_list == [
+        call("drv-1", 2, ride_id="ride-1"),
+        call("drv-2", 2, ride_id="ride-1"),
+    ]
+
+
+async def test_period_2_not_opened_when_offer_insert_fails():
+    """If the ride_offers insert itself fails, the claims are released and
+    Period 2 must never have opened for a driver who was never actually
+    offered anything (no ride_offers row exists to justify it)."""
+    ride = _make_ride(service_area_id=None)
+    d1 = _make_driver("drv-1")
+
+    from backend.routes.rides.matching import _match_driver_to_ride_attempt
+
+    with (
+        patch("backend.routes.rides.matching._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides.matching._deps.record_period_transition", AsyncMock()) as period,
+        patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
+        patch(
+            "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
+            AsyncMock(return_value=("nearest", 0, 10.0, 1, False)),
+        ),
+        patch(
+            "backend.routes.rides.matching._deps.filter_and_rank_drivers",
+            side_effect=lambda ride, drivers, *a, **kw: [(d, 1.0) for d in drivers],
+        ),
+        patch(
+            "backend.utils.driver_presence.present_driver_ids_checked",
+            AsyncMock(return_value=(set(), False)),
+        ),
+        patch("backend.utils.redis_client.redis_mget", AsyncMock(return_value=[None])),
+        patch("backend.routes.rides.matching._deps.manager.send_personal_message", AsyncMock()),
+        patch("backend.routes.rides.matching._deps.send_push_notification", AsyncMock()),
+        patch("backend.routes.rides.matching._deps.spawn", side_effect=lambda coro: coro.close()),
+        patch("backend.routes.rides.matching.sign_offer_card_token", return_value="tok"),
+    ):
+        mock_db.get_rows = AsyncMock(return_value=[d1])
+        mock_db.find_one = AsyncMock(return_value=None)
+        mock_db.claim_driver_atomic = AsyncMock(return_value=True)
+        mock_db.get_driver_by_id = AsyncMock(return_value=d1)
+        mock_db.set_driver_available = AsyncMock()
+        mock_db.run_sync = AsyncMock(side_effect=RuntimeError("ride_offers insert failed"))
+        mock_db.get_user_by_id = AsyncMock(return_value={"first_name": "Jamie"})
+
+        with pytest.raises(RuntimeError):
+            await _match_driver_to_ride_attempt("ride-1", ride=ride)
+
+    period.assert_not_awaited()
+    mock_db.set_driver_available.assert_awaited_once_with("drv-1", True)
 
 
 # ── _offer_timeout_handler ───────────────────────────────────────────────

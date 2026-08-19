@@ -14,7 +14,7 @@ try:
     )
     from ..features import send_push_notification
     from ..settings_loader import get_app_settings
-    from ..utils.money import cents_to_dollars
+    from ..utils.money import cents_to_dollars, dollars_to_cents
     from ..utils.rate_limiter import default_limiter
     from ..utils.rider_emails import send_refund_email, send_wallet_topup_email
 except ImportError:
@@ -29,7 +29,7 @@ except ImportError:
     )
     from features import send_push_notification
     from settings_loader import get_app_settings
-    from utils.money import cents_to_dollars
+    from utils.money import cents_to_dollars, dollars_to_cents
     from utils.rate_limiter import default_limiter
     from utils.rider_emails import send_refund_email, send_wallet_topup_email
 import asyncio
@@ -258,10 +258,11 @@ async def _handle_ride_invoice_paid(invoice: dict, ride_id: str, event_id: str, 
         )
         raise HTTPException(status_code=500, detail="Ride not found for paid invoice — Stripe will retry")
     _pstatus = ride.get("payment_status")
-    # 'refunded' is terminal too: if charge.refunded marked the ride refunded
-    # before a delayed invoice.paid lands, re-settling here would append another
-    # ledger row and flip payment_status back to 'paid', erasing the refund.
-    if _pstatus in ("paid", "waived_admin", "refunded"):
+    # 'refunded' and 'partially_refunded' are terminal too: if charge.refunded
+    # marked the ride (fully or partially) refunded before a delayed
+    # invoice.paid lands, re-settling here would append another ledger row and
+    # flip payment_status back to 'paid', erasing the refund record.
+    if _pstatus in ("paid", "waived_admin", "refunded", "partially_refunded"):
         logger.info(
             "invoice.paid: ride %s already settled (%s) — skipping",
             ride_id,
@@ -1036,60 +1037,133 @@ async def stripe_webhook(request: Request):
             if rides:
                 ride = rides[0]
                 ride_id = ride["id"]
+                # Stripe's amount_refunded is CUMULATIVE on the charge, not the
+                # delta of this specific event — two sequential partial refunds
+                # ($10, then another $10 out of $50) each fire their own
+                # charge.refunded with a DIFFERENT event_id, so
+                # claim_stripe_event does NOT dedupe them (they're legitimately
+                # distinct events). Treating amount_refunded as if it were this
+                # event's own amount would double-count: event 1 writes -$10 to
+                # the ledger, event 2 writes -$20 (the new cumulative) instead
+                # of -$10 (its actual delta), net -$30 against a charge that
+                # only ever refunded $20. Compute the delta against what was
+                # last recorded on the ride instead.
                 refunded_cents = int(charge.get("amount_refunded", 0))
                 refunded_amount = Decimal(str(refunded_cents)) / Decimal("100")
                 refunded_amount = refunded_amount.quantize(_TWO_PLACES, rounding=ROUND_HALF_UP)
-                await db_supabase.update_one(
-                    "rides",
-                    {"id": ride_id},
-                    {
-                        "payment_status": "refunded",
-                        "refund_amount": str(refunded_amount),
-                        "updated_at": datetime.now(timezone.utc).isoformat(),
-                    },
-                )
-                # C3: write a compensating ledger row so the 7-year tax/audit
-                # ledger nets the refund out (it previously recorded none). Per
-                # policy the driver KEEPS their pay — driver_earnings is NOT
-                # clawed back — but the reversed rider-side GST/PST is captured
-                # here for remittance. Idempotent-ish: a duplicate charge.refunded
-                # delivery is deduped upstream by claim_stripe_event(event_id).
-                try:
-                    from ..services.payment_service import record_refund_event
-                except ImportError:
-                    from services.payment_service import record_refund_event  # type: ignore
-                await record_refund_event(
-                    ride_id=ride_id,
-                    user_id=ride.get("rider_id") or "",
-                    refund_cents=refunded_cents,
-                    payment_intent_id=payment_intent_id,
-                    ride=ride,
-                )
-                logger.info(
-                    f"Stripe refund: ride {ride_id} marked refunded (${refunded_amount:.2f}); "
-                    f"driver pay retained, ledger + GST reversal recorded",
-                    extra={
-                        "domain": "payments",
-                        "ride_id": ride_id,
-                        "event_id": event_id,
-                    },
-                )
-                rider_id = ride.get("rider_id")
-                if rider_id:
+                previous_refunded_cents = dollars_to_cents(ride.get("refund_amount") or 0)
+                delta_cents = refunded_cents - previous_refunded_cents
+                if delta_cents <= 0:
+                    # Stale or out-of-order delivery: this event's cumulative
+                    # amount is not ahead of what's already recorded (a retry
+                    # of an older event arriving after a newer one already
+                    # applied, or a genuine duplicate that slipped past
+                    # claim_stripe_event under a different event_id). Skip the
+                    # ledger write and don't overwrite payment_status/
+                    # refund_amount backward — both are treated as terminal/
+                    # authoritative elsewhere in this file and in
+                    # admin/rides.py. Deliberately NOT a bare `return`: the
+                    # shared mark_stripe_event_processed(event_id) tail call
+                    # at the end of this function must still run, or Stripe
+                    # will retry this event forever.
+                    logger.info(
+                        "Stripe charge.refunded for ride %s: cumulative amount_refunded=%s not ahead of "
+                        "already-recorded refund_amount=%s — skipping as stale/out-of-order (event %s)",
+                        ride_id,
+                        refunded_cents,
+                        previous_refunded_cents,
+                        event_id,
+                        extra={"domain": "payments", "ride_id": ride_id, "event_id": event_id},
+                    )
+                else:
+                    delta_amount = cents_to_dollars(delta_cents)
+                    # A partial refund must NOT collapse into the same 'refunded'
+                    # status as a full one — 'refunded' is treated as terminal
+                    # (never re-invoiceable, never re-settled by a delayed
+                    # invoice.paid) elsewhere in this file and in admin/rides.py.
+                    # Marking a partial refund 'refunded' silently drops the fact
+                    # that the platform still retained (amount - amount_refunded)
+                    # of the fare, corrupting any report keyed off payment_status.
+                    #
+                    # Prefer Stripe's own authoritative `refunded` boolean (only
+                    # true once cumulative refunds reach the full charge amount);
+                    # fall back to comparing amount_refunded against amount when
+                    # `refunded` isn't present. If neither is present (shouldn't
+                    # happen on a real Stripe payload — both are always sent —
+                    # only on incomplete synthetic test data), default to the
+                    # prior full-refund behavior rather than guessing partial.
+                    is_full_refund: bool
+                    if isinstance(charge.get("refunded"), bool):
+                        is_full_refund = charge["refunded"]
+                    elif charge.get("amount") is not None:
+                        is_full_refund = refunded_cents >= int(charge["amount"])
+                    else:
+                        is_full_refund = True
+                    new_payment_status = "refunded" if is_full_refund else "partially_refunded"
+                    await db_supabase.update_one(
+                        "rides",
+                        {"id": ride_id},
+                        {
+                            "payment_status": new_payment_status,
+                            # Cumulative total refunded on this ride so far —
+                            # NOT this event's delta. Matches what
+                            # previous_refunded_cents reads back on the next
+                            # charge.refunded event for this ride.
+                            "refund_amount": str(refunded_amount),
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                        },
+                    )
+                    # C3: write a compensating ledger row so the 7-year tax/audit
+                    # ledger nets the refund out (it previously recorded none). Per
+                    # policy the driver KEEPS their pay — driver_earnings is NOT
+                    # clawed back — but the reversed rider-side GST/PST is captured
+                    # here for remittance. Idempotent-ish: a duplicate charge.refunded
+                    # delivery is deduped upstream by claim_stripe_event(event_id).
+                    # Uses delta_cents (THIS event's actual refund), not the
+                    # cumulative refunded_cents — see the comment on delta_cents
+                    # above for why passing cumulative here would double-count
+                    # across sequential partial refunds.
                     try:
-                        await send_push_notification(
-                            rider_id,
-                            "Refund processed",
-                            f"Your refund of ${refunded_amount:.2f} has been processed by your bank.",
-                            data={"type": "refund_processed", "ride_id": ride_id},
-                        )
-                    except Exception as _e:
-                        logger.debug(f"Refund push failed: {_e}")
-                    # A refund is a financial record; a push that scrolls out of
-                    # the tray is not one. Safe against a duplicate Stripe
-                    # delivery because claim_stripe_event(event_id) already
-                    # deduped this whole handler upstream. Self-swallowing.
-                    await send_refund_email(rider_id, refunded_amount, ride=ride)
+                        from ..services.payment_service import record_refund_event
+                    except ImportError:
+                        from services.payment_service import record_refund_event  # type: ignore
+                    await record_refund_event(
+                        ride_id=ride_id,
+                        user_id=ride.get("rider_id") or "",
+                        refund_cents=delta_cents,
+                        payment_intent_id=payment_intent_id,
+                        ride=ride,
+                    )
+                    logger.info(
+                        f"Stripe refund: ride {ride_id} marked {new_payment_status} "
+                        f"(this refund ${delta_amount:.2f}, total refunded ${refunded_amount:.2f}); "
+                        f"driver pay retained, ledger + GST reversal recorded",
+                        extra={
+                            "domain": "payments",
+                            "ride_id": ride_id,
+                            "event_id": event_id,
+                        },
+                    )
+                    rider_id = ride.get("rider_id")
+                    if rider_id:
+                        try:
+                            await send_push_notification(
+                                rider_id,
+                                "Refund processed",
+                                # This event's own amount, not the ride's
+                                # running cumulative total — a second partial
+                                # refund must not tell the rider $20 was just
+                                # refunded when this event only refunded $10.
+                                f"Your refund of ${delta_amount:.2f} has been processed by your bank.",
+                                data={"type": "refund_processed", "ride_id": ride_id},
+                            )
+                        except Exception as _e:
+                            logger.debug(f"Refund push failed: {_e}")
+                        # A refund is a financial record; a push that scrolls out of
+                        # the tray is not one. Safe against a duplicate Stripe
+                        # delivery because claim_stripe_event(event_id) already
+                        # deduped this whole handler upstream. Self-swallowing.
+                        await send_refund_email(rider_id, delta_amount, ride=ride)
             else:
                 await _record_orphan_refund(
                     charge=charge,

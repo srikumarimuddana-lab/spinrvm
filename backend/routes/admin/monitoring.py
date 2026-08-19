@@ -15,6 +15,7 @@ try:
     from ...db_supabase import _rows_from_res, count_documents, get_rows, run_sync
     from ...dependencies import get_admin_user
     from ...supabase_client import supabase
+    from ...utils.audit_logger import log_admin_action
     from ...utils.driver_online import intent_online
     from ...utils.driver_presence import PRESENCE_TTL, present_driver_ids
     from ...utils.metrics import snapshot as _metrics_snapshot
@@ -31,6 +32,7 @@ except ImportError:
     from db_supabase import _rows_from_res, count_documents, get_rows, run_sync
     from dependencies import get_admin_user
     from supabase_client import supabase
+    from utils.audit_logger import log_admin_action  # type: ignore # noqa: F401
     from utils.driver_online import intent_online  # type: ignore
     from utils.driver_presence import PRESENCE_TTL, present_driver_ids  # type: ignore
     from utils.metrics import snapshot as _metrics_snapshot  # type: ignore
@@ -532,11 +534,61 @@ async def flush_redis_prefix(
             detail=f"Prefix '{prefix}' is not in the flushable allowlist. Allowed: {sorted(_FLUSHABLE_PREFIXES)}",
         )
 
-    deleted = await redis_delete_pattern(f"{prefix}*")
+    # This is a destructive, irreversible production action (wipes every key
+    # under the prefix) -- it must leave a forensic trail. `deleted` (the
+    # count) is only known after the flush runs, so audit-log after acting,
+    # same convention as other outcome-carrying admin audit rows (e.g.
+    # stripe_import.py's account-redirect audit, rides.py's payout-period-close
+    # audit). A failure of the flush itself is still audited (outcome=failure)
+    # before re-raising -- silently swallowing it would violate CLAUDE.md's
+    # "do not silently swallow errors" rule for a destructive admin action.
+    try:
+        deleted = await redis_delete_pattern(f"{prefix}*")
+    except Exception as exc:
+        logger.error(
+            "redis flush-prefix failed",
+            extra={"domain": "admin", "prefix": prefix, "admin_id": current_admin.get("id")},
+            exc_info=True,
+        )
+        await log_admin_action(
+            current_admin,
+            "redis_flush_prefix",
+            "redis",
+            prefix,
+            {"prefix": prefix, "outcome": "failure", "error": str(exc)},
+        )
+        raise HTTPException(status_code=503, detail="Redis flush failed; retry.") from exc
+
+    logger.info(
+        "redis flush-prefix succeeded",
+        extra={
+            "domain": "admin",
+            "prefix": prefix,
+            "deleted_keys": deleted,
+            "admin_id": current_admin.get("id"),
+        },
+    )
+    # log_admin_action never raises (see utils/audit_logger.py) and logs its
+    # own error on write failure -- an audit-write failure must not block or
+    # corrupt this endpoint's response, but it must not be hidden either.
+    audit_id = await log_admin_action(
+        current_admin,
+        "redis_flush_prefix",
+        "redis",
+        prefix,
+        {"prefix": prefix, "outcome": "success", "deleted_keys": deleted},
+    )
+    if audit_id is None:
+        logger.error(
+            "redis flush-prefix audit log write failed after a successful flush",
+            extra={"domain": "admin", "prefix": prefix, "admin_id": current_admin.get("id")},
+        )
+
     return {
         "prefix": prefix,
         "deleted_keys": deleted,
         "admin_id": current_admin.get("id"),
+        "audit_id": audit_id,
     }
 
 

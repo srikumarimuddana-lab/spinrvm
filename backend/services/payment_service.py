@@ -18,12 +18,14 @@ try:
     from .. import db_supabase
     from ..services import corporate_allowance_service, corporate_wallet_service, ledger_service
     from ..services.corporate_policy_service import evaluate_policy
+    from ..services.fare_service import driver_earnings_with_tip
     from ..socket_manager import manager
     from ..utils.stripe_charge import cancel_authorization, capture_ride, charge_ride, increment_authorization
 except ImportError:
     import db_supabase  # type: ignore
     from services import corporate_allowance_service, corporate_wallet_service, ledger_service  # type: ignore
     from services.corporate_policy_service import evaluate_policy  # type: ignore
+    from services.fare_service import driver_earnings_with_tip  # type: ignore
     from socket_manager import manager  # type: ignore
     from utils.stripe_charge import (  # type: ignore
         cancel_authorization,
@@ -166,21 +168,26 @@ async def _refuse_unconfigured_settlement(ride_id: str, context: str) -> "Paymen
 def _tip_ride_update(ride: dict, tip_amount: Decimal) -> dict:
     """Fields to merge into an update_ride call when a tip is being settled.
 
-    Applies the delta (new tip - already-stored tip) to driver_earnings so
-    the call is idempotent: re-running with the same tip amount leaves
-    driver_earnings unchanged (delta = 0).
+    Canonical, idempotent calc (fare-payout-audit follow-up, 2026-08-19) —
+    driver_earnings_with_tip() recomputes fresh from the ride's own fare
+    columns every time, so re-running with the same tip amount always
+    produces the same answer, without needing any delta/existing-value
+    bookkeeping.
+
+    This function used to apply a DELTA ("new tip - already-stored tip") on
+    top of whatever driver_earnings currently held. That was only correct if
+    tip_amount and driver_earnings always moved together through THIS
+    function specifically — but routes/rides/rating.py's tip-while-rating
+    flow and routes/rides/payments.py's add_tip late-tip flow can each also
+    write tip_amount independently. A ride that touched more than one of
+    those paths landed on whichever path ran last, with no shared source of
+    truth for "what driver_earnings should be" — a real production
+    underpayment (driver credited $0.17 instead of $0.67 on a live-charged
+    ride, 2026-08-19). See driver_earnings_with_tip's own docstring.
     """
     tip_d = _round(tip_amount)
-    existing_tip = _round(_d(ride.get("tip_amount") or 0))
-    tip_delta = tip_d - existing_tip
     fields: dict = {"tip_amount": _f(tip_d)}
-    # Apply the delta in BOTH directions (C3): a downward tip correction must
-    # claw the over-credit back out of driver_earnings, not just an increase —
-    # otherwise a reduced/removed tip leaves the driver overpaid. Clamp at 0 so
-    # a correction can never drive earnings negative.
-    if tip_delta != 0:
-        new_earnings = _round(_d(ride.get("driver_earnings") or 0) + tip_delta)
-        fields["driver_earnings"] = _f(max(new_earnings, _round(Decimal("0"))))
+    fields["driver_earnings"] = _f(driver_earnings_with_tip(ride, tip_d))
     return fields
 
 

@@ -17,13 +17,10 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import api, { getAuthHeader, getApiErrorMessage } from '@shared/api/client';
-// Keep the default import: many test files jest.mock(
-// '@shared/config/spinr.config', () => ({ default: {...} })) without a
-// matching named 'SpinrConfig' export, so switching to a named import
-// breaks those mocks (confirmed in rider-app's utils/aiChat.ts).
-// eslint-disable-next-line import/no-named-as-default
-import SpinrConfig from '@shared/config/spinr.config';
+// getAuthHeader / SpinrConfig were only needed by the hand-rolled fetch()
+// this screen used for photo uploads; api.post now handles the URL, auth,
+// and App Check headers itself.
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../hooks/useToast';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useDriverStore } from '../store/driverStore';
@@ -115,27 +112,37 @@ export default function ReportSafetyScreen() {
             const res = await api.post<{ incident_id?: string }>('/safety/report', reportData);
             const reportId = res.data?.incident_id;
 
+            let failedPhotos = 0;
             if (reportId && photos.length > 0) {
-                const token = await getAuthHeader();
                 for (const [i, uri] of photos.entries()) {
                     try {
                         const fd = new FormData();
                         fd.append('file', { uri, name: `evidence_${i}.jpg`, type: 'image/jpeg' } as any);
-                        await fetch(`${SpinrConfig.backendUrl}/api/v1/safety/report/${reportId}/photo`, {
-                            method: 'POST',
-                            headers: {
-                                ...(token ? { Authorization: `Bearer ${token}` } : {}),
-                                Accept: 'application/json',
-                            },
-                            body: fd as any,
-                        });
-                    } catch {
-                        // Photo upload failure is non-fatal
+                        // Was a hand-rolled fetch(), which omitted the
+                        // X-Firebase-AppCheck header and so 401'd under
+                        // enforcement. api.post now passes FormData through
+                        // with the auth + App Check headers attached.
+                        await api.post(`/safety/report/${reportId}/photo`, fd);
+                    } catch (photoErr) {
+                        // Still non-fatal — the report itself is already
+                        // persisted and that is the safety-critical part. But
+                        // it is no longer SILENT: losing evidence without
+                        // telling anyone is what hid this bug for months.
+                        failedPhotos += 1;
+                        console.error('[report-safety] evidence upload failed', photoErr);
                     }
                 }
             }
 
-            showToast('success', 'Report Submitted', 'Your safety report has been submitted. Our trust and safety team will review it promptly.');
+            if (failedPhotos > 0) {
+                showToast(
+                    'warning',
+                    'Report Sent — Photos Failed',
+                    `Your report was submitted, but ${failedPhotos} of ${photos.length} photo${photos.length === 1 ? '' : 's'} could not be attached. Our team may contact you for them.`,
+                );
+            } else {
+                showToast('success', 'Report Submitted', 'Your safety report has been submitted. Our trust and safety team will review it promptly.');
+            }
             router.back();
         } catch (e) {
             showToast('error', 'Error', getApiErrorMessage(e, 'Could not submit your report. Please try again.'));

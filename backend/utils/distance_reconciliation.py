@@ -38,7 +38,20 @@ except ImportError:  # pragma: no cover - dual import path
     from utils.loop_monitor import record_heartbeat as _record_heartbeat  # type: ignore
     from utils.redis_client import redis_set_nx  # type: ignore
 
+try:
+    from .loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:  # pragma: no cover
+    try:
+        from utils.loop_monitor import record_heartbeat as _record_heartbeat  # type: ignore
+    except ImportError:  # pragma: no cover
+
+        def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+            pass
+
+
 logger = logging.getLogger(__name__)
+
+_LOOP_NAME = "distance_reconciliation (daily 04:00 UTC)"
 
 # Per-ride outlier band: outside [0.6, 1.8]× the quote, the measured distance is
 # far enough from what was priced to warrant a per-ride integrity event.
@@ -205,5 +218,5 @@ async def distance_reconciliation_loop(target_hour_utc: int = _RUN_HOUR_UTC) -> 
             logger.error("distance_reconciliation_loop: tick raised", exc_info=True)
         # Every iteration, lock or not — the watchdog is per-replica (same
         # pattern as retention_purge).
-        _record_heartbeat("distance_reconciliation (daily 04:00 UTC)")
+        _record_heartbeat(_LOOP_NAME)
         await asyncio.sleep(86400)

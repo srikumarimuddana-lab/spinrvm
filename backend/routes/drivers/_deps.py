@@ -57,6 +57,7 @@ try:
     from ...utils.earnings_snapshot import build_earnings_snapshot, fare_share
     from ...utils.error_handling import (
         AccountDisabledException,
+        DriverOfflineException,
         ErrorCode,
         RideStateError,
         SpinrException,
@@ -114,6 +115,7 @@ except ImportError:
     from utils.earnings_snapshot import build_earnings_snapshot, fare_share
     from utils.error_handling import (
         AccountDisabledException,
+        DriverOfflineException,
         ErrorCode,
         RideStateError,
         SpinrException,

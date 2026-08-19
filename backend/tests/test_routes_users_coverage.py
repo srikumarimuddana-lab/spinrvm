@@ -948,6 +948,66 @@ class TestRiderReferralSummary:
             _stop(patches)
 
     @pytest.mark.anyio
+    async def test_summary_asserts_grand_total_filter_applied(self):
+        """Wiring check: the completed-rides count must filter on grand_total >
+        0, mirroring utils.referral_payout._process_one's qualification check
+        (ranked blocker #6 / audit finding N2). Asserts the actual filter dict
+        passed to count_documents rather than trusting a return value alone."""
+        user = {"id": "user-1", "referral_code": "MYCODE"}
+        referred = [{"id": "r1", "first_name": "A", "last_name": "B", "created_at": "2026-01-01"}]
+        get_rows = AsyncMock(return_value=referred)
+        count_documents = AsyncMock(return_value=1)
+        patches = _start(
+            _referral_patches(
+                **{
+                    "backend.routes.users.db_supabase.get_rows": get_rows,
+                    "backend.routes.users.db_supabase.count_documents": count_documents,
+                }
+            )
+        )
+        try:
+            await _rider_referral_summary(user, include_referees=True)
+        finally:
+            _stop(patches)
+        table, filters = count_documents.await_args.args[0], count_documents.await_args.args[1]
+        assert table == "rides"
+        assert filters["rider_id"] == "r1"
+        assert filters["status"] == "completed"
+        assert filters["grand_total"] == {"$gt": 0}
+
+    @pytest.mark.anyio
+    async def test_summary_zero_fare_ride_does_not_count_as_qualified(self):
+        """A referee whose only completed ride cost $0 (fully covered by a
+        first_ride_only/free_ride promo) must NOT show as qualified — that ride
+        alone must not satisfy referral qualification (ranked blocker #6 /
+        audit finding N2, 2026-08-19)."""
+        user = {"id": "user-1", "referral_code": "MYCODE"}
+        referred = [{"id": "r1", "first_name": "A", "last_name": "B", "created_at": "2026-01-01"}]
+        get_rows = AsyncMock(return_value=referred)
+
+        async def count_documents(table, filters):
+            # Simulate the DB: r1 has exactly one completed ride, and it's $0.
+            if filters.get("grand_total") == {"$gt": 0}:
+                return 0
+            return 1
+
+        patches = _start(
+            _referral_patches(
+                **{
+                    "backend.routes.users.db_supabase.get_rows": get_rows,
+                    "backend.routes.users.db_supabase.count_documents": AsyncMock(side_effect=count_documents),
+                }
+            )
+        )
+        try:
+            summary = await _rider_referral_summary(user, include_referees=True)
+        finally:
+            _stop(patches)
+        assert summary["qualified_referrals"] == 0
+        assert summary["referees"][0]["qualified"] is False
+        assert summary["referees"][0]["status"] == "in_progress"
+
+    @pytest.mark.anyio
     async def test_paid_earnings_snapshot_wins_over_estimate(self):
         user = {"id": "user-1", "referral_code": "MYCODE"}
         patches = _start(

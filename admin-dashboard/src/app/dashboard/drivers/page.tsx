@@ -1521,7 +1521,8 @@ export default function DriversPage() {
                                         data={payoutSummary}
                                         loading={payoutLoading}
                                         driverId={selected.id}
-                                        driverName={`${selected.first_name || ""} ${selected.last_name || ""}`.trim() || selected.email || "this driver"}
+                                        driverName={driverDisplayName(selected) || "this driver"}
+                                        isLegacyImported={!!selected.legacy_import_metadata && Object.keys(selected.legacy_import_metadata).length > 0}
                                         notify={toast}
                                         retryingPayoutId={retryingPayoutId}
                                         refreshingKyc={refreshingKyc}
@@ -2052,11 +2053,16 @@ function PayoutMetric({ label, value, tone, sub }: { label: string; value: strin
     );
 }
 
-function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutId, onRetry, onRefreshKyc, onRefreshPayouts, onRevealSin, refreshingKyc, refreshingPayouts, revealedSin, canRevealSin, canRefreshPayouts, notify }: {
+function DriverPayoutsTab({ data, loading, driverId, driverName, isLegacyImported, retryingPayoutId, onRetry, onRefreshKyc, onRefreshPayouts, onRevealSin, refreshingKyc, refreshingPayouts, revealedSin, canRevealSin, canRefreshPayouts, notify }: {
     data: DriverPayoutSummary | null;
     loading: boolean;
     driverId: string;
     driverName: string;
+    // True when selected.legacy_import_metadata is non-empty -- distinguishes
+    // "migrated driver whose old-app banking data has no import destination"
+    // (banks.csv was never imported, ACTION_ITEMS.md A34 -- permanent, expected)
+    // from "new driver who hasn't finished onboarding" (transient, self-serve).
+    isLegacyImported: boolean;
     retryingPayoutId: string | null;
     onRetry: (payoutId: string) => Promise<void>;
     onRefreshKyc: () => Promise<void>;
@@ -2257,6 +2263,12 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                                 </div>
                             )}
                         </>
+                    ) : isLegacyImported ? (
+                        <div className="col-span-full text-sm text-muted-foreground py-2">
+                            {driverName}&rsquo;s payout method wasn&rsquo;t migrated from the previous app -- its raw
+                            banking data was never imported (a known, permanent gap for legacy drivers, not a bug).
+                            Ask {driverName} to add a bank account or Stripe Connect account to resume payouts.
+                        </div>
                     ) : (
                         <div className="col-span-full text-sm text-muted-foreground py-2">
                             {driverName} has not added a payout method yet. Payouts cannot be processed until a bank account or Stripe Connect account is linked.

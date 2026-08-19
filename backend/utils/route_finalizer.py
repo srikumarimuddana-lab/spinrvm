@@ -707,6 +707,34 @@ async def _recompute_ride_distance_stats(
         distance_basis,
     )
 
+    # Insurer audit correction: the SGI per-period distances were frozen at
+    # settlement; late evidence that shifted the measured distance beyond the
+    # epsilon appends revision rows (append-only-safe, migration 334). Readers
+    # use the driver_period_distances_current view. Best-effort.
+    driver_id = ride.get("driver_id")
+    if driver_id:
+        try:
+            try:
+                from .metrics import inc as _rev_metric_inc
+                from .period_distance_audit import record_period_distance_revision
+            except ImportError:
+                from utils.metrics import inc as _rev_metric_inc  # type: ignore
+                from utils.period_distance_audit import record_period_distance_revision  # type: ignore
+
+            revised_p3 = await record_period_distance_revision(
+                driver_id=driver_id, ride_id=ride_id, period=3, distance_km=round(new_actual, 3)
+            )
+            revised_p2 = await record_period_distance_revision(
+                driver_id=driver_id,
+                ride_id=ride_id,
+                period=2,
+                distance_km=round(float(distances.pickup_to_driver_km or 0), 3),
+            )
+            if revised_p3 or revised_p2:
+                _rev_metric_inc("spinr_insurance_period_distance_rederived_total")
+        except Exception:
+            logger.error("period-distance revision append failed for ride %s", ride_id, exc_info=True)
+
 
 async def finalize_route(ride_id: str) -> Dict[str, Any]:
     """Produce a revisioned route projection from durable evidence only.

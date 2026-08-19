@@ -60,6 +60,11 @@ export default function ActivityView() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  // Distinct earnings-fetch-failed state — see loadData below. Only set when
+  // there's no cached earnings for the current period to fall back on, so a
+  // transient background-refresh failure never blanks numbers already on
+  // screen; only a real "nothing to show" case surfaces this.
+  const [error, setError] = useState(false);
   // True once the first data load has completed.
   const hasLoadedRef = useRef(false);
   // The period whose data is currently on screen. The store holds only ONE
@@ -93,21 +98,49 @@ export default function ActivityView() {
     // Show the spinner whenever this period isn't cached — first load, a
     // never-opened pill, or after a ride invalidated the cache. A cached pill
     // renders its numbers instantly and refreshes silently in the background.
-    if (!cached) setLoading(true);
-    try {
-      if (isPeriodChange && hasLoadedRef.current) {
-        // Pill change (not the first load): only earnings is period-specific.
-        // The ride list re-filters client-side, so DON'T refetch it —
-        // replacing rideHistory forces the whole FlatList to re-render for
-        // no reason, which is the client-side lag on pill taps.
+    if (!cached) {
+      setLoading(true);
+      setError(false);
+    }
+    // Earnings-fetch failures must render a distinct error/retry state, not a
+    // fabricated "$0.00" earnings screen indistinguishable from a genuine
+    // zero balance (same failure class as the 2026-08-19 tip-underpayment
+    // incident — components silently disagreeing with reality — purely
+    // client-side here). Previously this whole block was wrapped in a bare
+    // `try { ... } catch {}`, which additionally meant a rejected
+    // fetchEarnings inside Promise.allSettled below was invisible to the
+    // catch entirely (allSettled never rejects), so the failure was silently
+    // dropped twice over. Each branch now inspects its own result.
+    if (isPeriodChange && hasLoadedRef.current) {
+      // Pill change (not the first load): only earnings is period-specific.
+      // The ride list re-filters client-side, so DON'T refetch it —
+      // replacing rideHistory forces the whole FlatList to re-render for
+      // no reason, which is the client-side lag on pill taps.
+      try {
         await fetchEarnings(period);
-      } else {
-        await Promise.allSettled([
-          fetchEarnings(period),
-          fetchRideHistory(PAGE_SIZE, 0, false),
-        ]);
+        setError(false);
+      } catch (err) {
+        console.error('[DriverActivity] earnings fetch failed:', err);
+        if (!cached) setError(true);
       }
-    } catch {}
+    } else {
+      const [earningsResult, historyResult] = await Promise.allSettled([
+        fetchEarnings(period),
+        fetchRideHistory(PAGE_SIZE, 0, false),
+      ]);
+      if (earningsResult.status === 'rejected') {
+        console.error('[DriverActivity] earnings fetch failed:', earningsResult.reason);
+        if (!cached) setError(true);
+      } else {
+        setError(false);
+      }
+      if (historyResult.status === 'rejected') {
+        // Ride history failure doesn't get the full-screen error treatment —
+        // the list just falls back to whatever's already in the store (or
+        // "No Rides Found") — but it must still be logged, not swallowed.
+        console.error('[DriverActivity] ride history fetch failed:', historyResult.reason);
+      }
+    }
     hasLoadedRef.current = true;
     shownPeriodRef.current = period;
     lastFocusFetchRef.current = Date.now();
@@ -349,6 +382,22 @@ export default function ActivityView() {
 
       {loading ? (
         <ActivityIndicator color="#ef4444" style={{ marginTop: 60 }} />
+      ) : error ? (
+        <View style={styles.errorState}>
+          <Ionicons name="cloud-offline-outline" size={48} color="#9ca3af" />
+          <Text style={styles.errorTitle}>Couldn&apos;t load your earnings</Text>
+          <Text style={styles.errorSub}>Something went wrong reaching our servers. Please try again.</Text>
+          <TouchableOpacity
+            style={styles.retryBtn}
+            activeOpacity={0.8}
+            onPress={loadData}
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading earnings"
+          >
+            <Ionicons name="refresh" size={18} color="#fff" />
+            <Text style={styles.retryBtnText}>Try Again</Text>
+          </TouchableOpacity>
+        </View>
       ) : (
         <>
           {/* Earnings breakdown */}
@@ -473,41 +522,47 @@ export default function ActivityView() {
               </View>
             </View>
           </View>
-
-          {/* Rides section header + status filter. The ride cards themselves are
-              virtualized below as FlatList items (see renderRideCard). */}
-          <View style={styles.ridesSection}>
-            <View style={styles.ridesSectionHeader}>
-              <Text style={styles.sectionTitle}>Your Rides</Text>
-              <Text style={styles.rideCount}>{filteredRides.length} rides</Text>
-            </View>
-
-            {/* Status filter pills — wrap to match the period row above. */}
-            <View style={styles.statusPillRow}>
-              {(['all', 'completed', 'scheduled', 'cancelled'] as StatusFilter[]).map((item) => (
-                <TouchableOpacity
-                  key={item}
-                  style={[
-                    styles.statusPill,
-                    isCompactFilterLayout && styles.statusPillCompact,
-                    statusFilter === item && styles.statusPillActive,
-                  ]}
-                  onPress={() => setStatusFilter(item)}
-                >
-                  <Text
-                    style={[
-                      styles.statusPillText,
-                      isCompactFilterLayout && styles.statusPillTextCompact,
-                      statusFilter === item && styles.statusPillTextActive,
-                    ]}
-                  >
-                    {item === 'all' ? 'All Status' : item.charAt(0).toUpperCase() + item.slice(1)}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
         </>
+      )}
+
+      {/* Rides section header + status filter — rendered whenever loading has
+          finished, independent of the earnings error state above: a failed
+          earnings fetch shouldn't also hide a ride history that loaded fine
+          (Promise.allSettled in loadData resolves them independently). The
+          ride cards themselves are virtualized below as FlatList items (see
+          renderRideCard). */}
+      {!loading && (
+        <View style={styles.ridesSection}>
+          <View style={styles.ridesSectionHeader}>
+            <Text style={styles.sectionTitle}>Your Rides</Text>
+            <Text style={styles.rideCount}>{filteredRides.length} rides</Text>
+          </View>
+
+          {/* Status filter pills — wrap to match the period row above. */}
+          <View style={styles.statusPillRow}>
+            {(['all', 'completed', 'scheduled', 'cancelled'] as StatusFilter[]).map((item) => (
+              <TouchableOpacity
+                key={item}
+                style={[
+                  styles.statusPill,
+                  isCompactFilterLayout && styles.statusPillCompact,
+                  statusFilter === item && styles.statusPillActive,
+                ]}
+                onPress={() => setStatusFilter(item)}
+              >
+                <Text
+                  style={[
+                    styles.statusPillText,
+                    isCompactFilterLayout && styles.statusPillTextCompact,
+                    statusFilter === item && styles.statusPillTextActive,
+                  ]}
+                >
+                  {item === 'all' ? 'All Status' : item.charAt(0).toUpperCase() + item.slice(1)}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
       )}
     </>
   );
@@ -611,6 +666,44 @@ const styles = StyleSheet.create({
     // the selected pill larger than the rest on narrow screens.
     color: '#fff',
     fontWeight: '700',
+  },
+  // Earnings-fetch error state — same shape as driver/referral.tsx's
+  // established error/retry pattern, using this screen's own hardcoded
+  // palette (ActivityView doesn't consume useTheme()) instead of theme tokens.
+  errorState: {
+    alignItems: 'center',
+    paddingHorizontal: 32,
+    paddingVertical: 48,
+  },
+  errorTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#374151',
+    marginTop: 16,
+    textAlign: 'center',
+  },
+  errorSub: {
+    fontSize: 14,
+    color: '#6b7280',
+    marginTop: 8,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  retryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 24,
+    backgroundColor: '#ef4444',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 25,
+    minHeight: 44,
+  },
+  retryBtnText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
   // Earnings card
   card: {

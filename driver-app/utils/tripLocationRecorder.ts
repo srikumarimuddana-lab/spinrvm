@@ -92,6 +92,9 @@ export interface RecorderHealth {
   lastFlushAt: string | null;
   degraded: boolean;
   degradationReason: 'no_recent_fix' | 'upload_failure' | null;
+  /** Capture-loss visibility: fixes produced vs persisted since ride start. */
+  drops: { droppedNoRide: number; enqueueFailures: number };
+  flushBackoff: { consecutiveFailures: number; notBeforeMs: number };
 }
 
 type TripLocationOutbox = Pick<
@@ -110,6 +113,12 @@ type TripLocationOutbox = Pick<
 export interface TripLocationRecorderOptions {
   outbox?: TripLocationOutbox;
   now?: () => number;
+  /**
+   * Non-fatal telemetry sink (counts only — never coordinates). Injectable so
+   * recorder tests stay free of the firebase-backed crashlytics import chain;
+   * defaults to a lazy require of ./crashlytics at call time.
+   */
+  reportNonFatal?: (error: Error, context: Record<string, string | number>) => void;
 }
 
 type NativeLocationWithElapsedTime = Location.LocationObject & {
@@ -141,10 +150,28 @@ export class TripLocationRecorder {
   private flushPromise: Promise<FlushPendingResult> | null = null;
   private nextFlushNotBefore = 0;
   private consecutiveFlushFailures = 0;
+  private droppedNoRide = 0;
+  private enqueueFailures = 0;
+  private readonly reportNonFatal: (error: Error, context: Record<string, string | number>) => void;
 
   constructor(options: TripLocationRecorderOptions = {}) {
     this.outbox = options.outbox ?? tripLocationOutbox;
     this.now = options.now ?? Date.now;
+    this.reportNonFatal =
+      options.reportNonFatal ??
+      ((error, context) => {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          require('./crashlytics').recordNonFatal(error, context);
+        } catch {
+          // Telemetry must never affect recording.
+        }
+      });
+  }
+
+  private resetDropCounters(): void {
+    this.droppedNoRide = 0;
+    this.enqueueFailures = 0;
   }
 
   async startRide(rideId: string): Promise<PendingTripLocationSession> {
@@ -159,6 +186,7 @@ export class TripLocationRecorder {
     // the background path self-heal regardless of the session pre-create.
     this.activeRideId = rideId;
     this.activeRideStartedAt = this.now();
+    this.resetDropCounters();
     await AsyncStorage.setItem(ACTIVE_RIDE_KEY, rideId);
     return this.outbox.startSession(rideId);
   }
@@ -170,7 +198,12 @@ export class TripLocationRecorder {
     isCompletionFix = false,
   ): Promise<TripLocationPoint | null> {
     const resolvedRideId = rideId ?? await this.resolveActiveRideId();
-    if (!resolvedRideId) return null;
+    if (!resolvedRideId) {
+      // Counted, not silent: until idle sessions land (Phase 1), a no-ride fix
+      // has nowhere durable to go — this counter is how that loss stays visible.
+      this.droppedNoRide += 1;
+      return null;
+    }
 
     const nativeLocation = location as NativeLocationWithElapsedTime;
     const point: TripLocationFix = {
@@ -188,7 +221,13 @@ export class TripLocationRecorder {
       is_completion_fix: isCompletionFix,
     };
 
-    const queued = await this.outbox.enqueue(point);
+    let queued: TripLocationPoint;
+    try {
+      queued = await this.outbox.enqueue(point);
+    } catch (error) {
+      this.enqueueFailures += 1;
+      throw error;
+    }
     this.activeRideId = resolvedRideId;
     this.activeRideStartedAt ??= this.now();
     this.lastCaptureAt = this.now();
@@ -322,6 +361,11 @@ export class TripLocationRecorder {
       lastFlushAt: this.lastFlushAt === null ? null : new Date(this.lastFlushAt).toISOString(),
       degraded: noRecentFix || uploadFailure,
       degradationReason: noRecentFix ? 'no_recent_fix' : uploadFailure ? 'upload_failure' : null,
+      drops: { droppedNoRide: this.droppedNoRide, enqueueFailures: this.enqueueFailures },
+      flushBackoff: {
+        consecutiveFailures: this.consecutiveFlushFailures,
+        notBeforeMs: this.nextFlushNotBefore,
+      },
     };
   }
 
@@ -347,6 +391,7 @@ export class TripLocationRecorder {
     this.lastUploadFailureAt = null;
     this.nextFlushNotBefore = 0;
     this.consecutiveFlushFailures = 0;
+    this.resetDropCounters();
     try {
       await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
     } catch {
@@ -357,6 +402,17 @@ export class TripLocationRecorder {
 
   async closeRide(rideId: string): Promise<void> {
     await this.outbox.closeSession(rideId);
+    // One capture-loss report per ride, counts only — never coordinates.
+    if (this.droppedNoRide + this.enqueueFailures > 0) {
+      this.reportNonFatal(new Error('gps capture drops during ride'), {
+        domain: 'drivers',
+        surface: 'driver-app',
+        reason: 'gps_capture_drops',
+        dropped_no_ride: this.droppedNoRide,
+        enqueue_failures: this.enqueueFailures,
+      });
+    }
+    this.resetDropCounters();
     if (this.activeRideId === rideId) {
       this.activeRideId = null;
       this.activeRideStartedAt = null;

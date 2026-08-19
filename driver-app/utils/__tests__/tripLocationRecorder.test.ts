@@ -216,3 +216,45 @@ describe('TripLocationRecorder flush backoff', () => {
     expect(health.degradationReason).toBe('upload_failure');
   });
 });
+
+describe('TripLocationRecorder drop telemetry', () => {
+  test('counts no-ride drops and reports once at closeRide, counts only', async () => {
+    const outbox = createOutbox();
+    outbox.closeSession.mockResolvedValue(undefined);
+    const reportNonFatal = jest.fn();
+    const recorder = createTripLocationRecorder({ outbox: outbox as any, reportNonFatal });
+    mockAsyncStorage.getItem.mockResolvedValue(null); // no active ride key
+
+    const loc = { timestamp: 1_000, coords: { latitude: 52.1, longitude: -106.6, accuracy: 5, speed: 1, heading: 0, altitude: null } } as any;
+    expect(await recorder.recordNativeFix(loc, 'background')).toBeNull();
+    expect(await recorder.recordNativeFix(loc, 'background')).toBeNull();
+
+    const health = await recorder.getRecorderHealth('ride-x');
+    expect(health.drops).toEqual({ droppedNoRide: 2, enqueueFailures: 0 });
+
+    await recorder.closeRide('ride-x');
+    expect(reportNonFatal).toHaveBeenCalledTimes(1);
+    const [error, context] = reportNonFatal.mock.calls[0];
+    expect(String(error.message)).toContain('gps capture drops');
+    expect(context.dropped_no_ride).toBe(2);
+    // PII rule: counts only — the report must never carry coordinates.
+    expect(JSON.stringify(context)).not.toContain('52.1');
+
+    // Counters reset after the report: a clean next ride reports nothing.
+    await recorder.closeRide('ride-x');
+    expect(reportNonFatal).toHaveBeenCalledTimes(1);
+  });
+
+  test('counts enqueue failures and still rethrows', async () => {
+    const outbox = createOutbox();
+    outbox.enqueue.mockRejectedValue(new Error('disk full'));
+    const reportNonFatal = jest.fn();
+    const recorder = createTripLocationRecorder({ outbox: outbox as any, reportNonFatal });
+
+    const loc = { timestamp: 1_000, coords: { latitude: 52.1, longitude: -106.6, accuracy: 5, speed: 1, heading: 0, altitude: null } } as any;
+    await expect(recorder.recordNativeFix(loc, 'foreground', 'ride-1')).rejects.toThrow('disk full');
+
+    const health = await recorder.getRecorderHealth('ride-1');
+    expect(health.drops.enqueueFailures).toBe(1);
+  });
+});

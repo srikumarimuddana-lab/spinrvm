@@ -41,10 +41,10 @@ except ImportError:
 
 
 try:
-    from ..db_supabase import run_sync, supabase  # type: ignore
+    from ..db_supabase import delete_many, run_sync, supabase  # type: ignore
     from .redis_client import redis_set_nx  # type: ignore
 except ImportError:
-    from db_supabase import run_sync, supabase  # type: ignore
+    from db_supabase import delete_many, run_sync, supabase  # type: ignore
     from utils.redis_client import redis_set_nx  # type: ignore
 
 
@@ -282,11 +282,58 @@ def _seconds_until_next(target_hour_utc: int) -> float:
     return (target - now).total_seconds()
 
 
+# 90 days — same window purge_pii_retention()'s blanket driver_location_history
+# delete enforces. The idle step below only acts when the operator configures a
+# TIGHTER window than this via settings.idle_breadcrumb_retention_hours.
+_IDLE_RETENTION_DEFAULT_HOURS = 2160
+
+
+async def _purge_idle_breadcrumbs_below_default() -> None:
+    """Enforce a tighter-than-default retention for Period-1 idle breadcrumbs.
+
+    purge_pii_retention() already hard-deletes ALL driver_location_history rows
+    at 90 days. This supplementary step only matters when
+    settings.idle_breadcrumb_retention_hours is set BELOW 2160: online_idle
+    rows (Period-1 roaming, no ride attached) then drop on the tighter
+    schedule while ride-attached rows keep the full 90-day window. Best-effort:
+    a failure here must not mask the main purge, so it logs and returns.
+    """
+    try:
+        try:
+            from ..settings_loader import get_app_settings  # type: ignore
+        except ImportError:
+            from settings_loader import get_app_settings  # type: ignore
+        raw = ((await get_app_settings()) or {}).get("idle_breadcrumb_retention_hours", _IDLE_RETENTION_DEFAULT_HOURS)
+        hours = int(raw)
+    except Exception:
+        logger.error(
+            "retention_purge: idle retention setting read failed; skipping idle step",
+            exc_info=True,
+        )
+        return
+    if hours >= _IDLE_RETENTION_DEFAULT_HOURS:
+        return  # blanket 90-day delete already covers (or is tighter than) this
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, hours))).isoformat()
+    try:
+        rows = await delete_many(
+            "driver_location_history",
+            {"timestamp": {"$lt": cutoff}, "tracking_phase": "online_idle"},
+        )
+        logger.info(
+            "retention_purge: idle breadcrumbs purged rows=%s retention_hours=%s",
+            len(rows) if isinstance(rows, list) else 0,
+            hours,
+        )
+    except Exception:
+        logger.exception("retention_purge: idle breadcrumb purge failed")
+
+
 async def _tick() -> None:
     """One purge iteration: acquire the replica lock then call run_retention_purge_tick."""
     acquired = await redis_set_nx(_LOCK_KEY, _pod_id(), _LOCK_TTL_SECONDS)
     if acquired:
         await run_retention_purge_tick(dry_run=False)
+        await _purge_idle_breadcrumbs_below_default()
     else:
         logger.info("retention_purge_loop: another replica holds the lock, skipping")
 

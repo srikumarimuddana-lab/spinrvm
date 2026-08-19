@@ -501,6 +501,44 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   independently tested (targeted + regression suites, ruff clean; real Jest
   runs for both mobile apps — rider-app 530/530, driver-app 555/555 with 1
   pre-existing unrelated flake confirmed passing in isolation).
+  **FIXED 2026-08-19** (3 more, from the ranked blocker register, again run
+  in parallel across disjoint files — 2 frontend, 1 backend): **#22** (baseline
+  #16, audit N6) 4 unlabeled icon-only buttons across rider-app/driver-app now
+  have `accessibilityLabel`s; driver-app `settings.tsx`'s shared
+  `renderToggle()` helper now has `accessibilityRole="switch"` +
+  `accessibilityState={{checked}}` — an additive fix to WAV plus the other 8
+  toggles the same helper backs; the admin document-reviewer modal's
+  remaining gap (focus-trap-in/restore-out) is now closed, with Tab/Shift+Tab
+  cycling and no new dependency (none existed, hand-implemented). See
+  `docs/change-log/2026-08-19-icon-buttons-wav-toggle-focus-trap-fix.md`.
+  **#23** (baseline #17, audit N7) all off-brand teal instances — driver
+  `(tabs)/index.tsx`, `subscription.tsx` (N7's 3rd instance), plus 2 more
+  found via grepping the same literal color value in `driver-arriving.tsx`
+  and `ride-options.tsx` (neither named in the audit) — now reuse
+  `CustomAlert.tsx`'s already-fixed color tokenization instead of an ad hoc
+  value; `payment-confirm.tsx` now renders a distinct "Couldn't load your
+  cards — Tap to retry" state, mutually exclusive with the genuine
+  empty-cards state, matching the existing retry pattern in `referral.tsx`.
+  A much broader, unrelated Tailwind-emerald palette used elsewhere was
+  deliberately left untouched (out of scope per the fix's own scoping),
+  flagged as a follow-up candidate. See
+  `docs/change-log/2026-08-19-off-brand-teal-payment-error-state-fix.md`.
+  **#25** (audit N10) the driver-location-write path's (tightest 150ms SLA
+  budget in the system) duplicate DB fetch — actually in the legacy v1
+  handler, not exactly where the audit's line numbers pointed after this
+  session's earlier GPS-plausibility-check work moved things around — is
+  now eliminated: the second `drivers` row fetch (used only to check
+  `is_online` before `mark_present`) reuses the row already fetched earlier
+  in the same request, since nothing writes `is_online` between the two
+  reads. Verified via a call-count assertion (exactly one fetch instead of
+  two), not a live timing measurement — no load-test harness available in
+  this sandbox, stated explicitly. See
+  `docs/change-log/2026-08-19-location-write-duplicate-fetch-fix.md`. All 3
+  independently tested: backend targeted + regression suites via
+  `/tmp/spinr-venv/bin/pytest`, ruff clean; real Jest/Vitest full-suite runs
+  for all 3 frontend surfaces (driver-app 558/558, rider-app 532/532,
+  admin-dashboard 329/329) plus a real production `npm run build` for the
+  admin-dashboard change, per CLAUDE.md's explicit requirement.
   Full ranked blocker register (30 items) and decision log (10 items, each
   with a suggested owner/due date) are in the audit doc — see there before
   re-deriving. Verdict at time of the 08-18 audit run: **FIX BLOCKERS** (17

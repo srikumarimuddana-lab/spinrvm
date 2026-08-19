@@ -586,20 +586,22 @@ function createStyles(colors: ThemeColors) {
     empty: { alignItems: 'center', paddingVertical: 40 },
     emptyText: { fontSize: 15, color: colors.textSecondary, marginTop: 12 },
 
-    // Free mode celebration card
+    // Free mode celebration card — reuses the brand success token
+    // (colors.success / colors.successBg), same convention CustomAlert.tsx
+    // established, instead of an ad hoc Tailwind-emerald palette.
     freeCard: {
-      backgroundColor: '#ECFDF5', marginHorizontal: 16, marginTop: 8,
+      backgroundColor: colors.successBg, marginHorizontal: 16, marginTop: 8,
       borderRadius: 20, padding: 28, alignItems: 'center',
-      borderWidth: 1.5, borderColor: '#A7F3D0',
+      borderWidth: 1.5, borderColor: `${colors.success}55`,
     },
     freeEmoji: { fontSize: 48, marginBottom: 12 },
-    freeTitle: { fontSize: 22, fontWeight: '800', color: '#065F46', marginBottom: 8 },
-    freeMessage: { fontSize: 15, color: '#047857', textAlign: 'center', lineHeight: 22, marginBottom: 16 },
+    freeTitle: { fontSize: 22, fontWeight: '800', color: colors.success, marginBottom: 8 },
+    freeMessage: { fontSize: 15, color: colors.success, textAlign: 'center', lineHeight: 22, marginBottom: 16 },
     freeBadge: {
       flexDirection: 'row', alignItems: 'center', gap: 6,
-      backgroundColor: '#D1FAE5', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 12,
+      backgroundColor: colors.successBg, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 12,
     },
-    freeBadgeText: { fontSize: 13, fontWeight: '700', color: '#065F46' },
+    freeBadgeText: { fontSize: 13, fontWeight: '700', color: colors.success },
 
     // Payment history
     paymentRow: {

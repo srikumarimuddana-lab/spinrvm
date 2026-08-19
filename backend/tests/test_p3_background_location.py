@@ -148,6 +148,52 @@ class TestUpdateLocationBatch:
         _, query, _ = updates[0]
         assert query.get("user_id") == DRIVER_USER_ID
 
+    async def test_single_driver_row_fetch_online_driver(self):
+        """Ranked #25 / audit N10: the v1 location-write path must fetch the
+        driver row from `drivers` exactly once per request, not twice
+        sequentially, on the tightest SLA budget in the system (<150ms
+        driver-location write). Previously this handler re-fetched the same
+        `{"user_id": ...}` row a second time immediately before the
+        mark_present() presence-refresh call, even though the first fetch's
+        `is_online` value was still valid (nothing between the two reads
+        writes that column)."""
+        from backend.routes.drivers import update_location_batch
+
+        driver_row = {
+            "id": "driver_row_id_1",
+            "user_id": DRIVER_USER_ID,
+            "is_online": True,
+            "period1_accum_km": 0,
+        }
+        get_rows_calls = []
+
+        async def fake_get_rows(table, filters, **kwargs):
+            get_rows_calls.append((table, filters))
+            if table == "drivers":
+                return [driver_row]
+            return []
+
+        mark_present = AsyncMock()
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock()),
+            patch("backend.routes.drivers._deps.mark_present", mark_present),
+            patch("utils.location_integrity.redis_get", AsyncMock(return_value=None)),
+        ):
+            result = await update_location_batch(
+                batch=[_point()],
+                current_user={"id": DRIVER_USER_ID},
+            )
+
+        assert result["success"] is True
+        drivers_fetches = [c for c in get_rows_calls if c[0] == "drivers"]
+        assert len(drivers_fetches) == 1, (
+            f"expected exactly one `drivers` fetch, got {len(drivers_fetches)}: {drivers_fetches}"
+        )
+        # Behavior unchanged: presence is still refreshed for an online driver.
+        mark_present.assert_awaited_once_with("driver_row_id_1")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Native background location permission — requires real device

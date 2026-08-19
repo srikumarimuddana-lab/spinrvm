@@ -575,9 +575,16 @@ async def update_location_batch(
         # Keep presence alive even when the driver's WebSocket briefly
         # drops but the REST location batch keeps flowing (e.g. phone on
         # cellular switching towers).
-        driver_row = (lambda _r: _r[0] if _r else None)(
-            await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
-        )
+        #
+        # Reuses `driver_row` fetched above (~line 525) instead of issuing a
+        # second `drivers` fetch for the same `user_id` in this same
+        # sequential await chain (ranked #25 / audit N10 — driver-location
+        # write is the tightest SLA budget in the system at <150ms). Safe
+        # because the only field read here is `is_online`, and the sole
+        # write to this row between the two points (`update_one` just
+        # above) only ever touches lat/lng/updated_at/heading/
+        # period1_accum_* -- never `is_online` -- so a second read could not
+        # observe a different value than the first.
         if driver_row and driver_row.get("is_online"):
             await _deps.mark_present(driver_row["id"])
 

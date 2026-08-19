@@ -56,6 +56,8 @@ export default function ReportSafetyScreen() {
                 <TouchableOpacity
                     style={styles.backButton}
                     onPress={() => router.back()}
+                    accessibilityRole="button"
+                    accessibilityLabel="Go back"
                 >
                     <Ionicons name="arrow-back" size={24} color={colors.text} />
                 </TouchableOpacity>

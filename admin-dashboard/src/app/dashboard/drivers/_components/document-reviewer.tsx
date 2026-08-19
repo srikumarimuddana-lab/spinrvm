@@ -98,6 +98,10 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
     const [notify, setNotify] = useState(true);
     const reasonRef = useRef<HTMLTextAreaElement>(null);
     const [downloading, setDownloading] = useState(false);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    // The element focused just before the modal opened, so we can hand
+    // focus back to it on close (e.g. the driver row's "Review" button).
+    const previouslyFocusedRef = useRef<Element | null>(null);
 
     const current = docs[index];
 
@@ -193,6 +197,28 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
         if (!open) return;
         const handler = (e: KeyboardEvent) => {
             if (e.key === "Escape") { onClose(); return; }
+            if (e.key === "Tab") {
+                // Focus-trap: keep Tab/Shift+Tab cycling within the modal
+                // instead of leaking focus out to the page behind it.
+                const root = dialogRef.current;
+                if (!root) return;
+                const focusable = Array.from(
+                    root.querySelectorAll<HTMLElement>(
+                        'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+                    ),
+                ).filter((el) => el.offsetParent !== null);
+                if (focusable.length === 0) return;
+                const first = focusable[0];
+                const last = focusable[focusable.length - 1];
+                if (e.shiftKey && document.activeElement === first) {
+                    e.preventDefault();
+                    last.focus();
+                } else if (!e.shiftKey && document.activeElement === last) {
+                    e.preventDefault();
+                    first.focus();
+                }
+                return;
+            }
             const tag = (document.activeElement?.tagName || "").toLowerCase();
             if (tag === "input" || tag === "textarea" || tag === "select") return;
             const k = e.key.toLowerCase();
@@ -213,12 +239,42 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
         return () => document.removeEventListener("keydown", handler);
     }, [open, onClose, goNext, goPrev, current?.status, mode, submit]);
 
+    // Focus-trap-in / focus-restore-out: move focus into the modal when it
+    // opens (screen-reader users otherwise stay anchored on the trigger
+    // behind an aria-modal dialog) and hand it back to whatever triggered
+    // the modal once it closes, so keyboard/AT users aren't dropped back at
+    // the top of the page.
+    useEffect(() => {
+        if (!open) return;
+        previouslyFocusedRef.current = document.activeElement;
+        const id = window.setTimeout(() => {
+            const root = dialogRef.current;
+            if (!root) return;
+            const firstFocusable = root.querySelector<HTMLElement>(
+                'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+            );
+            (firstFocusable ?? root).focus();
+        }, 0);
+        return () => {
+            window.clearTimeout(id);
+            const toRestore = previouslyFocusedRef.current;
+            if (toRestore instanceof HTMLElement) toRestore.focus();
+        };
+    }, [open]);
+
     const counter = useMemo(() => (docs.length ? `${index + 1} of ${docs.length}` : "0 of 0"), [docs.length, index]);
 
     if (!open) return null;
 
     return (
-        <div className="fixed inset-0 z-[100] bg-background/95 backdrop-blur-sm flex flex-col" role="dialog" aria-modal="true" aria-label="Document reviewer">
+        <div
+            ref={dialogRef}
+            tabIndex={-1}
+            className="fixed inset-0 z-[100] bg-background/95 backdrop-blur-sm flex flex-col outline-none"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Document reviewer"
+        >
             <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-border bg-card">
                 <div className="flex items-center gap-3 min-w-0">
                     <FileText className="h-5 w-5 text-muted-foreground shrink-0" />

@@ -6,6 +6,8 @@ rides; per-ride empty-before gap; Regina day boundaries.
 
 from datetime import date, datetime, timezone
 
+import pytest
+
 from backend.utils.driver_activity import build_daily_activity, regina_day_bounds_utc
 
 # Regina day 2026-06-01 → [06:00Z, next 06:00Z) since SK is UTC-6 (no DST).
@@ -100,3 +102,68 @@ def test_per_ride_phases_km_and_empty_before():
     assert trip["km"] == 8.0 and trip["seconds"] == 1440
     # r2 accepted 15:00, prior ride completed 14:40 → 1200s empty between rides
     assert r2["empty_before_seconds"] == 1200
+
+
+# ---------------------------------------------------------------------------
+# Endpoint: closed days merge the rollup's GPS-derived summary
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_closed_day_merges_rollup_gps_summary():
+    """A closed Regina day with a day_tz='regina' stats row gains gps_km /
+    gps_seconds (incl. Period-1 roaming, invisible to per-ride phase data)
+    and is labeled day_source='rollup'. The live per-ride list is untouched."""
+    from unittest.mock import AsyncMock, patch
+
+    try:
+        from backend.routes.admin import drivers as drivers_mod
+    except ImportError:
+        from routes.admin import drivers as drivers_mod  # type: ignore
+
+    async def _get_rows(table, filters=None, **kw):
+        if table == "driver_insurance_periods":
+            return []
+        if table == "rides":
+            return []
+        if table == "driver_daily_stats":
+            assert filters["day_tz"] == "regina"
+            return [
+                {
+                    "idle_km": 12.3,
+                    "navigating_km": 4.0,
+                    "trip_km": 30.0,
+                    "total_km": 46.3,
+                    "idle_seconds": 3600,
+                    "navigating_seconds": 900,
+                    "trip_seconds": 5400,
+                }
+            ]
+        raise AssertionError(f"unexpected table {table}")
+
+    with patch.object(drivers_mod.db_supabase, "get_rows", AsyncMock(side_effect=_get_rows)):
+        report = await drivers_mod.admin_driver_daily_activity(
+            driver_id="drv-1", date="2026-06-01", admin_user={"email": "a@spinr.ca"}
+        )
+
+    assert report["day_source"] == "rollup"
+    assert report["summary"]["gps_km"]["idle"] == 12.3
+    assert report["summary"]["gps_seconds"]["trip"] == 5400
+
+
+@pytest.mark.asyncio
+async def test_closed_day_without_regina_row_stays_live():
+    from unittest.mock import AsyncMock, patch
+
+    try:
+        from backend.routes.admin import drivers as drivers_mod
+    except ImportError:
+        from routes.admin import drivers as drivers_mod  # type: ignore
+
+    with patch.object(drivers_mod.db_supabase, "get_rows", AsyncMock(return_value=[])):
+        report = await drivers_mod.admin_driver_daily_activity(
+            driver_id="drv-1", date="2026-06-01", admin_user={"email": "a@spinr.ca"}
+        )
+
+    assert report["day_source"] == "live"
+    assert "gps_km" not in report["summary"]

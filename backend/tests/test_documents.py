@@ -520,6 +520,46 @@ class TestDocumentRegressions:
         )
 
     @pytest.mark.asyncio
+    async def test_supersede_prior_docs_logs_error_not_warning_on_db_failure(self):
+        """Audit finding #13/#19 (2026-08-18 fleet audit): a failed supersede
+        write must surface loudly (logger.error + full exception), not be
+        silently swallowed with logger.warning — the same class N13 already
+        fixed for routes/drivers/ride_cancel.py's auth_status write. Left
+        unfixed, a driver's prior "approved"/"pending" docs stay active
+        after a re-upload with no signal anything went wrong.
+
+        documents.py logs via loguru (not stdlib logging), which pytest's
+        caplog does not capture — patch documents.logger directly instead,
+        same approach this module needs for any loguru call site.
+        """
+        from documents import _supersede_and_flag_pending_review
+
+        async def failing_update_one(*args, **kwargs):
+            raise RuntimeError("db unavailable")
+
+        with (
+            patch("documents.db_supabase.update_one", AsyncMock(side_effect=failing_update_one)),
+            patch("documents.logger") as mock_logger,
+        ):
+            # flag_review=False returns right after the supersede attempt, so
+            # this exercises only the code path under test.
+            await _supersede_and_flag_pending_review(
+                driver_id="driver_1",
+                requirement_id="license_front",
+                side=None,
+                document_type="license",
+                flag_review=False,
+            )
+
+        assert mock_logger.warning.call_count == 0, (
+            "Should no longer log at WARNING level on this failure — see finding #13/#19"
+        )
+        mock_logger.error.assert_called_once()
+        error_args, error_kwargs = mock_logger.error.call_args
+        assert "driver_1" in error_args
+        assert error_kwargs.get("exc_info") is True, "full exception traceback must be attached"
+
+    @pytest.mark.asyncio
     async def test_get_driver_documents_no_driver_returns_empty_list(self):
         """Regression: GET /drivers/documents must return [] (not 404) when the
         authenticated user has no driver profile yet.

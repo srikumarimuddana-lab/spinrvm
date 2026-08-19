@@ -312,6 +312,20 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   re-verified together: full backend suite after integration —
   **12,177 passed, 8 skipped, 1 xfailed, 0 failed** (up from the 12,159
   pre-fix baseline, +18 new tests across the 6 fixes).
+  **FIXED 2026-08-19**: finding #13/#19's still-open twin — the identical
+  swallowed-DB-error pattern N13 (above) fixed in `ride_cancel.py` also
+  existed in `_supersede_and_flag_pending_review`
+  (`backend/documents.py`), unfixed by that pass since it's a different
+  file. Same remedy: `logger.error(..., exc_info=True)` with
+  `e.details["original"]` when available, replacing the swallowed
+  `logger.warning`. No behavior change beyond the log — still doesn't
+  re-raise, all 3 callers (2 in `documents.py`, 1 in
+  `routes/admin/documents.py`) unaffected. New regression test asserts
+  `logger.error` fires (not `.warning`) with `exc_info=True`; had to patch
+  `documents.logger` directly rather than use `caplog`, since this module
+  logs via loguru (not stdlib `logging`), which `caplog` doesn't capture.
+  `pytest tests/test_documents.py -q --no-cov` → 48 passed. See
+  `docs/change-log/2026-08-19-documents-supersede-error-swallow-fix.md`.
   Full ranked blocker register (30 items) and decision log (10 items, each
   with a suggested owner/due date) are in the audit doc — see there before
   re-deriving. Verdict at time of the 08-18 audit run: **FIX BLOCKERS** (17

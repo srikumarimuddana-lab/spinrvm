@@ -375,8 +375,10 @@ async def get_dashboard_overview(
 
     try:
         from ... import db_supabase as _dbs
+        from ...utils.legacy_rides import EXCLUDE_LEGACY_RIDES
     except ImportError:
         import db_supabase as _dbs  # type: ignore
+        from utils.legacy_rides import EXCLUDE_LEGACY_RIDES  # type: ignore
 
     start, end = _dashboard_window(range)
     start_iso, end_iso = start.isoformat(), end.isoformat()
@@ -385,6 +387,23 @@ async def get_dashboard_overview(
     def _in_range(extra: Optional[dict] = None) -> dict:
         f: dict = {"$and": [{"created_at": {"$gte": start_iso}}, {"created_at": {"$lte": end_iso}}]}
         return {**extra, **f} if extra else f
+
+    def _rides_in_range(extra: Optional[dict] = None) -> dict:
+        # rides_total / the per-status breakdown must exclude legacy-imported
+        # rides — same predicate as admin_ride_money_rollup (migration 302)
+        # and admin_dashboard_money's money sums below. A legacy ride's
+        # created_at is its true historical old-app date
+        # (booking_import_service.py), so it sits inside a 7d/24h window for
+        # as long as that date is recent — the homepage's own ride-count
+        # cards double-counted the same 186 rows the money side was already
+        # fixed for, undetected until this session's migration-data audit
+        # (docs/audit/2026-08-19-full-mongodb-export-collection-inventory.md).
+        # Reuses EXCLUDE_LEGACY_RIDES — the same shared predicate
+        # routes/drivers/earnings.py, routes/admin/rides.py, and others
+        # already use — instead of a duplicated inline literal, so a future
+        # change to the predicate's form (as happened for A26) only needs
+        # updating in one place.
+        return {**_in_range(extra), **EXCLUDE_LEGACY_RIDES}
 
     _count = _dbs.count_documents
 
@@ -406,9 +425,9 @@ async def get_dashboard_overview(
         _count("drivers", _in_range(area)),
         _count("users", {"role": "rider"}),
         _count("users", _in_range({"role": "rider"})),
-        _count("rides", _in_range(area)),
+        _count("rides", _rides_in_range(area)),
         _count("rides", {**area, "status": {"$in": _DASH_ACTIVE_STATUSES}}),
-        *[_count("rides", _in_range({**area, "status": s})) for s in _DASH_BREAKDOWN_STATUSES],
+        *[_count("rides", _rides_in_range({**area, "status": s})) for s in _DASH_BREAKDOWN_STATUSES],
     )
     breakdown = {s: int(bd_counts[i] or 0) for i, s in enumerate(_DASH_BREAKDOWN_STATUSES)}
 

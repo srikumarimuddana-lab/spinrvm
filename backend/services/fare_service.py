@@ -265,7 +265,18 @@ def driver_earnings_with_tip(ride: Dict[str, Any], tip_amount: Any) -> Decimal:
     this instead of reading and incrementing the existing column. It is
     naturally idempotent: calling it twice with the same ride+tip produces
     the same answer, so call order and staleness stop mattering.
+
+    Refuses a legacy-imported ride outright. ``total_fare``/``base_fare`` on
+    those rows are a receipt-display reconstruction (booking_import_service.py),
+    not real fare components — ``total_fare - admin_earnings`` there
+    algebraically equals the OLD app's admin commission, not a minimum-fare
+    uplift, so this formula would silently inflate driver_earnings by that
+    commission. rating.py and add_tip both already reject a tip on a legacy
+    ride before reaching here; this is the belt-and-suspenders stop for
+    whatever future call site doesn't remember to check first.
     """
+    if ride.get("legacy_import_metadata"):
+        raise ValueError("driver_earnings_with_tip is not valid for a legacy-imported ride")
     # fare_service._d has no None/""-guard by design (its other callers only
     # ever pass already-defaulted fare_info values) — this function reads
     # directly from a `rides` row instead, where NULL/missing is routine, so

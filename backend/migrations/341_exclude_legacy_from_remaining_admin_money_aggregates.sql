@@ -1,5 +1,14 @@
 -- 341_exclude_legacy_from_remaining_admin_money_aggregates.sql
 --
+-- migration-override-ok: intentional CREATE OR REPLACE of three existing
+-- functions — public.admin_earnings_overview_agg (last defined in migration
+-- 227, originally 163), public.admin_earnings_daily_series (163),
+-- admin_dashboard_money (194) — to add the legacy-ride exclusion predicate,
+-- exactly the same amendment pattern migrations 302/303 already used for
+-- admin_ride_money_rollup/admin_payouts_overview_aggregates. Not an
+-- accidental redefinition collision; see Purpose below for the full
+-- rationale.
+--
 -- Purpose:
 --   Found in this session's legacy-migration data-quality audit
 --   (docs/audit/2026-08-19-full-mongodb-export-collection-inventory.md and

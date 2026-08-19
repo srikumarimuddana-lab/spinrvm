@@ -241,7 +241,10 @@ async def get_ride(ride_id: str, *, include_route: bool = False) -> Optional[Dic
                 from settings_loader import get_app_settings  # type: ignore
             include_pickup_leg = bool(((await get_app_settings()) or {}).get("rider_show_pickup_leg_enabled", False))
         except Exception:
-            logger.warning("rider pickup-leg flag read failed; defaulting off")
+            # Fail-safe direction: trip-only contract. Still ERROR with the
+            # underlying exception — a settings read failing on the ride
+            # detail path must surface loudly (CLAUDE.md: never silently swallow).
+            logger.exception("rider pickup-leg flag read failed; defaulting off")
         await _project_route_detail(ride, route, include_pickup_leg=include_pickup_leg)
     return ride
 

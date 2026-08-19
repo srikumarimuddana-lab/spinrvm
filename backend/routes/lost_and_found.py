@@ -17,26 +17,37 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from loguru import logger
 from pydantic import BaseModel, Field
 
 try:
     from .. import db_supabase
     from ..dependencies import get_current_user
+    from ..documents import _extract_signed_url, _resolve_upload_type, read_upload_capped
     from ..features import send_push_notification
     from ..services.zoho_desk_integration import create_ticket_for_lost_and_found
+    from ..supabase_client import supabase
     from ..utils.error_handling import DuplicateRecordError
 except ImportError:
     import db_supabase  # type: ignore
     from dependencies import get_current_user  # type: ignore
+    from documents import _extract_signed_url, _resolve_upload_type, read_upload_capped  # type: ignore
     from features import send_push_notification  # type: ignore
     from services.zoho_desk_integration import create_ticket_for_lost_and_found  # type: ignore
+    from supabase_client import supabase  # type: ignore
     from utils.error_handling import DuplicateRecordError  # type: ignore
 
 api_router = APIRouter(prefix="/lost-and-found", tags=["Lost & Found"])
 
 _VALID_CATEGORIES = {"electronics", "clothing", "bag", "document", "keys", "other"}
+
+# Item photos get their own private bucket (migration 339) rather than reusing
+# driver-documents: that bucket holds driver identity documents, and putting
+# rider-visible item photos beside licences and insurance slips widens who can
+# be handed a signed URL into that namespace.
+_LF_BUCKET = "lost-and-found"
+_LF_SIGNED_URL_TTL_SECONDS = 3600
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +92,75 @@ async def _push_safe(user_id: str, title: str, body: str, data: dict, target_app
         await send_push_notification(user_id, title, body, data, target_app=target_app)
     except Exception:
         logger.opt(exception=True).error("lost_and_found push failed user={} target_app={}", user_id, target_app)
+
+
+async def _notify_counterparty(case: dict, case_id: str, is_driver_sender: bool, body: str) -> None:
+    """Push the *other* party on the case after a chat message.
+
+    Shared by the text and image message endpoints so the two can never drift
+    on who gets notified or which app the push is routed to.
+    """
+    if is_driver_sender:
+        notify_id = case.get("rider_user_id") or case.get("reporter_id")
+        if notify_id:
+            await _push_safe(
+                notify_id,
+                "Lost & Found",
+                body,
+                {"type": "lost_and_found_message", "case_id": case_id},
+                target_app="rider",
+            )
+        return
+
+    driver_user_id = None
+    if case.get("driver_id"):
+        d = await db_supabase.get_rows("drivers", {"id": case["driver_id"]}, limit=1)
+        if d:
+            driver_user_id = d[0].get("user_id")
+    if driver_user_id:
+        await _push_safe(
+            driver_user_id,
+            "Lost & Found",
+            body,
+            {"type": "lost_and_found_message", "case_id": case_id},
+            target_app="driver",
+        )
+
+
+async def _sign_message_images(rows: list) -> list:
+    """Attach a short-lived signed ``image_url`` to any row carrying an image_key.
+
+    The bucket is private, so the stored key is useless to a client on its own.
+    Signing happens per read rather than at write time because a signed URL
+    expires — persisting one would leave dead links in the thread within hours.
+
+    A signing failure degrades that one message to text-only rather than
+    failing the whole thread: the rest of the conversation still loads. The
+    error is logged at error level, not swallowed silently.
+    """
+    if not rows or not supabase:
+        return rows
+
+    targets = [row for row in rows if row.get("image_key")]
+    if not targets:
+        return rows
+
+    async def _sign(row: dict) -> None:
+        key = row["image_key"]
+        try:
+            res = await db_supabase.run_sync(
+                lambda k=key: supabase.storage.from_(_LF_BUCKET).create_signed_url(k, _LF_SIGNED_URL_TTL_SECONDS)
+            )
+            row["image_url"] = _extract_signed_url(res)
+        except Exception:
+            logger.opt(exception=True).error("lost_and_found: could not sign image for message={}", row.get("id"))
+
+    # Signed concurrently, not in a loop: a 50-message thread that the chat
+    # screen re-polls every 10s would otherwise pay 50 sequential storage
+    # round-trips per poll (the N+1 read pattern CLAUDE.md calls out).
+    # return_exceptions keeps one bad key from cancelling its siblings.
+    await asyncio.gather(*(_sign(row) for row in targets), return_exceptions=True)
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -338,7 +418,7 @@ async def list_messages(
         desc=True,
         limit=limit,
     )
-    return {"messages": list(reversed(rows))}
+    return {"messages": await _sign_message_images(list(reversed(rows)))}
 
 
 class SendMessageRequest(BaseModel):
@@ -373,30 +453,95 @@ async def send_message(
         },
     )
 
-    # Push the other party
-    if is_driver_sender:
-        notify_id = case.get("rider_user_id") or case.get("reporter_id")
-        if notify_id:
-            await _push_safe(
-                notify_id,
-                "Lost & Found",
-                req.message.strip(),
-                {"type": "lost_and_found_message", "case_id": case_id},
-                target_app="rider",
-            )
-    else:
-        driver_user_id = None
-        if case.get("driver_id"):
-            d = await db_supabase.get_rows("drivers", {"id": case["driver_id"]}, limit=1)
-            if d:
-                driver_user_id = d[0].get("user_id")
-        if driver_user_id:
-            await _push_safe(
-                driver_user_id,
-                "Lost & Found",
-                req.message.strip(),
-                {"type": "lost_and_found_message", "case_id": case_id},
-                target_app="driver",
-            )
+    await _notify_counterparty(case, case_id, is_driver_sender, req.message.strip())
 
     return {"success": True, "message": msg}
+
+
+# ---------------------------------------------------------------------------
+# Image attachments
+# ---------------------------------------------------------------------------
+
+
+@api_router.post("/{case_id}/messages/image")
+async def send_message_image(
+    case_id: str,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """Attach a photo of the item to the case chat.
+
+    A photo of what was actually found is the most useful evidence for a rider
+    identifying their property, so this is a first-class message type rather
+    than a support-only attachment: it lands in the same thread, in order,
+    visible to both parties.
+
+    The image is stored in a PRIVATE bucket and the row keeps only the object
+    key — reads mint a short-lived signed URL (see _sign_message_images).
+    """
+    user_id = current_user["id"]
+    driver = await _driver_for_user(user_id)
+    case = await _require_participant(case_id, user_id, driver["id"] if driver else None)
+
+    if case.get("status") in ("not_found", "returned", "resolved", "unresolved", "closed"):
+        raise HTTPException(status_code=400, detail="This case is closed")
+
+    # read_upload_capped enforces the 10 MB ceiling while reading, so an
+    # oversized body is never fully buffered.
+    content = await read_upload_capped(file)
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    # The bytes are authoritative, not the client's declared content-type —
+    # expo-image-picker labels everything image/jpeg. This also raises an
+    # actionable 400 for HEIC rather than storing something unrenderable.
+    content_type, ext = _resolve_upload_type(content, file.content_type or "application/octet-stream")
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Only image attachments are supported")
+
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Storage unavailable")
+
+    # Key is namespaced by case so a case's objects can be located (and purged)
+    # without a DB round-trip. The original filename is never used — it
+    # routinely carries personal detail and is not needed to serve the object.
+    storage_key = f"{case_id}/{uuid.uuid4()}{ext}"
+
+    try:
+        await db_supabase.run_sync(
+            lambda: supabase.storage.from_(_LF_BUCKET).upload(
+                file=content,
+                path=storage_key,
+                file_options={"content-type": content_type},
+            )
+        )
+    except Exception as exc:
+        # Do not soften this into a "message sent without image" success — the
+        # driver would believe the rider can see the item photo when they
+        # cannot. Surface it so the client can retry.
+        logger.opt(exception=True).error("lost_and_found image upload failed case={} key={}", case_id, storage_key)
+        raise HTTPException(status_code=502, detail="Could not store the image. Please try again.") from exc
+
+    is_driver_sender = bool(driver and case.get("driver_id") == driver["id"])
+    sender_role = "driver" if is_driver_sender else "rider"
+
+    msg = await db_supabase.insert_one(
+        "lost_and_found_messages",
+        {
+            "id": str(uuid.uuid4()),
+            "lost_and_found_id": case_id,
+            "sender_id": user_id,
+            "sender_role": sender_role,
+            # Image-only message: the CHECK constraint added in migration 339
+            # permits an empty message precisely when image_key is present.
+            "message": "",
+            "image_key": storage_key,
+            "image_mime": content_type,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+    await _notify_counterparty(case, case_id, is_driver_sender, "Sent a photo")
+
+    signed = await _sign_message_images([msg] if msg else [])
+    return {"success": True, "message": signed[0] if signed else msg}

@@ -28,7 +28,21 @@ const MOCK_INCIDENT = {
   reporter_name: 'Jane Rider',
 };
 
-async function mockSafety(page: any) {
+// 1x1 transparent GIF — a real, instantly-decodable image so the thumbnail
+// actually renders without reaching the network.
+const PIXEL =
+  'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+// Two photos on purpose: one that signed fine, one whose signed URL failed to
+// mint (url: null). The second must still render a tile — dropping it would
+// tell a reviewer no evidence exists when it does, which is the exact silent
+// -loss failure the evidence-photo work was built to fix.
+const MOCK_PHOTOS = [
+  { id: 'photo_e2e_1', content_type: 'image/jpeg', created_at: '2026-07-20T10:01:00Z', url: PIXEL },
+  { id: 'photo_e2e_2', content_type: 'image/jpeg', created_at: '2026-07-20T10:02:00Z', url: null },
+];
+
+async function mockSafety(page: any, opts: { photos?: unknown[] } = {}) {
   await setupAdminMocks(page, {
     extra: async (route, url, method, json) => {
       if (url.match(/\/safety\/incidents\/incident_e2e_1(?:[/?]|$)/)) {
@@ -36,6 +50,7 @@ async function mockSafety(page: any) {
           incident: MOCK_INCIDENT,
           reporter: { id: 'user_e2e_1', name: 'Jane Rider', email: 'jane@example.com', phone: '+13065550100', role: 'rider' },
           ride: null,
+          ...(opts.photos !== undefined ? { photos: opts.photos } : {}),
         });
       }
       if (method === 'PATCH' && url.includes('/safety/incidents/')) {
@@ -102,5 +117,45 @@ test.describe('admin dashboard: safety — interaction', () => {
     await expect(closeBtn).toBeVisible();
     await closeBtn.click();
     await expect(page.getByPlaceholder(/Visible to other admins/i)).not.toBeVisible();
+  });
+
+  test('evidence photos render, and an unsignable one still shows a tile', async ({ page }) => {
+    await mockSafety(page, { photos: MOCK_PHOTOS });
+    await page.goto('/dashboard/safety');
+    await page.getByText('Jane Rider').click();
+
+    // Count reflects ALL attached photos, including the one that could not
+    // be signed — a reviewer must know two exist.
+    await expect(page.getByText('Evidence photos (2)')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('button', { name: /Open evidence photo 1 of 1/i })).toBeVisible();
+    await expect(page.getByText('Preview unavailable')).toBeVisible();
+  });
+
+  test('clicking an evidence thumbnail opens the lightbox', async ({ page }) => {
+    await mockSafety(page, { photos: MOCK_PHOTOS });
+    await page.goto('/dashboard/safety');
+    await page.getByText('Jane Rider').click();
+
+    await page.getByRole('button', { name: /Open evidence photo 1 of 1/i }).click();
+    await expect(page.getByText('Evidence photo 1 of 1')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('link', { name: /Open full size/i })).toBeVisible();
+  });
+
+  test('no evidence section when the incident has no photos', async ({ page }) => {
+    await mockSafety(page, { photos: [] });
+    await page.goto('/dashboard/safety');
+    await page.getByText('Jane Rider').click();
+    await expect(page.getByPlaceholder(/Visible to other admins/i)).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText(/Evidence photos/i)).not.toBeVisible();
+  });
+
+  test('detail sheet still renders when the backend omits photos entirely', async ({ page }) => {
+    // A backend deployed before migration 335 returns no `photos` key at all.
+    // The drawer must not blow up on the undefined.
+    await mockSafety(page);
+    await page.goto('/dashboard/safety');
+    await page.getByText('Jane Rider').click();
+    await expect(page.getByPlaceholder(/Visible to other admins/i)).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText(/Evidence photos/i)).not.toBeVisible();
   });
 });

@@ -7,6 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StripeProvider } from '@stripe/stripe-react-native';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafetySheetHost } from '../components/SafetySheetHost';
 import * as Updates from 'expo-updates';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import NetInfo from '@react-native-community/netinfo';
@@ -962,6 +963,10 @@ function RootLayoutInner({
             buttons={confirmSheet.buttons}
             onClose={() => setConfirmSheet(prev => ({ ...prev, visible: false }))}
           />
+          {/* Root-mounted so the Safety panel escapes the map's
+              absolutely-positioned SOS overlay — see
+              store/safetySheetStore.ts. Same placement as ConfirmSheet/Toast. */}
+          <SafetySheetHost />
           <Toast />
         </SafeAreaProvider>
       </GestureRootWrapper>

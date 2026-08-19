@@ -1,5 +1,20 @@
 # Change Impact & Risk Log — Legacy driver SIN/DOB backfill from banks.csv
 
+> **Amendment (2026-08-19, same day):** `spinr-migration-reviewer`, run as part of this
+> session's broader legacy-migration data-quality audit, found a real race condition in
+> `apply_legacy_sin_dob_import` before it ever touched production: the never-clobber guarantee
+> was enforced only by the plan-time snapshot, not by the write itself, so a driver
+> self-entering their SIN via `routes/drivers/profile.py` during the batch loop could have that
+> value silently overwritten. Fixed same day, before any `--apply` run: the update now chains
+> `.is_("sin", "null")`/`.is_("date_of_birth", "null")` per field being written — the same
+> pattern `stripe_mapping_import_service.commit_plan` already uses for this exact class of race
+> — and returns the list of `old_driver_id`s whose guard didn't match (self-entry won) so the
+> caller can report them instead of assuming success. `apply_legacy_sin_dob_import` now returns
+> `list[str]` instead of `None`; the CLI script logs conflicts as warnings, safe to re-run (a
+> conflicted row is simply excluded from the next plan once its column is no longer null). 3 new
+> tests added (16 total, all pass): `test_apply_reports_conflict_and_does_not_clobber_a_concurrent_self_entry`
+> plus updated assertions on the two existing apply tests for the new return value.
+
 ## Summary
 
 | Field | Value |

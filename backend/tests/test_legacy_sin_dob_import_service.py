@@ -78,6 +78,10 @@ class _FakeQuery:
         self._filters.append(("in", col, list(vals)))
         return self
 
+    def is_(self, col, val):
+        self._filters.append(("is", col, val))
+        return self
+
     def update(self, fields):
         self._update = fields
         return self
@@ -90,6 +94,10 @@ class _FakeQuery:
             elif op == "in":
                 allowed = set(val)
                 rows = [r for r in rows if r.get(col) in allowed]
+            elif op == "is":
+                # PostgREST's .is_(col, "null") — the fake only needs the
+                # null case, which is all this module ever sends.
+                rows = [r for r in rows if r.get(col) is None]
         return rows
 
     def execute(self):
@@ -244,7 +252,8 @@ def test_apply_encrypts_sin_and_merges_metadata_without_clobbering(monkeypatch):
     fake = _install(monkeypatch, drivers=[driver])
     plan = svc.plan_legacy_sin_dob_import([_bank_row()], [_mongo_driver_row()])
 
-    svc.apply_legacy_sin_dob_import(plan, batch="test-batch-1")
+    conflicts = svc.apply_legacy_sin_dob_import(plan, batch="test-batch-1")
+    assert conflicts == []
 
     assert fake.recorder["rpc_calls"][0][0] == "encrypt_driver_pii"
     assert fake.recorder["rpc_calls"][0][1] == {"plaintext": VALID_SIN}
@@ -257,6 +266,37 @@ def test_apply_encrypts_sin_and_merges_metadata_without_clobbering(monkeypatch):
     assert updated["legacy_import_metadata"]["source"] == IMPORT_SOURCE
     assert updated["legacy_import_metadata"]["old_driver_id"] == "42"
     assert updated["legacy_import_metadata"][svc.LEGACY_BANK_SIN_DOB_SOURCE]["batch"] == "test-batch-1"
+
+
+def test_apply_reports_conflict_and_does_not_clobber_a_concurrent_self_entry(monkeypatch):
+    """A driver who self-enters their SIN via routes/drivers/profile.py
+    between plan() and apply() must win — the write-time .is_(col, "null")
+    guard, not just the plan-time snapshot, is what enforces this.
+
+    The guard covers the whole row's update in one query (both sin's and
+    date_of_birth's .is_(col, "null") checks are ANDed together when both
+    are being written), so a sin conflict skips this row's date_of_birth
+    write too this pass — safe, and self-healing: a re-plan next run sees
+    sin now on file (skips it) and date_of_birth still null (stages it
+    alone, no sin guard attached), so nothing is lost, just deferred one run."""
+    driver = _spinr_driver()
+    fake = _install(monkeypatch, drivers=[driver])
+    plan = svc.plan_legacy_sin_dob_import([_bank_row()], [_mongo_driver_row()])
+
+    # Simulate the race: the driver's own SIN entry lands after planning,
+    # before this batch's apply loop reaches their row.
+    driver["sin"] = "vault-uuid-self-entered"
+
+    conflicts = svc.apply_legacy_sin_dob_import(plan, batch="test-batch-race")
+
+    # old_driver_id here is banks.csv's driver_id (this module's own
+    # old_driver_id convention throughout), not the Spinr driver's
+    # legacy_import_metadata.old_driver_id (the numeric Saskatoon id) —
+    # two different "old id" namespaces, see the crosswalk in join_legacy_bank_sin_dob.
+    assert conflicts == ["mongo-driver-1"]
+    # self-entered value survives untouched; nothing else on the row changed
+    assert fake.store["drivers"][0]["sin"] == "vault-uuid-self-entered"
+    assert fake.store["drivers"][0]["date_of_birth"] is None
 
 
 def test_apply_refuses_when_plan_has_errors(monkeypatch):

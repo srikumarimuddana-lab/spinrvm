@@ -1063,15 +1063,31 @@ def plan_legacy_sin_dob_import(
     return plan
 
 
-def apply_legacy_sin_dob_import(plan: SinDobImportPlan, *, batch: str) -> None:
+def apply_legacy_sin_dob_import(plan: SinDobImportPlan, *, batch: str) -> list[str]:
     """Write ``plan.updates`` to ``drivers``. Idempotent: re-running after a
     partial failure only ever affects drivers still missing sin/date_of_birth,
     since ``plan_legacy_sin_dob_import`` already excludes anything on file.
+
+    Each update is guarded with ``.is_(<column>, "null")`` on exactly the
+    column(s) it writes — the same pattern
+    ``stripe_mapping_import_service.commit_plan`` already uses for this exact
+    race. The plan-time snapshot in ``plan_legacy_sin_dob_import`` only proves
+    the column was null *when planned*; without this guard, a driver who
+    self-enters their SIN via ``routes/drivers/profile.py`` during the
+    (possibly minutes-long) batch loop would have that value silently
+    overwritten by the stale plan snapshot's legacy value when this loop
+    reaches their row. A guard miss is never retried onto another row — it's
+    reported back as a conflict (0 rows matched, self-entry won) so the
+    caller can log it, never treated as success.
+
+    Returns the ``old_driver_id`` of every update whose guard didn't match
+    (self-entry won the race in between plan and apply) — empty on a clean run.
     """
     if plan.errors:
         raise RuntimeError("refusing to apply with validation errors")
 
     now_iso = datetime.now(timezone.utc).isoformat()
+    conflicts: list[str] = []
     for upd in plan.updates:
         fields: dict[str, Any] = {"updated_at": now_iso}
         plain_sin = upd.get("_plain_sin")
@@ -1088,7 +1104,16 @@ def apply_legacy_sin_dob_import(plan: SinDobImportPlan, *, batch: str) -> None:
         meta[LEGACY_BANK_SIN_DOB_SOURCE] = {"batch": batch, "imported_at": now_iso}
         fields["legacy_import_metadata"] = meta
 
-        supabase.table("drivers").update(fields).eq("id", driver_id).execute()
+        query = supabase.table("drivers").update(fields).eq("id", driver_id)
+        if plain_sin:
+            query = query.is_("sin", "null")
+        if upd.get("date_of_birth"):
+            query = query.is_("date_of_birth", "null")
+        res = query.execute()
+        if not res.data:
+            conflicts.append(upd["old_driver_id"])
+
+    return conflicts
 
 
 def print_sin_dob_report(plan: SinDobImportPlan, *, dry_run: bool) -> None:

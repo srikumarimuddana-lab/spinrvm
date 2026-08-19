@@ -103,10 +103,19 @@ def main() -> int:
     from datetime import datetime, timezone
 
     batch = args.batch or f"legacy-sin-dob-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
-    svc.apply_legacy_sin_dob_import(plan, batch=batch)
-    logger.info("applied %d update(s), batch=%s", len(plan.updates), batch)
+    conflicts = svc.apply_legacy_sin_dob_import(plan, batch=batch)
+    applied = len(plan.updates) - len(conflicts)
+    logger.info("applied %d update(s), batch=%s", applied, batch)
     for upd in plan.updates:
-        logger.info("updated driver id=%s old_driver_id=%s", upd["id"], upd["old_driver_id"])
+        if upd["old_driver_id"] not in conflicts:
+            logger.info("updated driver id=%s old_driver_id=%s", upd["id"], upd["old_driver_id"])
+    if conflicts:
+        logger.warning(
+            "%d update(s) skipped — driver self-entered sin/date_of_birth between plan and apply "
+            "(old_driver_id: %s); safe to re-run, these are excluded automatically next time",
+            len(conflicts),
+            ", ".join(conflicts),
+        )
     return 0
 
 

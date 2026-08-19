@@ -360,6 +360,7 @@ export type {
     SafetyIncident,
     SafetyIncidentListResponse,
     SafetyIncidentDetail,
+    SafetyIncidentPhoto,
     Chargeback,
     SubmitDisputeEvidenceResult,
 } from "./api/safety-disputes";

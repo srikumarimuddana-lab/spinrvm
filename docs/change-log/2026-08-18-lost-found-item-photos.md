@@ -195,9 +195,8 @@ return {"messages": await _sign_message_images(list(reversed(rows)))}
 
 ## 11. Follow-ups this change did NOT cover
 
-1. **`POST /safety/report/{id}/photo` is missing from the backend** — driver
-   safety-report photos are silently dropped by a client-side `catch {}`. A
-   safety surface losing evidence deserves its own fix and its own log entry.
-2. **`report-safety.tsx` should move to `api.post()`** now that it accepts
-   FormData; its hand-rolled `fetch()` omits the App Check header.
-3. **Storage purge for the `lost-and-found` bucket** (see above).
+1. ~~**`POST /safety/report/{id}/photo` is missing from the backend**~~ —
+   **DONE**, see `2026-08-18-safety-report-photo-endpoint.md`.
+2. ~~**`report-safety.tsx` should move to `api.post()`**~~ — **DONE**, same log.
+3. **Storage purge for the `lost-and-found` bucket** (see above). Still open —
+   and the `safety-evidence` bucket added later has the same gap.

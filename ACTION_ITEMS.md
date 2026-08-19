@@ -11370,6 +11370,102 @@ how much they de-risk a public launch._
   branches bind the same names statically via AST inspection, not by
   actually exercising both import paths at runtime.
 
+### A41. Legacy-migration data-quality audit (2026-08-19) — 5-agent sweep across backend/admin/driver-app/regulatory
+- [ ] **Status:** open — 3 live/near-live bugs found and fixed same session; a
+  larger set of design-decision-dependent gaps documented below, not fixed.
+  Triggered by a user request to audit whether the 2026-07-29 legacy import
+  is "clean and relevant" and whether it could reproduce the same class of
+  confusion as the same-day driver-earnings-tip-underpayment incident
+  (`docs/change-log/2026-08-19-driver-earnings-tip-underpayment.md` — that
+  incident itself was confirmed **unrelated** to the migration, a general
+  delta-math bug, already fixed).
+- **Method:** 5 parallel agents — `spinr-migration-reviewer` (import-pipeline
+  data integrity), `spinr-money-auditor` (legacy-ride/fare-calc risk),
+  `spinr-regulatory-compliance-checker` (PIPEDA), and two `general-purpose`
+  agents (admin-dashboard display, driver-app display).
+- **FIXED this session (3):**
+  1. **`add_tip` had no legacy-ride guard** (money-auditor, BLOCKER) — a
+     legacy-imported ride's matched rider could fire a real Stripe charge
+     for a pre-Spinr trip and inflate `driver_earnings` by the old app's
+     admin commission via the new (2026-08-19) canonical
+     `driver_earnings_with_tip()` formula, which was never designed for
+     legacy rows' `total_fare`/`base_fare` shape. `rating.py` already had
+     this guard; `payments.py`'s `add_tip` didn't.
+     `docs/change-log/2026-08-19-legacy-ride-tip-guard-and-earnings-hardening.md`.
+  2. **4 admin money aggregates missed the A25/A26/302/303 legacy-exclusion
+     fix** (admin-dashboard review agent, HIGH, live-wrong for ~1 week
+     post-cutover) — `admin_earnings_overview_agg`, `admin_earnings_daily_series`
+     (Earnings Overview page), `admin_dashboard_money` + `get_dashboard_overview`'s
+     ride counts (the dashboard **homepage**). Migration 341.
+     `docs/change-log/2026-08-19-admin-money-aggregates-legacy-exclusion.md`.
+  3. **SIN/DOB backfill race condition** (migration-reviewer, HIGH but
+     latent — caught before any `--apply` run) — `apply_legacy_sin_dob_import`'s
+     never-clobber guarantee was plan-time-snapshot-only, not write-guarded;
+     fixed with the same `.is_(col, "null")` pattern
+     `stripe_mapping_import_service.py` already established. Amendment to
+     `docs/change-log/2026-08-19-legacy-sin-dob-import.md`.
+- **STILL OPEN — regulatory (`spinr-regulatory-compliance-checker`, BLOCKER-class):**
+  - No consent basis on file for imported riders/drivers at all — not even
+    the honest "null, predates consent tracking" state the 2026-08-19
+    consent-version fix correctly gives organic pre-tracking users. This is
+    materially different: imported users never went through *any* Spinr
+    consent flow. Sharpened by the SIN/DOB backfill collecting the single
+    most sensitive PIPEDA-class field for this population. Needs a legal
+    decision (does the old app's `pages.csv` consent transfer, or is
+    re-consent required) before the SIN/DOB importer's `--apply` step runs.
+  - `driver_insurance_periods.is_reconstructed` (migration 332) is invisible
+    to `backend/scripts/compliance_export.py` — a regulator subpoena
+    response today would hand over reconstructed insurance-period data with
+    no marker distinguishing it from a contemporaneous log.
+  - 10-item ordered data-quality checklist for the Oct 30 final cutover
+    delivered by this agent — see the audit report (below) for the full list.
+- **STILL OPEN — migration data-integrity (`spinr-migration-reviewer`):**
+  - `sin_collected_at` is stamped with the backfill's own timestamp,
+    identically to self-entry — an admin viewing driver detail or the T4A-
+    filer export can't tell "driver gave us this" from "we inherited this
+    from a CSV." No `sin_source`/equivalent flag exists.
+  - Legacy rides' estimated `duration_minutes` (no `start_ride_at` in the
+    old app) carries no per-row marker once committed — flows into the
+    driver-facing Activity screen's "Total Duration" stat unflagged.
+  - No admin screen marks a **driver or rider profile record itself** as
+    legacy-imported (only ride rows have the A30 badge) — `legacy_import_metadata`
+    already reaches the frontend on every driver row, just unused.
+- **STILL OPEN — driver-app display (`general-purpose` agent):**
+  - `ActivityView.tsx`'s earnings fetch failure is silently swallowed
+    (`catch {}`) — a transient 503 renders a fully-formed "$0.00" earnings
+    screen indistinguishable from a real zero balance. **This is general,
+    not migration-specific — same failure class as the tip-underpayment
+    incident, reachable by any driver.**
+  - Client-derived "Fare" line (`totalEarnings - tips - incentives - bonuses - tax`)
+    omits `total_cancel_fees` (which backend `total_earnings` includes) and
+    clamps to exactly `$0.00` on drift — same "component totals disagree
+    with headline total" failure class as this morning's bug, just
+    client-side.
+  - Profile Vehicle card has no blank-field fallback (every other field on
+    the same screen does) — a legacy driver with unpopulated
+    make/model/color sees a visibly broken-looking row.
+  - Documents screen shows every requirement "Missing"/"UPLOAD REQUIRED"
+    for a legacy driver whose old-app document *images* were never part of
+    the export (filenames only) — no distinguishing copy from "you never
+    uploaded this."
+- **STILL OPEN — admin-dashboard display (`general-purpose` agent):**
+  - Driver list/detail renders blank name with no fallback (`users/page.tsx`
+    already has `|| email || phone`; `drivers/page.tsx` doesn't).
+  - `DriverRidesTab`'s `driverName` prop drops the fallback its sibling
+    `DriverPayoutsTab` has — produces a literally empty "Driver" table
+    column and a subject-less empty-state sentence.
+  - "No payout method" messaging can't distinguish a real onboarding gap
+    from unrecoverable migrated banking data (banks.csv has no import
+    destination — see A34/audit doc).
+- **Files:** full findings in each agent's report, synthesized in
+  `docs/audit/2026-08-19-legacy-migration-data-quality-audit.md` (agent
+  reports not separately filed — see that doc for the complete, unedited
+  per-finding detail) and `docs/runbooks/legacy-migration-playbook.md`
+  (the requested repeatable future-migration strategy for Oct 30).
+- **Acceptance:** each STILL OPEN item above either fixed with its own
+  Change Impact Log, or explicitly risk-accepted/scheduled by the product
+  owner with a dated note here.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

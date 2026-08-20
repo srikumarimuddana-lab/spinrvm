@@ -410,6 +410,7 @@ export {
     updateSubscriptionTaxConfig,
     getAuditLogs,
     getAuditLogTopActors,
+    type AuditLogEntry,
     getQuests,
     createQuest,
     updateQuest,

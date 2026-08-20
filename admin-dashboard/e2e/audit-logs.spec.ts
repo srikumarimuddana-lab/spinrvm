@@ -9,8 +9,9 @@ import { setupAdminMocks } from './admin-mocks';
 const MOCK_LOG = {
   id: 'audit_e2e_1',
   created_at: '2026-07-20T10:00:00Z',
-  user_email: 'admin@spinr.ca',
-  action: 'update_settings',
+  actor_id: 'actor_e2e_1',
+  actor_email: 'admin@spinr.ca',
+  action: 'settings_updated',
   entity_type: 'settings',
   entity_id: 'settings_1',
   details: 'Updated surge cap to 2.5',
@@ -35,7 +36,7 @@ test.describe('admin dashboard: audit-logs — interaction', () => {
   test('search box accepts typed text', async ({ page }) => {
     await mockAuditLogs(page);
     await page.goto('/dashboard/audit-logs');
-    const search = page.getByPlaceholder(/Search by user, entity, or details/i);
+    const search = page.getByPlaceholder(/Search by email, entity ID, or details/i);
     await expect(search).toBeVisible({ timeout: 20000 });
     await search.fill('surge');
     await expect(search).toHaveValue('surge');

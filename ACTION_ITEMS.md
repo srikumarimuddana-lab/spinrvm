@@ -561,11 +561,17 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   the existing `corporate_*.py` gate's pattern, refactored into a shared
   `_coverage_floor_lib.py`), with floors set just below each file's real
   2026-08-19-measured coverage — blocking further erosion without
-  retroactively failing the whole repo. **Escalation, not silently
-  patched**: `payments.py` measured **86.1%**, below its CLAUDE.md-documented
+  retroactively failing the whole repo. **Escalation raised, then closed
+  same day**: `payments.py` measured **86.1%**, below its CLAUDE.md-documented
   90% target — flagged explicitly as needing a human decision (write the
   missing tests, or revise the target), per the "Escalate, don't silently
-  ship" release gate. See
+  ship" release gate; drafted as decision-log item #4 in
+  `docs/audit/2026-08-19-decision-writeups.md` recommending the test-writing
+  path (money-arithmetic code was already fully covered — the gap was
+  idempotency/ownership/error-handler branches). Closed later the same day:
+  14 targeted unit tests (`test_payments_coverage_gap_closure.py`) raised
+  coverage to **90.16%**, crossing the target; the gate's floor updated
+  86.1%→90.16%-derived 85% to match. See
   `docs/change-log/2026-08-19-money-path-coverage-floor-gate-fix.md`. All 3
   independently tested (backend: 1447+ admin tests passed plus a full
   20-test coverage-gate suite, ruff clean, real coverage measurements taken

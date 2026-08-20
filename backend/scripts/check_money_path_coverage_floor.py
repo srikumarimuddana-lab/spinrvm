@@ -53,18 +53,24 @@ already safe in both cases: rounding measured-5 down to the nearest 5
 always lands strictly below the real measured value, whether or not that
 value happens to clear the CLAUDE.md target.
 
-`routes/payments.py` measured BELOW its 90% CLAUDE.md target (86.1%, not
-90%+) -- this is a real, pre-existing gap, not something this gate
-manufactured, and it is flagged explicitly in docs/change-log/2026-08-19-
-money-path-coverage-floor-gate-fix.md as a follow-up decision needed (write
-tests to close the gap, or revise the documented target) per CLAUDE.md's
-own "escalate, don't silently ship" release gate #9 -- this gate's floor
-for that file (80%) only stops further erosion, it does not silently
-declare the gap closed. The other 4 rows are already at/above their
-documented target. This mirrors exactly how `check_corporate_coverage_
-floor.py` was introduced only once corporate_*.py was already compliant,
-and how its 4 no-recorded-measurement rows shipped with an explicitly
-conservative, clearly-labeled starting floor rather than a guess.
+`routes/payments.py` measured BELOW its 90% CLAUDE.md target at this gate's
+introduction (86.1%, 2026-08-19) -- flagged explicitly in docs/change-log/
+2026-08-19-money-path-coverage-floor-gate-fix.md and docs/audit/2026-08-19-
+decision-writeups.md item #4 as a follow-up decision (write tests to close
+the gap, or revise the documented target) per CLAUDE.md's own "escalate,
+don't silently ship" release gate #9. That gap was closed the same day: 14
+targeted unit tests added in `test_payments_coverage_gap_closure.py` (see
+that file's docstring for exactly which branches they cover -- production
+mock-payment rejection, C-3 idempotency early-return, ownership 403/404
+checks, Stripe error-handler branches) raised measured coverage to 90.16%
+(-k payment/fare/crypto/otp run), crossing the 90% target. The floor below
+now follows the same "measured - 5, rounded down to nearest 5" convention
+as every other row -- 90.16 -> 85%, matching the "target met" rows. The
+other 4 rows are already at/above their documented target. This mirrors
+exactly how `check_corporate_coverage_floor.py` was introduced only once
+corporate_*.py was already compliant, and how its 4 no-recorded-measurement
+rows shipped with an explicitly conservative, clearly-labeled starting
+floor rather than a guess.
 
 Do not lower a floor to make a failing PR pass. If a floor is wrong
 (measured incorrectly, or the module was legitimately refactored down in
@@ -93,9 +99,10 @@ except ImportError:
 # path-coverage-floor-gate-fix.md has the full run output each row cites.
 FLOOR_MANIFEST: FloorManifest = {
     "routes/payments.py": (
-        80.0,
-        "measured 86.1% (2026-08-19, -k payment/fare/crypto/otp run); "
-        "BELOW 90% target -- see change-log follow-up, floor = measured - 5 rounded to nearest 5",
+        85.0,
+        "measured 90.16% (2026-08-19, -k payment/fare/crypto/otp run, after "
+        "test_payments_coverage_gap_closure.py closed the prior 86.1% gap); "
+        "target 90% met",
     ),
     "services/fare_service.py": (
         90.0,

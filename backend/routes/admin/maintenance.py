@@ -177,6 +177,34 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None, admin: di
 # ============================================================
 
 
+async def _resolve_actor_emails(actor_ids: list) -> Dict[str, str]:
+    """Batch-resolve actor_id UUIDs to human-readable emails.
+
+    Checks admin_staff first (most audit rows come from admin actions),
+    then falls back to users for rider/driver-initiated entries.
+    """
+    if not actor_ids:
+        return {}
+    actor_map: Dict[str, str] = {}
+    staff_rows = await db_supabase.get_rows(
+        "admin_staff",
+        {"id": {"$in": actor_ids}},
+        limit=200,
+    )
+    for s in staff_rows:
+        actor_map[s["id"]] = s.get("email", "")
+    missing = [aid for aid in actor_ids if aid not in actor_map]
+    if missing:
+        user_rows = await db_supabase.get_rows(
+            "users",
+            {"id": {"$in": missing}},
+            limit=200,
+        )
+        for u in user_rows:
+            actor_map[u["id"]] = u.get("email") or u.get("phone", "")
+    return actor_map
+
+
 @router.get("/audit-logs")
 async def get_audit_logs(
     limit: int = Query(50),
@@ -184,6 +212,8 @@ async def get_audit_logs(
     action: Optional[str] = Query(None),
     entity_type: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
     _admin: dict = Depends(require_module("audit")),
 ):
     """Get audit log entries with optional filters and pagination."""
@@ -192,21 +222,41 @@ async def get_audit_logs(
         filters["action"] = action
     if entity_type:
         filters["entity_type"] = entity_type
+    if start_date or end_date:
+        date_filter: Dict[str, str] = {}
+        if start_date:
+            date_filter["$gte"] = start_date
+        if end_date:
+            date_filter["$lte"] = end_date
+        filters["created_at"] = date_filter
     if search:
         term = search.strip()
         if term:
-            # entity_id is the column every current writer (log_admin_action,
-            # log_user_action, the PII-reveal endpoint below) actually
-            # populates — resource_id is the pre-migration-57 legacy column
-            # that nothing writes anymore. Searching resource_id silently
-            # matched zero modern rows instead of erroring, so this was a
-            # quiet SOC search gap, not a crash.
-            filters["$or"] = [
+            or_clauses: list = [
                 {"actor_id": {"$regex": term, "$options": "i"}},
                 {"entity_id": {"$regex": term, "$options": "i"}},
                 {"details": {"$regex": term, "$options": "i"}},
             ]
+            # Resolve email search: look up admin_staff whose email
+            # matches, then include their IDs so searching "alice@"
+            # finds Alice's audit entries even though the DB stores
+            # only actor_id (UUID), not email (removed in migration 51).
+            matching_staff = await db_supabase.get_rows(
+                "admin_staff",
+                {"email": {"$regex": term, "$options": "i"}},
+                limit=50,
+            )
+            matching_ids = [s["id"] for s in matching_staff if s.get("id")]
+            if matching_ids:
+                or_clauses.append({"actor_id": {"$in": matching_ids}})
+            filters["$or"] = or_clauses
     logs = await db_supabase.get_rows("audit_logs", filters, order="created_at", desc=True, limit=limit, offset=offset)
+
+    actor_ids = list({log.get("actor_id") for log in logs if log.get("actor_id")})
+    actor_map = await _resolve_actor_emails(actor_ids)
+    for log in logs:
+        log["actor_email"] = actor_map.get(log.get("actor_id", ""), "")
+
     return logs
 
 
@@ -254,6 +304,10 @@ async def get_audit_log_top_actors(
         }
         for actor, count in by_actor.most_common(limit)
     ]
+    actor_ids = [t["actor_id"] for t in top if t["actor_id"] != "unknown"]
+    actor_map = await _resolve_actor_emails(actor_ids)
+    for t in top:
+        t["actor_email"] = actor_map.get(t["actor_id"], "")
     return {
         "days": days,
         "window_start": since,

@@ -31,11 +31,12 @@ You can cancel a ride request before a driver accepts it at no charge.
 CANCELLING AFTER A DRIVER ACCEPTS
 
 Once a driver has accepted your ride and is on the way, a cancellation fee
-may apply if you cancel more than [NUMBER, E.G. 2 MINUTES] after acceptance,
-because the driver has already committed time and travel to reach you. The
-app will always show you whether a fee applies to that specific cancellation
-before you confirm the cancellation — you will never be charged a fee you
-weren't told about in advance.
+may apply if you cancel more than 2 minutes after acceptance (currently 120
+seconds by default, admin-configurable per service area), because the
+driver has already committed time and travel to reach you. The app will
+always show you whether a fee applies to that specific cancellation before
+you confirm the cancellation — you will never be charged a fee you weren't
+told about in advance.
 
 The cancellation fee is a flat amount, currently $4.50 by default (admin-
 configurable). $4.00 goes to the driver to compensate the time and travel
@@ -46,10 +47,11 @@ drive.
 
 NO-SHOW FEES
 
-If a driver arrives at your pickup location and you do not show up within
-[NUMBER, E.G. 5 MINUTES] of arrival, and the driver cancels the trip as a
-result, a no-show fee may apply. The app notifies you when your driver has
-arrived so you have a chance to respond before a no-show fee is charged.
+If a driver arrives at your pickup location and you do not show up within 5
+minutes of arrival (currently 300 seconds by default, admin-configurable
+per service area), and the driver cancels the trip as a result, a no-show
+fee may apply. The app notifies you when your driver has arrived so you
+have a chance to respond before a no-show fee is charged.
 
 CANCELLING AFTER THE TRIP STARTS
 
@@ -87,15 +89,24 @@ incorrectly.
    on every fee-eligible cancellation. Corrected the paragraph to state the
    real split rather than a false no-commission claim, and to make clear
    this fee is distinct from the 0%-commission fare itself.
-2. **Still open — genuinely unverified, do not invent**: the specific time
-   windows (`[NUMBER, E.G. 2 MINUTES]` for the post-acceptance cancellation
-   grace period, `[NUMBER, E.G. 5 MINUTES]` for the no-show wait, `[NUMBER,
-   E.G. 60 DAYS]` for the dispute window) — searched
-   `backend/routes/rides/cancellation.py` and `services/cancellation_service.py`
-   for a hardcoded constant and found none; these thresholds appear to be
-   configured elsewhere (per-service-area settings) or not yet formalized as
-   a fixed number. Confirm the actual values with product/fare-config before
-   publishing — do not guess.
+2. **Fixed 2026-08-20** (`spinr-legal-readiness-reviewer`): the post-acceptance
+   grace period and no-show wait were filled in from real config —
+   `backend/services/cancellation_service.py:58` reads
+   `free_cancel_window_seconds` (default 120s = 2 minutes) and
+   `backend/routes/drivers/ride_cancel.py:324` reads `noshow_wait_seconds`
+   (default 300s = 5 minutes), both admin/service-area configurable the same
+   way the fee-split amounts are (`backend/routes/admin/service_areas.py`).
+   Worded as "currently N by default" to reflect that a service area can
+   override it, matching how the fee-split paragraph is phrased.
+3. **Still open — genuinely unverified, do not invent**: the dispute-window
+   bracket (`[NUMBER, E.G. 60 DAYS]`). Read `backend/routes/disputes.py` in
+   full — `create_dispute()` has no time-based cutoff at all; it only checks
+   the ride is completed/cancelled and that no other dispute is already open
+   on that ride. There is no `dispute_window_days` or any expiry check
+   anywhere in the file. This is a genuine gap between what the draft wants
+   to promise and what the backend enforces — either product/fare-config
+   needs to pick a number, or the backend needs to actually enforce a window
+   before this page can cite one as a hard promise. Do not guess.
 3. Confirm this doesn't duplicate content already correct in
    `docs/legal/terms-of-service.md` §5 in a way that could drift out of
    sync — consider this page authoritative on specifics, and simplify §5 in

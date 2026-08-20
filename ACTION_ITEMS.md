@@ -6757,6 +6757,48 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   reconstruction-verification.md`) are the first real candidate backlog once this ships — filing the
   table is not itself a decision to correct them, that stays a separate, explicit call.
 
+### B35. `routes/rides/booking.py` float()-casts several `rides` money fields at write time — same bug class as B28/B29/B30, wider blast radius than first reported
+
+- **Source:** found while fixing B30 (2026-08-20) — B30's own PR flagged a narrower version of
+  this (`subtotal_fare`/`discount_amount`/`grand_total` around line 1278-1288, the promo-application
+  branch). Re-grepped `booking.py` directly for this follow-up and the real footprint is larger: this
+  is the primary ride-CREATION write path, not a secondary re-estimate helper like B30's `_shared.py`,
+  which raises the stakes further.
+- **Confirmed (verified in code, not assumed):** `booking.py` imports `_f` from `._shared`
+  (`from ._shared import (..., _f, ...)`), and `_shared.py:443` defines `_f(v: Decimal) -> float` —
+  so every call site below genuinely produces a Python `float`, not a Decimal-safe string.
+- **Confirmed DB-write call sites** (dict values assigned into `ride_data`/the ride-update payload,
+  same shape as B30's fix):
+  - Lines ~1007-1024: `base_fare=_f(base_fare)`, `distance_fare=_f(distance_fare)`,
+    `time_fare=_f(time_fare)`, `booking_fee=_f(booking_fee)`, `total_fare=_f(total_fare)`,
+    `driver_earnings=_f(driver_earnings)`, `admin_earnings=_f(admin_earnings)` — ride-insert
+    construction.
+  - Line ~1052: `ride_data["airport_fee"] = _f(airport_fee)`.
+  - Lines ~1282-1293 (the originally-flagged instance): `"subtotal_fare": _f(server_fare)`,
+    `"discount_amount": _f(discount)`, plus `grand_total` (already a float from line 1269's
+    `_f(_round(...))`) — the promo-application update branch.
+- **Separate, NOT yet triaged as the same bug class** — do not fold into this fix without checking
+  first: lines ~226, ~299, ~345 (`"authorized_amount": _f(...)`) appear to feed a Stripe
+  payment-intent/manual-capture-hold call, not a `rides` table column. Stripe's own API wants an
+  integer-cents amount, not a float dollar figure — if that's really what's happening here, it may be
+  a *different*, possibly more serious bug (wrong units to Stripe), not a same-class NUMERIC-column
+  float-cast. Needs its own read of the Stripe call site before deciding whether it's in scope here.
+- **Status:** open, no owner assigned, not fixed. Needs the same treatment as B28/B29/B30: for each
+  confirmed DB-write site, verify the target `rides` column is genuinely `NUMERIC` (don't assume —
+  B30 found `grand_total` in `_shared.py` was already correct and `discount_amount` wasn't written
+  at all, so this file's actual bug surface may also be narrower or wider than the grep above once
+  read line-by-line), swap `float()` → `str()` at the write boundary, extend the B28/B29/B30
+  regression-test pattern, and — because this is the live ride-creation path — a `mock_supabase_client`
+  dry run with a concrete before/after scenario per CLAUDE.md's "State-machine and money changes need
+  a dry run" gate. Given the wider footprint (7+ fields vs. B30's 2), consider whether this warrants
+  splitting into more than one PR to keep each diff reviewable and single-scope.
+- **Files:** `backend/routes/rides/booking.py`.
+- **Acceptance:** every confirmed-NUMERIC field this function writes into `rides` is serialized via
+  `str(Decimal)`, not `float()`, at the write boundary; a regression test covers each; a dry-run
+  scenario is described in the closing Change Impact Log; the `authorized_amount`/Stripe question
+  above is resolved (either confirmed out of scope with a one-line note why, or filed as its own
+  separate item if it turns out to be a real unit-mismatch bug).
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly

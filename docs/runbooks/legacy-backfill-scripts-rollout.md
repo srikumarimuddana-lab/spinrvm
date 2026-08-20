@@ -26,10 +26,11 @@ Put to the product owner directly via `AskUserQuestion` (not inferred or assumed
    using this runbook (pre-flight checklist, dry-run-first, rollback path per capability) — not
    delegated to a Claude Code session.
 
-**What this decision does *not* cover:** the 7-anomalous-row disposition (booking import, needs
-live-DB/Stripe access to resolve — tracked separately in `ACTION_ITEMS.md` A41) and the underlying
-legal-sufficiency judgment on old-app consent (business/counsel decision) are both still open,
-unrelated questions this rollout decision does not resolve or block on.
+**What this decision does *not* cover:** the underlying legal-sufficiency judgment on old-app consent
+(business/counsel decision) remains open and unrelated to this rollout decision. The 7-anomalous-row
+disposition, open at the time this section was first written, was resolved the same day — see "The
+three capabilities" §3 above; it does not need a separate decision before running this runbook's
+capabilities.
 
 **As of this update, no `--apply`/commit run has actually happened yet** — this section records the
 go-ahead and the execution plan, not a completed run. The pre-flight checklist, rollback paths, and
@@ -85,12 +86,22 @@ import, super-admin-only, at `POST /api/admin/bookings/import/validate` and `...
 `rides.status='cancelled'` rows — GPS, timestamps, and cancellation attribution only, explicitly no
 fare/earnings/payout write. Of the real export's 1,210 rows: 712 `cancelled` + 225 `failed` are
 targeted (minus phone-match/test-account skips, which can only be known against a live `users`/
-`drivers` table); 2 blank-status and 7 anomalous "failed-but-actually-settled" rows are permanently
-excluded from this path (see the change log for the 7-row finding — that's a **separate, still-open,
-deferred decision**, not something `--apply`ing this capability resolves). **Status: built,
-unit-tested against 63 tests plus the real cached CSV's row counts, reviewed by
-`spinr-migration-reviewer` and `spinr-money-auditor` (no blockers), never run against a live
-environment.**
+`drivers` table); 2 blank-status rows are excluded (genuinely unknown status, unsafe to guess).
+
+**7 anomalous "failed-but-actually-completed" rows — disposition decided 2026-08-20, not excluded
+any more.** These 7 (real `driver_id`/`start_ride_at`/`complete_delivery_at`, structurally a
+completed trip) were found permanently excluded as of the first cut of this capability. A same-day
+follow-up (`docs/change-log/2026-08-20-anomalous-legacy-rows-payment-verification.md`) cross-checked
+the old app's own `payments.csv` export and found 0 of the 7 (0/225 of the whole `failed` bucket) has
+any payment record — the trip happened but was never paid for. Product owner decided (via
+`AskUserQuestion`) to import them as `rides.status='completed'` with real GPS/distance/duration but
+**$0 fare, $0 driver earnings, no payout** — see
+`docs/change-log/2026-08-20-anomalous-rows-zero-fare-completed-import.md` for the implementation.
+These 7 now commit alongside the other 937 cancelled/failed rows in the same `commit` call — no
+separate action needed to include them. **Status: built, unit-tested against 76 tests (across both
+booking-import test files) plus the real cached CSV's row counts for the base cancelled/failed path,
+reviewed by `spinr-migration-reviewer` and `spinr-money-auditor` (no blockers), never run against a
+live environment.**
 
 This capability is **additive to the same CSVs already used for the completed-booking import** — it
 does not require a separate upload or a separate decision about *which* CSV to use, only whether/when
@@ -202,11 +213,13 @@ any of the three.
      CSVs (the admin dashboard's existing Legacy Booking Import tool already calls this first, before
      enabling its own "commit" action).
 3. **Record the dry-run counts before applying** — rows planned, rows skipped (already on file /
-   already marked / test-account / anomalous-looks-completed for the booking import), and any errors
-   or warnings. Compare against what's expected (~186 legacy rides for the duration-estimated
-   backfill; a similarly-sized population for SIN/DOB joined against `banks.csv`; up to 712 cancelled
-   + 225 failed minus phone-match/test-account skips and minus 7 known-anomalous + 2 blank-status for
-   the booking import). A count wildly different from expectation (much larger, much smaller, or a
+   already marked / test-account for the booking import), the new `cancelled_failed_zero_fare_completed`
+   count (should be up to 7, matching the anomalous rows — see §3 above), and any errors or warnings.
+   Compare against what's expected (~186 legacy rides for the duration-estimated backfill; a
+   similarly-sized population for SIN/DOB joined against `banks.csv`; up to 712 cancelled + 225 failed
+   minus phone-match/test-account skips and minus 2 blank-status for the booking import, of which up
+   to 7 of the "failed" ones land in the zero-fare-completed bucket instead of the normal
+   cancelled/failed one). A count wildly different from expectation (much larger, much smaller, or a
    spike in errors/warnings) is a stop-and-investigate signal, not something to apply through.
 4. **If time has passed since the last dry-run**, re-run the dry run immediately before applying —
    more legacy rows may have been imported in the interim (e.g. via Oct 30), and a stale report from
@@ -227,9 +240,12 @@ any of the three.
      this script, so there is nothing to revert there either.
    - Cancelled/failed booking import: the commit response returns every inserted ride's `id` (same
      shape as the existing completed-booking import's response). Reverting means deleting exactly
-     those `rides` rows by id — since this path never writes a `payouts` row or touches
-     `drivers.total_rides`, there is no downstream state to unwind elsewhere (unlike the
-     completed-booking import, which does have an offsetting-payout row to consider on rollback).
+     those `rides` rows by id — this path never writes a `payouts` row (unlike the completed-booking
+     import, which does have an offsetting-payout row to consider on rollback). The normal
+     cancelled/failed rows also never touch `drivers.total_rides`; the up-to-7 zero-fare-completed rows
+     (§3 above) do get counted into it via the same recount used by the regular completed path, so
+     reverting those specifically also needs a re-run of `recount_driver_total_rides` (or the next
+     scheduled import) for any driver among the deleted ids to bring the count back down.
    - None of the three requires a migration or a second deploy to roll back — all are plain, targeted
      writes against a printed/returned id list.
 7. **All three are safe to re-run after a partial failure** — re-running only ever touches rows

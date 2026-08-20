@@ -69,8 +69,7 @@ restricted by law.
 HOW TO APPEAL
 
 If your account is deactivated, you may appeal within [NUMBER, E.G. 30
-DAYS] by [DESCRIBE APPEAL CHANNEL — E.G. "using the Appeal button in the
-driver app" OR "emailing driver-appeals@spinr.ca"]. Include any information
+DAYS] using the Appeal screen in the driver app. Include any information
 you believe is relevant — Spinr's safety team did not have, or may not have
 correctly weighed. A different reviewer than the one who made the original
 decision will review your appeal and respond within [NUMBER, E.G. 10
@@ -94,8 +93,15 @@ validity before you can go online again.
 1. **All bracketed timeframes need a real number from the safety team**, not
    a guess — check whether an internal SLA already exists for safety-hold
    investigations before publishing a number here.
-2. Confirm the appeal channel described actually exists in the driver app,
-   or build it before publishing a policy that promises it.
+2. **Fixed 2026-08-19/2026-08-20**: confirmed the in-app appeal channel is
+   real and wired (`driver-app/app/appeal.tsx` → `backend/services/
+   driver_appeals.py` → `routes/drivers/appeals.py`/`routes/admin/
+   driver_appeals.py`; "a different reviewer than the one who made the
+   original decision" language at `appeal.tsx:122` matches this draft).
+   Resolved the channel placeholder to the in-app screen only — the
+   `driver-appeals@spinr.ca` email alternative it previously offered as an
+   either/or does not exist anywhere in code (no mailbox, no route
+   referencing it) and should not be offered until it's actually built.
 3. Cross-reference `docs/legal/community-guidelines.md` and
    `docs/legal/non-discrimination-policy.md` for consistency on what counts
    as a "serious violation" — all three should describe the same standard.

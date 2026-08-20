@@ -794,3 +794,179 @@ def print_report(plan: BookingImportPlan, *, dry_run: bool) -> None:
             print(f"    … and {len(plan.errors) - 50} more")
         print("\n  Refusing to commit until every error above is resolved.")
     print()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Historical `duration_estimated` marker backfill (already-imported rides)
+#
+# docs/change-log/2026-08-19-legacy-migration-transparency-backend.md (§3)
+# fixed build_plan() above so every *future* import stamps
+# legacy_import_metadata.duration_estimated on the row it writes. That fix
+# is import-code-path-only by design and explicitly does not touch the rides
+# already committed by the original 2026-07-29 import — this section is the
+# deferred follow-up: a dry-run-by-default backfill that stamps the SAME
+# marker onto those already-imported rows, without re-estimating or
+# otherwise touching duration_minutes itself.
+#
+# Detection mirrors build_plan()'s own condition exactly, not a
+# reimplementation of it: build_plan() only ever writes ride["ride_started_at"]
+# when its local `started_at` was truthy (see the "if started_at:" guard
+# above), and migration 137 makes `started_at` a read-only generated column
+# always equal to `ride_started_at`. So "this committed row has no
+# ride_started_at" is precisely "build_plan() took the estimation branch for
+# this row" — no CSV re-read or re-estimation needed.
+#
+# Safety rules, mirroring driver_import_service's legacy SIN/DOB backfill:
+#   - only scans rows already carrying this module's own IMPORT_SOURCE in
+#     legacy_import_metadata.
+#   - never clobbers a row that already has a `duration_estimated` key (or
+#     this backfill's own marker key) — whatever is already stamped (by the
+#     importer itself, or an earlier run of this backfill) wins.
+#   - the write-time guard below re-checks each row immediately before
+#     writing, not just at plan time, so a concurrent run of this same
+#     script can't double-stamp or race a row.
+#   - reports carry only ride ids (internal UUIDs) and counts — never
+#     addresses, names, or any other ride PII.
+
+DURATION_ESTIMATED_BACKFILL_MARKER = "legacy_duration_estimated_backfill"
+
+
+@dataclass
+class DurationEstimatedBackfillItem:
+    id: str
+    old_booking_id: str | None
+    duration_estimated: bool
+
+
+@dataclass
+class DurationEstimatedBackfillPlan:
+    updates: list[DurationEstimatedBackfillItem] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    skipped_already_marked: int = 0
+    total_legacy_rides_scanned: int = 0
+
+
+def _fetch_legacy_rides_for_duration_backfill() -> list[dict[str, Any]]:
+    """Every ride this importer has ever written, minimal columns only.
+
+    Selects id/ride_started_at/legacy_import_metadata rather than '*' — this
+    backfill has no reason to pull fare/address/PII columns into memory for a
+    marker-only operation.
+    """
+    rows = (
+        supabase.table("rides")
+        .select("id,ride_started_at,legacy_import_metadata")
+        .filter("legacy_import_metadata->>source", "eq", IMPORT_SOURCE)
+        .execute()
+        .data
+        or []
+    )
+    return rows
+
+
+def plan_duration_estimated_backfill() -> DurationEstimatedBackfillPlan:
+    """Plan the historical duration_estimated marker backfill. Read-only —
+    issues no writes. Idempotent across repeated dry runs: a row already
+    carrying `duration_estimated` or DURATION_ESTIMATED_BACKFILL_MARKER is
+    skipped, not re-planned.
+    """
+    plan = DurationEstimatedBackfillPlan()
+    rows = _fetch_legacy_rides_for_duration_backfill()
+    plan.total_legacy_rides_scanned = len(rows)
+
+    for row in rows:
+        row_id = row.get("id")
+        if not row_id:
+            plan.errors.append("legacy ride row is missing its id — cannot plan an update for it")
+            continue
+
+        meta = row.get("legacy_import_metadata") or {}
+        if "duration_estimated" in meta or DURATION_ESTIMATED_BACKFILL_MARKER in meta:
+            plan.skipped_already_marked += 1
+            continue
+
+        plan.updates.append(
+            DurationEstimatedBackfillItem(
+                id=row_id,
+                old_booking_id=meta.get("old_booking_id"),
+                # Same condition build_plan() uses at import time (see the
+                # section docstring above): no ride_started_at means the
+                # importer took the estimation branch for this row.
+                duration_estimated=not bool(row.get("ride_started_at")),
+            )
+        )
+    return plan
+
+
+def apply_duration_estimated_backfill(plan: DurationEstimatedBackfillPlan, *, batch: str) -> list[str]:
+    """Write plan.updates' duration_estimated marker onto `rides`.
+
+    Write-time guard, not just the plan-time snapshot: immediately before
+    writing each row, this re-reads its current legacy_import_metadata and
+    refuses to touch a row that already carries `duration_estimated` (or this
+    backfill's own marker) by the time apply() reaches it — e.g. a concurrent
+    run of this same script. This mirrors
+    driver_import_service.apply_legacy_sin_dob_import's guard exactly (see
+    that function's docstring for why a plan-time-only check is a race): the
+    plan-time skip above only proves the key was absent *when planned*. The
+    PostgREST-level `.filter(..., "is", "null")` clause on the update itself
+    is the atomic half of the guard — the same pattern
+    driver_import_service.py's `.is_(col, "null")` calls use for a real
+    column, applied here to a JSONB key.
+
+    Never touches duration_minutes — only legacy_import_metadata.
+
+    Returns the `id` of every row whose guard didn't match (already marked in
+    the plan/apply window) — reported back as a conflict, never silently
+    dropped. Safe to re-run: a re-plan after a partial apply only ever
+    contains rows still missing the marker.
+    """
+    if plan.errors:
+        raise RuntimeError("refusing to apply with validation errors")
+    if not plan.updates:
+        return []
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    conflicts: list[str] = []
+    for item in plan.updates:
+        existing = supabase.table("rides").select("legacy_import_metadata").eq("id", item.id).execute().data
+        meta = dict((existing[0].get("legacy_import_metadata") or {}) if existing else {})
+        if "duration_estimated" in meta or DURATION_ESTIMATED_BACKFILL_MARKER in meta:
+            conflicts.append(item.id)
+            continue
+
+        meta["duration_estimated"] = item.duration_estimated
+        meta[DURATION_ESTIMATED_BACKFILL_MARKER] = {"batch": batch, "backfilled_at": now_iso}
+
+        res = (
+            supabase.table("rides")
+            .update({"legacy_import_metadata": meta, "updated_at": now_iso})
+            .eq("id", item.id)
+            .filter("legacy_import_metadata->>duration_estimated", "is", "null")
+            .execute()
+        )
+        if not res.data:
+            conflicts.append(item.id)
+
+    return conflicts
+
+
+def print_duration_estimated_backfill_report(plan: DurationEstimatedBackfillPlan, *, dry_run: bool) -> None:
+    """Print counts and ride ids only — never addresses, names, or any other PII."""
+    mode = "DRY RUN" if dry_run else "COMMIT"
+    n_estimated = sum(1 for u in plan.updates if u.duration_estimated)
+    n_measured = len(plan.updates) - n_estimated
+    print(f"\n=== Legacy ride duration_estimated backfill ({mode}) ===")
+    print(f"  legacy rides scanned         : {plan.total_legacy_rides_scanned}")
+    print(f"  already marked, skipped      : {plan.skipped_already_marked}")
+    print(f"  rows to stamp                : {len(plan.updates)}")
+    print(f"    duration_estimated=true    : {n_estimated}")
+    print(f"    duration_estimated=false   : {n_measured}")
+    if plan.errors:
+        print(f"\n  --- ERRORS ({len(plan.errors)}) ---")
+        for e in plan.errors[:50]:
+            print(f"    {e}")
+        if len(plan.errors) > 50:
+            print(f"    … and {len(plan.errors) - 50} more")
+        print("\n  Refusing to apply until every error above is resolved.")
+    print()

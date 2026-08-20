@@ -5,6 +5,7 @@
  */
 import {
   bonusLabel,
+  buildOfferAlertText,
   buildOfferCard,
   buildTripCard,
   fareBreakdownLabel,
@@ -206,6 +207,67 @@ describe('buildOfferCard', () => {
     expect(c.pickupLabel).toBeNull();
     expect(c.dropoffLabel).toBeNull();
     expect(c.wav).toBe(false);
+  });
+});
+
+describe('buildOfferAlertText', () => {
+  const text = (o: OfferLike | null) => buildOfferAlertText(buildOfferCard(o));
+
+  it('leads the title with total earnings, then the rider', () => {
+    // The regression this guards: the title used to read "New ride · Alex ★4.9"
+    // — the largest text Android Auto gives us, spent on a label — while the
+    // amount sat below it in body text, and was the BASE fare at that.
+    expect(text(offer).title).toBe('$17.50 · Alex ★4.9');
+  });
+
+  it('explains the split and the rate on the first subtitle line', () => {
+    const lines = text(offer).subtitle!.split('\n');
+    expect(lines[0]).toBe('$14.50 fare + $3.00 bonus · $5.40/km');
+  });
+
+  it('puts trip shape and flags on the second line, destination on the third', () => {
+    const lines = text(offer).subtitle!.split('\n');
+    expect(lines[1]).toBe('8 min away · 3.2 km · 1.5× surge · WAV');
+    expect(lines[2]).toBe('→ 202 Dropoff Ave');
+  });
+
+  it('carries every badge the phone panel shows', () => {
+    const lines = text({
+      ...offer,
+      quiet_mode: true,
+      is_scheduled: true,
+      payment_method: 'cash',
+    }).subtitle!.split('\n');
+    expect(lines[1]).toBe(
+      '8 min away · 3.2 km · 1.5× surge · WAV · Quiet ride · Pre-booked · Cash',
+    );
+  });
+
+  it('omits the rate line entirely when there is no bonus and no distance', () => {
+    const t = text({ ride_id: 'r', fare: '11.00', dropoff_address: 'Somewhere' });
+    expect(t.title).toBe('$11.00');
+    expect(t.subtitle).toBe('→ Somewhere');
+  });
+
+  it('shows the bare rate when a ride has distance but no bonus', () => {
+    const lines = text({
+      ride_id: 'r',
+      fare: '9.75',
+      distance_km: 2.1,
+      rider_name: 'Kiran',
+    }).subtitle!.split('\n');
+    expect(lines[0]).toBe('$4.64/km');
+  });
+
+  it('falls back to a label when the payload carries no money at all', () => {
+    expect(text({ ride_id: 'r', rider_name: 'Kiran' }).title).toBe('New ride · Kiran');
+    expect(text({ ride_id: 'r' }).title).toBe('New ride request');
+    expect(text(null).title).toBe('New ride request');
+    expect(text(null).subtitle).toBeNull();
+  });
+
+  it('drops the rating from the title when the rider has none', () => {
+    expect(text({ ...offer, rider_rating: undefined }).title).toBe('$17.50 · Alex');
   });
 });
 

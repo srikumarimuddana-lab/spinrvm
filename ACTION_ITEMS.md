@@ -6738,6 +6738,24 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   `admin_driver_distance_logs`) to prefer a correction over its original when one exists.
 - **Status:** open, not designed or built. A real migration + RLS + immutability-trigger + two-consumer
   wiring change, out of scope for the verification pass that surfaced it.
+- **Files:** new migration under `backend/migrations/` (next free number per
+  `ls backend/migrations | sort -V | tail -1` — do not assume 353 without re-checking at commit time,
+  per this repo's numbering convention); `backend/migrations/64_driver_insurance_periods.sql` and
+  `332_backfill_legacy_ride_insurance_periods.sql` (context — confirm the new table's RLS/immutability
+  pattern matches theirs, don't diverge silently); `backend/scripts/compliance_export.py` (regulator-facing
+  export — must prefer a correction over its original when one exists); `backend/routes/admin/
+  driver_distance.py`'s `admin_driver_distance_logs` (admin-facing per-span read, same requirement);
+  `backend/services/insurance_period_reconstruction_verification.py` (the tool that surfaced this gap —
+  once the corrections table exists, its `apply_verification_plan()` no-op should be revisited, since
+  writing a correction row would then have a sanctioned destination).
+- **Acceptance:** `driver_insurance_period_corrections` table exists (original-period FK, corrected
+  `started_at`/`ended_at`, `reason`, `corrected_by`, `corrected_at`, append-only/immutable once written,
+  RLS matching `driver_insurance_periods`' own service-role-only pattern); both `compliance_export.py`
+  and `admin_driver_distance_logs` read a correction in preference to its original row when one exists,
+  with a test proving the preference (not just that the table can be queried); the 156 rides this
+  session's verification pass found diverging (`docs/change-log/2026-08-20-insurance-period-
+  reconstruction-verification.md`) are the first real candidate backlog once this ships — filing the
+  table is not itself a decision to correct them, that stays a separate, explicit call.
 
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 

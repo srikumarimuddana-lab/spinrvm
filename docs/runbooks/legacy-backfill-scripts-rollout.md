@@ -1,14 +1,16 @@
 # Legacy Backfill Scripts — Rollout Runbook
 
-**Status:** written 2026-08-20, updated same day to add a third capability, then updated again same
-day to record the product owner's rollout decision (see "Decision recorded" below). All three
-covered here have been built, tested against a local fake Supabase client (and, for the booking
-import, verified against the real cached `bookings.csv` export's actual row counts), and reviewed —
-but **none has ever been run with `--apply`/`commit` against any environment** (mocked, staging, or
-production) **by any Claude Code session**. This document describes the safe procedure for whoever
-runs them. **It is not, itself, the sign-off to run any of them** — the sign-off now exists (see
-"Decision recorded" immediately below), but the actual `--apply`/commit execution is the product
-owner's own action, still outstanding as of this update.
+**Status:** written 2026-08-20, updated same day to add a third capability, then to record the product
+owner's rollout decision for those three (see "Decision recorded" below), then to fix a critical bug
+in the SIN/DOB backfill's CSV reader found while building a fourth capability (vehicle-history
+backfill, added same day — see "Sign-off" for why it is NOT covered by the existing decision). All
+four covered here have been built, tested against a local fake Supabase client (and, for the booking
+import and vehicle-history backfill, verified against the real cached export's actual row counts and
+crosswalk-resolution numbers), and reviewed — but **none has ever been run with `--apply`/`commit`
+against any environment** (mocked, staging, or production) **by any Claude Code session**. This
+document describes the safe procedure for whoever runs them. **It is not, itself, the sign-off to run
+any of them** — for the original three, the sign-off now exists (see "Decision recorded" immediately
+below); for the fourth, it does not yet.
 
 ## Decision recorded (2026-08-20)
 
@@ -47,7 +49,7 @@ Related reading:
   modified by this document; read it for the full migration timeline these three capabilities sit
   inside).
 
-## The three capabilities
+## The four capabilities
 
 ### 1. `backend/scripts/backfill_legacy_driver_sin_dob.py`
 
@@ -60,7 +62,20 @@ Only touches drivers already tagged with the importer's own source key (a phone-
 can never reach an organic driver's SIN/DOB), and never overwrites an existing `sin` or
 `date_of_birth` — self-entered data always wins over the legacy import. Write path
 (`apply_legacy_sin_dob_import`) uses a write-time `.is_(col, "null")` guard per column, re-checked
-immediately before each write. **Status: built, unit-tested, never run with `--apply`.**
+immediately before each write.
+
+**Critical fix, 2026-08-20 (same day as the "Decision recorded" section above was written) —
+read this before running.** The CLI's CSV reader was silently broken: it went through a header-
+normalization pass tuned for a *different* CSV (the bespoke Saskatoon driver recruitment sheet), which
+mangled the raw Mongo export's own `_id` column, causing the phone crosswalk this script depends on to
+match **0 of 157 real rows** — the script would have printed a clean "0 updates, 0 errors" report and
+looked like a successful no-op run while silently accomplishing nothing. Fixed same day (verified
+against the real export: 157/157 resolve correctly now) — see
+`docs/change-log/2026-08-20-mongo-export-header-normalization-bug.md`. **The "Decision recorded"
+timing/execution answers above still stand** (this was a bug in the tool, not a reason to revisit the
+go-ahead) but if you have a copy of this repo checked out from before 2026-08-20's later commits, pull
+first — an unpatched checkout would silently no-op. **Status: built, unit-tested, fixed, never run with
+`--apply`.**
 
 ### 2. `backend/scripts/backfill_legacy_ride_duration_estimated.py`
 
@@ -109,6 +124,24 @@ to actually commit against real data. If the completed-booking import has alread
 given CSV batch, re-running `commit` against the *same* CSVs now will import the newly-supported
 cancelled/failed rows from that same file (the already-imported completed rows are skipped
 idempotently, matched on `old_booking_id`) without re-touching anything already committed.
+
+### 4. `backend/scripts/backfill_legacy_vehicle_history.py`
+
+Backfills `driver_vehicle_history` (migration 157, the append-only vehicle-change audit trail — see
+its own live writer, `utils/vehicle_history.py`) for drivers already imported by the one-time Saskatoon
+driver CSV import, from `vehicle_details.csv` (vehicle make/model/colour/year/plate/VIN, keyed by a
+Mongo ObjectId `driver_id`) joined to `drivers.csv` the same way the SIN/DOB backfill resolves a phone
+number. Closes the Oct 30 checklist's item #4 (7-year driver/vehicle-linkage regulatory retention gap)
+— see `docs/runbooks/legacy-migration-playbook.md`. Writes only to `driver_vehicle_history`, never to
+`drivers`' own current vehicle columns; a driver with more than one legacy vehicle row (24 of 330 in
+the real export) gets a real before/after change chain reconstructed, sorted by the legacy row's own
+timestamp. Idempotent across re-runs (skips any `(driver_id, field, created_at, new_value)` tuple
+already on file) — see `docs/change-log/2026-08-20-legacy-vehicle-history-backfill.md` for why this
+table's append-only shape needs a different (simpler) idempotency approach than the SIN/DOB backfill's
+write-time guard. Idempotency dedup fixed same day (spinr-migration-reviewer finding) to compare a
+canonicalized timestamp rather than a raw string that would never have matched Postgres's own output
+format on a re-run. **Status: built, unit-tested (17 tests) against a real-export crosswalk check
+(308/355 rows resolve a phone; the remainder are genuinely unmatched), never run with `--apply`.**
 
 ## The concurrent-writer risk, and how it's addressed
 
@@ -194,13 +227,16 @@ with no special sequencing needed on that front.
      the wait to Oct 30 is.
   Either way, the completed-booking import's own established four-CSV upload flow is unchanged —
   this is purely a "when to click commit" question, not a new operational procedure to design.
+- **Vehicle-history backfill (§4) has no dependency on the Oct 30 final cutover either** — same
+  reasoning as SIN/DOB: it targets the already-completed Saskatoon driver import population, and scans
+  by `legacy_import_metadata->>source`, not by import batch/date.
 
 This is a recommendation, not a decision — confirm timing with the product owner before scheduling
-any of the three.
+any of the four.
 
 ## Pre-flight checklist (before ever passing `--apply`/`commit`)
 
-1. **Confirm the target environment explicitly.** The two CLI scripts read `SUPABASE_URL` /
+1. **Confirm the target environment explicitly.** The CLI scripts read `SUPABASE_URL` /
    `SUPABASE_SERVICE_ROLE_KEY` from the environment; the booking import runs as an authenticated
    admin-dashboard action against whichever backend the admin's session is pointed at — verify which
    project/environment either way (`echo $SUPABASE_URL`, check `backend/.env`, or confirm the admin
@@ -212,6 +248,7 @@ any of the three.
    - Cancelled/failed booking import: `POST /api/admin/bookings/import/validate` with the same four
      CSVs (the admin dashboard's existing Legacy Booking Import tool already calls this first, before
      enabling its own "commit" action).
+   - Vehicle-history backfill: `python backend/scripts/backfill_legacy_vehicle_history.py --vehicle-details-csv <path> --drivers-csv <path>`
 3. **Record the dry-run counts before applying** — rows planned, rows skipped (already on file /
    already marked / test-account for the booking import), the new `cancelled_failed_zero_fare_completed`
    count (should be up to 7, matching the anomalous rows — see §3 above), and any errors or warnings.
@@ -219,8 +256,11 @@ any of the three.
    similarly-sized population for SIN/DOB joined against `banks.csv`; up to 712 cancelled + 225 failed
    minus phone-match/test-account skips and minus 2 blank-status for the booking import, of which up
    to 7 of the "failed" ones land in the zero-fare-completed bucket instead of the normal
-   cancelled/failed one). A count wildly different from expectation (much larger, much smaller, or a
-   spike in errors/warnings) is a stop-and-investigate signal, not something to apply through.
+   cancelled/failed one; up to 308 matched `vehicle_details.csv` rows across up to 6 tracked fields
+   each for the vehicle-history backfill, per the real-export crosswalk check in
+   `docs/change-log/2026-08-20-legacy-vehicle-history-backfill.md`). A count wildly different from
+   expectation (much larger, much smaller, or a spike in errors/warnings) is a stop-and-investigate
+   signal, not something to apply through.
 4. **If time has passed since the last dry-run**, re-run the dry run immediately before applying —
    more legacy rows may have been imported in the interim (e.g. via Oct 30), and a stale report from
    days or weeks earlier should not be trusted blindly.
@@ -246,25 +286,37 @@ any of the three.
      (§3 above) do get counted into it via the same recount used by the regular completed path, so
      reverting those specifically also needs a re-run of `recount_driver_total_rides` (or the next
      scheduled import) for any driver among the deleted ids to bring the count back down.
-   - None of the three requires a migration or a second deploy to roll back — all are plain, targeted
+   - Vehicle-history backfill: append-only, so there is no existing value it could have clobbered.
+     Reverting means deleting the specific `driver_vehicle_history` rows this run inserted — every
+     row's `driver_id`/`field`/`old_driver_id`/`old_vehicle_id` is logged per apply-time report line,
+     and a backfilled row's `created_at` is always the legacy event time (years before this script's
+     own run date), which cannot collide with a real live edit's history row.
+   - None of the four requires a migration or a second deploy to roll back — all are plain, targeted
      writes against a printed/returned id list.
-7. **All three are safe to re-run after a partial failure** — re-running only ever touches rows
+7. **All four are safe to re-run after a partial failure** — re-running only ever touches rows
    still missing their respective marker/field/row, by construction of each's plan/validate step.
 
 ## Sign-off
 
-**Flipping `--apply`/commit on any of the three requires explicit product-owner sign-off before it
-happens.** That sign-off now exists — see "Decision recorded" at the top: run all three now, the
+**Flipping `--apply`/commit on any of these requires explicit product-owner sign-off before it
+happens.** For the original three — see "Decision recorded" at the top: run all three now, the
 booking import against the existing 2026-07-26-vintage CSV, executed by the product owner directly
-(no live Supabase credentials are available to any Claude Code session). This runbook is the
-documented safe procedure for that execution, not a substitute for it. Before each actual run:
+(no live Supabase credentials are available to any Claude Code session).
+
+**The vehicle-history backfill (§4) is NOT covered by that existing decision** — it was built after
+the "Decision recorded" section above was written, and has not been put to the product owner. Treat it
+as needing its own separate go-ahead before `--apply`, same process as the original three: confirm
+target environment/expected row counts with a fresh dry run, get explicit timing sign-off, then apply.
+Nothing about the original three's approval extends to it automatically.
+
+This runbook is the documented safe procedure for execution, not a substitute for sign-off. Before
+each actual run:
 
 1. Confirm the target environment and expected row counts (pre-flight checklist above) with a fresh
-   dry run/validate — the "Decision recorded" go-ahead is not a substitute for this per-run check.
-2. Re-confirm nothing has materially changed since 2026-08-20 (e.g. a fresher CSV export becoming
-   available, in which case revisit whether the "run against the existing export" choice above still
-   holds) before passing `--apply`/click commit.
+   dry run/validate — an earlier go-ahead is not a substitute for this per-run check.
+2. Re-confirm nothing has materially changed since the sign-off was given (e.g. a fresher CSV export
+   becoming available) before passing `--apply`/click commit.
 3. Only then pass `--apply`/click commit.
 
-No `--apply`/commit run has happened yet for any of the three, against any environment, as of this
-document (last updated 2026-08-20, decision recorded).
+No `--apply`/commit run has happened yet for any of the four, against any environment, as of this
+document (last updated 2026-08-20, vehicle-history backfill added).

@@ -491,5 +491,5 @@ These directories exist alongside `.claude/` but serve different tooling:
 | `.emergent/` | Active | Emergent AI agent config |
 | `.maestro/` | Active | Maestro orchestration config |
 | `audit-framework/` | Active | Shared audit scripts for all AI assistants |
-| `memory/` | Stale | Originally for agent memory; contains only `.gitkeep` — can be archived |
-| `discovery/` | Stale | Early Expo sandbox; unreferenced by any surface — can be archived |
+| `memory/` | Archived | Originally for agent memory; contained only `.gitkeep`. Deleted 2026-05-05 in commit `223ec89b0` (PR #451). |
+| `discovery/` | Archived | Early Expo sandbox; was unreferenced by any surface. Deleted 2026-05-05 in commit `223ec89b0` (PR #451). |

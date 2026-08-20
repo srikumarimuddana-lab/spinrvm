@@ -15,10 +15,14 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   BarChart3, TrendingDown, XCircle, CheckCircle,
   RefreshCw, Activity, Car, DollarSign, Target, Search, AlertTriangle,
-  MapPin, Send, TrendingUp,
+  MapPin, Send, TrendingUp, Users, Timer, LayoutDashboard,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { DriverOffersPanel } from "@/components/analytics/driver-offers-panel";
+import { MarketplaceOverviewPanel } from "@/components/analytics/marketplace-overview-panel";
+import { SupplyPanel } from "@/components/analytics/supply-panel";
+import { EfficiencyPanel } from "@/components/analytics/efficiency-panel";
+import { FinancialPanel } from "@/components/analytics/financial-panel";
 import { DemandForecastPanel } from "@/components/analytics/demand-forecast-panel";
 import { Pagination } from "@/components/ui/pagination";
 import {
@@ -330,11 +334,23 @@ export default function AnalyticsPage() {
         </CardContent>
       </Card>
 
-      <Tabs defaultValue="cancellations">
+      <Tabs defaultValue="overview">
         {/* Horizontally scrollable so the tab row degrades gracefully on
             narrow screens instead of wrapping into the content below. */}
         <div className="overflow-x-auto">
           <TabsList>
+            <TabsTrigger value="overview" className="gap-1.5">
+              <LayoutDashboard className="h-3.5 w-3.5" /> Overview
+            </TabsTrigger>
+            <TabsTrigger value="supply" className="gap-1.5">
+              <Users className="h-3.5 w-3.5" /> Supply
+            </TabsTrigger>
+            <TabsTrigger value="efficiency" className="gap-1.5">
+              <Timer className="h-3.5 w-3.5" /> Efficiency
+            </TabsTrigger>
+            <TabsTrigger value="financial" className="gap-1.5">
+              <DollarSign className="h-3.5 w-3.5" /> Financial
+            </TabsTrigger>
             <TabsTrigger value="cancellations">Cancellations</TabsTrigger>
             <TabsTrigger value="acceptance">Driver Acceptance</TabsTrigger>
             <TabsTrigger value="offers" className="gap-1.5">
@@ -345,6 +361,27 @@ export default function AnalyticsPage() {
             </TabsTrigger>
           </TabsList>
         </div>
+
+        {/* Marketplace health — the funnel and the CLAUDE.md KPI targets. */}
+        <TabsContent value="overview" className="space-y-4">
+          <MarketplaceOverviewPanel
+            dateRange={dateRange}
+            serviceAreaId={svcArea}
+            refreshToken={refreshToken}
+          />
+        </TabsContent>
+
+        <TabsContent value="supply" className="space-y-4">
+          <SupplyPanel dateRange={dateRange} serviceAreaId={svcArea} refreshToken={refreshToken} />
+        </TabsContent>
+
+        <TabsContent value="efficiency" className="space-y-4">
+          <EfficiencyPanel dateRange={dateRange} serviceAreaId={svcArea} refreshToken={refreshToken} />
+        </TabsContent>
+
+        <TabsContent value="financial" className="space-y-4">
+          <FinancialPanel dateRange={dateRange} serviceAreaId={svcArea} refreshToken={refreshToken} />
+        </TabsContent>
 
         {/* Cancellation Breakdown Tab */}
         <TabsContent value="cancellations" className="space-y-4">

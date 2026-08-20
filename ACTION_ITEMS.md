@@ -6637,6 +6637,41 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   `routes/promotions.py` ride-count call sites exclude them, with a regression test and a
   Change Impact Log (money-adjacent, rider-facing — same rigor as any other promotions.py fix).
 
+### B32. `driver_earnings` silently dropped a tip credit when more than one code path wrote it to the same ride (2026-08-19, live-testing incident)
+
+- **Source:** user attached 2 real ride receipts from live Saskatchewan app
+  testing (real Stripe charges) plus a driver Activity panel screenshot
+  showing Fare $0.00 and a mismatched Total Earned. Traced via live
+  `rides`/`financial_events` queries the user ran in Supabase SQL Editor
+  (no DB access in-session at the time).
+- **Root cause:** `routes/rides/rating.py` (tip-while-rating), `routes/rides/payments.py`'s
+  `add_tip` (late tip), and the `settle_ride_card_payment` RPC / `payment_service.py`'s
+  `_tip_ride_update` fallback (tip at settlement) each independently computed
+  `driver_earnings` as "existing value + tip delta." Correct only if a ride's
+  tip is ever written by exactly one of these paths — a ride that crossed more
+  than one landed with `driver_earnings` short by exactly the dropped tip.
+  `financial_events` confirmed the Stripe charge itself was always correct in
+  both sampled rides (`delta_cents` matched fare+tax+tip); this was a driver
+  underpayment, never a rider overcharge.
+- **Fix:** added `fare_service.driver_earnings_with_tip(ride, tip_amount)` —
+  one canonical, idempotent formula (`total_fare - (booking_fee + airport_fee) + tip`,
+  recomputed fresh every call, no delta/call-order dependency) — and switched
+  all 4 write sites to use it (migration 337 for the RPC). One-off migration 338
+  corrected the single affected production ride (SPR-8X2GTY:
+  `driver_earnings` 0.17 → 0.67). Live-verified end-to-end: DB values
+  (`driver_earnings` 0.62 + 0.67) reconcile exactly against the driver
+  Activity panel's Fare/Tips/Tax/Total Earned lines after the fix.
+- **Status:** [x] **DONE** (2026-08-19). PR #4258 (fix + migrations 337/338,
+  merged) and PR #4262 (follow-up doc/checksum-drift fix, merged) — see
+  `docs/change-log/2026-08-19-driver-earnings-tip-underpayment.md` for full
+  root-cause trace, blast-radius grep (40+ readers of `driver_earnings`,
+  none changed), and before/after. 153 targeted tests pass; `ruff check` clean.
+- **Related, NOT fixed in this pass** (flagged, no ticket yet): a
+  `spinr-money-auditor` pass during the same investigation also flagged
+  `backend/routes/drivers/_shared.py:113-119`'s `_ride_income()` — a legacy
+  fallback that folds tip into ride income when `driver_earnings` is NULL —
+  as a related but distinct gap worth a follow-up look.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly

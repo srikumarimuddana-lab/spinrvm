@@ -27,6 +27,18 @@
  * WAV and surge survive as chips. WAV is a Saskatchewan accessibility
  * obligation, and surge changes what the driver is paid — neither is decoration.
  *
+ * ─── Why there is no fare on it during a ride ────────────────────────────────
+ * The head unit is a screen the RIDER can read. Quoting what this trip pays,
+ * inches from the passenger who is paying for it, is an awkward negotiation the
+ * driver never asked for — and on a 0%-commission product the two numbers are
+ * nearly the same one, which makes it worse, not better. The driver has already
+ * seen the money at the only moment it is a decision: the offer, where it leads
+ * the alert and the offer panel at hero scale. Once accepted, the ride's own
+ * numbers — distance and ETA — are what this bar carries instead.
+ *
+ * The completed leg keeps its total (that is the whole message of that card),
+ * but masked behind the same earnings-privacy toggle as the TODAY pill.
+ *
  * This bar is not used during an offer. That moment has its own, deliberately
  * much richer panel — CarOfferPanel.tsx — because the alert cannot render the
  * one number the driver is deciding on at anything above body-text size. This
@@ -36,6 +48,7 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import type { TripCard } from './carCard';
+import { displayEarnings, useCarEarningsPrivacy } from './carEarningsPrivacy';
 import { carColors, carSpace, carType } from './carTheme';
 
 /** A small rounded chip (WAV, surge). */
@@ -58,10 +71,19 @@ function Chip({
 }
 
 export function CarTripCard({ card }: { card: TripCard }): React.ReactElement {
-  const meta = [card.etaLabel, card.distanceLabel].filter(Boolean).join(' · ');
-  // The one leg where the number genuinely leads: the trip is over and what it
-  // paid is the whole message. Everywhere else the destination leads.
+  const earningsHidden = useCarEarningsPrivacy((s) => s.hidden);
+  // The one leg where money belongs on this bar at all: the trip is over and
+  // what it paid is the whole message. During pickup and the trip itself the
+  // fare is deliberately absent — see the header note.
   const moneyLeads = card.leg === 'complete';
+  const fareText = moneyLeads ? displayEarnings(card.fareLabel, earningsHidden) : null;
+  // With the fare gone from the engaged legs, the trip's own numbers take the
+  // right-hand column: distance leads, ETA sits under it. They are what the
+  // driver is actually tracking between here and the drop-off.
+  const meta = moneyLeads
+    ? [card.etaLabel, card.distanceLabel].filter(Boolean).join(' · ')
+    : card.etaLabel;
+  const lead = moneyLeads ? null : card.distanceLabel;
   // Caption line doubles as the rider identifier so the name costs no extra row.
   const caption = [card.destinationCaption, card.riderName].filter(Boolean).join(' · ');
 
@@ -92,12 +114,17 @@ export function CarTripCard({ card }: { card: TripCard }): React.ReactElement {
           </View>
 
           <View style={styles.moneyCol}>
-            {card.fareLabel && (
-              <Text style={moneyLeads ? styles.fareLead : styles.fare} numberOfLines={1}>
-                {card.fareLabel}
+            {fareText && (
+              <Text style={styles.fareLead} numberOfLines={1}>
+                {fareText}
               </Text>
             )}
-            {meta.length > 0 && (
+            {lead && (
+              <Text style={styles.fare} numberOfLines={1}>
+                {lead}
+              </Text>
+            )}
+            {meta && meta.length > 0 && (
               <Text style={styles.meta} numberOfLines={1}>
                 {meta}
               </Text>

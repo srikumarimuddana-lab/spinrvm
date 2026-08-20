@@ -46,6 +46,7 @@ import { bumpCarSurfaceGeneration } from './carSurfaceGeneration';
 import { startCarLocationService, stopCarLocationService } from './carLocationTask';
 import { startCarSession, stopCarSession } from './carSession';
 import { setCarColorScheme, type CarColorScheme } from './carColorScheme';
+import { useCarEarningsPrivacy } from './carEarningsPrivacy';
 import { triggerDriverEmergency } from '../../hooks/useDriverSafetyTrigger';
 
 const NAV_TEMPLATE_ID = 'spinr-aa-nav';
@@ -57,6 +58,11 @@ const NAV_ICON = require('../../assets/images/nav_arrow.png');
 const ZOOM_IN_ICON = require('../../assets/images/zoom_in.png');
 const ZOOM_OUT_ICON = require('../../assets/images/zoom_out.png');
 const RECENTER_ICON = require('../../assets/images/recenter.png');
+// Earnings privacy toggle. Two glyphs so the button itself states the current
+// state — an eye means "the total is hidden, press to show", a struck-through
+// eye means "it is on screen, press to hide".
+const EYE_ICON = require('../../assets/images/eye.png');
+const EYE_OFF_ICON = require('../../assets/images/eye_off.png');
 
 // `console.log` stays gated on __DEV__ (release builds shouldn't chatter), but
 // the line is ALWAYS recorded to the on-surface debug buffer. Previously the
@@ -195,6 +201,32 @@ export default function registerAutoPlay(): void {
     },
   };
 
+  // Earnings privacy toggle: the only way to reveal (or re-hide) the day's total
+  // on a screen the rider can read over the driver's shoulder. The surface is
+  // non-interactive, so like zoom it can only be driven from a map button.
+  const earningsButton = () => ({
+    type: 'custom' as const,
+    image: {
+      type: 'asset' as const,
+      image: useCarEarningsPrivacy.getState().hidden ? EYE_ICON : EYE_OFF_ICON,
+    },
+    onPress: () => {
+      useCarEarningsPrivacy.getState().toggle();
+      log('earnings privacy →', useCarEarningsPrivacy.getState().hidden ? 'hidden' : 'shown');
+      // The button's own glyph is part of the state it toggles, so the strip has
+      // to be rebuilt for it to flip. Cheap — setMapButtons is the same call the
+      // leg transitions already make.
+      try {
+        template?.setMapButtons(mapButtonsFor(!!selectCarRoute(
+          useDriverStore.getState().rideState,
+          useDriverStore.getState().activeRide,
+        )));
+      } catch (e) {
+        logError('privacy toggle button refresh failed:', e);
+      }
+    },
+  });
+
   // Navigate button only while navigating; zoom buttons in every state.
   const mapButtonsFor = (hasRoute: boolean) => {
     const navHandoffButtons = hasRoute
@@ -207,8 +239,13 @@ export default function registerAutoPlay(): void {
         ]
       : [];
     // Android Auto's action strip caps at 4. In a ride that is Navigate +
-    // Recenter + 2 zoom = exactly 4; idle drops Navigate and sits at 3.
-    return [...navHandoffButtons, recenterButton, ...zoomButtons];
+    // Recenter + 2 zoom = exactly 4 — full, so the earnings toggle only appears
+    // when there is no route. That is also when it matters: idle and
+    // trip-completed are the legs the pill is read on, and mid-ride the total
+    // simply stays masked rather than displacing Navigate or a zoom control.
+    return hasRoute
+      ? [...navHandoffButtons, recenterButton, ...zoomButtons]
+      : [recenterButton, earningsButton(), ...zoomButtons];
   };
 
   // The single state-driven header action (top-right on Android). Accept/Decline
@@ -632,6 +669,10 @@ export default function registerAutoPlay(): void {
     // the map snap back to the default span each time.
     if (!template) {
       useCarMapCamera.getState().reset(); // start each session framed at the default zoom
+      // Every session starts with earnings masked. A reveal is a decision about
+      // who can currently see the screen, so it must never carry into the next
+      // drive (or the next person in the car).
+      useCarEarningsPrivacy.getState().reset();
       try {
         template = new MapTemplate({
           id: NAV_TEMPLATE_ID,

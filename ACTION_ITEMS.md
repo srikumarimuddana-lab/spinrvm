@@ -6710,6 +6710,35 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   fallback that folds tip into ride income when `driver_earnings` is NULL —
   as a related but distinct gap worth a follow-up look.
 
+### B34. No `driver_insurance_period_corrections` table exists — `.claude/context/domain-safety.md` describes one, but there is no way to route a real correction into `driver_insurance_periods` today
+
+- **Source:** surfaced while building the Oct 30 checklist's item #5(a) verification pass
+  (`docs/change-log/2026-08-20-insurance-period-reconstruction-verification.md`) — needed to decide how a
+  genuinely-diverging Period-2 reconstruction (156/186 legacy rides, real `driverlocationlogs.csv` data vs
+  migration 332's `driver_arrived_at` proxy) could ever be corrected.
+- **The gap:** `.claude/context/domain-safety.md`'s "Insurance period transitions" section states
+  *"Corrections go into a separate `driver_insurance_period_corrections` table with justification"* as
+  established behavior. It isn't — confirmed by `grep -rl driver_insurance_period_corrections backend/
+  docs/` (zero hits) and a live `information_schema.tables` query against production for `%insurance_
+  period%` (only `driver_insurance_periods` exists). This is the same "documented but never built" pattern
+  already flagged elsewhere in `domain-safety.md`'s own "Corrected 2026-08-16" sections for emergency
+  contacts and night-ride protections — this one just hadn't been checked against the schema yet.
+- **Why it matters:** `driver_insurance_periods`' immutability trigger unconditionally blocks any `UPDATE`
+  to a closed row (verified directly against the trigger function, not assumed), so once a period row is
+  wrong — a bad reconstruction, a bug in `record_period_transition()`, anything — there is currently no
+  sanctioned way to record a fix. The only technically-possible workaround (insert a second, competing row
+  for the same `ride_id`/`period`) creates an unresolvable contradiction for anyone reading the table later
+  (SGI export, admin dashboard, a future coverage-gap check) with nothing in the schema saying which row is
+  authoritative.
+- **Recommended shape** (not designed in detail, just the constraints a real design needs to satisfy):
+  a new table `driver_insurance_period_corrections` (`original_period_id` FK, corrected `started_at`/
+  `ended_at`, `reason` text, `corrected_by`, `corrected_at`) that supersedes-but-never-mutates the original
+  row, plus updates to every current reader of `driver_insurance_periods` for regulatory purposes
+  (`scripts/compliance_export.py`, `backend/routes/admin/driver_distance.py`'s
+  `admin_driver_distance_logs`) to prefer a correction over its original when one exists.
+- **Status:** open, not designed or built. A real migration + RLS + immutability-trigger + two-consumer
+  wiring change, out of scope for the verification pass that surfaced it.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly
@@ -11859,6 +11888,37 @@ how much they de-risk a public launch._
   against `driverlocationlogs.csv`'s real phase-boundary timestamps —
   is unchanged and remains fully open**, not attempted this pass. See
   `docs/change-log/2026-08-20-insurance-period-reconstructed-admin-column.md`.
+- **FIXED (2026-08-20, ninth pass — Oct 30 checklist item #5(a), the
+  remaining half):** built as a read-only **verification** pass, not a
+  wholesale re-insert — `backend/services/insurance_period_reconstruction_verification.py`
+  + `backend/scripts/verify_legacy_insurance_period_reconstruction.py` (14
+  new tests) stream `driverlocationlogs.csv` (148 MB, 7,948 rows, `way_points`
+  never loaded beyond the row it's part of) and compare its real phase-
+  boundary timestamps against migration 332's already-inserted rows for the
+  same 186 rides. Only 3 distinct `phase` values exist in the real export
+  (`idle`/`going_to_pickup`/`on_ride` — enumerated via a streaming script
+  first, not assumed); `going_to_pickup` maps to the whole of Period 2 (the
+  old app had no separate assigned/accepted/arrived phases), `on_ride` to
+  Period 3. **Finding, verified against the real 186-row set (read-only, via
+  Supabase MCP against production)**: Period 3's boundary was accurate
+  (median 0.6s divergence) but Period 2's start was systematically
+  understated by migration 332's `driver_arrived_at` proxy — median ~580s
+  (~9.7 min) earlier, up to ~10.5h in one outlier — across all 156 cleanly-
+  reconstructable rides (25 ambiguous phase-span counts, 1 no CSV data, 4
+  migration-332-excluded). This confirms and quantifies a limitation
+  migration 332's own header comment already disclosed, not a new problem.
+  **No new `driver_insurance_periods` rows were written.** Migration 332's
+  rows are all closed; its immutability trigger unconditionally blocks any
+  `UPDATE` to a closed row (re-read directly from the trigger function, not
+  assumed). Inserting a second, competing set of rows for an already-covered
+  ride was considered and rejected — nothing in the schema marks which of
+  two overlapping spans is authoritative, and `.claude/context/domain-safety.md`'s
+  intended fix for exactly this (a `driver_insurance_period_corrections`
+  table) does not exist (confirmed by grep + a live schema query). Building
+  that table is filed as B34 below, not attempted here.
+  `apply_verification_plan()` always raises — this tool is read-only by
+  design. See `docs/change-log/2026-08-20-insurance-period-reconstruction-verification.md`.
+  **Item #5 (both (a) and (b)) is now fully addressed.**
 - **STILL OPEN:**
   - **Rollout decision — MADE (2026-08-20), execution still pending**: three
     dry-run-only backfill/import scripts existed (`backfill_legacy_driver_sin_dob.py`,
@@ -11872,9 +11932,14 @@ how much they de-risk a public launch._
     fresh Oct 30 pull) — accepting the documented trade-off that a second
     commit pass against the Oct 30 export may later be needed for anything
     cancelled/failed since 2026-07-26 (harmless, idempotent on
-    `old_booking_id`). Because this session has no live Supabase
-    credentials, the product owner will **execute the actual `--apply`/commit
-    runs themselves**, directly, using
+    `old_booking_id`). Because the CLI scripts have no `SUPABASE_URL`/
+    `SUPABASE_SERVICE_ROLE_KEY` configured for this session (see the
+    runbook's 2026-08-20 "Correction" section — a separate, live,
+    **read-only** Supabase MCP connection to production does exist and is
+    authorized for verification, discovered and confirmed with the product
+    owner during item #5(a) below; writes still require explicit per-run
+    authorization), the product owner will **execute the actual
+    `--apply`/commit runs themselves**, directly, using
     `docs/runbooks/legacy-backfill-scripts-rollout.md` (see its "Decision
     recorded" section) — no session performed a write against live data.
     The **7-anomalous-row disposition** above remains a separate, still-open

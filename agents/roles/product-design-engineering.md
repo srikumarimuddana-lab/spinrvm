@@ -47,3 +47,19 @@ anything shared that changed.
   like when it happens by accident.
 - Cannot ship a UI change to a customer-facing surface without an accessibility pass —
   hand off to Trust/Safety/Security's WCAG-adjacent review before Release, not after.
+
+## Individual roles
+- [Product Manager](product-design-engineering/product-manager.md)
+- [Product / UX Designer](product-design-engineering/product-designer.md)
+- [Backend Engineer](product-design-engineering/backend-engineer.md)
+- [Rider App Engineer](product-design-engineering/rider-app-engineer.md)
+- [Driver App Engineer](product-design-engineering/driver-app-engineer.md)
+- [Admin / Web Engineer](product-design-engineering/admin-web-engineer.md)
+- [DevOps / Infra Engineer](product-design-engineering/devops-infra-engineer.md)
+- [QA / Test Engineer](product-design-engineering/qa-test-engineer.md)
+- [Payments Engineer](product-design-engineering/payments-engineer.md)
+- [Data Engineer / Analyst](product-design-engineering/data-engineer-analyst.md)
+- [Engineering Manager](product-design-engineering/engineering-manager.md)
+- [Site Reliability Engineer](product-design-engineering/site-reliability-engineer.md)
+- [Data Scientist / ML Engineer](product-design-engineering/data-scientist-ml-engineer.md)
+- [AI Guardrail Reviewer](product-design-engineering/ai-guardrail-reviewer.md)

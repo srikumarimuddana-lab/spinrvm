@@ -33,3 +33,12 @@ relevant) a one-line addition to a support playbook.
 - Cannot promise a driver classification-adjacent commitment (guaranteed hours,
   mandatory shifts) in support scripts or onboarding copy — drivers are independent
   contractors, and control-of-work language is a legal exposure regardless of intent.
+
+## Individual roles
+- [Driver Onboarding / Operations Manager](operations-support/driver-onboarding-manager.md)
+- [Driver Ambassador / Field Ops](operations-support/driver-ambassador.md)
+- [Support Operations Lead](operations-support/support-ops-lead.md)
+- [Rider Support Agent](operations-support/rider-support-agent.md)
+- [Driver Support Agent](operations-support/driver-support-agent.md)
+- [Regional Operations Director](operations-support/regional-operations-director.md)
+- [City / Regional Launch Manager](operations-support/city-launch-manager.md)

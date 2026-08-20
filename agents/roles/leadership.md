@@ -39,3 +39,7 @@ A single chosen direction plus the reasoning for picking it, written into
   employee-style benefits) — that's a legal-classification risk CLAUDE.md flags
   explicitly, and needs Finance/Legal/People's sign-off, not just Leadership's.
 - Cannot raise the surge cap above 2.5× or treat it as a tunable growth lever.
+
+## Individual roles
+- [Founder / CEO](leadership/ceo.md)
+- [Co-founder / COO](leadership/coo.md)

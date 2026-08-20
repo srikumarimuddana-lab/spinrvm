@@ -21,7 +21,13 @@ The actual working pipeline, as of 2026-08-20, is:
   physically unable to do; soft stops that need a human's go-ahead)
 - **`roles/*.md`** — one plain-language file per department (matches the org chart in
   the "rideshare team roles" session): what it decides, what it needs, what it can
-  never do
+  never do. Each department also has an `agents/roles/<department>/*.md`
+  subdirectory of individual role docs (e.g. `product-design-engineering/
+  backend-engineer.md`) — 41 in total, one per role on the org chart — each linking
+  back to its department doc for pipeline-stage ownership and the shared can't-do
+  list, adding only what's specific to that individual role. The pipeline script
+  reads department docs, not individual ones — individual docs are for humans (and
+  future finer-grained pipeline work) browsing "what does this specific role do."
 - **`pipeline.workflow.js`** — the actual Claude Code `Workflow` script that runs the
   pipeline, reusing the existing `spinr-*` review subagents as stage workers
 - **`runs/<date>-<slug>/`** — one folder per completed pipeline run

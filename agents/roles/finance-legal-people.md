@@ -47,3 +47,12 @@ PR or needs to wait for a named human.
   regulatory retention window, or GPS pickup/dropoff data inside the 3-year window —
   PIPEDA deletion rights don't override Saskatchewan Transportation Act retention
   requirements.
+
+## Individual roles
+- [Legal Counsel](finance-legal-people/legal-counsel.md)
+- [Privacy / Compliance Lead (DPO)](finance-legal-people/privacy-compliance-lead-dpo.md)
+- [Controller / Finance Manager](finance-legal-people/controller-finance-manager.md)
+- [Finance & Accounting Team](finance-legal-people/finance-accounting-team.md)
+- [Regulatory / Government Affairs Liaison](finance-legal-people/government-affairs-liaison.md)
+- [Head of People / HR](finance-legal-people/head-of-people.md)
+- [Recruiter](finance-legal-people/recruiter.md)

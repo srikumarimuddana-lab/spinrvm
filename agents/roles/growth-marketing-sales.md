@@ -36,3 +36,11 @@ a cheaper implementation would satisfy the same goal.
   unlabeled charge doesn't ship, full stop.
 - Cannot add third-party ad SDKs or behavioral-retargeting tracking to hit an
   acquisition-cost target — not what Spinr's analytics exist for.
+
+## Individual roles
+- [Growth / Marketing Manager](growth-marketing-sales/growth-marketing-manager.md)
+- [Community / Social Media Manager](growth-marketing-sales/community-social-manager.md)
+- [Corporate Sales Representative](growth-marketing-sales/corporate-sales-rep.md)
+- [Corporate Account Exec / Customer Success](growth-marketing-sales/corporate-account-exec-success.md)
+- [Performance Marketing](growth-marketing-sales/performance-marketing.md)
+- [Brand / Content](growth-marketing-sales/brand-content.md)

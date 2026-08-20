@@ -110,8 +110,10 @@ what happened without translating agent jargon first.
 ## Where this lives
 
 - `agents/pipeline.workflow.js` — the actual Workflow script (the "graph engine")
-- `agents/roles/*.md` — one file per role/department, read by the relevant stage's
-  agent as its system context
+- `agents/roles/*.md` — one file per department, read by the relevant stage's agent
+  as its system context. Each department also has an `agents/roles/<department>/
+  *.md` subdirectory of individual role docs (41 total, one per role on the org
+  chart) — these are for humans browsing the org, not read by the pipeline itself.
 - `agents/GUARDRAILS.md` — the standing "can't do" list every stage must respect
 - `agents/runs/<date>-<slug>/` — one folder per pipeline run, holding the three
   documents above

@@ -11887,15 +11887,35 @@ how much they de-risk a public launch._
     — fourth capability" section. All four capabilities now have
     product-owner sign-off to run now; **none has actually been `--apply`'d
     yet** as of this update.
-  - Remaining Oct 30 checklist items (now 7 of 10, since items #3 and #4 are
-    both built though not yet `--apply`'d, and item #7 — the accuracy-
-    disclosure pass — is now FULLY ADDRESSED: DOB got its own `dob_source()`
-    derived field alongside SIN's existing `sin_source()`, and email got an
-    explicit, documented "no dedicated flag" decision rather than being left
-    silently unresolved) — see `docs/runbooks/legacy-migration-playbook.md`
-    for the full, now-accurate per-item status; the cancelled/failed-booking
-    (#3) and vehicle-linkage (#4) items there should be read alongside this
-    entry, not in isolation.
+  - Remaining Oct 30 checklist items (now 6 of 10 with real work still open,
+    plus items #3/#4 built-but-not-`--apply`'d and item #5(a) dispatched to a
+    background session, in progress as of this update):
+    - #3 (cancelled/failed-booking import) and #4 (vehicle-linkage backfill)
+      are both fully built, reviewed, and rollout-decided — the only
+      remaining step is the product owner's own `--apply` execution, not
+      further engineering work.
+    - #5(b) (admin-dashboard `is_reconstructed` column) and #7 (DOB/email
+      accuracy-disclosure) are now FULLY ADDRESSED — DOB got its own
+      `dob_source()` derived field alongside SIN's existing `sin_source()`
+      (with a post-review fix for a real over-disclosure bug, see A41's
+      DOB-provenance entry above), email got an explicit documented "no
+      dedicated flag" decision, and the admin-dashboard drill-down surfaces
+      `is_reconstructed` per span.
+    - #8 (explicit include/exclude sign-off, per `REVIEW`-tagged collection)
+      is now FULLY ADDRESSED — every collection in the 2026-08-19 inventory
+      doc has a recorded decision, put to the product owner directly rather
+      than inferred; see that doc's new "Sign-off recorded" section. Two
+      non-blocking residual gaps flagged there (`pages`/`faqs` live-content
+      diffs, neither an import candidate either way).
+    - #5(a) (re-run insurance-period reconstruction using
+      `driverlocationlogs.csv`'s real phase-boundary timestamps instead of
+      the `driver_arrived_at` fallback) is **dispatched, in progress** as of
+      this update — not yet complete, do not assume it's done.
+    - #1 (consent-basis decision), #2 (retention-window proof), #9
+      (never-import list re-confirm), #10 (final reconciliation) remain
+      exactly as open as previously documented — see
+      `docs/runbooks/legacy-migration-playbook.md` for the full, per-item
+      status.
   - Real device/visual verification for the consent-notice mechanism (no
     simulator/device available across all five passes) and the underlying
     legal sufficiency-of-old-consent judgment itself (business/counsel

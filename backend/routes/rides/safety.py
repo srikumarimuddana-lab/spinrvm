@@ -403,18 +403,19 @@ async def trigger_emergency(
 # re-verification. See agents/runs/sos-rideless-path/decisions.md for the
 # full reasoning and the accepted duplication tradeoff.
 #
-# Dark-launched behind AppSettings.rideless_sos_enabled (migration 350,
+# Dark-launched behind AppSettings.rideless_sos_enabled (migration 353,
 # default false). Checked here, server-side, so the endpoint 404s when the
 # flag is off even if a client somehow calls it anyway -- fail-closed
 # defense in depth, not just "the client won't call it".
 #
-# IMPORTANT: the SMS/push copy below is a DRAFT. Per decisions.md, exact
-# wording sent to emergency contacts for a ride-less alert is a required
-# Product + Trust & Safety sign-off gate -- it must not reuse trigger_emergency's
-# "...during a Spinr ride" phrasing (false for this path) and must not claim
-# anything the current infrastructure doesn't back up (domain-safety.md).
-# This flag must not be enabled in ANY environment, dark-launch included,
-# until that sign-off happens.
+# The SMS/push copy below was reviewed and approved -- see decisions.md's
+# sign-off entry. It does not reuse trigger_emergency's "...during a Spinr
+# ride" phrasing (false for this path) and does not claim anything the
+# current infrastructure doesn't back up (domain-safety.md). Triage-runbook
+# readiness for this incident type was also reviewed and accepted (matches
+# the existing precedent of /safety/report's ride_id=NULL incidents).
+# Enabling the flag in any real environment is still a separate action from
+# this code existing -- no environment has it enabled today.
 
 
 class RidelessEmergencyRequest(BaseModel):
@@ -614,7 +615,7 @@ async def trigger_emergency_rideless(
 
     # Notify emergency contacts via SMS. Copy corrected from trigger_emergency's
     # "...during a Spinr ride" phrasing, which would be false here -- see the
-    # module-level DRAFT-copy note above.
+    # module-level copy-approval note above.
     contacts_notified = 0
     _notified_contact_ids: set = set()
     try:

@@ -33,7 +33,8 @@ COMMENT ON COLUMN public.settings.rideless_sos_enabled IS
     'showing the existing "No Active Ride / Call 911" prompt when no ride '
     'is active. On = rider-app''s home-screen SOS button can send a real '
     'ride-less alert (safety_incidents.ride_id = NULL, '
-    'category=''sos_button_rideless''). Requires explicit Product + Trust & '
-    'Safety sign-off on SMS/push copy and triage-runbook readiness before '
-    'being flipped on in ANY environment, dark-launch included -- see '
-    'agents/runs/sos-rideless-path/decisions.md.';
+    'category=''sos_button_rideless''). SMS/push copy and triage-runbook '
+    'readiness were reviewed and signed off 2026-08-20 -- see '
+    'agents/runs/sos-rideless-path/decisions.md. Still ships false here; '
+    'enabling in any real environment is a separate PATCH /api/admin/settings '
+    'action, not part of this migration.';

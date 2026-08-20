@@ -61,5 +61,6 @@ anything shared that changed.
 - [Data Engineer / Analyst](product-design-engineering/data-engineer-analyst.md)
 - [Engineering Manager](product-design-engineering/engineering-manager.md)
 - [Site Reliability Engineer](product-design-engineering/site-reliability-engineer.md)
-- [Data Scientist / ML Engineer](product-design-engineering/data-scientist-ml-engineer.md)
+- [Data Scientist](product-design-engineering/data-scientist.md)
+- [ML Engineer](product-design-engineering/ml-engineer.md)
 - [AI Guardrail Reviewer](product-design-engineering/ai-guardrail-reviewer.md)

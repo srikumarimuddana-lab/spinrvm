@@ -233,6 +233,31 @@ async def admin_driver_distance_logs(
         or []
     )
 
+    # ACTION_ITEMS.md B34: a sanctioned correction (migration 355) is
+    # preferred over the original span's started_at/ended_at when one is on
+    # file for it — same "prefer, never present indistinguishably" rule as
+    # scripts/compliance_export.py. Empty span set short-circuits rather than
+    # issuing an all-empty $in (CLAUDE.md's query-filter rules).
+    span_ids = [s["id"] for s in spans if s.get("id")]
+    corrections: Dict[str, dict] = {}
+    if span_ids:
+        correction_rows = (
+            await db_supabase.get_rows(
+                "driver_insurance_period_corrections",
+                {"original_period_id": {"$in": span_ids}},
+                columns="original_period_id,corrected_started_at,corrected_ended_at",
+                limit=len(span_ids),
+            )
+            or []
+        )
+        corrections = {r["original_period_id"]: r for r in correction_rows}
+    for s in spans:
+        correction = corrections.get(s.get("id"))
+        if correction:
+            s["started_at"] = correction["corrected_started_at"]
+            s["ended_at"] = correction["corrected_ended_at"]
+            s["is_corrected"] = True
+
     # Audited distances for the day: ride-scoped (P2/P3) keyed by
     # (ride_id, period); P1 rows (ride_id NULL) matched to spans by overlap.
     dist_rows = (
@@ -313,6 +338,11 @@ async def admin_driver_distance_logs(
                 # this; this is the admin-dashboard read-only counterpart
                 # (legacy-migration-playbook.md checklist item #5(b)).
                 "is_reconstructed": bool(s.get("is_reconstructed", False)),
+                # Migration 355 (ACTION_ITEMS.md B34): True when a sanctioned
+                # driver_insurance_period_corrections row was found for this
+                # span above and its started_at/ended_at were already
+                # substituted with the corrected values.
+                "is_corrected": bool(s.get("is_corrected", False)),
             }
         )
 

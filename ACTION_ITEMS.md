@@ -11554,37 +11554,81 @@ how much they de-risk a public launch._
     already-imported historical ride rows with the same
     `legacy_import_metadata.duration_estimated` key the importer now
     stamps going forward. **Never run with `--apply` against anything.**
-    Found and documented (not fixed — correctly judged as over-engineering
-    for two one-off manual CLIs neither of which has ever applied) a new
-    risk: `backend/services/legacy_gst_backfill_service.py` is a *separate*
+    Found a concurrent-writer risk (see fourth pass below for the fix):
+    `backend/services/legacy_gst_backfill_service.py` is a *separate*
     pre-existing manual backfill that also read-merge-writes the same
-    `rides.legacy_import_metadata` column — a genuine concurrent-writer
-    collision risk if both scripts' `--apply` steps were ever run close
-    together. Flagged as a named, unresolved risk for whoever runs either
-    script's `--apply` step.
+    `rides.legacy_import_metadata` column.
   - Consent-notice mobile completion (cold-start + `profile-setup.tsx`) —
     see above, filed under the consent-basis-gap bullet rather than
     duplicated here.
+- **FIXED (2026-08-19, fourth pass — 2 more parallel worktree-isolated
+  tracks, no file overlap with each other or the earlier three passes):**
+  - **Concurrent-writer risk hardened** —
+    `docs/change-log/2026-08-19-legacy-backfill-concurrent-writer-fix.md`:
+    on investigation, `legacy_gst_backfill_service.py` turned out to have
+    **no commit/write path at all today** (dry-run-plan-only by its own
+    docstring's design) — the task's original premise ("harden its write
+    path") didn't match reality, correctly caught rather than assumed.
+    An advisory-lock approach was investigated and correctly rejected as
+    infeasible (these scripts only have `supabase-py`/PostgREST access,
+    not the raw psycopg connection `run_migrations.py` uses for exactly
+    this reason — a session-level Postgres advisory lock can't reliably
+    span a PostgREST read-then-write across pooled connections). Instead,
+    `apply_duration_estimated_backfill` (the one function that writes
+    today) now carries a whole-column optimistic-concurrency guard
+    alongside its existing `duration_estimated IS NULL` check — the write
+    only succeeds if nothing else touched *any* key on that row's
+    `legacy_import_metadata` since it was read; a mismatch is reported as
+    a conflict, never silently dropped. The required pattern is documented
+    in `legacy_gst_backfill_service.py`'s own docstring for whoever adds
+    its write path later. New regression test simulates the race
+    directly. `docs/runbooks/legacy-backfill-scripts-rollout.md` (new)
+    gives a concrete pre-flight/sequencing runbook for both dry-run
+    scripts — explicitly **not** a decision to run `--apply` on anything,
+    that sign-off still belongs to the product owner.
+  - **Oct 30 checklist re-verified against all four passes' actual shipped
+    code** (not just claimed) —
+    `docs/runbooks/legacy-migration-playbook.md` now carries accurate
+    per-item status inline. Result: **3 of 10 items partially addressed**
+    (consent-basis mechanism built but flag off; `is_reconstructed` export
+    fix landed but admin-dashboard column + migration-332 re-run
+    still open; SIN gets provenance but name/email/DOB accuracy-disclosure
+    is only a coarse whole-profile badge), **1 fully addressed** (SIN/DOB
+    minimization scope sign-off), **6 still exactly as open as originally
+    written** (retention-window proof, cancelled/failed-booking import
+    path, vehicle-linkage backfill, systematic REVIEW-collection sign-off,
+    never-import-list re-confirmation, final reconciliation — the last two
+    are inherently blocked on the actual Oct 30 export). **Cancelled/failed
+    booking import path (78% of old-app bookings) confirmed still
+    completely unaddressed** — `booking_import_service.py`'s
+    `TARGET_BOOKING_STATUS = "completed"` skip logic is unchanged; this
+    remains the single largest unaddressed gap and a real Oct 30 deadline
+    (data is gone once the old app is decommissioned).
 - **STILL OPEN:**
   - **Rollout decision, unmade**: two dry-run-only backfill scripts now
     exist (`backfill_legacy_driver_sin_dob.py`,
-    `backfill_legacy_ride_duration_estimated.py`) — who runs `--apply`,
-    against which environment, and in what order relative to
-    `legacy_gst_backfill_service.py` (see the concurrent-writer risk just
-    above) is an operational decision for the Oct 30 cutover, not made by
-    any session so far.
-  - 10-item ordered data-quality checklist for the Oct 30 final cutover
-    delivered by the original audit — see the audit report (below) for the
-    full list; not re-verified this pass.
+    `backfill_legacy_ride_duration_estimated.py`, both write-guarded, both
+    documented in `docs/runbooks/legacy-backfill-scripts-rollout.md`) — who
+    runs `--apply`, against which environment, and when is still an
+    operational decision for the product owner, not made by any session.
+  - **Cancelled/failed-booking import path** — no path exists, no session
+    has built one; 78% of old-app bookings (941/1,210) have full pickup/
+    dropoff GPS and `created_at` with no import destination and no
+    scheduled fix. Time-sensitive: gone permanently once the old app is
+    decommissioned, independent of the Oct 30 final-extract date.
+  - Remaining Oct 30 checklist items — see
+    `docs/runbooks/legacy-migration-playbook.md` for the full, now-accurate
+    per-item status (7 of 10 still open or only partial, detailed above).
   - Real device/visual verification for the consent-notice mechanism (no
-    simulator/device available across all three passes) and the underlying
+    simulator/device available across all four passes) and the underlying
     legal sufficiency-of-old-consent judgment itself (business/counsel
     decision).
 - **Files:** full original findings in
   `docs/audit/2026-08-19-legacy-migration-data-quality-audit.md` and
-  `docs/runbooks/legacy-migration-playbook.md` (the repeatable
-  future-migration strategy for Oct 30); remediation details in the six
-  Change Impact Logs referenced above.
+  `docs/runbooks/legacy-migration-playbook.md` (now re-verified, the
+  repeatable future-migration strategy for Oct 30); remediation details in
+  the eight Change Impact Logs referenced above and
+  `docs/runbooks/legacy-backfill-scripts-rollout.md`.
 
 ### A42. Wrong legal entity name in ~25 files — "Spinr Technologies Inc." should be "Spinr Mobility Inc."
 - [x] **Status:** FIXED (2026-08-19, second pass) — 39 files corrected to

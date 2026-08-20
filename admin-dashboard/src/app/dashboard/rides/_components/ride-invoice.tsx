@@ -117,7 +117,7 @@ export default function RideInvoice({ rideId, status, paymentStatus }: Props) {
             doc.setFont("helvetica", "normal");
             doc.text("Ride Receipt", margin, 23);
             doc.setFontSize(8);
-            doc.text("Spinr Technologies Inc.", pageW - margin, 13, { align: "right" });
+            doc.text("Spinr Mobility Inc.", pageW - margin, 13, { align: "right" });
             doc.text("Saskatoon, SK", pageW - margin, 18, { align: "right" });
             doc.text("support@spinr.ca · www.spinr.ca", pageW - margin, 23, { align: "right" });
             y = 40;

@@ -44,6 +44,16 @@ const STATUS_TABS = [
 
 const PAGE_SIZE = 50;
 
+// Blank-name fallback for a driver row/detail — mirrors the rider-facing
+// pattern already used in dashboard/users/page.tsx (`|| email || phone`).
+// Reachable today: the legacy driver importer writes "" (not skipped, not
+// null) for a blank full_name, so `${first_name} ${last_name}` alone can
+// render as a bare, unlabeled space with no visible content.
+function driverDisplayName(d: { first_name?: string | null; last_name?: string | null; email?: string | null; phone?: string | null } | null | undefined): string {
+    if (!d) return "";
+    return `${d.first_name || ""} ${d.last_name || ""}`.trim() || d.email || d.phone || "";
+}
+
 // Match a driver_documents row to a service-area requirement using
 // one consistent priority everywhere:
 //   1. requirement_key — canonical slug stored since migration 28
@@ -946,7 +956,14 @@ export default function DriversPage() {
                                                     <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-card ${driver.is_online ? "bg-emerald-500" : "bg-gray-300"}`} />
                                                 </div>
                                                 <div className="flex-1 min-w-0">
-                                                    <p className="text-sm font-semibold truncate">{driver.first_name} {driver.last_name}</p>
+                                                    <p className="text-sm font-semibold truncate flex items-center gap-1.5">
+                                                        {driverDisplayName(driver) || <span className="text-muted-foreground/60 italic">Unnamed driver</span>}
+                                                        {driver.legacy_import_metadata && Object.keys(driver.legacy_import_metadata).length > 0 && (
+                                                            <span className="inline-block text-[10px] font-medium text-muted-foreground bg-muted rounded px-1.5 py-0.5 shrink-0">
+                                                                Imported
+                                                            </span>
+                                                        )}
+                                                    </p>
                                                     {driver.driver_code && <p className="text-[11px] font-mono text-muted-foreground truncate">{driver.driver_code}</p>}
                                                     {driver.email && <p className="text-[11px] text-muted-foreground truncate">{showPii ? driver.email : maskEmail(driver.email)}</p>}
                                                     {driver.phone && <p className="text-[11px] text-muted-foreground flex items-center gap-1 mt-0.5"><Phone className="h-2.5 w-2.5" /> {showPii ? driver.phone : maskPhone(driver.phone)}</p>}
@@ -1067,7 +1084,14 @@ export default function DriversPage() {
                                             />
                                         </div>
                                         <div>
-                                            <h2 className="text-xl font-bold">{selected.first_name} {selected.last_name}</h2>
+                                            <h2 className="text-xl font-bold flex items-center gap-2">
+                                                {driverDisplayName(selected) || <span className="text-muted-foreground italic">Unnamed driver</span>}
+                                                {selected.legacy_import_metadata && Object.keys(selected.legacy_import_metadata).length > 0 && (
+                                                    <span className="inline-block text-[10px] font-medium text-muted-foreground bg-muted rounded px-1.5 py-0.5 align-middle">
+                                                        Imported
+                                                    </span>
+                                                )}
+                                            </h2>
                                             <div className="flex items-center gap-2 mt-1 flex-wrap">
                                                 {selected.driver_code && (
                                                     <button onClick={() => navigator.clipboard.writeText(selected.driver_code)} className="flex items-center gap-1 text-xs font-mono font-semibold text-primary bg-primary/10 px-2 py-0.5 rounded" title="Copy driver code">{selected.driver_code}<Copy className="h-3 w-3" /></button>
@@ -1470,7 +1494,7 @@ export default function DriversPage() {
                                         rides={driverRides}
                                         totalCount={driverRidesTotalCount}
                                         loading={ridesLoading}
-                                        driverName={`${selected.first_name || ""} ${selected.last_name || ""}`.trim()}
+                                        driverName={driverDisplayName(selected) || "this driver"}
                                         fmtDate={fmtDate}
                                     />
                                 </TabsContent>
@@ -1497,7 +1521,8 @@ export default function DriversPage() {
                                         data={payoutSummary}
                                         loading={payoutLoading}
                                         driverId={selected.id}
-                                        driverName={`${selected.first_name || ""} ${selected.last_name || ""}`.trim() || selected.email || "this driver"}
+                                        driverName={driverDisplayName(selected) || "this driver"}
+                                        isLegacyImported={!!selected.legacy_import_metadata && Object.keys(selected.legacy_import_metadata).length > 0}
                                         notify={toast}
                                         retryingPayoutId={retryingPayoutId}
                                         refreshingKyc={refreshingKyc}
@@ -2028,11 +2053,16 @@ function PayoutMetric({ label, value, tone, sub }: { label: string; value: strin
     );
 }
 
-function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutId, onRetry, onRefreshKyc, onRefreshPayouts, onRevealSin, refreshingKyc, refreshingPayouts, revealedSin, canRevealSin, canRefreshPayouts, notify }: {
+function DriverPayoutsTab({ data, loading, driverId, driverName, isLegacyImported, retryingPayoutId, onRetry, onRefreshKyc, onRefreshPayouts, onRevealSin, refreshingKyc, refreshingPayouts, revealedSin, canRevealSin, canRefreshPayouts, notify }: {
     data: DriverPayoutSummary | null;
     loading: boolean;
     driverId: string;
     driverName: string;
+    // True when selected.legacy_import_metadata is non-empty -- distinguishes
+    // "migrated driver whose old-app banking data has no import destination"
+    // (banks.csv was never imported, ACTION_ITEMS.md A34 -- permanent, expected)
+    // from "new driver who hasn't finished onboarding" (transient, self-serve).
+    isLegacyImported: boolean;
     retryingPayoutId: string | null;
     onRetry: (payoutId: string) => Promise<void>;
     onRefreshKyc: () => Promise<void>;
@@ -2233,6 +2263,12 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, retryingPayoutI
                                 </div>
                             )}
                         </>
+                    ) : isLegacyImported ? (
+                        <div className="col-span-full text-sm text-muted-foreground py-2">
+                            {driverName}&rsquo;s payout method wasn&rsquo;t migrated from the previous app -- its raw
+                            banking data was never imported (a known, permanent gap for legacy drivers, not a bug).
+                            Ask {driverName} to add a bank account or Stripe Connect account to resume payouts.
+                        </div>
                     ) : (
                         <div className="col-span-full text-sm text-muted-foreground py-2">
                             {driverName} has not added a payout method yet. Payouts cannot be processed until a bank account or Stripe Connect account is linked.

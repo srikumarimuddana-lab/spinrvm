@@ -172,6 +172,12 @@ export default function UsersPage() {
                 status: u.status || "active",
                 status_reason: u.status_reason ?? null,
                 suspended_until: u.suspended_until ?? null,
+                // Now present on the list endpoint (_USER_LIST_COLUMNS,
+                // backend/routes/admin/users.py) -- carried through this
+                // explicit per-field transform so the list-row "Imported"
+                // badge below isn't silently dropped, the way it would be if
+                // this object literal simply omitted the key.
+                legacy_import_metadata: u.legacy_import_metadata ?? null,
             }));
             setUsers(transformed);
         } catch (err: any) {
@@ -497,7 +503,14 @@ export default function UsersPage() {
                                             <TableRow key={user.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelectedUser(user)}>
                                                 <TableCell>
                                                     <div>
-                                                        <p className="font-medium">{user.name}</p>
+                                                        <p className="font-medium flex items-center gap-1.5">
+                                                            {user.name}
+                                                            {user.legacy_import_metadata && Object.keys(user.legacy_import_metadata).length > 0 && (
+                                                                <span className="inline-block text-[10px] font-medium text-muted-foreground bg-muted rounded px-1.5 py-0.5 shrink-0">
+                                                                    Imported
+                                                                </span>
+                                                            )}
+                                                        </p>
                                                         <p className="text-xs text-muted-foreground font-mono">{user.id?.slice(0, 8)}</p>
                                                     </div>
                                                 </TableCell>
@@ -589,6 +602,15 @@ export default function UsersPage() {
                                         )}
                                         {selectedUser.is_driver && (
                                             <Badge variant="secondary" className="bg-violet-500/15 text-violet-600">Driver</Badge>
+                                        )}
+                                        {/* legacy_import_metadata is only present on the DETAIL fetch
+                                            (admin_get_user_details selects the full users row) -- the
+                                            list endpoint's _USER_LIST_COLUMNS projection omits it, so
+                                            this reads from userDetail, not selectedUser. */}
+                                        {userDetail?.legacy_import_metadata && Object.keys(userDetail.legacy_import_metadata).length > 0 && (
+                                            <span className="inline-block text-[10px] font-medium text-muted-foreground bg-muted rounded px-1.5 py-0.5">
+                                                Imported
+                                            </span>
                                         )}
                                     </div>
                                 </div>

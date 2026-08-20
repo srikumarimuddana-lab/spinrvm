@@ -265,7 +265,10 @@ def test_apply_encrypts_sin_and_merges_metadata_without_clobbering(monkeypatch):
     # original metadata key survives; new key is added alongside it
     assert updated["legacy_import_metadata"]["source"] == IMPORT_SOURCE
     assert updated["legacy_import_metadata"]["old_driver_id"] == "42"
-    assert updated["legacy_import_metadata"][svc.LEGACY_BANK_SIN_DOB_SOURCE]["batch"] == "test-batch-1"
+    marker = updated["legacy_import_metadata"][svc.LEGACY_BANK_SIN_DOB_SOURCE]
+    assert marker["batch"] == "test-batch-1"
+    assert marker["sin_written"] is True
+    assert marker["dob_written"] is True
 
 
 def test_apply_reports_conflict_and_does_not_clobber_a_concurrent_self_entry(monkeypatch):
@@ -317,6 +320,26 @@ def test_apply_is_a_noop_with_no_updates(monkeypatch):
     assert fake.recorder == {}
 
 
+def test_apply_dob_only_backfill_does_not_mark_sin_written(monkeypatch):
+    """A driver whose SIN is already self-entered but whose DOB is missing
+    gets a DOB-only backfill — the marker must record sin_written=False so
+    sin_source() (below) never mislabels their self-entered SIN as
+    legacy-imported."""
+    driver = _spinr_driver(sin="vault-uuid-self-entered", date_of_birth=None)
+    fake = _install(monkeypatch, drivers=[driver])
+    plan = svc.plan_legacy_sin_dob_import([_bank_row()], [_mongo_driver_row()])
+
+    conflicts = svc.apply_legacy_sin_dob_import(plan, batch="test-batch-dob-only")
+    assert conflicts == []
+
+    updated = fake.store["drivers"][0]
+    assert updated["sin"] == "vault-uuid-self-entered"  # untouched
+    assert updated["date_of_birth"] == "1992-08-03"
+    marker = updated["legacy_import_metadata"][svc.LEGACY_BANK_SIN_DOB_SOURCE]
+    assert marker["sin_written"] is False
+    assert marker["dob_written"] is True
+
+
 # ── print_sin_dob_report ────────────────────────────────────────────────
 
 
@@ -329,3 +352,51 @@ def test_print_sin_dob_report_smoke(capsys):
     out = capsys.readouterr().out
     assert "DRY RUN" in out
     assert "drivers to update: 1" in out
+
+
+# ── sin_source (finding #2, docs/audit/2026-08-19-legacy-migration-data-quality-audit.md) ──
+
+
+def test_sin_source_none_driver_or_no_sin():
+    assert svc.sin_source(None) is None
+    assert svc.sin_source({}) is None
+    assert svc.sin_source({"sin_collected_at": None, "legacy_import_metadata": {}}) is None
+
+
+def test_sin_source_self_entry_when_no_legacy_marker():
+    driver = {"sin_collected_at": "2026-08-01T00:00:00Z", "legacy_import_metadata": {}}
+    assert svc.sin_source(driver) == "self_entry"
+
+
+def test_sin_source_legacy_import_when_marker_has_sin_written():
+    driver = {
+        "sin_collected_at": "2026-08-19T00:00:00Z",  # same-shaped stamp as self-entry
+        "legacy_import_metadata": {
+            svc.LEGACY_BANK_SIN_DOB_SOURCE: {"batch": "b1", "imported_at": "2026-08-19T00:00:00Z", "sin_written": True}
+        },
+    }
+    assert svc.sin_source(driver) == "legacy_import"
+
+
+def test_sin_source_dob_only_backfill_stays_self_entry():
+    """Regression for the exact mislabeling bug this fix must avoid: a
+    legacy_import_metadata marker exists (a DOB-only batch touched this
+    driver) but sin_written is False, because the SIN itself was
+    self-entered — must classify as self_entry, not legacy_import."""
+    driver = {
+        "sin_collected_at": "2026-01-01T00:00:00Z",  # self-entry, predates the DOB backfill
+        "legacy_import_metadata": {
+            svc.LEGACY_BANK_SIN_DOB_SOURCE: {
+                "batch": "dob-only-batch",
+                "imported_at": "2026-08-19T00:00:00Z",
+                "sin_written": False,
+                "dob_written": True,
+            }
+        },
+    }
+    assert svc.sin_source(driver) == "self_entry"
+
+
+def test_sin_source_no_sin_collected_at_and_no_legacy_marker_is_none():
+    driver = {"sin_collected_at": None, "legacy_import_metadata": {"source": IMPORT_SOURCE}}
+    assert svc.sin_source(driver) is None

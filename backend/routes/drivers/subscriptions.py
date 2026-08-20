@@ -965,7 +965,7 @@ _LEGACY_INVOICE_HEADER = (
 )
 _LEGACY_INVOICE_FOOTER = (
     '<tr><td style="padding:16px 32px 24px;border-top:1px solid #f0f0f0;text-align:center;">\n'
-    '    <p style="color:#bbb;font-size:11px;margin:0;">Spinr Technologies Inc. · Saskatoon, SK, Canada</p>\n'
+    '    <p style="color:#bbb;font-size:11px;margin:0;">Spinr Mobility Inc. · Saskatoon, SK, Canada</p>\n'
     '    <p style="color:#bbb;font-size:11px;margin:4px 0 0;">support@spinr.ca · www.spinr.ca</p>\n'
     "  </td></tr>"
 )

@@ -332,7 +332,7 @@ def generate_receipt_pdf(
     pdf.set_font("Helvetica", "", 8)
     pdf.set_text_color(150, 150, 150)
     pdf.ln(4)
-    identity = company.identity_line if company is not None else "Spinr Technologies Inc. - Saskatoon, SK"
+    identity = company.identity_line if company is not None else "Spinr Mobility Inc. - Saskatoon, SK"
     contact = company.contact_line if company is not None else "support@spinr.ca - www.spinr.ca"
     # fpdf2 core fonts are latin-1; the settings-driven lines can contain an
     # em dash or a middot, which would raise on output. Fold them to ASCII

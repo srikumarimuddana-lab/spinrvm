@@ -73,7 +73,7 @@ _CENT = Decimal("0.01")
 # driver_insurance_periods.ride_id -> rides.id. Only ride-linked periods (2/3)
 # are ever requested (see _scan), so the embed is never empty for a matched row.
 _COLUMNS = (
-    "id,driver_id,period,started_at,ended_at,ride_id,"
+    "id,driver_id,period,started_at,ended_at,ride_id,is_reconstructed,"
     "rides(id,status,created_at,planned_distance_km,actual_distance_km,"
     "phase_distances,total_fare)"
 )
@@ -90,6 +90,7 @@ FIELDNAMES = [
     "actual_distance_km",
     "phase_distances",
     "total_fare_cad",
+    "is_reconstructed",
 ]
 
 
@@ -117,6 +118,11 @@ def redact_row(period_row: Dict[str, Any]) -> Dict[str, Any]:
         "actual_distance_km": ride.get("actual_distance_km"),
         "phase_distances": json.dumps(ride.get("phase_distances") or {}, sort_keys=True),
         "total_fare_cad": _money(ride.get("total_fare")),
+        # Migration 332: true when this insurance-period row was reconstructed
+        # from a legacy-import ride's timestamps rather than logged
+        # contemporaneously by the app. Regulator/SGI exports must not present
+        # reconstructed data indistinguishable from a live-logged record.
+        "is_reconstructed": bool(period_row.get("is_reconstructed", False)),
     }
 
 

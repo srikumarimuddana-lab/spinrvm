@@ -203,6 +203,26 @@ def test_update_flags_user_not_found(test_client, admin_override):
     assert resp.status_code == 404
 
 
+# ---------- GET /users (list) ----------
+
+
+def test_list_users_projects_legacy_import_metadata(test_client, admin_override):
+    """Additional check, docs/audit/2026-08-19-legacy-migration-data-quality-
+    audit.md: the rider list must expose legacy_import_metadata the same way
+    the driver list already does (admin_get_drivers projects no restrictive
+    columns=), so an admin can recognize a legacy-imported rider profile."""
+    row = {**USER, "legacy_import_metadata": {"source": "legacy_mongo_rider_import", "batch": "b1"}}
+    get_rows = AsyncMock(return_value=[row])
+    with patch(f"{MOD}.db_supabase.get_rows", get_rows):
+        resp = test_client.get("/api/admin/users")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()[0]["legacy_import_metadata"]["source"] == "legacy_mongo_rider_import"
+    # Assert the projection itself requested the column, not just that the
+    # fake happened to echo it back.
+    _, kwargs = get_rows.call_args
+    assert "legacy_import_metadata" in kwargs["columns"]
+
+
 # ---------- GET /users/{id} ----------
 
 

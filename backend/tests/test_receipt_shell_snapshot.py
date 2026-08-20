@@ -118,16 +118,16 @@ def test_current_shell_has_no_logo_image():
 
 def test_current_shell_footer_is_hardcoded():
     html = _html()
-    assert "Spinr Technologies Inc." in html
+    assert "Spinr Mobility Inc." in html
     assert "support@spinr.ca" in html
 
 
 # --- Branded shell (branded_receipt_enabled = true) ------------------------
 
 _COMPANY = CompanyDetails(
-    name="Spinr Technologies Inc.",
+    name="Spinr Mobility Inc.",
     address="220 3rd Ave S, Saskatoon SK S7K 1M1",
-    identity_line="Spinr Technologies Inc. — 220 3rd Ave S, Saskatoon SK S7K 1M1",
+    identity_line="Spinr Mobility Inc. — 220 3rd Ave S, Saskatoon SK S7K 1M1",
     contact_line="help@spinr.ca · https://spinr.ca · +1 306 555 0100",
     support_email="help@spinr.ca",
     logo_url="https://api-spinr.spinr.ca/api/v1/branding/spinr-logo.png",
@@ -148,7 +148,7 @@ def test_branded_shell_shows_the_configured_company_name_and_address():
 
 
 def test_branded_shell_drops_the_hardcoded_footer():
-    assert "Spinr Technologies Inc. · Saskatoon, SK" not in _branded()
+    assert "Spinr Mobility Inc. · Saskatoon, SK" not in _branded()
     assert "www.spinr.ca" not in _branded()
 
 
@@ -216,7 +216,7 @@ def test_only_the_shell_differs_between_the_two():
     # Two known, intentional shell bleeds into the body: the accent colour on
     # the total and the route pin, and the company name in the greeting.
     normalised = branded_body.replace("#FF3B30", "#ee2b2b").replace(
-        "Thanks for riding with Spinr Technologies Inc.", "Thanks for riding with Spinr."
+        "Thanks for riding with Spinr Mobility Inc.", "Thanks for riding with Spinr."
     )
     assert normalised == legacy_body
 
@@ -253,4 +253,4 @@ def test_text_receipt_contains_no_markup():
 
 def test_text_receipt_falls_back_to_the_legacy_footer_without_a_company():
     text = generate_receipt_text(_RIDE, _RIDER, _DRIVER, company=None)
-    assert "Spinr Technologies Inc. · Saskatoon, SK" in text
+    assert "Spinr Mobility Inc. · Saskatoon, SK" in text

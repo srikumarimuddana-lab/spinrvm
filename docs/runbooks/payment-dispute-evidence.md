@@ -150,7 +150,7 @@ For an **overcharge / wrong-fare** claim specifically: pull `fare_breakdown_snap
 Always include one as `uncategorized_text`. A reviewer spends ~90 seconds on a dispute; the letter is what they actually read.
 
 ```
-Spinr Technologies Inc. — ride-hailing, Saskatoon, Saskatchewan, Canada.
+Spinr Mobility Inc. — ride-hailing, Saskatoon, Saskatchewan, Canada.
 
 Charge: CAD $<amount> on <date>, PaymentIntent <pi_...>, Ride <ride_code>.
 

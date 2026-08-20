@@ -3,6 +3,7 @@ import { AppState, AppStateStatus, View, Text, Pressable, ActivityIndicator, Sty
 import { useRouter, useNavigationContainerRef } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
 import { createLogger } from '@shared/utils/logger';
+import api from '@shared/api/client';
 
 const log = createLogger('Index');
 
@@ -105,7 +106,22 @@ export default function Index() {
         router.replace('/login' as any);
       });
     } else {
-      router.replace('/driver/' as any);
+      // Legacy/re-consent notice: cold-start landing on driver home for an
+      // already-authenticated, profile-complete driver. Mirrors otp.tsx's
+      // fresh-login check for a pre-existing account whose consent isn't
+      // recorded — fail-open so a network hiccup never blocks entry to the
+      // app. Dark-shipped: while app_settings.legacy_consent_notice_enabled
+      // is off, /consent/status always reports needs_notice: false.
+      api.get('/consent/status').then(
+        (res) => {
+          if ((res.data as any)?.needs_notice) {
+            router.replace('/legacy-consent-notice' as any);
+          } else {
+            router.replace('/driver/' as any);
+          }
+        },
+        () => router.replace('/driver/' as any), // fail open — never block cold start on this check
+      );
     }
     // logout is a stable authStore action; router is already treated as a
     // safe/stable dep elsewhere in this file (handleSignInInstead above).

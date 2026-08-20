@@ -124,7 +124,7 @@ const NAV_GROUPS: NavGroup[] = [
                 icon: Headphones,
                 module: "support_tickets",
                 children: [
-                    { href: "/dashboard/support-tickets/tickets", label: "Tickets", icon: Inbox, module: "support_tickets" },
+                    { href: "/dashboard/support-tickets/tickets", label: "Zoho Tickets", icon: Inbox, module: "support_tickets" },
                     { href: "/dashboard/support-tickets/trends", label: "Trends", icon: BarChart3, module: "support_tickets" },
                 ],
             },

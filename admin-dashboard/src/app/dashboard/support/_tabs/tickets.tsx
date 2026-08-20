@@ -47,7 +47,7 @@ export default function TicketsTab() {
         <div className="space-y-4">
             <div className="flex gap-1 border-b -mt-1">
                 {[{ k: "tickets", l: "Tickets", i: MessageSquare }, { k: "faqs", l: "FAQs", i: HelpCircle }].map((t) => (
-                    <button key={t.k} onClick={() => setSub(t.k as any)} aria-label={`${t.l} sub-tab (within Tickets)`} className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 -mb-px ${sub === t.k ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
+                    <button key={t.k} onClick={() => setSub(t.k as any)} aria-label={`${t.l} sub-tab (within Support Tickets)`} className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 -mb-px ${sub === t.k ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
                         <t.i className="h-3.5 w-3.5" />{t.l}
                     </button>
                 ))}

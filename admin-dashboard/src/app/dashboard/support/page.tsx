@@ -14,7 +14,7 @@ const FaqsTab = dynamic(() => import("./_tabs/faqs"), { ssr: false, loading: () 
 const LegalDocumentsTab = dynamic(() => import("./_tabs/legal-documents"), { ssr: false, loading: () => <TabLoader /> });
 
 const TABS = [
-    { id: "tickets", label: "Tickets", icon: LifeBuoy },
+    { id: "tickets", label: "Support Tickets", icon: LifeBuoy },
     { id: "disputes", label: "Disputes", icon: HelpCircle },
     { id: "complaints", label: "Complaints", icon: FileWarning },
     { id: "lost-found", label: "Lost & Found", icon: PackageSearch },

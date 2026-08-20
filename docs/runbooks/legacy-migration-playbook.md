@@ -248,6 +248,21 @@ rushed).
    > `is_reconstructed` reference exists anywhere in `admin-dashboard/src/`. (a) — re-running
    > migration 332's reconstruction using `driverlocationlogs.csv`'s real phase-boundary timestamps
    > — was not attempted in any of today's PRs; still fully open.
+   >
+   > **[RE-VERIFIED 2026-08-20, SAME DAY — (b) NOW FULLY DONE.]** The remaining half of (b) is
+   > closed: `admin_driver_distance_logs` (`backend/routes/admin/driver_distance.py`, `GET
+   > /drivers/{id}/distance-logs`) — the existing per-span drill-down that already lists one row
+   > per `driver_insurance_periods` span for a Regina day — now includes `is_reconstructed` per
+   > row (additive field; no other field changed). The admin-dashboard `DayLogs` table
+   > (`admin-dashboard/src/app/dashboard/drivers/_components/driver-distance.tsx`) renders a small
+   > "Reconstructed" badge next to the phase badge when true, styled like the existing "Imported"
+   > badge (`docs/change-log/2026-08-19-legacy-migration-transparency-admin-dashboard.md`), with an
+   > `aria-label`/`title` text alternative (not color-only). No new screen was added — this route/
+   > table was judged the natural home since it is already the one place that lists raw insurance-
+   > period spans one row at a time rather than an aggregate; the daily-activity summary tab
+   > (`admin_driver_daily_activity`) aggregates spans into per-phase totals and has no natural
+   > per-row slot. See `docs/change-log/2026-08-20-insurance-period-reconstructed-admin-column.md`.
+   > **(a) is unchanged and still fully open** — out of scope for this pass, not attempted.
 6. **SIN/DOB and any other PII-sensitive backfill — minimization + encryption sign-off before any
    `--apply` run**, keeping the already-recorded scope narrow (SIN+DOB via existing encrypted
    columns, not raw banking numbers with no live consumer).

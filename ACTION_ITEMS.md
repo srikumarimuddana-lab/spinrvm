@@ -11704,7 +11704,9 @@ how much they de-risk a public launch._
     per-item status inline. Result: **3 of 10 items partially addressed**
     (consent-basis mechanism built but flag off; `is_reconstructed` export
     fix landed but admin-dashboard column + migration-332 re-run
-    still open; SIN gets provenance but name/email/DOB accuracy-disclosure
+    still open — **admin-dashboard column now shipped, eighth pass, see
+    below; migration-332 re-run (part (a)) remains open**; SIN gets
+    provenance but name/email/DOB accuracy-disclosure
     is only a coarse whole-profile badge), **1 fully addressed** (SIN/DOB
     minimization scope sign-off), **6 still exactly as open as originally
     written** (retention-window proof, cancelled/failed-booking import
@@ -11834,6 +11836,29 @@ how much they de-risk a public launch._
     after the "Decision recorded" rollout answers below were given, so it
     is explicitly NOT covered by them; see
     `docs/runbooks/legacy-backfill-scripts-rollout.md`'s "Sign-off" section.
+- **FIXED (2026-08-20, eighth pass — Oct 30 checklist item #5(b), the
+  admin-dashboard half of `is_reconstructed` surfacing):** the backend half
+  of #5(b) (regulator-facing `scripts/compliance_export.py`) already landed
+  in the second pass above; this pass closes the remaining admin-dashboard
+  half. `admin_driver_distance_logs` (`GET /drivers/{id}/distance-logs`,
+  `backend/routes/admin/driver_distance.py`) — the existing per-span
+  drill-down that already lists one row per `driver_insurance_periods` span
+  for a Regina day, already gated behind `require_module("drivers")` —
+  now includes `is_reconstructed` per row (additive field, no other field
+  in the response changed). The admin-dashboard `DayLogs` table
+  (`admin-dashboard/src/app/dashboard/drivers/_components/driver-distance.tsx`)
+  renders a small "Reconstructed" badge next to the phase badge when true,
+  styled like the existing "Imported" badge, with an `aria-label`/`title`
+  text alternative (not color-only). No new screen was added — this
+  existing route/table was the natural home since it already lists raw
+  spans one row at a time; the daily-activity summary tab
+  (`admin_driver_daily_activity`) aggregates spans into per-phase totals
+  and has no natural per-row slot. Read-only — no write path to
+  `driver_insurance_periods` was added, consistent with its append-only
+  rule. **Part (a) of item #5 — re-running migration 332's reconstruction
+  against `driverlocationlogs.csv`'s real phase-boundary timestamps —
+  is unchanged and remains fully open**, not attempted this pass. See
+  `docs/change-log/2026-08-20-insurance-period-reconstructed-admin-column.md`.
 - **STILL OPEN:**
   - **Rollout decision — MADE (2026-08-20), execution still pending**: three
     dry-run-only backfill/import scripts existed (`backfill_legacy_driver_sin_dob.py`,

@@ -49,6 +49,7 @@ from ._shared import (  # noqa: F401
     _fetch_directions_route,
     _get_active_service_area_for_point,
     _is_corporate_paid,
+    _money_str,
     _round,
     _sum_fare_breakdown,
     booked_distance_suspect_reason,
@@ -223,7 +224,7 @@ async def _attach_preauthorized_hold(
     if outcome.status == "authorized":
         return {
             "payment_intent_id": outcome.payment_intent_id,
-            "authorized_amount": _f(outcome.charged_amount),
+            "authorized_amount": _money_str(outcome.charged_amount),
             "auth_status": "authorized",
         }
     if outcome.status == "declined":
@@ -296,7 +297,7 @@ async def _preauthorize_ride_card(
         return _PreauthOutcome(
             fields={
                 "payment_intent_id": outcome.payment_intent_id,
-                "authorized_amount": _f(hold_amount),
+                "authorized_amount": _money_str(hold_amount),
                 "auth_status": "authorized",
                 # Persisted because settlement happens in a LATER request and
                 # cannot re-ask Stripe cheaply. Drives whether a tip is added to
@@ -342,7 +343,7 @@ async def _preauthorize_ride_card(
                 return _PreauthOutcome(
                     fields={
                         "payment_intent_id": fare_outcome.payment_intent_id,
-                        "authorized_amount": _f(_round(_d(grand_total))),
+                        "authorized_amount": _money_str(_round(_d(grand_total))),
                         "auth_status": "fare_only",
                         "auth_incrementable": fare_outcome.incremental_authorization_supported,
                     }
@@ -1266,7 +1267,7 @@ async def create_ride(
                     user_id=current_user["id"],
                     discount=discount,
                 )
-                discounted_grand = _f(_round(_d(fresh_ride.get("grand_total", server_fare)) - discount))
+                discounted_grand = _money_str(_round(_d(fresh_ride.get("grand_total", server_fare)) - discount))
                 # NOTE: do NOT mutate total_fare. total_fare is the fare-side
                 # subtotal (base+dist+time+booking+airport) used by area-fee
                 # and tax math downstream. The rider's effective bill goes on
@@ -1279,15 +1280,15 @@ async def create_ride(
                     "rides",
                     {"id": ride.id},
                     {
-                        "subtotal_fare": _f(server_fare),
-                        "discount_amount": _f(discount),
+                        "subtotal_fare": _money_str(server_fare),
+                        "discount_amount": _money_str(discount),
                         "promo_code": validation["code"],
                         "promo_application_id": application_id,
                         "grand_total": discounted_grand,
                     },
                 )
-                fresh_ride["subtotal_fare"] = _f(server_fare)
-                fresh_ride["discount_amount"] = _f(discount)
+                fresh_ride["subtotal_fare"] = _money_str(server_fare)
+                fresh_ride["discount_amount"] = _money_str(discount)
                 fresh_ride["promo_code"] = validation["code"]
                 fresh_ride["promo_application_id"] = application_id
                 fresh_ride["grand_total"] = discounted_grand

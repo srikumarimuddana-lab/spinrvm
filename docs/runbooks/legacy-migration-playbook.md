@@ -189,25 +189,50 @@ rushed).
 3. **Cancelled/failed-booking import path must exist and run before decommission** — closing the
    78% gap (941/1,210 old-app bookings). At minimum: GPS pickup/dropoff trace + timestamps, no
    payout/earnings reconstruction attempted. This is the one hard data-loss deadline on this list.
-   > **[RE-VERIFIED 2026-08-20 — STILL ACCURATE AS WRITTEN. This is the cross-cutting gap the task
-   > asked to confirm explicitly.]** Confirmed directly against
-   > `backend/services/booking_import_service.py`: `TARGET_BOOKING_STATUS = "completed"` (line 60)
-   > and `build_plan()` skips any row where `booking_status != "completed"` (line 318) — unchanged
-   > by any of today's three PRs. The module's own header comment (lines 57–59) still asserts
-   > "cancelled/failed legacy bookings carry no fare, no earnings, and no history value" — a claim
-   > the audit doc directly contradicts ("They still carry full pickup/dropoff GPS and `created_at`.
-   > If the old app is decommissioned before a cancelled-booking importer exists, this data is gone
-   > permanently"). No cancelled/failed import path exists, is scheduled, or was even discussed in
-   > today's remediation work. **Do not treat this as covered by anything else on this list** — none
-   > of the three PRs' fixes (tip guard, admin-money-aggregate exclusion, SIN/DOB backfill,
-   > duration-estimated marker, consent notice, entity-name correction, transparency badges) touch
-   > booking import scope at all. This remains the one hard, irreversible-after-decommission
-   > data-loss deadline on the whole list.
+   > **[RE-VERIFIED 2026-08-20 — BUILT, NOT YET RUN.]** This item was still accurate as of the
+   > fifth-pass re-verification above, but is now built: PR #4278 (2026-08-20) added a
+   > `cancelled`/`failed` branch to `booking_import_service.py` (GPS/timestamps/cancellation
+   > attribution only, no fare/earnings/payout, matching this item's own "at minimum" spec exactly),
+   > and PR #4281 (same day) closed a follow-on gap where 7 of those rows structurally completed a
+   > real trip (imported as `$0`-fare `completed` rows instead, per
+   > `docs/change-log/2026-08-20-anomalous-rows-zero-fare-completed-import.md`, since a plain
+   > cancelled-status write would have violated the ride-state-machine's
+   > never-cancelled-after-trip-start invariant). Both merged into `main`. **The hard deadline this
+   > item exists to prevent is no longer live-blocking decommission** — the code path now exists,
+   > is tested (109 tests across both), and was reviewed by `spinr-migration-reviewer`/
+   > `spinr-money-auditor` (both SAFE TO MERGE). **What's still open:** no `--apply`/`commit` has
+   > run against any environment — see `docs/runbooks/legacy-backfill-scripts-rollout.md`'s "Decision
+   > recorded" section: the product owner has approved running it now (against the existing
+   > 2026-07-26-vintage `bookings.csv`, not waiting for Oct 30) and will execute it directly, since no
+   > session in this repo has live Supabase credentials. Until that `--apply` actually runs, the data
+   > is still only *recoverable*, not yet *recovered* — this item should stay open on this checklist
+   > until that execution is confirmed, but the code/design risk this item was tracking is closed.
 4. **Vehicle-at-trip-time linkage backfill** using `vehicle_details.csv` into `driver_vehicle_history`
    (migration 157) — closes the P0 §0.4 7-year driver/vehicle-linkage gap.
-   > **[RE-VERIFIED 2026-08-20 — STILL ACCURATE AS WRITTEN.]** No importer targeting
-   > `driver_vehicle_history` from `vehicle_details.csv` was built in any of today's three PRs — none
-   > of the change-logs cross-referenced for this pass mention it. Still fully open.
+   > **[RE-VERIFIED 2026-08-20, SIXTH PASS — BUILT, NOT YET RUN.]** Still accurate at the fifth pass,
+   > now built: `backend/scripts/backfill_legacy_vehicle_history.py` +
+   > `driver_import_service.plan_legacy_vehicle_history_backfill`/`apply_legacy_vehicle_history_backfill`
+   > (17 new tests, real-export crosswalk verified: 308/355 `vehicle_details.csv` rows resolve a Spinr
+   > driver). Writes only to `driver_vehicle_history` (never `drivers`' own current vehicle columns);
+   > a driver with more than one legacy vehicle row gets a real before/after change chain, sorted by
+   > the legacy row's own timestamp — not import time, matching this playbook's own Stage 3 provenance
+   > principle, with a deterministic tiebreak for identical timestamps. `spinr-migration-reviewer`
+   > also caught and this fix closed same day: the idempotency dedup originally compared raw
+   > `created_at` strings, which never matches Postgres's trimmed-fraction serialization on a re-run
+   > (would have broken the "safe to re-run" guarantee on nearly every row). See
+   > `docs/change-log/2026-08-20-legacy-vehicle-history-backfill.md`.
+   >
+   > **Building this also surfaced and fixed a real bug in the already-merged SIN/DOB backfill
+   > (item #6 below)**: its CSV reader silently mangled the raw Mongo export's `_id` column, which
+   > would have made the already-approved SIN/DOB `--apply` run resolve 0/157 rows while reporting a
+   > clean "0 errors" — a silent no-op, not a visible failure. Fixed same day, verified against the
+   > real export (157/157 now resolve). See
+   > `docs/change-log/2026-08-20-mongo-export-header-normalization-bug.md`.
+   >
+   > **What's still open:** no `--apply` has run against any environment, and — unlike the SIN/DOB/
+   > duration-estimated/booking-import trio — this specific capability's rollout timing has **not**
+   > been put to the product owner yet (it was built after that decision was recorded); see
+   > `docs/runbooks/legacy-backfill-scripts-rollout.md`'s "Sign-off" section.
 5. **Insurance-period reconstruction, redone with the better source, and finally surfaced**: (a)
    re-run migration 332's approach using `driverlocationlogs.csv`'s real phase-boundary timestamps
    instead of the `driver_arrived_at` fallback; (b) wire `is_reconstructed` into
@@ -235,7 +260,19 @@ rushed).
    > was applied before any `--apply` run, per that same change-log's amendment. **`--apply` has
    > still never been run against production** (confirmed — the CLI wrapper remains dry-run-only in
    > every verification note read for this pass), so the ordering this item requires (sign-off
-   > before apply) has not been violated. Note this is a narrower ask than item #1's broader
+   > before apply) has not been violated.
+   >
+   > **2026-08-20, sixth pass — CRITICAL: a bug was found and fixed that would have made this script
+   > silently no-op if `--apply` had been run before this fix.** Its CSV reader routed through header
+   > normalization built for a different CSV dialect, which mangled the Mongo export's `_id` column
+   > and would have resolved 0/157 real rows (0 updates, 0 errors — indistinguishable from a clean
+   > successful run). Caught while building item #4 above, fixed same day, verified against the real
+   > export (157/157 now resolve correctly). See
+   > `docs/change-log/2026-08-20-mongo-export-header-normalization-bug.md`. This does not change this
+   > item's status (the minimization sign-off itself was always correct) but is essential context for
+   > anyone about to run `--apply`: confirm your checkout includes this fix first.
+   >
+   > Note this is a narrower ask than item #1's broader
    > consent-basis decision, which is still only partially addressed — see #1.
 7. **Accuracy-disclosure pass**: for every field imported without independent verification (SIN,
    DOB, name, email), decide and document whether a provenance/verified flag should be surfaced

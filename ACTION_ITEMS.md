@@ -6637,6 +6637,44 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   `routes/promotions.py` ride-count call sites exclude them, with a regression test and a
   Change Impact Log (money-adjacent, rider-facing — same rigor as any other promotions.py fix).
 
+### B33. `driver_import_service.read_csv`'s header normalization silently broke the SIN/DOB backfill's phone crosswalk — CLOSED (2026-08-20)
+
+- [x] **Status:** FIXED same day it was found — CRITICAL severity: the already-merged, product-owner-
+  approved-to-run SIN/DOB backfill (`backfill_legacy_driver_sin_dob.py`) would have resolved **0 of
+  157 real `banks.csv` rows** if `--apply` had been run, printing a clean "0 updates, 0 errors" report
+  indistinguishable from a genuinely successful no-op run — the worst kind of failure for an operator
+  to catch, since nothing looks wrong.
+- **Root cause:** `driver_import_service.read_csv()` runs every CSV header through `normalize_header()`
+  — built and correctly tuned for the bespoke Saskatoon driver recruitment CSV (case-folding, an alias
+  table like `"dob": "date_of_birth"`), but silently corrupts the raw MongoDB export's own field-naming
+  convention when reused for `banks.csv`/`drivers.csv`/`vehicle_details.csv`: Mongo's `_id` column has
+  its leading underscore stripped (`re.sub(r"[^a-z0-9]+", "_", ...).strip("_")`), becoming `"id"` — the
+  exact key `join_legacy_bank_sin_dob`'s phone-crosswalk dict is built from. A second, independent
+  corruption would have hit `vehicle_details.csv`'s `name` column (vehicle make) via the alias table's
+  `"name": "full_name"` rewrite (meant for a person's name) — never shipped live, since it was caught
+  while building the vehicle-history backfill (A41 Oct 30 checklist item #4) in the same session.
+- **Why existing tests never caught it:** `test_legacy_sin_dob_import_service.py` constructs its row
+  fixtures as hand-written Python dicts with `_id` already present, never calling `read_csv()` — a
+  fully-mocked-dependency unit test gave zero real coverage of the integration between the join logic
+  and the actual CSV-parsing pipeline. Exactly the "stubbed-out component gives zero real coverage"
+  pattern CLAUDE.md's pre-merge gates warn about.
+- **Fix:** added `driver_import_service.read_mongo_export_csv()` — a raw reader preserving column names
+  exactly as exported (mirrors `booking_import_service.read_csv`'s already-correct convention for the
+  same file class, which never had this bug). Updated both CLI scripts that read a raw Mongo-export CSV
+  (`backfill_legacy_driver_sin_dob.py`, and this session's new `backfill_legacy_vehicle_history.py`) to
+  use it. `read_csv`/`normalize_header` themselves are unchanged — still correct for the Saskatoon CSV.
+  4 new regression tests pin the `_id`/`name` preservation and document why `read_csv` must never be
+  used for this file class. Verified against the real cached export, not just reasoned about: SIN/DOB
+  phone crosswalk 0/157 → 157/157; vehicle-history crosswalk 0/355 → 308/355.
+- **Impact:** no `--apply` run had ever happened (confirmed throughout this session's tracking docs),
+  so no live data was affected — caught before it could silently no-op a real run, not after. Blast
+  radius grepped: `import_saskatoon_drivers.py` and the admin-dashboard driver-upload flow both
+  correctly use `read_csv` for the Saskatoon CSV, unaffected.
+- **Files:** `backend/services/driver_import_service.py`,
+  `backend/scripts/backfill_legacy_driver_sin_dob.py`, `backend/scripts/backfill_legacy_vehicle_history.py`,
+  `backend/tests/test_mongo_export_csv_reader.py`.
+- **Change Impact Log:** `docs/change-log/2026-08-20-mongo-export-header-normalization-bug.md`.
+
 ### B32. `driver_earnings` silently dropped a tip credit when more than one code path wrote it to the same ride (2026-08-19, live-testing incident)
 
 - **Source:** user attached 2 real ride receipts from live Saskatchewan app
@@ -11767,6 +11805,35 @@ how much they de-risk a public launch._
     cross-checked for this fix; not needed for the $0-fare disposition
     actually shipped, but would matter if a future decision revisits option
     2 (real payout) from the investigation finding.
+- **FIXED (2026-08-20, seventh pass — Oct 30 checklist item #4, vehicle-linkage
+  backfill):** built `backend/scripts/backfill_legacy_vehicle_history.py` +
+  `driver_import_service.plan_legacy_vehicle_history_backfill`/
+  `apply_legacy_vehicle_history_backfill` — backfills `driver_vehicle_history`
+  (migration 157) from `vehicle_details.csv`, closing the 7-year driver/
+  vehicle-linkage regulatory retention gap. Writes only to
+  `driver_vehicle_history`, never `drivers`' own current vehicle columns; a
+  driver with more than one legacy vehicle row gets a real before/after
+  change chain, sorted by the legacy row's own timestamp (with a
+  deterministic tiebreak on `old_vehicle_id` for identical timestamps). 17
+  new tests; real-export crosswalk verified (308/355 rows resolve a Spinr
+  driver). Manual review (`spinr-migration-reviewer`) also caught a real
+  idempotency bug — the "already backfilled" dedup compared raw
+  `created_at` strings, which would never have matched Postgres's trimmed-
+  fraction serialization on a re-run; fixed same day (canonicalized
+  epoch-ms comparison instead), with a regression test that actually
+  simulates the round-trip. `docs/change-log/2026-08-20-legacy-vehicle-history-backfill.md`.
+  - **Also found and fixed while building this (CRITICAL, filed as B32):**
+    the already-merged, product-owner-approved-to-run SIN/DOB backfill's CSV
+    reader silently mangled the Mongo export's `_id` column and would have
+    resolved 0/157 real rows if `--apply` had been run — a silent no-op
+    reported as a clean success, not a visible failure. Fixed same day,
+    verified against the real export (157/157 now resolve). See B32 above
+    and `docs/change-log/2026-08-20-mongo-export-header-normalization-bug.md`.
+  - **STILL OPEN, not decided this pass:** the vehicle-history backfill's
+    rollout timing has NOT been put to the product owner — it was built
+    after the "Decision recorded" rollout answers below were given, so it
+    is explicitly NOT covered by them; see
+    `docs/runbooks/legacy-backfill-scripts-rollout.md`'s "Sign-off" section.
 - **STILL OPEN:**
   - **Rollout decision — MADE (2026-08-20), execution still pending**: three
     dry-run-only backfill/import scripts existed (`backfill_legacy_driver_sin_dob.py`,
@@ -11787,11 +11854,11 @@ how much they de-risk a public launch._
     recorded" section) — no session performed a write against live data.
     The **7-anomalous-row disposition** above remains a separate, still-open
     question this decision does not resolve.
-  - Remaining Oct 30 checklist items — see
+  - Remaining Oct 30 checklist items (now 8 of 10, since items #3 and #4 are
+    both built though not yet `--apply`'d) — see
     `docs/runbooks/legacy-migration-playbook.md` for the full, now-accurate
-    per-item status (most recently updated before this fifth pass; the
-    cancelled/failed-booking item there should be read alongside this
-    entry, not in isolation).
+    per-item status; the cancelled/failed-booking (#3) and vehicle-linkage
+    (#4) items there should be read alongside this entry, not in isolation.
   - Real device/visual verification for the consent-notice mechanism (no
     simulator/device available across all five passes) and the underlying
     legal sufficiency-of-old-consent judgment itself (business/counsel

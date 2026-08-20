@@ -811,19 +811,56 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
         # contaminate measured distance or route quality.
         segmented = segment_route(_phase_3_points(points, ride), ride, completion_point)
         matched_route = await compute_segmented_road_route(list(segmented.observed_segments))
-        reconstructed: Optional[Dict[str, Any]] = None
-        if (
-            ride.get("pickup_lat") is not None
-            and ride.get("pickup_lng") is not None
-            and isinstance(completion_point, dict)
+        # Tail-anchor resolution. The recorded completion fix is the preferred
+        # anchor; when capture died before one could be recorded (SPR-YDEBCH:
+        # an 11-minute background-capture hole, last fix 23s before completion,
+        # completion_point never uploaded), route_booked_dropoff_anchor_enabled
+        # lets the finalizer anchor the tail to the BOOKED dropoff instead of
+        # skipping reconstruction entirely — which published bare fragments.
+        # The start anchor has always been the booked pickup, so this is the
+        # symmetric tail default. Every bridged stretch keeps
+        # geometry_kind='inferred' and the anchor's provenance lands in
+        # route_quality.completion_anchor_source for the insurer audit trail.
+        # Requires at least one observed segment: a zero-evidence ride must not
+        # publish a fabricated "actual route" (clients show the booked route).
+        # Flag off (default) → byte-for-byte legacy behavior.
+        completion_anchor: Optional[Dict[str, Any]] = (
+            completion_point
+            if isinstance(completion_point, dict)
             and completion_point.get("lat") is not None
             and completion_point.get("lng") is not None
+            else None
+        )
+        completion_anchor_source: Optional[str] = "completion_fix" if completion_anchor is not None else None
+        if (
+            completion_anchor is None
+            and segmented.observed_segments
+            and ride.get("dropoff_lat") is not None
+            and ride.get("dropoff_lng") is not None
         ):
+            try:
+                _dropoff_anchor_enabled = bool(
+                    ((await get_app_settings()) or {}).get("route_booked_dropoff_anchor_enabled", False)
+                )
+            except Exception:
+                # Fail-safe direction: legacy fragments. Still loud — a settings
+                # read failing on the finalize path must surface.
+                logger.error(
+                    "booked-dropoff anchor flag read failed for ride_id=%s; treating as off",
+                    ride_id,
+                    exc_info=True,
+                )
+                _dropoff_anchor_enabled = False
+            if _dropoff_anchor_enabled:
+                completion_anchor = {"lat": ride.get("dropoff_lat"), "lng": ride.get("dropoff_lng")}
+                completion_anchor_source = "booked_dropoff"
+        reconstructed: Optional[Dict[str, Any]] = None
+        if ride.get("pickup_lat") is not None and ride.get("pickup_lng") is not None and completion_anchor is not None:
             reconstructed = await reconstruct_completed_route(
                 segmented,
                 matched_route,
                 {"lat": ride.get("pickup_lat"), "lng": ride.get("pickup_lng")},
-                completion_point,
+                completion_anchor,
             )
         display_segments = (
             reconstructed["segments"] if reconstructed is not None else _matched_projection(segmented, matched_route)
@@ -834,6 +871,10 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
         drawable = _has_drawable_route(display_segments)
         processing_status = _final_status(segmented, matched_route, drawable, reconstructed)
         quality = _quality_projection(segmented, matched_route, drawable, reconstructed)
+        if reconstructed is not None and completion_anchor_source is not None:
+            # Provenance of the reconstruction's tail anchor: a recorded
+            # completion fix vs. the booked dropoff fallback (audit surface).
+            quality["completion_anchor_source"] = completion_anchor_source
 
         # Flag-gated ADDITIVE pickup-leg (Period 2) geometry: observed-only (no
         # road matching — no extra provider spend), phase-tagged segments

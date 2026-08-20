@@ -28,6 +28,7 @@ import type { HeatmapCell } from '../../hooks/useDemandHeatmap';
 import { selectCarRoute } from './carRoute';
 import { buildTripCard, type OfferLike } from './carCard';
 import { CarTripCard } from './CarTripCard';
+import { CarOfferPanel } from './CarOfferPanel';
 import { useCarMapCamera } from './carMapCamera';
 import { useCarLocation } from './useCarLocation';
 import { pushDebug, setDebugFact } from './carDebug';
@@ -425,16 +426,20 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
           />
         )}
       </MapView>
-      {/* Slim status bar (display-only; interaction is via template header
-          actions / map buttons / the ride-offer alert).
+      {/* The offer moment gets its own, much richer panel — see
+          CarOfferPanel.tsx for why it is not the slim bar below.
 
-          Hidden in TWO states, for different reasons:
-          - `idle`  — nothing to say, so the screen stays an uncluttered map.
-          - `offer` — the Android Auto alert is on screen and already carries
-            rider, fare, bonus, ETA and the Accept/Decline buttons. Drawing this
-            underneath it produced two overlapping panels with no clear target,
-            which is exactly what a driver must not have to work out while
-            deciding on a ride. The alert owns that moment; we get out of it. */}
+          Short version: the alert is system chrome, so the one number a driver
+          is deciding on arrives there as ordinary body text. This panel renders
+          it at hero scale with the rate, the badges and both ends of the trip.
+          It repeats neither button, so the alert still unambiguously owns the
+          Accept/Decline decision — the overlap problem that got the slim bar
+          hidden here in the first place was two panels competing to be acted
+          on, not two panels on screen. */}
+      {card.leg === 'offer' && <CarOfferPanel card={card} />}
+      {/* Slim status bar for every engaged leg (display-only; interaction is via
+          template header actions / map buttons). Hidden when `idle` — nothing to
+          say, so the screen stays an uncluttered map. */}
       {card.leg !== 'idle' && card.leg !== 'offer' && <CarTripCard card={card} />}
       {/* Always-on status pill. Two jobs:
           - UX: the idle car screen is otherwise a bare map with no indication

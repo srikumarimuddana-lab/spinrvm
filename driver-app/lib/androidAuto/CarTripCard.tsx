@@ -27,10 +27,11 @@
  * WAV and surge survive as chips. WAV is a Saskatchewan accessibility
  * obligation, and surge changes what the driver is paid — neither is decoration.
  *
- * Nothing is shown at all during an offer: the Android Auto alert already
- * carries rider, fare, bonus, ETA and the Accept/Decline buttons, and drawing
- * this underneath it produced two overlapping panels with no clear target.
- * See carSurface.tsx.
+ * This bar is not used during an offer. That moment has its own, deliberately
+ * much richer panel — CarOfferPanel.tsx — because the alert cannot render the
+ * one number the driver is deciding on at anything above body-text size. This
+ * file stays the ENGAGED-leg chrome, where the destination leads and the map
+ * needs its height back.
  */
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';

@@ -11854,6 +11854,14 @@ how much they de-risk a public launch._
     recorded" section) — no session performed a write against live data.
     The **7-anomalous-row disposition** above remains a separate, still-open
     question this decision does not resolve.
+  - **Fourth capability's rollout decision — also MADE, same day**: the
+    vehicle-history backfill (built after the above decision was recorded)
+    got its own separate `AskUserQuestion` once merged — **run now**, same
+    reasoning and same self-execution model as the other three. See
+    `docs/runbooks/legacy-backfill-scripts-rollout.md`'s "Decision recorded
+    — fourth capability" section. All four capabilities now have
+    product-owner sign-off to run now; **none has actually been `--apply`'d
+    yet** as of this update.
   - Remaining Oct 30 checklist items (now 8 of 10, since items #3 and #4 are
     both built though not yet `--apply`'d) — see
     `docs/runbooks/legacy-migration-playbook.md` for the full, now-accurate

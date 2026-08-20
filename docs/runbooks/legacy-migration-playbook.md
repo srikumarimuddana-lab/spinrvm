@@ -229,10 +229,12 @@ rushed).
    > real export (157/157 now resolve). See
    > `docs/change-log/2026-08-20-mongo-export-header-normalization-bug.md`.
    >
-   > **What's still open:** no `--apply` has run against any environment, and — unlike the SIN/DOB/
-   > duration-estimated/booking-import trio — this specific capability's rollout timing has **not**
-   > been put to the product owner yet (it was built after that decision was recorded); see
-   > `docs/runbooks/legacy-backfill-scripts-rollout.md`'s "Sign-off" section.
+   > **[RE-VERIFIED 2026-08-20, SAME DAY — ROLLOUT TIMING NOW DECIDED TOO.]** Put to the product owner
+   > directly via `AskUserQuestion` (the same session, right after this capability merged): run now,
+   > same as the other three. See `docs/runbooks/legacy-backfill-scripts-rollout.md`'s "Decision
+   > recorded — fourth capability" section. **What's still open:** no `--apply` has run against any
+   > environment yet — the product owner will execute it directly, per that same section (no session
+   > in this repo has live Supabase credentials).
 5. **Insurance-period reconstruction, redone with the better source, and finally surfaced**: (a)
    re-run migration 332's approach using `driverlocationlogs.csv`'s real phase-boundary timestamps
    instead of the `driver_arrived_at` fallback; (b) wire `is_reconstructed` into

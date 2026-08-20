@@ -119,12 +119,14 @@ export function useCarLocation(): CarLatLng | null {
           accuracy: Location.Accuracy.High,
         });
         if (cancelled || !current?.coords) return;
-        const next = {
+        // adoptCarFix returns the MERGED fix — a one-shot request carries no
+        // course over ground, so this keeps the last real bearing instead of
+        // snapping the marker to north. Same at both other call sites below.
+        const next = adoptCarFix({
           latitude: current.coords.latitude,
           longitude: current.coords.longitude,
           heading: current.coords.heading ?? null,
-        };
-        adoptCarFix(next);
+        });
         setLoc(next);
         persistFix(next, true); // bypass throttle: freshest thing we will have
       } catch {
@@ -174,12 +176,13 @@ export function useCarLocation(): CarLatLng | null {
             distanceInterval: 5,
           },
           (p) => {
-            const next = {
+            // The one path that genuinely produces a course over ground, so
+            // this is normally where a fresh bearing enters the system.
+            const next = adoptCarFix({
               latitude: p.coords.latitude,
               longitude: p.coords.longitude,
               heading: p.coords.heading ?? null,
-            };
-            adoptCarFix(next); // survives the next surface teardown/rebuild
+            }); // survives the next surface teardown/rebuild
             setLoc(next);
             persistFix(next);
           },
@@ -219,12 +222,15 @@ export function useCarLocation(): CarLatLng | null {
             accuracy: Location.Accuracy.High,
           });
           if (cancelled || !current?.coords) return;
-          const next = {
+          // The watchdog is the path that broke marker rotation on Android
+          // Auto: with the phone backgrounded in a cradle the throttled watcher
+          // goes quiet, so this fires every few seconds and its course-less fix
+          // became the dominant one. Merging keeps the last real bearing.
+          const next = adoptCarFix({
             latitude: current.coords.latitude,
             longitude: current.coords.longitude,
             heading: current.coords.heading ?? null,
-          };
-          adoptCarFix(next);
+          });
           setLoc(next);
           persistFix(next);
         } catch {

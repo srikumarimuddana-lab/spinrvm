@@ -11,6 +11,7 @@ import {
   _resetCarFixChannel,
   adoptCarFix,
   carFixAgeMs,
+  carryHeading,
   getLastCarFix,
   LAST_LOCATION_KEY,
   metresBetween,
@@ -73,6 +74,58 @@ describe('seed vs live ordering', () => {
   it('a real fix does start the age clock', () => {
     adoptCarFix(SASKATOON);
     expect(carFixAgeMs()).toBeLessThan(1_000);
+  });
+});
+
+describe('heading carry-over', () => {
+  const at = (heading: number | null) => ({ ...SASKATOON, heading });
+
+  it('keeps a fix that already has a bearing', () => {
+    expect(carryHeading(at(271), at(90)).heading).toBe(271);
+  });
+
+  it('carries the last bearing onto a fix that has none', () => {
+    // THE bug: a one-shot getCurrentPositionAsync has no course over ground, so
+    // the watchdog's fix wiped the watcher's good bearing and the marker
+    // snapped back to north every few seconds.
+    expect(carryHeading(at(null), at(271)).heading).toBe(271);
+  });
+
+  it('treats expo’s -1 "unknown" as no bearing, in both directions', () => {
+    expect(carryHeading(at(-1), at(271)).heading).toBe(271);
+    expect(carryHeading(at(null), at(-1)).heading).toBeNull();
+  });
+
+  it('has nothing to carry on the very first fix', () => {
+    expect(carryHeading(at(null), null).heading).toBeNull();
+  });
+
+  it('never carries POSITION forward — only the bearing', () => {
+    const moved = { ...move(500), heading: null };
+    const merged = carryHeading(moved, at(271));
+    expect(merged.latitude).toBe(moved.latitude);
+    expect(merged.longitude).toBe(moved.longitude);
+    expect(merged.heading).toBe(271);
+  });
+
+  it('adoptCarFix returns the merged fix so callers render the true bearing', () => {
+    adoptCarFix(at(271));
+    const merged = adoptCarFix(at(null));
+    expect(merged.heading).toBe(271);
+    expect(getLastCarFix()?.heading).toBe(271);
+  });
+
+  it('a real turn replaces the carried bearing', () => {
+    adoptCarFix(at(271));
+    expect(adoptCarFix(at(15)).heading).toBe(15);
+  });
+
+  it('publishCarFix hands subscribers the merged fix, not the raw one', () => {
+    adoptCarFix(at(271));
+    const seen: (number | null)[] = [];
+    subscribeCarFix((f) => seen.push(f.heading));
+    publishCarFix(at(null));
+    expect(seen).toEqual([271]);
   });
 });
 

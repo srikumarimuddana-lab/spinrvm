@@ -471,8 +471,23 @@ export default function registerAutoPlay(): void {
     }
   };
 
-  const showNavChoiceAlert = (leg: string) => {
+  const showNavChoiceAlert = async (leg: string) => {
     if (!template) return;
+
+    // Only show the choice if Waze is actually installed; otherwise go
+    // straight to Google Maps — no point asking when there's one option.
+    let wazeAvailable = false;
+    try {
+      wazeAvailable = await Linking.canOpenURL('waze://');
+    } catch {
+      // canOpenURL can throw on some Android builds; treat as unavailable.
+    }
+
+    if (!wazeAvailable) {
+      handoffToNav('google');
+      return;
+    }
+
     const id = alertSeq++;
     const label = leg === 'dropoff' ? 'drop-off' : 'pickup';
     try {

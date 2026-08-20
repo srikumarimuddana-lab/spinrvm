@@ -35,7 +35,8 @@ export interface OfferLike {
   ride_id: string;
   pickup_address?: string;
   dropoff_address?: string;
-  fare?: string;
+  /** Widened to match the phone's IncomingRide, which types it `string | number`. */
+  fare?: string | number;
   distance_km?: number;
   duration_minutes?: number;
   rider_name?: string;
@@ -46,6 +47,12 @@ export interface OfferLike {
   total_bonus?: number;
   incentives?: { name: string; bonus_amount: number; incentive_type: string }[];
   quest_hint?: { title: string } | null;
+  // Badge inputs the phone's RideOfferPanel already reads. Optional/falsy-default
+  // so an offer payload from a backend that predates any of them renders exactly
+  // as it does today (no badge) rather than throwing.
+  quiet_mode?: boolean;
+  is_scheduled?: boolean;
+  payment_method?: string;
 }
 
 /** Everything the head-unit card renders. All fields pre-formatted for display. */
@@ -75,10 +82,34 @@ export interface TripCard {
   distanceLabel: string | null;
   /** Fare ("$14.50"), or null. */
   fareLabel: string | null;
+  /**
+   * What the driver actually banks: fare + bonus ("$17.50"), or null.
+   *
+   * THE headline number, and the reason this field exists separately from
+   * `fareLabel`. The phone's RideOfferPanel leads with fare + bonus at 52px,
+   * while the car surface and the offer alert both led with the bare fare — so
+   * a bonused ride was advertised to the driver as WORTH LESS in the car than
+   * on the phone, on the one screen where they decide whether to take it.
+   */
+  totalEarningsLabel: string | null;
+  /** "$14.50 fare + $3.00 bonus" — only when a bonus makes the split matter. */
+  fareBreakdownLabel: string | null;
+  /** Rate the ride pays per km ("$4.60/km") — how drivers actually rank offers. */
+  perKmLabel: string | null;
   /** Surge badge ("1.5×") when above 1.0, else null. */
   surgeLabel: string | null;
   /** Wheelchair-accessible vehicle requested. */
   wav: boolean;
+  /** Rider asked for a quiet ride. */
+  quietMode: boolean;
+  /** Booked in advance rather than hailed now. */
+  isScheduled: boolean;
+  /** Rider is paying cash — the driver collects at drop-off. */
+  cashPayment: boolean;
+  /** Pickup address, kept alongside `dropoffLabel` so the offer can show BOTH. */
+  pickupLabel: string | null;
+  /** Drop-off address. */
+  dropoffLabel: string | null;
   /** Secondary guidance line, e.g. the phone-only start-trip prompt. */
   hint: string | null;
   /**
@@ -96,9 +127,75 @@ const firstName = (full?: string): string | null => {
   return t.split(/\s+/)[0];
 };
 
-const money = (v?: string | null): string | null => {
+const money = (v?: string | number | null): string | null => {
   const t = (v ?? '').toString().trim();
   return t.length > 0 ? `$${t}` : null;
+};
+
+/** Parse a money-ish value ("14.50", 14.5) to a number. Null when unusable. */
+const amount = (v?: string | number | null): number | null => {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  const t = (v ?? '').toString().trim();
+  if (t.length === 0) return null;
+  const n = Number.parseFloat(t);
+  return Number.isFinite(n) ? n : null;
+};
+
+/**
+ * Fare + bonus — what the driver banks on this ride.
+ *
+ * Deliberately the SAME plain-float arithmetic as the phone's RideOfferPanel
+ * (`baseFare + totalBonus`). These two surfaces quote the same offer to the same
+ * driver seconds apart, so they must agree to the cent; a "more correct" rounding
+ * strategy here would be a worse bug than the imprecision it fixed. Both are
+ * display-only — the authoritative money is computed backend-side in Decimal and
+ * settled from there, never from either of these strings.
+ */
+export const totalEarnings = (
+  fare?: string | number | null,
+  bonus?: number | null,
+): number | null => {
+  const base = amount(fare);
+  if (base === null) return null;
+  const extra = typeof bonus === 'number' && Number.isFinite(bonus) && bonus > 0 ? bonus : 0;
+  return base + extra;
+};
+
+/** "$17.50" — fare + bonus, the number the offer leads with. */
+export const totalEarningsLabel = (
+  fare?: string | number | null,
+  bonus?: number | null,
+): string | null => {
+  const t = totalEarnings(fare, bonus);
+  return t === null ? null : `$${t.toFixed(2)}`;
+};
+
+/**
+ * "$14.50 fare + $3.00 bonus", or null when there is no bonus to explain.
+ *
+ * Without it the hero number silently disagrees with the fare the rider is
+ * quoted, which reads as a bug rather than a bonus.
+ */
+export const fareBreakdownLabel = (
+  fare?: string | number | null,
+  bonus?: number | null,
+): string | null => {
+  const base = amount(fare);
+  if (base === null) return null;
+  if (typeof bonus !== 'number' || !Number.isFinite(bonus) || bonus <= 0) return null;
+  return `$${base.toFixed(2)} fare + $${bonus.toFixed(2)} bonus`;
+};
+
+/** "$4.60/km" — total earnings over trip distance. Null without both. */
+export const perKmLabel = (
+  fare?: string | number | null,
+  bonus?: number | null,
+  distanceKm?: number | null,
+): string | null => {
+  const t = totalEarnings(fare, bonus);
+  if (t === null) return null;
+  if (typeof distanceKm !== 'number' || !Number.isFinite(distanceKm) || distanceKm <= 0) return null;
+  return `$${(t / distanceKm).toFixed(2)}/km`;
 };
 
 const km = (v?: number | null): string | null =>
@@ -155,8 +252,16 @@ export function buildOfferCard(offer: OfferLike | null): TripCard {
     etaLabel: mins(offer?.duration_minutes),
     distanceLabel: km(offer?.distance_km),
     fareLabel: money(offer?.fare),
+    totalEarningsLabel: totalEarningsLabel(offer?.fare, offer?.total_bonus),
+    fareBreakdownLabel: fareBreakdownLabel(offer?.fare, offer?.total_bonus),
+    perKmLabel: perKmLabel(offer?.fare, offer?.total_bonus, offer?.distance_km),
     surgeLabel: surgeBadge(offer?.surge_multiplier),
     wav: offer?.requires_wav === true,
+    quietMode: offer?.quiet_mode === true,
+    isScheduled: offer?.is_scheduled === true,
+    cashPayment: offer?.payment_method === 'cash',
+    pickupLabel: offer?.pickup_address?.trim() || null,
+    dropoffLabel: offer?.dropoff_address?.trim() || null,
     hint: 'Accept or decline on the request card',
     earningsTodayLabel: null,
   };
@@ -215,6 +320,8 @@ export function buildTripCard(
             total_bonus: activeRide?.total_bonus,
             incentives: activeRide?.incentives,
             quest_hint: activeRide?.quest_hint,
+            quiet_mode: ride.quiet_mode,
+            payment_method: ride.payment_method,
           }
         : null,
     );
@@ -227,10 +334,33 @@ export function buildTripCard(
   const bonus = bonusLabel(activeRide?.total_bonus);
   const perk = perkLabel(activeRide?.incentives, activeRide?.quest_hint);
   const fareLabel = money(ride?.total_fare);
+  const totalLabel = totalEarningsLabel(ride?.total_fare, activeRide?.total_bonus);
+  const breakdown = fareBreakdownLabel(ride?.total_fare, activeRide?.total_bonus);
+  const perKm = perKmLabel(ride?.total_fare, activeRide?.total_bonus, ride?.distance_km);
   const surgeLabel = surgeBadge(ride?.surge_multiplier);
   const wav = ride?.requires_wav === true;
+  const quietMode = ride?.quiet_mode === true;
+  const cashPayment = ride?.payment_method === 'cash';
+  const pickupLabel = ride?.pickup_address?.trim() || null;
+  const dropoffLabel = ride?.dropoff_address?.trim() || null;
   const etaLabel = mins(ride?.duration_minutes);
   const distanceLabel = km(ride?.distance_km);
+  // Shared across every engaged-ride leg below. Grouped so a new field is added
+  // in ONE place — the five near-identical literals were already the most
+  // error-prone part of this builder.
+  const moneyFields = {
+    fareLabel,
+    totalEarningsLabel: totalLabel,
+    fareBreakdownLabel: breakdown,
+    perKmLabel: perKm,
+  };
+  const flagFields = {
+    quietMode,
+    isScheduled: false,
+    cashPayment,
+    pickupLabel,
+    dropoffLabel,
+  };
 
   switch (state) {
     case 'navigating_to_pickup':
@@ -247,9 +377,10 @@ export function buildTripCard(
         destinationCaption: 'Pick-up',
         etaLabel,
         distanceLabel,
-        fareLabel,
+        ...moneyFields,
         surgeLabel,
         wav,
+        ...flagFields,
         hint: null,
         earningsTodayLabel: null,
       };
@@ -268,9 +399,10 @@ export function buildTripCard(
         destinationCaption: 'Pick-up',
         etaLabel: null,
         distanceLabel,
-        fareLabel,
+        ...moneyFields,
         surgeLabel,
         wav,
+        ...flagFields,
         // OTP start-trip is distraction-sensitive — stays on the phone (CLAUDE.md).
         hint: 'Verify the rider’s PIN on your phone to start the trip',
         earningsTodayLabel: null,
@@ -290,9 +422,10 @@ export function buildTripCard(
         destinationCaption: 'Drop-off',
         etaLabel,
         distanceLabel,
-        fareLabel,
+        ...moneyFields,
         surgeLabel,
         wav,
+        ...flagFields,
         hint: null,
         earningsTodayLabel: null,
       };
@@ -311,9 +444,14 @@ export function buildTripCard(
         destinationCaption: null,
         etaLabel: null,
         distanceLabel: null,
-        fareLabel,
+        ...moneyFields,
         surgeLabel: null,
         wav: false,
+        quietMode: false,
+        isScheduled: false,
+        cashPayment,
+        pickupLabel: null,
+        dropoffLabel: null,
         hint: 'Open Spinr on your phone for your next ride',
         // The one place cumulative earnings belong: right after a driver has
         // finished a trip, showing what the day has added up to. Omitted
@@ -338,8 +476,16 @@ export function buildTripCard(
         etaLabel: null,
         distanceLabel: null,
         fareLabel: null,
+        totalEarningsLabel: null,
+        fareBreakdownLabel: null,
+        perKmLabel: null,
         surgeLabel: null,
         wav: false,
+        quietMode: false,
+        isScheduled: false,
+        cashPayment: false,
+        pickupLabel: null,
+        dropoffLabel: null,
         hint: 'Ride requests will appear here',
         earningsTodayLabel: null,
       };

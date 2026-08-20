@@ -1188,6 +1188,74 @@ def sin_source(driver: dict[str, Any] | None) -> str | None:
     return None
 
 
+def dob_source(driver: dict[str, Any] | None) -> str | None:
+    """Derive date-of-birth provenance for display — the DOB counterpart of
+    ``sin_source()`` above (Oct 30 checklist item #7,
+    docs/runbooks/legacy-migration-playbook.md). Same return-value contract
+    (``"legacy_import" | "self_entry" | None``), same no-DB-access, pure-
+    function shape, and same rule: never changes what ``date_of_birth``
+    means or is written as, and never returns the DOB itself.
+
+    Deliberately NOT a literal copy of ``sin_source()``'s check, because DOB
+    has an extra legacy-import write path SIN never had:
+
+      1. ``build_plan()`` (the original Saskatoon driver CSV import) writes
+         ``date_of_birth`` directly at driver creation when the CSV row has
+         one — every driver from that import carries
+         ``legacy_import_metadata.source == IMPORT_SOURCE``. ``build_plan()``
+         never writes ``sin`` at all, so this path has no SIN equivalent.
+      2. ``apply_legacy_sin_dob_import()`` (the ``banks.csv`` backfill) writes
+         DOB later, but ONLY when the column was still NULL at that point
+         (see its own "never clobbers" docstring) — a driver whose DOB was
+         already set by (1) gets no ``dob_written`` marker at all from this
+         path, because ``plan_legacy_sin_dob_import`` skips a column that's
+         already on file.
+
+    Checking only the banks.csv marker (the literal mirror of
+    ``sin_source()``'s single-marker check) would silently mislabel the more
+    common case — a DOB set at initial import and never touched by the later
+    backfill — as ``"self_entry"``, i.e. it would UNDER-disclose, claiming
+    driver-verified provenance for raw, unverified legacy CSV data. That is
+    the opposite of what an accuracy-disclosure flag is for, so this
+    function also checks the CSV-import marker directly.
+
+    - ``"legacy_import"`` — either the ``banks.csv`` backfill marker's
+      ``dob_written`` is ``True``, OR this driver's whole record originated
+      from the Saskatoon CSV import (``legacy_import_metadata.source ==
+      IMPORT_SOURCE``) and ``date_of_birth`` is set. Like ``sin_source()``,
+      this is a permanent provenance marker, not a live freshness flag: a
+      ``super_admin`` correction via ``admin_update_driver``
+      (``routes/admin/drivers.py``) does not clear either marker, matching
+      ``sin_source()``'s identical behaviour for an admin-corrected SIN
+      (``admin_update_driver_sin`` doesn't clear the ``sin_written`` marker
+      either — see that function's own docstring). Once a value has ever
+      been legacy-imported, this label sticks even if since corrected.
+    - ``"self_entry"`` — ``date_of_birth`` is set but neither of the above
+      applies. As of 2026-08-20 there is no driver-facing route that writes
+      ``date_of_birth`` at all (checked ``routes/drivers/``, ``routes/auth.py``,
+      ``schemas.py`` — none exist), so in practice this bucket is currently
+      only reached by an admin manually setting/correcting DOB on a
+      non-legacy-imported driver via ``admin_update_driver``'s
+      ``date_of_birth`` field. Named ``"self_entry"`` rather than
+      ``"admin_entry"`` to keep the same three-value contract ``sin_source()``
+      already established (callers branch on the literal strings).
+    - ``None`` — no DOB on file (or no driver row).
+    """
+    if not driver:
+        return None
+    if not driver.get("date_of_birth"):
+        return None
+    meta = driver.get("legacy_import_metadata") or {}
+    if not isinstance(meta, dict):
+        return "self_entry"
+    marker = meta.get(LEGACY_BANK_SIN_DOB_SOURCE)
+    if isinstance(marker, dict) and marker.get("dob_written"):
+        return "legacy_import"
+    if meta.get("source") == IMPORT_SOURCE:
+        return "legacy_import"
+    return "self_entry"
+
+
 def print_sin_dob_report(plan: SinDobImportPlan, *, dry_run: bool) -> None:
     mode = "DRY RUN" if dry_run else "COMMIT"
     print(f"{mode} report — legacy SIN/DOB backfill")

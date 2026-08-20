@@ -400,3 +400,73 @@ def test_sin_source_dob_only_backfill_stays_self_entry():
 def test_sin_source_no_sin_collected_at_and_no_legacy_marker_is_none():
     driver = {"sin_collected_at": None, "legacy_import_metadata": {"source": IMPORT_SOURCE}}
     assert svc.sin_source(driver) is None
+
+
+# ── dob_source (Oct 30 checklist item #7, docs/runbooks/legacy-migration-playbook.md) ──
+
+
+def test_dob_source_none_driver_or_no_dob():
+    assert svc.dob_source(None) is None
+    assert svc.dob_source({}) is None
+    assert svc.dob_source({"date_of_birth": None, "legacy_import_metadata": {}}) is None
+
+
+def test_dob_source_legacy_import_when_original_csv_import_wrote_it():
+    """The common case: DOB was set at initial driver creation by build_plan()
+    (the Saskatoon CSV import) and never touched by the later banks.csv
+    backfill, so there is no dob_written marker at all — must still classify
+    as legacy_import via the source==IMPORT_SOURCE check, not self_entry."""
+    driver = {
+        "date_of_birth": "1990-01-01",
+        "legacy_import_metadata": {"source": IMPORT_SOURCE, "old_driver_id": "42"},
+    }
+    assert svc.dob_source(driver) == "legacy_import"
+
+
+def test_dob_source_legacy_import_when_banks_csv_backfill_marker_present():
+    driver = {
+        "date_of_birth": "1990-01-01",
+        "legacy_import_metadata": {
+            svc.LEGACY_BANK_SIN_DOB_SOURCE: {"batch": "b1", "imported_at": "2026-08-19T00:00:00Z", "dob_written": True}
+        },
+    }
+    assert svc.dob_source(driver) == "legacy_import"
+
+
+def test_dob_source_self_entry_when_no_legacy_marker_and_not_csv_import():
+    """DOB set on a driver with no legacy_import_metadata.source==IMPORT_SOURCE
+    and no banks.csv marker — currently only reachable via an admin
+    correction (no driver-facing route writes date_of_birth), but the
+    contract stays 'self_entry' to match sin_source()'s three-value shape."""
+    driver = {"date_of_birth": "1990-01-01", "legacy_import_metadata": {}}
+    assert svc.dob_source(driver) == "self_entry"
+
+
+def test_dob_source_sin_only_backfill_stays_legacy_import_via_csv_source():
+    """Regression mirroring test_sin_source_dob_only_backfill_stays_self_entry,
+    but for the opposite direction: a banks.csv batch that only backfilled
+    SIN (dob_written False, because DOB was already on file from the
+    original CSV import) must NOT be reported as self_entry — the CSV-import
+    marker still correctly classifies it as legacy_import."""
+    driver = {
+        "date_of_birth": "1990-01-01",
+        "legacy_import_metadata": {
+            "source": IMPORT_SOURCE,
+            "old_driver_id": "42",
+            svc.LEGACY_BANK_SIN_DOB_SOURCE: {
+                "batch": "sin-only-batch",
+                "imported_at": "2026-08-19T00:00:00Z",
+                "sin_written": True,
+                "dob_written": False,
+            },
+        },
+    }
+    assert svc.dob_source(driver) == "legacy_import"
+
+
+def test_dob_source_non_dict_legacy_import_metadata_is_self_entry():
+    """Defensive guard: a truthy, non-dict legacy_import_metadata value (bad
+    data) must not raise — falls through to self_entry rather than crashing
+    the admin driver-detail read path."""
+    driver = {"date_of_birth": "1990-01-01", "legacy_import_metadata": "corrupt"}
+    assert svc.dob_source(driver) == "self_entry"

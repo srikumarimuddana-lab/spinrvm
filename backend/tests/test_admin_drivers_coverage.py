@@ -724,6 +724,80 @@ class TestLiveStatsLicenseMask:
         assert resp.status_code == 200, resp.text
         assert resp.json()["sin_source"] is None
 
+    def test_dob_source_legacy_import_from_original_csv_import(self, test_client, super_admin_override):
+        """Oct 30 checklist item #7 — DOB set at the original Saskatoon CSV
+        import (no banks.csv dob_written marker) must still read as
+        legacy_import in the admin driver-detail view, not self_entry."""
+        driver = {
+            "id": "drv-1",
+            "user_id": None,
+            "date_of_birth": "1990-01-01",
+            "legacy_import_metadata": {"source": "legacy_saskatoon_driver_import", "old_driver_id": "42"},
+        }
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/live-stats")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["dob_on_file"] is True
+        assert body["dob_source"] == "legacy_import"
+        # Raw DOB must never appear in this response.
+        assert "date_of_birth" not in body
+
+    def test_dob_source_legacy_import_from_banks_csv_backfill(self, test_client, super_admin_override):
+        driver = {
+            "id": "drv-1",
+            "user_id": None,
+            "date_of_birth": "1990-01-01",
+            "legacy_import_metadata": {
+                "legacy_mongo_banks_sin_dob_import": {
+                    "batch": "b1",
+                    "imported_at": "2026-08-19T00:00:00Z",
+                    "dob_written": True,
+                }
+            },
+        }
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/live-stats")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["dob_source"] == "legacy_import"
+
+    def test_dob_source_self_entry_when_no_legacy_marker(self, test_client, super_admin_override):
+        driver = {
+            "id": "drv-1",
+            "user_id": None,
+            "date_of_birth": "1990-01-01",
+            "legacy_import_metadata": {},
+        }
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/live-stats")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["dob_source"] == "self_entry"
+
+    def test_dob_source_none_and_dob_on_file_false_when_no_dob(self, test_client, super_admin_override):
+        driver = {"id": "drv-1", "user_id": None}
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/live-stats")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["dob_source"] is None
+        assert body["dob_on_file"] is False
+
 
 # ---------------------------------------------------------------------------
 # Driver notes CRUD

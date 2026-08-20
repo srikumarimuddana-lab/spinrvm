@@ -11887,11 +11887,15 @@ how much they de-risk a public launch._
     — fourth capability" section. All four capabilities now have
     product-owner sign-off to run now; **none has actually been `--apply`'d
     yet** as of this update.
-  - Remaining Oct 30 checklist items (now 8 of 10, since items #3 and #4 are
-    both built though not yet `--apply`'d) — see
-    `docs/runbooks/legacy-migration-playbook.md` for the full, now-accurate
-    per-item status; the cancelled/failed-booking (#3) and vehicle-linkage
-    (#4) items there should be read alongside this entry, not in isolation.
+  - Remaining Oct 30 checklist items (now 7 of 10, since items #3 and #4 are
+    both built though not yet `--apply`'d, and item #7 — the accuracy-
+    disclosure pass — is now FULLY ADDRESSED: DOB got its own `dob_source()`
+    derived field alongside SIN's existing `sin_source()`, and email got an
+    explicit, documented "no dedicated flag" decision rather than being left
+    silently unresolved) — see `docs/runbooks/legacy-migration-playbook.md`
+    for the full, now-accurate per-item status; the cancelled/failed-booking
+    (#3) and vehicle-linkage (#4) items there should be read alongside this
+    entry, not in isolation.
   - Real device/visual verification for the consent-notice mechanism (no
     simulator/device available across all five passes) and the underlying
     legal sufficiency-of-old-consent judgment itself (business/counsel

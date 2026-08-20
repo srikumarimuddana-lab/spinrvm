@@ -309,6 +309,37 @@ rushed).
    > badge applies. So: SIN is a clean yes, name/email get a coarser whole-profile signal rather than
    > a per-field decision, and DOB has no equivalent treatment at all — genuinely partial, not
    > "decide and document even if no" for every field as the item asks.
+   >
+   > **2026-08-20, seventh pass — FULLY ADDRESSED, all four fields now have an explicit decision.**
+   > DOB: built `driver_import_service.dob_source()`, same `"legacy_import" | "self_entry" | None`
+   > contract as `sin_source()`, wired into the admin driver live-stats read path
+   > (`dob_source`/`dob_on_file` keys, mirroring `sin_source`/`sin_on_file`). **Deliberately NOT**
+   > wired into the T4A filer-handoff export — checked `_t4a_filer_handoff_rows`'s drivers-column
+   > projection first; DOB is not a field that export reads or displays at all (only SIN/earnings/
+   > Stripe-verified legal name), so there is nothing there to attach provenance to. Unlike SIN,
+   > DOB has a second legacy-import write path (the original Saskatoon CSV import writes
+   > `date_of_birth` directly at driver creation, not just the later `banks.csv` backfill — `sin` is
+   > never written by that CSV import at all), so `dob_source()` is not a literal copy of
+   > `sin_source()`'s single-marker check; see its docstring for the full derivation and the
+   > mislabeling trap a literal copy would have caused. Raw DOB is never surfaced by either new
+   > field — provenance/presence only, per PIPEDA.
+   >
+   > Email: investigated and decided **no dedicated flag**, documented in
+   > `docs/change-log/2026-08-20-legacy-dob-email-provenance-flags.md`. Reason: email is not a
+   > set-once, verification-sensitive field the way SIN (locked after first entry, tax-filing use)
+   > and DOB (no self-entry route at all today, so an unverified legacy value can persist
+   > indefinitely) are. `routes/users.py`'s `create_profile` (`POST /profile`, the primary profile-
+   > completion flow every phone-first signup goes through) unconditionally overwrites `users.email`
+   > with whatever the person types, with no guard protecting a legacy-imported value — so the instant
+   > a legacy-imported rider or driver completes their profile, their email is fully self-entered and
+   > the import-sourced value is gone. There is also no existing timestamp/marker analogous to
+   > `sin_collected_at` to derive a provenance label from without a new column, which would not be a
+   > pure-additive, zero-migration change like `sin_source()`/`dob_source()` are. The existing
+   > whole-profile "Imported" badge already discloses "this profile may carry unverified legacy data"
+   > at the right granularity for a field that self-corrects through ordinary use. All four fields in
+   > this item now have an explicit, documented decision — SIN and DOB: yes, with flags; name: whole-
+   > profile signal only (existing, unchanged); email: no, with the above reasoning. Item #7 is
+   > closed.
 8. **Explicit include/exclude sign-off, recorded per collection**, for every `REVIEW`-tagged
    collection from the inventory doc — a silent drop at decommission time is not acceptable for
    data about to become permanently unrecoverable.

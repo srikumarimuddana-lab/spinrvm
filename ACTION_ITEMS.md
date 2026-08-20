@@ -11604,36 +11604,95 @@ how much they de-risk a public launch._
     written** (retention-window proof, cancelled/failed-booking import
     path, vehicle-linkage backfill, systematic REVIEW-collection sign-off,
     never-import-list re-confirmation, final reconciliation — the last two
-    are inherently blocked on the actual Oct 30 export). **Cancelled/failed
-    booking import path (78% of old-app bookings) confirmed still
-    completely unaddressed** — `booking_import_service.py`'s
-    `TARGET_BOOKING_STATUS = "completed"` skip logic is unchanged; this
-    remains the single largest unaddressed gap and a real Oct 30 deadline
-    (data is gone once the old app is decommissioned).
+    are inherently blocked on the actual Oct 30 export). Cancelled/failed
+    booking import path was still unaddressed as of this checklist
+    re-verification — **now fixed, fifth pass, see immediately below.**
+- **FIXED (2026-08-20, fifth pass — single cohesive feature, one
+  worktree-isolated implementation agent + two adversarial review agents
+  since Codex review is inactive this session, per CLAUDE.md's mandatory
+  manual-review requirement for migration/money-touching changes):**
+  - **Cancelled/failed-booking import path built.**
+    `docs/change-log/2026-08-20-legacy-cancelled-failed-booking-import.md`.
+    `booking_import_service.py` gained a second, lightweight branch:
+    legacy `cancelled`/`failed` bookings now import as `rides.status='cancelled'`
+    rows (GPS, timestamps, `cancelled_at`/`cancellation_reason`/
+    `cancelled_by`/`cancellation_type` only — no fare, no earnings, no
+    `payouts` row, no `driver_ids_to_recount` — "skip payout-offset logic,
+    keep GPS+timestamps," per two independent prior audit passes). The
+    existing `completed`-only path is unchanged (verified by diff, not
+    assumed). Of 1,210 real bookings: 712 cancelled + 225 failed now have
+    an import path; 2 blank-status rows excluded (status genuinely
+    unknown); **7 anomalous rows deliberately excluded from any import
+    path** — see new deferred finding below.
+  - **Regulatory basis**: pickup/dropoff GPS + `created_at` for cancelled
+    trips is a PIPEDA/SK Transportation Act retention requirement, not
+    optional — the old importer's docstring claim that these rows "carry
+    no history value" was wrong.
+  - **Migration 349** adds `legacy_import_metadata = '{}'::jsonb` exclusion
+    to 4 admin analytics functions that had zero legacy-cancelled
+    exclusion and would otherwise skew the live cancellation-rate KPI
+    (target ≤8%/≤3%) the moment this ships: `admin_cancellation_breakdown`,
+    `admin_analytics_overview`, `admin_earnings_overview_agg` (341's own
+    comment wrongly assumed "cancelled/funnel keys need no exclusion
+    (completed-only importer)" — this session's change is exactly what
+    invalidates that), and a 6th function found via the migration's own
+    blast-radius check (not in the original 5 named), `admin_driver_acceptance_rates`.
+  - **Caught in review and fixed** (`spinr-migration-reviewer`, MEDIUM):
+    the first draft left `admin_earnings_overview_agg`'s `cohort` CTE
+    (`fn_requested`/`fn_reached_searching`/`fn_completed`) fully unfiltered
+    and mis-framed the gap as "pre-existing." Legacy-imported *cancelled*
+    rows are brand new as of this exact change (no legacy row could ever
+    be `cancelled` before it) — leaving `cohort` unfiltered would have
+    silently inflated the funnel's requested/reached-searching counts.
+    Fixed with a narrower predicate that excludes only legacy-cancelled
+    rows from `cohort`, deliberately leaving legacy-*completed* rides
+    (271 of them, live in this same funnel since migration 227, predating
+    this session) counting exactly as they always have — a blanket
+    exclusion would have retroactively changed those already-live numbers
+    too, a separate question this migration still does not decide.
+    `spinr-money-auditor` independently reviewed the same change set:
+    **SAFE TO MERGE, no blockers, no warnings** (verified no fare/earnings/
+    payout field is ever written by the new branch, the 7-row exclusion
+    guard is correct against the real export, and idempotency holds).
+  - Verification: 95 tests pass (23 new import-path tests + 15 new
+    migration-349 regression tests + all pre-existing booking-import/
+    migration-341 tests re-run unmodified), `ruff check` clean.
+- **NEW finding, deferred (2026-08-20, money-relevant, needs Stripe/live-DB
+  access this session doesn't have):** 7 of the 225 legacy `failed`
+  bookings are **not actually failed rides** — they have a real matched
+  `driver_id`, `start_ride_at`, `complete_delivery_at`, a real
+  `total_amount` ($5.75–$9.48), and real driver earnings ($6.22–$9.75),
+  structurally indistinguishable from a genuinely completed trip. Most
+  likely a payment-settlement failure flag in the old app, not "the ride
+  never happened." **Not imported by any path this session** — importing
+  them via the new cancelled/failed path would violate the ride state
+  machine's never-cancelled-after-trip-start invariant and lose real
+  earnings data; importing them via the completed path needs the same
+  rigor as any earnings-bearing write plus Stripe-side context to confirm
+  the payment-failure hypothesis. A future session with that access needs
+  to decide what to do with them.
 - **STILL OPEN:**
-  - **Rollout decision, unmade**: two dry-run-only backfill scripts now
-    exist (`backfill_legacy_driver_sin_dob.py`,
-    `backfill_legacy_ride_duration_estimated.py`, both write-guarded, both
-    documented in `docs/runbooks/legacy-backfill-scripts-rollout.md`) — who
-    runs `--apply`, against which environment, and when is still an
+  - **7-anomalous-row disposition** — see finding immediately above.
+  - **Rollout decision, unmade**: three dry-run-only backfill/import
+    scripts now exist (`backfill_legacy_driver_sin_dob.py`,
+    `backfill_legacy_ride_duration_estimated.py`, and the cancelled/failed
+    booking import via the existing admin `/bookings/import/*` endpoints)
+    — who runs them, against which environment, and when is still an
     operational decision for the product owner, not made by any session.
-  - **Cancelled/failed-booking import path** — no path exists, no session
-    has built one; 78% of old-app bookings (941/1,210) have full pickup/
-    dropoff GPS and `created_at` with no import destination and no
-    scheduled fix. Time-sensitive: gone permanently once the old app is
-    decommissioned, independent of the Oct 30 final-extract date.
   - Remaining Oct 30 checklist items — see
     `docs/runbooks/legacy-migration-playbook.md` for the full, now-accurate
-    per-item status (7 of 10 still open or only partial, detailed above).
+    per-item status (most recently updated before this fifth pass; the
+    cancelled/failed-booking item there should be read alongside this
+    entry, not in isolation).
   - Real device/visual verification for the consent-notice mechanism (no
-    simulator/device available across all four passes) and the underlying
+    simulator/device available across all five passes) and the underlying
     legal sufficiency-of-old-consent judgment itself (business/counsel
     decision).
 - **Files:** full original findings in
   `docs/audit/2026-08-19-legacy-migration-data-quality-audit.md` and
-  `docs/runbooks/legacy-migration-playbook.md` (now re-verified, the
-  repeatable future-migration strategy for Oct 30); remediation details in
-  the eight Change Impact Logs referenced above and
+  `docs/runbooks/legacy-migration-playbook.md` (the repeatable
+  future-migration strategy for Oct 30); remediation details in the nine
+  Change Impact Logs referenced above and
   `docs/runbooks/legacy-backfill-scripts-rollout.md`.
 
 ### A42. Wrong legal entity name in ~25 files — "Spinr Technologies Inc." should be "Spinr Mobility Inc."

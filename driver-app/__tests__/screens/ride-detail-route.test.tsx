@@ -21,10 +21,13 @@ describe('driver ride detail route presentation contract', () => {
     expect(source).not.toContain('actualSections.map((section) => (');
     expect(source).not.toContain('INFERRED_ROUTE_STROKE');
     expect(source).not.toContain('ACTUAL_ROUTE_STROKE');
-    // The ONE sanctioned raw-Polyline use: the dashed Period-2 pickup leg
-    // (server-flag-gated) as separate grey context under the trip gradient.
-    expect(source.match(/<Polyline/g) ?? []).toHaveLength(1);
+    // The TWO sanctioned raw-Polyline uses, both dashed grey CONTEXT (never a
+    // substitute for actual evidence): the Period-2 pickup leg and the
+    // booked-route underlay shown when a v2 actual route is missing/incomplete
+    // ("never show a missing path", owner directive 2026-08-20).
+    expect(source.match(/<Polyline/g) ?? []).toHaveLength(2);
     expect(source).toContain('pickupLegSections.map');
+    expect(source).toContain('showPlannedUnderlay && plannedSegments.map');
     expect(source).toContain('lineDashPattern={[6, 6]}');
     expect(source).not.toContain('{routeSnapshotUrl ? (');
     expect(source).toContain('ride.actual_completion_point');
@@ -40,11 +43,15 @@ describe('driver ride detail route presentation contract', () => {
     expect(source).toContain('Actual route unavailable');
   });
 
-  it('keeps planned geometry legacy-only for completed rides', () => {
+  it('keeps planned geometry out of the v2 solid line — dashed underlay only', () => {
     expect(source).toContain('const isV2Route =');
-    // Legacy planned coords still flow into mapCoordinates (v2 rides drop them),
-    // which is what feeds the shared RouteLine — the geometry source is unchanged.
-    expect(source).toContain('isV2Route ? [] : plannedSegments');
+    // Legacy rides still draw the planned line solid; a v2 ride NEVER routes
+    // planned coords into the solid RouteLine — its planned geometry appears
+    // only as the dashed underlay when the actual route is missing/incomplete.
+    expect(source).toContain('const showPlannedUnderlay =');
+    expect(source).toContain("(!hasActualRoute || ride?.route_geometry_status !== 'complete')");
+    expect(source).toContain(') : isV2Route ? null : (');
+    expect(source).toContain("? (showPlannedUnderlay ? 'Booked route' : 'Actual route')");
     expect(source).toContain("? 'Actual route processing'");
     expect(source).toContain('routeQualityLabel');
   });

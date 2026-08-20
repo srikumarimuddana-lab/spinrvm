@@ -83,7 +83,9 @@ class TestPreauthorizeRideCard:
 
         assert result.fields == {
             "payment_intent_id": "pi_hold",
-            "authorized_amount": 25.0,  # fare exactly — no buffer
+            # ACTION_ITEMS.md B35: authorized_amount is NUMERIC(12,2) on `rides` —
+            # must cross this boundary as a Decimal-safe string, not a float.
+            "authorized_amount": "25.00",  # fare exactly — no buffer
             "auth_status": "authorized",
             "auth_incrementable": False,
         }
@@ -152,7 +154,8 @@ class TestPreauthorizeRideCard:
 
         assert result.fields == {
             "payment_intent_id": "pi_fare_only",
-            "authorized_amount": 25.0,  # fare only, no buffer
+            # ACTION_ITEMS.md B35: authorized_amount is NUMERIC(12,2) on `rides`.
+            "authorized_amount": "25.00",  # fare only, no buffer
             "auth_status": "fare_only",
             "auth_incrementable": False,
         }
@@ -339,7 +342,8 @@ class TestAttachPreauthorizedHold:
 
         assert fields == {
             "payment_intent_id": "pi_sca",
-            "authorized_amount": 35.0,
+            # ACTION_ITEMS.md B35: authorized_amount is NUMERIC(12,2) on `rides`.
+            "authorized_amount": "35.00",
             "auth_status": "authorized",
         }
         # ownership + amount checks are threaded to verify_authorization

@@ -6780,6 +6780,71 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   reconstruction-verification.md`) are the first real candidate backlog once this ships — filing the
   table is not itself a decision to correct them, that stays a separate, explicit call.
 
+### B35. `routes/rides/booking.py` float()-casts several `rides` money fields at write time — same bug class as B28/B29/B30
+
+- **Source:** found while fixing B30 (2026-08-20) — B30's own PR flagged a narrower version of
+  this (`subtotal_fare`/`discount_amount`/`grand_total` around line 1278-1288, the promo-application
+  branch). This entry's original filing (below, struck through) grepped `booking.py` for every `_f(`
+  call site and assumed the wider list was all the same bug class — **that assumption was wrong for
+  most of it**, corrected once each column's real DB type was checked. Exactly the failure mode
+  CLAUDE.md's "verify, don't assume" principle exists for.
+- **Status:** ✅ FIXED (2026-08-20, PR #4312). Every field below was checked against the live
+  `rides` schema (`information_schema.columns`) before being touched — not grep-assumed.
+  - **Genuinely NUMERIC, fixed** (swapped `_f()` → `_money_str()`, the file's own existing
+    Decimal-safe-string helper, not a new one):
+    - `authorized_amount` — `NUMERIC(12,2)`, 3 write sites (`_attach_preauthorized_hold`,
+      `_preauthorize_ride_card` ×2). This was the field the original filing (below) explicitly
+      flagged as "separate, NOT yet triaged, might be a Stripe API param" — traced end-to-end
+      instead of guessed at: all three sites merge directly into `ride_data`, the raw dict passed
+      straight to `insert_ride()`. It's a genuine `rides` column write, not a Stripe call parameter.
+    - `subtotal_fare`, `discount_amount`, `grand_total` — `NUMERIC(10,2)`, the promo-application
+      branch (~1267-1293) — this was the original, narrower B30-flagged instance.
+  - **Originally listed as suspect, confirmed FALSE POSITIVES — left untouched, would have been a
+    real bug to "fix"**: `base_fare`, `distance_fare`, `time_fare`, `booking_fee`, `total_fare`,
+    `driver_earnings`, `admin_earnings`, `airport_fee` are all genuinely `double precision` (FLOAT8)
+    on `rides`, not `NUMERIC` — `_f()` is the *correct* serialization for these columns.
+    Corroborated by pre-existing comments in migrations 159/303 ("driver_earnings is FLOAT in the
+    DB"). The original filing's grep-only method (below) couldn't distinguish this from the real
+    bug class; only a live schema check could.
+  - **New adjacent finding, NOT fixed here** (flagging per "escalate, don't silently ship" rather
+    than silently leaving it undiscoverable): `backend/services/fare_service.py`'s
+    `recalculate_fare_for_distance` (runs on ride completion) has the identical `_f(new_grand_total)`
+    bug on the same NUMERIC `grand_total` column — likely higher-traffic than the booking-time promo
+    branch fixed here. Not filed as its own item yet; needs a same-treatment pass (verify the column
+    type, don't assume from this note) before it is.
+  - Tests: new `test_booking_rides_numeric_no_float_cast.py` (6 fix-pinning + 8 FLOAT8
+    negative-control tests, verified to actually fail when the fix is reverted); 3 pre-existing
+    `test_ride_preauth_booking.py` assertions updated from hardcoded floats (`25.0`/`35.0`) to the
+    corrected Decimal-safe strings (`"25.00"`/`"35.00"`). Full booking/ride/promo/preauth surface:
+    2823 + 358 passed, 0 failed. `ruff check`/`ruff format --check` clean.
+  - Full detail: `docs/change-log/2026-08-20-b35-booking-float-fix.md`.
+- **Files:** `backend/routes/rides/booking.py`, `backend/tests/test_booking_rides_numeric_no_float_cast.py`
+  (new), `backend/tests/test_ride_preauth_booking.py`.
+
+<details>
+<summary>Original filing (2026-08-20), superseded by the corrected findings above — kept for the
+record of what was assumed vs. what was actually true</summary>
+
+- **Confirmed (verified in code, not assumed):** `booking.py` imports `_f` from `._shared`
+  (`from ._shared import (..., _f, ...)`), and `_shared.py:443` defines `_f(v: Decimal) -> float` —
+  so every call site below genuinely produces a Python `float`, not a Decimal-safe string.
+- **"Confirmed" DB-write call sites** (dict values assigned into `ride_data`/the ride-update payload,
+  same shape as B30's fix) — **8 of these 9 fields turned out to be FLOAT8, not NUMERIC; see the
+  corrected findings above**:
+  - Lines ~1007-1024: `base_fare=_f(base_fare)`, `distance_fare=_f(distance_fare)`,
+    `time_fare=_f(time_fare)`, `booking_fee=_f(booking_fee)`, `total_fare=_f(total_fare)`,
+    `driver_earnings=_f(driver_earnings)`, `admin_earnings=_f(admin_earnings)` — ride-insert
+    construction.
+  - Line ~1052: `ride_data["airport_fee"] = _f(airport_fee)`.
+  - Lines ~1282-1293 (the originally-flagged instance, this one *was* real): `"subtotal_fare":
+    _f(server_fare)`, `"discount_amount": _f(discount)`, plus `grand_total`.
+- **Separate, NOT yet triaged as the same bug class** — do not fold into this fix without checking
+  first: lines ~226, ~299, ~345 (`"authorized_amount": _f(...)`) appear to feed a Stripe
+  payment-intent/manual-capture-hold call, not a `rides` table column. **This turned out to be wrong
+  too — it's a genuine `rides` NUMERIC write, see corrected findings above.**
+
+</details>
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly

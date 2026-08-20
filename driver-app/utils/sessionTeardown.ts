@@ -1,5 +1,6 @@
 import { registerLogoutCallback } from '@shared/store/authStore';
 import { stopBackgroundLocation, stopGeofenceRecovery } from './backgroundLocation';
+import { resetLocationIntegrity } from './locationIntegrity';
 import { tripLocationRecorder } from './tripLocationRecorder';
 import { recordNonFatal } from './crashlytics';
 import { LAST_LOCATION_KEY } from '../lib/androidAuto/carFixChannel';
@@ -63,7 +64,18 @@ export async function teardownDriverLocationSession(): Promise<void> {
     recordNonFatal(e, { domain: 'drivers', surface: 'driver-app', teardown: 'stop_car_location' });
   }
 
-  // 4. Drop coordinates already at rest on the device. Unlike every other
+  // 4. Clear every producer's anti-spoof last-location state. Producers are
+  //    stopped above, but the checkers' baselines survive in module memory —
+  //    the next account on this device must not have its first fixes compared
+  //    against the previous driver's final position (a legitimate first fix
+  //    from a different part of town would read as a teleport).
+  try {
+    resetLocationIntegrity();
+  } catch (e) {
+    recordNonFatal(e, { domain: 'drivers', surface: 'driver-app', teardown: 'reset_integrity' });
+  }
+
+  // 5. Drop coordinates already at rest on the device. Unlike every other
   //    caller, this deliberately discards unacknowledged points — see
   //    TripLocationOutbox.purgeAll for why sign-out is the exception.
   try {
@@ -74,7 +86,7 @@ export async function teardownDriverLocationSession(): Promise<void> {
     recordNonFatal(e, { domain: 'drivers', surface: 'driver-app', teardown: 'purge_outbox' });
   }
 
-  // 5. And the plain-AsyncStorage last-known position. The outbox purge above
+  // 6. And the plain-AsyncStorage last-known position. The outbox purge above
   //    does not cover it — different store, and it is the one coordinate pair
   //    that survives a sign-out precisely because it is a display cache rather
   //    than trip data. `useDriverDashboard` already deletes it on go-offline for

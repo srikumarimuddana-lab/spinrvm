@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -564,11 +564,14 @@ class TestAdminPayoutRetry:
         with (
             patch("db_supabase.find_one", AsyncMock(return_value={"id": "payout-1", "status": "failed"})),
             patch("db_supabase.update_one", AsyncMock(side_effect=_update)),
+            patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-1")) as audit_mock,
         ):
             resp = client.post("/api/admin/payouts/payout-1/retry")
         assert resp.status_code == 200
         assert resp.json()["status"] == "pending"
         assert captured["fields"]["status"] == "pending"
+        audit_mock.assert_awaited_once()
+        assert audit_mock.call_args[0][1] == "payout_retry_requested"
 
     def test_retry_allows_super_admin_role(self, client, as_super_admin):
         with (
@@ -619,6 +622,7 @@ class TestAdminBulkRetryPayouts:
         with (
             patch("db_supabase.get_rows", AsyncMock(return_value=rows)),
             patch("db_supabase.update_one", AsyncMock(return_value=None)),
+            patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-2")) as audit_mock,
         ):
             resp = client.post(
                 "/api/admin/payouts/bulk-retry",
@@ -626,6 +630,8 @@ class TestAdminBulkRetryPayouts:
             )
         assert resp.status_code == 200
         assert resp.json()["retried"] == 1
+        audit_mock.assert_awaited_once()
+        assert audit_mock.call_args[0][1] == "payout_bulk_retry_requested"
 
     def test_bulk_retry_update_failure_counted_not_swallowed(self, client, as_finance_admin):
         async def _find_one(table, filt):
@@ -673,6 +679,57 @@ class TestAdminClosePayoutPeriod:
             resp = client.post("/api/admin/payouts/close-period", json={"year": 2026, "month": 6})
         assert resp.status_code == 200
         assert resp.json()["total_amount"] == 0
+
+
+class TestAdminRegenerateImportedSnapshots:
+    """Ranked-blocker #18 (baseline #12): this endpoint previously wrote no
+    audit_logs row for a bulk write (route_snapshot_url) across up to 500
+    imported rides."""
+
+    def test_regenerate_requires_super_admin_403(self, client, as_finance_admin):
+        resp = client.post("/api/admin/rides/regenerate-imported-snapshots", json={})
+        assert resp.status_code == 403
+
+    def test_regenerate_no_rides_skips_audit(self, client, as_super_admin):
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-1")) as audit_mock,
+        ):
+            resp = client.post("/api/admin/rides/regenerate-imported-snapshots", json={})
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 0
+        # No rides to process -> the endpoint returns before reaching the
+        # audit call; nothing happened, so nothing to log.
+        audit_mock.assert_not_awaited()
+
+    def test_regenerate_happy_path_audits_totals(self, client, as_super_admin):
+        rides = [
+            {
+                "id": "ride-1",
+                "pickup_lat": 50.4,
+                "pickup_lng": -104.6,
+                "dropoff_lat": 50.5,
+                "dropoff_lng": -104.7,
+                "planned_route_polyline": None,
+            }
+        ]
+        fake_storage = MagicMock()
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=rides)),
+            patch("db_supabase.update_one", AsyncMock(return_value=None)),
+            patch("utils.route_snapshot.render_ride_snapshot_google", AsyncMock(return_value=None)),
+            patch("utils.route_snapshot.render_ride_snapshot", MagicMock(return_value=b"png-bytes")),
+            patch("supabase_client.supabase", MagicMock(storage=fake_storage)),
+            patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-2")) as audit_mock,
+            patch("asyncio.sleep", AsyncMock()),
+        ):
+            resp = client.post("/api/admin/rides/regenerate-imported-snapshots", json={"limit": 10})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 1
+        audit_mock.assert_awaited_once()
+        assert audit_mock.call_args[0][1] == "ride_snapshots_regenerated"
+        assert audit_mock.call_args[0][4]["total"] == 1
 
 
 # ---------------------------------------------------------------------------

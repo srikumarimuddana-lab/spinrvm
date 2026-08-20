@@ -172,6 +172,23 @@ export function registerBackgroundMessageHandlers(): void {
       return;
     }
 
+    // Server-side gap monitor saw this trip stop reporting GPS and the WS
+    // nudge couldn't reach us (socket closes when backgrounded — exactly the
+    // state this data-only push exists for). Re-assert the background task
+    // (restarts it if the OS killed it, re-promotes the shared service if
+    // demoted) and drain the outbox. No coordinates in the payload; renders
+    // no notification.
+    if (data?.type === 'location_health') {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const bg = require('../utils/backgroundLocation');
+        await bg.recoverTripLocation();
+      } catch {
+        // Best-effort — the 60s in-handler self-heal remains the backstop.
+      }
+      return;
+    }
+
     if (data?.type !== 'new_ride_assignment' || !data?.ride_id) return;
 
     const fare = toNum(data.fare) ?? 0;

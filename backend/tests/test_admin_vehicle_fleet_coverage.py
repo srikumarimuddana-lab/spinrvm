@@ -120,10 +120,13 @@ class TestVehicleTypeCrud:
         with (
             patch.object(vf.db_supabase, "insert_one", AsyncMock(return_value={"id": "vt_1"})),
             patch.object(vf, "invalidate_fare_cache", AsyncMock()) as inv,
+            patch.object(vf, "log_admin_action", AsyncMock(return_value="audit-1")) as audit_mock,
         ):
-            result = await vf.admin_create_vehicle_type(req)
+            result = await vf.admin_create_vehicle_type(req, admin=ADMIN)
         assert result == {"type_id": "vt_1"}
         inv.assert_awaited_once()
+        audit_mock.assert_awaited_once()
+        assert audit_mock.call_args[0][1] == "vehicle_type_created"
 
     @pytest.mark.asyncio
     async def test_create_vehicle_type_handles_non_dict_row(self):
@@ -131,8 +134,9 @@ class TestVehicleTypeCrud:
         with (
             patch.object(vf.db_supabase, "insert_one", AsyncMock(return_value=None)),
             patch.object(vf, "invalidate_fare_cache", AsyncMock()),
+            patch.object(vf, "log_admin_action", AsyncMock(return_value="audit-2")),
         ):
-            result = await vf.admin_create_vehicle_type(req)
+            result = await vf.admin_create_vehicle_type(req, admin=ADMIN)
         assert result == {"type_id": ""}
 
     @pytest.mark.asyncio
@@ -157,8 +161,9 @@ class TestVehicleTypeCrud:
         with (
             patch.object(vf.db_supabase, "update_one", AsyncMock(side_effect=_capture)),
             patch.object(vf, "invalidate_fare_cache", AsyncMock()),
+            patch.object(vf, "log_admin_action", AsyncMock(return_value="audit-3")),
         ):
-            await vf.admin_update_vehicle_type("vt_1", vf.VehicleTypeUpdateRequest(illustration_url=""))
+            await vf.admin_update_vehicle_type("vt_1", vf.VehicleTypeUpdateRequest(illustration_url=""), admin=ADMIN)
         assert seen["illustration_url"] is None
 
     @pytest.mark.asyncio
@@ -171,8 +176,9 @@ class TestVehicleTypeCrud:
         with (
             patch.object(vf.db_supabase, "update_one", AsyncMock(side_effect=_capture)),
             patch.object(vf, "invalidate_fare_cache", AsyncMock()),
+            patch.object(vf, "log_admin_action", AsyncMock(return_value="audit-4")),
         ):
-            await vf.admin_update_vehicle_type("vt_1", vf.VehicleTypeUpdateRequest(marker_image_url=""))
+            await vf.admin_update_vehicle_type("vt_1", vf.VehicleTypeUpdateRequest(marker_image_url=""), admin=ADMIN)
         assert seen["marker_image_url"] is None
 
 
@@ -238,10 +244,13 @@ class TestDeleteVehicleType:
             patch.object(vf.db_supabase, "get_rows", AsyncMock(side_effect=_get_rows)),
             patch.object(vf.db_supabase, "delete_many", AsyncMock()) as del_mock,
             patch.object(vf, "invalidate_fare_cache", AsyncMock()),
+            patch.object(vf, "log_admin_action", AsyncMock(return_value="audit-5")) as audit_mock,
         ):
-            result = await vf.admin_delete_vehicle_type("vt_1")
+            result = await vf.admin_delete_vehicle_type("vt_1", admin=ADMIN)
         assert result == {"message": "Vehicle type deleted"}
         del_mock.assert_awaited_once()
+        audit_mock.assert_awaited_once()
+        assert audit_mock.call_args[0][1] == "vehicle_type_deleted"
 
     @pytest.mark.asyncio
     async def test_delete_ignores_malformed_pricing_rows(self):
@@ -263,8 +272,9 @@ class TestDeleteVehicleType:
             patch.object(vf.db_supabase, "get_rows", AsyncMock(side_effect=_get_rows)),
             patch.object(vf.db_supabase, "delete_many", AsyncMock()),
             patch.object(vf, "invalidate_fare_cache", AsyncMock()),
+            patch.object(vf, "log_admin_action", AsyncMock(return_value="audit-6")),
         ):
-            result = await vf.admin_delete_vehicle_type("vt_1")
+            result = await vf.admin_delete_vehicle_type("vt_1", admin=ADMIN)
         assert result == {"message": "Vehicle type deleted"}
 
 
@@ -449,8 +459,9 @@ class TestFareConfigs:
         with (
             patch.object(vf.db_supabase, "insert_one", AsyncMock(side_effect=_capture)),
             patch.object(vf, "invalidate_fare_cache", AsyncMock()),
+            patch.object(vf, "log_admin_action", AsyncMock(return_value="audit-7")),
         ):
-            result = await vf.admin_create_fare_config(req)
+            result = await vf.admin_create_fare_config(req, admin=ADMIN)
         assert result == {"config_id": "fc_1"}
         assert inserted["per_km_rate"] == 1.5
         assert inserted["per_minute_rate"] == 0.3
@@ -478,19 +489,23 @@ class TestFareConfigs:
         with (
             patch.object(vf.db_supabase, "update_one", AsyncMock(side_effect=_capture)),
             patch.object(vf, "invalidate_fare_cache", AsyncMock()),
+            patch.object(vf, "log_admin_action", AsyncMock(return_value="audit-8")),
         ):
-            await vf.admin_update_fare_config("fc_1", req)
+            await vf.admin_update_fare_config("fc_1", req, admin=ADMIN)
         assert seen["per_km_rate"] == 2.0
 
     @pytest.mark.asyncio
     async def test_delete_fare_config(self):
+        audit_mock = AsyncMock(return_value="audit-9")
         with (
             patch.object(vf.db_supabase, "delete_many", AsyncMock()) as del_mock,
             patch.object(vf, "invalidate_fare_cache", AsyncMock()),
+            patch.object(vf, "log_admin_action", audit_mock),
         ):
-            result = await vf.admin_delete_fare_config("fc_1")
+            result = await vf.admin_delete_fare_config("fc_1", admin=ADMIN)
         assert result == {"message": "Fare configuration deleted"}
         del_mock.assert_awaited_once_with("fare_configs", {"id": "fc_1"})
+        audit_mock.assert_awaited_once_with(ADMIN, "fare_config_deleted", "fare_configs", "fc_1", {})
 
 
 # ---------------------------------------------------------------------------
@@ -524,14 +539,19 @@ class TestLostAndFound:
             patch.object(vf.db_supabase, "get_driver_by_id", AsyncMock(return_value={"user_id": "u1"})),
             patch.object(vf.db_supabase, "get_user_by_id", AsyncMock(return_value={"fcm_token": "tok"})),
             patch.object(vf.db_supabase, "update_lost_and_found", AsyncMock()) as update_mock,
+            patch.object(vf, "log_admin_action", AsyncMock(return_value="audit-10")) as audit_mock,
         ):
             with patch.dict("sys.modules", {}):
                 import backend.features as features_mod  # noqa: F401
 
                 with patch.object(features_mod, "send_push_notification", push_mock):
-                    result = await vf.admin_report_lost_item("ride_1", vf.LostAndFoundRequest(item_description="phone"))
+                    result = await vf.admin_report_lost_item(
+                        "ride_1", vf.LostAndFoundRequest(item_description="phone"), admin=ADMIN
+                    )
         assert result == item
         push_mock.assert_awaited_once()
+        audit_mock.assert_awaited_once()
+        assert audit_mock.call_args[0][1] == "lost_item_reported"
         # N3 (ACTION_ITEMS.md): the first positional arg must be the driver's
         # users.id ("u1"), not the raw fcm_token string ("tok") —
         # send_push_notification looks the recipient up by users.id itself;
@@ -549,8 +569,11 @@ class TestLostAndFound:
             patch.object(vf.db_supabase, "get_ride", AsyncMock(return_value=ride)),
             patch.object(vf.db_supabase, "create_lost_and_found", AsyncMock(return_value=item)),
             patch.object(vf.db_supabase, "get_driver_by_id", AsyncMock(side_effect=RuntimeError("db down"))),
+            patch.object(vf, "log_admin_action", AsyncMock(return_value="audit-11")),
         ):
-            result = await vf.admin_report_lost_item("ride_1", vf.LostAndFoundRequest(item_description="phone"))
+            result = await vf.admin_report_lost_item(
+                "ride_1", vf.LostAndFoundRequest(item_description="phone"), admin=ADMIN
+            )
         assert result == item
 
     @pytest.mark.asyncio
@@ -567,10 +590,19 @@ class TestLostAndFound:
             seen.update(update)
             return {"id": item_id, **update}
 
-        with patch.object(vf.db_supabase, "update_lost_and_found", AsyncMock(side_effect=_capture)):
-            result = await vf.admin_resolve_lost_item("laf_1", vf.LostAndFoundResolveRequest(status="resolved"))
+        audit_mock = AsyncMock(return_value="audit-12")
+        with (
+            patch.object(vf.db_supabase, "update_lost_and_found", AsyncMock(side_effect=_capture)),
+            patch.object(vf, "log_admin_action", audit_mock),
+        ):
+            result = await vf.admin_resolve_lost_item(
+                "laf_1", vf.LostAndFoundResolveRequest(status="resolved"), admin=ADMIN
+            )
         assert "resolved_at" in seen
         assert result["status"] == "resolved"
+        audit_mock.assert_awaited_once_with(
+            ADMIN, "lost_item_resolved", "lost_and_found", "laf_1", {"status": "resolved"}
+        )
 
     @pytest.mark.asyncio
     async def test_resolve_lost_item_404_when_missing(self):
@@ -618,11 +650,17 @@ class TestLostAndFound:
 
     @pytest.mark.asyncio
     async def test_update_lost_item_success(self):
-        with patch.object(
-            vf.db_supabase, "update_lost_and_found", AsyncMock(return_value={"id": "laf_1", "status": "found"})
+        audit_mock = AsyncMock(return_value="audit-13")
+        with (
+            patch.object(
+                vf.db_supabase, "update_lost_and_found", AsyncMock(return_value={"id": "laf_1", "status": "found"})
+            ),
+            patch.object(vf, "log_admin_action", audit_mock),
         ):
-            result = await vf.admin_update_lost_item("laf_1", vf.LostAndFoundUpdateRequest(status="found"))
+            result = await vf.admin_update_lost_item("laf_1", vf.LostAndFoundUpdateRequest(status="found"), admin=ADMIN)
         assert result["status"] == "found"
+        audit_mock.assert_awaited_once()
+        assert audit_mock.call_args[0][1] == "lost_item_updated"
 
     @pytest.mark.asyncio
     async def test_delete_lost_item_404(self):
@@ -633,10 +671,13 @@ class TestLostAndFound:
 
     @pytest.mark.asyncio
     async def test_delete_lost_item_success(self):
+        audit_mock = AsyncMock(return_value="audit-14")
         with (
             patch.object(vf.db_supabase, "get_rows", AsyncMock(return_value=[{"id": "laf_1"}])),
             patch.object(vf.db_supabase, "delete_one", AsyncMock()) as del_mock,
+            patch.object(vf, "log_admin_action", audit_mock),
         ):
-            result = await vf.admin_delete_lost_item("laf_1")
+            result = await vf.admin_delete_lost_item("laf_1", admin=ADMIN)
         assert result == {"message": "Item deleted"}
         del_mock.assert_awaited_once_with("lost_and_found", {"id": "laf_1"})
+        audit_mock.assert_awaited_once_with(ADMIN, "lost_item_deleted", "lost_and_found", "laf_1", {})

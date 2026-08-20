@@ -95,6 +95,8 @@ async def test_tick_skips_a_ride_without_an_id_and_still_scans_the_rest(monkeypa
             ]
         if table == "driver_location_history":
             return [{"captured_at": (NOW - timedelta(seconds=1)).isoformat()}]
+        if table == "ride_location_gap_events":
+            return []  # no open events for the orphan-closure pass
         raise AssertionError(f"unexpected table {table}")
 
     monkeypatch.setattr(route_gap_monitor.db_supabase, "get_rows", get_rows)
@@ -108,7 +110,7 @@ async def test_tick_skips_a_ride_without_an_id_and_still_scans_the_rest(monkeypa
 
     # Only the id-bearing ride is scanned; it is healthy (1s < 30s threshold),
     # and there is no pre-existing open gap event to resolve.
-    assert result == {"scanned": 1, "opened": 0, "resolved": 0, "unknown": 0}
+    assert result == {"scanned": 1, "opened": 0, "resolved": 0, "unknown": 0, "orphaned_closed": 0}
 
 
 @pytest.mark.asyncio
@@ -118,6 +120,8 @@ async def test_tick_counts_a_ride_with_no_start_time_and_no_capture_as_unknown(m
             return [{"id": "ride_1", "driver_id": "driver_1", "ride_started_at": None}]
         if table == "driver_location_history":
             return []
+        if table == "ride_location_gap_events":
+            return []  # no open events for the orphan-closure pass
         raise AssertionError(f"unexpected table {table}")
 
     monkeypatch.setattr(route_gap_monitor.db_supabase, "get_rows", get_rows)
@@ -128,7 +132,7 @@ async def test_tick_counts_a_ride_with_no_start_time_and_no_capture_as_unknown(m
 
     result = await route_gap_monitor.route_gap_monitor_tick()
 
-    assert result == {"scanned": 1, "opened": 0, "resolved": 0, "unknown": 1}
+    assert result == {"scanned": 1, "opened": 0, "resolved": 0, "unknown": 1, "orphaned_closed": 0}
 
 
 # ── route_gap_monitor_loop: success / error / cancellation ───────────────────

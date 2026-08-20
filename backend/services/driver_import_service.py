@@ -38,11 +38,13 @@ try:
     from ..documents import _extract_signed_url
     from ..supabase_client import supabase
     from ..utils.driver_code import generate_driver_code
+    from ..utils.sin import sin_last4, validate_sin
     from ..validators import validate_vin
 except ImportError:  # pragma: no cover - allow direct/CLI module imports
     from documents import _extract_signed_url
     from supabase_client import supabase
     from utils.driver_code import generate_driver_code
+    from utils.sin import sin_last4, validate_sin  # type: ignore
     from validators import validate_vin
 
 REQUIRED_DRIVER_COLUMNS = {
@@ -899,6 +901,229 @@ def print_report(plan: ImportPlan, *, dry_run: bool) -> None:
     print(f"  drivers to update: {len(plan.drivers_to_update)}")
     print(f"  documents planned: {len(plan.docs_to_insert)}")
     print(f"  files planned: {len(plan.files_to_upload)}")
+    print(f"  warnings: {len(plan.warnings)}")
+    print(f"  errors: {len(plan.errors)}")
+    for item in plan.warnings[:50]:
+        print(f"WARNING old_driver_id={item.old_driver_id} field={item.field}: {item.message}")
+    for item in plan.errors[:100]:
+        print(f"ERROR old_driver_id={item.old_driver_id} field={item.field}: {item.message}")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Legacy SIN + date-of-birth backfill (banks.csv from the raw Mongo export)
+#
+# Separate from build_plan/commit_plan above: this backfills two columns
+# (drivers.sin, drivers.date_of_birth) on drivers this importer already
+# created, rather than creating new driver rows. Source is the old app's
+# `banks.csv` (Mongo ObjectId-keyed) joined against `drivers.csv` from the
+# same export to resolve a phone number, per
+# docs/audit/2026-08-19-full-mongodb-export-collection-inventory.md.
+#
+# Deliberately excludes account_number/transit_number/institute_number —
+# nothing in the live payout path reads raw banking numbers today (Stripe
+# Connect collects them directly from the driver; the one local table that
+# looks like a destination, `bank_accounts`, already discards the full
+# number down to last4, and its only payout consumer is hardcoded
+# `_STANDARD_CASHOUT_DISABLED = True`). Importing them would build new
+# storage for sensitive data nothing reads — see the audit doc and this
+# session's user decision before changing that scope.
+#
+# Safety rules, all enforced below:
+#   - only touches drivers already carrying this module's own
+#     ``IMPORT_SOURCE`` in ``legacy_import_metadata`` — a phone-number
+#     coincidence can never touch an organic (non-legacy) driver's SIN/DOB.
+#   - never clobbers an existing ``sin`` or ``date_of_birth`` — if the
+#     driver already has one on file (self-entered or from an earlier
+#     backfill), that value wins.
+#   - reuses ``encrypt_pii`` (the same vault RPC ``commit_plan`` already
+#     uses for ``license_number``) for SIN; DOB is stored plain, matching
+#     the existing ``date_of_birth`` column (migration 221) and
+#     ``build_plan``'s own DOB handling above.
+#   - report items carry only ``old_driver_id``/``field``/``message``, same
+#     as everywhere else in this module — never a raw phone, SIN, or DOB.
+
+LEGACY_BANK_SIN_DOB_SOURCE = "legacy_mongo_banks_sin_dob_import"
+
+
+@dataclass
+class SinDobImportPlan:
+    updates: list[dict[str, Any]] = field(default_factory=list)
+    warnings: list[ImportErrorItem] = field(default_factory=list)
+    errors: list[ImportErrorItem] = field(default_factory=list)
+    skipped_unmatched: int = 0
+    skipped_not_legacy_driver: int = 0
+    skipped_already_on_file: int = 0
+    skipped_duplicate_match: int = 0
+
+
+def join_legacy_bank_sin_dob(
+    bank_rows: list[dict[str, str]], mongo_driver_rows: list[dict[str, str]]
+) -> list[dict[str, str | None]]:
+    """Resolve each ``banks.csv`` row to a phone number via ``drivers.csv``.
+
+    ``banks.csv.driver_id`` is a Mongo ObjectId referencing ``drivers.csv._id``
+    in the same export — verified 100% joinable
+    (docs/audit/2026-08-19-full-mongodb-export-collection-inventory.md,
+    finding #2). Rows whose ``driver_id`` has no match in ``mongo_driver_rows``
+    come back with ``phone: None`` and are reported as unmatched by the caller.
+    """
+    phone_by_object_id = {r["_id"]: r.get("phone", "") for r in mongo_driver_rows if r.get("_id")}
+    out: list[dict[str, str | None]] = []
+    for row in bank_rows:
+        old_driver_id = (row.get("driver_id") or "").strip()
+        phone_raw = phone_by_object_id.get(old_driver_id) if old_driver_id else None
+        out.append(
+            {
+                "old_driver_id": old_driver_id or None,
+                "phone": normalize_phone(phone_raw) if phone_raw else None,
+                "sin_raw": (row.get("sin") or "").strip() or None,
+                # banks.csv stores DOB as a full ISO datetime
+                # ("1992-08-03T00:00:00.000"), not the plain date DATE_FORMATS
+                # expects — truncate at "T" so iso_date's "%Y-%m-%d" branch
+                # matches, same as every other DOB source in this module.
+                "date_of_birth_raw": (row.get("date_of_birth") or "").split("T", 1)[0],
+            }
+        )
+    return out
+
+
+def plan_legacy_sin_dob_import(
+    bank_rows: list[dict[str, str]], mongo_driver_rows: list[dict[str, str]]
+) -> SinDobImportPlan:
+    plan = SinDobImportPlan()
+    joined = join_legacy_bank_sin_dob(bank_rows, mongo_driver_rows)
+
+    phones = sorted({r["phone"] for r in joined if r["phone"]})
+    drivers_by_phone: dict[str, dict[str, Any]] = {}
+    if phones:
+        cols = "id,phone,sin,date_of_birth,legacy_import_metadata"
+        for d in _select_in("drivers", cols, "phone", phones):
+            key = d.get("phone")
+            if key and key not in drivers_by_phone:
+                drivers_by_phone[key] = d
+
+    seen_driver_ids: set[str] = set()
+    for row in joined:
+        old_id = row["old_driver_id"] or "unknown"
+
+        if not row["phone"]:
+            plan.warnings.append(
+                ImportErrorItem(old_id, "phone", "driver_id has no matching row in the Mongo drivers export")
+            )
+            plan.skipped_unmatched += 1
+            continue
+
+        driver = drivers_by_phone.get(row["phone"])
+        if not driver:
+            plan.warnings.append(ImportErrorItem(old_id, "phone", "no Spinr driver with this phone number"))
+            plan.skipped_unmatched += 1
+            continue
+
+        meta = driver.get("legacy_import_metadata") or {}
+        if meta.get("source") != IMPORT_SOURCE:
+            plan.warnings.append(
+                ImportErrorItem(
+                    old_id, "legacy_import_metadata", "matched driver is not a known legacy-imported driver; skipped"
+                )
+            )
+            plan.skipped_not_legacy_driver += 1
+            continue
+
+        if driver["id"] in seen_driver_ids:
+            plan.warnings.append(
+                ImportErrorItem(old_id, "phone", "duplicate phone match within this batch; first row wins")
+            )
+            plan.skipped_duplicate_match += 1
+            continue
+        seen_driver_ids.add(driver["id"])
+
+        update: dict[str, Any] = {"id": driver["id"], "old_driver_id": old_id}
+
+        if row["sin_raw"]:
+            if driver.get("sin"):
+                plan.skipped_already_on_file += 1
+            else:
+                try:
+                    update["_plain_sin"] = validate_sin(row["sin_raw"])
+                except ValueError as exc:
+                    plan.warnings.append(ImportErrorItem(old_id, "sin", f"invalid SIN, skipped: {exc}"))
+
+        if row["date_of_birth_raw"]:
+            dob_iso = iso_date(row["date_of_birth_raw"])
+            if not dob_iso:
+                plan.warnings.append(ImportErrorItem(old_id, "date_of_birth", "could not parse date"))
+            elif driver.get("date_of_birth"):
+                pass  # already on file — never clobber, not counted as an error
+            else:
+                update["date_of_birth"] = dob_iso
+
+        if "_plain_sin" in update or "date_of_birth" in update:
+            plan.updates.append(update)
+
+    return plan
+
+
+def apply_legacy_sin_dob_import(plan: SinDobImportPlan, *, batch: str) -> list[str]:
+    """Write ``plan.updates`` to ``drivers``. Idempotent: re-running after a
+    partial failure only ever affects drivers still missing sin/date_of_birth,
+    since ``plan_legacy_sin_dob_import`` already excludes anything on file.
+
+    Each update is guarded with ``.is_(<column>, "null")`` on exactly the
+    column(s) it writes — the same pattern
+    ``stripe_mapping_import_service.commit_plan`` already uses for this exact
+    race. The plan-time snapshot in ``plan_legacy_sin_dob_import`` only proves
+    the column was null *when planned*; without this guard, a driver who
+    self-enters their SIN via ``routes/drivers/profile.py`` during the
+    (possibly minutes-long) batch loop would have that value silently
+    overwritten by the stale plan snapshot's legacy value when this loop
+    reaches their row. A guard miss is never retried onto another row — it's
+    reported back as a conflict (0 rows matched, self-entry won) so the
+    caller can log it, never treated as success.
+
+    Returns the ``old_driver_id`` of every update whose guard didn't match
+    (self-entry won the race in between plan and apply) — empty on a clean run.
+    """
+    if plan.errors:
+        raise RuntimeError("refusing to apply with validation errors")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    conflicts: list[str] = []
+    for upd in plan.updates:
+        fields: dict[str, Any] = {"updated_at": now_iso}
+        plain_sin = upd.get("_plain_sin")
+        if plain_sin:
+            fields["sin"] = encrypt_pii(plain_sin)
+            fields["sin_last4"] = sin_last4(plain_sin)
+            fields["sin_collected_at"] = now_iso
+        if upd.get("date_of_birth"):
+            fields["date_of_birth"] = upd["date_of_birth"]
+
+        driver_id = upd["id"]
+        existing = supabase.table("drivers").select("legacy_import_metadata").eq("id", driver_id).execute().data
+        meta = dict((existing[0].get("legacy_import_metadata") or {}) if existing else {})
+        meta[LEGACY_BANK_SIN_DOB_SOURCE] = {"batch": batch, "imported_at": now_iso}
+        fields["legacy_import_metadata"] = meta
+
+        query = supabase.table("drivers").update(fields).eq("id", driver_id)
+        if plain_sin:
+            query = query.is_("sin", "null")
+        if upd.get("date_of_birth"):
+            query = query.is_("date_of_birth", "null")
+        res = query.execute()
+        if not res.data:
+            conflicts.append(upd["old_driver_id"])
+
+    return conflicts
+
+
+def print_sin_dob_report(plan: SinDobImportPlan, *, dry_run: bool) -> None:
+    mode = "DRY RUN" if dry_run else "COMMIT"
+    print(f"{mode} report — legacy SIN/DOB backfill")
+    print(f"  drivers to update: {len(plan.updates)}")
+    print(f"  skipped (no matching driver): {plan.skipped_unmatched}")
+    print(f"  skipped (not a known legacy driver): {plan.skipped_not_legacy_driver}")
+    print(f"  skipped (already on file): {plan.skipped_already_on_file}")
+    print(f"  skipped (duplicate match within batch): {plan.skipped_duplicate_match}")
     print(f"  warnings: {len(plan.warnings)}")
     print(f"  errors: {len(plan.errors)}")
     for item in plan.warnings[:50]:

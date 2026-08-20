@@ -554,7 +554,7 @@ _PD_DRIVER = {"id": "d1", "name": "Jane Doe", "first_name": "Jane", "last_name":
 
 
 def _period_distance_get_rows_side(table, filters=None, **kw):
-    if table == "driver_period_distances":
+    if table == "driver_period_distances_current":
         return [_PD_PERIOD_2, _PD_PERIOD_3]
     if table == "drivers":
         return [_PD_DRIVER]
@@ -821,7 +821,7 @@ def test_insurance_billing_scopes_by_driver_home_area_and_labels_it_as_such(admi
             return [_DRIVER_ROW]
         if table == "drivers":
             return [_DRIVER_ROW]
-        if table == "driver_period_distances":
+        if table == "driver_period_distances_current":
             return [
                 {
                     "driver_id": "d1",
@@ -840,7 +840,7 @@ def test_insurance_billing_scopes_by_driver_home_area_and_labels_it_as_such(admi
     ):
         resp = admin_client.get("/api/admin/compliance/insurance-billing-sgi?service_area_ids=a1")
     assert resp.status_code == 200
-    assert captured["driver_period_distances"][0]["driver_id"] == {"$in": ["d1"]}
+    assert captured["driver_period_distances_current"][0]["driver_id"] == {"$in": ["d1"]}
     subtitle = new_pdf.call_args.args[1] if len(new_pdf.call_args.args) > 1 else new_pdf.call_args.kwargs["subtitle"]
     assert any("by driver's home area" in line for line in subtitle)
 

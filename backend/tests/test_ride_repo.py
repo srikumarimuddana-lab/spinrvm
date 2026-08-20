@@ -687,3 +687,81 @@ class TestGetRideDetailsEnriched:
         assert result["offers"][0]["driver_name"] is None or isinstance(result["offers"][0]["driver_name"], str)
         assert result["incentive_claims"][0]["name"] == "Peak Hours"
         assert result["incentive_total"] == 5.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# get_ride: rider_show_pickup_leg_enabled flag (Phase 4)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestGetRidePickupLegFlag:
+    _ROUTE = {
+        "route_schema_version": 2,
+        "observed_segments": [
+            {
+                "id": "seg-p2",
+                "coordinates": [[50.44, -104.61], [50.45, -104.61]],
+                "phase": "navigating_to_pickup",
+            },
+            {
+                "id": "seg-p3",
+                "coordinates": [[50.45, -104.61], [50.46, -104.61]],
+                "phase": "trip_in_progress",
+            },
+        ],
+    }
+
+    def _client(self):
+        return _FakeSupabase(
+            {
+                "rides": _Query([{"id": "ride_1", "status": "completed"}]),
+                "ride_routes": _Query([dict(self._ROUTE)]),
+            }
+        )
+
+    async def _run_sync(self, fn, **_kw):
+        return fn()
+
+    @pytest.mark.anyio
+    async def test_flag_off_serves_trip_phase_only(self):
+        with (
+            patch.object(ride_repo, "supabase", self._client()),
+            patch.object(ride_repo, "run_sync", self._run_sync),
+            patch("settings_loader.get_app_settings", AsyncMock(return_value={})),
+        ):
+            ride = await ride_repo.get_ride("ride_1", include_route=True)
+
+        phases = [s.get("phase") for s in ride["actual_route_segments"]]
+        assert phases == ["trip_in_progress"]
+
+    @pytest.mark.anyio
+    async def test_flag_on_includes_pickup_leg(self):
+        with (
+            patch.object(ride_repo, "supabase", self._client()),
+            patch.object(ride_repo, "run_sync", self._run_sync),
+            patch(
+                "settings_loader.get_app_settings",
+                AsyncMock(return_value={"rider_show_pickup_leg_enabled": True}),
+            ),
+        ):
+            ride = await ride_repo.get_ride("ride_1", include_route=True)
+
+        phases = [s.get("phase") for s in ride["actual_route_segments"]]
+        assert phases == ["navigating_to_pickup", "trip_in_progress"]
+
+    @pytest.mark.anyio
+    async def test_settings_failure_defaults_to_trip_only(self):
+        """The 2026-07-20 actual-route-only contract is the safe default —
+        a settings outage must never widen what the rider sees."""
+        with (
+            patch.object(ride_repo, "supabase", self._client()),
+            patch.object(ride_repo, "run_sync", self._run_sync),
+            patch(
+                "settings_loader.get_app_settings",
+                AsyncMock(side_effect=RuntimeError("settings down")),
+            ),
+        ):
+            ride = await ride_repo.get_ride("ride_1", include_route=True)
+
+        phases = [s.get("phase") for s in ride["actual_route_segments"]]
+        assert phases == ["trip_in_progress"]

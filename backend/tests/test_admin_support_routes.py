@@ -159,6 +159,8 @@ def test_create_dispute(client, _set_admin, monkeypatch):
     assert body["success"] is True
     assert body["dispute"]["status"] == "pending"
     assert "user_name" not in body["dispute"]
+    m.log_admin_action.assert_awaited_once()
+    assert m.log_admin_action.call_args.args[1] == "dispute_created"
 
 
 def test_get_dispute_details_not_found(client, _set_admin, monkeypatch):
@@ -190,6 +192,8 @@ def test_update_dispute_with_fields(client, _set_admin, monkeypatch):
     assert resp.status_code == 200
     update_one.assert_called_once()
     assert update_one.call_args.args[2]["status"] == "resolved"
+    m.log_admin_action.assert_awaited_once()
+    assert m.log_admin_action.call_args.args[1] == "dispute_updated"
 
 
 def test_resolve_dispute(client, _set_admin, monkeypatch):
@@ -208,6 +212,7 @@ def test_delete_dispute(client, _set_admin, monkeypatch):
     resp = client.delete("/api/admin/disputes/d1")
     assert resp.status_code == 200
     delete_many.assert_called_once_with("disputes", {"id": "d1"})
+    m.log_admin_action.assert_awaited_once_with(_ADMIN, "dispute_deleted", "disputes", "d1", {})
 
 
 # ---------- Support Tickets ----------
@@ -230,6 +235,8 @@ def test_create_ticket(client, _set_admin, monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["ticket"]["status"] == "open"
+    m.log_admin_action.assert_awaited_once()
+    assert m.log_admin_action.call_args.args[1] == "ticket_created"
 
 
 def test_get_ticket_details_not_found(client, _set_admin, monkeypatch):
@@ -278,6 +285,7 @@ def test_close_ticket(client, _set_admin, monkeypatch):
     resp = client.post("/api/admin/tickets/t1/close")
     assert resp.status_code == 200
     assert update_one.call_args.args[2]["status"] == "closed"
+    m.log_admin_action.assert_awaited_once_with(_ADMIN, "ticket_closed", "support_tickets", "t1", {})
 
 
 def test_update_ticket_no_fields_skips_write(client, _set_admin, monkeypatch):
@@ -294,6 +302,8 @@ def test_update_ticket_with_fields(client, _set_admin, monkeypatch):
     resp = client.put("/api/admin/tickets/t1", json={"priority": "high", "status": "open"})
     assert resp.status_code == 200
     assert update_one.call_args.args[2]["priority"] == "high"
+    m.log_admin_action.assert_awaited_once()
+    assert m.log_admin_action.call_args.args[1] == "ticket_updated"
 
 
 def test_delete_ticket(client, _set_admin, monkeypatch):
@@ -302,6 +312,7 @@ def test_delete_ticket(client, _set_admin, monkeypatch):
     resp = client.delete("/api/admin/tickets/t1")
     assert resp.status_code == 200
     delete_many.assert_called_once_with("support_tickets", {"id": "t1"})
+    m.log_admin_action.assert_awaited_once_with(_ADMIN, "ticket_deleted", "support_tickets", "t1", {})
 
 
 # ---------- Flags ----------
@@ -364,6 +375,7 @@ def test_delete_flag(client, _set_admin, monkeypatch):
     resp = client.delete("/api/admin/flags/f1")
     assert resp.status_code == 200
     delete_one.assert_called_once_with("flags", {"id": "f1"})
+    m.log_admin_action.assert_awaited_once_with(_ADMIN, "flag_deleted", "flags", "f1", {})
 
 
 # ---------- Complaints ----------
@@ -405,6 +417,8 @@ def test_complaint_success(client, _set_admin, monkeypatch):
     )
     assert resp.status_code == 200
     assert resp.json()["against_id"] == "u1"
+    m.log_admin_action.assert_awaited_once()
+    assert m.log_admin_action.call_args.args[1] == "complaint_created"
 
 
 def test_resolve_complaint_not_found(client, _set_admin, monkeypatch):
@@ -434,3 +448,4 @@ def test_delete_complaint(client, _set_admin, monkeypatch):
     resp = client.delete("/api/admin/complaints/c1")
     assert resp.status_code == 200
     delete_one.assert_called_once_with("complaints", {"id": "c1"})
+    m.log_admin_action.assert_awaited_once_with(_ADMIN, "complaint_deleted", "complaints", "c1", {})

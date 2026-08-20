@@ -1,7 +1,6 @@
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -14,10 +13,10 @@ except ImportError:
 
 try:
     from ... import db_supabase
-    from ...db_supabase import run_sync as _run_sync
-    from ...supabase_client import supabase as _supabase_client
+    from ...utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase
+    from utils.audit_logger import log_admin_action  # type: ignore
 
 db = db_supabase  # legacy alias
 
@@ -62,19 +61,33 @@ router = APIRouter()
 
 
 @router.post("/maintenance/cleanup-location-history")
-async def admin_cleanup_location_history(days: int = Query(30, ge=7, le=1095)):
+async def admin_cleanup_location_history(
+    days: int = Query(30, ge=7, le=1095),
+    admin: dict = Depends(get_admin_user),
+):
     """Delete old driver_location_history rows.
 
     By default deletes rows older than 30 days. On ride completion the
     aggregated data (phase distances, route polyline) is already stored on
     the ride row, so the raw GPS points are only needed for recent disputes.
 
-    Also deletes online_idle points older than 24 hours regardless (they are
-    never useful for historical analysis).
+    Idle (online_idle) points use the configurable retention from
+    settings.idle_breadcrumb_retention_hours (default 2160h = 90 days per the
+    owner's 2026-08-18 decision — idle history now feeds per-day Distance
+    Logs and map replay; the old hardcoded 24h purge silently destroyed it).
     """
     now = datetime.now(timezone.utc)
     cutoff_historical = (now - timedelta(days=days)).isoformat()
-    cutoff_idle = (now - timedelta(hours=24)).isoformat()
+    idle_hours = 2160
+    try:
+        try:
+            from ...settings_loader import get_app_settings
+        except ImportError:
+            from settings_loader import get_app_settings  # type: ignore
+        idle_hours = int(((await get_app_settings()) or {}).get("idle_breadcrumb_retention_hours", 2160))
+    except Exception:
+        logger.error("idle retention setting read failed; using 2160h default", exc_info=True)
+    cutoff_idle = (now - timedelta(hours=max(1, idle_hours))).isoformat()
 
     deleted_historical = -1
     deleted_idle = -1
@@ -92,6 +105,13 @@ async def admin_cleanup_location_history(days: int = Query(30, ge=7, le=1095)):
         logger.error(f"Cleanup idle GPS failed: {e}", exc_info=True)
 
     logger.info("[CLEANUP] Deleted historical + idle GPS points (counts not tracked — direct delete)")
+    await log_admin_action(
+        admin,
+        "location_history_cleanup",
+        "driver_location_history",
+        "bulk",
+        {"days": days, "historical_cutoff": cutoff_historical, "idle_cutoff": cutoff_idle},
+    )
     return {
         "deleted_historical": deleted_historical,
         "deleted_idle": deleted_idle,
@@ -101,180 +121,55 @@ async def admin_cleanup_location_history(days: int = Query(30, ge=7, le=1095)):
 
 
 @router.post("/maintenance/rollup-driver-daily")
-async def admin_rollup_driver_daily(target_date: Optional[str] = None):
-    """Roll up driver activity for a single day into driver_daily_stats.
+async def admin_rollup_driver_daily(target_date: Optional[str] = None, admin: dict = Depends(get_admin_user)):
+    """Roll up driver activity for one Regina business day into driver_daily_stats.
 
-    Captures:
-    - Online minutes (first_online → last_online span that day)
-    - Idle km (distance traveled in 'online_idle' phase — roaming)
-    - Navigating km (driver → pickup)
-    - Trip km (paid trips, from completed rides that day)
-    - Rides completed/cancelled/declined counts
-    - Earnings totals
-
-    Run nightly via a cron job hitting this endpoint with yesterday's date.
-    Idempotent — upserts by (driver_id, stat_date).
+    Delegates to utils/driver_daily_rollup.rollup_driver_day — the same core
+    the scheduled 30-min loop runs — so the manual admin trigger and the
+    loop share one day definition (America/Regina, day_tz='regina') and one
+    field list (v2 per-phase km + seconds). Idempotent upsert per driver-day.
     """
-    from collections import defaultdict
+    try:
+        from ...utils.driver_activity import REGINA_TZ
+        from ...utils.driver_daily_rollup import rollup_driver_day
+    except ImportError:
+        from utils.driver_activity import REGINA_TZ  # type: ignore
+        from utils.driver_daily_rollup import rollup_driver_day  # type: ignore
 
-    # Default to yesterday (UTC)
+    regina_today = datetime.now(timezone.utc).astimezone(REGINA_TZ).date()
     if target_date:
         stat_date = datetime.fromisoformat(target_date).date()
         # Completed days only: a partial-day rollup would make MAX(stat_date)
         # claim today is covered, so the leaderboard's freshness top-up
-        # (routes/drivers.py::get_driver_leaderboard, keyed off day-after
-        # MAX(stat_date)) would silently drop every ride completed after the
-        # rollup ran until the next nightly pass.
-        if stat_date >= datetime.now(timezone.utc).date():
+        # (routes/drivers/referrals.py::get_driver_leaderboard, keyed off
+        # day-after MAX(stat_date)) would silently drop every ride completed
+        # after the rollup ran until the next pass. "Today" is now the REGINA
+        # date — between 00:00 and 06:00 UTC the UTC calendar is already a
+        # day ahead of Saskatchewan.
+        if stat_date >= regina_today:
             raise HTTPException(
                 status_code=422,
-                detail="target_date must be a completed UTC day (yesterday or earlier)",
+                detail="target_date must be a completed America/Regina day (yesterday or earlier)",
             )
     else:
-        stat_date = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+        stat_date = regina_today - timedelta(days=1)
 
-    day_start = datetime.combine(stat_date, datetime.min.time())
-    day_end = day_start + timedelta(days=1)
-    day_start_iso = day_start.isoformat()
-    day_end_iso = day_end.isoformat()
-
-    # Pull all rides from that day to determine the set of active driver IDs
-    # and to count/sum earnings. 10 k rides/day is a safe upper bound for the
-    # near term; revisit if Spinr expands to > 10 k daily rides per market.
-    day_rides = await db_supabase.get_rows(
-        "rides",
-        {"created_at": {"$gte": day_start_iso, "$lt": day_end_iso}},
-        limit=10000,
-    )
-    rides_by_driver: Dict[str, list] = defaultdict(list)
-    for r in day_rides or []:
-        did = r.get("driver_id")
-        if did:
-            rides_by_driver[did].append(r)
-
-    # Pull decline audit log entries for the day to count per driver
-    decline_logs = await db.get_rows(
-        "audit_logs",
+    result = await rollup_driver_day(stat_date)
+    # Admin audit trail (main's audit-sweep): every operator-triggered
+    # maintenance action is recorded, including this one.
+    await log_admin_action(
+        admin,
+        "driver_daily_rollup",
+        "driver_daily_stats",
+        stat_date.isoformat(),
         {
-            "action": "ride_declined",
-            "created_at": {"$gte": day_start_iso, "$lt": day_end_iso},
+            "drivers_processed": result.get("drivers_processed"),
+            "created": result.get("created"),
+            "updated": result.get("updated"),
+            "day_tz": "regina",
         },
-        limit=10000,  # capped from 100k — decline events are sparse; 10k covers any realistic day
     )
-    declines_by_driver: Dict[str, int] = defaultdict(int)
-    for entry in decline_logs or []:
-        # actor_id stores driver_id for decline entries (see decline_ride endpoint)
-        did = entry.get("actor_id") or entry.get("user_email")
-        if did:
-            declines_by_driver[did] += 1
-
-    # Discover drivers who were online that day via a lightweight distinct-value
-    # query (only driver_id + timestamp; no coordinates loaded yet). Fetching
-    # 1 M rows across all drivers in one query OOMs the process; instead we
-    # collect driver IDs here and fetch GPS points per driver below.
-    presence_rows = await db_supabase.get_rows(
-        "driver_location_history",
-        {"timestamp": {"$gte": day_start_iso, "$lt": day_end_iso}},
-        order="timestamp",
-        columns="driver_id",
-        limit=10000,  # enough to identify all active drivers; per-driver aggregation is done in SQL
-    )
-    drivers_with_gps: set = set()
-    for p in presence_rows or []:
-        did = p.get("driver_id")
-        if did:
-            drivers_with_gps.add(did)
-
-    all_driver_ids = drivers_with_gps | set(rides_by_driver.keys())
-
-    created = 0
-    updated = 0
-    for driver_id in all_driver_ids:
-        rides = rides_by_driver.get(driver_id, [])
-
-        # Call the server-side SQL function instead of fetching up to 100 k GPS
-        # rows into Python and running haversine in a loop. Returns 7 scalars.
-        def _rpc(did=driver_id):
-            return _supabase_client.rpc(
-                "compute_driver_phase_distances",
-                {
-                    "p_driver_id": did,
-                    "p_day_start": day_start_iso,
-                    "p_day_end": day_end_iso,
-                },
-            ).execute()
-
-        gps_stats: Dict[str, Any] = {}
-        try:
-            resp = await _run_sync(_rpc)
-            rows = getattr(resp, "data", None) or []
-            gps_stats = rows[0] if rows else {}
-        except Exception as e:
-            logger.error(
-                f"[ROLLUP] compute_driver_phase_distances failed driver={driver_id}: {e}",
-                exc_info=True,
-            )
-
-        idle_km = float(gps_stats.get("idle_km") or 0)
-        navigating_km = float(gps_stats.get("navigating_km") or 0)
-        trip_km = float(gps_stats.get("trip_km") or 0)
-        online_minutes = int(gps_stats.get("online_minutes") or 0)
-        first_online_at = gps_stats.get("first_online_at")
-        last_online_at = gps_stats.get("last_online_at")
-
-        # Ride counts and earnings
-        rides_completed = sum(1 for r in rides if r.get("status") == "completed")
-        rides_cancelled = sum(1 for r in rides if r.get("status") == "cancelled")
-        total_earnings = float(
-            sum(Decimal(str(r.get("driver_earnings") or 0)) for r in rides if r.get("status") == "completed")
-        )
-        total_tips = float(sum(Decimal(str(r.get("tip_amount") or 0)) for r in rides if r.get("status") == "completed"))
-
-        # Determine service area from driver profile
-        drv = await db_supabase.get_driver_by_id(driver_id)
-        service_area_id = drv.get("service_area_id") if drv else None
-
-        total_km = round(idle_km + navigating_km + trip_km, 2)
-
-        stat_row = {
-            "id": f"{driver_id}_{stat_date.isoformat()}",
-            "driver_id": driver_id,
-            "stat_date": stat_date.isoformat(),
-            "service_area_id": service_area_id,
-            "online_minutes": online_minutes,
-            "idle_km": round(idle_km, 2),
-            "navigating_km": round(navigating_km, 2),
-            "trip_km": round(trip_km, 2),
-            "total_km": total_km,
-            "first_online_at": first_online_at,
-            "last_online_at": last_online_at,
-            "rides_completed": rides_completed,
-            "rides_cancelled": rides_cancelled,
-            "rides_declined": declines_by_driver.get(driver_id, 0),
-            "total_earnings": round(total_earnings, 2),
-            "total_tips": round(total_tips, 2),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-
-        # Upsert
-        existing = (lambda _r: _r[0] if _r else None)(
-            await db_supabase.get_rows("driver_daily_stats", {"id": stat_row["id"]}, limit=1)
-        )
-        if existing:
-            await db_supabase.update_one("driver_daily_stats", {"id": stat_row["id"]}, stat_row)
-            updated += 1
-        else:
-            stat_row["created_at"] = datetime.now(timezone.utc).isoformat()
-            await db_supabase.insert_one("driver_daily_stats", stat_row)
-            created += 1
-
-    logger.info(f"[ROLLUP] driver_daily_stats for {stat_date}: created={created} updated={updated}")
-    return {
-        "stat_date": stat_date.isoformat(),
-        "drivers_processed": len(all_driver_ids),
-        "created": created,
-        "updated": updated,
-    }
+    return result
 
 
 # ============================================================

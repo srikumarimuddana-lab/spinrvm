@@ -28,7 +28,7 @@ type OutboxRow = TripLocationFix & {
 class MemorySqliteDatabase {
   readonly sessions = new Map<string, SessionRow>();
   readonly outbox = new Map<string, OutboxRow>();
-  readonly quarantine = new Map<string, OutboxRow & { rejection_reason: string }>();
+  readonly quarantine = new Map<string, OutboxRow & { rejection_reason: string; quarantined_at?: string }>();
   failNextOutboxInsert = false;
   private transactionTail = Promise.resolve();
 
@@ -62,6 +62,12 @@ class MemorySqliteDatabase {
     }
     if (sql.includes('COUNT(*) AS count')) {
       return { count: [...this.outbox.values()].filter((point) => point.ride_id === params[0]).length } as T;
+    }
+    if (sql.includes('AS total FROM trip_location_quarantine')) {
+      return { total: this.quarantine.size } as T;
+    }
+    if (sql.includes('AS total FROM trip_location_outbox')) {
+      return { total: this.outbox.size } as T;
     }
     return null;
   }
@@ -137,9 +143,38 @@ class MemorySqliteDatabase {
       return;
     }
     if (sql.includes('INSERT INTO trip_location_quarantine')) {
-      const [rejectionReason, , sessionId, sequence] = params as [string, string, string, number];
+      const copy = (key: string, point: OutboxRow, reason: string, quarantinedAt: string) => {
+        if (!this.quarantine.has(key)) {
+          this.quarantine.set(key, { ...point, rejection_reason: reason, quarantined_at: quarantinedAt });
+        }
+      };
+      // Bulk forms carry their reason inline in the SQL; per-row (acknowledge
+      // rejections) passes it as the first param.
+      if (sql.includes("'signout_unflushed'")) {
+        const [quarantinedAt] = params as [string];
+        for (const [key, point] of this.outbox) copy(key, point, 'signout_unflushed', quarantinedAt);
+        return;
+      }
+      if (sql.includes("'expired_unflushed'")) {
+        const [quarantinedAt, cutoff] = params as [string, string];
+        for (const [key, point] of this.outbox) {
+          const session = this.sessions.get(point.recording_session_id);
+          if (session?.closed_at && session.closed_at < cutoff) copy(key, point, 'expired_unflushed', quarantinedAt);
+        }
+        return;
+      }
+      if (sql.includes("'evicted_capacity'")) {
+        const [quarantinedAt, limit] = params as [string, number];
+        const closedRows = [...this.outbox.entries()]
+          .filter(([, p]) => this.sessions.get(p.recording_session_id)?.closed_at)
+          .sort(([, a], [, b]) => a.enqueued_at.localeCompare(b.enqueued_at))
+          .slice(0, Number(limit));
+        for (const [key, point] of closedRows) copy(key, point, 'evicted_capacity', quarantinedAt);
+        return;
+      }
+      const [rejectionReason, quarantinedAt, sessionId, sequence] = params as [string, string, string, number];
       const point = this.outbox.get(`${sessionId}:${sequence}`);
-      if (point) this.quarantine.set(`${sessionId}:${sequence}`, { ...point, rejection_reason: rejectionReason });
+      if (point) copy(`${sessionId}:${sequence}`, point, rejectionReason, quarantinedAt);
       return;
     }
     // Unqualified purge deletes (sign-out). Checked before the acknowledged-
@@ -154,6 +189,46 @@ class MemorySqliteDatabase {
     }
     if (sql.trim() === 'DELETE FROM trip_location_sessions') {
       this.sessions.clear();
+      return;
+    }
+    // ── Retention prune statements ──
+    if (sql.includes('DELETE FROM trip_location_quarantine WHERE quarantined_at <')) {
+      const [cutoff] = params as [string];
+      for (const [key, row] of this.quarantine) {
+        if ((row.quarantined_at ?? '') < cutoff) this.quarantine.delete(key);
+      }
+      return;
+    }
+    if (sql.includes('DELETE FROM trip_location_quarantine WHERE rowid IN')) {
+      const [limit] = params as [number];
+      [...this.quarantine.entries()]
+        .sort(([, a], [, b]) => (a.quarantined_at ?? '').localeCompare(b.quarantined_at ?? ''))
+        .slice(0, Number(limit))
+        .forEach(([key]) => this.quarantine.delete(key));
+      return;
+    }
+    if (sql.includes('DELETE FROM trip_location_outbox WHERE session_id IN')) {
+      const [cutoff] = params as [string];
+      for (const [key, point] of this.outbox) {
+        const session = this.sessions.get(point.recording_session_id);
+        if (session?.closed_at && session.closed_at < cutoff) this.outbox.delete(key);
+      }
+      return;
+    }
+    if (sql.includes('DELETE FROM trip_location_sessions WHERE closed_at IS NOT NULL AND closed_at <')) {
+      const [cutoff] = params as [string];
+      for (const [key, session] of this.sessions) {
+        if (session.closed_at && session.closed_at < cutoff) this.sessions.delete(key);
+      }
+      return;
+    }
+    if (sql.includes('DELETE FROM trip_location_outbox WHERE rowid IN')) {
+      const [limit] = params as [number];
+      [...this.outbox.entries()]
+        .filter(([, p]) => this.sessions.get(p.recording_session_id)?.closed_at)
+        .sort(([, a], [, b]) => a.enqueued_at.localeCompare(b.enqueued_at))
+        .slice(0, Number(limit))
+        .forEach(([key]) => this.outbox.delete(key));
       return;
     }
     if (sql.includes('DELETE FROM trip_location_outbox') && sql.includes('sequence_number <= ?')) {
@@ -320,7 +395,7 @@ describe('TripLocationOutbox', () => {
 });
 
 describe('purgeAll (sign-out)', () => {
-  it('drops pending points, quarantine, and sessions', async () => {
+  it('preserves unacknowledged points into quarantine, then clears outbox + sessions', async () => {
     const database = new MemorySqliteDatabase();
     const outbox = createTripLocationOutbox({
       openDatabase: async () => database as never,
@@ -331,17 +406,23 @@ describe('purgeAll (sign-out)', () => {
     await outbox.startSession('ride-1');
     await outbox.enqueue(makeFix());
     await outbox.enqueue(makeFix({ monotonic_ms: 2345 }));
+    await outbox.enqueue(makeFix({ monotonic_ms: 3456 })); // the un-flushed tail
     await outbox.acknowledge('session-purge', 0, [{ sequence_number: 1, reason: 'stale_capture' }]);
-    expect(database.outbox.size + database.quarantine.size + database.sessions.size).toBeGreaterThan(0);
+    const preQuarantine = database.quarantine.size;
 
     await outbox.purgeAll();
 
-    // Raw coordinates must not survive sign-out anywhere in the file — a
-    // shared/rented vehicle would otherwise upload them under the next
-    // driver's session.
+    // Sign-out must never destroy location evidence (SGI/billing): unacked
+    // points move to quarantine — which no flush path ever reads, so the next
+    // account on a shared device cannot upload them — and age off via the
+    // prune TTL. The active outbox and sessions are cleared.
     expect(database.outbox.size).toBe(0);
-    expect(database.quarantine.size).toBe(0);
     expect(database.sessions.size).toBe(0);
+    expect(database.quarantine.size).toBeGreaterThanOrEqual(preQuarantine);
+    const preserved = [...database.quarantine.values()].filter(
+      (p) => p.rejection_reason === 'signout_unflushed',
+    );
+    expect(preserved.length).toBeGreaterThan(0);
   });
 
   it('is a no-op on an untouched outbox', async () => {
@@ -374,5 +455,99 @@ describe('purgeAll (sign-out)', () => {
     const queued = await outbox.enqueue(makeFix({ ride_id: 'ride-1' }));
     expect(queued.sequence_number).toBe(0);
     expect(database.outbox.size).toBe(1);
+  });
+});
+
+describe('prune (retention bounds)', () => {
+  const NOW = '2026-08-18T12:00:00.000Z';
+  const DAYS = (n: number) => n * 24 * 60 * 60 * 1000;
+  const iso = (msAgo: number) => new Date(Date.parse(NOW) - msAgo).toISOString();
+
+  function harness(retention?: { quarantineMaxRows?: number; outboxSoftCapRows?: number }) {
+    const database = new MemorySqliteDatabase();
+    let id = 0;
+    const outbox = createTripLocationOutbox({
+      openDatabase: async () => database as never,
+      randomUUID: () => `session-${++id}`,
+      now: () => NOW,
+      retention,
+    });
+    return { database, outbox };
+  }
+
+  it('deletes quarantine rows older than 14 days, keeps fresher ones', async () => {
+    const { database, outbox } = harness();
+    database.quarantine.set('s:0', { ...makeFix(), recording_session_id: 's', sequence_number: 0, enqueued_at: iso(DAYS(20)), rejection_reason: 'x', quarantined_at: iso(DAYS(15)) } as never);
+    database.quarantine.set('s:1', { ...makeFix(), recording_session_id: 's', sequence_number: 1, enqueued_at: iso(DAYS(2)), rejection_reason: 'x', quarantined_at: iso(DAYS(2)) } as never);
+
+    await outbox.prune();
+
+    expect(database.quarantine.has('s:0')).toBe(false);
+    expect(database.quarantine.has('s:1')).toBe(true);
+  });
+
+  it('expires sessions closed >7 days ago: points preserved to quarantine, rows + session deleted', async () => {
+    const { database, outbox } = harness();
+    await outbox.startSession('ride-old');
+    await outbox.enqueue(makeFix({ ride_id: 'ride-old' }));
+    await outbox.closeSession('ride-old');
+    // Backdate the close beyond the TTL.
+    for (const s of database.sessions.values()) s.closed_at = iso(DAYS(8));
+    await outbox.startSession('ride-live');
+    await outbox.enqueue(makeFix({ ride_id: 'ride-live' }));
+
+    await outbox.prune();
+
+    const reasons = [...database.quarantine.values()].map((q) => q.rejection_reason);
+    expect(reasons).toContain('expired_unflushed');
+    expect([...database.outbox.values()].every((p) => p.ride_id === 'ride-live')).toBe(true);
+    expect([...database.sessions.values()].every((s) => s.ride_id === 'ride-live')).toBe(true);
+  });
+
+  it('caps quarantine oldest-first', async () => {
+    const { database, outbox } = harness({ quarantineMaxRows: 2 });
+    for (let i = 0; i < 4; i += 1) {
+      database.quarantine.set(`s:${i}`, { ...makeFix(), recording_session_id: 's', sequence_number: i, enqueued_at: iso(DAYS(1)), rejection_reason: 'x', quarantined_at: iso(DAYS(0) + (4 - i) * 1000) } as never);
+    }
+
+    await outbox.prune();
+
+    expect(database.quarantine.size).toBe(2);
+    // The two OLDEST quarantined_at values were evicted (s:0 oldest … s:3 newest).
+    expect([...database.quarantine.keys()].sort()).toEqual(['s:2', 's:3']);
+  });
+
+  it('soft-caps the outbox by evicting oldest CLOSED-session rows only, preserving them to quarantine', async () => {
+    const { database, outbox } = harness({ outboxSoftCapRows: 2 });
+    await outbox.startSession('ride-closed');
+    await outbox.enqueue(makeFix({ ride_id: 'ride-closed', monotonic_ms: 1 }));
+    await outbox.enqueue(makeFix({ ride_id: 'ride-closed', monotonic_ms: 2 }));
+    await outbox.closeSession('ride-closed');
+    // Recent close — NOT expired, only capped.
+    for (const s of database.sessions.values()) if (s.ride_id === 'ride-closed') s.closed_at = iso(DAYS(1));
+    await outbox.startSession('ride-open');
+    await outbox.enqueue(makeFix({ ride_id: 'ride-open', monotonic_ms: 3 }));
+    await outbox.enqueue(makeFix({ ride_id: 'ride-open', monotonic_ms: 4 }));
+
+    await outbox.prune();
+
+    // 4 rows, cap 2 → excess 2 evicted from the CLOSED session only.
+    expect([...database.outbox.values()].filter((p) => p.ride_id === 'ride-open')).toHaveLength(2);
+    expect([...database.outbox.values()].filter((p) => p.ride_id === 'ride-closed')).toHaveLength(0);
+    const evicted = [...database.quarantine.values()].filter((q) => q.rejection_reason === 'evicted_capacity');
+    expect(evicted).toHaveLength(2);
+  });
+
+  it('never evicts open-session rows even when the cap is exceeded', async () => {
+    const { database, outbox } = harness({ outboxSoftCapRows: 1 });
+    await outbox.startSession('ride-open');
+    await outbox.enqueue(makeFix({ ride_id: 'ride-open', monotonic_ms: 1 }));
+    await outbox.enqueue(makeFix({ ride_id: 'ride-open', monotonic_ms: 2 }));
+
+    await outbox.prune();
+
+    // Cap exceeded but every row belongs to an open session: deliberately unenforced.
+    expect(database.outbox.size).toBe(2);
+    expect(database.quarantine.size).toBe(0);
   });
 });

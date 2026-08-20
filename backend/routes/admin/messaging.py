@@ -4,13 +4,17 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 try:
     from ... import db_supabase
+    from ...dependencies import get_admin_user
+    from ...utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase
+    from dependencies import get_admin_user
+    from utils.audit_logger import log_admin_action
 
 db = db_supabase  # legacy alias
 
@@ -278,6 +282,7 @@ async def admin_send_cloud_message(
     payload: CloudMessageRequest,
     background_tasks: BackgroundTasks,
     response: Response,
+    admin: dict = Depends(get_admin_user),
 ):
     """Send or schedule a cloud message to users/drivers.
 
@@ -358,6 +363,13 @@ async def admin_send_cloud_message(
         )
         response.status_code = 202
 
+    await log_admin_action(
+        admin,
+        "cloud_message_sent" if not is_scheduled else "cloud_message_scheduled",
+        "cloud_messages",
+        doc["id"],
+        {"audience": audience, "channels": channels, "total_recipients": total_recipients},
+    )
     return {"success": True, "message": doc}
 
 
@@ -481,7 +493,7 @@ async def admin_list_marketing_suppressions(
 
 
 @router.post("/marketing/suppressions")
-async def admin_add_marketing_suppression(payload: ManualSuppressionRequest):
+async def admin_add_marketing_suppression(payload: ManualSuppressionRequest, admin: dict = Depends(get_admin_user)):
     """Manually add an address/number to the marketing suppression list."""
     try:
         from ...services import marketing_consent
@@ -490,11 +502,18 @@ async def admin_add_marketing_suppression(payload: ManualSuppressionRequest):
     added = await marketing_consent.add_marketing_suppression(
         payload.channel, payload.target, reason=payload.reason, source="admin"
     )
+    await log_admin_action(
+        admin,
+        "marketing_suppression_added",
+        "marketing_suppressions",
+        payload.target,
+        {"channel": payload.channel, "reason": payload.reason},
+    )
     return {"success": True, "added": added}
 
 
 @router.delete("/marketing/suppressions/{suppression_id}")
-async def admin_delete_marketing_suppression(suppression_id: str):
+async def admin_delete_marketing_suppression(suppression_id: str, admin: dict = Depends(get_admin_user)):
     """Remove a suppression (re-allow marketing to this target).
 
     Use with care: lifting a bounce/complaint suppression re-enables marketing
@@ -505,11 +524,18 @@ async def admin_delete_marketing_suppression(suppression_id: str):
     if not existing:
         raise HTTPException(status_code=404, detail="Suppression not found")
     await db_supabase.delete_many("marketing_suppressions", {"id": suppression_id})
+    await log_admin_action(
+        admin,
+        "marketing_suppression_deleted",
+        "marketing_suppressions",
+        suppression_id,
+        {"target": existing.get("target"), "channel": existing.get("channel")},
+    )
     return {"success": True}
 
 
 @router.delete("/cloud-messaging/{message_id}")
-async def admin_delete_cloud_message(message_id: str):
+async def admin_delete_cloud_message(message_id: str, admin: dict = Depends(get_admin_user)):
     """Cancel/delete a scheduled cloud message."""
     existing = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("cloud_messages", {"id": message_id}, limit=1)
@@ -521,4 +547,5 @@ async def admin_delete_cloud_message(message_id: str):
         raise HTTPException(status_code=400, detail="Cannot delete a sent message")
 
     await db_supabase.update_one("cloud_messages", {"id": message_id}, {"status": "cancelled"})
+    await log_admin_action(admin, "cloud_message_cancelled", "cloud_messages", message_id, {})
     return {"message": "Message cancelled"}

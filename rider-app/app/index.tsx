@@ -3,6 +3,7 @@ import { View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
 import { useRideStore } from '../store/rideStore';
+import api from '@shared/api/client';
 
 export default function Index() {
   const router = useRouter();
@@ -49,7 +50,23 @@ export default function Index() {
       } catch {
         // fall through to home on error
       }
-      router.replace('/(tabs)');
+      // Legacy/re-consent notice: cold-start landing on home for an already-
+      // authenticated, profile-complete rider with no active-ride redirect
+      // above (so this never interrupts a rider mid-ride). Mirrors otp.tsx's
+      // fresh-login check for a pre-existing account whose consent isn't
+      // recorded — fail-open so a network hiccup never blocks entry to the
+      // app. Dark-shipped: while app_settings.legacy_consent_notice_enabled
+      // is off, /consent/status always reports needs_notice: false.
+      api.get('/consent/status').then(
+        (res) => {
+          if ((res.data as any)?.needs_notice) {
+            router.replace('/legacy-consent-notice' as any);
+          } else {
+            router.replace('/(tabs)');
+          }
+        },
+        () => router.replace('/(tabs)'), // fail open — never block cold start on this check
+      );
     })();
     // router is expo-router's stable singleton.
   }, [isInitialized, token, user, router]);

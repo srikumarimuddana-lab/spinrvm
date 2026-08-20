@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -827,6 +828,27 @@ def print_report(plan: BookingImportPlan, *, dry_run: bool) -> None:
 #     script can't double-stamp or race a row.
 #   - reports carry only ride ids (internal UUIDs) and counts — never
 #     addresses, names, or any other ride PII.
+#
+# Concurrent-writer hardening (docs/change-log/2026-08-19-legacy-backfill-
+# concurrent-writer-fix.md): legacy_gst_backfill_service.py is a SEPARATE
+# manual backfill that also read-merge-writes rides.legacy_import_metadata
+# (adds `old_payout_gst_amount`) — currently plan-only, with no commit path
+# of its own yet (see that module's docstring), but the moment one is added
+# it becomes a second writer to this exact column. The `.filter(...,
+# "duration_estimated", "is", "null")` guard below only protects THIS
+# backfill's own key from being clobbered; on its own it does nothing to
+# stop a stale local `meta` snapshot (read here, then written back as the
+# WHOLE column) from silently dropping some OTHER key a concurrent writer
+# added in between our read and our write. apply_duration_estimated_backfill
+# below closes that by adding a second, whole-column optimistic-concurrency
+# guard (`.filter("legacy_import_metadata", "eq", <json of the exact row we
+# read>)`) so the write only succeeds if nothing else touched the column in
+# between — any concurrent writer (this script racing itself, or a future
+# legacy_gst_backfill_service.py apply path) is reported as a conflict
+# instead of silently losing data, and is safe to retry on the next run.
+# Whoever eventually gives legacy_gst_backfill_service.py a commit path MUST
+# use the same whole-column snapshot-equality guard shown here — not just a
+# check on its own key — for the same reason.
 
 DURATION_ESTIMATED_BACKFILL_MARKER = "legacy_duration_estimated_backfill"
 
@@ -923,12 +945,31 @@ def apply_duration_estimated_backfill(plan: DurationEstimatedBackfillPlan, *, ba
     driver_import_service.py's `.is_(col, "null")` calls use for a real
     column, applied here to a JSONB key.
 
+    Second, whole-column guard (concurrent-writer hardening — see the
+    section banner comment above this backfill for the full reasoning): the
+    `duration_estimated IS NULL` guard above only protects THIS function's
+    own key. It writes the ENTIRE `legacy_import_metadata` column back from a
+    local `meta` dict built off a single read, so if some other writer (e.g.
+    a future legacy_gst_backfill_service.py apply path) adds a different key
+    to the same row between our read and our write, that key would
+    otherwise be silently overwritten by our stale snapshot — the guard
+    above would not catch it, because `duration_estimated` genuinely was
+    still null at write time. `.filter("legacy_import_metadata", "eq",
+    <json of the row exactly as we read it>)` closes that: it is an
+    optimistic-concurrency check on the whole column, so the write only
+    succeeds if nobody touched ANY key in between. A mismatch (0 rows
+    updated) is reported as a conflict exactly like the existing guard
+    already does — never retried onto a stale value, never silently
+    dropped — and is picked up cleanly on the next run since the plan step
+    always re-reads current state.
+
     Never touches duration_minutes — only legacy_import_metadata.
 
-    Returns the `id` of every row whose guard didn't match (already marked in
-    the plan/apply window) — reported back as a conflict, never silently
-    dropped. Safe to re-run: a re-plan after a partial apply only ever
-    contains rows still missing the marker.
+    Returns the `id` of every row whose guard didn't match (already marked,
+    or any other concurrent write to the column, in the plan/apply window) —
+    reported back as a conflict, never silently dropped. Safe to re-run: a
+    re-plan after a partial apply only ever contains rows still missing the
+    marker.
     """
     if plan.errors:
         raise RuntimeError("refusing to apply with validation errors")
@@ -939,11 +980,12 @@ def apply_duration_estimated_backfill(plan: DurationEstimatedBackfillPlan, *, ba
     conflicts: list[str] = []
     for item in plan.updates:
         existing = supabase.table("rides").select("legacy_import_metadata").eq("id", item.id).execute().data
-        meta = dict((existing[0].get("legacy_import_metadata") or {}) if existing else {})
-        if "duration_estimated" in meta or DURATION_ESTIMATED_BACKFILL_MARKER in meta:
+        read_meta = dict((existing[0].get("legacy_import_metadata") or {}) if existing else {})
+        if "duration_estimated" in read_meta or DURATION_ESTIMATED_BACKFILL_MARKER in read_meta:
             conflicts.append(item.id)
             continue
 
+        meta = dict(read_meta)
         meta["duration_estimated"] = item.duration_estimated
         meta[DURATION_ESTIMATED_BACKFILL_MARKER] = {"batch": batch, "backfilled_at": now_iso}
 
@@ -952,6 +994,7 @@ def apply_duration_estimated_backfill(plan: DurationEstimatedBackfillPlan, *, ba
             .update({"legacy_import_metadata": meta, "updated_at": now_iso})
             .eq("id", item.id)
             .filter("legacy_import_metadata->>duration_estimated", "is", "null")
+            .filter("legacy_import_metadata", "eq", json.dumps(read_meta, sort_keys=True, default=str))
             .execute()
         )
         if not res.data:

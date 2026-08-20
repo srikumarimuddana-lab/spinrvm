@@ -16,6 +16,9 @@ apply path's write-time guard against a concurrent double-stamp.
 
 from __future__ import annotations
 
+import copy
+import json
+
 from backend.services import booking_import_service as svc
 
 IMPORT_SOURCE = svc.IMPORT_SOURCE
@@ -46,9 +49,10 @@ class _FakeExecute:
 
 
 class _FakeQuery:
-    def __init__(self, table, store):
+    def __init__(self, table, store, supa=None):
         self.table = table
         self.store = store
+        self.supa = supa
         self._filters = []
         self._update = None
 
@@ -82,6 +86,15 @@ class _FakeQuery:
                     rows = [r for r in rows if (r.get(base) or {}).get(key) is None]
                 else:  # pragma: no cover - defensive, no other op used here
                     raise AssertionError(f"unhandled JSON-path filter op: {op}")
+            elif op == "eq" and isinstance(val, str) and val.lstrip()[:1] in "{[":
+                # Whole-column JSONB equality guard (the concurrent-writer
+                # hardening in apply_duration_estimated_backfill passes a
+                # json.dumps()'d snapshot as `val`, matching how PostgREST's
+                # `eq.<json>` filter is built for real). Compare by parsed
+                # value, not string equality, mirroring Postgres jsonb `=`
+                # (order-independent) rather than a literal text match.
+                target = json.loads(val)
+                rows = [r for r in rows if (r.get(col) or {}) == target]
             elif op == "eq":
                 rows = [r for r in rows if r.get(col) == val]
         return rows
@@ -92,15 +105,33 @@ class _FakeQuery:
             for row in matched:
                 row.update(self._update)
             return _FakeExecute(matched)
-        return _FakeExecute(self._matched())
+        # A real PostgREST SELECT returns a materialized JSON snapshot, not a
+        # live reference into server-side state — deep-copy so a later
+        # mutation of the fake store (e.g. the on_next_select hook below)
+        # can't retroactively change data the caller already "received over
+        # the wire".
+        result = _FakeExecute(copy.deepcopy(self._matched()))
+        # One-shot hook: fires right after a plain SELECT's execute() returns,
+        # so a test can simulate another process's write landing in the real
+        # race window this fix protects — between apply()'s own read of a
+        # row and its own write, not before either happens.
+        if self.supa is not None and self.supa.on_next_select is not None:
+            callback = self.supa.on_next_select
+            self.supa.on_next_select = None
+            callback()
+        return result
 
 
 class _FakeSupabase:
     def __init__(self, rides=None):
         self.store = {"rides": rides if rides is not None else []}
+        # One-shot callback a test can set to simulate a concurrent writer's
+        # update landing right after the next plain SELECT executes. See
+        # _FakeQuery.execute().
+        self.on_next_select = None
 
     def table(self, name):
-        return _FakeQuery(name, self.store)
+        return _FakeQuery(name, self.store, self)
 
 
 def _install(monkeypatch, rides=None):
@@ -247,6 +278,43 @@ def test_apply_reports_conflict_and_does_not_clobber_a_concurrent_stamp(monkeypa
     # the concurrent stamp survives untouched
     assert fake.store["rides"][0]["legacy_import_metadata"]["duration_estimated"] is False
     assert fake.store["rides"][0]["legacy_import_metadata"][MARKER]["batch"] == "other-run"
+
+
+def test_apply_does_not_clobber_an_unrelated_key_added_by_a_concurrent_writer(monkeypatch):
+    """Simulates the concurrent-writer risk with legacy_gst_backfill_service.py
+    (docs/change-log/2026-08-19-legacy-backfill-concurrent-writer-fix.md):
+    some OTHER script read-merge-writes a different key
+    (`old_payout_gst_amount`) into the same row's legacy_import_metadata
+    between our plan() and apply(), without ever touching
+    `duration_estimated`. The `duration_estimated IS NULL` guard alone would
+    still pass here (that key is untouched) and, before this fix, would have
+    written back this function's stale `meta` snapshot — silently dropping
+    the concurrently-added key. The whole-column equality guard must instead
+    treat this as a conflict and leave the concurrent write intact."""
+    ride = _legacy_ride(ride_started_at=None)
+    fake = _install(monkeypatch, rides=[ride])
+    plan = svc.plan_duration_estimated_backfill()
+
+    # Simulate the race landing in the actual protected window: right after
+    # apply()'s own read of this row (which still sees no
+    # old_payout_gst_amount) but before its write, a different backfill
+    # (e.g. legacy_gst_backfill_service.py, once it grows a commit path)
+    # writes an unrelated key to the same row.
+    def _concurrent_write():
+        ride["legacy_import_metadata"] = dict(ride["legacy_import_metadata"])
+        ride["legacy_import_metadata"]["old_payout_gst_amount"] = "1.23"
+
+    fake.on_next_select = _concurrent_write
+
+    conflicts = svc.apply_duration_estimated_backfill(plan, batch="test-batch-gst-race")
+
+    assert conflicts == ["ride-1"]
+    meta = fake.store["rides"][0]["legacy_import_metadata"]
+    # the concurrently-written key survives untouched
+    assert meta["old_payout_gst_amount"] == "1.23"
+    # and this backfill did NOT get to stamp its own key over the stale read
+    assert "duration_estimated" not in meta
+    assert MARKER not in meta
 
 
 def test_apply_refuses_when_plan_has_errors(monkeypatch):

@@ -5,6 +5,20 @@ the 2026-07-29 production cut predates this playbook and did not follow it forma
 retrospect it satisfied most of the same discipline informally. Intended audience: whoever runs the
 Oct 30 final old-app export and decommission.
 
+**Status as of 2026-08-19 (re-verified):** the 10-item checklist below was re-verified item-by-item
+against the actual codebase after three same-day remediation PRs landed (#4265 MongoDB export
+analysis + SIN/DOB backfill, #4270 legacy/re-consent notice mechanism, #4272 the full A41 3-track
+remediation across backend/driver-app/admin-dashboard). Each item now carries an inline
+**[RE-VERIFIED 2026-08-20]** annotation with a status (still accurate / partially addressed / fully
+addressed / N/A) and a citation to the specific change-log/file. Net picture: items 1, 5, 6, and 7
+moved from fully-open to partially or fully addressed; items 2, 4, 8, 9, and 10 are untouched by
+today's work and remain exactly as open as when this checklist was written. **Item 3 — the
+cancelled/failed-booking cross-cutting gap (78%, 941/1,210 old-app bookings) — is still completely
+unaddressed**: `backend/services/booking_import_service.py` still only imports
+`booking_status == "completed"` rows by explicit design (see its own header comment, unchanged
+today), with no cancelled/failed import path built or scheduled. This re-verification pass is itself
+audit-only — no code was changed to produce it, only this playbook's own annotations.
+
 ## Why this exists
 
 Three real bugs traced back to the same root cause this session
@@ -137,6 +151,8 @@ rushed).
   risk-accepted — per the regulatory checklist below, a hard data-loss deadline (cancelled/failed
   bookings, still unimported as of this writing) makes "decommission first, fix data gaps later"
   irreversible, not just risky.
+  > **[RE-VERIFIED 2026-08-20]** "Still unimported as of this writing" remains true as of this
+  > re-verification — see checklist item 3's annotation below for the direct code confirmation.
 
 ## The Oct 30-specific checklist (from this session's `spinr-regulatory-compliance-checker` pass, reproduced verbatim)
 
@@ -145,33 +161,122 @@ rushed).
    either (a) a documented legal opinion that the old app's consent covers this new-system use, or
    (b) a re-consent prompt gated on `consent_version IS NULL AND legacy_import_metadata <> '{}'`.
    Must happen before step 6, not after.
+   > **[RE-VERIFIED 2026-08-20 — PARTIALLY ADDRESSED.]** Option (a) — a documented legal opinion —
+   > still has not happened; the only thing resolved is a narrower, prerequisite question (the old
+   > app's legal entity name, "Spinr Mobility Inc.," is confirmed correct/unchanged — see A42), not
+   > the sufficiency-of-old-consent-for-this-use judgment itself, which stays explicitly a
+   > business/counsel call per `docs/change-log/2026-08-19-legacy-consent-notice.md`. Option (b) —
+   > the re-consent prompt — is now built end-to-end but **not live**: backend
+   > `GET/POST /consent/status|accept` gated on `app_settings.legacy_consent_notice_enabled`
+   > (default `False`) per `docs/change-log/2026-08-19-legacy-consent-notice.md`; mobile UI wired
+   > into both apps' fresh-login (`otp.tsx`), cold-start (`index.tsx`), and profile-setup-completion
+   > paths per `docs/change-log/2026-08-19-legacy-consent-notice-mobile.md` and
+   > `-mobile-completion.md`. The gate condition is a generic `consent_version != CONSENT_VERSION`
+   > check rather than the literal `consent_version IS NULL AND legacy_import_metadata <> '{}'`
+   > predicate this item specifies, but it covers the same population plus more (any stale
+   > consent, not just legacy-imported rows). Flag stays off — no user has actually seen the
+   > notice yet, and no simulator/device visual verification was performed on either screen. Since
+   > the SIN/DOB backfill (step 6) also has not been `--apply`'d yet, the "before step 6" ordering
+   > constraint has not been violated, but the item's core ask — an actual decision that took
+   > effect — is not yet true.
 2. **Retention-window correctness proof, per data class**, run as a query against the actual Oct 30
    export before import: for each of the four regulatory retention rows (trip record 7yr, driver/
    vehicle linkage 7yr, GPS pickup/dropoff 3yr, insurance-period transitions 7yr), confirm the
    importer preserves the *legacy* event timestamp, not import-time `now()`.
+   > **[RE-VERIFIED 2026-08-20 — STILL ACCURATE AS WRITTEN.]** Nothing in today's three PRs touches
+   > this. This is inherently a query that can only be run against the *actual Oct 30 export* — it
+   > has not happened, and none of today's remediation work substitutes for it. Still fully open.
 3. **Cancelled/failed-booking import path must exist and run before decommission** — closing the
    78% gap (941/1,210 old-app bookings). At minimum: GPS pickup/dropoff trace + timestamps, no
    payout/earnings reconstruction attempted. This is the one hard data-loss deadline on this list.
+   > **[RE-VERIFIED 2026-08-20 — STILL ACCURATE AS WRITTEN. This is the cross-cutting gap the task
+   > asked to confirm explicitly.]** Confirmed directly against
+   > `backend/services/booking_import_service.py`: `TARGET_BOOKING_STATUS = "completed"` (line 60)
+   > and `build_plan()` skips any row where `booking_status != "completed"` (line 318) — unchanged
+   > by any of today's three PRs. The module's own header comment (lines 57–59) still asserts
+   > "cancelled/failed legacy bookings carry no fare, no earnings, and no history value" — a claim
+   > the audit doc directly contradicts ("They still carry full pickup/dropoff GPS and `created_at`.
+   > If the old app is decommissioned before a cancelled-booking importer exists, this data is gone
+   > permanently"). No cancelled/failed import path exists, is scheduled, or was even discussed in
+   > today's remediation work. **Do not treat this as covered by anything else on this list** — none
+   > of the three PRs' fixes (tip guard, admin-money-aggregate exclusion, SIN/DOB backfill,
+   > duration-estimated marker, consent notice, entity-name correction, transparency badges) touch
+   > booking import scope at all. This remains the one hard, irreversible-after-decommission
+   > data-loss deadline on the whole list.
 4. **Vehicle-at-trip-time linkage backfill** using `vehicle_details.csv` into `driver_vehicle_history`
    (migration 157) — closes the P0 §0.4 7-year driver/vehicle-linkage gap.
+   > **[RE-VERIFIED 2026-08-20 — STILL ACCURATE AS WRITTEN.]** No importer targeting
+   > `driver_vehicle_history` from `vehicle_details.csv` was built in any of today's three PRs — none
+   > of the change-logs cross-referenced for this pass mention it. Still fully open.
 5. **Insurance-period reconstruction, redone with the better source, and finally surfaced**: (a)
    re-run migration 332's approach using `driverlocationlogs.csv`'s real phase-boundary timestamps
    instead of the `driver_arrived_at` fallback; (b) wire `is_reconstructed` into
    `backend/scripts/compliance_export.py`'s output and an admin-dashboard read-only column.
+   > **[RE-VERIFIED 2026-08-20 — PARTIALLY ADDRESSED.]** Half of (b) is done: `is_reconstructed` is
+   > now in the regulator-facing export's embedded select, `redact_row()` output, and CSV/JSON
+   > `FIELDNAMES` — confirmed directly in `scripts/compliance_export.py` (repo-root, not
+   > `backend/scripts/` as this item names — corrected during the fix per
+   > `docs/change-log/2026-08-19-legacy-migration-transparency-backend.md`, finding #1). The other
+   > half of (b) — an admin-dashboard read-only column — is **not** done: confirmed by grep, no
+   > `is_reconstructed` reference exists anywhere in `admin-dashboard/src/`. (a) — re-running
+   > migration 332's reconstruction using `driverlocationlogs.csv`'s real phase-boundary timestamps
+   > — was not attempted in any of today's PRs; still fully open.
 6. **SIN/DOB and any other PII-sensitive backfill — minimization + encryption sign-off before any
    `--apply` run**, keeping the already-recorded scope narrow (SIN+DOB via existing encrypted
    columns, not raw banking numbers with no live consumer).
+   > **[RE-VERIFIED 2026-08-20 — FULLY ADDRESSED for the literal ask, though a related item (#1)
+   > stays open.]** The minimization sign-off was made and recorded before any code was written
+   > (business-owner decision, SIN+DOB via `encrypt_driver_pii`, raw banking numbers explicitly
+   > excluded because nothing in the live payout path reads them — manual cashout is hardcoded
+   > `_STANDARD_CASHOUT_DISABLED = True`) per
+   > `docs/change-log/2026-08-19-legacy-sin-dob-import.md`. Scope stayed narrow (confirmed:
+   > `account_number`/`transit_number`/`institute_number` were never touched). A same-day write-time
+   > race-condition fix (`.is_(col, "null")` guards, mirroring `stripe_mapping_import_service.py`)
+   > was applied before any `--apply` run, per that same change-log's amendment. **`--apply` has
+   > still never been run against production** (confirmed — the CLI wrapper remains dry-run-only in
+   > every verification note read for this pass), so the ordering this item requires (sign-off
+   > before apply) has not been violated. Note this is a narrower ask than item #1's broader
+   > consent-basis decision, which is still only partially addressed — see #1.
 7. **Accuracy-disclosure pass**: for every field imported without independent verification (SIN,
    DOB, name, email), decide and document whether a provenance/verified flag should be surfaced
    downstream, even if the decision is explicitly "no, and here's why."
+   > **[RE-VERIFIED 2026-08-20 — PARTIALLY ADDRESSED.]** SIN: done — a new
+   > `driver_import_service.sin_source()` derived field (`"legacy_import" | "self_entry" | None`)
+   > now surfaces in the admin driver live-stats read path and the T4A filer-handoff export, per
+   > `docs/change-log/2026-08-19-legacy-migration-transparency-backend.md` finding #2. Name/profile
+   > as a whole: partially covered — the "Imported" badge now on driver list/detail, rider detail,
+   > and (after a same-day follow-up) the rider list table
+   > (`docs/change-log/2026-08-19-legacy-migration-transparency-admin-dashboard.md`,
+   > `docs/change-log/2026-08-19-legacy-migration-rider-list-badge.md`) discloses that an entire
+   > profile — including its name — is import-sourced, though this is a whole-profile signal, not a
+   > dedicated per-field name-provenance flag. DOB: **not** addressed — no equivalent `dob_source`
+   > derived field or downstream surface exists; confirmed by grep, only `sin_source()` was built.
+   > Email: **not** addressed — no dedicated provenance flag; only the same whole-profile "Imported"
+   > badge applies. So: SIN is a clean yes, name/email get a coarser whole-profile signal rather than
+   > a per-field decision, and DOB has no equivalent treatment at all — genuinely partial, not
+   > "decide and document even if no" for every field as the item asks.
 8. **Explicit include/exclude sign-off, recorded per collection**, for every `REVIEW`-tagged
    collection from the inventory doc — a silent drop at decommission time is not acceptable for
    data about to become permanently unrecoverable.
+   > **[RE-VERIFIED 2026-08-20 — STILL ACCURATE AS WRITTEN.]** Today's PRs made per-field decisions
+   > for two specific collections already flagged in the inventory (`banks.csv` → SIN+DOB narrow
+   > backfill, item #6; `driverlocationlogs.csv` and `vehicle_details.csv` referenced as future
+   > source material for items #4/#5(a) but not yet acted on) — that is progress on individual
+   > `REVIEW` rows, not the systematic "sign-off recorded per collection, for every `REVIEW`-tagged
+   > collection" sweep this item calls for. No evidence any of today's PRs revisited the full
+   > inventory doc's `REVIEW` list as a checklist. Still open as a systematic pass.
 9. **Never-import list re-confirmed against the Oct 30 export specifically** (`sessions.csv`,
    `admins.csv` from the 07-26 snapshot) — verify the new pull doesn't introduce an equivalent-
    sensitivity collection the earlier snapshot didn't have.
+   > **[RE-VERIFIED 2026-08-20 — STILL ACCURATE AS WRITTEN / N/A UNTIL OCT 30.]** This item is
+   > inherently gated on the Oct 30 export existing, which it doesn't yet — nothing in today's three
+   > PRs could have addressed it, and none tried. Still fully open, unchanged.
 10. **Final reconciliation, post-import, before old-app teardown is authorized** — row-count and
     dollar-figure diff, verified match, not just "we ran the scripts."
+    > **[RE-VERIFIED 2026-08-20 — STILL ACCURATE AS WRITTEN / N/A UNTIL THE FINAL IMPORT RUNS.]**
+    > This item necessarily follows the Oct 30 import itself, which has not happened. Today's PRs
+    > added dry-run-only backfill tooling (SIN/DOB, `duration_estimated`) that itself was never
+    > `--apply`'d, so there is nothing yet to reconcile. Still fully open, unchanged.
 
 ## What this playbook is not
 

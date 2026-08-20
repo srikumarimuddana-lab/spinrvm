@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,6 +40,15 @@ const DRIVER_PAGE_SIZE = 25;
 
 /** Sentinel for "no area filter" — Radix Select cannot hold an empty value. */
 const ALL_AREAS = "__all__";
+
+/** Tab ids are part of the URL contract — /dashboard/driver-offers and
+ *  /dashboard/forecast redirect to ?tab=offers / ?tab=forecast, so renaming
+ *  one of these breaks those redirects and any bookmark. */
+const TAB_IDS = [
+  "overview", "supply", "efficiency", "financial",
+  "cancellations", "acceptance", "offers", "forecast",
+] as const;
+const DEFAULT_TAB = "overview";
 
 /** Server-side sortable columns on /driver-acceptance. Sorting must be
  *  server-side here: a client-side sort only reorders the rows already on
@@ -101,7 +111,17 @@ function SectionError({ onRetry }: { onRetry: () => void }) {
   );
 }
 
+/** Next.js requires any component calling useSearchParams() to sit under a
+ *  Suspense boundary, or the build fails on the prerender pass. */
 export default function AnalyticsPage() {
+  return (
+    <Suspense fallback={<div className="py-16 text-center text-sm text-muted-foreground">Loading analytics…</div>}>
+      <AnalyticsPageInner />
+    </Suspense>
+  );
+}
+
+function AnalyticsPageInner() {
   const [dateRange, setDateRange] = useState("30d");
   // One service-area filter shared by every tab, so "Saskatoon" means the
   // same thing on the funnel, the cancellations, and the offer ledger.
@@ -133,6 +153,27 @@ export default function AnalyticsPage() {
   const [driversLoading, setDriversLoading] = useState(true);
 
   const svcArea = areaId === ALL_AREAS ? undefined : areaId;
+
+  // Tab selection lives in the URL so a tab can be linked, bookmarked and
+  // reached by the redirects from the old standalone routes.
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const requestedTab = searchParams.get("tab");
+  const tab = (TAB_IDS as readonly string[]).includes(requestedTab ?? "")
+    ? (requestedTab as string)
+    : DEFAULT_TAB;
+
+  const onTabChange = useCallback(
+    (next: string) => {
+      const sp = new URLSearchParams(searchParams.toString());
+      if (next === DEFAULT_TAB) sp.delete("tab");
+      else sp.set("tab", next);
+      const qs = sp.toString();
+      // replace, not push — flipping tabs shouldn't fill the back button.
+      router.replace(qs ? `?${qs}` : "/dashboard/analytics", { scroll: false });
+    },
+    [router, searchParams],
+  );
 
   const { resolvedTheme } = useTheme();
   const REASON_COLORS = useMemo(() => reasonColors(resolvedTheme === "dark"), [resolvedTheme]);
@@ -375,7 +416,7 @@ export default function AnalyticsPage() {
         </CardContent>
       </Card>
 
-      <Tabs defaultValue="overview">
+      <Tabs value={tab} onValueChange={onTabChange}>
         {/* Horizontally scrollable so the tab row degrades gracefully on
             narrow screens instead of wrapping into the content below. */}
         <div className="overflow-x-auto">

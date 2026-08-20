@@ -196,7 +196,7 @@ class TestTriggerEmergencyRideless:
         from backend.routes import rides as rides_mod
 
         class _ReqKeyed(_Req):
-            idempotency_key = "abcdefgh12345678"
+            idempotency_key = "test-retry-idem-001"
 
         existing_incident = {"id": "existing-incident-id"}
         settings_mock = AsyncMock(return_value={"rideless_sos_enabled": True})

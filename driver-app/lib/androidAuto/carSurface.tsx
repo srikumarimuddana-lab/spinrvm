@@ -20,7 +20,7 @@
  * UNPROVEN ON HARDWARE: validated at the JS level only. The on-surface render
  * must still be confirmed on an EAS dev build + Android Auto DHU.
  */
-import React, { useCallback, useEffect, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
 import { useDriverStore } from '../../store/driverStore';
 import { useDemandHeatmapView } from '../../hooks/demandHeatmapShared';
@@ -28,8 +28,11 @@ import type { HeatmapCell } from '../../hooks/useDemandHeatmap';
 import { selectCarRoute } from './carRoute';
 import { buildTripCard, type OfferLike } from './carCard';
 import { CarTripCard } from './CarTripCard';
+import { CarOfferPanel } from './CarOfferPanel';
 import { useCarMapCamera } from './carMapCamera';
+import { normalizeHeading, shouldCommitHeading, zoomForSpan } from './carCameraMath';
 import { useCarLocation } from './useCarLocation';
+import { useCarLiveRoute } from './useCarLiveRoute';
 import { pushDebug, setDebugFact } from './carDebug';
 import { CarDebugPanel } from './CarDebugPanel';
 import { useCarSurfaceGeneration } from './carSurfaceGeneration';
@@ -48,6 +51,14 @@ import { carColors } from './carTheme';
 // Saskatoon — Spinr is Saskatchewan-first. Used only until the first fix /
 // last-known location loads, so the idle map never opens on null-island (0,0).
 const FALLBACK_CENTER = { latitude: 52.1332, longitude: -106.67 };
+
+/**
+ * Camera glide, in ms. Comfortably under the ~2s fix cadence (TRIP_CADENCE in
+ * useCarLocation) so each move settles before the next one starts, and long
+ * enough that a turn sweeps rather than snaps. The camera used to jump on every
+ * fix because react-native-maps' `region` prop moves without animating.
+ */
+const CAMERA_ANIM_MS = 700;
 
 // Inlined at build time by Expo. Empty here means the AAB was built without the
 // var set in its EAS environment, which lands an empty apiKey in the merged
@@ -185,10 +196,104 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
   // with — Play App Signing re-signs the AAB, so a key pinned to the upload
   // key's SHA-1 is rejected on a Play-installed build while sideloaded APKs
   // keep working). Read with: adb logcat -s ReactNativeJS:V
+  // ─── Heading-up camera ─────────────────────────────────────────────────────
+  //
+  // The map used to be locked north-up while the CAR MARKER spun, which is the
+  // opposite of what every driver expects from Google Maps: there the map turns
+  // and the car stays pointing up the screen. Reported from a real head unit as
+  // "the map is in fixed layout and car keeps rotating up and down".
+  //
+  // This cannot be done through the `region` prop. On Android that compiles to
+  // `newLatLngBounds`, which resets camera bearing to zero on every update — so
+  // `region` and a rotation can never coexist. The camera is therefore driven
+  // imperatively from here, and `region` downgraded to `initialRegion`.
+  // Inline type-only import: fully erased at compile time, so it cannot defeat
+  // the lazy `require` below that keeps this file loadable without native maps.
+  const mapRef = useRef<import('react-native-maps').default | null>(null);
+  // Bumped by onMapReady. A remount (the MapView is keyed on the trip leg) needs
+  // the camera re-applied, and only a dependency change will do that — hence a
+  // counter in state rather than a ref.
+  const [mapReadyTick, setMapReadyTick] = useState(0);
+  const setMapRef = useCallback((m: typeof mapRef.current) => {
+    mapRef.current = m;
+  }, []);
+  // Surface size in dp, needed to turn a lat/lng span into a Google zoom level.
+  // Zero until first layout; zoomForSpan returns null on that, and the camera
+  // then keeps whatever framing initialRegion established.
+  const [viewport, setViewport] = useState({ w: 0, h: 0 });
+  const onMapLayout = useCallback((e: { nativeEvent: { layout: { width: number; height: number } } }) => {
+    const { width, height } = e.nativeEvent.layout;
+    setViewport((p) => (p.w === width && p.h === height ? p : { w: width, h: height }));
+  }, []);
+
+  // The bearing the camera is actually committed to — deliberately NOT every
+  // raw fix. GPS course is noisy, and a map that twitches a degree at a time on
+  // a straight road reads as broken; shouldCommitHeading holds until a real
+  // turn. Null until the first fix carries a course, and the map stays north-up
+  // until then rather than guessing a direction.
+  const [cameraHeading, setCameraHeading] = useState<number | null>(null);
+  const rawHeading = here?.heading ?? null;
+  // Rotation freezes while the driver has dragged the map away from themselves:
+  // turning a deliberately-offset view under them is disorienting. Holding the
+  // last bearing (rather than snapping back to north, which is what this did
+  // before) means Recenter resumes tracking without a spin.
+  // Live OSRM route from the driver's CURRENT position, replacing the static
+  // booking-time planned line once it arrives. Null when there is no
+  // trustworthy one (wrong ride, wrong leg, or too old) and the planned line
+  // stands in. See useCarLiveRoute for why the car may poll for itself.
+  const liveRoute = useCarLiveRoute(activeRide?.ride?.id ?? null, route?.leg ?? null, !!route);
+  const livePath = liveRoute?.polyline ?? null;
+
+  const isPannedAway = offsetLat !== 0 || offsetLng !== 0;
+  // Adjusted during render rather than in an effect — React's documented
+  // "adjusting state when a prop changes" pattern, the same one CarMarker.tsx
+  // uses for its image-failure reset. An effect here would be a cascading
+  // render per GPS fix (and trips react-hooks/set-state-in-effect); this
+  // re-renders only when the bearing actually clears the jitter threshold.
+  const [prevRawHeading, setPrevRawHeading] = useState<number | null>(rawHeading);
+  if (rawHeading !== prevRawHeading) {
+    setPrevRawHeading(rawHeading);
+    if (!isPannedAway) {
+      const next = normalizeHeading(rawHeading);
+      if (shouldCommitHeading(cameraHeading, next)) setCameraHeading(next);
+    }
+  }
+
+  const followTarget = here ?? route?.destination ?? FALLBACK_CENTER;
+  // The pan offset rides on top: while it is non-zero the driver has dragged the
+  // map, so the view stays where they put it instead of being yanked back by the
+  // next GPS fix. The Recenter map button clears it.
+  const centerLat = followTarget.latitude + offsetLat;
+  const centerLng = followTarget.longitude + offsetLng;
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map?.animateCamera || mapReadyTick === 0) return;
+    const camera: Record<string, unknown> = {
+      center: { latitude: centerLat, longitude: centerLng },
+      // 0 is north-up, which is exactly the right fallback before any course
+      // has been observed — and the behaviour this surface had until now.
+      heading: cameraHeading ?? 0,
+    };
+    // Omitted rather than guessed before layout: animateCamera leaves a field it
+    // isn't given alone, so skipping `zoom` preserves the current framing
+    // instead of snapping the driver to some default.
+    const zoom = zoomForSpan(delta, viewport.w, viewport.h, centerLat);
+    if (zoom !== null) camera.zoom = zoom;
+    try {
+      map.animateCamera(camera, { duration: CAMERA_ANIM_MS });
+    } catch (e) {
+      // Loud-ish: a throw here freezes the camera, which looks exactly like a
+      // dead GPS. Never fatal though — the map still renders where it was.
+      pushDebug('error', `animateCamera failed: ${String(e)}`);
+    }
+  }, [centerLat, centerLng, cameraHeading, delta, viewport.w, viewport.h, mapReadyTick]);
+
   const onMapReady = useCallback(() => {
     console.log('[CarSurface] MapView ready (native view attached)');
     pushDebug('info', 'MapView onMapReady — native view attached');
     setDebugFact('map', 'ready (no tiles yet)');
+    setMapReadyTick((n) => n + 1);
   }, []);
   const onMapLoaded = useCallback(() => {
     console.log('[CarSurface] MapView finished rendering tiles');
@@ -241,7 +346,22 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
     );
     setDebugFact('rideState', String(rideState));
     setDebugFact('leg', card.leg);
-    setDebugFact('zoomDelta', delta.toFixed(4));
+    const z = zoomForSpan(delta, viewport.w, viewport.h, centerLat);
+    setDebugFact(
+      'zoomDelta',
+      `${delta.toFixed(4)} → ${z === null ? 'no layout yet' : `z${z.toFixed(1)}`}`,
+    );
+    // Distinguishes the three states that all look like "the map won't turn":
+    // no course from the sensor, a course held but the driver has panned, and a
+    // live committed bearing.
+    setDebugFact(
+      'mapHeading',
+      isPannedAway
+        ? `${cameraHeading?.toFixed(0) ?? '—'}° frozen (panned)`
+        : cameraHeading === null
+          ? 'north-up (no course yet)'
+          : `${cameraHeading.toFixed(0)}° course-up`,
+    );
     setDebugFact(
       'pan',
       offsetLat === 0 && offsetLng === 0
@@ -249,9 +369,19 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
         : `${offsetLat.toFixed(4)}, ${offsetLng.toFixed(4)} (recenter to clear)`,
     );
     setDebugFact('location', here ? `${here.latitude.toFixed(4)}, ${here.longitude.toFixed(4)}` : 'no fix (fallback)');
-    setDebugFact('route', route ? `${route.leg}, ${route.polyline.length} pts` : 'none');
+    // Says WHICH line is on screen. "planned" on a moving trip is the symptom
+    // of the live poll failing, and was previously indistinguishable from
+    // working correctly.
+    setDebugFact(
+      'route',
+      route
+        ? livePath
+          ? `${route.leg}, ${livePath.length} pts (live OSRM)`
+          : `${route.leg}, ${route.polyline.length} pts (planned, booking-time)`
+        : 'none',
+    );
     setDebugFact('heatmap', `${heatmapStatus}, ${carHeatCells.length} cells`);
-  }, [rideState, card.leg, delta, here, route, heatmapStatus, carHeatCells.length, offsetLat, offsetLng, todayEarnings]);
+  }, [rideState, card.leg, delta, here, route, heatmapStatus, carHeatCells.length, offsetLat, offsetLng, todayEarnings, cameraHeading, isPannedAway, viewport.w, viewport.h, centerLat, livePath]);
 
   let Maps: typeof import('react-native-maps') | null = null;
   try {
@@ -313,26 +443,21 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
     RoutePins = null;
   }
 
-  // Follow the driver; fall back to the active destination, then a city center,
-  // so the camera always has a valid target even before the first GPS fix.
-  // The pan offset is added on top: while it is non-zero the driver has dragged
-  // the map, so the view stays where they put it instead of being yanked back
-  // by the next GPS fix. The Recenter map button clears it.
-  const followTarget = here ?? route?.destination ?? FALLBACK_CENTER;
-  const center = {
-    latitude: followTarget.latitude + offsetLat,
-    longitude: followTarget.longitude + offsetLng,
-  };
+  // `followTarget`, `centerLat`, `centerLng`, `cameraHeading` and the effect
+  // that drives them all live ABOVE the maps guard — the camera effect is a
+  // hook and cannot sit after an early return.
 
   return (
     <View style={[styles.fill, styles.mapBackdrop]}>
       <MapView
         // Re-mount on a leg / idle transition so Android's Google Maps native
         // layer fully drops a leftover route overlay; within a leg the camera is
-        // driven by `region` (below), not a remount, so live location + zoom
-        // updates don't thrash the surface.
+        // driven by the `camera` prop (below), not a remount, so live location,
+        // zoom, and heading updates don't thrash the surface.
         key={`${route ? route.leg : 'idle'}-${surfaceGeneration}`}
+        ref={setMapRef}
         style={styles.fill}
+        onLayout={onMapLayout}
         // Match shared/components/AppMap.tsx rather than relying on the
         // platform default, so the car surface and the phone resolve the
         // provider identically.
@@ -354,16 +479,25 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
         onMapLoaded={onMapLoaded}
         // The projected car surface is non-interactive (Android Auto drives
         // interaction through template buttons, not in-surface touches); the
-        // controlled region lets the zoom buttons + follow-me drive the camera.
+        // controlled camera lets the zoom buttons + follow-me drive position,
+        // zoom, and heading.
         pointerEvents="none"
         showsUserLocation={false}
         // Android Auto flips this at dusk from the car's own ambient state. A
         // daylight map at night on a dashboard is genuinely dangerous, not just
         // ugly — it is the brightest object in the cabin and it is at eye level.
         customMapStyle={isNight ? NIGHT_MAP_STYLE : undefined}
-        region={{
-          latitude: center.latitude,
-          longitude: center.longitude,
+        // INITIAL only — every subsequent move goes through animateCamera in the
+        // effect above.
+        //
+        // A controlled `camera` prop was tried first (f8983e2) and is the reason
+        // rotation still looked broken on hardware: react-native-maps compiles it
+        // to `map.moveCamera`, which SNAPS. Position jumped every ~2s and the
+        // bearing jumped with it, so a turn arrived as a lurch rather than a
+        // sweep. animateCamera is the same camera, interpolated.
+        initialRegion={{
+          latitude: centerLat,
+          longitude: centerLng,
           latitudeDelta: delta,
           longitudeDelta: delta,
         }}
@@ -382,13 +516,26 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
           );
         })}
 
-        {/* THE uniform route line + pins. `route.polyline` is the SAME stored
-            pickup→dropoff geometry as before (empty on the pre-pickup leg); it is
-            now drawn as one orange→red gradient via the shared RouteLine so the
-            car surface reads identically to the phone. Pins follow the leg: green
-            pickup while heading to the rider; green pickup (route start) + red
-            dropoff once the trip is under way. */}
-        {route && RouteLine && <RouteLine path={route.polyline} />}
+        {/* THE uniform route line + pins, drawn as one orange→red gradient via
+            the shared RouteLine so the car reads identically to the phone.
+
+            The line PREFERS the live OSRM route — road-matched from where the
+            driver actually is, refreshed every 20s — and falls back to the
+            stored `planned_route_polyline` only when there is no trustworthy
+            live one. Until now only the stored line existed, so a driver who
+            took a different road watched the head unit insist on the route
+            planned at booking for the whole trip.
+
+            The live line also fills a gap the stored one could never cover: it
+            exists on the PRE-PICKUP leg too (`route.polyline` is empty there,
+            because the stored geometry runs pickup→dropoff and drawing it while
+            the driver heads to the rider pointed the wrong way entirely).
+
+            Pins follow the leg: green pickup while heading to the rider; green
+            pickup (route start) + red dropoff once the trip is under way. */}
+        {route && RouteLine && (livePath ?? route.polyline).length > 1 && (
+          <RouteLine path={livePath ?? route.polyline} />
+        )}
         {route && RoutePins && (
           <RoutePins
             pickup={route.leg === 'pickup' ? route.destination : (route.polyline[0] ?? null)}
@@ -398,20 +545,36 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
         {here && CarMarker && (
           <CarMarker
             coordinate={{ latitude: here.latitude, longitude: here.longitude }}
-            heading={here.heading}
+            // The camera's committed bearing, NOT the raw fix.
+            //
+            // CarMarker is `flat`, so react-native-maps applies its rotation
+            // relative to the MAP, not the screen — the icon's on-screen angle
+            // is therefore (marker heading − camera bearing). Feeding it the
+            // same value the camera is using makes that zero, so the car sits
+            // still pointing up while the world turns underneath, which is what
+            // Google Maps does and what "the car keeps rotating up and down"
+            // was asking for. Falls back to the raw bearing when no course has
+            // been observed yet: the map is north-up then, so the marker must
+            // show the true direction itself (and CarMarker derives one from
+            // travel when even that is missing).
+            heading={cameraHeading ?? here.heading}
           />
         )}
       </MapView>
-      {/* Slim status bar (display-only; interaction is via template header
-          actions / map buttons / the ride-offer alert).
+      {/* The offer moment gets its own, much richer panel — see
+          CarOfferPanel.tsx for why it is not the slim bar below.
 
-          Hidden in TWO states, for different reasons:
-          - `idle`  — nothing to say, so the screen stays an uncluttered map.
-          - `offer` — the Android Auto alert is on screen and already carries
-            rider, fare, bonus, ETA and the Accept/Decline buttons. Drawing this
-            underneath it produced two overlapping panels with no clear target,
-            which is exactly what a driver must not have to work out while
-            deciding on a ride. The alert owns that moment; we get out of it. */}
+          Short version: the alert is system chrome, so the one number a driver
+          is deciding on arrives there as ordinary body text. This panel renders
+          it at hero scale with the rate, the badges and both ends of the trip.
+          It repeats neither button, so the alert still unambiguously owns the
+          Accept/Decline decision — the overlap problem that got the slim bar
+          hidden here in the first place was two panels competing to be acted
+          on, not two panels on screen. */}
+      {card.leg === 'offer' && <CarOfferPanel card={card} />}
+      {/* Slim status bar for every engaged leg (display-only; interaction is via
+          template header actions / map buttons). Hidden when `idle` — nothing to
+          say, so the screen stays an uncluttered map. */}
       {card.leg !== 'idle' && card.leg !== 'offer' && <CarTripCard card={card} />}
       {/* Always-on status pill. Two jobs:
           - UX: the idle car screen is otherwise a bare map with no indication

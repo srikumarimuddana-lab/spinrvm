@@ -100,15 +100,52 @@ export const getLastCarFix = (): CarLatLng | null => lastFix;
 export const carFixAgeMs = (): number => (lastFixAt === 0 ? Infinity : Date.now() - lastFixAt);
 
 /**
+ * Carry the last known bearing onto a fix that has none.
+ *
+ * ─── Why the car marker never turned while the phone's did ───────────────────
+ * Only `watchPositionAsync` produces a course over ground; a one-shot
+ * `getCurrentPositionAsync` almost never does, and reports 0 or -1 instead. The
+ * car has THREE such one-shot paths (the startup fix, and the staleness
+ * watchdog every 3s) where the phone dashboard has none — and on Android Auto
+ * they are the paths that dominate, because the phone app is backgrounded in a
+ * cradle and Android throttles its foreground watcher hard. So the good bearing
+ * from the occasional watcher callback was being overwritten seconds later by a
+ * watchdog fix carrying no bearing at all, and the marker snapped back to north.
+ *
+ * A bearing does not stop being true because the next fix forgot to mention it:
+ * a car pointing west at the last real reading is still pointing west. Holding
+ * it is strictly better than discarding it — and when the driver genuinely
+ * turns, the watcher supplies a new one that replaces it.
+ *
+ * Position is never carried this way; only the bearing. A stale POSITION is the
+ * "map shows where I started" bug this whole module exists to prevent.
+ */
+export function carryHeading(next: CarLatLng, prev: CarLatLng | null): CarLatLng {
+  // Negative is expo's "unknown" sentinel; null is "provider gave nothing".
+  const hasHeading = typeof next.heading === 'number' && Number.isFinite(next.heading) && next.heading >= 0;
+  if (hasHeading) return next;
+  const carried = prev?.heading;
+  if (typeof carried !== 'number' || !Number.isFinite(carried) || carried < 0) return next;
+  return { ...next, heading: carried };
+}
+
+/**
  * Adopt a fix WITHOUT notifying subscribers.
  *
  * For the hook's own watcher and seeds, which already hold the value in React
  * state — re-publishing it would loop straight back into the setState that
  * produced it.
+ *
+ * Returns what was actually stored, which may carry a bearing forward from the
+ * previous fix (see `carryHeading`) — callers should use the return value for
+ * their own setState rather than the fix they passed in, or the marker and the
+ * module cache disagree about which way the car is pointing.
  */
-export function adoptCarFix(fix: CarLatLng): void {
-  lastFix = fix;
+export function adoptCarFix(fix: CarLatLng): CarLatLng {
+  const merged = carryHeading(fix, lastFix);
+  lastFix = merged;
   lastFixAt = Date.now();
+  return merged;
 }
 
 /** Seed the module cache only if nothing better has landed. Returns what won. */
@@ -161,11 +198,14 @@ export function subscribeCarFix(listener: (fix: CarLatLng) => void): () => void 
  */
 export function publishCarFix(fix: CarLatLng): void {
   publishedSinceRead += 1;
-  adoptCarFix(fix);
-  persistFix(fix);
+  // Subscribers get the MERGED fix, not the raw one — a background task fix with
+  // no course would otherwise re-render the marker pointing north even though
+  // the module cache still holds the true bearing.
+  const merged = adoptCarFix(fix);
+  persistFix(merged);
   for (const l of fixListeners) {
     try {
-      l(fix);
+      l(merged);
     } catch {
       // A bad subscriber must not stop the others.
     }

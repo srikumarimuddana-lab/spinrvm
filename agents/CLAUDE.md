@@ -2,6 +2,32 @@
 
 Python SDK for multi-agent development automation. **Not part of the production runtime** — used for code review, testing, documentation, and deployment orchestration during development.
 
+## Start here: the real, running pipeline
+
+The files below (`orchestrator.py`, `registry.py`, etc.) are a **legacy scaffold** —
+read `RESEARCH.md`'s "finding" section before using them: they never call a language
+model, so running them produces Python objects moving between classes, not actual
+engineering work. They're kept for their role/hierarchy structure, which the newer
+design below still draws on.
+
+The actual working pipeline, as of 2026-08-20, is:
+
+- **`RESEARCH.md`** — why an external framework (LangGraph/CrewAI/AutoGen/MetaGPT/
+  ChatDev/OpenHands) wasn't adopted, and what was adopted instead
+- **`PIPELINE_DESIGN.md`** — the 10-stage ideation→operations graph, who owns each
+  stage, and the three-document paper trail (`progress-report.md`, `decisions.md`,
+  `challenges-and-issues.md`) every run produces
+- **`GUARDRAILS.md`** — the standing can't-do list (hard stops the pipeline is
+  physically unable to do; soft stops that need a human's go-ahead)
+- **`roles/*.md`** — one plain-language file per department (matches the org chart in
+  the "rideshare team roles" session): what it decides, what it needs, what it can
+  never do
+- **`pipeline.workflow.js`** — the actual Claude Code `Workflow` script that runs the
+  pipeline, reusing the existing `spinr-*` review subagents as stage workers
+- **`runs/<date>-<slug>/`** — one folder per completed pipeline run
+
+## Legacy scaffold (pre-2026-08-20)
+
 | Module | Class | Role |
 |--------|-------|------|
 | `base_agent.py` | `BaseAgent` | Abstract base: task queue, message bus, knowledge entries |

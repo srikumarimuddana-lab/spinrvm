@@ -4,6 +4,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Working Style
 
+### Core engineering principles
+Adapted from Karpathy-style LLM coding guidance (https://github.com/multica-ai/andrej-karpathy-skills) to this codebase's existing rules — not a copy of it. Bias toward caution over speed on anything touching rides, payments, auth, corporate, or safety; use judgment on trivial tasks (docs, tests, tooling).
+
+**Think before coding — surface assumptions, don't silently resolve them.**
+- State assumptions explicitly before implementing. If a request has more than one plausible reading, name the readings and ask — don't pick one silently.
+- This is the design-time half of the "Escalate, don't silently ship" release gate (below): surface ambiguity *before* writing code, not just before merging it.
+- Applies with extra force to the ride state machine, money paths, and insurance-period logic — a wrong assumption there is a regression on a live-tested surface, not a style nit.
+
+**Simplicity first — minimum code that solves the problem.**
+- No speculative features, no single-use abstractions, no configurability that wasn't asked for.
+- This does not waive anything this file marks mandatory elsewhere: Decimal-only money math, the dual-import pattern, `_require_ride_in_state()` guards, insurance-period audit rows, the query-filter escaping rules. Those are required scaffolding, not speculative complexity — don't "simplify" them away.
+- If a diff could be materially smaller without dropping required error handling or the patterns above, shrink it.
+
+**Surgical changes — touch only what the task requires.**
+- Don't reformat or "clean up" adjacent code, comments, or unrelated lines while in a file for something else. Match existing style even where you'd write it differently.
+- Notice unrelated dead code → mention it, don't delete it (unless asked).
+- Remove only the imports/variables your own change orphaned. This is the same discipline as the blast-radius check (below) — know what you're touching before you touch it, and touch nothing else.
+
+**Goal-driven execution — define verification before you start.**
+- Before implementing, state a short plan with a verify step per item, e.g. `1. [change] → verify: [test/command/manual check]`.
+- Turn vague asks into checkable ones: "fix the bug" → "write/extend a test that reproduces it, then make it pass."
+- This is the same discipline the Change Impact Log's "Verification performed" field requires after the fact — do it up front too, so subtasks (below) carry a verification step, not just a file list.
+
 ### Task decomposition (mandatory)
 - Before starting any implementation, break it into subtasks of ≤ 3 files each.
 - Use `TodoWrite` to track every subtask; mark done immediately after each commit.
@@ -491,5 +514,5 @@ These directories exist alongside `.claude/` but serve different tooling:
 | `.emergent/` | Active | Emergent AI agent config |
 | `.maestro/` | Active | Maestro orchestration config |
 | `audit-framework/` | Active | Shared audit scripts for all AI assistants |
-| `memory/` | Stale | Originally for agent memory; contains only `.gitkeep` — can be archived |
-| `discovery/` | Stale | Early Expo sandbox; unreferenced by any surface — can be archived |
+| `memory/` | Archived | Originally for agent memory; contained only `.gitkeep`. Deleted 2026-05-05 in commit `223ec89b0` (PR #451). |
+| `discovery/` | Archived | Early Expo sandbox; was unreferenced by any surface. Deleted 2026-05-05 in commit `223ec89b0` (PR #451). |

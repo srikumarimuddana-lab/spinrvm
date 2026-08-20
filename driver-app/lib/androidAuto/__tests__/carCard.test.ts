@@ -5,10 +5,15 @@
  */
 import {
   bonusLabel,
+  buildOfferAlertText,
   buildOfferCard,
   buildTripCard,
+  fareBreakdownLabel,
+  perKmLabel,
   perkLabel,
   surgeBadge,
+  totalEarnings,
+  totalEarningsLabel,
   type OfferLike,
 } from '../carCard';
 import type { ActiveRide } from '../../../store/driverStore';
@@ -81,6 +86,53 @@ describe('bonusLabel', () => {
   });
 });
 
+describe('totalEarnings', () => {
+  it('adds a positive bonus to the base fare', () => {
+    expect(totalEarnings('14.50', 3)).toBe(17.5);
+    expect(totalEarningsLabel('14.50', 3)).toBe('$17.50');
+  });
+
+  it('accepts a numeric fare, matching the phone payload shape', () => {
+    expect(totalEarningsLabel(14.5, 3)).toBe('$17.50');
+  });
+
+  it('is the bare fare when there is no bonus', () => {
+    expect(totalEarningsLabel('14.50', 0)).toBe('$14.50');
+    expect(totalEarningsLabel('14.50', undefined)).toBe('$14.50');
+  });
+
+  it('never lets a negative bonus shrink the advertised total', () => {
+    expect(totalEarningsLabel('14.50', -5)).toBe('$14.50');
+  });
+
+  it('is null when the fare is missing or unparseable', () => {
+    expect(totalEarningsLabel(undefined, 3)).toBeNull();
+    expect(totalEarningsLabel('', 3)).toBeNull();
+    expect(totalEarningsLabel('n/a', 3)).toBeNull();
+  });
+});
+
+describe('fareBreakdownLabel', () => {
+  it('explains the split only when a bonus makes the hero differ from the fare', () => {
+    expect(fareBreakdownLabel('14.50', 3)).toBe('$14.50 fare + $3.00 bonus');
+    expect(fareBreakdownLabel('14.50', 0)).toBeNull();
+    expect(fareBreakdownLabel('14.50', undefined)).toBeNull();
+  });
+});
+
+describe('perKmLabel', () => {
+  it('rates the ride on total earnings, not the bare fare', () => {
+    // 17.50 / 3.5 km — a bonus raises the rate the driver is judging.
+    expect(perKmLabel('14.00', 3.5, 3.5)).toBe('$5.00/km');
+  });
+
+  it('is null without a usable distance', () => {
+    expect(perKmLabel('14.50', 3, 0)).toBeNull();
+    expect(perKmLabel('14.50', 3, undefined)).toBeNull();
+    expect(perKmLabel('14.50', 3, -2)).toBeNull();
+  });
+});
+
 describe('perkLabel', () => {
   it('prefers a quest title, then the top incentive', () => {
     expect(perkLabel([{ name: 'Boost' }], { title: 'Quest!' })).toBe('Quest!');
@@ -108,13 +160,114 @@ describe('buildOfferCard', () => {
     expect(c.perkLabel).toBe('3 of 5 rides — $20 bonus');
   });
 
+  it('leads with fare + bonus, not the bare fare', () => {
+    // The regression this guards: the car advertised $14.50 for a ride the
+    // phone advertised at $17.50, on the screen where the driver decides.
+    const c = buildOfferCard(offer);
+    expect(c.totalEarningsLabel).toBe('$17.50');
+    expect(c.fareLabel).toBe('$14.50');
+    expect(c.fareBreakdownLabel).toBe('$14.50 fare + $3.00 bonus');
+    expect(c.perKmLabel).toBe('$5.40/km'); // 17.50 / 3.24
+  });
+
+  it('carries both ends of the trip so the offer can show pickup AND dropoff', () => {
+    const c = buildOfferCard(offer);
+    expect(c.pickupLabel).toBe('101 Pickup St');
+    expect(c.dropoffLabel).toBe('202 Dropoff Ave');
+  });
+
+  it('reads the badge flags the phone panel shows', () => {
+    const c = buildOfferCard({
+      ...offer,
+      quiet_mode: true,
+      is_scheduled: true,
+      payment_method: 'cash',
+    });
+    expect(c.quietMode).toBe(true);
+    expect(c.isScheduled).toBe(true);
+    expect(c.cashPayment).toBe(true);
+  });
+
+  it('leaves every badge off for a payload from a backend that omits them', () => {
+    const c = buildOfferCard(offer);
+    expect(c.quietMode).toBe(false);
+    expect(c.isScheduled).toBe(false);
+    expect(c.cashPayment).toBe(false);
+  });
+
   it('degrades gracefully with a null offer', () => {
     const c = buildOfferCard(null);
     expect(c.leg).toBe('offer');
     expect(c.riderName).toBeNull();
     expect(c.fareLabel).toBeNull();
+    expect(c.totalEarningsLabel).toBeNull();
+    expect(c.fareBreakdownLabel).toBeNull();
+    expect(c.perKmLabel).toBeNull();
     expect(c.destinationLabel).toBeNull();
+    expect(c.pickupLabel).toBeNull();
+    expect(c.dropoffLabel).toBeNull();
     expect(c.wav).toBe(false);
+  });
+});
+
+describe('buildOfferAlertText', () => {
+  const text = (o: OfferLike | null) => buildOfferAlertText(buildOfferCard(o));
+
+  it('leads the title with total earnings, then the rider', () => {
+    // The regression this guards: the title used to read "New ride · Alex ★4.9"
+    // — the largest text Android Auto gives us, spent on a label — while the
+    // amount sat below it in body text, and was the BASE fare at that.
+    expect(text(offer).title).toBe('$17.50 · Alex ★4.9');
+  });
+
+  it('explains the split and the rate on the first subtitle line', () => {
+    const lines = text(offer).subtitle!.split('\n');
+    expect(lines[0]).toBe('$14.50 fare + $3.00 bonus · $5.40/km');
+  });
+
+  it('puts trip shape and flags on the second line, destination on the third', () => {
+    const lines = text(offer).subtitle!.split('\n');
+    expect(lines[1]).toBe('8 min away · 3.2 km · 1.5× surge · WAV');
+    expect(lines[2]).toBe('→ 202 Dropoff Ave');
+  });
+
+  it('carries every badge the phone panel shows', () => {
+    const lines = text({
+      ...offer,
+      quiet_mode: true,
+      is_scheduled: true,
+      payment_method: 'cash',
+    }).subtitle!.split('\n');
+    expect(lines[1]).toBe(
+      '8 min away · 3.2 km · 1.5× surge · WAV · Quiet ride · Pre-booked · Cash',
+    );
+  });
+
+  it('omits the rate line entirely when there is no bonus and no distance', () => {
+    const t = text({ ride_id: 'r', fare: '11.00', dropoff_address: 'Somewhere' });
+    expect(t.title).toBe('$11.00');
+    expect(t.subtitle).toBe('→ Somewhere');
+  });
+
+  it('shows the bare rate when a ride has distance but no bonus', () => {
+    const lines = text({
+      ride_id: 'r',
+      fare: '9.75',
+      distance_km: 2.1,
+      rider_name: 'Kiran',
+    }).subtitle!.split('\n');
+    expect(lines[0]).toBe('$4.64/km');
+  });
+
+  it('falls back to a label when the payload carries no money at all', () => {
+    expect(text({ ride_id: 'r', rider_name: 'Kiran' }).title).toBe('New ride · Kiran');
+    expect(text({ ride_id: 'r' }).title).toBe('New ride request');
+    expect(text(null).title).toBe('New ride request');
+    expect(text(null).subtitle).toBeNull();
+  });
+
+  it('drops the rating from the title when the rider has none', () => {
+    expect(text({ ...offer, rider_rating: undefined }).title).toBe('$17.50 · Alex');
   });
 });
 

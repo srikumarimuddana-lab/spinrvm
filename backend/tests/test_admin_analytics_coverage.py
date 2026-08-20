@@ -569,3 +569,122 @@ class TestDriverAcceptancePagination:
     def test_invalid_sort_column_is_rejected(self, admin_client):
         drivers, acc, users = _acc_fixture(n_good=1, n_low=0)
         assert self._call(admin_client, drivers, acc, users, sort_by="; DROP TABLE").status_code == 422
+
+
+# ── service-area scoping + Regina bucketing (migration 350) ───────────
+
+
+class TestAnalyticsAreaScopeAndTimezone:
+    """Cover for migration 350: the overview gained a service-area scope, and
+    both aggregates moved from UTC to America/Regina day/hour buckets."""
+
+    def test_overview_forwards_service_area_to_the_rpc(self, admin_client):
+        rpc = AsyncMock(return_value=[{"total": 3, "completed": 3}])
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", rpc),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock()),
+        ):
+            resp = admin_client.get("/api/admin/analytics/overview", params={"service_area_id": "saskatoon"})
+        assert resp.status_code == 200
+        assert rpc.await_args.args[1]["p_service_area_id"] == "saskatoon"
+        assert resp.json()["service_area_id"] == "saskatoon"
+
+    def test_overview_passes_null_area_when_unscoped(self, admin_client):
+        """'All areas' must reach the RPC as NULL, not the string 'all'."""
+        rpc = AsyncMock(return_value=[{"total": 1}])
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", rpc),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock()),
+        ):
+            resp = admin_client.get("/api/admin/analytics/overview")
+        assert resp.status_code == 200
+        assert rpc.await_args.args[1]["p_service_area_id"] is None
+        assert resp.json()["service_area_id"] is None
+
+    def test_overview_cache_key_is_per_area(self, admin_client):
+        """Two areas must not share one cached payload."""
+        seen = []
+
+        async def _get(key):
+            seen.append(key)
+            return None
+
+        with (
+            patch("backend.routes.admin.analytics.redis_get", _get),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(return_value=[{"total": 1}])),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock()),
+        ):
+            admin_client.get("/api/admin/analytics/overview", params={"service_area_id": "a1"})
+            admin_client.get("/api/admin/analytics/overview", params={"service_area_id": "a2"})
+            admin_client.get("/api/admin/analytics/overview")
+        assert len(set(seen)) == 3, f"cache keys collided: {seen}"
+
+    def test_cache_key_version_bumped_off_the_utc_buckets(self, admin_client):
+        """Entries cached under UTC bucketing must not be served after the switch."""
+        seen = []
+
+        async def _get(key):
+            seen.append(key)
+            return None
+
+        with (
+            patch("backend.routes.admin.analytics.redis_get", _get),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(return_value=[{"total": 1}])),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock()),
+        ):
+            admin_client.get("/api/admin/analytics/overview")
+            admin_client.get("/api/admin/analytics/cancellation-reasons")
+        assert all(":v2:" in k for k in seen), seen
+
+    def test_both_endpoints_report_the_bucketing_timezone(self, admin_client):
+        """The UI renders bare hour labels; without this it cannot say which zone."""
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(return_value=[{"total": 0}])),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock()),
+        ):
+            ov = admin_client.get("/api/admin/analytics/overview").json()
+            cx = admin_client.get("/api/admin/analytics/cancellation-reasons").json()
+        assert ov["timezone"] == "America/Regina"
+        assert cx["timezone"] == "America/Regina"
+
+
+class TestReginaBucketingMigration:
+    """Static checks on migration 350 — it is applied by a runner we cannot
+    exercise here, and silently dropping migration 349's legacy-import
+    exclusion while rewriting these functions would re-skew live KPIs."""
+
+    @staticmethod
+    def _sql() -> str:
+        from pathlib import Path
+
+        p = Path(__file__).resolve().parents[1] / "migrations" / "350_analytics_regina_buckets_and_area_scope.sql"
+        return p.read_text()
+
+    @staticmethod
+    def _body(sql: str) -> str:
+        return "\n".join(ln for ln in sql.split("\n") if not ln.lstrip().startswith("--"))
+
+    def test_legacy_import_exclusion_survives_the_rewrite(self):
+        assert self._body(self._sql()).count("legacy_import_metadata = '{}'::jsonb") == 2
+
+    def test_no_utc_bucketing_remains(self):
+        body = self._body(self._sql())
+        assert "AT TIME ZONE 'UTC'" not in body
+        assert body.count("America/Regina") >= 3
+
+    def test_both_functions_stay_revoked_from_public_roles(self):
+        assert self._body(self._sql()).count("REVOKE EXECUTE") == 2
+
+    def test_overview_signature_change_drops_the_old_arity_first(self):
+        """CREATE OR REPLACE cannot change a signature — without the DROP this
+        would silently leave two overloads and PostgREST could pick either."""
+        body = self._body(self._sql())
+        assert "DROP FUNCTION IF EXISTS public.admin_analytics_overview(timestamptz);" in body
+        assert "p_service_area_id text DEFAULT NULL" in body
+
+    def test_area_predicate_present_on_both_functions(self):
+        body = self._body(self._sql())
+        assert body.count("p_service_area_id IS NULL OR service_area_id::text = p_service_area_id") == 2

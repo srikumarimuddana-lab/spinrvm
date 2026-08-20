@@ -7,8 +7,8 @@ import {
     LayoutDashboard, Car, Users, DollarSign, Settings, MapPin, Ticket,
     Flame, Building2, LifeBuoy, HelpCircle,
     Menu, X,
-    Shield, ShieldAlert, Cloud, Trophy, TrendingUp, Activity,
-    Inbox, Clock, Headphones, BarChart3, Send, Sparkles, Gift, Upload, FileText, Bug, Mail, Gavel,
+    Shield, ShieldAlert, Cloud, Trophy, Activity,
+    Inbox, Clock, Headphones, BarChart3, Sparkles, Gift, Upload, FileText, Bug, Mail, Gavel,
     PackageSearch, Flag, FileWarning, ScrollText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -86,14 +86,15 @@ const NAV_GROUPS: NavGroup[] = [
             // grantable list; see the note on AVAILABLE_MODULES in
             // backend/routes/admin/staff.py.
             { href: "/dashboard/heatmap", label: "Heat Map", icon: Flame, module: "rides" },
+            // Dispatch Offers and Demand Forecast are tabs on this page
+            // (?tab=offers / ?tab=forecast); their old standalone routes
+            // redirect here, so they no longer need their own nav entries.
             { href: "/dashboard/analytics", label: "Analytics", icon: LayoutDashboard, module: "dashboard" },
-            { href: "/dashboard/driver-offers", label: "Driver Offers", icon: Send, module: "dashboard" },
             // Referrals live inside Earnings & Payouts → Referrals tab. This
             // entry (to the still-existing standalone page) shows ONLY for
             // staff with drivers but not earnings — e.g. the "operations"
             // role — who would otherwise lose all navigable referral access.
             { href: "/dashboard/referrals", label: "Referrals", icon: Gift, module: "drivers", hideIfModule: "earnings" },
-            { href: "/dashboard/forecast", label: "Demand Forecast", icon: TrendingUp, module: "dashboard" },
         ],
     },
     {

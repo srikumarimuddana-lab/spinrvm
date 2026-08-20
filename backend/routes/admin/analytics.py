@@ -13,16 +13,70 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 try:
     from ...db import db
     from ...dependencies import get_admin_user
+    from ...services.fare_service import _d, _f, _round
     from ...utils.redis_client import redis_get, redis_set
 except ImportError:
     from db import db
     from dependencies import get_admin_user
+    from services.fare_service import _d, _f, _round  # noqa: F401
     from utils.redis_client import redis_get, redis_set  # noqa: F401
 
 logger = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/analytics", tags=["Admin Analytics"])
 
 _OVERVIEW_CACHE_TTL = 300  # 5 minutes
+
+# Day/hour buckets in the analytics RPCs are America/Regina business time,
+# not UTC (migration 350). Reported in every payload so the dashboard can
+# label its axes rather than rendering a bare, ambiguous "14:00".
+_ANALYTICS_TZ = "America/Regina"
+
+# Business KPI targets, quoted from CLAUDE.md's "KPI Targets" table so the
+# dashboard can render actual-vs-target instead of a bare number an operator
+# has to remember the threshold for. `direction` says which side is healthy.
+_KPI_TARGETS: dict = {
+    "match_rate": {"target": 85.0, "direction": "min", "label": "Match rate"},
+    "rider_cancel_rate": {"target": 8.0, "direction": "max", "label": "Rider cancellation rate"},
+    "driver_cancel_rate": {"target": 3.0, "direction": "max", "label": "Driver cancellation rate"},
+    "utilization_pct": {"target": 55.0, "direction": "min", "label": "Driver utilization"},
+}
+
+
+def _pct(numerator: float, denominator: float) -> float:
+    """Percentage, or 0.0 when the denominator is empty. Display-only — not money."""
+    return round(numerator / denominator * 100, 1) if denominator else 0.0
+
+
+def _kpi(key: str, actual: float) -> dict:
+    """Pair an actual with its CLAUDE.md target and whether it is being met."""
+    spec = _KPI_TARGETS[key]
+    meeting = actual >= spec["target"] if spec["direction"] == "min" else actual <= spec["target"]
+    return {
+        "key": key,
+        "label": spec["label"],
+        "actual": actual,
+        "target": spec["target"],
+        "direction": spec["direction"],
+        "meeting_target": meeting,
+    }
+
+
+# Upper bound on how many driver rows one acceptance-rate request will scan.
+# Hitting it sets `scan_truncated` in the response rather than silently
+# returning a partial list.
+_DRIVER_SCAN_CAP = 2000
+
+# A "low performer" is flagged in one place so the summary count, the
+# `low_performers_only` filter, and the threshold reported to the UI can
+# never drift apart.
+_LOW_PERFORMER_RATE = 70.0
+_LOW_PERFORMER_MIN_RIDES = 5
+
+
+def _is_low_performer(row: dict) -> bool:
+    """Below the completion threshold, with enough rides for it to mean anything."""
+    rate = row.get("completion_rate", row.get("acceptance_rate", 0))
+    return rate < _LOW_PERFORMER_RATE and row.get("total_rides", 0) >= _LOW_PERFORMER_MIN_RIDES
 
 
 def _parse_date_range(date_range: str) -> datetime:
@@ -72,7 +126,9 @@ async def get_cancellation_breakdown(
     """
     import json as _json
 
-    cache_key = f"analytics:cancellation-reasons:{date_range}:{service_area_id or 'all'}"
+    # `v2` marks the America/Regina hour bucketing (migration 350) — see
+    # the same note on /overview.
+    cache_key = f"analytics:cancellation-reasons:v2:{date_range}:{service_area_id or 'all'}"
     cached = await redis_get(cache_key)
     if cached:
         try:
@@ -123,6 +179,8 @@ async def get_cancellation_breakdown(
     result = {
         "total_cancellations": total,
         "date_range": date_range,
+        "service_area_id": service_area_id,
+        "timezone": _ANALYTICS_TZ,
         "reasons": reasons,
         "by_party": by_party,
         "hourly_distribution": hourly,
@@ -142,19 +200,54 @@ async def get_driver_acceptance_rates(
     date_range: str = Query("30d", pattern="^(today|7d|30d|90d|1y)$"),
     service_area_id: Optional[str] = None,
     limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    search: Optional[str] = Query(None, max_length=100),
+    sort_by: str = Query(
+        "completion_rate",
+        pattern="^(completion_rate|acceptance_rate|cancellation_rate|total_rides|completed|cancelled_by_driver|rating|name)$",
+    ),
+    order: str = Query("desc", pattern="^(asc|desc)$"),
+    min_rides: int = Query(0, ge=0),
+    low_performers_only: bool = False,
     admin: dict = Depends(get_admin_user),
 ):
-    """Driver acceptance rate rankings and performance metrics."""
+    """Driver acceptance rate rankings and performance metrics.
+
+    Paginated + sortable + searchable server-side. This matters for more than
+    convenience: the response previously sorted by acceptance rate DESC and
+    returned only the first `limit` rows, so the drivers the
+    `low_performer_count` summary counts (worst rates) were exactly the rows
+    the slice discarded. Ops could see that N drivers were underperforming
+    and had no way to find out which. `sort_by`/`order`/`offset` and
+    `low_performers_only` make every counted driver reachable.
+
+    Summary stats (`total_drivers`, `avg_acceptance_rate`,
+    `low_performer_count`) are computed over the whole filtered set, never
+    over the returned page — a page-scoped average would change as you
+    paginate.
+    """
     start_date = _parse_date_range(date_range)
 
+    # Service-area scoping is pushed into the query rather than applied in
+    # Python after the fetch: filtering post-cap meant an operator with more
+    # than _DRIVER_SCAN_CAP drivers silently filtered an arbitrary subset.
+    driver_filters: dict = {}
+    if service_area_id:
+        driver_filters["service_area_id"] = service_area_id
+
     try:
-        drivers = await db.get_rows("drivers", {}, limit=500)
+        drivers = await db.get_rows("drivers", driver_filters, limit=_DRIVER_SCAN_CAP)
     except Exception as e:
         logger.error(f"Failed to fetch drivers: {e}", exc_info=True, extra={"domain": "admin"})
         raise HTTPException(status_code=503, detail="analytics_unavailable") from e
 
-    if service_area_id:
-        drivers = [d for d in drivers if d.get("service_area_id") == service_area_id]
+    # Never truncate silently — surface it so the UI can say the list is partial.
+    scan_truncated = len(drivers) >= _DRIVER_SCAN_CAP
+    if scan_truncated:
+        logger.warning(
+            "driver-acceptance hit the driver scan cap; results are partial",
+            extra={"domain": "admin", "cap": _DRIVER_SCAN_CAP, "service_area_id": service_area_id},
+        )
 
     driver_ids = [d["id"] for d in drivers]
     user_ids = [d["user_id"] for d in drivers if d.get("user_id")]
@@ -208,7 +301,11 @@ async def get_driver_acceptance_rates(
         completed = int(agg.get("completed") or 0)
         cancelled_by_driver = int(agg.get("cancelled_by_driver") or 0)
 
-        acceptance_rate = round((completed / total_assigned * 100), 1) if total_assigned > 0 else 0
+        # completed / assigned. This is a COMPLETION rate, not an acceptance
+        # rate: a driver who accepts every offer but whose riders cancel
+        # scores badly here. True acceptance (accepted / offered) comes from
+        # the ride_offers ledger — see /analytics/driver-offer-stats.
+        completion_rate = round((completed / total_assigned * 100), 1) if total_assigned > 0 else 0
         cancellation_rate = round((cancelled_by_driver / total_assigned * 100), 1) if total_assigned > 0 else 0
 
         user = users_map.get(driver.get("user_id"))
@@ -221,7 +318,9 @@ async def get_driver_acceptance_rates(
                 "total_rides": total_assigned,
                 "completed": completed,
                 "cancelled_by_driver": cancelled_by_driver,
-                "acceptance_rate": acceptance_rate,
+                "completion_rate": completion_rate,
+                # Deprecated alias, kept so an un-updated client keeps working.
+                "acceptance_rate": completion_rate,
                 "cancellation_rate": cancellation_rate,
                 "rating": driver.get("rating", 0),
                 "lat": driver.get("lat"),
@@ -230,19 +329,69 @@ async def get_driver_acceptance_rates(
             }
         )
 
-    # Sort by acceptance rate descending
-    result.sort(key=lambda x: x["acceptance_rate"], reverse=True)
+    # ── Filters (applied before summary + pagination) ────────────────
+    if search:
+        needle = search.strip().lower()
+        if needle:
+            result = [r for r in result if needle in (r["name"] or "").lower()]
+    if min_rides > 0:
+        result = [r for r in result if r["total_rides"] >= min_rides]
+    if low_performers_only:
+        result = [r for r in result if _is_low_performer(r)]
 
-    # Summary stats
-    avg_acceptance = round(sum(r["acceptance_rate"] for r in result) / len(result), 1) if result else 0
-    low_performers = [r for r in result if r["acceptance_rate"] < 70 and r["total_rides"] >= 5]
+    # Summary stats over the full filtered set, not the returned page.
+    #
+    # Two averages, because one number here was actively misleading: the old
+    # average spanned EVERY driver row including those with no rides in the
+    # window (rate 0), so 200 registered drivers with 20 active at ~90%
+    # displayed as ~9%. `avg_completion_rate_active` averages only drivers who
+    # actually had a ride — the figure an operator means — while the
+    # all-driver average is kept, correctly labelled, since that is what the
+    # previous field reported.
+    active = [r for r in result if r["total_rides"] > 0]
+    avg_all = round(sum(r["completion_rate"] for r in result) / len(result), 1) if result else 0
+    avg_active = round(sum(r["completion_rate"] for r in active) / len(active), 1) if active else 0
+    low_performer_count = sum(1 for r in result if _is_low_performer(r))
+
+    # ── Sort, then paginate ──────────────────────────────────────────
+    reverse = order == "desc"
+    if sort_by == "acceptance_rate":
+        sort_by = "completion_rate"  # deprecated spelling, same column
+    if sort_by == "name":
+        result.sort(key=lambda x: (x["name"] or "").lower(), reverse=reverse)
+    else:
+        # Stable secondary key so equal rates keep a deterministic order across
+        # pages — without it, a driver can appear on two pages or on neither.
+        result.sort(key=lambda x: (x.get(sort_by) or 0, x["driver_id"]), reverse=reverse)
+
+    total = len(result)
+    page = result[offset : offset + limit]
 
     return {
         "date_range": date_range,
-        "total_drivers": len(result),
-        "avg_acceptance_rate": avg_acceptance,
-        "low_performer_count": len(low_performers),
-        "drivers": result[:limit],
+        "service_area_id": service_area_id,
+        # Every driver matching the filters — NOT "active drivers". The UI
+        # previously labelled this "Total Active Drivers", which it never was.
+        "total_drivers": total,
+        "drivers_with_rides": len(active),
+        "avg_completion_rate_active": avg_active,
+        "avg_completion_rate_all": avg_all,
+        # Deprecated alias of avg_completion_rate_all.
+        "avg_acceptance_rate": avg_all,
+        # This endpoint reports COMPLETION, not acceptance — stated in the
+        # payload so a consumer cannot mislabel it by accident.
+        "metric": "completion_rate",
+        "true_acceptance_source": "/api/admin/analytics/driver-offer-stats",
+        "low_performer_count": low_performer_count,
+        "low_performer_threshold": {"rate_below": _LOW_PERFORMER_RATE, "min_rides": _LOW_PERFORMER_MIN_RIDES},
+        "drivers": page,
+        "returned": len(page),
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + len(page) < total,
+        "scan_truncated": scan_truncated,
+        "sort_by": sort_by,
+        "order": order,
     }
 
 
@@ -252,12 +401,22 @@ async def get_driver_acceptance_rates(
 @api_router.get("/overview")
 async def get_analytics_overview(
     date_range: str = Query("30d", pattern="^(today|7d|30d|90d|1y)$"),
+    service_area_id: Optional[str] = None,
     admin: dict = Depends(get_admin_user),
 ):
-    """High-level operational metrics for the analytics dashboard. Cached 5 min (F-50)."""
+    """High-level operational metrics for the analytics dashboard. Cached 5 min (F-50).
+
+    Optionally scoped to one service area (migration 350) — the headline KPI
+    cards previously blended every market together, which makes the
+    per-market CLAUDE.md KPI targets unreadable for an operator running more
+    than one city.
+    """
     import json as _json
 
-    cache_key = f"analytics:overview:{date_range}"
+    # `v2` marks the America/Regina bucketing switch (migration 350). Without
+    # it, entries cached under the old UTC bucketing would keep being served
+    # for up to _OVERVIEW_CACHE_TTL after deploy.
+    cache_key = f"analytics:overview:v2:{date_range}:{service_area_id or 'all'}"
     cached = await redis_get(cache_key)
     if cached:
         try:
@@ -271,7 +430,10 @@ async def get_analytics_overview(
     # aggregated in Postgres (admin_analytics_overview) instead of fetching up to
     # 10,000 rides and summing in Python.
     try:
-        ov = await db.rpc("admin_analytics_overview", {"p_start": start_date.isoformat()})
+        ov = await db.rpc(
+            "admin_analytics_overview",
+            {"p_start": start_date.isoformat(), "p_service_area_id": service_area_id},
+        )
     except Exception as e:
         logger.error(f"Failed to aggregate rides for overview: {e}", exc_info=True)
         from fastapi import HTTPException as _HTTPException
@@ -314,6 +476,8 @@ async def get_analytics_overview(
 
     result = {
         "date_range": date_range,
+        "service_area_id": service_area_id,
+        "timezone": _ANALYTICS_TZ,
         "total_rides": total,
         "completed": completed,
         "cancelled": cancelled,
@@ -741,3 +905,418 @@ async def get_driver_offer_trends(
         "service_area_id": service_area_id,
         "daily_chart": daily_chart,
     }
+
+
+# ── Marketplace funnel ───────────────────────────────────────────────
+
+
+@api_router.get("/marketplace-funnel")
+async def get_marketplace_funnel(
+    date_range: str = Query("30d", pattern="^(today|7d|30d|90d|1y)$"),
+    service_area_id: Optional[str] = None,
+    admin: dict = Depends(get_admin_user),
+):
+    """Request -> matched -> accepted -> completed, with drop-off per stage.
+
+    This is the "is the marketplace working" view. Three of CLAUDE.md's KPI
+    targets (match rate, rider cancellation rate, driver cancellation rate)
+    had no surface anywhere in the dashboard before this endpoint; the
+    Analytics page showed a single blended cancellation rate that mapped to
+    neither of the two cancellation targets.
+
+    Aggregated in Postgres (admin_marketplace_funnel, migration 351).
+    Cached 5 min, per range + area.
+    """
+    import json as _json
+
+    cache_key = f"analytics:marketplace-funnel:v1:{date_range}:{service_area_id or 'all'}"
+    cached = await redis_get(cache_key)
+    if cached:
+        try:
+            return _json.loads(cached)
+        except Exception:  # noqa: S110
+            pass  # corrupt cache entry — fall through to fresh fetch
+
+    start_date = _parse_date_range(date_range)
+    now = datetime.now(timezone.utc)
+
+    try:
+        fn = await db.rpc(
+            "admin_marketplace_funnel",
+            {
+                "p_start": start_date.isoformat(),
+                "p_end": now.isoformat(),
+                "p_service_area_id": service_area_id,
+            },
+        )
+    except Exception as e:
+        logger.error(
+            f"Failed to aggregate marketplace funnel: {e}",
+            exc_info=True,
+            extra={"domain": "admin"},
+        )
+        raise HTTPException(status_code=503, detail="analytics_unavailable") from e
+
+    fn = fn[0] if isinstance(fn, list) and fn else fn
+    if not isinstance(fn, dict):
+        fn = {}
+
+    requested = int(fn.get("requested") or 0)
+    matched = int(fn.get("matched") or 0)
+    accepted = int(fn.get("accepted") or 0)
+    completed = int(fn.get("completed") or 0)
+    cancelled = int(fn.get("cancelled") or 0)
+    no_supply = int(fn.get("no_supply") or 0)
+    by_party = fn.get("cancels_by_party") or {}
+
+    rider_cancels = int(by_party.get("rider") or 0)
+    driver_cancels = int(by_party.get("driver") or 0)
+
+    result = {
+        "date_range": date_range,
+        "service_area_id": service_area_id,
+        "timezone": _ANALYTICS_TZ,
+        # Absolute stage counts — the funnel itself.
+        "stages": [
+            {"key": "requested", "label": "Requested", "count": requested},
+            {"key": "matched", "label": "Driver matched", "count": matched},
+            {"key": "accepted", "label": "Driver accepted", "count": accepted},
+            {"key": "completed", "label": "Completed", "count": completed},
+        ],
+        # Drop-off between consecutive stages, so the worst step is obvious.
+        "dropoff": {
+            "request_to_match": requested - matched,
+            "match_to_accept": matched - accepted,
+            "accept_to_complete": accepted - completed,
+        },
+        "in_flight": int(fn.get("in_flight") or 0),
+        "cancelled": cancelled,
+        "no_supply": no_supply,
+        "cancels_by_party": by_party,
+        # How much of the split rests on legacy reason-string matching rather
+        # than the structured columns — surfaced, not hidden.
+        "cancels_unattributed_fallback": int(fn.get("cancels_unattributed_fallback") or 0),
+        "rates": {
+            "match_rate": _pct(matched, requested),
+            "acceptance_rate": _pct(accepted, requested),
+            "fulfilment_rate": _pct(completed, requested),
+            "cancellation_rate": _pct(cancelled, requested),
+            "rider_cancel_rate": _pct(rider_cancels, requested),
+            "driver_cancel_rate": _pct(driver_cancels, requested),
+            "unmet_demand_rate": _pct(no_supply, requested),
+        },
+        "kpis": [
+            _kpi("match_rate", _pct(matched, requested)),
+            _kpi("rider_cancel_rate", _pct(rider_cancels, requested)),
+            _kpi("driver_cancel_rate", _pct(driver_cancels, requested)),
+        ],
+        "daily": fn.get("daily") or [],
+    }
+    try:
+        await redis_set(cache_key, _json.dumps(result), ttl=_OVERVIEW_CACHE_TTL)
+    except Exception:  # noqa: S110
+        pass  # Redis unavailable — return fresh result uncached
+    return result
+
+
+# ── Supply & driver utilization ──────────────────────────────────────
+
+
+@api_router.get("/supply-utilization")
+async def get_supply_utilization(
+    date_range: str = Query("30d", pattern="^(today|7d|30d|90d|1y)$"),
+    service_area_id: Optional[str] = None,
+    admin: dict = Depends(get_admin_user),
+):
+    """Online / en-route / on-trip hours and driver utilization.
+
+    Derived from the append-only ``driver_insurance_periods`` ledger — the
+    same rows the SGI/Saskatchewan Transportation Act audit trail is built
+    from — so utilization can never disagree with the regulatory record.
+
+    Reports utilization two ways on purpose: ``utilization_pct`` is
+    CLAUDE.md's stated on-trip/online definition (target >= 55%), while
+    ``engaged_pct`` counts Period 2 (en route to pickup) as working, which is
+    how a driver experiences it. Quoting only one invites the two readings to
+    be conflated.
+
+    Aggregated in Postgres (admin_supply_utilization, migration 351).
+    Cached 5 min, per range + area.
+    """
+    import json as _json
+
+    cache_key = f"analytics:supply-utilization:v1:{date_range}:{service_area_id or 'all'}"
+    cached = await redis_get(cache_key)
+    if cached:
+        try:
+            return _json.loads(cached)
+        except Exception:  # noqa: S110
+            pass  # corrupt cache entry — fall through to fresh fetch
+
+    start_date = _parse_date_range(date_range)
+    now = datetime.now(timezone.utc)
+
+    try:
+        su = await db.rpc(
+            "admin_supply_utilization",
+            {
+                "p_start": start_date.isoformat(),
+                "p_end": now.isoformat(),
+                "p_service_area_id": service_area_id,
+            },
+        )
+    except Exception as e:
+        logger.error(
+            f"Failed to aggregate supply utilization: {e}",
+            exc_info=True,
+            extra={"domain": "admin"},
+        )
+        raise HTTPException(status_code=503, detail="analytics_unavailable") from e
+
+    su = su[0] if isinstance(su, list) and su else su
+    if not isinstance(su, dict):
+        su = {}
+
+    def _hours(seconds_key: str) -> float:
+        return round(float(su.get(seconds_key) or 0) / 3600.0, 2)
+
+    online_hours = _hours("online_seconds")
+    on_trip_hours = _hours("on_trip_seconds")
+    active_drivers = int(su.get("active_drivers") or 0)
+    utilization = float(su.get("utilization_pct") or 0)
+
+    result = {
+        "date_range": date_range,
+        "service_area_id": service_area_id,
+        "timezone": _ANALYTICS_TZ,
+        "online_hours": online_hours,
+        "idle_hours": _hours("idle_seconds"),
+        "en_route_hours": _hours("en_route_seconds"),
+        "on_trip_hours": on_trip_hours,
+        "utilization_pct": utilization,
+        "engaged_pct": float(su.get("engaged_pct") or 0),
+        "active_drivers": active_drivers,
+        # Average online hours per driver who was online at all in the window —
+        # the supply-depth question "are a few drivers carrying everything?"
+        "avg_online_hours_per_driver": round(online_hours / active_drivers, 2) if active_drivers else 0.0,
+        "kpis": [_kpi("utilization_pct", utilization)],
+        "daily": su.get("daily") or [],
+    }
+    try:
+        await redis_set(cache_key, _json.dumps(result), ttl=_OVERVIEW_CACHE_TTL)
+    except Exception:  # noqa: S110
+        pass  # Redis unavailable — return fresh result uncached
+    return result
+
+
+# ── Efficiency (rider experience + driver economics) ─────────────────
+
+
+@api_router.get("/efficiency")
+async def get_efficiency_metrics(
+    date_range: str = Query("30d", pattern="^(today|7d|30d|90d|1y)$"),
+    service_area_id: Optional[str] = None,
+    admin: dict = Depends(get_admin_user),
+):
+    """Time-to-match, assignment-to-pickup, ETA error, and deadhead ratio.
+
+    These move before the headline rates do: time-to-match climbing is a
+    supply signal that shows up well ahead of the cancellation rate. Deadhead
+    matters more here than at a commission-taking operator — the driver keeps
+    100% of the fare, so unpaid approach km come straight out of their
+    earnings.
+
+    Every percentile ships with its sample size. A P95 over eleven rides is
+    not a fleet statistic, and the caller must be able to tell.
+
+    Aggregated in Postgres (admin_efficiency_metrics, migration 352).
+    """
+    import json as _json
+
+    cache_key = f"analytics:efficiency:v1:{date_range}:{service_area_id or 'all'}"
+    cached = await redis_get(cache_key)
+    if cached:
+        try:
+            return _json.loads(cached)
+        except Exception:  # noqa: S110
+            pass  # corrupt cache entry — fall through to fresh fetch
+
+    start_date = _parse_date_range(date_range)
+    now = datetime.now(timezone.utc)
+
+    try:
+        ef = await db.rpc(
+            "admin_efficiency_metrics",
+            {
+                "p_start": start_date.isoformat(),
+                "p_end": now.isoformat(),
+                "p_service_area_id": service_area_id,
+            },
+        )
+    except Exception as e:
+        logger.error(
+            f"Failed to aggregate efficiency metrics: {e}",
+            exc_info=True,
+            extra={"domain": "admin"},
+        )
+        raise HTTPException(status_code=503, detail="analytics_unavailable") from e
+
+    ef = ef[0] if isinstance(ef, list) and ef else ef
+    if not isinstance(ef, dict):
+        ef = {}
+
+    def _num(key: str):
+        """None stays None — a missing percentile must not render as 0 seconds."""
+        v = ef.get(key)
+        return float(v) if v is not None else None
+
+    result = {
+        "date_range": date_range,
+        "service_area_id": service_area_id,
+        "timezone": _ANALYTICS_TZ,
+        "time_to_match": {
+            "p50_secs": _num("time_to_match_p50_secs"),
+            "p95_secs": _num("time_to_match_p95_secs"),
+            "sample": int(ef.get("matched_sample") or 0),
+        },
+        # Spans driver acceptance AND the drive to pickup: `rides` has no
+        # arrival timestamp, so this is an upper bound on drive time.
+        "assignment_to_trip_start": {
+            "p50_secs": _num("time_to_pickup_p50_secs"),
+            "p95_secs": _num("time_to_pickup_p95_secs"),
+            "sample": int(ef.get("pickup_sample") or 0),
+        },
+        "pickup_eta_error": {
+            "p50_secs": _num("eta_error_p50_secs"),
+            "p95_secs": _num("eta_error_p95_secs"),
+            "on_time_pct": _num("eta_on_time_pct") or 0.0,
+            "sample": int(ef.get("eta_sample") or 0),
+        },
+        "deadhead": {
+            "unpaid_km": _num("deadhead_km") or 0.0,
+            "paid_km": _num("paid_km") or 0.0,
+            "ratio_pct": _num("deadhead_ratio_pct") or 0.0,
+        },
+    }
+    try:
+        await redis_set(cache_key, _json.dumps(result), ttl=_OVERVIEW_CACHE_TTL)
+    except Exception:  # noqa: S110
+        pass  # Redis unavailable — return fresh result uncached
+    return result
+
+
+# ── Financial / growth ───────────────────────────────────────────────
+
+
+@api_router.get("/financial")
+async def get_financial_metrics(
+    date_range: str = Query("30d", pattern="^(today|7d|30d|90d|1y)$"),
+    service_area_id: Optional[str] = None,
+    admin: dict = Depends(get_admin_user),
+):
+    """Gross bookings, fare composition, surge penetration, corporate split.
+
+    "Gross bookings" is what riders paid — NOT Spinr revenue. Drivers keep
+    100% of the fare on consumer rides (CLAUDE.md: not a commission-taking
+    marketplace), so this figure must never be presented as company revenue.
+    The field is named `gross_bookings` for that reason.
+
+    Also derives revenue per online hour by combining with the supply ledger,
+    since bookings alone cannot say whether supply is being used efficiently.
+
+    Aggregated in Postgres (admin_financial_metrics, migration 352).
+    """
+    import json as _json
+
+    cache_key = f"analytics:financial:v1:{date_range}:{service_area_id or 'all'}"
+    cached = await redis_get(cache_key)
+    if cached:
+        try:
+            return _json.loads(cached)
+        except Exception:  # noqa: S110
+            pass  # corrupt cache entry — fall through to fresh fetch
+
+    start_date = _parse_date_range(date_range)
+    now = datetime.now(timezone.utc)
+    rpc_args = {
+        "p_start": start_date.isoformat(),
+        "p_end": now.isoformat(),
+        "p_service_area_id": service_area_id,
+    }
+
+    try:
+        fin = await db.rpc("admin_financial_metrics", rpc_args)
+    except Exception as e:
+        logger.error(
+            f"Failed to aggregate financial metrics: {e}",
+            exc_info=True,
+            extra={"domain": "admin"},
+        )
+        raise HTTPException(status_code=503, detail="analytics_unavailable") from e
+
+    # Supply hours are needed for bookings-per-online-hour. A failure here
+    # must not fail the whole endpoint — the financial figures are still
+    # valid without it — but it is logged, not swallowed silently, and the
+    # derived field is reported as null rather than 0 so a reader cannot
+    # mistake "unknown" for "zero".
+    online_hours: Optional[Decimal] = None
+    try:
+        su = await db.rpc("admin_supply_utilization", rpc_args)
+        su = su[0] if isinstance(su, list) and su else su
+        if isinstance(su, dict):
+            online_hours = _d(su.get("online_seconds") or 0) / Decimal("3600")
+    except Exception as e:
+        logger.error(
+            f"Supply lookup failed while building financial metrics; bookings_per_online_hour will be null: {e}",
+            exc_info=True,
+            extra={"domain": "admin"},
+        )
+
+    fin = fin[0] if isinstance(fin, list) and fin else fin
+    if not isinstance(fin, dict):
+        fin = {}
+
+    gross = _d(fin.get("gross_bookings") or 0)
+    per_hour = _round(gross / online_hours) if online_hours and online_hours > 0 else None
+
+    result = {
+        "date_range": date_range,
+        "service_area_id": service_area_id,
+        "timezone": _ANALYTICS_TZ,
+        "completed_rides": int(fin.get("completed_rides") or 0),
+        # Rider-paid volume, NOT company revenue — drivers keep 100% of the
+        # fare on consumer rides.
+        "gross_bookings": _f(gross),
+        "avg_fare": _f(_d(fin.get("avg_fare") or 0)),
+        "tips": _f(_d(fin.get("tips") or 0)),
+        "tax": _f(_d(fin.get("tax") or 0)),
+        "discounts": _f(_d(fin.get("discounts") or 0)),
+        "bookings_per_online_hour": _f(per_hour) if per_hour is not None else None,
+        "online_hours": _f(_round(online_hours)) if online_hours is not None else None,
+        "surge": {
+            "rides": int(fin.get("surge_rides") or 0),
+            "pct_of_rides": float(fin.get("surge_pct") or 0),
+            "avg_multiplier": float(fin.get("avg_surge_multiplier") or 1),
+            "attributable_bookings": _f(_d(fin.get("surge_revenue") or 0)),
+        },
+        "mix": {
+            "corporate_rides": int(fin.get("corporate_rides") or 0),
+            "corporate_bookings": _f(_d(fin.get("corporate_bookings") or 0)),
+            "consumer_rides": int(fin.get("consumer_rides") or 0),
+            "consumer_bookings": _f(_d(fin.get("consumer_bookings") or 0)),
+        },
+        "riders": {
+            "unique": int(fin.get("unique_riders") or 0),
+            "repeat": int(fin.get("repeat_riders") or 0),
+            # Within-window repeat share, NOT a retention cohort — it reads
+            # lower on short windows by construction.
+            "repeat_rate_pct": float(fin.get("repeat_rate_pct") or 0),
+            "repeat_rate_basis": "within_window",
+        },
+        "daily": fin.get("daily") or [],
+    }
+    try:
+        await redis_set(cache_key, _json.dumps(result), ttl=_OVERVIEW_CACHE_TTL)
+    except Exception:  # noqa: S110
+        pass  # Redis unavailable — return fresh result uncached
+    return result

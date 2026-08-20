@@ -179,6 +179,17 @@ rushed).
    > the SIN/DOB backfill (step 6) also has not been `--apply`'d yet, the "before step 6" ordering
    > constraint has not been violated, but the item's core ask — an actual decision that took
    > effect — is not yet true.
+   >
+   > **[2026-08-20, same day — fact-finding done for option (a), still not decided.]** A read-only
+   > investigation compared the old app's `pages.csv` legal text against Spinr's current, unreviewed
+   > `docs/legal/*.md` drafts, checked whether old-app users ever actually accepted anything (no
+   > evidence found — no consent/acceptance field exists anywhere in the exported schema), and listed
+   > concrete material differences (undisclosed subprocessors Gemini/LogRocket, GPS-retention
+   > mismatch, surge-cap mismatch, no dashcam mention gap in current draft, etc.). See
+   > `docs/audit/2026-08-20-legacy-consent-legal-sufficiency-factsheet.md` for the full fact sheet and
+   > 7 open questions for counsel. **This is fact-finding only — it is explicitly not the legal
+   > opinion itself and does not decide sufficiency.** The core ask (an actual decision, in writing)
+   > remains open; this just makes that decision easier to make well.
 2. **Retention-window correctness proof, per data class**, run as a query against the actual Oct 30
    export before import: for each of the four regulatory retention rows (trip record 7yr, driver/
    vehicle linkage 7yr, GPS pickup/dropoff 3yr, insurance-period transitions 7yr), confirm the

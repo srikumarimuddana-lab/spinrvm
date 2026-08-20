@@ -11632,6 +11632,24 @@ how much they de-risk a public launch._
   verification (no simulator/device available this session, same standing
   gap) and the underlying legal sufficiency-of-old-consent judgment itself
   (business/counsel decision, not a code task).
+  - **Fact-finding done for the legal-sufficiency judgment (2026-08-20,
+    same day) — the judgment itself is still open.** A read-only
+    investigation directly compared the old app's `pages.csv` legal text
+    against Spinr's own current, unreviewed `docs/legal/*.md` drafts and
+    checked for consent-acceptance evidence. Key findings: (1) **no
+    consent/acceptance field exists anywhere in the old-app export's
+    schema** for any rider or driver — a stored policy document is not
+    evidence anyone actually accepted it; (2) the old-app text and the
+    current draft are **not the same document** — different fare figures,
+    a 1.3× surge cap in the old text vs. today's real 2.5× cap, different
+    GPS-retention terms (old: 7yr full route; current: 90-day full trail /
+    3yr pickup-dropoff only); (3) current subprocessors Gemini and
+    LogRocket appear in **neither** document; (4) neither document mentions
+    data migration/successor-platform language at all. Full fact sheet,
+    with 7 open questions framed for counsel (not pre-answered), at
+    `docs/audit/2026-08-20-legacy-consent-legal-sufficiency-factsheet.md`.
+    This closes the "what facts does counsel need" gap, not the decision
+    itself.
 - **FIXED (2026-08-19, second pass — 4 parallel worktree-isolated tracks,
   no file overlap between them, verified before dispatch and again by full
   regression across all 4 merged results — 539 backend tests green,

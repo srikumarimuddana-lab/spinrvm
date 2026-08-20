@@ -72,6 +72,15 @@ backfill (`backfill_legacy_driver_sin_dob.py`) already built this session, plus 
   anything that reads a driver's *current* vehicle (matching, dispatch, admin driver list).
 - No migration needed — the target table and its RLS/grants (migration 157) are unchanged.
 
+**PIPEDA note (spinr-security-auditor finding, not a new weakness):** migration 157 stores plate/VIN
+as plaintext `TEXT` in `driver_vehicle_history.old_value`/`new_value` — the same convention the live
+writer (`utils/vehicle_history.py`) already uses for every real-time vehicle edit. This backfill
+inherits that existing design decision rather than introducing a new one, but does meaningfully
+increase the volume of plaintext VIN/plate at rest in that table (up to ~355 legacy rows across up to
+6 tracked fields each). Not a blocker for this PR (consistent with already-shipped behavior for the
+same table), but worth surfacing here rather than silently: if the table's plaintext-storage decision
+is ever revisited, this backfill's rows are part of that scope too.
+
 ## 5. User experience effect
 
 None until `--apply` actually runs (still pending — no live Supabase credentials in this session, same

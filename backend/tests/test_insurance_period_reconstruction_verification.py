@@ -250,6 +250,42 @@ def test_diverges_when_a_boundary_exceeds_tolerance():
     assert abs(plan.results[0].detail["delta_seconds"]["p2_start_vs_driver_arrived_at"] + 600) < 1
 
 
+def test_incomplete_timestamps_when_a_span_boundary_is_missing():
+    # A going_to_pickup span missing its end_time (e.g. a phase-log row the
+    # old app never closed) still counts as "exactly one" for the
+    # AMBIGUOUS_SPAN_COUNT check, but has no usable end boundary -- must be
+    # excluded from divergence reporting, not treated as a 0/None delta.
+    c = _candidate()
+    started_ms = _ms(c.started_at)
+    completed_ms = _ms(c.ride_completed_at)
+    spans = {
+        "mongo-booking-1": [
+            _span("going_to_pickup", start_ms=_ms(c.driver_arrived_at), end_ms=None),
+            _span("on_ride", start_ms=started_ms, end_ms=completed_ms),
+        ]
+    }
+    plan = svc.build_verification_plan([c], spans)
+    assert plan.results[0].status == "INCOMPLETE_TIMESTAMPS"
+
+
+def test_no_migration_332_proxy_to_compare_when_candidate_missing_proxy_field():
+    # A candidate row whose driver_arrived_at proxy was never populated by
+    # migration 332 (e.g. one of its own excluded/edge-case rides slipping
+    # through as a candidate elsewhere) has real CSV boundaries but nothing
+    # to compare them against -- must not be silently treated as a 0 delta.
+    c = _candidate(driver_arrived_at=None)
+    started_ms = _ms(c.started_at)
+    completed_ms = _ms(c.ride_completed_at)
+    spans = {
+        "mongo-booking-1": [
+            _span("going_to_pickup", start_ms=started_ms - 600_000, end_ms=started_ms),
+            _span("on_ride", start_ms=started_ms, end_ms=completed_ms),
+        ]
+    }
+    plan = svc.build_verification_plan([c], spans)
+    assert plan.results[0].status == "NO_MIGRATION_332_PROXY_TO_COMPARE"
+
+
 def test_period_3_end_boundary_alone_can_trigger_diverges():
     c = _candidate()
     arrived_ms = _ms(c.driver_arrived_at)

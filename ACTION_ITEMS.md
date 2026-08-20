@@ -11650,6 +11650,30 @@ how much they de-risk a public launch._
     `docs/audit/2026-08-20-legacy-consent-legal-sufficiency-factsheet.md`.
     This closes the "what facts does counsel need" gap, not the decision
     itself.
+  - **Decision made, re-consent version bumped (2026-08-20, same day,
+    later).** The product owner decided directly in-session — given the
+    fact sheet above — to re-run consent for **both** existing and new
+    users, rather than wait on the sufficiency judgment. This PR ships
+    only the version-bump half of that decision:
+    `backend/routes/auth.py`'s `CONSENT_VERSION` moved
+    `consumer-tos-2026-01-draft` -> `consumer-tos-2026-08-v1`, tied to the
+    real `terms-of-service.md`/`privacy-policy.md` publication event
+    (`legal_documents` version 1, rider+driver rows, 2026-08-17 — see
+    `docs/legal/legal-text-publication-checklist.md`). New signups get the
+    new version auto-stamped immediately (unconditional on the flag). For
+    existing users the bump alone does **nothing visible** — two other
+    pieces gate the actual re-prompt and were explicitly **not** touched by
+    this change, each a separate/sequential unit of work: (1) flipping
+    `app_settings.legacy_consent_notice_enabled` to `true` in the live DB
+    (handled by a different actor, after this merges/deploys — not a code
+    change); (2) a new-signup consent checkbox on the mobile signup screens
+    (`rider-app/app/login.tsx` and the driver-app equivalent), being built
+    by a separate, parallel session on this same branch — **status not
+    confirmed from here**: as of this branch's base commit no checkbox
+    markup exists yet in `rider-app/app/login.tsx`, but that session may
+    land its commits after this one; check the branch directly rather than
+    trusting this note's snapshot. Full write-up:
+    `docs/change-log/2026-08-20-consent-version-bump-re-consent-rollout.md`.
 - **FIXED (2026-08-19, second pass — 4 parallel worktree-isolated tracks,
   no file overlap between them, verified before dispatch and again by full
   regression across all 4 merged results — 539 backend tests green,

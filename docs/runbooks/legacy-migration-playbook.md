@@ -190,6 +190,29 @@ rushed).
    > 7 open questions for counsel. **This is fact-finding only — it is explicitly not the legal
    > opinion itself and does not decide sufficiency.** The core ask (an actual decision, in writing)
    > remains open; this just makes that decision easier to make well.
+   >
+   > **[RE-VERIFIED 2026-08-20, LATER SAME DAY — DECISION MADE; ROLLOUT NOW THREE SEPARATE PIECES,
+   > ONE SHIPPED HERE.]** The product owner made the call directly in-session, in writing here: skip
+   > waiting on the option-(a) legal-sufficiency opinion and re-run consent under option (b) for
+   > **both** existing and new users. That decision splits into three independent pieces, tracked
+   > separately (see A41 in `ACTION_ITEMS.md` for the same note in that log):
+   >   1. **This PR — `CONSENT_VERSION` bump.** `backend/routes/auth.py`:
+   >      `consumer-tos-2026-01-draft` -> `consumer-tos-2026-08-v1`, tied to the real
+   >      `terms-of-service.md`/`privacy-policy.md` publication event (`legal_documents` version 1,
+   >      2026-08-17). Makes new signups stamp the new version immediately and makes every existing
+   >      user's stored version genuinely stale — but by itself changes nothing a user can see.
+   >   2. **The flag flip** (`app_settings.legacy_consent_notice_enabled` -> `true`) — explicitly
+   >      **not** done by this PR; a separate actor flips it in the live DB after this merges and
+   >      deploys. Until that happens, `GET /consent/status` keeps reporting `needs_notice: false`
+   >      unconditionally (see `routes/legacy_consent.py`), so existing users see no prompt at all
+   >      regardless of the version bump above.
+   >   3. **New-signup consent checkbox** on the mobile signup screens — a separate, parallel session
+   >      is reported to be building this concurrently on this same branch. Not confirmed from here:
+   >      as of this change's base commit, `rider-app/app/login.tsx` has no consent-checkbox markup
+   >      yet. Whether it has landed by the time this is read depends on push order on the shared
+   >      branch — check the branch directly, don't trust this snapshot.
+   > Net effect right now: nothing user-visible has shipped from any of the three pieces yet. Full
+   > write-up: `docs/change-log/2026-08-20-consent-version-bump-re-consent-rollout.md`.
 2. **Retention-window correctness proof, per data class**, run as a query against the actual Oct 30
    export before import: for each of the four regulatory retention rows (trip record 7yr, driver/
    vehicle linkage 7yr, GPS pickup/dropoff 3yr, insurance-period transitions 7yr), confirm the

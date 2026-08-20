@@ -137,7 +137,20 @@ _CORPORATE_EMAIL_OTP_TABLE = "corporate_email_otp_records"
 # CONSENT_VERSION constant for CASL consent) until a real consent screen
 # lands; bump it whenever the shipped ToS/Privacy Policy text materially
 # changes.
-CONSENT_VERSION = "consumer-tos-2026-01-draft"
+#
+# Bumped 2026-08-20 (consumer-tos-2026-01-draft -> consumer-tos-2026-08-v1):
+# product owner decision to re-run consent for both existing and new users,
+# per docs/audit/2026-08-20-legacy-consent-legal-sufficiency-factsheet.md —
+# no old-app user has any recorded affirmative acceptance, and the old app's
+# text materially diverges from Spinr's current text (surge cap, GPS
+# retention window, undisclosed subprocessors). Ties to the real
+# docs/legal/terms-of-service.md + privacy-policy.md publication event
+# (legal_documents version 1, rider+driver rows, 2026-08-17 — see
+# docs/legal/legal-text-publication-checklist.md). This bump alone changes
+# nothing live: existing users are only re-prompted once
+# app_settings.legacy_consent_notice_enabled flips true (routes/legacy_consent.py,
+# separate change, not this commit).
+CONSENT_VERSION = "consumer-tos-2026-08-v1"
 
 
 class CompanyEmailOtpSendRequest(BaseModel):

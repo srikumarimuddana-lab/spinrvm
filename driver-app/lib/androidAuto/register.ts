@@ -471,6 +471,34 @@ export default function registerAutoPlay(): void {
     }
   };
 
+  const showNavChoiceAlert = (leg: string) => {
+    if (!template) return;
+    const id = alertSeq++;
+    const label = leg === 'dropoff' ? 'drop-off' : 'pickup';
+    try {
+      template.showAlert({
+        id,
+        title: { text: `Navigate to ${label}` },
+        subtitle: { text: 'Choose your navigation app' },
+        primaryAction: {
+          title: 'Google Maps',
+          style: 'default',
+          onPress: () => handoffToNav('google'),
+        },
+        secondaryAction: {
+          title: 'Waze',
+          style: 'default',
+          onPress: () => handoffToNav('waze'),
+        },
+        durationMs: 10000,
+        priority: 'high',
+      });
+    } catch (e) {
+      log('nav choice alert failed, falling back to Google:', e);
+      handoffToNav('google');
+    }
+  };
+
   const clearOfferAlert = () => {
     if (template && shownAlertNum != null) {
       try {
@@ -493,14 +521,32 @@ export default function registerAutoPlay(): void {
 
     clearOfferAlert(); // dismiss any stale offer before showing the new one
     const card = buildOfferCard(offer);
-    const sub = [
-      card.fareLabel,
-      card.bonusLabel,
+
+    // Title: rider name + rating when available, e.g. "New ride · Sarah ★4.9"
+    let title = 'New ride request';
+    if (card.riderName) {
+      title = card.riderRating
+        ? `New ride · ${card.riderName} ★${card.riderRating}`
+        : `New ride · ${card.riderName}`;
+    }
+
+    // Structured subtitle — group money on line 1, trip details on line 2,
+    // destination on line 3. The NavigationAlert renders '\n' as line breaks.
+    const moneyLine = [card.fareLabel, card.bonusLabel].filter(Boolean).join(' · ');
+    const detailLine = [
       card.etaLabel ? `${card.etaLabel} away` : null,
+      card.distanceLabel,
       card.surgeLabel ? `${card.surgeLabel} surge` : null,
+      card.wav ? 'WAV' : null,
     ]
       .filter(Boolean)
       .join(' · ');
+    const destLine = offer?.dropoff_address?.trim()
+      ? `→ ${offer.dropoff_address.trim()}`
+      : null;
+    const sub = [moneyLine || null, detailLine || null, destLine]
+      .filter(Boolean)
+      .join('\n');
 
     const num = alertSeq++;
     shownOfferId = rideId;
@@ -508,7 +554,7 @@ export default function registerAutoPlay(): void {
     try {
       template.showAlert({
         id: num,
-        title: { text: card.riderName ? `New ride · ${card.riderName}` : 'New ride request' },
+        title: { text: title },
         subtitle: sub.length > 0 ? { text: sub } : undefined,
         primaryAction: {
           title: 'Accept',
@@ -570,8 +616,8 @@ export default function registerAutoPlay(): void {
     } else if (navLegKey && navLegKey !== handedOffFor) {
       handedOffFor = navLegKey;
       log('auto hand-off for leg', navLegKey);
-      setDebugFact('navHandoff', `${route?.leg} → ${navProvider}`);
-      handoffToNav(navProvider);
+      setDebugFact('navHandoff', `${route?.leg} → choice`);
+      showNavChoiceAlert(route?.leg ?? 'pickup');
     } else if (!navLegKey) {
       handedOffFor = null; // ride ended; the next leg is a fresh hand-off
     }

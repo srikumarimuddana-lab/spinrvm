@@ -33,7 +33,7 @@ import {
   selectCarRoute,
   type NavProvider,
 } from './carRoute';
-import { buildOfferCard, type OfferLike } from './carCard';
+import { buildOfferAlertText, buildOfferCard, type OfferLike } from './carCard';
 import { CarMapSurface } from './carSurface';
 import { useCarMapCamera } from './carMapCamera';
 import { isCarDebugAvailable, pushDebug, setDebugFact, useCarDebug } from './carDebug';
@@ -494,31 +494,9 @@ export default function registerAutoPlay(): void {
     clearOfferAlert(); // dismiss any stale offer before showing the new one
     const card = buildOfferCard(offer);
 
-    // Title: rider name + rating when available, e.g. "New ride · Sarah ★4.9"
-    let title = 'New ride request';
-    if (card.riderName) {
-      title = card.riderRating
-        ? `New ride · ${card.riderName} ★${card.riderRating}`
-        : `New ride · ${card.riderName}`;
-    }
-
-    // Structured subtitle — group money on line 1, trip details on line 2,
-    // destination on line 3. The NavigationAlert renders '\n' as line breaks.
-    const moneyLine = [card.fareLabel, card.bonusLabel].filter(Boolean).join(' · ');
-    const detailLine = [
-      card.etaLabel ? `${card.etaLabel} away` : null,
-      card.distanceLabel,
-      card.surgeLabel ? `${card.surgeLabel} surge` : null,
-      card.wav ? 'WAV' : null,
-    ]
-      .filter(Boolean)
-      .join(' · ');
-    const destLine = offer?.dropoff_address?.trim()
-      ? `→ ${offer.dropoff_address.trim()}`
-      : null;
-    const sub = [moneyLine || null, detailLine || null, destLine]
-      .filter(Boolean)
-      .join('\n');
+    // Built in carCard.ts so it is unit-testable without the native module —
+    // see buildOfferAlertText for why the money leads the title.
+    const { title, subtitle } = buildOfferAlertText(card);
 
     const num = alertSeq++;
     shownOfferId = rideId;
@@ -527,7 +505,7 @@ export default function registerAutoPlay(): void {
       template.showAlert({
         id: num,
         title: { text: title },
-        subtitle: sub.length > 0 ? { text: sub } : undefined,
+        subtitle: subtitle ? { text: subtitle } : undefined,
         primaryAction: {
           title: 'Accept',
           style: 'default',

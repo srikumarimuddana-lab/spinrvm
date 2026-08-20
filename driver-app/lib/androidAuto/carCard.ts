@@ -236,6 +236,62 @@ export const perkLabel = (
   return inc || null;
 };
 
+/** The two strings the Android Auto ride-offer alert is built from. */
+export interface OfferAlertText {
+  title: string;
+  /** Newline-separated; the NavigationAlert renders '\n' as line breaks. */
+  subtitle: string | null;
+}
+
+/**
+ * Title + subtitle for the ride-offer NavigationAlert.
+ *
+ * Lives here, next to the card it reads, rather than inline in register.ts —
+ * register.ts imports the native module, so anything inline there is only
+ * testable by re-implementing it in the test, and that copy silently drifts
+ * from the code it claims to cover.
+ *
+ * THE MONEY LEADS THE TITLE. The title is the largest text Android Auto will
+ * render for us, and it used to be spent on the words "New ride" — a label for
+ * something the Accept/Decline buttons already make obvious — while the amount
+ * sat below it in body text. And it is the TOTAL, not the bare fare: fare +
+ * bonus is what the driver banks and what the phone quotes, and the two
+ * surfaces must never advertise one ride at two different prices.
+ */
+export function buildOfferAlertText(card: TripCard): OfferAlertText {
+  const headline = card.totalEarningsLabel ?? card.fareLabel;
+  const who = card.riderName
+    ? card.riderRating
+      ? `${card.riderName} ★${card.riderRating}`
+      : card.riderName
+    : null;
+  const title = headline
+    ? [headline, who].filter(Boolean).join(' · ')
+    : who
+      ? `New ride · ${who}`
+      : 'New ride request';
+
+  // Line 1 explains the headline rather than repeating it: the fare/bonus split
+  // (so a headline above the rider's fare reads as a bonus, not a bug) and the
+  // per-km rate, which is how drivers rank one offer against another.
+  const rateLine = [card.fareBreakdownLabel, card.perKmLabel].filter(Boolean).join(' · ');
+  const detailLine = [
+    card.etaLabel ? `${card.etaLabel} away` : null,
+    card.distanceLabel,
+    card.surgeLabel ? `${card.surgeLabel} surge` : null,
+    card.wav ? 'WAV' : null,
+    card.quietMode ? 'Quiet ride' : null,
+    card.isScheduled ? 'Pre-booked' : null,
+    card.cashPayment ? 'Cash' : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  const destLine = card.dropoffLabel ? `→ ${card.dropoffLabel}` : null;
+  const subtitle = [rateLine || null, detailLine || null, destLine].filter(Boolean).join('\n');
+
+  return { title, subtitle: subtitle.length > 0 ? subtitle : null };
+}
+
 /** The fresh-offer card (state === 'ride_offered'), sourced from the dispatch payload. */
 export function buildOfferCard(offer: OfferLike | null): TripCard {
   return {

@@ -17,7 +17,9 @@ import {
   RefreshCw, Activity, Car, DollarSign, Target, Search, AlertTriangle,
   MapPin, Send, TrendingUp, Users, Timer, LayoutDashboard,
 } from "lucide-react";
+import { useTheme } from "next-themes";
 import { Input } from "@/components/ui/input";
+import { CHART_PALETTE_DARK, CHART_PALETTE_LIGHT } from "@/components/analytics/chart-palette";
 import { DriverOffersPanel } from "@/components/analytics/driver-offers-panel";
 import { MarketplaceOverviewPanel } from "@/components/analytics/marketplace-overview-panel";
 import { SupplyPanel } from "@/components/analytics/supply-panel";
@@ -53,15 +55,25 @@ const DATE_RANGES = [
   { value: "1y", label: "1 Year" },
 ];
 
-const REASON_COLORS: Record<string, string> = {
-  rider_cancelled: "#3B82F6",
-  no_drivers_available: "#EF4444",
-  driver_cancelled: "#F59E0B",
-  search_timeout: "#8B5CF6",
-  scheduled_cancelled: "#6B7280",
-  unspecified: "#D1D5DB",
-  other: "#9CA3AF",
-};
+// Cancellation-reason hues come from the same validated categorical palette
+// every other Analytics chart uses (see chart-palette.ts), so the four real
+// reasons carry palette slots and the three residual buckets are greys — the
+// "Other" treatment, rather than inventing three more hues.
+//
+// Dark mode uses the palette's selected deeper steps: the light amber and
+// emerald steps fail the lightness band against the dark surface.
+function reasonColors(isDark: boolean): Record<string, string> {
+  const p = isDark ? CHART_PALETTE_DARK : CHART_PALETTE_LIGHT;
+  return {
+    rider_cancelled: p[0],       // blue
+    no_drivers_available: p[4],  // red
+    driver_cancelled: p[2],      // amber
+    search_timeout: p[3],        // violet
+    scheduled_cancelled: isDark ? "#6B7280" : "#9CA3AF",
+    unspecified: isDark ? "#4B5563" : "#D1D5DB",
+    other: isDark ? "#52525B" : "#9CA3AF",
+  };
+}
 
 const REASON_LABELS: Record<string, string> = {
   rider_cancelled: "Rider Cancelled",
@@ -73,6 +85,22 @@ const REASON_LABELS: Record<string, string> = {
   other: "Other",
 };
 
+/** Rendered in place of a chart whose request failed. Deliberately distinct
+ *  from the empty state: "we don't know" and "there were none" are different
+ *  answers, and on this page the second one reads as good news. */
+function SectionError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="py-8 text-center space-y-3">
+      <p className="text-sm text-red-600 dark:text-red-400">
+        Couldn&apos;t load this data — it isn&apos;t zero, it&apos;s unknown.
+      </p>
+      <Button variant="outline" size="sm" onClick={onRetry}>
+        <RefreshCw className="h-3 w-3 mr-1" /> Retry
+      </Button>
+    </div>
+  );
+}
+
 export default function AnalyticsPage() {
   const [dateRange, setDateRange] = useState("30d");
   // One service-area filter shared by every tab, so "Saskatoon" means the
@@ -82,7 +110,13 @@ export default function AnalyticsPage() {
   // Bumped by Refresh; the embedded panels watch it to refetch.
   const [refreshToken, setRefreshToken] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [fetchError, setFetchError] = useState(false);
+  // Per-section, not one global flag. A failed request rendered as
+  // "No data for selected period" is a lie that reads as good news on a
+  // page whose whole job is spotting bad news.
+  const [overviewError, setOverviewError] = useState(false);
+  const [cancelError, setCancelError] = useState(false);
+  const [driverError, setDriverError] = useState(false);
+  const fetchError = overviewError || cancelError || driverError;
   const [overview, setOverview] = useState<any>(null);
   const [cancellations, setCancellations] = useState<any>(null);
   const [driverRates, setDriverRates] = useState<any>(null);
@@ -99,6 +133,9 @@ export default function AnalyticsPage() {
   const [driversLoading, setDriversLoading] = useState(true);
 
   const svcArea = areaId === ALL_AREAS ? undefined : areaId;
+
+  const { resolvedTheme } = useTheme();
+  const REASON_COLORS = useMemo(() => reasonColors(resolvedTheme === "dark"), [resolvedTheme]);
 
   // Buckets are America/Regina business time (migration 350), not UTC nor the
   // viewer's browser zone. Label it — a bare "14:00" is ambiguous, and it was
@@ -129,8 +166,8 @@ export default function AnalyticsPage() {
         getAnalyticsOverview(dateRange, svcArea).catch(() => null),
         getCancellationBreakdown(dateRange, svcArea).catch(() => null),
       ]);
-      if (ov === null || cancel === null) setFetchError(true);
-      else setFetchError(false);
+      setOverviewError(ov === null);
+      setCancelError(cancel === null);
       setOverview(ov);
       setCancellations(cancel);
     } finally {
@@ -150,7 +187,7 @@ export default function AnalyticsPage() {
         order: driverOrder,
         lowPerformersOnly: lowOnly || undefined,
       }).catch(() => null);
-      if (drivers === null) setFetchError(true);
+      setDriverError(drivers === null);
       setDriverRates(drivers);
     } finally {
       setDriversLoading(false);
@@ -262,16 +299,17 @@ export default function AnalyticsPage() {
 
       {/* Backend error banner */}
       {fetchError && !loading && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 flex items-center justify-between">
+        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 flex flex-wrap items-center justify-between gap-2 dark:border-red-800 dark:bg-red-950 dark:text-red-200">
           <span>Analytics data unavailable — the backend returned an error. Check service health and try again.</span>
-          <Button variant="outline" size="sm" onClick={fetchAll} className="ml-4 text-red-700 border-red-300 hover:bg-red-100">
+          <Button variant="outline" size="sm" onClick={fetchAll} className="text-red-700 border-red-300 hover:bg-red-100 dark:text-red-200 dark:border-red-700 dark:hover:bg-red-900">
             <RefreshCw className="h-3 w-3 mr-1" /> Retry
           </Button>
         </div>
       )}
 
-      {/* KPI Cards */}
-      {overview && (
+      {/* KPI Cards — hidden only when genuinely absent, never as a way of
+          hiding a failure; the banner above plus SectionError cover that. */}
+      {overview && !overviewError && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <Card>
             <CardContent className="pt-4">
@@ -286,7 +324,7 @@ export default function AnalyticsPage() {
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <CheckCircle className="h-4 w-4 text-green-500" /> Completion Rate
               </div>
-              <div className="text-2xl font-bold mt-1 text-green-600">{overview.completion_rate}%</div>
+              <div className="text-2xl font-bold mt-1 text-green-600 dark:text-green-400">{overview.completion_rate}%</div>
             </CardContent>
           </Card>
           <Card>
@@ -294,7 +332,7 @@ export default function AnalyticsPage() {
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <XCircle className="h-4 w-4 text-red-500" /> Cancellation Rate
               </div>
-              <div className="text-2xl font-bold mt-1 text-red-600">{overview.cancellation_rate}%</div>
+              <div className="text-2xl font-bold mt-1 text-red-600 dark:text-red-400">{overview.cancellation_rate}%</div>
             </CardContent>
           </Card>
           <Card>
@@ -317,7 +355,9 @@ export default function AnalyticsPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {overview?.daily_chart && overview.daily_chart.length > 0 ? (
+          {overviewError ? (
+            <SectionError onRetry={fetchCore} />
+          ) : overview?.daily_chart && overview.daily_chart.length > 0 ? (
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={overview.daily_chart}>
                 <CartesianGrid strokeDasharray="3 3" />
@@ -393,8 +433,12 @@ export default function AnalyticsPage() {
                 <CardTitle>By Reason</CardTitle>
               </CardHeader>
               <CardContent>
-                {pieData.length === 0 ? (
-                  <div className="text-center py-8 text-muted-foreground">No cancellation data</div>
+                {cancelError ? (
+                  <SectionError onRetry={fetchCore} />
+                ) : pieData.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    No cancellations in this period
+                  </div>
                 ) : (
                   <ResponsiveContainer width="100%" height={300}>
                     <PieChart>
@@ -403,14 +447,31 @@ export default function AnalyticsPage() {
                         dataKey="value"
                         nameKey="name"
                         cx="50%" cy="50%"
-                        outerRadius={100}
-                        label={(props: any) => `${props.name || ''} (${((props.percent ?? 0) * 100).toFixed(0)}%)`}
+                        outerRadius={90}
+                        /* Label only the slices big enough to read — labels on
+                           every slice collide once several small reasons
+                           appear. The table below carries exact values. */
+                        label={(props: any) =>
+                          (props.percent ?? 0) >= 0.08
+                            ? `${((props.percent ?? 0) * 100).toFixed(0)}%`
+                            : ""
+                        }
+                        labelLine={false}
                       >
                         {pieData.map((entry: any, i: number) => (
                           <Cell key={i} fill={entry.color} />
                         ))}
                       </Pie>
-                      <Tooltip />
+                      {/* Identity must not rest on colour alone. */}
+                      <Legend wrapperStyle={{ fontSize: 12 }} />
+                      <Tooltip
+                        formatter={(v: any, n: any) => [Number(v).toLocaleString(), n]}
+                        contentStyle={{
+                          fontSize: 12, borderRadius: 10,
+                          border: "1px solid hsl(var(--border))",
+                          background: "hsl(var(--card))",
+                        }}
+                      />
                     </PieChart>
                   </ResponsiveContainer>
                 )}
@@ -426,7 +487,9 @@ export default function AnalyticsPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                {(cancellations?.hourly_distribution?.length ?? 0) > 0 ? (
+                {cancelError ? (
+                  <SectionError onRetry={fetchCore} />
+                ) : (cancellations?.hourly_distribution?.length ?? 0) > 0 ? (
                   <ResponsiveContainer width="100%" height={300}>
                     <BarChart data={cancellations.hourly_distribution}>
                       <CartesianGrid strokeDasharray="3 3" />
@@ -481,7 +544,7 @@ export default function AnalyticsPage() {
 
         {/* Driver Acceptance Tab */}
         <TabsContent value="acceptance" className="space-y-4">
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <Card>
               <CardContent className="pt-4">
                 <div className="text-sm text-muted-foreground">Avg Completion Rate</div>
@@ -510,7 +573,7 @@ export default function AnalyticsPage() {
                   <TrendingDown className="h-3 w-3 text-red-500" />
                   Low completion (&lt;{driverRates?.low_performer_threshold?.rate_below ?? 70}%)
                 </div>
-                <div className="text-2xl font-bold text-red-600">
+                <div className="text-2xl font-bold text-red-600 dark:text-red-400">
                   {driverRates?.low_performer_count || 0}
                 </div>
                 {/* The count is meaningless if you can't see who it refers to —
@@ -632,8 +695,15 @@ export default function AnalyticsPage() {
                   ))}
                   {driverRows.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-                        {driversLoading
+                      <TableCell
+                        colSpan={8}
+                        className={`text-center py-8 ${
+                          driverError ? "text-red-600 dark:text-red-400" : "text-muted-foreground"
+                        }`}
+                      >
+                        {driverError
+                          ? "Couldn't load drivers — this isn't an empty list, it's unknown."
+                          : driversLoading
                           ? "Loading drivers…"
                           : driverSearch
                             ? `No driver matching “${driverSearch}” in this period`

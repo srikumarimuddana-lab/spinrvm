@@ -19,7 +19,7 @@ SPINR CAREERS PRIVACY NOTICE
 
 Last updated: [INSERT PUBLICATION DATE]
 
-This notice explains how Spinr Technologies Inc. ("Spinr," "we," "us")
+This notice explains how Spinr Mobility Inc. ("Spinr," "we," "us")
 handles personal information you provide when you apply for a position with
 us. It's separate from our rider/driver Privacy Policy, which covers Spinr's
 ride-share platform, not our recruiting process.

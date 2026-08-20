@@ -364,7 +364,7 @@ def _mock_company():
 
     return CompanyDetails(
         name="Spinr",
-        identity_line="Spinr Technologies Inc. — Saskatoon, SK",
+        identity_line="Spinr Mobility Inc. — Saskatoon, SK",
         address="Saskatoon, SK",
         contact_line="support@spinr.ca · www.spinr.ca",
         support_email="support@spinr.ca",

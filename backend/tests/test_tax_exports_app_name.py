@@ -21,9 +21,9 @@ DRIVER_EMAIL = "driver@example.com"
 
 def _company(app_name):
     return CompanyDetails(
-        name="Spinr Technologies Inc.",
+        name="Spinr Mobility Inc.",
         app_name=app_name,
-        identity_line="Spinr Technologies Inc. - Saskatoon, SK",
+        identity_line="Spinr Mobility Inc. - Saskatoon, SK",
         address="",
         contact_line="support@spinr.ca - www.spinr.ca",
         support_email="support@spinr.ca",

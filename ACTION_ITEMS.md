@@ -11436,98 +11436,189 @@ how much they de-risk a public launch._
      fixed with the same `.is_(col, "null")` pattern
      `stripe_mapping_import_service.py` already established. Amendment to
      `docs/change-log/2026-08-19-legacy-sin-dob-import.md`.
-- **STILL OPEN — regulatory (`spinr-regulatory-compliance-checker`, BLOCKER-class):**
-  - No consent basis on file for imported riders/drivers at all — not even
-    the honest "null, predates consent tracking" state the 2026-08-19
-    consent-version fix correctly gives organic pre-tracking users. This is
-    materially different: imported users never went through *any* Spinr
-    consent flow. Sharpened by the SIN/DOB backfill collecting the single
-    most sensitive PIPEDA-class field for this population. Needs a legal
-    decision (does the old app's `pages.csv` consent transfer, or is
-    re-consent required) before the SIN/DOB importer's `--apply` step runs.
-    **In progress (2026-08-19, same day):** entity-identity question
-    resolved by the user — the old app's `pages.csv` legal entity, "Spinr
-    Mobility Inc.," **is** Spinr's correct, unchanged legal name (confirmed
-    by the user directly; see the corrected finding immediately below —
-    "Spinr Technologies Inc.," used in ~25 other files, is the wrong name,
-    not the other way around as this session first assumed). Given same
-    entity, old-app consent has a real basis to stand on, but the
-    sufficiency-for-this-use call is still the user's/counsel's, not
-    assumed here. Regardless of that call, the user approved building the
-    reusable remediation: a dark-shipped, flagged one-time consent-refresh
-    notice (`legacy_consent_notice_enabled`, default off) — closes both this
-    gap and LGL-3 (below) with the same mechanism. Backend shipped
-    (`docs/change-log/2026-08-19-legacy-consent-notice.md`:
-    `routes/legacy_consent.py`, `GET/POST /consent/*`, 8 tests, all passing,
-    no other reader of `consent_version` affected). **Mobile UI shipped, same
-    day, scoped down deliberately** (user chose "safe subset" over full
-    wiring, `docs/change-log/2026-08-19-legacy-consent-notice-mobile.md`):
-    new `legacy-consent-notice.tsx` screen in both rider-app and driver-app,
-    wired into each app's existing post-login redirect check in `otp.tsx`
-    (fresh-login path only). `tsc --noEmit` clean on both full apps, ESLint
-    clean. **No simulator/device available this session — screens are
-    unverified visually**, stated explicitly rather than implied checked.
-    **Still open:** the cold-start/session-restore path (`shared/store/authStore.ts`
-    + each app's `_layout.tsx` — deliberately not touched blind, no way to
-    verify a navigation change against either live app without a device);
-    `profile-setup.tsx`'s own completion redirect (a pre-existing account
-    with an incomplete profile bypasses this integration entirely); real
-    device/visual verification before the flag is ever turned on; and the
-    underlying legal sufficiency-of-old-consent judgment itself.
-  - `driver_insurance_periods.is_reconstructed` (migration 332) is invisible
-    to `backend/scripts/compliance_export.py` — a regulator subpoena
-    response today would hand over reconstructed insurance-period data with
-    no marker distinguishing it from a contemporaneous log.
+- **Consent-basis gap (regulatory, was BLOCKER-class):** entity-identity
+  question resolved by the user — the old app's `pages.csv` legal entity,
+  "Spinr Mobility Inc.," **is** Spinr's correct, unchanged legal name
+  (confirmed by the user directly; see A42 below — "Spinr Technologies
+  Inc.," used in ~25 other files, was the wrong name, now fixed). Given same
+  entity, old-app consent has a real basis to stand on, but the
+  sufficiency-for-this-use call is still the user's/counsel's, not assumed
+  here. Regardless of that call, the user approved building the reusable
+  remediation: a dark-shipped, flagged one-time consent-refresh notice
+  (`legacy_consent_notice_enabled`, default off) — closes both this gap and
+  LGL-3 with the same mechanism. Backend shipped
+  (`docs/change-log/2026-08-19-legacy-consent-notice.md`:
+  `routes/legacy_consent.py`, `GET/POST /consent/*`, 8 tests, all passing,
+  no other reader of `consent_version` affected). **Mobile UI shipped, same
+  day, scoped down deliberately** (user chose "safe subset" over full
+  wiring, `docs/change-log/2026-08-19-legacy-consent-notice-mobile.md`):
+  new `legacy-consent-notice.tsx` screen in both rider-app and driver-app,
+  wired into each app's existing post-login redirect check in `otp.tsx`
+  (fresh-login path only). `tsc --noEmit` clean on both full apps, ESLint
+  clean. **No simulator/device available this session — screens are
+  unverified visually**, stated explicitly rather than implied checked.
+  **Cold-start and `profile-setup.tsx` gaps now closed (2026-08-19, third
+  pass)** — `docs/change-log/2026-08-19-legacy-consent-notice-mobile-completion.md`:
+  both apps' `app/index.tsx` (the actual cold-start landing logic — not
+  `_layout.tsx`, which turned out to only own app-shell concerns; confirmed
+  by reading the code rather than assumed) now checks `/consent/status` on
+  an already-authenticated cold start, placed after the active-ride
+  short-circuit so a rider mid-trip is never interrupted. Both apps'
+  `profile-setup.tsx` now runs the same check on first-time completion only
+  (not on a settings-driven edit of an already-complete profile).
+  `authStore.ts` was deliberately NOT touched — grepped all 39 importers
+  across both apps first and confirmed the existing `profile_complete`/name/
+  email fields already on the store were sufficient. `tsc --noEmit` +
+  ESLint clean on both full apps. **Still open:** real device/visual
+  verification (no simulator/device available this session, same standing
+  gap) and the underlying legal sufficiency-of-old-consent judgment itself
+  (business/counsel decision, not a code task).
+- **FIXED (2026-08-19, second pass — 4 parallel worktree-isolated tracks,
+  no file overlap between them, verified before dispatch and again by full
+  regression across all 4 merged results — 539 backend tests green,
+  `tsc --noEmit`/ESLint/production-build clean on admin-dashboard,
+  `tsc --noEmit`/ESLint/full Jest suite (598 tests) clean on driver-app):**
+  - **Regulatory BLOCKER — `is_reconstructed` insurance periods now visible
+    to the compliance export.** `scripts/compliance_export.py` (repo-root,
+    not `backend/scripts/` as originally assumed — corrected during the
+    fix) now includes `is_reconstructed` in its embedded select,
+    `redact_row()`, and CSV/JSON field list. A regulator subpoena response
+    today now correctly distinguishes reconstructed `driver_insurance_periods`
+    rows from a contemporaneous log.
+  - **`sin_collected_at` provenance** — a derived `sin_source` field
+    (`"legacy_import"` | `"self_entry"` | `null`) now surfaces in the admin
+    driver live-stats read path and the T4A-filer compliance export,
+    computed from the existing `legacy_import_metadata` marker (no new
+    column, no migration). Along the way, a real correctness bug was found
+    and fixed: `apply_legacy_sin_dob_import` stamped its marker
+    unconditionally on any SIN-*or*-DOB write, which would have mislabeled
+    a self-entered SIN as legacy-imported whenever a DOB-only backfill
+    later touched that driver — fixed with separate `sin_written`/
+    `dob_written` booleans on the marker. Confirmed safe to change: this
+    importer has never run `--apply` in production, so no live data exists
+    in the old marker shape.
+  - **Legacy rides' estimated `duration_minutes` marker** — the importer
+    (`booking_import_service.py`) now stamps
+    `legacy_import_metadata.duration_estimated = true` going forward when
+    it estimates duration from distance. **Deliberately NOT backfilled**
+    onto already-imported historical ride rows this session (a separate,
+    larger decision touching live ride data) — flagged as a follow-up
+    below, not done.
+  - **Driver/rider profile-record legacy badge** — added to admin-dashboard
+    driver list, driver detail, and rider detail (matching the existing
+    A30 ride-row badge's visual pattern). Driver blank-name fallback added
+    to `drivers/page.tsx` (matching `users/page.tsx`'s `|| email || phone`
+    pattern). `DriverRidesTab`'s dropped fallback fixed to match
+    `DriverPayoutsTab`. "No payout method" messaging now distinguishes a
+    real onboarding gap from unrecoverable legacy-migrated banking data.
+    **Rider list-view badge NOT implemented** — the backend field it needs
+    (`legacy_import_metadata` on the rider list endpoint,
+    `routes/admin/users.py`) was added in this same pass, but no
+    admin-dashboard track implemented the actual list-view badge UI; driver
+    list/detail and rider *detail* badges are done, rider *list* is the one
+    remaining gap, now unblocked for a future pass.
+  - **`ActivityView.tsx` silent earnings-fetch failure** — fixed; each
+    fetch result is now inspected explicitly and a distinct error/retry
+    state renders instead of a fabricated "$0.00" (general fix, not
+    migration-specific, same failure class as the tip-underpayment
+    incident).
+  - **Fare line cancel-fee omission** — fixed; `total_cancel_fees` is now
+    included in the client-side Fare-line subtraction, and a genuine
+    mismatch renders "Doesn't match total" instead of being silently
+    clamped to $0.00.
+  - **Profile Vehicle card blank-field fallback** — added, matching the
+    convention used elsewhere on the same screen.
+  - **Documents screen legacy-driver copy** — partially fixed: an additive
+    info banner now shows for a legacy-imported driver with zero documents
+    on file (confirmed `legacy_import_metadata` reaches the client via
+    `GET /drivers/me`). The underlying per-requirement "Missing"/"UPLOAD
+    REQUIRED" badge logic itself was deliberately left unchanged (kept
+    additive-only on a live-tested screen).
+  - Change Impact Logs: `docs/change-log/2026-08-19-legacy-migration-transparency-{backend,driver-app,admin-dashboard}.md`.
+- **FIXED (2026-08-19, third pass — 3 more parallel worktree-isolated
+  tracks, no file overlap with each other or the earlier two passes):**
+  - **Rider list-view legacy-import badge** — added to the main users table
+    in `admin-dashboard/src/app/dashboard/users/page.tsx`, matching the
+    existing driver-list/rider-detail badge pattern.
+    `docs/change-log/2026-08-19-legacy-migration-rider-list-badge.md`.
+    Along the way, the agent caught a real bug: `fetchUsers()`'s per-row
+    transform built a new object literal field-by-field and never listed
+    `legacy_import_metadata`, so it would have been silently dropped before
+    ever reaching rendered state, even with the backend field live — fixed
+    as part of the same change.
+  - **Historical `duration_estimated` backfill** —
+    `docs/change-log/2026-08-19-legacy-duration-estimated-backfill.md`: a
+    dry-run-only CLI script (`backend/scripts/backfill_legacy_ride_duration_estimated.py`),
+    mirroring the SIN/DOB backfill's plan/apply/never-clobber discipline
+    exactly (write-time guard, not just a plan-time snapshot). Marks
+    already-imported historical ride rows with the same
+    `legacy_import_metadata.duration_estimated` key the importer now
+    stamps going forward. **Never run with `--apply` against anything.**
+    Found and documented (not fixed — correctly judged as over-engineering
+    for two one-off manual CLIs neither of which has ever applied) a new
+    risk: `backend/services/legacy_gst_backfill_service.py` is a *separate*
+    pre-existing manual backfill that also read-merge-writes the same
+    `rides.legacy_import_metadata` column — a genuine concurrent-writer
+    collision risk if both scripts' `--apply` steps were ever run close
+    together. Flagged as a named, unresolved risk for whoever runs either
+    script's `--apply` step.
+  - Consent-notice mobile completion (cold-start + `profile-setup.tsx`) —
+    see above, filed under the consent-basis-gap bullet rather than
+    duplicated here.
+- **STILL OPEN:**
+  - **Rollout decision, unmade**: two dry-run-only backfill scripts now
+    exist (`backfill_legacy_driver_sin_dob.py`,
+    `backfill_legacy_ride_duration_estimated.py`) — who runs `--apply`,
+    against which environment, and in what order relative to
+    `legacy_gst_backfill_service.py` (see the concurrent-writer risk just
+    above) is an operational decision for the Oct 30 cutover, not made by
+    any session so far.
   - 10-item ordered data-quality checklist for the Oct 30 final cutover
-    delivered by this agent — see the audit report (below) for the full list.
-- **STILL OPEN — migration data-integrity (`spinr-migration-reviewer`):**
-  - `sin_collected_at` is stamped with the backfill's own timestamp,
-    identically to self-entry — an admin viewing driver detail or the T4A-
-    filer export can't tell "driver gave us this" from "we inherited this
-    from a CSV." No `sin_source`/equivalent flag exists.
-  - Legacy rides' estimated `duration_minutes` (no `start_ride_at` in the
-    old app) carries no per-row marker once committed — flows into the
-    driver-facing Activity screen's "Total Duration" stat unflagged.
-  - No admin screen marks a **driver or rider profile record itself** as
-    legacy-imported (only ride rows have the A30 badge) — `legacy_import_metadata`
-    already reaches the frontend on every driver row, just unused.
-- **STILL OPEN — driver-app display (`general-purpose` agent):**
-  - `ActivityView.tsx`'s earnings fetch failure is silently swallowed
-    (`catch {}`) — a transient 503 renders a fully-formed "$0.00" earnings
-    screen indistinguishable from a real zero balance. **This is general,
-    not migration-specific — same failure class as the tip-underpayment
-    incident, reachable by any driver.**
-  - Client-derived "Fare" line (`totalEarnings - tips - incentives - bonuses - tax`)
-    omits `total_cancel_fees` (which backend `total_earnings` includes) and
-    clamps to exactly `$0.00` on drift — same "component totals disagree
-    with headline total" failure class as this morning's bug, just
-    client-side.
-  - Profile Vehicle card has no blank-field fallback (every other field on
-    the same screen does) — a legacy driver with unpopulated
-    make/model/color sees a visibly broken-looking row.
-  - Documents screen shows every requirement "Missing"/"UPLOAD REQUIRED"
-    for a legacy driver whose old-app document *images* were never part of
-    the export (filenames only) — no distinguishing copy from "you never
-    uploaded this."
-- **STILL OPEN — admin-dashboard display (`general-purpose` agent):**
-  - Driver list/detail renders blank name with no fallback (`users/page.tsx`
-    already has `|| email || phone`; `drivers/page.tsx` doesn't).
-  - `DriverRidesTab`'s `driverName` prop drops the fallback its sibling
-    `DriverPayoutsTab` has — produces a literally empty "Driver" table
-    column and a subject-less empty-state sentence.
-  - "No payout method" messaging can't distinguish a real onboarding gap
-    from unrecoverable migrated banking data (banks.csv has no import
-    destination — see A34/audit doc).
-- **Files:** full findings in each agent's report, synthesized in
-  `docs/audit/2026-08-19-legacy-migration-data-quality-audit.md` (agent
-  reports not separately filed — see that doc for the complete, unedited
-  per-finding detail) and `docs/runbooks/legacy-migration-playbook.md`
-  (the requested repeatable future-migration strategy for Oct 30).
+    delivered by the original audit — see the audit report (below) for the
+    full list; not re-verified this pass.
+  - Real device/visual verification for the consent-notice mechanism (no
+    simulator/device available across all three passes) and the underlying
+    legal sufficiency-of-old-consent judgment itself (business/counsel
+    decision).
+- **Files:** full original findings in
+  `docs/audit/2026-08-19-legacy-migration-data-quality-audit.md` and
+  `docs/runbooks/legacy-migration-playbook.md` (the repeatable
+  future-migration strategy for Oct 30); remediation details in the six
+  Change Impact Logs referenced above.
 
 ### A42. Wrong legal entity name in ~25 files — "Spinr Technologies Inc." should be "Spinr Mobility Inc."
-- [ ] **Status:** open, not fixed — found while resolving A41's consent-basis
-  blocker (cross-checking the old app's `pages.csv` ToS/Privacy Policy
-  entity name against the current codebase), user-confirmed 2026-08-19.
+- [x] **Status:** FIXED (2026-08-19, second pass) — 39 files corrected to
+  "Spinr Mobility Inc." across backend PDF/email/branding code, 2 frontend
+  files, 9 `docs/legal/*.md` documents, and 1 runbook, plus regenerated
+  email snapshot golden files and corrected test fixtures. 365 targeted
+  backend tests pass, `ruff check` clean, `tsc --noEmit` clean on
+  admin-dashboard and rider-app. `docs/change-log/2026-08-19-entity-name-correction.md`
+  has the full file list and before/after snippets for the T4A/receipt
+  changes.
+  - `backend/utils/report_branding.py`'s `COMPANY_LINE` was previously
+    "corrected" *backwards* on 2026-07-30 (flipped from "Mobility" to
+    "Technologies"); this pass fixed it back and added an inline comment
+    recording that history so it doesn't get re-flipped a third time.
+  - **Deliberately left untouched:** 5 pre-existing `docs/change-log/*.md`
+    entries that quote the wrong name as historical record (before/after
+    snippets, bug descriptions — rewriting history changelog entries would
+    be revisionist, not a fix); `backend/tests/test_company_details.py`'s
+    parametrized example-input cases (one documents a real 2026-08-09
+    production incident where the wrong name reached an actual receipt —
+    left as evidence, not corrected); `backend/services/data_transfer/sgi_form_filler.py`
+    (already correct, untouched).
+  - **STILL OPEN — not decided this session:** whether any already-filed
+    T4A slip, already-sent receipt, or already-published legal document
+    needs re-issuance or re-notice given the wrong name was live in
+    production for some period (confirmed via the `test_company_details.py`
+    comment above) — this is a product-owner/counsel decision, not made
+    here. `docs/legal/*.md` files are corrected in-repo but any that have
+    already moved to signed/published status externally need the same
+    correction applied to that external copy separately.
+- **Original finding (2026-08-19, first pass):** found while resolving
+  A41's consent-basis blocker (cross-checking the old app's `pages.csv`
+  ToS/Privacy Policy entity name against the current codebase),
+  user-confirmed same day.
 - **What:** The correct, unchanged-since-incorporation legal name is
   **"Spinr Mobility Inc."** (user confirmed directly). The current codebase
   uses **"Spinr Technologies Inc."** in ~25 files instead — including

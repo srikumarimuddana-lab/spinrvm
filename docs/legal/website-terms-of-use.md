@@ -18,7 +18,7 @@ SPINR WEBSITE TERMS OF USE
 Last updated: [INSERT PUBLICATION DATE]
 
 These Terms of Use govern your use of spinr.ca (the "Site"), operated by
-Spinr Technologies Inc. ("Spinr," "we," "us"). If you create a Spinr account
+Spinr Mobility Inc. ("Spinr," "we," "us"). If you create a Spinr account
 to book or provide rides, the separate Spinr Terms of Service also applies
 to that activity — these Website Terms of Use apply to browsing the Site
 itself.
@@ -39,7 +39,7 @@ Spinr or our licensors and is protected by copyright and trademark law. You
 may view and download Site content for personal, non-commercial use only.
 You may not reproduce, distribute, or create derivative works from Site
 content without our written permission. "Spinr" and our logo are trademarks
-of Spinr Technologies Inc. — see our Trademark and Copyright Notice for
+of Spinr Mobility Inc. — see our Trademark and Copyright Notice for
 details.
 
 THIRD-PARTY LINKS

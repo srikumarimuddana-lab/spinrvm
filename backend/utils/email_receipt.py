@@ -76,7 +76,7 @@ _LEGACY_HEADER = (
 )
 _LEGACY_FOOTER = (
     '<tr><td style="padding:16px 24px 24px;text-align:center;border-top:1px solid #f0f0f0;">\n'
-    '        <p style="color:#bbb;font-size:12px;margin:0;">Spinr Technologies Inc. · Saskatoon, SK</p>\n'
+    '        <p style="color:#bbb;font-size:12px;margin:0;">Spinr Mobility Inc. · Saskatoon, SK</p>\n'
     '          <p style="color:#bbb;font-size:11px;margin:4px 0 0;">support@spinr.ca · www.spinr.ca</p>\n'
     "        </td></tr>"
 )
@@ -601,7 +601,7 @@ def generate_receipt_text(
     if company is not None:
         lines += [company.identity_line, company.contact_line]
     else:
-        lines += ["Spinr Technologies Inc. · Saskatoon, SK", "support@spinr.ca · www.spinr.ca"]
+        lines += ["Spinr Mobility Inc. · Saskatoon, SK", "support@spinr.ca · www.spinr.ca"]
     return "\n".join(lines).strip() + "\n"
 
 

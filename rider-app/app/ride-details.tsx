@@ -108,7 +108,7 @@ export function buildReceiptHtml(ride: any): string {
       <td style="text-align:right;color:#ee2b2b;font-weight:800;font-size:17px">$${_money(grand)}</td></tr></table></td></tr>
     ${driverBlock}
     <tr><td style="padding:12px 24px 24px;text-align:center;border-top:1px solid #f0f0f0">
-      <p style="color:#bbb;font-size:11px;margin:0">Spinr Technologies Inc. · Saskatoon, SK</p>
+      <p style="color:#bbb;font-size:11px;margin:0">Spinr Mobility Inc. · Saskatoon, SK</p>
       <p style="color:#bbb;font-size:11px;margin:3px 0 0">support@spinr.ca · www.spinr.ca</p></td></tr>
   </table></body></html>`;
 }

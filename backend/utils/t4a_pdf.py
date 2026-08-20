@@ -134,7 +134,7 @@ def generate_t4a_pdf(summary: dict) -> bytes:
     # PAYER INFORMATION
     # ═══════════════════════════════════════════════════════════════════════════
     section_heading("PAYER INFORMATION")
-    label_value("Payer / Issuer", "Spinr Technologies Inc.")
+    label_value("Payer / Issuer", "Spinr Mobility Inc.")
     label_value("Business Number (BN)", "See Spinr corporate tax records")
     label_value("Address", "Saskatoon, SK, Canada")
     h_rule()
@@ -209,7 +209,7 @@ def generate_t4a_pdf(summary: dict) -> bytes:
     pdf.set_font("Helvetica", "I", 7)
     pdf.set_text_color(100, 100, 100)
     footer_lines = [
-        "This slip is issued by Spinr Technologies Inc. for CRA reporting purposes.",
+        "This slip is issued by Spinr Mobility Inc. for CRA reporting purposes.",
         f"Generated: {generated_at}  |  For the tax year ending December 31, {year}",
         "This document was produced electronically and is valid without a signature.",
     ]

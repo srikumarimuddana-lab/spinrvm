@@ -5,7 +5,7 @@
 > shouldn't be expanded into a full policy.
 >
 > **This is a draft, not legal advice.** It assumes "Spinr" and the Spinr
-> logo are registered or common-law trademarks of Spinr Technologies Inc. —
+> logo are registered or common-law trademarks of Spinr Mobility Inc. —
 > **confirm actual trademark registration status with counsel before
 > publishing a ® or claiming registered rights**; if no application has
 > been filed, use ™ (claiming common-law rights) instead of ®, and consider
@@ -18,10 +18,10 @@
 
 TRADEMARK AND COPYRIGHT NOTICE
 
-© [YEAR]–present Spinr Technologies Inc. All rights reserved.
+© [YEAR]–present Spinr Mobility Inc. All rights reserved.
 
 "Spinr" and the Spinr logo are [TRADEMARKS ("™") OR REGISTERED TRADEMARKS
-("®") — CONFIRM ACTUAL STATUS BEFORE PUBLISHING] of Spinr Technologies Inc.
+("®") — CONFIRM ACTUAL STATUS BEFORE PUBLISHING] of Spinr Mobility Inc.
 in Canada [AND ANY OTHER JURISDICTIONS WHERE REGISTERED]. Other product and
 company names mentioned on this site or in our apps may be trademarks of
 their respective owners.

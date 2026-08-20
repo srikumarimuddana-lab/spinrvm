@@ -48,7 +48,7 @@ interface DriverDocument {
 
 export default function DocumentsScreen() {
     const insets = useSafeAreaInsets();
-    const { fetchDriverProfile } = useAuthStore();
+    const { fetchDriverProfile, driver } = useAuthStore();
     const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
     const [loading, setLoading] = useState(true);
@@ -254,6 +254,21 @@ export default function DocumentsScreen() {
         );
     }
 
+    // legacy_import_metadata reaches /drivers/me unfiltered today (not in
+    // _STRIP_FROM_SELF_RESPONSE — backend/routes/drivers/profile.py) even
+    // though its own column comment (migration 221) scopes it to
+    // "admin/compliance use only" — an existing overexposure this fix
+    // consumes rather than causes. Kept to a presence check only; nothing
+    // from inside the object is ever rendered, to stay within that intent
+    // as closely as this UI-only fix can.
+    const legacyMeta = driver?.legacy_import_metadata as Record<string, unknown> | undefined;
+    const isLegacyImportedDriver = !!legacyMeta && Object.keys(legacyMeta).length > 0;
+    // A real migration gap affects every requirement equally (the old app's
+    // document IMAGES were never part of the export — only driver rows were)
+    // rather than a genuine one-off missing upload, so this only shows for a
+    // driver with literally nothing on file yet.
+    const showLegacyDocsGapNotice = isLegacyImportedDriver && documents.length === 0;
+
     return (
         <View style={styles.container}>
             <StatusBar barStyle="dark-content" />
@@ -266,6 +281,25 @@ export default function DocumentsScreen() {
                         Keep your documents up to date to maintain your driver status.
                     </Text>
                 </View>
+
+                {/* A legacy-imported driver whose old-app document images never made
+                    it into this export sees the exact same "Missing"/"UPLOAD
+                    REQUIRED" copy below as someone who genuinely never uploaded
+                    anything, even though they're already approved and driving —
+                    this banner adds context without changing the per-requirement
+                    status logic itself. */}
+                {showLegacyDocsGapNotice && (
+                    <View style={styles.legacyInfoBox}>
+                        <Ionicons name="time-outline" size={20} color={colors.textDim} style={{ marginRight: 8 }} />
+                        <Text style={styles.legacyInfoText}>
+                            Your documents from your previous Spinr account weren&apos;t part of
+                            this transfer — that&apos;s a data-migration gap, not a sign
+                            anything is missing from your file. You&apos;re still an approved,
+                            active driver. Re-upload below whenever it&apos;s convenient, or
+                            contact support with any questions.
+                        </Text>
+                    </View>
+                )}
 
                 {requirements.map((req) => {
                     // Get the overall document upload status
@@ -538,6 +572,17 @@ function createStyles(colors: ThemeColors) {
             borderColor: '#FFE4E6',
         },
         infoText: { color: colors.primaryDark, fontSize: 13, lineHeight: 20, flex: 1 },
+        legacyInfoBox: {
+            flexDirection: 'row',
+            alignItems: 'flex-start',
+            backgroundColor: colors.surfaceLight,
+            padding: 15,
+            borderRadius: 12,
+            marginBottom: 20,
+            borderWidth: 1,
+            borderColor: colors.border,
+        },
+        legacyInfoText: { color: colors.textDim, fontSize: 13, lineHeight: 20, flex: 1 },
         card: {
             backgroundColor: colors.surface,
             borderRadius: 12,

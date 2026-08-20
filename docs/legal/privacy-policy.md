@@ -18,7 +18,7 @@ SPINR PRIVACY POLICY
 
 Last updated: [INSERT PUBLICATION DATE]
 
-Spinr Technologies Inc. ("Spinr," "we," "us," or "our") operates a ride-share platform for Saskatchewan, Canada. This Privacy Policy explains what personal information we collect, why we collect it, who we share it with, and the choices and rights you have. It applies to everyone who uses the Spinr rider app or driver app.
+Spinr Mobility Inc. ("Spinr," "we," "us," or "our") operates a ride-share platform for Saskatchewan, Canada. This Privacy Policy explains what personal information we collect, why we collect it, who we share it with, and the choices and rights you have. It applies to everyone who uses the Spinr rider app or driver app.
 
 We are subject to Canada's Personal Information Protection and Electronic Documents Act (PIPEDA) and, for our drivers, to record-keeping obligations under Saskatchewan's ride-share regulatory framework. Where those two sets of obligations overlap — for example, PIPEDA gives you a right to ask us to delete your data, while Saskatchewan's transportation regulations require certain trip and driver records to be kept for a fixed number of years — we explain in the "Your Rights" section below exactly what that means for you.
 

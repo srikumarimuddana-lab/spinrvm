@@ -23,7 +23,7 @@
 DATA PROCESSING ADDENDUM
 
 This Data Processing Addendum ("DPA") is Exhibit B to, and forms part of,
-the Master Services Agreement between Spinr Technologies Inc. ("Spinr,"
+the Master Services Agreement between Spinr Mobility Inc. ("Spinr,"
 acting as processor) and Company (acting as controller of its Authorized
 Riders' personal information for the purposes described below).
 

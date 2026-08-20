@@ -672,6 +672,58 @@ class TestLiveStatsLicenseMask:
         assert body["total_assigned"] == 3
         assert body["total_rides"] == 2
 
+    def test_sin_source_self_entry(self, test_client, super_admin_override):
+        driver = {
+            "id": "drv-1",
+            "user_id": None,
+            "sin_collected_at": "2026-08-01T00:00:00Z",
+            "legacy_import_metadata": {},
+        }
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/live-stats")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["sin_source"] == "self_entry"
+
+    def test_sin_source_legacy_import(self, test_client, super_admin_override):
+        """Finding #2, docs/audit/2026-08-19-legacy-migration-data-quality-audit.md:
+        a banks.csv-backfilled SIN must be distinguishable from self-entry
+        in the admin driver-detail view."""
+        driver = {
+            "id": "drv-1",
+            "user_id": None,
+            "sin_collected_at": "2026-08-19T00:00:00Z",
+            "legacy_import_metadata": {
+                "legacy_mongo_banks_sin_dob_import": {
+                    "batch": "b1",
+                    "imported_at": "2026-08-19T00:00:00Z",
+                    "sin_written": True,
+                }
+            },
+        }
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/live-stats")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["sin_source"] == "legacy_import"
+
+    def test_sin_source_none_when_no_sin(self, test_client, super_admin_override):
+        driver = {"id": "drv-1", "user_id": None}
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/live-stats")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["sin_source"] is None
+
 
 # ---------------------------------------------------------------------------
 # Driver notes CRUD

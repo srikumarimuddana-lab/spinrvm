@@ -51,7 +51,7 @@ class CompanyDetails(NamedTuple):
     """Everything an email footer needs, already resolved and fallback-applied."""
 
     name: str
-    #: Legal name + mailing address, e.g. "Spinr Technologies Inc. — 123 Main St, Saskatoon, SK".
+    #: Legal name + mailing address, e.g. "Spinr Mobility Inc. — 123 Main St, Saskatoon, SK".
     identity_line: str
     #: Mailing address on its own, for layouts that print the name separately
     #: (the invoice PDF's header block). Empty when none is configured.
@@ -81,7 +81,7 @@ class CompanyDetails(NamedTuple):
         """The company name, safe to end a sentence with.
 
         A configured legal name usually already ends in a period ("… Inc."),
-        and copy that appends its own produces "Spinr Technologies Inc..".
+        and copy that appends its own produces "Spinr Mobility Inc..".
         Every template that ends a sentence with the name must use this rather
         than remembering the rule — it is not the kind of thing anyone notices
         in review, and it is now in front of customers on every email.

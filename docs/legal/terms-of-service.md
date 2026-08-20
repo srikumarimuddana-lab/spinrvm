@@ -34,7 +34,7 @@ SPINR TERMS OF SERVICE
 
 Last updated: [INSERT PUBLICATION DATE]
 
-Welcome to Spinr. These Terms of Service ("Terms") govern your access to and use of the Spinr mobile applications, website, and related services (together, the "Service"), operated by Spinr Technologies Inc. ("Spinr," "we," "us," or "our"). By creating an account, requesting a ride, or driving on the Spinr platform, you agree to these Terms. If you do not agree, do not use the Service.
+Welcome to Spinr. These Terms of Service ("Terms") govern your access to and use of the Spinr mobile applications, website, and related services (together, the "Service"), operated by Spinr Mobility Inc. ("Spinr," "we," "us," or "our"). By creating an account, requesting a ride, or driving on the Spinr platform, you agree to these Terms. If you do not agree, do not use the Service.
 
 Spinr is a Canadian company. The Service is currently offered in Saskatchewan, Canada, and is designed around Saskatchewan's transportation and insurance regulatory framework. These Terms are governed by the laws of the Province of Saskatchewan and the federal laws of Canada applicable in Saskatchewan, without regard to conflict-of-law principles.
 

@@ -387,7 +387,7 @@ Company may only be changed by mutual written agreement.
 
 ## SIGNATURES
 
-Spinr Technologies Inc., by: ______________________  Date: ______________
+Spinr Mobility Inc., by: ______________________  Date: ______________
 
 Name / Title: ______________________
 

@@ -41,7 +41,7 @@ even during that period.
 
 WHO IS SENDING
 
-Every marketing message we send identifies Spinr Technologies Inc. as the
+Every marketing message we send identifies Spinr Mobility Inc. as the
 sender and includes our contact information: [SPINR BUSINESS ADDRESS] and
 a way to reach us, either in the message or on a linked page.
 
@@ -60,7 +60,7 @@ turn them off without affecting your ability to use Spinr safely.
 
 ### B. Required message footer (for every commercial electronic message)
 
-Spinr Technologies Inc. | [SPINR MAILING ADDRESS] | [PHONE OR WEBSITE
+Spinr Mobility Inc. | [SPINR MAILING ADDRESS] | [PHONE OR WEBSITE
 CONTACT]
 
 You're receiving this because you opted in to marketing messages from

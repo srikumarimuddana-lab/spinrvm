@@ -27,6 +27,7 @@ try:
     from ...dependencies import get_admin_user
     from ...routes.drivers._shared import _decrypt_driver_pii, _ride_income
     from ...services import admin_export_approvals
+    from ...services.driver_import_service import sin_source
     from ...services.stripe_kyc_sync import get_legal_name_and_address_from_stripe
     from ...settings_loader import get_app_settings
     from ...utils import metrics, report_branding
@@ -37,6 +38,7 @@ except ImportError:
     from dependencies import get_admin_user
     from routes.drivers._shared import _decrypt_driver_pii, _ride_income
     from services import admin_export_approvals  # type: ignore
+    from services.driver_import_service import sin_source  # type: ignore
     from services.stripe_kyc_sync import get_legal_name_and_address_from_stripe  # type: ignore
     from settings_loader import get_app_settings
     from utils import metrics, report_branding
@@ -803,7 +805,7 @@ async def _t4a_filer_handoff_rows(year: int) -> tuple[list[dict], bool, int]:
             await db_supabase.get_rows(
                 "drivers",
                 {"id": {"$in": batch}},
-                columns="id,name,first_name,last_name,stripe_account_id,sin,sin_collected_at",
+                columns="id,name,first_name,last_name,stripe_account_id,sin,sin_collected_at,legacy_import_metadata",
                 limit=len(batch),
             )
         )
@@ -843,6 +845,12 @@ async def _t4a_filer_handoff_rows(year: int) -> tuple[list[dict], bool, int]:
                 # The full SIN comes later, per driver, through the audited
                 # reveal. Internal admin views may show last 4; this may not.
                 "sin_collected_at": d.get("sin_collected_at") or "",
+                # "legacy_import" | "self_entry" | "" — a SIN backfilled from
+                # the banks.csv legacy import stamps the same sin_collected_at
+                # field self-entry does, so a filer relying on that column
+                # alone can't tell provenance apart. See sin_source() docstring
+                # (docs/audit/2026-08-19-legacy-migration-data-quality-audit.md).
+                "sin_source": sin_source(d) or "",
             }
         )
     return rows, truncated, len(qualifying_ids)
@@ -902,12 +910,15 @@ async def get_t4a_filer_handoff(
         "total_earnings",
         "sin_on_file",
         "sin_collected_at",
+        "sin_source",
     ]
     subtitle = (
         f"Tax year {year} — {qualifying_count} driver(s) at or above the ${_T4A_THRESHOLD} CRA threshold. "
         "Full SINs are deliberately absent — retrieve them per driver via the audited, "
         "super_admin-only reveal-sin endpoint at filing time, so every disclosure is logged. "
-        "Any row marked 'NO - CANNOT FILE' has no SIN on record and must be chased before the deadline."
+        "Any row marked 'NO - CANNOT FILE' has no SIN on record and must be chased before the deadline. "
+        "sin_source distinguishes a driver-entered SIN ('self_entry') from one backfilled from the "
+        "legacy banks.csv import ('legacy_import') — sin_collected_at alone cannot tell them apart."
     )
     if truncated:
         subtitle += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rides; narrow the query"

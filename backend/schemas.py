@@ -401,8 +401,8 @@ class AppSettings(BaseModel):
     # Product/brand name used in email BODY copy ("Open the {app_name} driver
     # app", "your {app_name} wallet", "— The {app_name} Team"). Deliberately
     # separate from company_name, which is the legal entity name
-    # ("Spinr Technologies Inc.") and reads badly inline ("Open the Spinr
-    # Technologies Inc. driver app"). See utils/company_details.py and
+    # ("Spinr Mobility Inc.") and reads badly inline ("Open the Spinr
+    # Mobility Inc. driver app"). See utils/company_details.py and
     # ACTION_ITEMS.md N17.
     company_app_name: str = "Spinr"
     company_address: str = ""

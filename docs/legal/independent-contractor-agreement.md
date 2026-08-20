@@ -47,7 +47,7 @@
 # SPINR INDEPENDENT CONTRACTOR AGREEMENT
 
 This Independent Contractor Agreement ("Agreement") is entered into between
-Spinr Technologies Inc., a corporation existing under the laws of
+Spinr Mobility Inc., a corporation existing under the laws of
 [PROVINCE/JURISDICTION OF INCORPORATION] with its principal place of business
 at [SPINR REGISTERED ADDRESS] ("Spinr," "we," "us," or "our"), and the
 individual completing driver onboarding and accepting this Agreement
@@ -325,7 +325,7 @@ Contractor signature: ______________________  Date: ______________
 
 Contractor name (printed): ______________________
 
-Spinr Technologies Inc., by: ______________________  Date: ______________
+Spinr Mobility Inc., by: ______________________  Date: ______________
 
 ## END DRAFT
 

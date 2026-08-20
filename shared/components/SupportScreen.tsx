@@ -617,7 +617,7 @@ export default function SupportScreen({
 
             <View style={styles.companyCard}>
               <Text style={styles.companyTitle}>
-                {companyInfo.name || 'SPINR TECHNOLOGIES INC.'}
+                {companyInfo.name || 'SPINR MOBILITY INC.'}
               </Text>
               {([
                 {

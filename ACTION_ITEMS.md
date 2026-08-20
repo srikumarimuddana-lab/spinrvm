@@ -11457,13 +11457,22 @@ how much they de-risk a public launch._
   (fresh-login path only). `tsc --noEmit` clean on both full apps, ESLint
   clean. **No simulator/device available this session — screens are
   unverified visually**, stated explicitly rather than implied checked.
-  **Still open:** the cold-start/session-restore path (`shared/store/authStore.ts`
-  + each app's `_layout.tsx` — deliberately not touched blind, no way to
-  verify a navigation change against either live app without a device);
-  `profile-setup.tsx`'s own completion redirect (a pre-existing account
-  with an incomplete profile bypasses this integration entirely); real
-  device/visual verification before the flag is ever turned on; and the
-  underlying legal sufficiency-of-old-consent judgment itself.
+  **Cold-start and `profile-setup.tsx` gaps now closed (2026-08-19, third
+  pass)** — `docs/change-log/2026-08-19-legacy-consent-notice-mobile-completion.md`:
+  both apps' `app/index.tsx` (the actual cold-start landing logic — not
+  `_layout.tsx`, which turned out to only own app-shell concerns; confirmed
+  by reading the code rather than assumed) now checks `/consent/status` on
+  an already-authenticated cold start, placed after the active-ride
+  short-circuit so a rider mid-trip is never interrupted. Both apps'
+  `profile-setup.tsx` now runs the same check on first-time completion only
+  (not on a settings-driven edit of an already-complete profile).
+  `authStore.ts` was deliberately NOT touched — grepped all 39 importers
+  across both apps first and confirmed the existing `profile_complete`/name/
+  email fields already on the store were sufficient. `tsc --noEmit` +
+  ESLint clean on both full apps. **Still open:** real device/visual
+  verification (no simulator/device available this session, same standing
+  gap) and the underlying legal sufficiency-of-old-consent judgment itself
+  (business/counsel decision, not a code task).
 - **FIXED (2026-08-19, second pass — 4 parallel worktree-isolated tracks,
   no file overlap between them, verified before dispatch and again by full
   regression across all 4 merged results — 539 backend tests green,
@@ -11526,22 +11535,56 @@ how much they de-risk a public launch._
     REQUIRED" badge logic itself was deliberately left unchanged (kept
     additive-only on a live-tested screen).
   - Change Impact Logs: `docs/change-log/2026-08-19-legacy-migration-transparency-{backend,driver-app,admin-dashboard}.md`.
+- **FIXED (2026-08-19, third pass — 3 more parallel worktree-isolated
+  tracks, no file overlap with each other or the earlier two passes):**
+  - **Rider list-view legacy-import badge** — added to the main users table
+    in `admin-dashboard/src/app/dashboard/users/page.tsx`, matching the
+    existing driver-list/rider-detail badge pattern.
+    `docs/change-log/2026-08-19-legacy-migration-rider-list-badge.md`.
+    Along the way, the agent caught a real bug: `fetchUsers()`'s per-row
+    transform built a new object literal field-by-field and never listed
+    `legacy_import_metadata`, so it would have been silently dropped before
+    ever reaching rendered state, even with the backend field live — fixed
+    as part of the same change.
+  - **Historical `duration_estimated` backfill** —
+    `docs/change-log/2026-08-19-legacy-duration-estimated-backfill.md`: a
+    dry-run-only CLI script (`backend/scripts/backfill_legacy_ride_duration_estimated.py`),
+    mirroring the SIN/DOB backfill's plan/apply/never-clobber discipline
+    exactly (write-time guard, not just a plan-time snapshot). Marks
+    already-imported historical ride rows with the same
+    `legacy_import_metadata.duration_estimated` key the importer now
+    stamps going forward. **Never run with `--apply` against anything.**
+    Found and documented (not fixed — correctly judged as over-engineering
+    for two one-off manual CLIs neither of which has ever applied) a new
+    risk: `backend/services/legacy_gst_backfill_service.py` is a *separate*
+    pre-existing manual backfill that also read-merge-writes the same
+    `rides.legacy_import_metadata` column — a genuine concurrent-writer
+    collision risk if both scripts' `--apply` steps were ever run close
+    together. Flagged as a named, unresolved risk for whoever runs either
+    script's `--apply` step.
+  - Consent-notice mobile completion (cold-start + `profile-setup.tsx`) —
+    see above, filed under the consent-basis-gap bullet rather than
+    duplicated here.
 - **STILL OPEN:**
-  - Historical backfill of `duration_estimated` onto already-imported
-    legacy ride rows (importer-code fix is done; backfilling live rows is a
-    separate decision, not made here).
-  - Rider list-view legacy-import badge (backend field now available, UI
-    not yet built — see above).
+  - **Rollout decision, unmade**: two dry-run-only backfill scripts now
+    exist (`backfill_legacy_driver_sin_dob.py`,
+    `backfill_legacy_ride_duration_estimated.py`) — who runs `--apply`,
+    against which environment, and in what order relative to
+    `legacy_gst_backfill_service.py` (see the concurrent-writer risk just
+    above) is an operational decision for the Oct 30 cutover, not made by
+    any session so far.
   - 10-item ordered data-quality checklist for the Oct 30 final cutover
     delivered by the original audit — see the audit report (below) for the
     full list; not re-verified this pass.
-  - Cold-start/session-restore consent path, `profile-setup.tsx` redirect,
-    and real-device visual verification (consent-notice mechanism, above).
+  - Real device/visual verification for the consent-notice mechanism (no
+    simulator/device available across all three passes) and the underlying
+    legal sufficiency-of-old-consent judgment itself (business/counsel
+    decision).
 - **Files:** full original findings in
   `docs/audit/2026-08-19-legacy-migration-data-quality-audit.md` and
   `docs/runbooks/legacy-migration-playbook.md` (the repeatable
-  future-migration strategy for Oct 30); remediation details in the three
-  Change Impact Logs listed above.
+  future-migration strategy for Oct 30); remediation details in the six
+  Change Impact Logs referenced above.
 
 ### A42. Wrong legal entity name in ~25 files — "Spinr Technologies Inc." should be "Spinr Mobility Inc."
 - [x] **Status:** FIXED (2026-08-19, second pass) — 39 files corrected to

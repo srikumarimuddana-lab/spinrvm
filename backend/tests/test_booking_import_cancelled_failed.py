@@ -10,8 +10,6 @@ other test module's, matching this repo's existing per-file fake-client
 convention (each importer test file owns its fake).
 """
 
-
-
 from backend.services import booking_import_service as svc
 
 SERVICE_AREA = {"id": "sa-1", "name": "Saskatoon"}
@@ -189,37 +187,130 @@ def test_failed_row_with_no_matches_is_skipped(monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# Anomalous "looks completed" exclusion
+# Anomalous "looks completed" rows -- imported as completed, $0 fare
+# (disposition decided 2026-08-20; see
+# docs/change-log/2026-08-20-anomalous-legacy-rows-payment-verification.md
+# and docs/change-log/2026-08-20-anomalous-rows-zero-fare-completed-import.md)
 # --------------------------------------------------------------------------
 
 
-def test_row_with_both_timestamps_is_excluded_not_imported(monkeypatch):
+def _anomalous_booking(**overrides):
     """The 7-row anomaly: booking_status='failed' but structurally a
-    completed trip (both start_ride_at and complete_delivery_at populated).
-    Must be skipped by this path, not imported either way."""
-    _install_fake(monkeypatch)
-    plan = _plan(
-        [
-            _cancelled_booking(
-                booking_status="failed",
-                start_ride_at="1770198000000",
-                complete_delivery_at="1770198600000",
-            )
-        ]
+    completed trip (both start_ride_at and complete_delivery_at populated),
+    with real total_amount/you_earn figures the old app never actually
+    collected (0/225 `failed` bookings have a payments.csv record)."""
+    row = _cancelled_booking(
+        booking_status="failed",
+        start_ride_at="1770198000000",
+        complete_delivery_at="1770198600000",
+        distance_in_km="3.2",
+        total_amount="9.16",
+        you_earn="7.54",
     )
-    assert plan.rides_to_insert == []
-    assert not plan.errors  # reported as a warning/skip, not a blocking error
-    assert plan.stats["cancelled_failed_skipped_looks_completed"] == 1
-    assert any("looks completed" in w.message for w in plan.warnings)
+    row.update(overrides)
+    return row
 
 
-def test_row_with_only_start_timestamp_is_still_imported(monkeypatch):
+def test_row_with_both_timestamps_imports_as_completed_zero_fare(monkeypatch):
+    _install_fake(monkeypatch)
+    plan = _plan([_anomalous_booking()])
+    assert not plan.errors
+    (ride,) = plan.rides_to_insert
+    assert ride["status"] == "completed"
+    assert plan.stats["cancelled_failed_zero_fare_completed"] == 1
+    assert plan.stats["cancelled_failed_rides_planned"] == 0  # not counted as a cancelled row
+
+
+def test_anomalous_row_writes_no_fare_earnings_or_payout(monkeypatch):
+    _install_fake(monkeypatch)
+    plan = _plan([_anomalous_booking()])
+    (ride,) = plan.rides_to_insert
+    for field in (
+        "base_fare",
+        "distance_fare",
+        "time_fare",
+        "total_fare",
+        "tip_amount",
+        "driver_earnings",
+        "admin_earnings",
+    ):
+        assert ride[field] == 0.0, field
+    assert ride["grand_total"] == "0"
+    assert plan.payouts_to_insert == []
+    assert plan.stats["sum_offset_payouts"] == 0.0
+
+
+def test_anomalous_row_payment_status_is_pending_not_failed(monkeypatch):
+    """Must never be 'failed'/'processing'/'requires_action' -- those are
+    exactly what payment_retry.py's retry_failed_payments() scans for any
+    status != 'cancelled' row, which would try to collect real payment on
+    this $0 legacy row. auth_status must also stay unset so
+    preauth_capture.py's completed+pending sweep can't claim it either."""
+    _install_fake(monkeypatch)
+    plan = _plan([_anomalous_booking()])
+    (ride,) = plan.rides_to_insert
+    assert ride["payment_status"] == "pending"
+    assert "auth_status" not in ride
+
+
+def test_anomalous_row_preserves_gps_and_timestamps(monkeypatch):
+    _install_fake(monkeypatch)
+    plan = _plan([_anomalous_booking()])
+    (ride,) = plan.rides_to_insert
+    assert ride["pickup_lat"] == 50.4099027
+    assert ride["ride_started_at"] == svc.parse_epoch_ms("1770198000000")
+    assert ride["ride_completed_at"] == svc.parse_epoch_ms("1770198600000")
+    assert ride["distance_km"] == 3.2
+
+
+def test_anomalous_row_legacy_metadata_flags_disposition(monkeypatch):
+    _install_fake(monkeypatch)
+    plan = _plan([_anomalous_booking()])
+    (ride,) = plan.rides_to_insert
+    meta = ride["legacy_import_metadata"]
+    assert meta["anomalous_looks_completed_zero_fare"] is True
+    assert meta["original_booking_status"] == "failed"
+    assert meta["source"] == svc.IMPORT_SOURCE
+
+
+def test_anomalous_row_driver_is_recounted_unlike_normal_cancelled_rows(monkeypatch):
+    """Unlike the normal cancelled/failed branch (never recounted -- those
+    rows are never status='completed'), this row IS a real completed ride
+    and total_rides (a plain COUNT of status='completed') must include it."""
+    _install_fake(monkeypatch)
+    plan = _plan([_anomalous_booking()])
+    assert "drv-1" in plan.driver_ids_to_recount
+
+
+def test_anomalous_row_matches_completed_idempotency_on_rerun(monkeypatch):
+    """Re-running against the same CSV must skip the row already written --
+    matched on legacy_import_metadata->>old_booking_id, same as every other
+    path in this importer (_fetch_already_imported is status-agnostic).
+    Inserts the planned ride directly rather than going through
+    commit_plan()/recount_drivers(), which this test file's minimal fake
+    Supabase client doesn't implement (recount idempotency is covered
+    separately in test_booking_import_service.py)."""
+    booking = _anomalous_booking()
+    store = _install_fake(monkeypatch)
+    plan1 = _plan([booking])
+    store["rides"].extend(plan1.rides_to_insert)
+    # Simulate a second run against the same CSV.
+    already = svc._fetch_already_imported()
+    assert booking["_id"] in already
+    plan2 = _plan([booking])
+    assert plan2.rides_to_insert == []
+    assert plan2.stats["cancelled_failed_skipped_already_imported"] == 1
+
+
+def test_row_with_only_start_timestamp_is_still_a_normal_cancellation(monkeypatch):
     """Only ONE of the two timestamps populated is not the anomaly -- still
     a legitimate pre-trip-adjacent cancellation, must import normally."""
     _install_fake(monkeypatch)
     plan = _plan([_cancelled_booking(start_ride_at="1770198000000", complete_delivery_at="")])
     assert len(plan.rides_to_insert) == 1
-    assert plan.stats["cancelled_failed_skipped_looks_completed"] == 0
+    (ride,) = plan.rides_to_insert
+    assert ride["status"] == "cancelled"
+    assert plan.stats["cancelled_failed_zero_fare_completed"] == 0
 
 
 def test_blank_status_rows_are_excluded(monkeypatch):

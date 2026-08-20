@@ -15,10 +15,17 @@
 # PR #4300: an idempotency-key test fixture for ACTION_ITEMS.md B15(c)
 # (rideless SOS) was a generic-looking 16-char alphanumeric literal, tripping
 # the generic-api-key rule on the git-history scan. Not a real secret --
-# fixed forward in commit 9a395c054 (the fixture now reads
-# "test-retry-idem-001", unambiguously not key-shaped), but both the
-# introducing commit and the commit that first explained the fix (which
-# quoted the original literal verbatim) still exist in history, so the
-# history scan (G5a) needs both fingerprints ignored.
-8ebc43e8f01d1a457200a4c6dc8f7bc1018b4766:backend/tests/test_sos_rideless.py:generic-api-key:199
-098b7a7cec168cf321afcdcc48256310ba93488f:agents/runs/sos-rideless-path/decisions.md:generic-api-key:205
+# fixed forward (the fixture now reads "test-retry-idem-001", unambiguously
+# not key-shaped), but both the introducing commit and the commit that first
+# explained the fix (which quoted the original literal verbatim) still exist
+# in history, so the history scan (G5a) needs both fingerprints ignored.
+#
+# NOTE: this branch was rebased onto main after these fingerprints were
+# first added, which rewrote every commit hash on the branch -- the original
+# fingerprints (8ebc43e8f.../098b7a7ce...) no longer match anything and were
+# replaced below with the post-rebase hashes. If this branch is rebased
+# again, these will need updating again (a known limitation of pinning
+# .gitleaksignore to commit hashes on an actively-rebased branch -- see
+# agents/runs/sos-rideless-path/decisions.md for the fuller reasoning).
+a85009e05ca09d94cca4b89dc8c6aea737e209da:backend/tests/test_sos_rideless.py:generic-api-key:199
+dd01616036dc3bf8cdb346b9a2fe9a39b17a43c8:agents/runs/sos-rideless-path/decisions.md:generic-api-key:205

@@ -56,7 +56,8 @@ next, and rejected:
   *"Corrections go into a separate `driver_insurance_period_corrections` table with justification"* — but
   that table has never been built. Confirmed by `grep -rl driver_insurance_period_corrections backend/
   docs/` (zero hits) and by a live `information_schema.tables` query against production
-  (`soavhtdhefowwvforzwb`, read-only, via Supabase MCP) for any table matching `%insurance_period%`: only
+  (`soavhtdhefowwvforzwb`, `ca-central-1`, read-only, via Supabase MCP) for any table matching
+  `%insurance_period%`: only
   `driver_insurance_periods` itself exists.
 - Without that table, the only place a "corrected" Period 2 span could go is `driver_insurance_periods`
   itself, alongside migration 332's original row for the same `ride_id`/`period`. Nothing in the schema
@@ -124,7 +125,8 @@ first place.
 - [x] **Real-export verification performed** (mirrors the vehicle-history backfill's 308/355 crosswalk
   check): ran the actual shipped `stream_driverlocationlogs_phase_spans` + `build_verification_plan`
   functions (not a throwaway script) against the real 148 MB `driverlocationlogs.csv` and the real 186
-  candidate rides (fetched read-only from production via Supabase MCP, `soavhtdhefowwvforzwb`). Results:
+  candidate rides (fetched read-only from production via Supabase MCP, `soavhtdhefowwvforzwb`,
+  `ca-central-1`). Results:
 
   | Status | Count | Meaning |
   |---|---|---|
@@ -174,7 +176,8 @@ first place.
   independently, and no such verification was attempted in this pass.
 - **The 186-row candidate list, and every timestamp compared against it, came from a single live,
   read-only Supabase query run once during this session (via the Supabase MCP tool against project
-  `soavhtdhefowwvforzwb`), not from a repeatable, checked-in fixture.** If production data for these
+  `soavhtdhefowwvforzwb`, `ca-central-1`), not from a repeatable, checked-in fixture.** If production data
+  for these
   rides changes before anyone re-runs `verify_legacy_insurance_period_reconstruction.py` for real, the
   numbers in this log will be stale. The script itself re-fetches live each run, so this only affects the
   specific numbers quoted here, not the tool's correctness going forward.

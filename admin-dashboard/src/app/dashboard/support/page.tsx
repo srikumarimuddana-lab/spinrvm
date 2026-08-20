@@ -1,8 +1,30 @@
 "use client";
 
-import { useState } from "react";
+/**
+ * Support & Issues — 7 sub-views (Support Tickets, Disputes, Complaints,
+ * Lost & Found, Flags, FAQs, Legal) behind one "support" module gate.
+ *
+ * Admin portal IA audit, Finding G: this page's tabs previously had no nav
+ * representation at all (compare Help Desk, whose 2 sub-views are real
+ * sidebar children) and no URL sync, so a tab couldn't be bookmarked, deep
+ * -linked, or highlighted in the sidebar. Switched to the same
+ * Tabs + useSearchParams pattern records/page.tsx already uses, and
+ * sidebar.tsx now gives real nav children to the sub-views that don't
+ * already have their own top-level nav entry (Support Tickets, Complaints,
+ * Lost & Found, Flags, Legal). Disputes and FAQs are deliberately NOT given
+ * nav children here — they already have standalone top-level entries
+ * ("Disputes & Refunds", "FAQs"), and both are covered by a separate,
+ * documented "point to the dedicated page, don't merge" product decision
+ * (see support/_tabs/disputes.tsx and support/_tabs/faqs.tsx) that this
+ * change does not revisit — adding a second nav path to the same
+ * unreconciled pair would add duplication, not remove it.
+ */
+
+import { Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { LifeBuoy, HelpCircle, PackageSearch, Flag, FileWarning, BookOpen, ScrollText } from "lucide-react";
 import dynamic from "next/dynamic";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRequireModule } from "@/hooks/useRequireModule";
 
 const TicketsTab = dynamic(() => import("./_tabs/tickets"), { ssr: false, loading: () => <TabLoader /> });
@@ -13,25 +35,45 @@ const ComplaintsTab = dynamic(() => import("./_tabs/complaints"), { ssr: false, 
 const FaqsTab = dynamic(() => import("./_tabs/faqs"), { ssr: false, loading: () => <TabLoader /> });
 const LegalDocumentsTab = dynamic(() => import("./_tabs/legal-documents"), { ssr: false, loading: () => <TabLoader /> });
 
-const TABS = [
-    { id: "tickets", label: "Support Tickets", icon: LifeBuoy },
-    { id: "disputes", label: "Disputes", icon: HelpCircle },
-    { id: "complaints", label: "Complaints", icon: FileWarning },
-    { id: "lost-found", label: "Lost & Found", icon: PackageSearch },
-    { id: "flags", label: "Flags", icon: Flag },
-    { id: "faqs", label: "FAQs", icon: BookOpen },
-    { id: "legal", label: "Legal", icon: ScrollText },
-];
+type TabSlug = "tickets" | "disputes" | "complaints" | "lost-found" | "flags" | "faqs" | "legal";
+
+const TAB_ORDER: TabSlug[] = ["tickets", "disputes", "complaints", "lost-found", "flags", "faqs", "legal"];
+
+const TAB_META: Record<TabSlug, { label: string; icon: typeof LifeBuoy; Component: React.ComponentType }> = {
+    tickets: { label: "Support Tickets", icon: LifeBuoy, Component: TicketsTab },
+    disputes: { label: "Disputes", icon: HelpCircle, Component: DisputesTab },
+    complaints: { label: "Complaints", icon: FileWarning, Component: ComplaintsTab },
+    "lost-found": { label: "Lost & Found", icon: PackageSearch, Component: LostAndFoundTab },
+    flags: { label: "Flags", icon: Flag, Component: FlagsTab },
+    faqs: { label: "FAQs", icon: BookOpen, Component: FaqsTab },
+    legal: { label: "Legal", icon: ScrollText, Component: LegalDocumentsTab },
+};
+
+function isValidTab(value: string | null): value is TabSlug {
+    return !!value && (TAB_ORDER as string[]).includes(value);
+}
 
 function TabLoader() {
     return <div className="flex items-center justify-center py-20"><div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>;
 }
 
-export default function SupportPage() {
+function SupportPageInner() {
     const { allowed } = useRequireModule("support");
-    const [activeTab, setActiveTab] = useState("tickets");
+    const router = useRouter();
+    const searchParams = useSearchParams();
+
+    const requestedTab = searchParams.get("tab");
+    const initialTab = isValidTab(requestedTab) ? requestedTab : "tickets";
+    const [activeTab, setActiveTab] = useState<TabSlug>(initialTab);
+
+    const onTabChange = (value: string) => {
+        if (!isValidTab(value)) return;
+        setActiveTab(value);
+        router.replace(`/dashboard/support?tab=${value}`, { scroll: false });
+    };
 
     if (!allowed) return null;
+
     return (
         <div className="px-1 sm:px-0">
             <div className="mb-4">
@@ -41,27 +83,36 @@ export default function SupportPage() {
                 <p className="text-xs sm:text-sm text-muted-foreground mt-1">Manage tickets, disputes, lost items, and user flags</p>
             </div>
 
-            <div className="flex gap-0 mb-4 overflow-x-auto border-b -mx-1 px-1 scrollbar-none">
-                {TABS.map(tab => (
-                    <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                        className={`flex items-center gap-1.5 px-3 sm:px-4 py-2 sm:py-2.5 text-xs sm:text-sm font-medium whitespace-nowrap border-b-2 transition-colors shrink-0 ${
-                            activeTab === tab.id
-                                ? "border-primary text-primary"
-                                : "border-transparent text-muted-foreground hover:text-foreground"
-                        }`}>
-                        <tab.icon className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                        {tab.label}
-                    </button>
-                ))}
-            </div>
-
-            {activeTab === "tickets" && <TicketsTab />}
-            {activeTab === "disputes" && <DisputesTab />}
-            {activeTab === "complaints" && <ComplaintsTab />}
-            {activeTab === "lost-found" && <LostAndFoundTab />}
-            {activeTab === "flags" && <FlagsTab />}
-            {activeTab === "faqs" && <FaqsTab />}
-            {activeTab === "legal" && <LegalDocumentsTab />}
+            <Tabs value={activeTab} onValueChange={onTabChange}>
+                <TabsList className="max-w-full justify-start overflow-x-auto scrollbar-none">
+                    {TAB_ORDER.map((slug) => {
+                        const { icon: Icon, label } = TAB_META[slug];
+                        return (
+                            <TabsTrigger key={slug} value={slug} className="gap-1.5">
+                                <Icon className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                                {label}
+                            </TabsTrigger>
+                        );
+                    })}
+                </TabsList>
+                {TAB_ORDER.map((slug) => {
+                    const { Component } = TAB_META[slug];
+                    return (
+                        <TabsContent key={slug} value={slug} className="mt-4">
+                            <Component />
+                        </TabsContent>
+                    );
+                })}
+            </Tabs>
         </div>
+    );
+}
+
+export default function SupportPage() {
+    // useSearchParams requires a Suspense boundary in the App Router.
+    return (
+        <Suspense fallback={null}>
+            <SupportPageInner />
+        </Suspense>
     );
 }

@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
     getTickets, replyToTicket, closeTicket, createTicket, updateTicket, deleteTicket,
-    getFaqs, createFaq, updateFaq, deleteFaq,
 } from "@/lib/api";
 import { formatDate, statusColor } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,7 +19,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Pagination } from "@/components/ui/pagination";
-import { MessageSquare, CheckCircle, Plus, Trash2, Pencil, Send, Search, RefreshCw, HelpCircle, ExternalLink } from "lucide-react";
+import { MessageSquare, CheckCircle, Plus, Trash2, Pencil, Send, Search, RefreshCw, ExternalLink } from "lucide-react";
 import { useServiceAreas, ServiceAreaFilter, ServiceAreaSelect } from "../_components/service-area-select";
 import { useToast } from "@/components/ui/use-toast";
 import {
@@ -41,20 +40,15 @@ const PRIORITIES = ["low", "medium", "high", "urgent"];
 // already passed in dark mode as-is (text-amber-600, no override needed).
 const P_COLORS: Record<string, string> = { low: "bg-zinc-500/15 text-zinc-600 dark:text-zinc-400", medium: "bg-blue-500/15 text-blue-700 dark:text-blue-400", high: "bg-amber-500/15 text-amber-800 dark:text-amber-600", urgent: "bg-red-500/15 text-red-700 dark:text-red-400" };
 
+// Used to switch between a "tickets" and a "faqs" sub-tab here; the "faqs"
+// side was a third, undocumented FAQ implementation (no permission checks,
+// no audience labels, no updated_at column) with no product-decision cover
+// — unlike the FaqsTab component, which explicitly documents a "point to
+// the dedicated page, don't merge" decision. Removed as a plain orphaned
+// duplicate (admin portal IA audit, Finding A) rather than folded into that
+// decision. Support & Issues already has its own "FAQs" tab for this.
 export default function TicketsTab() {
-    const [sub, setSub] = useState<"tickets" | "faqs">("tickets");
-    return (
-        <div className="space-y-4">
-            <div className="flex gap-1 border-b -mt-1">
-                {[{ k: "tickets", l: "Tickets", i: MessageSquare }, { k: "faqs", l: "FAQs", i: HelpCircle }].map((t) => (
-                    <button key={t.k} onClick={() => setSub(t.k as any)} aria-label={`${t.l} sub-tab (within Support Tickets)`} className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 -mb-px ${sub === t.k ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
-                        <t.i className="h-3.5 w-3.5" />{t.l}
-                    </button>
-                ))}
-            </div>
-            {sub === "tickets" ? <TicketsList /> : <FaqsList />}
-        </div>
-    );
+    return <TicketsList />;
 }
 
 function TicketsList() {
@@ -238,65 +232,6 @@ function TicketsList() {
                     <AlertDialogFooter>
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
                         <AlertDialogAction onClick={() => { if (deleteTarget) { deleteTicket(deleteTarget).then(load); if (selected?.id === deleteTarget) setSelected(null); setDeleteTarget(null); } }} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
-                    </AlertDialogFooter>
-                </AlertDialogContent>
-            </AlertDialog>
-        </div>
-    );
-}
-
-function FaqsList() {
-    const [faqDeleteTarget, setFaqDeleteTarget] = useState<string | null>(null);
-    const [faqs, setFaqs] = useState<any[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [dialogOpen, setDialogOpen] = useState(false);
-    const [editing, setEditing] = useState<any>(null);
-    const [form, setForm] = useState({ question: "", answer: "", category: "", audience: "both" });
-
-    const load = () => { setLoading(true); getFaqs().then(setFaqs).catch(() => setFaqs([])).finally(() => setLoading(false)); };
-    useEffect(() => { load(); }, []);
-
-    const handleSave = async () => { try { if (editing) await updateFaq(editing.id, form); else await createFaq(form); setDialogOpen(false); setEditing(null); setForm({ question: "", answer: "", category: "", audience: "both" }); load(); } catch {} };
-
-    const { sorted, sort, toggle } = useTableSort(faqs);
-
-    return (
-        <div className="space-y-4">
-            <div className="flex justify-end"><Button size="sm" onClick={() => { setEditing(null); setForm({ question: "", answer: "", category: "", audience: "both" }); setDialogOpen(true); }}><Plus className="mr-1.5 h-3.5 w-3.5" />Add FAQ</Button></div>
-            <Card><CardContent className="p-0">
-                {loading ? <div className="flex justify-center p-12"><div className="h-7 w-7 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
-                : faqs.length === 0 ? <div className="text-center py-12 text-muted-foreground text-sm">No FAQs yet.</div>
-                : <Table><TableHeader><TableRow><SortableHead column="question" sort={sort} onSort={toggle}>Question</SortableHead><SortableHead column="category" sort={sort} onSort={toggle}>Category</SortableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
-                    <TableBody>{sorted.map((f) => (
-                        <TableRow key={f.id}><TableCell className="font-medium max-w-[280px] truncate text-sm">{f.question}</TableCell><TableCell className="text-xs text-muted-foreground">{f.category || "General"}</TableCell>
-                            <TableCell className="text-right"><div className="flex justify-end gap-0.5">
-                                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditing(f); setForm({ question: f.question || "", answer: f.answer || "", category: f.category || "", audience: f.audience || "both" }); setDialogOpen(true); }}><Pencil className="h-3.5 w-3.5" /></Button>
-                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => setFaqDeleteTarget(f.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
-                            </div></TableCell>
-                        </TableRow>
-                    ))}</TableBody></Table>}
-            </CardContent></Card>
-            <Dialog open={dialogOpen} onOpenChange={(o) => { if (!o) { setDialogOpen(false); setEditing(null); } }}>
-                <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle className="text-base">{editing ? "Edit" : "Create"} FAQ</DialogTitle></DialogHeader>
-                    <div className="space-y-3">
-                        <div className="space-y-1.5"><Label className="text-xs">Category</Label><Input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} placeholder="Rides, Payments..." /></div>
-                        <div className="space-y-1.5"><Label className="text-xs">Audience</Label><Select value={form.audience} onValueChange={(v) => setForm({ ...form, audience: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="both">Both apps</SelectItem><SelectItem value="rider">Rider app</SelectItem><SelectItem value="driver">Driver app</SelectItem></SelectContent></Select></div>
-                        <div className="space-y-1.5"><Label className="text-xs">Question</Label><Input value={form.question} onChange={(e) => setForm({ ...form, question: e.target.value })} placeholder="How do I...?" /></div>
-                        <div className="space-y-1.5"><Label className="text-xs">Answer</Label><Textarea value={form.answer} onChange={(e) => setForm({ ...form, answer: e.target.value })} placeholder="Answer..." rows={4} /></div>
-                        <Button className="w-full" size="sm" onClick={handleSave}>{editing ? "Update" : "Create"}</Button>
-                    </div>
-                </DialogContent>
-            </Dialog>
-
-            <AlertDialog open={!!faqDeleteTarget} onOpenChange={(open) => { if (!open) setFaqDeleteTarget(null); }}>
-                <AlertDialogContent>
-                    <AlertDialogHeader>
-                        <AlertDialogTitle>Delete FAQ?</AlertDialogTitle>
-                        <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction onClick={() => { if (faqDeleteTarget) deleteFaq(faqDeleteTarget).then(load).finally(() => setFaqDeleteTarget(null)); }} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>

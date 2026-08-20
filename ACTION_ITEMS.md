@@ -11932,9 +11932,14 @@ how much they de-risk a public launch._
     fresh Oct 30 pull) — accepting the documented trade-off that a second
     commit pass against the Oct 30 export may later be needed for anything
     cancelled/failed since 2026-07-26 (harmless, idempotent on
-    `old_booking_id`). Because this session has no live Supabase
-    credentials, the product owner will **execute the actual `--apply`/commit
-    runs themselves**, directly, using
+    `old_booking_id`). Because the CLI scripts have no `SUPABASE_URL`/
+    `SUPABASE_SERVICE_ROLE_KEY` configured for this session (see the
+    runbook's 2026-08-20 "Correction" section — a separate, live,
+    **read-only** Supabase MCP connection to production does exist and is
+    authorized for verification, discovered and confirmed with the product
+    owner during item #5(a) below; writes still require explicit per-run
+    authorization), the product owner will **execute the actual
+    `--apply`/commit runs themselves**, directly, using
     `docs/runbooks/legacy-backfill-scripts-rollout.md` (see its "Decision
     recorded" section) — no session performed a write against live data.
     The **7-anomalous-row disposition** above remains a separate, still-open

@@ -36,12 +36,18 @@ DATE — DO NOT STATE THIS UNLESS IT IS ACTUALLY TRUE].
 
 WHAT WE'VE BUILT SO FAR
 
-[LIST SPECIFIC, VERIFIED ACCESSIBILITY FEATURES ALREADY SHIPPED — e.g.
-screen-reader support, dynamic text sizing, sufficient color contrast,
-keyboard navigation on the admin dashboard, WAV ride matching, service
-animal accommodation as a non-negotiable policy. Pull this list from
-`docs/ACCESSIBILITY.md` and `docs/accessibility-plan.md`, and only include
-items that are actually true today, not planned.]
+On our admin dashboard, we run automated accessibility checks on every code
+change: static analysis of every screen for missing alt text, unlabeled form
+inputs, and invalid ARIA attributes, plus automated scans of our sign-in and
+core dashboard screens. As of our most recent review, these checks report
+zero critical violations. In our mobile apps, icon-only buttons and custom
+interactive controls are labeled for screen readers, and where a
+wheelchair-accessible vehicle is online and available in your service area,
+WAV requests are matched to it. Accommodating a service animal is a
+non-negotiable policy for every driver, not a courtesy.
+
+We have not yet completed a full accessibility audit of our rider app,
+driver app, or website — see "Known limitations" below.
 
 WHEELCHAIR-ACCESSIBLE VEHICLES AND SERVICE ANIMALS
 
@@ -52,9 +58,11 @@ for the full detail.
 
 KNOWN LIMITATIONS
 
-We are not aware of every accessibility barrier in our apps, and we don't
-claim full conformance today. If you encounter something that doesn't work
-well with assistive technology, we want to know — see "Tell us" below.
+Our rider app, driver app, and website have not yet had a full accessibility
+audit — today's automated coverage is strongest on the admin dashboard. We
+are not aware of every accessibility barrier in our apps, and we don't claim
+full conformance today. If you encounter something that doesn't work well
+with assistive technology, we want to know — see "Tell us" below.
 
 REQUESTING AN ALTERNATE FORMAT
 
@@ -93,8 +101,15 @@ affected.
    department, given the pattern in `zoho-config-card.tsx` — and (3) confirm
    it's actually monitored (someone reads it) before this page cites it. A
    public page pointing to a dead inbox is worse than no page.
-3. Fill in "What we've built so far" only with features actually verified,
-   not aspirational ones — check `docs/ACCESSIBILITY.md`'s current state
-   before writing this section, and have the
-   `spinr-accessibility-reviewer` agent sanity-check the final list against
-   the actual codebase before publication.
+3. **Fixed 2026-08-19**: "What we've built so far" is now filled in from
+   `docs/ACCESSIBILITY.md`'s 2026-04-09 compliance status — admin dashboard
+   automated checks (jsx-a11y static analysis + axe-core E2E scans) at 0
+   critical violations, mobile-app screen-reader labeling, WAV matching, and
+   mandatory service-animal accommodation. Explicitly did not claim anything
+   for rider app, driver app, or website, since `docs/ACCESSIBILITY.md`
+   marks all three "Not yet audited" — that gap is now named in "Known
+   limitations" instead of glossed over. This section should be re-checked
+   against `docs/ACCESSIBILITY.md` before publication in case its status
+   table has moved since 2026-04-09, and the `spinr-accessibility-reviewer`
+   agent should still sanity-check the final list against the actual
+   codebase before publication.

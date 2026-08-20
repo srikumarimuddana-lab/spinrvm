@@ -471,49 +471,6 @@ export default function registerAutoPlay(): void {
     }
   };
 
-  const showNavChoiceAlert = async (leg: string) => {
-    if (!template) return;
-
-    // Only show the choice if Waze is actually installed; otherwise go
-    // straight to Google Maps — no point asking when there's one option.
-    let wazeAvailable = false;
-    try {
-      wazeAvailable = await Linking.canOpenURL('waze://');
-    } catch {
-      // canOpenURL can throw on some Android builds; treat as unavailable.
-    }
-
-    if (!wazeAvailable) {
-      handoffToNav('google');
-      return;
-    }
-
-    const id = alertSeq++;
-    const label = leg === 'dropoff' ? 'drop-off' : 'pickup';
-    try {
-      template.showAlert({
-        id,
-        title: { text: `Navigate to ${label}` },
-        subtitle: { text: 'Choose your navigation app' },
-        primaryAction: {
-          title: 'Google Maps',
-          style: 'default',
-          onPress: () => handoffToNav('google'),
-        },
-        secondaryAction: {
-          title: 'Waze',
-          style: 'default',
-          onPress: () => handoffToNav('waze'),
-        },
-        durationMs: 10000,
-        priority: 'high',
-      });
-    } catch (e) {
-      log('nav choice alert failed, falling back to Google:', e);
-      handoffToNav('google');
-    }
-  };
-
   const clearOfferAlert = () => {
     if (template && shownAlertNum != null) {
       try {
@@ -631,8 +588,8 @@ export default function registerAutoPlay(): void {
     } else if (navLegKey && navLegKey !== handedOffFor) {
       handedOffFor = navLegKey;
       log('auto hand-off for leg', navLegKey);
-      setDebugFact('navHandoff', `${route?.leg} → choice`);
-      showNavChoiceAlert(route?.leg ?? 'pickup');
+      setDebugFact('navHandoff', `${route?.leg} → google`);
+      handoffToNav('google');
     } else if (!navLegKey) {
       handedOffFor = null; // ride ended; the next leg is a fresh hand-off
     }

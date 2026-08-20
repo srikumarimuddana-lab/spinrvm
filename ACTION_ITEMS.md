@@ -6604,6 +6604,39 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   a dry-run scenario against `mock_supabase_client` is described in the
   closing Change Impact Log, not just "tests pass."
 
+### B31. `routes/promotions.py`'s promo-eligibility ride counts don't exclude legacy-imported completed rides — pre-existing, affects 271+ rows, not net-new to A41's zero-fare-completed fix
+
+- **Source:** `spinr-money-auditor` review of A41's 7-anomalous-row zero-fare-completed
+  import (2026-08-20) — flagged that `count_documents("rides", {"rider_id": user_id,
+  "status": "completed"})` (`routes/promotions.py:225,265,518`) would include the new
+  $0-fare completed legacy rows for any matched rider, potentially wrongly denying a
+  `first_ride_only` promo or shifting a `min_total_rides`/`max_total_rides` tier for a
+  rider who now has an old completed ride on file.
+- **Verified NOT net-new to that PR**: `routes/promotions.py` has **no
+  `legacy_import_metadata` exclusion anywhere** in any of its three ride-count call sites
+  (`grep` confirmed). This means the original 2026-07-29 completed-booking import's 271 real
+  legacy rides have already been counting toward promo eligibility for any matched rider
+  since that import ran — this is a pre-existing gap the new 7 zero-fare rows marginally
+  extend, not a new category of bug. Deliberately NOT bundled into the 7-row-disposition PR
+  (scope-contract discipline — one logical change per PR) — filed here instead, per
+  CLAUDE.md's "escalate, don't silently ship, when in doubt."
+- **Status:** open, not investigated beyond the grep hit and the reasoning above. Needs: (1)
+  confirm how many real (non-test) rider accounts are actually affected today (join
+  `legacy_import_metadata->>source = 'legacy_mongo_booking_import'` completed rides against
+  currently-matched `rider_id`s, count distinct riders with ≥1 such row) to size the real
+  exposure before deciding urgency; (2) decide whether promo eligibility SHOULD exclude
+  legacy rows entirely (a rider's actual first *Spinr* ride, not their first ride ever in the
+  old app, is arguably the more defensible "first_ride_only" semantic) — this is a product
+  decision, not purely technical; (3) if excluded, add the same
+  `legacy_import_metadata = '{}'::jsonb`-equivalent filter (or its `db_supabase`
+  query-builder equivalent, since this is a live-request-path Python filter, not a SQL
+  function) to all three call sites, plus a regression test.
+- **Files:** `backend/routes/promotions.py` (lines 225, 265, 518 as of 2026-08-20).
+- **Acceptance:** either a documented, deliberate decision that legacy-imported completed
+  rides SHOULD count toward promo eligibility (risk-accepted, dated note here), or all three
+  `routes/promotions.py` ride-count call sites exclude them, with a regression test and a
+  Change Impact Log (money-adjacent, rider-facing — same rigor as any other promotions.py fix).
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly
@@ -11685,7 +11718,11 @@ how much they de-risk a public launch._
   a committed row as something to actually collect payment on. No migration
   needed — these land in the same already-established "legacy completed
   row" analytics treatment (341/349) as the other 271. 8 new unit tests (76
-  total across both booking-import test files), `ruff check` clean.
+  total across both booking-import test files), `ruff check` clean. Reviewed
+  by `spinr-money-auditor` (SAFE TO MERGE; found and fixed a receipt-line
+  gap in the same PR; found and separately filed the pre-existing
+  promo-eligibility gap as B31 below) and `spinr-dispatch-reviewer` (SAFE TO
+  MERGE, no findings).
   `docs/change-log/2026-08-20-anomalous-rows-zero-fare-completed-import.md`
   has the full Change Impact Log.
   - **STILL OPEN, not decided this pass:** whether any of the 7 drivers/

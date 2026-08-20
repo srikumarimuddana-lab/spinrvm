@@ -11673,12 +11673,25 @@ how much they de-risk a public launch._
   to decide what to do with them.
 - **STILL OPEN:**
   - **7-anomalous-row disposition** — see finding immediately above.
-  - **Rollout decision, unmade**: three dry-run-only backfill/import
-    scripts now exist (`backfill_legacy_driver_sin_dob.py`,
+  - **Rollout decision — MADE (2026-08-20), execution still pending**: three
+    dry-run-only backfill/import scripts existed (`backfill_legacy_driver_sin_dob.py`,
     `backfill_legacy_ride_duration_estimated.py`, and the cancelled/failed
     booking import via the existing admin `/bookings/import/*` endpoints)
-    — who runs them, against which environment, and when is still an
-    operational decision for the product owner, not made by any session.
+    with the timing/environment/CSV-vintage question genuinely unresolved
+    as of the fifth pass. Put to the product owner directly via
+    `AskUserQuestion` (not inferred): **run all three now** (not deferred to
+    Oct 30), and for the booking import specifically, **run now against the
+    existing 2026-07-26-vintage `bookings.csv` export** (not wait for a
+    fresh Oct 30 pull) — accepting the documented trade-off that a second
+    commit pass against the Oct 30 export may later be needed for anything
+    cancelled/failed since 2026-07-26 (harmless, idempotent on
+    `old_booking_id`). Because this session has no live Supabase
+    credentials, the product owner will **execute the actual `--apply`/commit
+    runs themselves**, directly, using
+    `docs/runbooks/legacy-backfill-scripts-rollout.md` (see its "Decision
+    recorded" section) — no session performed a write against live data.
+    The **7-anomalous-row disposition** above remains a separate, still-open
+    question this decision does not resolve.
   - Remaining Oct 30 checklist items — see
     `docs/runbooks/legacy-migration-playbook.md` for the full, now-accurate
     per-item status (most recently updated before this fifth pass; the

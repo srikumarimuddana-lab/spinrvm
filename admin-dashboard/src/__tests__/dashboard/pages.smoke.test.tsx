@@ -139,6 +139,9 @@ vi.mock("lucide-react", () => {
     ChevronsUpDown: Icon, Percent: Icon, Receipt: Icon, Undo2: Icon, Landmark: Icon,
     // heatmap / service-areas AD-* additions
     Flame: Icon, ArrowRightLeft: Icon,
+    // analytics panel refactor (marketplace/supply/efficiency/financial tabs)
+    LayoutDashboard: Icon, CarFront: Icon, Gauge: Icon, Repeat: Icon, Route: Icon, Sun: Icon,
+    Timer: Icon,
   };
 });
 

@@ -11,3 +11,14 @@
 # history, so the history scan (G5a) needs these two fingerprints ignored.
 758f7cedd7cce1e19e8b8533e09692827b76501e:backend/tests/test_sos_paging.py:generic-api-key:38
 758f7cedd7cce1e19e8b8533e09692827b76501e:backend/tests/test_admin_settings_lms_gate.py:generic-api-key:147
+
+# PR #4300: an idempotency-key test fixture for ACTION_ITEMS.md B15(c)
+# (rideless SOS) was a generic-looking 16-char alphanumeric literal, tripping
+# the generic-api-key rule on the git-history scan. Not a real secret --
+# fixed forward in commit 9a395c054 (the fixture now reads
+# "test-retry-idem-001", unambiguously not key-shaped), but both the
+# introducing commit and the commit that first explained the fix (which
+# quoted the original literal verbatim) still exist in history, so the
+# history scan (G5a) needs both fingerprints ignored.
+8ebc43e8f01d1a457200a4c6dc8f7bc1018b4766:backend/tests/test_sos_rideless.py:generic-api-key:199
+098b7a7cec168cf321afcdcc48256310ba93488f:agents/runs/sos-rideless-path/decisions.md:generic-api-key:205

@@ -1,17 +1,40 @@
 """Legacy booking import — parse, validate, and commit previous-app bookings.
 
-Imports completed rides from the previous (MongoDB-backed) app into ``rides``
-so riders and drivers see their trip history in Spinr. Customers and drivers
-are matched to existing accounts by phone number; unmatched parties import
-with a NULL link so the row can be re-linked later.
+Imports rides from the previous (MongoDB-backed) app into ``rides`` so riders
+and drivers see their trip history in Spinr. Customers and drivers are matched
+to existing accounts by phone number; unmatched parties import with a NULL
+link so the row can be re-linked later.
 
-Driver payouts for these rides were ALREADY settled in the previous app. The
-new app derives ``payable_balance`` live from completed rides
+Two independent code paths, selected by the legacy ``booking_status``:
+
+- ``completed`` — full fare/earnings import (see the money-safety paragraph
+  below). This is the ORIGINAL 2026-07-29 import path; its behavior is
+  unchanged by the cancelled/failed path added 2026-08-20.
+- ``cancelled`` / ``failed`` — added 2026-08-20
+  (docs/change-log/2026-08-20-legacy-cancelled-failed-booking-import.md,
+  ACTION_ITEMS.md A41). Every cancelled/failed legacy row still carries real
+  pickup/dropoff GPS and ``created_at``, which PIPEDA/SK Transportation Act
+  retention rules require Spinr to keep — the previous claim here that these
+  rows "carry no fare, no earnings, and no history value" was wrong; they
+  simply carry no MONEY value. This path writes status/cancellation fields
+  only — no fare, no earnings, no payout, no driver recount ("skip
+  payout-offset logic, keep GPS+timestamps" — P2-migration-completeness.md
+  item #2, reconfirmed 2026-08-19). A hard guard excludes any row that has
+  BOTH ``start_ride_at`` and ``complete_delivery_at`` populated regardless of
+  its legacy status — those are structurally indistinguishable from a
+  genuinely completed trip (mislabeled in the old app) and need the same
+  earnings-write rigor as the completed path, which this lightweight branch
+  does not have; they are reported under ``skipped_looks_completed``, never
+  silently imported by either path.
+
+Driver payouts for COMPLETED rides were ALREADY settled in the previous app.
+The new app derives ``payable_balance`` live from completed rides
 (``routes/drivers/earnings.py``), so importing real earnings without an offset
 would let a driver withdraw money they were already paid. Every matched driver
 therefore gets one offsetting ``payouts`` row (``payout_type='legacy_import'``,
-``status='completed'``) whose amount equals the sum of their imported earnings.
-Net payable delta per driver is exactly $0.
+``status='completed'``) whose amount equals the sum of their imported
+earnings. Net payable delta per driver is exactly $0. Cancelled/failed rows
+have no earnings, so they never touch this offset mechanism.
 
 Follows the same validate-then-commit contract as rider_import_service and
 driver_import_service. Reports carry only row numbers + legacy booking codes —
@@ -54,10 +77,24 @@ IMPORT_SOURCE = "legacy_mongo_booking_import"
 PAYOUT_TYPE = "legacy_import"
 PAYOUT_LABEL = "Settled in previous app (legacy import)"
 
-# Only completed rides are imported: cancelled/failed legacy bookings carry no
-# fare, no earnings, and no history value, and a cancelled row with a NULL
-# driver is invisible in rider history anyway.
+# The full fare/earnings import path — unchanged since 2026-07-29.
 TARGET_BOOKING_STATUS = "completed"
+
+# Added 2026-08-20 (A41): legacy bookings that never completed a trip. Both
+# statuses land on rides.status='cancelled' -- Spinr's own state machine has
+# no separate "failed" status, and every row in both legacy buckets is
+# pre-trip (see module docstring). A booking whose legacy status is neither
+# this, TARGET_BOOKING_STATUS, nor one of these (e.g. the export's 2 blank
+# `""` rows) is unrecognized and is skipped entirely -- never guessed at.
+LEGACY_CANCELLED_STATUSES = frozenset({"cancelled", "failed"})
+
+# Synthetic cancellation_reason for a cancelled/failed row whose legacy
+# cancelled_reason was blank (the overwhelming majority of the `failed`
+# bucket -- "no driver was ever found", not a payment/system failure).
+# admin_cancellation_breakdown buckets on this text, so it must read as a
+# real reason, not silently render NULL into that function's 'unspecified'
+# bucket.
+NO_DRIVER_FOUND_REASON = "No driver found (legacy import)"
 
 # Canadian accounts only. The legacy export contains the previous vendor's
 # test accounts (country code 91 / yopmail addresses) whose rides are not real.

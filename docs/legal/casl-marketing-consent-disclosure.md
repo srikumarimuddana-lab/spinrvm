@@ -33,11 +33,10 @@ WHAT COUNTS AS CONSENT
 
 We ask for your express consent to marketing messages — for example, an
 opt-in checkbox during signup or in Settings, not a pre-checked box. If you
-don't opt in, we don't send marketing messages, though we may still rely on
-implied consent for a limited time after you've had a business relationship
-with us (for example, shortly after your last completed ride), consistent
-with CASL's implied-consent rules — we still let you opt out at any time
-even during that period.
+don't opt in, we don't send marketing messages. Spinr does not rely on
+CASL's implied-consent basis for any marketing message — every marketing
+message you receive is because you actively opted in, and you can opt out
+at any time.
 
 WHO IS SENDING
 
@@ -75,11 +74,33 @@ Spinr. [Unsubscribe] | [Manage preferences]
 1. **Fill in a real mailing address and contact method** — CASL requires
    sender identification with valid contact information in every commercial
    message; a placeholder here would make every message sent before it's
-   filled in non-compliant.
-2. Confirm the implied-consent window described matches CASL's actual rule
-   (generally 2 years from the end of a business relationship, or 6 months
-   from an inquiry) with counsel before publishing a specific claim about it.
-3. Cross-reference `backend/services/marketing_consent.py` and migration
-   190 to confirm the described opt-in/opt-out mechanics match what's
-   actually implemented — this document should describe the real system,
-   not a target one.
+   filled in non-compliant. Still open — needs a named business owner to
+   supply the real address; the rendering mechanism already exists
+   (`backend/utils/marketing_email.py`'s footer builder) and requires only
+   the address value, not new code.
+2. **Fixed 2026-08-20** (`spinr-legal-readiness-reviewer`): this section
+   previously claimed Spinr "may still rely on implied consent for a
+   limited time after you've had a business relationship," describing a
+   CASL implied-consent mechanism. That mechanism does not exist in code —
+   `backend/services/marketing_consent.py`'s `is_eligible()` requires an
+   explicit `opted_in=true` row on every call with no time-decay or
+   business-relationship fallback, and migration 190's own comment states
+   this is deliberate ("DEFAULT false — never send marketing until the user
+   actively opts in (CASL: implied consent is not the default)"). Rewrote
+   the section to describe the actual pure-opt-in system instead of a
+   consent basis Spinr doesn't rely on. If an implied-consent fallback is
+   ever built, this section needs to be rewritten again to match — and
+   counsel would need to confirm the window length (generally 2 years from
+   the end of a business relationship, or 6 months from an inquiry) at that
+   time, not before.
+3. **Fixed 2026-08-20**: cross-checked the remaining mechanics against
+   `backend/services/marketing_consent.py` and migration 190 — all confirmed
+   accurate: opt-in defaults false per channel; unsubscribe is processed
+   synchronously via a one-click link (`backend/routes/marketing.py`'s
+   `/marketing/unsubscribe`, RFC 8058), not on a multi-day delay as this
+   draft's "within 10 business days" phrasing implies (that language is now
+   a floor, not the actual mechanism — accurate but understates how fast it
+   actually is); SMS STOP is handled (`backend/routes/webhooks.py`); and the
+   sender-identification/address footer is rendered unconditionally on
+   every marketing send (`backend/utils/marketing_email.py`,
+   `routes/admin/messaging.py` confirms it's non-optional).

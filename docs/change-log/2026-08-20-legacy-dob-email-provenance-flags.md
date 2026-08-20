@@ -69,6 +69,24 @@ and DOB/email got nothing.
   driver-verified provenance for raw unverified legacy CSV data. Fixed by
   also checking `legacy_import_metadata.source == IMPORT_SOURCE`. Full
   reasoning is in the function's own docstring.
+- **Post-review fix (`spinr-security-auditor`, 2026-08-20, BLOCKER — same
+  day, before merge):** the `source == IMPORT_SOURCE` check above is
+  record-level, not field-level — it's stamped on *every* driver from the
+  CSV import regardless of whether that specific row's DOB column was
+  actually populated (`build_plan()` never rejects a row for a blank DOB).
+  A driver whose CSV row had no DOB, was never matched by the `banks.csv`
+  phone-crosswalk backfill, and later had DOB entered by a `super_admin`
+  via `admin_update_driver` would have `source == IMPORT_SOURCE` true
+  forever, despite the value being admin-entered — the opposite failure
+  mode from the one the check was added to fix: *over*-disclosure, labeling
+  admin-verified data as raw unverified legacy CSV data. **Fixed** by
+  stamping a new, unconditional per-row `legacy_import_metadata.
+  dob_present_at_import: bool` marker in `build_plan()` (true or false,
+  always present, never inferred) recording whether *this row's* CSV DOB
+  column actually had a value at import time, and switching `dob_source()`'s
+  fallback check from `source == IMPORT_SOURCE` to `dob_present_at_import
+  is True`. 3 new regression tests (2 unit, 1 endpoint-level) cover the
+  fixed scenario directly.
 
 **Email — investigated, decided NOT to add a dedicated flag:**
 
@@ -167,6 +185,9 @@ using the rider/driver apps. No copy/notification change.
 | `docs/runbooks/legacy-migration-playbook.md` | Appended a dated re-verification block to item #7 recording DOB as done and the email decision | Checklist status update, per the file's own established annotation style |
 | `ACTION_ITEMS.md` | Updated A41's "Remaining Oct 30 checklist items" count/reasoning to include item #7 as fully addressed | Keep the backlog entry in sync with the checklist |
 | `docs/change-log/2026-08-20-legacy-dob-email-provenance-flags.md` | This file | Mandatory Change Impact Log for a live-tested-adjacent (admin/drivers) surface |
+| `backend/services/driver_import_service.py` (post-review) | Added `dob_present_at_import` stamp in `build_plan()`; switched `dob_source()`'s fallback check to it | Fix `spinr-security-auditor` BLOCKER (over-disclosure for admin-entered DOB on a blank-at-import legacy driver) |
+| `backend/tests/test_legacy_sin_dob_import_service.py` (post-review) | Updated 2 existing fixtures + 2 new regression tests | Cover the fixed scenario and the missing-marker default |
+| `backend/tests/test_admin_drivers_coverage.py` (post-review) | Updated 1 existing fixture + 1 new endpoint-level regression test | Same coverage at the HTTP-response layer |
 
 No changes to `backend/services/driver_import_service.py`'s SIN code path,
 `sin_source()`, its tests, the vehicle-history backfill, the

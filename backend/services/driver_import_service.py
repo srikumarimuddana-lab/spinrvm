@@ -754,6 +754,7 @@ def build_plan(
                     "batch": import_batch,
                     "old_driver_id": old_id,
                     "source": IMPORT_SOURCE,
+                    "dob_present_at_import": bool(dob),
                     "address_present": bool(row.get("address")),
                     "drivers_abstract_status": row.get("drivers_abstract_status") or None,
                 },
@@ -1217,12 +1218,28 @@ def dob_source(driver: dict[str, Any] | None) -> str | None:
     backfill — as ``"self_entry"``, i.e. it would UNDER-disclose, claiming
     driver-verified provenance for raw, unverified legacy CSV data. That is
     the opposite of what an accuracy-disclosure flag is for, so this
-    function also checks the CSV-import marker directly.
+    function also checks a CSV-import marker directly.
+
+    That marker must be field-level, not record-level: ``legacy_import_
+    metadata.source == IMPORT_SOURCE`` is stamped on EVERY driver from the
+    Saskatoon CSV import regardless of whether that specific row's DOB
+    column was populated (``build_plan()`` never rejects a row for a blank
+    DOB). A driver whose CSV row had no DOB, was never matched by the
+    banks.csv backfill (phone-crosswalk miss), and later had DOB entered by
+    a ``super_admin`` via ``admin_update_driver`` would have
+    ``source == IMPORT_SOURCE`` forever true despite the value being
+    admin-entered, not legacy CSV data — checking that field alone would
+    OVER-disclose in the opposite direction (found by `spinr-security-
+    auditor`, 2026-08-20, BLOCKER). ``build_plan()`` instead stamps a
+    per-row ``dob_present_at_import`` boolean unconditionally (true or
+    false, never omitted) recording whether *this specific row's* DOB
+    column actually had a value at import time — that is the marker this
+    function checks, not the record-level ``source`` field.
 
     - ``"legacy_import"`` — either the ``banks.csv`` backfill marker's
-      ``dob_written`` is ``True``, OR this driver's whole record originated
-      from the Saskatoon CSV import (``legacy_import_metadata.source ==
-      IMPORT_SOURCE``) and ``date_of_birth`` is set. Like ``sin_source()``,
+      ``dob_written`` is ``True``, OR this driver's own CSV row had a DOB
+      value at import time (``legacy_import_metadata.dob_present_at_import
+      is True``) and ``date_of_birth`` is still set. Like ``sin_source()``,
       this is a permanent provenance marker, not a live freshness flag: a
       ``super_admin`` correction via ``admin_update_driver``
       (``routes/admin/drivers.py``) does not clear either marker, matching
@@ -1231,12 +1248,13 @@ def dob_source(driver: dict[str, Any] | None) -> str | None:
       either — see that function's own docstring). Once a value has ever
       been legacy-imported, this label sticks even if since corrected.
     - ``"self_entry"`` — ``date_of_birth`` is set but neither of the above
-      applies. As of 2026-08-20 there is no driver-facing route that writes
-      ``date_of_birth`` at all (checked ``routes/drivers/``, ``routes/auth.py``,
-      ``schemas.py`` — none exist), so in practice this bucket is currently
-      only reached by an admin manually setting/correcting DOB on a
-      non-legacy-imported driver via ``admin_update_driver``'s
-      ``date_of_birth`` field. Named ``"self_entry"`` rather than
+      applies. This covers both: a driver with no legacy-import lineage at
+      all, and a legacy-imported driver whose CSV row had no DOB
+      (``dob_present_at_import`` is ``False``) and whose current value was
+      therefore written later — by an admin via ``admin_update_driver``, the
+      only route that writes ``date_of_birth`` as of 2026-08-20 (checked
+      ``routes/drivers/``, ``routes/auth.py``, ``schemas.py`` — no
+      driver-facing route exists). Named ``"self_entry"`` rather than
       ``"admin_entry"`` to keep the same three-value contract ``sin_source()``
       already established (callers branch on the literal strings).
     - ``None`` — no DOB on file (or no driver row).
@@ -1251,7 +1269,7 @@ def dob_source(driver: dict[str, Any] | None) -> str | None:
     marker = meta.get(LEGACY_BANK_SIN_DOB_SOURCE)
     if isinstance(marker, dict) and marker.get("dob_written"):
         return "legacy_import"
-    if meta.get("source") == IMPORT_SOURCE:
+    if meta.get("dob_present_at_import") is True:
         return "legacy_import"
     return "self_entry"
 

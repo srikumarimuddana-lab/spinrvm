@@ -732,7 +732,11 @@ class TestLiveStatsLicenseMask:
             "id": "drv-1",
             "user_id": None,
             "date_of_birth": "1990-01-01",
-            "legacy_import_metadata": {"source": "legacy_saskatoon_driver_import", "old_driver_id": "42"},
+            "legacy_import_metadata": {
+                "source": "legacy_saskatoon_driver_import",
+                "old_driver_id": "42",
+                "dob_present_at_import": True,
+            },
         }
         with (
             patch("db_supabase.get_rows", AsyncMock(return_value=[])),
@@ -775,6 +779,32 @@ class TestLiveStatsLicenseMask:
             "user_id": None,
             "date_of_birth": "1990-01-01",
             "legacy_import_metadata": {},
+        }
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/live-stats")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["dob_source"] == "self_entry"
+
+    def test_dob_source_self_entry_when_admin_entered_after_blank_csv_import(self, test_client, super_admin_override):
+        """Regression for the spinr-security-auditor finding (2026-08-20,
+        BLOCKER): a driver whose CSV row had no DOB (dob_present_at_import
+        False) and later had DOB entered by an admin via admin_update_driver
+        must read as self_entry at this endpoint, not legacy_import — even
+        though legacy_import_metadata.source is still IMPORT_SOURCE (stamped
+        on every driver from that import regardless of DOB presence)."""
+        driver = {
+            "id": "drv-1",
+            "user_id": None,
+            "date_of_birth": "1990-01-01",
+            "legacy_import_metadata": {
+                "source": "legacy_saskatoon_driver_import",
+                "old_driver_id": "42",
+                "dob_present_at_import": False,
+            },
         }
         with (
             patch("db_supabase.get_rows", AsyncMock(return_value=[])),

@@ -415,12 +415,51 @@ def test_dob_source_legacy_import_when_original_csv_import_wrote_it():
     """The common case: DOB was set at initial driver creation by build_plan()
     (the Saskatoon CSV import) and never touched by the later banks.csv
     backfill, so there is no dob_written marker at all — must still classify
-    as legacy_import via the source==IMPORT_SOURCE check, not self_entry."""
+    as legacy_import via the dob_present_at_import marker, not self_entry."""
+    driver = {
+        "date_of_birth": "1990-01-01",
+        "legacy_import_metadata": {
+            "source": IMPORT_SOURCE,
+            "old_driver_id": "42",
+            "dob_present_at_import": True,
+        },
+    }
+    assert svc.dob_source(driver) == "legacy_import"
+
+
+def test_dob_source_self_entry_when_csv_row_had_no_dob_but_admin_entered_it_later():
+    """Regression for the spinr-security-auditor finding (2026-08-20,
+    BLOCKER): legacy_import_metadata.source == IMPORT_SOURCE is stamped on
+    EVERY driver from the Saskatoon CSV import, regardless of whether that
+    row's DOB column was populated. A driver whose CSV row had no DOB
+    (dob_present_at_import False), never matched the banks.csv backfill, and
+    later had DOB entered by an admin via admin_update_driver must be
+    reported as self_entry — not legacy_import — even though
+    legacy_import_metadata.source is still IMPORT_SOURCE. Checking source
+    alone (the pre-fix behaviour) over-disclosed: it labeled admin-verified
+    data as raw, unverified legacy CSV data."""
+    driver = {
+        "date_of_birth": "1990-01-01",
+        "legacy_import_metadata": {
+            "source": IMPORT_SOURCE,
+            "old_driver_id": "42",
+            "dob_present_at_import": False,
+        },
+    }
+    assert svc.dob_source(driver) == "self_entry"
+
+
+def test_dob_source_self_entry_when_dob_present_at_import_marker_absent():
+    """Older/pre-fix legacy_import_metadata rows (written before this marker
+    existed) have no dob_present_at_import key at all. `.get(...) is True`
+    must not treat a missing key the same as True — falls through to
+    self_entry rather than defaulting to the more sensitive legacy_import
+    label on ambiguous data."""
     driver = {
         "date_of_birth": "1990-01-01",
         "legacy_import_metadata": {"source": IMPORT_SOURCE, "old_driver_id": "42"},
     }
-    assert svc.dob_source(driver) == "legacy_import"
+    assert svc.dob_source(driver) == "self_entry"
 
 
 def test_dob_source_legacy_import_when_banks_csv_backfill_marker_present():
@@ -446,13 +485,15 @@ def test_dob_source_sin_only_backfill_stays_legacy_import_via_csv_source():
     """Regression mirroring test_sin_source_dob_only_backfill_stays_self_entry,
     but for the opposite direction: a banks.csv batch that only backfilled
     SIN (dob_written False, because DOB was already on file from the
-    original CSV import) must NOT be reported as self_entry — the CSV-import
-    marker still correctly classifies it as legacy_import."""
+    original CSV import) must NOT be reported as self_entry — the
+    dob_present_at_import marker still correctly classifies it as
+    legacy_import."""
     driver = {
         "date_of_birth": "1990-01-01",
         "legacy_import_metadata": {
             "source": IMPORT_SOURCE,
             "old_driver_id": "42",
+            "dob_present_at_import": True,
             svc.LEGACY_BANK_SIN_DOB_SOURCE: {
                 "batch": "sin-only-batch",
                 "imported_at": "2026-08-19T00:00:00Z",

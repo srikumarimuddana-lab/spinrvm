@@ -676,7 +676,16 @@ class TestReginaBucketingMigration:
         assert body.count("America/Regina") >= 3
 
     def test_both_functions_stay_revoked_from_public_roles(self):
-        assert self._body(self._sql()).count("REVOKE EXECUTE") == 2
+        body = self._body(self._sql())
+        assert body.count("REVOKE EXECUTE") == 2
+        # Naming only anon/authenticated is a NO-OP: Postgres grants EXECUTE to
+        # PUBLIC on CREATE FUNCTION, and both roles inherit it from there.
+        # Verified on Postgres 16 — has_function_privilege('anon', ...) stayed
+        # true until PUBLIC was revoked.
+        assert body.count("FROM PUBLIC, anon, authenticated") == 2
+        # service_role does not inherit EXECUTE any other way, and the backend
+        # calls these through it.
+        assert body.count("GRANT  EXECUTE") == 2
 
     def test_overview_signature_change_drops_the_old_arity_first(self):
         """CREATE OR REPLACE cannot change a signature — without the DROP this
@@ -877,6 +886,8 @@ class TestMarketplaceMigration351:
     def test_both_functions_are_locked_down(self):
         body = self._body()
         assert body.count("REVOKE EXECUTE") == 2
+        assert body.count("FROM PUBLIC, anon, authenticated") == 2
+        assert body.count("GRANT  EXECUTE") == 2
         assert body.count("SECURITY DEFINER") == 2
         assert body.count("SET search_path = public, pg_catalog") == 2
 
@@ -1072,6 +1083,8 @@ class TestMarketplaceMigration352:
     def test_both_functions_are_locked_down(self):
         body = self._body()
         assert body.count("REVOKE EXECUTE") == 2
+        assert body.count("FROM PUBLIC, anon, authenticated") == 2
+        assert body.count("GRANT  EXECUTE") == 2
         assert body.count("SECURITY DEFINER") == 2
         assert body.count("SET search_path = public, pg_catalog") == 2
 

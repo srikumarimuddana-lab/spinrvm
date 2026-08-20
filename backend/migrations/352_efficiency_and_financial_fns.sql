@@ -75,6 +75,17 @@
 -- Forward-compatible: two new functions. No table, column, constraint, or
 -- existing function altered. Nothing written or migrated.
 --
+--
+-- Grants: Postgres grants EXECUTE to PUBLIC by default on CREATE FUNCTION, so
+-- `REVOKE ... FROM anon, authenticated` alone is a NO-OP — both roles keep
+-- EXECUTE through PUBLIC. Verified locally on Postgres 16: proacl showed
+-- `=X/postgres` (the PUBLIC grant) and has_function_privilege('anon', ...)
+-- returned true until PUBLIC was revoked. These are SECURITY DEFINER
+-- functions that bypass RLS and return aggregate business data, so the
+-- revoke must name PUBLIC. service_role is then granted back explicitly,
+-- because it does NOT inherit EXECUTE any other way and the backend calls
+-- these through it. Same pattern as migrations 50/296 (purge_pii_retention)
+-- and 216 (encrypt/decrypt_driver_pii).
 -- Rollback:
 --   DROP FUNCTION IF EXISTS public.admin_efficiency_metrics(timestamptz, timestamptz, text);
 --   DROP FUNCTION IF EXISTS public.admin_financial_metrics(timestamptz, timestamptz, text);
@@ -166,7 +177,8 @@ COMMENT ON FUNCTION public.admin_efficiency_metrics(timestamptz, timestamptz, te
     'ratio for /analytics/efficiency. Returns sample sizes alongside every percentile. '
     'Excludes legacy imports (349).';
 
-REVOKE EXECUTE ON FUNCTION public.admin_efficiency_metrics(timestamptz, timestamptz, text) FROM anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.admin_efficiency_metrics(timestamptz, timestamptz, text) FROM PUBLIC, anon, authenticated;
+GRANT  EXECUTE ON FUNCTION public.admin_efficiency_metrics(timestamptz, timestamptz, text) TO service_role;
 
 -- ── Financial ───────────────────────────────────────────────────────────
 
@@ -262,4 +274,5 @@ COMMENT ON FUNCTION public.admin_financial_metrics(timestamptz, timestamptz, tex
     'within-window rider repeat rate for /analytics/financial. Regina business days (350). '
     'Excludes legacy imports (349). repeat_rate_pct is within-window, NOT a retention cohort.';
 
-REVOKE EXECUTE ON FUNCTION public.admin_financial_metrics(timestamptz, timestamptz, text) FROM anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.admin_financial_metrics(timestamptz, timestamptz, text) FROM PUBLIC, anon, authenticated;
+GRANT  EXECUTE ON FUNCTION public.admin_financial_metrics(timestamptz, timestamptz, text) TO service_role;

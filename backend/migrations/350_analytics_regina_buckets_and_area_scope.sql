@@ -61,6 +61,17 @@
 -- for the range scan, since the WHERE clause still filters on bare
 -- created_at.
 --
+--
+-- Grants: Postgres grants EXECUTE to PUBLIC by default on CREATE FUNCTION, so
+-- `REVOKE ... FROM anon, authenticated` alone is a NO-OP — both roles keep
+-- EXECUTE through PUBLIC. Verified locally on Postgres 16: proacl showed
+-- `=X/postgres` (the PUBLIC grant) and has_function_privilege('anon', ...)
+-- returned true until PUBLIC was revoked. These are SECURITY DEFINER
+-- functions that bypass RLS and return aggregate business data, so the
+-- revoke must name PUBLIC. service_role is then granted back explicitly,
+-- because it does NOT inherit EXECUTE any other way and the backend calls
+-- these through it. Same pattern as migrations 50/296 (purge_pii_retention)
+-- and 216 (encrypt/decrypt_driver_pii).
 -- Rollback (restores migration 349's exact definitions):
 --   DROP FUNCTION IF EXISTS public.admin_analytics_overview(timestamptz, text);
 --   -- then re-run the two CREATE OR REPLACE blocks from
@@ -125,7 +136,8 @@ COMMENT ON FUNCTION public.admin_analytics_overview(timestamptz, text) IS
     'Optional service-area scope (migration 350). '
     'Excludes legacy-imported rides (migration 349).';
 
-REVOKE EXECUTE ON FUNCTION public.admin_analytics_overview(timestamptz, text) FROM anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.admin_analytics_overview(timestamptz, text) FROM PUBLIC, anon, authenticated;
+GRANT  EXECUTE ON FUNCTION public.admin_analytics_overview(timestamptz, text) TO service_role;
 
 -- ── 2. Cancellation breakdown: Regina hour buckets ────────────────────
 
@@ -196,4 +208,5 @@ COMMENT ON FUNCTION public.admin_cancellation_breakdown(timestamptz, text) IS
     'Hour buckets on America/Regina (migration 350). '
     'Excludes legacy-imported rides (migration 349).';
 
-REVOKE EXECUTE ON FUNCTION public.admin_cancellation_breakdown(timestamptz, text) FROM anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.admin_cancellation_breakdown(timestamptz, text) FROM PUBLIC, anon, authenticated;
+GRANT  EXECUTE ON FUNCTION public.admin_cancellation_breakdown(timestamptz, text) TO service_role;

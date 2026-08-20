@@ -74,6 +74,12 @@ const nextConfig: NextConfig = {
       { source: "/dashboard/compliance", destination: "/dashboard/records?tab=compliance", permanent: false },
       { source: "/dashboard/bulk-operations", destination: "/dashboard/records?tab=bulk-operations", permanent: false },
       { source: "/dashboard/export-approvals", destination: "/dashboard/records?tab=export-approvals", permanent: false },
+      // Same pattern, admin portal IA audit Findings A/B: FAQs and Disputes
+      // & Refunds used to be separate sidebar entries; their content is now
+      // reached as Support & Issues tabs (same component, reused as-is —
+      // see support/_tabs/{faqs,disputes}.tsx).
+      { source: "/dashboard/faqs", destination: "/dashboard/support?tab=faqs", permanent: false },
+      { source: "/dashboard/disputes", destination: "/dashboard/support?tab=disputes", permanent: false },
     ];
   },
   async rewrites() {

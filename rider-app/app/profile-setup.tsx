@@ -138,7 +138,23 @@ export default function ProfileSetupScreen() {
           }
           if (applied) showToast('Referral applied', 'Your referral code was added.', 'success');
         }
-        router.replace('/(tabs)' as any);
+        // Legacy/re-consent notice: this is the profile-completion redirect
+        // for a pre-existing account that reached /profile-setup with an
+        // incomplete profile (otp.tsx's else branch) — the population most
+        // likely to be legacy-imported. Mirrors otp.tsx's own check
+        // exactly — fail-open so a network hiccup never blocks entry to the
+        // app. Dark-shipped: while app_settings.legacy_consent_notice_enabled
+        // is off, /consent/status always reports needs_notice: false.
+        api.get('/consent/status').then(
+          (res) => {
+            if ((res.data as any)?.needs_notice) {
+              router.replace('/legacy-consent-notice' as any);
+            } else {
+              router.replace('/(tabs)' as any);
+            }
+          },
+          () => router.replace('/(tabs)' as any), // fail open
+        );
       }
     } catch (err: any) {
       // Title + severity come from the backend error code/field (e.g. a

@@ -20,8 +20,37 @@ export const getDashboardOverview = (opts: { range?: string; service_area_id?: s
 export const getCancellationBreakdown = (dateRange = "30d", serviceAreaId?: string) =>
     request<any>(`/api/admin/analytics/cancellation-reasons?date_range=${dateRange}${serviceAreaId ? `&service_area_id=${serviceAreaId}` : ''}`);
 
-export const getDriverAcceptanceRates = (dateRange = "30d", serviceAreaId?: string) =>
-    request<any>(`/api/admin/analytics/driver-acceptance?date_range=${dateRange}${serviceAreaId ? `&service_area_id=${serviceAreaId}` : ''}`);
+export type DriverAcceptanceSort =
+    | "acceptance_rate" | "cancellation_rate" | "total_rides"
+    | "completed" | "cancelled_by_driver" | "rating" | "name";
+
+export interface DriverAcceptanceOpts {
+    serviceAreaId?: string;
+    limit?: number;
+    offset?: number;
+    search?: string;
+    sortBy?: DriverAcceptanceSort;
+    order?: "asc" | "desc";
+    minRides?: number;
+    lowPerformersOnly?: boolean;
+}
+
+/** Paginated/sortable server-side — the summary counts cover the whole
+ *  filtered set, so `low_performer_count` stays reachable via
+ *  `lowPerformersOnly` (or an ascending sort) rather than being sliced off
+ *  the end of the default descending page. */
+export const getDriverAcceptanceRates = (dateRange = "30d", opts: DriverAcceptanceOpts = {}) => {
+    const sp = new URLSearchParams({ date_range: dateRange });
+    if (opts.serviceAreaId) sp.set("service_area_id", opts.serviceAreaId);
+    if (opts.limit != null) sp.set("limit", String(opts.limit));
+    if (opts.offset) sp.set("offset", String(opts.offset));
+    if (opts.search) sp.set("search", opts.search);
+    if (opts.sortBy) sp.set("sort_by", opts.sortBy);
+    if (opts.order) sp.set("order", opts.order);
+    if (opts.minRides) sp.set("min_rides", String(opts.minRides));
+    if (opts.lowPerformersOnly) sp.set("low_performers_only", "true");
+    return request<any>(`/api/admin/analytics/driver-acceptance?${sp.toString()}`);
+};
 
 export const getDriverOfferStats = (dateRange = "30d", serviceAreaId?: string) =>
     request<any>(`/api/admin/analytics/driver-offer-stats?date_range=${dateRange}${serviceAreaId ? `&service_area_id=${serviceAreaId}` : ''}`);

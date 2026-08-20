@@ -426,3 +426,146 @@ class TestDriverOfferTrends:
         with patch("backend.routes.admin.analytics.db.rpc", AsyncMock(side_effect=RuntimeError("boom"))):
             resp = admin_client.get("/api/admin/analytics/driver-offer-trends")
         assert resp.status_code == 503
+
+
+# ── driver-acceptance: pagination / search / sort reachability ────────
+
+
+def _acc_fixture(n_good: int, n_low: int):
+    """n_good drivers at 100% acceptance, n_low at 20% (low performers).
+
+    Mirrors the shape that caused the original bug: the default sort is
+    acceptance-rate DESC, so every low performer lands after the good ones.
+    """
+    drivers, acc, users = [], [], []
+    for i in range(n_good):
+        did = f"good{i}"
+        drivers.append({"id": did, "user_id": f"u{did}", "rating": 4.9, "is_online": True})
+        acc.append({"driver_id": did, "total_rides": 10, "completed": 10, "cancelled_by_driver": 0})
+        users.append({"id": f"u{did}", "first_name": "Good", "last_name": str(i)})
+    for i in range(n_low):
+        did = f"low{i}"
+        drivers.append({"id": did, "user_id": f"u{did}", "rating": 3.1, "is_online": False})
+        acc.append({"driver_id": did, "total_rides": 10, "completed": 2, "cancelled_by_driver": 8})
+        users.append({"id": f"u{did}", "first_name": "Low", "last_name": str(i)})
+    return drivers, acc, users
+
+
+class TestDriverAcceptancePagination:
+    """Regression cover for the summary/table mismatch.
+
+    `low_performer_count` counted across every driver while the response
+    returned only the first `limit` rows of an acceptance-rate DESC sort — so
+    the drivers the card counted were exactly the rows the slice dropped.
+    """
+
+    def _call(self, admin_client, drivers, acc, users, **params):
+        with (
+            patch(
+                "backend.routes.admin.analytics.db.get_rows",
+                AsyncMock(side_effect=[drivers, users]),
+            ),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(return_value=acc)),
+        ):
+            return admin_client.get("/api/admin/analytics/driver-acceptance", params=params)
+
+    def test_low_performers_are_off_the_default_page_but_still_counted(self, admin_client):
+        """The exact failure mode: counted, but not on page 1."""
+        drivers, acc, users = _acc_fixture(n_good=60, n_low=3)
+        resp = self._call(admin_client, drivers, acc, users, limit=50)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["low_performer_count"] == 3
+        assert data["total_drivers"] == 63
+        # Page 1 is all high performers — this is why the filter below matters.
+        assert all(d["acceptance_rate"] == 100.0 for d in data["drivers"])
+        assert data["has_more"] is True
+
+    def test_low_performers_only_filter_reaches_them(self, admin_client):
+        drivers, acc, users = _acc_fixture(n_good=60, n_low=3)
+        resp = self._call(admin_client, drivers, acc, users, limit=50, low_performers_only=True)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_drivers"] == 3
+        assert data["has_more"] is False
+        assert {d["driver_id"] for d in data["drivers"]} == {"low0", "low1", "low2"}
+
+    def test_ascending_sort_reaches_them(self, admin_client):
+        drivers, acc, users = _acc_fixture(n_good=60, n_low=3)
+        resp = self._call(admin_client, drivers, acc, users, limit=5, order="asc")
+        data = resp.json()
+        assert [d["driver_id"] for d in data["drivers"][:3]] == ["low0", "low1", "low2"]
+
+    def test_offset_pages_through_the_full_set(self, admin_client):
+        drivers, acc, users = _acc_fixture(n_good=4, n_low=2)
+        first = self._call(admin_client, drivers, acc, users, limit=4, offset=0).json()
+        drivers2, acc2, users2 = _acc_fixture(n_good=4, n_low=2)
+        second = self._call(admin_client, drivers2, acc2, users2, limit=4, offset=4).json()
+        assert first["has_more"] is True
+        assert second["has_more"] is False
+        assert second["returned"] == 2
+        # No driver appears on both pages, and together they cover everything.
+        ids = {d["driver_id"] for d in first["drivers"]} | {d["driver_id"] for d in second["drivers"]}
+        assert len(ids) == 6
+
+    def test_summary_covers_full_set_not_just_the_page(self, admin_client):
+        """A page-scoped average would drift as you paginate."""
+        drivers, acc, users = _acc_fixture(n_good=8, n_low=2)
+        page1 = self._call(admin_client, drivers, acc, users, limit=2, offset=0).json()
+        drivers2, acc2, users2 = _acc_fixture(n_good=8, n_low=2)
+        page5 = self._call(admin_client, drivers2, acc2, users2, limit=2, offset=8).json()
+        assert page1["avg_acceptance_rate"] == page5["avg_acceptance_rate"] == 84.0
+        assert page1["low_performer_count"] == page5["low_performer_count"] == 2
+        assert page1["total_drivers"] == page5["total_drivers"] == 10
+
+    def test_search_filters_by_driver_name(self, admin_client):
+        drivers, acc, users = _acc_fixture(n_good=3, n_low=1)
+        data = self._call(admin_client, drivers, acc, users, search="low").json()
+        assert data["total_drivers"] == 1
+        assert data["drivers"][0]["driver_id"] == "low0"
+
+    def test_search_is_case_insensitive(self, admin_client):
+        drivers, acc, users = _acc_fixture(n_good=2, n_low=1)
+        data = self._call(admin_client, drivers, acc, users, search="LOW").json()
+        assert data["total_drivers"] == 1
+
+    def test_min_rides_filter_excludes_idle_drivers(self, admin_client):
+        drivers = [
+            {"id": "busy", "user_id": "ub", "rating": 4.0, "is_online": True},
+            {"id": "idle", "user_id": "ui", "rating": 4.0, "is_online": True},
+        ]
+        acc = [{"driver_id": "busy", "total_rides": 9, "completed": 9, "cancelled_by_driver": 0}]
+        users = [
+            {"id": "ub", "first_name": "Busy", "last_name": "D"},
+            {"id": "ui", "first_name": "Idle", "last_name": "D"},
+        ]
+        data = self._call(admin_client, drivers, acc, users, min_rides=1).json()
+        assert data["total_drivers"] == 1
+        assert data["drivers"][0]["driver_id"] == "busy"
+
+    def test_scan_truncated_flag_is_false_below_the_cap(self, admin_client):
+        drivers, acc, users = _acc_fixture(n_good=2, n_low=0)
+        assert self._call(admin_client, drivers, acc, users).json()["scan_truncated"] is False
+
+    def test_scan_truncated_flag_set_at_the_cap(self, admin_client):
+        from backend.routes.admin.analytics import _DRIVER_SCAN_CAP
+
+        drivers, acc, users = _acc_fixture(n_good=_DRIVER_SCAN_CAP, n_low=0)
+        assert self._call(admin_client, drivers, acc, users).json()["scan_truncated"] is True
+
+    def test_threshold_is_reported_so_ui_cannot_drift(self, admin_client):
+        drivers, acc, users = _acc_fixture(n_good=1, n_low=1)
+        data = self._call(admin_client, drivers, acc, users).json()
+        assert data["low_performer_threshold"] == {"rate_below": 70.0, "min_rides": 5}
+
+    def test_offset_past_the_end_returns_empty_page_not_an_error(self, admin_client):
+        drivers, acc, users = _acc_fixture(n_good=2, n_low=0)
+        data = self._call(admin_client, drivers, acc, users, offset=500).json()
+        assert data["drivers"] == []
+        assert data["returned"] == 0
+        assert data["has_more"] is False
+        assert data["total_drivers"] == 2
+
+    def test_invalid_sort_column_is_rejected(self, admin_client):
+        drivers, acc, users = _acc_fixture(n_good=1, n_low=0)
+        assert self._call(admin_client, drivers, acc, users, sort_by="; DROP TABLE").status_code == 422

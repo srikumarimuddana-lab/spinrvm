@@ -1,17 +1,40 @@
 """Legacy booking import — parse, validate, and commit previous-app bookings.
 
-Imports completed rides from the previous (MongoDB-backed) app into ``rides``
-so riders and drivers see their trip history in Spinr. Customers and drivers
-are matched to existing accounts by phone number; unmatched parties import
-with a NULL link so the row can be re-linked later.
+Imports rides from the previous (MongoDB-backed) app into ``rides`` so riders
+and drivers see their trip history in Spinr. Customers and drivers are matched
+to existing accounts by phone number; unmatched parties import with a NULL
+link so the row can be re-linked later.
 
-Driver payouts for these rides were ALREADY settled in the previous app. The
-new app derives ``payable_balance`` live from completed rides
+Two independent code paths, selected by the legacy ``booking_status``:
+
+- ``completed`` — full fare/earnings import (see the money-safety paragraph
+  below). This is the ORIGINAL 2026-07-29 import path; its behavior is
+  unchanged by the cancelled/failed path added 2026-08-20.
+- ``cancelled`` / ``failed`` — added 2026-08-20
+  (docs/change-log/2026-08-20-legacy-cancelled-failed-booking-import.md,
+  ACTION_ITEMS.md A41). Every cancelled/failed legacy row still carries real
+  pickup/dropoff GPS and ``created_at``, which PIPEDA/SK Transportation Act
+  retention rules require Spinr to keep — the previous claim here that these
+  rows "carry no fare, no earnings, and no history value" was wrong; they
+  simply carry no MONEY value. This path writes status/cancellation fields
+  only — no fare, no earnings, no payout, no driver recount ("skip
+  payout-offset logic, keep GPS+timestamps" — P2-migration-completeness.md
+  item #2, reconfirmed 2026-08-19). A hard guard excludes any row that has
+  BOTH ``start_ride_at`` and ``complete_delivery_at`` populated regardless of
+  its legacy status — those are structurally indistinguishable from a
+  genuinely completed trip (mislabeled in the old app) and need the same
+  earnings-write rigor as the completed path, which this lightweight branch
+  does not have; they are reported under ``skipped_looks_completed``, never
+  silently imported by either path.
+
+Driver payouts for COMPLETED rides were ALREADY settled in the previous app.
+The new app derives ``payable_balance`` live from completed rides
 (``routes/drivers/earnings.py``), so importing real earnings without an offset
 would let a driver withdraw money they were already paid. Every matched driver
 therefore gets one offsetting ``payouts`` row (``payout_type='legacy_import'``,
-``status='completed'``) whose amount equals the sum of their imported earnings.
-Net payable delta per driver is exactly $0.
+``status='completed'``) whose amount equals the sum of their imported
+earnings. Net payable delta per driver is exactly $0. Cancelled/failed rows
+have no earnings, so they never touch this offset mechanism.
 
 Follows the same validate-then-commit contract as rider_import_service and
 driver_import_service. Reports carry only row numbers + legacy booking codes —
@@ -55,10 +78,24 @@ IMPORT_SOURCE = "legacy_mongo_booking_import"
 PAYOUT_TYPE = "legacy_import"
 PAYOUT_LABEL = "Settled in previous app (legacy import)"
 
-# Only completed rides are imported: cancelled/failed legacy bookings carry no
-# fare, no earnings, and no history value, and a cancelled row with a NULL
-# driver is invisible in rider history anyway.
+# The full fare/earnings import path — unchanged since 2026-07-29.
 TARGET_BOOKING_STATUS = "completed"
+
+# Added 2026-08-20 (A41): legacy bookings that never completed a trip. Both
+# statuses land on rides.status='cancelled' -- Spinr's own state machine has
+# no separate "failed" status, and every row in both legacy buckets is
+# pre-trip (see module docstring). A booking whose legacy status is neither
+# this, TARGET_BOOKING_STATUS, nor one of these (e.g. the export's 2 blank
+# `""` rows) is unrecognized and is skipped entirely -- never guessed at.
+LEGACY_CANCELLED_STATUSES = frozenset({"cancelled", "failed"})
+
+# Synthetic cancellation_reason for a cancelled/failed row whose legacy
+# cancelled_reason was blank (the overwhelming majority of the `failed`
+# bucket -- "no driver was ever found", not a payment/system failure).
+# admin_cancellation_breakdown buckets on this text, so it must read as a
+# real reason, not silently render NULL into that function's 'unspecified'
+# bucket.
+NO_DRIVER_FOUND_REASON = "No driver found (legacy import)"
 
 # Canadian accounts only. The legacy export contains the previous vendor's
 # test accounts (country code 91 / yopmail addresses) whose rides are not real.
@@ -294,6 +331,27 @@ def payout_id_for(batch: str, driver_id: str) -> str:
     return f"legacy-import-{batch}-{driver_id}"
 
 
+def _match_rider_driver(
+    cust: dict[str, str],
+    drv: dict[str, str],
+    users_by_phone: dict[str, dict[str, Any]],
+    drivers_by_phone: dict[str, dict[str, Any]],
+) -> tuple[str | None, str | None]:
+    """Resolve a legacy customer/driver row pair to Spinr user/driver ids by phone.
+
+    Shared, read-only, byte-for-byte identical to the matching the completed
+    path always used inline — extracted so the cancelled/failed path (added
+    2026-08-20) can reuse it without duplicating the phone-normalization
+    lookup. Pure function: takes no dependency on ``build_plan``'s loop state,
+    so it carries no risk of changing the completed path's behavior.
+    """
+    rider_row = users_by_phone.get(normalize_phone(cust.get("phone", "")))
+    driver_row = drivers_by_phone.get(normalize_phone(drv.get("phone", "")))
+    rider_id = rider_row["id"] if rider_row else None
+    driver_id = driver_row["id"] if driver_row else None
+    return rider_id, driver_id
+
+
 def build_plan(
     bookings: list[dict[str, str]],
     customers: list[dict[str, str]],
@@ -312,26 +370,64 @@ def build_plan(
     earnings_by_booking = _earnings_by_booking(earnings)
 
     # Select the target rows first so prefetch only asks about phones we need.
+    # `targets` (completed) is selected and filtered EXACTLY as before this
+    # branch was added — see the `if status == TARGET_BOOKING_STATUS:` arm
+    # below, which is a straight copy of the pre-2026-08-20 loop body.
     targets: list[tuple[int, dict[str, str]]] = []
+    cancelled_failed_targets: list[tuple[int, dict[str, str]]] = []
     skipped_not_completed = 0
     skipped_test_account = 0
+    cancelled_target_rows = 0
+    failed_target_rows = 0
     for idx, b in enumerate(bookings, start=1):
-        if (b.get("booking_status") or "").strip() != TARGET_BOOKING_STATUS:
+        status = (b.get("booking_status") or "").strip()
+
+        if status == TARGET_BOOKING_STATUS:
+            cust = customers_by_id.get((b.get("customer_id") or "").strip())
+            drv = drivers_by_id.get((b.get("driver_id") or "").strip())
+            cust_cc = (cust or {}).get("country_code")
+            drv_cc = (drv or {}).get("country_code")
+            if cust_cc != CANADA_COUNTRY_CODE or drv_cc != CANADA_COUNTRY_CODE:
+                skipped_test_account += 1
+                continue
+            targets.append((idx, b))
+
+        elif status in LEGACY_CANCELLED_STATUSES:
+            # Same test-account intent as the completed branch, adapted for a
+            # party that may legitimately be entirely absent: a cancelled/
+            # failed booking's driver_id is blank far more often than not
+            # (only 269/712 cancelled + 14/225 failed rows in the real export
+            # ever had a driver assigned) -- unlike a completed ride, which
+            # always has one. Requiring the driver's country code to equal
+            # Canada even when NO driver was ever assigned would wrongly
+            # reject the overwhelming majority of this bucket as "test
+            # accounts". The customer is always required (every booking has
+            # one); the driver check applies only when a driver row exists.
+            cust = customers_by_id.get((b.get("customer_id") or "").strip())
+            drv = drivers_by_id.get((b.get("driver_id") or "").strip())
+            cust_cc = (cust or {}).get("country_code")
+            if cust_cc != CANADA_COUNTRY_CODE:
+                skipped_test_account += 1
+                continue
+            if drv and drv.get("country_code") != CANADA_COUNTRY_CODE:
+                skipped_test_account += 1
+                continue
+            cancelled_failed_targets.append((idx, b))
+            if status == "cancelled":
+                cancelled_target_rows += 1
+            else:
+                failed_target_rows += 1
+
+        else:
+            # Includes the export's 2 blank (`""`) booking_status rows: not
+            # completed, cancelled, or failed, so genuinely unknown -- unsafe
+            # to guess, always skipped here.
             skipped_not_completed += 1
-            continue
-        cust = customers_by_id.get((b.get("customer_id") or "").strip())
-        drv = drivers_by_id.get((b.get("driver_id") or "").strip())
-        cust_cc = (cust or {}).get("country_code")
-        drv_cc = (drv or {}).get("country_code")
-        if cust_cc != CANADA_COUNTRY_CODE or drv_cc != CANADA_COUNTRY_CODE:
-            skipped_test_account += 1
-            continue
-        targets.append((idx, b))
 
     legacy_phones = sorted(
         {
             normalize_phone(p)
-            for _, b in targets
+            for _, b in targets + cancelled_failed_targets
             for p in (
                 (customers_by_id.get((b.get("customer_id") or "").strip()) or {}).get("phone", ""),
                 (drivers_by_id.get((b.get("driver_id") or "").strip()) or {}).get("phone", ""),
@@ -384,10 +480,7 @@ def build_plan(
         cust = customers_by_id.get((b.get("customer_id") or "").strip()) or {}
         drv = drivers_by_id.get((b.get("driver_id") or "").strip()) or {}
 
-        rider_row = users_by_phone.get(normalize_phone(cust.get("phone", "")))
-        driver_row = drivers_by_phone.get(normalize_phone(drv.get("phone", "")))
-        rider_id = rider_row["id"] if rider_row else None
-        driver_id = driver_row["id"] if driver_row else None
+        rider_id, driver_id = _match_rider_driver(cust, drv, users_by_phone, drivers_by_phone)
 
         if rider_id is None:
             unmatched_riders += 1
@@ -640,6 +733,160 @@ def build_plan(
             payout_totals[driver_id] = payout_totals.get(driver_id, ZERO) + driver_total
             plan.driver_ids_to_recount.add(driver_id)
 
+    # Boundary marker so `rides_planned` below can keep meaning exactly what
+    # it always meant (completed rides only) even though cancelled/failed
+    # rows land in the SAME plan.rides_to_insert list (commit_plan inserts
+    # both in one pass; there is nothing status-specific for it to skip).
+    completed_rides_count = len(plan.rides_to_insert)
+
+    # --- cancelled/failed rows: status + cancellation fields only. -----
+    # Added 2026-08-20 (A41). No fare, no earnings, no payout, no driver
+    # recount — see the module docstring's "skip payout-offset logic, keep
+    # GPS+timestamps" design guidance. Every row here already passed the
+    # test-account filter above.
+    cancelled_failed_skipped_already_imported = 0
+    cancelled_failed_skipped_looks_completed = 0
+    cancelled_failed_skipped_unmatched_both = 0
+    cancelled_failed_skipped_missing_coordinates = 0
+    cancelled_failed_unmatched_riders = 0
+    cancelled_failed_unmatched_drivers = 0
+
+    for idx, b in cancelled_failed_targets:
+        legacy_status = (b.get("booking_status") or "").strip()
+        old_id = (b.get("_id") or "").strip()
+        code = (b.get("booking_id") or "").strip() or f"row{idx}"
+
+        if not old_id:
+            plan.errors.append(ImportReportItem(idx, code, "_id", "booking is missing its legacy _id"))
+            continue
+        if old_id in seen_old_ids:
+            plan.errors.append(ImportReportItem(idx, code, "_id", "duplicate legacy booking _id in CSV"))
+            continue
+        seen_old_ids.add(old_id)
+
+        if old_id in already_imported:
+            cancelled_failed_skipped_already_imported += 1
+            continue
+
+        # Anomalous-row guard: a row with BOTH start_ride_at and
+        # complete_delivery_at populated is structurally indistinguishable
+        # from a genuinely completed trip (real driver_id/you_earn present in
+        # the 7 rows found in the actual export) -- mislabeled in the old
+        # app, not a real cancellation/failure. This lightweight path writes
+        # no fare/earnings fields, so importing one of these here would
+        # silently lose real driver-earnings data AND violate the ride state
+        # machine's "never cancelled after trip start" invariant. Never
+        # imported by any path in this task -- reported, not dropped.
+        if (b.get("start_ride_at") or "").strip() and (b.get("complete_delivery_at") or "").strip():
+            cancelled_failed_skipped_looks_completed += 1
+            plan.warnings.append(
+                ImportReportItem(
+                    idx,
+                    code,
+                    "booking_status",
+                    f"booking_status={legacy_status!r} but has both start_ride_at and "
+                    "complete_delivery_at set (looks completed); not imported by this path",
+                )
+            )
+            continue
+
+        cust = customers_by_id.get((b.get("customer_id") or "").strip()) or {}
+        drv = drivers_by_id.get((b.get("driver_id") or "").strip()) or {}
+        rider_id, driver_id = _match_rider_driver(cust, drv, users_by_phone, drivers_by_phone)
+
+        if rider_id is None:
+            cancelled_failed_unmatched_riders += 1
+        if driver_id is None:
+            cancelled_failed_unmatched_drivers += 1
+        if rider_id is None and driver_id is None:
+            cancelled_failed_skipped_unmatched_both += 1
+            continue
+
+        # --- coordinates / addresses (NOT NULL columns) -- same rule as the
+        # completed path, including the address fallback text and warning.
+        try:
+            pickup_lat = float(b["pickup_lat"])
+            pickup_lng = float(b["pickup_long"])
+            dropoff_lat = float(b["drop_lat"])
+            dropoff_lng = float(b["drop_long"])
+        except (KeyError, TypeError, ValueError):
+            cancelled_failed_skipped_missing_coordinates += 1
+            plan.errors.append(ImportReportItem(idx, code, "coordinates", "missing or unparseable pickup/drop lat/lng"))
+            continue
+
+        pickup_address = (b.get("pickup_address") or "").strip()
+        dropoff_address = (b.get("drop_address") or "").strip()
+        if not pickup_address:
+            pickup_address = "Address unavailable (imported ride)"
+            plan.warnings.append(ImportReportItem(idx, code, "pickup_address", "legacy pickup address was blank"))
+        if not dropoff_address:
+            dropoff_address = "Address unavailable (imported ride)"
+            plan.warnings.append(ImportReportItem(idx, code, "drop_address", "legacy drop address was blank"))
+
+        created_at = parse_epoch_ms(b.get("created_at", ""))
+        if not created_at:
+            plan.errors.append(ImportReportItem(idx, code, "created_at", "missing or unparseable created_at"))
+            continue
+
+        # No reliable cancellation timestamp exists in the export (updated_at
+        # is 0% populated on both legacy buckets) -- created_at is the only
+        # timestamp available, so it doubles as the cancellation time.
+        # Flagged as estimated so it is never mistaken for a real measured
+        # cancellation moment once committed (mirrors duration_estimated).
+        cancelled_at = created_at
+
+        legacy_cancelled_by = (b.get("cancelled_by") or "").strip().lower()
+        if legacy_cancelled_by == "customer":
+            cancelled_by_value, cancellation_type = "rider", "rider_cancel"
+        elif legacy_cancelled_by == "driver":
+            cancelled_by_value, cancellation_type = "driver", "driver_cancel"
+        else:
+            cancelled_by_value, cancellation_type = "system", "no_drivers_found"
+
+        legacy_reason = (b.get("cancelled_reason") or "").strip()
+        cancellation_reason = legacy_reason or NO_DRIVER_FOUND_REASON
+
+        ride = {
+            "id": str(uuid.uuid4()),
+            "rider_id": rider_id,
+            "driver_id": driver_id,
+            "vehicle_type_id": vehicle_type["id"],
+            "service_area_id": service_area["id"],
+            "pickup_address": pickup_address,
+            "pickup_lat": pickup_lat,
+            "pickup_lng": pickup_lng,
+            "dropoff_address": dropoff_address,
+            "dropoff_lat": dropoff_lat,
+            "dropoff_lng": dropoff_lng,
+            "booking_fee": 0.0,  # explicit: the column defaults to 2.0
+            "status": "cancelled",
+            "cancelled_at": cancelled_at,
+            "cancellation_reason": cancellation_reason,
+            "cancelled_by": cancelled_by_value,
+            "cancellation_type": cancellation_type,
+            "created_at": created_at,
+            "ride_requested_at": created_at,
+            "updated_at": now_iso,
+            "legacy_import_metadata": {
+                "batch": batch,
+                "source": IMPORT_SOURCE,
+                "old_booking_id": old_id,
+                "old_booking_code": code,
+                "old_customer_id": (b.get("customer_id") or "").strip(),
+                "old_driver_id": (b.get("driver_id") or "").strip(),
+                "imported_at": now_iso,
+                "cancelled_at_estimated": True,
+                # The literal legacy status ("cancelled" or "failed") so a
+                # future consumer can tell these apart from the original
+                # completed-path import without guessing from status alone
+                # (both land on rides.status='cancelled' here).
+                "original_booking_status": legacy_status,
+            },
+        }
+        plan.rides_to_insert.append(ride)
+        # Deliberately NOT added to plan.driver_ids_to_recount: total_rides is
+        # a COUNT of status='completed' rides, and this row is never one.
+
     # --- offsetting payouts: neutralize the payable balance we just created ---
     existing_payout_ids: set[str] = set()
     if payout_totals:
@@ -680,7 +927,10 @@ def build_plan(
         "target_rows": len(targets),
         "skipped_already_imported": skipped_already_imported,
         "skipped_unmatched_both": skipped_unmatched_both,
-        "rides_planned": len(plan.rides_to_insert),
+        # Completed rides only -- unchanged meaning from before the
+        # cancelled/failed path existed, even though both paths now share
+        # plan.rides_to_insert. See `completed_rides_count` above.
+        "rides_planned": completed_rides_count,
         "unmatched_riders": unmatched_riders,
         "unmatched_drivers": unmatched_drivers,
         "earnings_fallback_rows": earnings_fallback_rows,
@@ -688,6 +938,17 @@ def build_plan(
         "payouts_planned": len(plan.payouts_to_insert),
         "payouts_skipped_existing": len(existing_payout_ids),
         "drivers_to_recount": len(plan.driver_ids_to_recount),
+        # --- cancelled/failed path (added 2026-08-20, A41) ---
+        "cancelled_target_rows": cancelled_target_rows,
+        "failed_target_rows": failed_target_rows,
+        "cancelled_failed_rides_planned": len(plan.rides_to_insert) - completed_rides_count,
+        "cancelled_failed_skipped_already_imported": cancelled_failed_skipped_already_imported,
+        "cancelled_failed_skipped_unmatched_both": cancelled_failed_skipped_unmatched_both,
+        "cancelled_failed_skipped_looks_completed": cancelled_failed_skipped_looks_completed,
+        "cancelled_failed_skipped_missing_coordinates": cancelled_failed_skipped_missing_coordinates,
+        "cancelled_failed_unmatched_riders": cancelled_failed_unmatched_riders,
+        "cancelled_failed_unmatched_drivers": cancelled_failed_unmatched_drivers,
+        "total_rides_planned": len(plan.rides_to_insert),
         "sum_rider_paid": float(sum_rider_paid),
         "sum_driver_total": float(sum_driver_total),
         "sum_offset_payouts": float(sum((to_decimal(p["amount"]) for p in plan.payouts_to_insert), ZERO)),
@@ -779,6 +1040,18 @@ def print_report(plan: BookingImportPlan, *, dry_run: bool) -> None:
     )
     print(f"    already present, skipped : {s.get('payouts_skipped_existing', 0)}")
     print(f"  drivers to recount         : {s.get('drivers_to_recount', 0)}")
+
+    print("\n  --- cancelled/failed (status + cancellation fields only, no money) ---")
+    print(f"  cancelled target rows       : {s.get('cancelled_target_rows', 0)}")
+    print(f"  failed target rows          : {s.get('failed_target_rows', 0)}")
+    print(f"  rides to insert             : {s.get('cancelled_failed_rides_planned', 0)}")
+    print(f"    with unmatched rider      : {s.get('cancelled_failed_unmatched_riders', 0)}")
+    print(f"    with unmatched driver     : {s.get('cancelled_failed_unmatched_drivers', 0)}")
+    print(f"  skipped (already imported)  : {s.get('cancelled_failed_skipped_already_imported', 0)}")
+    print(f"  skipped (no party matched)  : {s.get('cancelled_failed_skipped_unmatched_both', 0)}")
+    print(f"  skipped (looks completed)   : {s.get('cancelled_failed_skipped_looks_completed', 0)}")
+    print(f"  skipped (bad coordinates)   : {s.get('cancelled_failed_skipped_missing_coordinates', 0)}")
+    print(f"  total rides planned (both)  : {s.get('total_rides_planned', 0)}")
 
     if plan.warnings:
         print(f"\n  --- warnings ({len(plan.warnings)}) ---")

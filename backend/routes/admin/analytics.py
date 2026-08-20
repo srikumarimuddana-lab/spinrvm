@@ -13,10 +13,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 try:
     from ...db import db
     from ...dependencies import get_admin_user
+    from ...services.fare_service import _d, _f, _round
     from ...utils.redis_client import redis_get, redis_set
 except ImportError:
     from db import db
     from dependencies import get_admin_user
+    from services.fare_service import _d, _f, _round  # noqa: F401
     from utils.redis_client import redis_get, redis_set  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -1069,6 +1071,219 @@ async def get_supply_utilization(
         "avg_online_hours_per_driver": round(online_hours / active_drivers, 2) if active_drivers else 0.0,
         "kpis": [_kpi("utilization_pct", utilization)],
         "daily": su.get("daily") or [],
+    }
+    try:
+        await redis_set(cache_key, _json.dumps(result), ttl=_OVERVIEW_CACHE_TTL)
+    except Exception:  # noqa: S110
+        pass  # Redis unavailable — return fresh result uncached
+    return result
+
+
+# ── Efficiency (rider experience + driver economics) ─────────────────
+
+
+@api_router.get("/efficiency")
+async def get_efficiency_metrics(
+    date_range: str = Query("30d", pattern="^(today|7d|30d|90d|1y)$"),
+    service_area_id: Optional[str] = None,
+    admin: dict = Depends(get_admin_user),
+):
+    """Time-to-match, assignment-to-pickup, ETA error, and deadhead ratio.
+
+    These move before the headline rates do: time-to-match climbing is a
+    supply signal that shows up well ahead of the cancellation rate. Deadhead
+    matters more here than at a commission-taking operator — the driver keeps
+    100% of the fare, so unpaid approach km come straight out of their
+    earnings.
+
+    Every percentile ships with its sample size. A P95 over eleven rides is
+    not a fleet statistic, and the caller must be able to tell.
+
+    Aggregated in Postgres (admin_efficiency_metrics, migration 352).
+    """
+    import json as _json
+
+    cache_key = f"analytics:efficiency:v1:{date_range}:{service_area_id or 'all'}"
+    cached = await redis_get(cache_key)
+    if cached:
+        try:
+            return _json.loads(cached)
+        except Exception:  # noqa: S110
+            pass  # corrupt cache entry — fall through to fresh fetch
+
+    start_date = _parse_date_range(date_range)
+    now = datetime.now(timezone.utc)
+
+    try:
+        ef = await db.rpc(
+            "admin_efficiency_metrics",
+            {
+                "p_start": start_date.isoformat(),
+                "p_end": now.isoformat(),
+                "p_service_area_id": service_area_id,
+            },
+        )
+    except Exception as e:
+        logger.error(
+            f"Failed to aggregate efficiency metrics: {e}",
+            exc_info=True,
+            extra={"domain": "admin"},
+        )
+        raise HTTPException(status_code=503, detail="analytics_unavailable") from e
+
+    ef = ef[0] if isinstance(ef, list) and ef else ef
+    if not isinstance(ef, dict):
+        ef = {}
+
+    def _num(key: str):
+        """None stays None — a missing percentile must not render as 0 seconds."""
+        v = ef.get(key)
+        return float(v) if v is not None else None
+
+    result = {
+        "date_range": date_range,
+        "service_area_id": service_area_id,
+        "timezone": _ANALYTICS_TZ,
+        "time_to_match": {
+            "p50_secs": _num("time_to_match_p50_secs"),
+            "p95_secs": _num("time_to_match_p95_secs"),
+            "sample": int(ef.get("matched_sample") or 0),
+        },
+        # Spans driver acceptance AND the drive to pickup: `rides` has no
+        # arrival timestamp, so this is an upper bound on drive time.
+        "assignment_to_trip_start": {
+            "p50_secs": _num("time_to_pickup_p50_secs"),
+            "p95_secs": _num("time_to_pickup_p95_secs"),
+            "sample": int(ef.get("pickup_sample") or 0),
+        },
+        "pickup_eta_error": {
+            "p50_secs": _num("eta_error_p50_secs"),
+            "p95_secs": _num("eta_error_p95_secs"),
+            "on_time_pct": _num("eta_on_time_pct") or 0.0,
+            "sample": int(ef.get("eta_sample") or 0),
+        },
+        "deadhead": {
+            "unpaid_km": _num("deadhead_km") or 0.0,
+            "paid_km": _num("paid_km") or 0.0,
+            "ratio_pct": _num("deadhead_ratio_pct") or 0.0,
+        },
+    }
+    try:
+        await redis_set(cache_key, _json.dumps(result), ttl=_OVERVIEW_CACHE_TTL)
+    except Exception:  # noqa: S110
+        pass  # Redis unavailable — return fresh result uncached
+    return result
+
+
+# ── Financial / growth ───────────────────────────────────────────────
+
+
+@api_router.get("/financial")
+async def get_financial_metrics(
+    date_range: str = Query("30d", pattern="^(today|7d|30d|90d|1y)$"),
+    service_area_id: Optional[str] = None,
+    admin: dict = Depends(get_admin_user),
+):
+    """Gross bookings, fare composition, surge penetration, corporate split.
+
+    "Gross bookings" is what riders paid — NOT Spinr revenue. Drivers keep
+    100% of the fare on consumer rides (CLAUDE.md: not a commission-taking
+    marketplace), so this figure must never be presented as company revenue.
+    The field is named `gross_bookings` for that reason.
+
+    Also derives revenue per online hour by combining with the supply ledger,
+    since bookings alone cannot say whether supply is being used efficiently.
+
+    Aggregated in Postgres (admin_financial_metrics, migration 352).
+    """
+    import json as _json
+
+    cache_key = f"analytics:financial:v1:{date_range}:{service_area_id or 'all'}"
+    cached = await redis_get(cache_key)
+    if cached:
+        try:
+            return _json.loads(cached)
+        except Exception:  # noqa: S110
+            pass  # corrupt cache entry — fall through to fresh fetch
+
+    start_date = _parse_date_range(date_range)
+    now = datetime.now(timezone.utc)
+    rpc_args = {
+        "p_start": start_date.isoformat(),
+        "p_end": now.isoformat(),
+        "p_service_area_id": service_area_id,
+    }
+
+    try:
+        fin = await db.rpc("admin_financial_metrics", rpc_args)
+    except Exception as e:
+        logger.error(
+            f"Failed to aggregate financial metrics: {e}",
+            exc_info=True,
+            extra={"domain": "admin"},
+        )
+        raise HTTPException(status_code=503, detail="analytics_unavailable") from e
+
+    # Supply hours are needed for bookings-per-online-hour. A failure here
+    # must not fail the whole endpoint — the financial figures are still
+    # valid without it — but it is logged, not swallowed silently, and the
+    # derived field is reported as null rather than 0 so a reader cannot
+    # mistake "unknown" for "zero".
+    online_hours: Optional[Decimal] = None
+    try:
+        su = await db.rpc("admin_supply_utilization", rpc_args)
+        su = su[0] if isinstance(su, list) and su else su
+        if isinstance(su, dict):
+            online_hours = _d(su.get("online_seconds") or 0) / Decimal("3600")
+    except Exception as e:
+        logger.error(
+            f"Supply lookup failed while building financial metrics; bookings_per_online_hour will be null: {e}",
+            exc_info=True,
+            extra={"domain": "admin"},
+        )
+
+    fin = fin[0] if isinstance(fin, list) and fin else fin
+    if not isinstance(fin, dict):
+        fin = {}
+
+    gross = _d(fin.get("gross_bookings") or 0)
+    per_hour = _round(gross / online_hours) if online_hours and online_hours > 0 else None
+
+    result = {
+        "date_range": date_range,
+        "service_area_id": service_area_id,
+        "timezone": _ANALYTICS_TZ,
+        "completed_rides": int(fin.get("completed_rides") or 0),
+        # Rider-paid volume, NOT company revenue — drivers keep 100% of the
+        # fare on consumer rides.
+        "gross_bookings": _f(gross),
+        "avg_fare": _f(_d(fin.get("avg_fare") or 0)),
+        "tips": _f(_d(fin.get("tips") or 0)),
+        "tax": _f(_d(fin.get("tax") or 0)),
+        "discounts": _f(_d(fin.get("discounts") or 0)),
+        "bookings_per_online_hour": _f(per_hour) if per_hour is not None else None,
+        "online_hours": _f(_round(online_hours)) if online_hours is not None else None,
+        "surge": {
+            "rides": int(fin.get("surge_rides") or 0),
+            "pct_of_rides": float(fin.get("surge_pct") or 0),
+            "avg_multiplier": float(fin.get("avg_surge_multiplier") or 1),
+            "attributable_bookings": _f(_d(fin.get("surge_revenue") or 0)),
+        },
+        "mix": {
+            "corporate_rides": int(fin.get("corporate_rides") or 0),
+            "corporate_bookings": _f(_d(fin.get("corporate_bookings") or 0)),
+            "consumer_rides": int(fin.get("consumer_rides") or 0),
+            "consumer_bookings": _f(_d(fin.get("consumer_bookings") or 0)),
+        },
+        "riders": {
+            "unique": int(fin.get("unique_riders") or 0),
+            "repeat": int(fin.get("repeat_riders") or 0),
+            # Within-window repeat share, NOT a retention cohort — it reads
+            # lower on short windows by construction.
+            "repeat_rate_pct": float(fin.get("repeat_rate_pct") or 0),
+            "repeat_rate_basis": "within_window",
+        },
+        "daily": fin.get("daily") or [],
     }
     try:
         await redis_set(cache_key, _json.dumps(result), ttl=_OVERVIEW_CACHE_TTL)

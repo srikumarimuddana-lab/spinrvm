@@ -475,11 +475,7 @@ def test_recomputed_statistics_use_reconstructed_distance_without_touching_fare(
         "routed_connector_distance_km": 0.0,
         "straight_connector_distance_km": 0.0,
     }
-    _run(
-        route_finalizer._recompute_ride_distance_stats(
-            "ride_1", ride, 4, reconstructed=_reconstructed, coverage=0.9
-        )
-    )
+    _run(route_finalizer._recompute_ride_distance_stats("ride_1", ride, 4, reconstructed=_reconstructed, coverage=0.9))
 
     ride_update = next(payload for table, _filters, payload in updates if table == "rides")
     assert ride_update["actual_distance_km"] == 1.55
@@ -489,3 +485,142 @@ def test_recomputed_statistics_use_reconstructed_distance_without_touching_fare(
         assert forbidden not in ride_update
     assert inserts[0][0] == "ride_distance_recomputes"
     assert inserts[0][1]["new_actual_distance_km"] == 1.55
+
+
+# ---------------------------------------------------------------------------
+# Booked-dropoff tail anchor (route_booked_dropoff_anchor_enabled)
+# ---------------------------------------------------------------------------
+
+
+def _ride_with_endpoints() -> dict:
+    return {
+        **_ride(),
+        "pickup_lat": 50.45,
+        "pickup_lng": -104.62,
+        "dropoff_lat": 50.46,
+        "dropoff_lng": -104.63,
+    }
+
+
+def _reconstruction_ok() -> dict:
+    return {
+        "segments": [
+            {
+                "id": "inferred-missing_tail-1",
+                "provider": "osrm_inferred",
+                "geometry_kind": "inferred",
+                "gap_reason": "missing_tail",
+                "distance_km": 0.8,
+                "coordinates": [[50.45, -104.62], [50.46, -104.63]],
+            }
+        ],
+        "distance_km": 1.0,
+        "observed_distance_km": 0.2,
+        "inferred_distance_km": 0.8,
+        "routed_connector_distance_km": 0.8,
+        "straight_connector_distance_km": 0.0,
+        "observed_distance_ratio": 0.2,
+        "inferred_distance_ratio": 0.8,
+        "inferred_gap_count": 1,
+        "endpoint_start_verified": True,
+        "endpoint_end_verified": True,
+        "failed_gaps": [],
+    }
+
+
+def _anchor_case(monkeypatch, *, settings, completion_point=None, ride=None, points=None):
+    """Shared wiring for the tail-anchor tests; returns (update, reconstruct)."""
+    update = AsyncMock(return_value={"ride_id": "ride_1"})
+    reconstruct = AsyncMock(return_value=_reconstruction_ok())
+    monkeypatch.setattr(
+        route_finalizer.db_supabase,
+        "get_rows",
+        AsyncMock(return_value=[_point(0, 0), _point(1, 10)] if points is None else points),
+    )
+    monkeypatch.setattr(route_finalizer.db_supabase, "get_ride", AsyncMock(return_value=ride or _ride_with_endpoints()))
+    monkeypatch.setattr(route_finalizer.db_supabase, "update_one", update)
+    monkeypatch.setattr(
+        route_finalizer, "_get_route_row", AsyncMock(return_value=_route_row(completion_point=completion_point))
+    )
+    monkeypatch.setattr(route_finalizer, "_publish_finalized_snapshot", AsyncMock())
+    monkeypatch.setattr(route_finalizer, "_recompute_ride_distance_stats", AsyncMock())
+    monkeypatch.setattr(route_finalizer, "reconstruct_completed_route", reconstruct, raising=False)
+    monkeypatch.setattr(route_finalizer, "get_app_settings", settings, raising=False)
+    monkeypatch.setattr(
+        route_finalizer,
+        "compute_segmented_road_route",
+        AsyncMock(return_value={"segments": [], "distance_km": 0.0, "provider": "osrm_match", "failures": []}),
+    )
+    return update, reconstruct
+
+
+def test_missing_completion_fix_skips_reconstruction_when_flag_off(monkeypatch):
+    update, reconstruct = _anchor_case(monkeypatch, settings=AsyncMock(return_value={}))
+
+    result = _run(route_finalizer.finalize_route("ride_1"))
+
+    reconstruct.assert_not_awaited()
+    payload = update.await_args.args[2]
+    assert result["processing_status"] == "incomplete"
+    assert payload["route_quality"]["incomplete_reason"] == "missing_completion_fix"
+    assert "completion_anchor_source" not in payload["route_quality"]
+
+
+def test_missing_completion_fix_anchors_to_booked_dropoff_when_flag_on(monkeypatch):
+    update, reconstruct = _anchor_case(
+        monkeypatch, settings=AsyncMock(return_value={"route_booked_dropoff_anchor_enabled": True})
+    )
+
+    result = _run(route_finalizer.finalize_route("ride_1"))
+
+    reconstruct.assert_awaited_once()
+    assert reconstruct.await_args.args[2] == {"lat": 50.45, "lng": -104.62}
+    assert reconstruct.await_args.args[3] == {"lat": 50.46, "lng": -104.63}
+    payload = update.await_args.args[2]
+    assert result["processing_status"] == "complete"
+    assert payload["road_matched_segments"] == _reconstruction_ok()["segments"]
+    assert payload["route_quality"]["completion_anchor_source"] == "booked_dropoff"
+    assert payload["route_quality"]["incomplete_reason"] is None
+
+
+def test_completion_fix_present_wins_over_booked_dropoff_and_records_provenance(monkeypatch):
+    fix = _point(2, 600)
+    update, reconstruct = _anchor_case(
+        monkeypatch,
+        settings=AsyncMock(return_value={"route_booked_dropoff_anchor_enabled": True}),
+        completion_point=fix,
+    )
+
+    result = _run(route_finalizer.finalize_route("ride_1"))
+
+    reconstruct.assert_awaited_once()
+    assert reconstruct.await_args.args[3] == fix
+    payload = update.await_args.args[2]
+    assert result["processing_status"] == "complete"
+    assert payload["route_quality"]["completion_anchor_source"] == "completion_fix"
+
+
+def test_flag_on_without_observed_evidence_never_fabricates_a_route(monkeypatch):
+    update, reconstruct = _anchor_case(
+        monkeypatch,
+        settings=AsyncMock(return_value={"route_booked_dropoff_anchor_enabled": True}),
+        points=[],
+    )
+
+    result = _run(route_finalizer.finalize_route("ride_1"))
+
+    reconstruct.assert_not_awaited()
+    assert result["processing_status"] == "incomplete"
+    payload = update.await_args.args[2]
+    assert "completion_anchor_source" not in payload["route_quality"]
+
+
+def test_anchor_flag_read_failure_falls_back_to_legacy_fragments(monkeypatch):
+    update, reconstruct = _anchor_case(monkeypatch, settings=AsyncMock(side_effect=RuntimeError("settings store down")))
+
+    result = _run(route_finalizer.finalize_route("ride_1"))
+
+    reconstruct.assert_not_awaited()
+    payload = update.await_args.args[2]
+    assert result["processing_status"] == "incomplete"
+    assert payload["route_quality"]["incomplete_reason"] == "missing_completion_fix"

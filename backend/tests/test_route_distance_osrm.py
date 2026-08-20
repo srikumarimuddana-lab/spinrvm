@@ -8,7 +8,7 @@ to [[lat,lng],...], distance summed across matchings (m -> km), soft-None on
 errors, OSRM-first selection, and the back-compat distance-only shim.
 """
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -220,6 +220,69 @@ async def test_segmented_matching_chunks_293_points_with_overlap_and_keeps_osrm_
     assert len(matched) == len(calls) * 2
     assert matched[0]["polyline"] != matched[1]["polyline"]
     assert result["distance_km"] == round(len(calls) * 1.5, 3)
+
+
+@pytest.mark.asyncio
+async def test_segmented_chunk_retry_recovers_transient_osrm_failure():
+    """One bounded retry per failed chunk: a transient OSRM hiccup must not
+    downgrade the whole observed segment to raw jagged GPS (SPR-JE4G7T)."""
+    osrm_calls = {"n": 0}
+    google_calls = {"n": 0}
+
+    async def _fake_app_settings():
+        return {"osrm_url": "http://osrm:5000", "google_maps_api_key": "key-123"}
+
+    async def _flaky_osrm(points, _url):
+        osrm_calls["n"] += 1
+        if osrm_calls["n"] == 1:
+            return None
+        return [(1.2, [[points[0]["lat"], points[0]["lng"]], [points[-1]["lat"], points[-1]["lng"]]])]
+
+    async def _fake_google(points, _key):
+        google_calls["n"] += 1
+        return (9.9, [[1, 1], [2, 2]])
+
+    with (
+        patch.object(rd, "get_app_settings", _fake_app_settings),
+        patch.object(rd, "_compute_osrm_chunk_matchings", _flaky_osrm),
+        patch.object(rd, "_compute_via_google_roads", _fake_google),
+        patch.object(rd.asyncio, "sleep", AsyncMock()),
+    ):
+        result = await rd.compute_segmented_road_route([_trip(6)])
+
+    assert osrm_calls["n"] == 2
+    assert google_calls["n"] == 0, "retry succeeded — Google fallback must not fire"
+    assert result["failures"] == []
+    assert result["provider"] == "osrm_match"
+    assert result["segments"][0]["matched_segments"][0]["provider"] == "osrm_match"
+
+
+@pytest.mark.asyncio
+async def test_segmented_chunk_double_osrm_failure_still_falls_back_to_google():
+    osrm_calls = {"n": 0}
+
+    async def _fake_app_settings():
+        return {"osrm_url": "http://osrm:5000", "google_maps_api_key": "key-123"}
+
+    async def _dead_osrm(_points, _url):
+        osrm_calls["n"] += 1
+        return None
+
+    async def _fake_google(points, key):
+        assert key == "key-123"
+        return (2.5, [[points[0]["lat"], points[0]["lng"]], [points[-1]["lat"], points[-1]["lng"]]])
+
+    with (
+        patch.object(rd, "get_app_settings", _fake_app_settings),
+        patch.object(rd, "_compute_osrm_chunk_matchings", _dead_osrm),
+        patch.object(rd, "_compute_via_google_roads", _fake_google),
+        patch.object(rd.asyncio, "sleep", AsyncMock()),
+    ):
+        result = await rd.compute_segmented_road_route([_trip(6)])
+
+    assert osrm_calls["n"] == 2, "exactly one retry — never an unbounded loop"
+    assert result["failures"] == []
+    assert result["provider"] == "google_roads"
 
 
 # ── compute_road_route — provider selection ───────────────────────────────────

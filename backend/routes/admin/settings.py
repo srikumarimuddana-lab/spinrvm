@@ -432,6 +432,26 @@ class SettingsUpdateRequest(BaseModel):
     # above. The endpoint also requires an explicit confirm:true on every
     # call -- this flag alone does not make a single request submit.
     dispute_stripe_evidence_submission_enabled: Optional[bool] = None
+    # GPS tracking-overhaul rollout flags (migrations 345/349, all ship dark).
+    # These existed as settings columns but were missing from this model, so
+    # the admin dashboard's save silently dropped them (extra="ignore") and
+    # the owner's flag flips only worked via a direct DB edit. Wiring them
+    # here is what makes the documented "flip via admin settings" rollout
+    # real. Semantics live at the consumers: breadcrumbs.py (idle capture),
+    # period1_distance_finalizer.py, route_finalizer.py (P2 geometry, booked-
+    # dropoff tail anchor), ride_repo.py (rider pickup-leg display),
+    # route_gap_monitor.py (FCM nudge), stale_p3_closer.py (autoclose).
+    idle_location_v2_enabled: Optional[bool] = None
+    period1_distance_tracking_enabled: Optional[bool] = None
+    p2_route_geometry_enabled: Optional[bool] = None
+    rider_show_pickup_leg_enabled: Optional[bool] = None
+    location_health_push_nudge_enabled: Optional[bool] = None
+    stale_p3_autoclose_enabled: Optional[bool] = None
+    route_booked_dropoff_anchor_enabled: Optional[bool] = None
+    # 24h floor: below one day the purge loop would eat evidence the route
+    # finalizer's late-tail revisions still need. 90 days (2160h) default per
+    # the owner's retention decision, ceiling matches the blanket GPS purge.
+    idle_breadcrumb_retention_hours: Optional[int] = Field(default=None, ge=24, le=2160)
 
     @field_validator("lms_api_base_url")
     @classmethod

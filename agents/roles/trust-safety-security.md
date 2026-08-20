@@ -45,3 +45,11 @@ A pass/fail plus, on fail, specific findings tied to file and line — vague fin
 - Cannot let a rider's exact pickup/dropoff address, raw GPS coordinates, full name,
   phone number, or government ID reach a log line, Sentry event, or analytics payload
   — this list is absolute, not a judgment call per change.
+
+## Individual roles
+- [Insurance / Risk Advisor](trust-safety-security/insurance-risk-advisor.md)
+- [Security Engineer](trust-safety-security/security-engineer.md)
+- [Fraud / Trust & Safety Analyst](trust-safety-security/fraud-trust-safety-analyst.md)
+- [Safety / Trust Operations Lead](trust-safety-security/safety-operations-lead.md)
+- [24/7 Safety On-Call](trust-safety-security/safety-on-call.md)
+- [Internal Audit / Security Team](trust-safety-security/internal-audit-security.md)

@@ -122,6 +122,24 @@ def _patch_insert_one(side_effect=None):
     return patch("compliance_export.db.insert_one", AsyncMock(side_effect=side_effect or (lambda *a, **kw: None)))
 
 
+def _table_routed_get_rows(periods_result, corrections_result=None):
+    """Build a get_rows side_effect that returns `periods_result` (or its
+    pages, in order, if given a list-of-lists) for driver_insurance_periods
+    and `corrections_result` (default []) for driver_insurance_period_
+    corrections — mirrors _scan()'s two-table read (ACTION_ITEMS.md B34)
+    without every existing single-table test having to special-case it."""
+    periods_pages = list(periods_result) if periods_result and isinstance(periods_result[0], list) else None
+
+    async def get_rows_side(table, filters=None, **kw):
+        if table == "driver_insurance_period_corrections":
+            return corrections_result or []
+        if periods_pages is not None:
+            return periods_pages.pop(0) if periods_pages else []
+        return periods_result
+
+    return get_rows_side
+
+
 class TestScanFilters:
     def test_date_range_and_period_filter_applied(self):
         captured = {}
@@ -170,8 +188,11 @@ class TestScanFilters:
         calls = []
 
         async def get_rows_side(table, filters=None, **kw):
-            calls.append(kw.get("offset"))
-            return pages.pop(0) if pages else []
+            if table == "driver_insurance_periods":
+                calls.append(kw.get("offset"))
+                return pages.pop(0) if pages else []
+            # ACTION_ITEMS.md B34 correction lookup — none on file here.
+            return []
 
         with _patch_get_rows(get_rows_side), _patch_insert_one():
             summary = asyncio.run(run_export(start="2026-01-01", end="2026-04-01", requested_by="admin1"))
@@ -187,10 +208,7 @@ class TestAuditTrail:
         async def insert_side(table, doc):
             insert_calls.append((table, doc))
 
-        async def get_rows_side(table, filters=None, **kw):
-            return [_period_row()]
-
-        with _patch_get_rows(get_rows_side), _patch_insert_one(insert_side):
+        with _patch_get_rows(_table_routed_get_rows([_period_row()])), _patch_insert_one(insert_side):
             asyncio.run(
                 run_export(
                     start="2026-01-01",
@@ -215,10 +233,7 @@ class TestOutputRendering:
     def test_csv_output_written_to_file(self, tmp_path):
         out_file = tmp_path / "export.csv"
 
-        async def get_rows_side(table, filters=None, **kw):
-            return [_period_row()]
-
-        with _patch_get_rows(get_rows_side), _patch_insert_one():
+        with _patch_get_rows(_table_routed_get_rows([_period_row()])), _patch_insert_one():
             summary = asyncio.run(
                 run_export(
                     start="2026-01-01",
@@ -231,16 +246,14 @@ class TestOutputRendering:
         content = out_file.read_text()
         assert "ride_id" in content.splitlines()[0]
         assert "is_reconstructed" in content.splitlines()[0]
+        assert "is_corrected" in content.splitlines()[0]
         assert "r1" in content
         assert summary["output"] == str(out_file)
 
     def test_json_output_written_to_file(self, tmp_path):
         out_file = tmp_path / "export.json"
 
-        async def get_rows_side(table, filters=None, **kw):
-            return [_period_row()]
-
-        with _patch_get_rows(get_rows_side), _patch_insert_one():
+        with _patch_get_rows(_table_routed_get_rows([_period_row()])), _patch_insert_one():
             asyncio.run(
                 run_export(
                     start="2026-01-01",
@@ -253,3 +266,94 @@ class TestOutputRendering:
 
         parsed = json.loads(out_file.read_text())
         assert parsed[0]["ride_id"] == "r1"
+
+
+class TestCorrectionPreference:
+    """ACTION_ITEMS.md B34: when a driver_insurance_period_corrections row
+    exists for a period, the export must return the CORRECTED started_at/
+    ended_at, not the original — not just that the corrections table can be
+    queried."""
+
+    def test_corrected_values_preferred_over_original(self, tmp_path):
+        out_file = tmp_path / "export.json"
+        original = _period_row(ride_id="r1", started="2026-07-05T10:00:00Z", ended="2026-07-05T10:20:00Z")
+        original["id"] = "p1"
+        correction = {
+            "original_period_id": "p1",
+            "corrected_started_at": "2026-07-05T09:45:00Z",  # real GPS start, earlier
+            "corrected_ended_at": "2026-07-05T10:20:00Z",
+        }
+
+        with (
+            _patch_get_rows(_table_routed_get_rows([original], [correction])),
+            _patch_insert_one(),
+        ):
+            asyncio.run(
+                run_export(
+                    start="2026-01-01",
+                    end="2026-04-01",
+                    requested_by="admin1",
+                    fmt="json",
+                    out_path=str(out_file),
+                )
+            )
+
+        record = json.loads(out_file.read_text())[0]
+        assert record["period_started_at"] == "2026-07-05T09:45:00Z"
+        assert record["period_ended_at"] == "2026-07-05T10:20:00Z"
+        assert record["is_corrected"] is True
+
+    def test_original_values_kept_when_no_correction_on_file(self, tmp_path):
+        out_file = tmp_path / "export.json"
+        original = _period_row(ride_id="r1", started="2026-07-05T10:00:00Z", ended="2026-07-05T10:20:00Z")
+        original["id"] = "p1"
+
+        with (
+            _patch_get_rows(_table_routed_get_rows([original], corrections_result=[])),
+            _patch_insert_one(),
+        ):
+            asyncio.run(
+                run_export(
+                    start="2026-01-01",
+                    end="2026-04-01",
+                    requested_by="admin1",
+                    fmt="json",
+                    out_path=str(out_file),
+                )
+            )
+
+        record = json.loads(out_file.read_text())[0]
+        assert record["period_started_at"] == "2026-07-05T10:00:00Z"
+        assert record["period_ended_at"] == "2026-07-05T10:20:00Z"
+        assert record["is_corrected"] is False
+
+    def test_correction_lookup_scoped_to_scanned_period_ids(self):
+        # The $in filter passed to the corrections lookup must be exactly
+        # the ids of the rows just scanned — never an unfiltered/empty $in.
+        captured_filters = {}
+        original = _period_row(ride_id="r1")
+        original["id"] = "p1"
+
+        async def get_rows_side(table, filters=None, **kw):
+            if table == "driver_insurance_period_corrections":
+                captured_filters["filters"] = filters
+                return []
+            return [original]
+
+        with _patch_get_rows(get_rows_side), _patch_insert_one():
+            asyncio.run(run_export(start="2026-01-01", end="2026-04-01", requested_by="admin1"))
+
+        assert captured_filters["filters"] == {"original_period_id": {"$in": ["p1"]}}
+
+    def test_no_correction_lookup_when_no_periods_scanned(self):
+        # Empty scan result must short-circuit — never issue an all-empty $in.
+        calls = []
+
+        async def get_rows_side(table, filters=None, **kw):
+            calls.append(table)
+            return []
+
+        with _patch_get_rows(get_rows_side), _patch_insert_one():
+            asyncio.run(run_export(start="2026-01-01", end="2026-04-01", requested_by="admin1"))
+
+        assert calls == ["driver_insurance_periods"]

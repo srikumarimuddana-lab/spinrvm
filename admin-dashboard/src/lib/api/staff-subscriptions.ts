@@ -106,12 +106,25 @@ export const updateSubscriptionTaxConfig = (
     });
 
 /* ── Audit Logs ──────────────────────────── */
+export interface AuditLogEntry {
+    id: string;
+    created_at: string;
+    action: string;
+    entity_type: string;
+    entity_id: string;
+    actor_id: string;
+    actor_email: string;
+    details: string | null;
+}
+
 export const getAuditLogs = (opts: {
     limit?: number;
     offset?: number;
     action?: string;
     entity_type?: string;
     search?: string;
+    start_date?: string;
+    end_date?: string;
 } = {}) => {
     const sp = new URLSearchParams();
     sp.set("limit", String(opts.limit ?? 50));
@@ -119,7 +132,9 @@ export const getAuditLogs = (opts: {
     if (opts.action) sp.set("action", opts.action);
     if (opts.entity_type) sp.set("entity_type", opts.entity_type);
     if (opts.search) sp.set("search", opts.search);
-    return request<any[]>(`/api/admin/audit-logs?${sp.toString()}`);
+    if (opts.start_date) sp.set("start_date", opts.start_date);
+    if (opts.end_date) sp.set("end_date", opts.end_date);
+    return request<AuditLogEntry[]>(`/api/admin/audit-logs?${sp.toString()}`);
 };
 
 // Corporate + admin portal review, round 2: "no 'who touched the most'
@@ -135,6 +150,7 @@ export const getAuditLogTopActors = (opts: { days?: number; limit?: number } = {
         rows_scanned_capped: boolean;
         actors: Array<{
             actor_id: string;
+            actor_email: string;
             action_count: number;
             top_actions: Array<{ action: string; count: number }>;
         }>;

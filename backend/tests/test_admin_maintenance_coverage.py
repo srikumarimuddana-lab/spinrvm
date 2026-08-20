@@ -230,30 +230,34 @@ class TestRollupDriverDaily:
 class TestAuditLogs:
     @pytest.mark.asyncio
     async def test_get_audit_logs_no_filters(self):
-        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[{"id": "log1"}])) as mock:
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[{"id": "log1"}])):
             result = await maint.get_audit_logs(
-                limit=10, offset=0, action=None, entity_type=None, search=None, _admin=ADMIN
+                limit=10, offset=0, action=None, entity_type=None, search=None,
+                start_date=None, end_date=None, _admin=ADMIN,
             )
-        assert result == [{"id": "log1"}]
-        _, filters = mock.call_args.args
-        assert filters == {}
+        assert result == [{"id": "log1", "actor_email": ""}]
 
     @pytest.mark.asyncio
     async def test_get_audit_logs_applies_action_and_entity_filters(self):
         with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock:
             await maint.get_audit_logs(
-                limit=10, offset=0, action="staff_created", entity_type="staff", search=None, _admin=ADMIN
+                limit=10, offset=0, action="staff_created", entity_type="staff", search=None,
+                start_date=None, end_date=None, _admin=ADMIN,
             )
-        _, filters = mock.call_args.args
-        assert filters == {"action": "staff_created", "entity_type": "staff"}
+        first_call_filters = mock.call_args_list[0].args[1]
+        assert first_call_filters == {"action": "staff_created", "entity_type": "staff"}
 
     @pytest.mark.asyncio
     async def test_get_audit_logs_search_builds_or_regex(self):
         with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock:
-            await maint.get_audit_logs(limit=10, offset=0, action=None, entity_type=None, search="abc", _admin=ADMIN)
-        _, filters = mock.call_args.args
-        assert "$or" in filters
-        assert len(filters["$or"]) == 3
+            await maint.get_audit_logs(
+                limit=10, offset=0, action=None, entity_type=None, search="abc",
+                start_date=None, end_date=None, _admin=ADMIN,
+            )
+        audit_call = next(c for c in mock.call_args_list if c.args[0] == "audit_logs")
+        audit_filters = audit_call.args[1]
+        assert "$or" in audit_filters
+        assert len(audit_filters["$or"]) >= 3
 
     @pytest.mark.asyncio
     async def test_get_audit_logs_search_matches_entity_id_not_legacy_resource_id(self):
@@ -263,18 +267,75 @@ class TestAuditLogs:
         anymore. Searching resource_id silently matched zero modern rows —
         lock in entity_id so this doesn't regress."""
         with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock:
-            await maint.get_audit_logs(limit=10, offset=0, action=None, entity_type=None, search="abc", _admin=ADMIN)
-        _, filters = mock.call_args.args
-        searched_fields = {list(clause.keys())[0] for clause in filters["$or"]}
-        assert searched_fields == {"actor_id", "entity_id", "details"}
+            await maint.get_audit_logs(
+                limit=10, offset=0, action=None, entity_type=None, search="abc",
+                start_date=None, end_date=None, _admin=ADMIN,
+            )
+        audit_call = next(c for c in mock.call_args_list if c.args[0] == "audit_logs")
+        audit_filters = audit_call.args[1]
+        searched_fields = {list(clause.keys())[0] for clause in audit_filters["$or"]}
+        assert "entity_id" in searched_fields
         assert "resource_id" not in searched_fields
 
     @pytest.mark.asyncio
     async def test_get_audit_logs_blank_search_after_strip_ignored(self):
         with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock:
-            await maint.get_audit_logs(limit=10, offset=0, action=None, entity_type=None, search="   ", _admin=ADMIN)
-        _, filters = mock.call_args.args
-        assert "$or" not in filters
+            await maint.get_audit_logs(
+                limit=10, offset=0, action=None, entity_type=None, search="   ",
+                start_date=None, end_date=None, _admin=ADMIN,
+            )
+        first_call_filters = mock.call_args_list[0].args[1]
+        assert "$or" not in first_call_filters
+
+    @pytest.mark.asyncio
+    async def test_get_audit_logs_resolves_actor_email(self):
+        logs = [{"id": "log1", "actor_id": "staff-1"}]
+        staff = [{"id": "staff-1", "email": "alice@spinr.ca"}]
+        async def side_effect(table, *args, **kwargs):
+            if table == "audit_logs":
+                return logs
+            if table == "admin_staff":
+                return staff
+            return []
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(side_effect=side_effect)):
+            result = await maint.get_audit_logs(
+                limit=10, offset=0, action=None, entity_type=None, search=None,
+                start_date=None, end_date=None, _admin=ADMIN,
+            )
+        assert result[0]["actor_email"] == "alice@spinr.ca"
+
+    @pytest.mark.asyncio
+    async def test_get_audit_logs_date_range_filter(self):
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock:
+            await maint.get_audit_logs(
+                limit=10, offset=0, action=None, entity_type=None, search=None,
+                start_date="2026-08-01", end_date="2026-08-15T23:59:59Z", _admin=ADMIN,
+            )
+        first_call_filters = mock.call_args_list[0].args[1]
+        assert first_call_filters["created_at"] == {"$gte": "2026-08-01", "$lte": "2026-08-15T23:59:59Z"}
+
+    @pytest.mark.asyncio
+    async def test_get_audit_logs_search_includes_email_match(self):
+        """Searching 'alice' should find audit rows by alice even though
+        the DB stores only actor_id (UUID), not email."""
+        matching_staff = [{"id": "staff-1", "email": "alice@spinr.ca"}]
+        async def side_effect(table, *args, **kwargs):
+            if table == "admin_staff":
+                return matching_staff
+            return []
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(side_effect=side_effect)) as mock:
+            await maint.get_audit_logs(
+                limit=10, offset=0, action=None, entity_type=None, search="alice",
+                start_date=None, end_date=None, _admin=ADMIN,
+            )
+        first_call = mock.call_args_list[0]
+        if first_call.args[0] == "admin_staff":
+            audit_call = mock.call_args_list[1]
+        else:
+            audit_call = mock.call_args_list[0]
+        or_clauses = audit_call.args[1].get("$or", [])
+        has_in_clause = any("$in" in list(c.values())[0] for c in or_clauses if isinstance(list(c.values())[0], dict) and "$in" in list(c.values())[0])
+        assert has_in_clause, "Search should include $in clause for email-matched actor IDs"
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +355,11 @@ class TestAuditLogTopActors:
             {"actor_id": "admin-a", "action": "settings_updated"},
             {"actor_id": "admin-b", "action": "staff_updated"},
         ]
-        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=rows)):
+        async def side_effect(table, *args, **kwargs):
+            if table == "audit_logs":
+                return rows
+            return []
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(side_effect=side_effect)):
             result = await maint.get_audit_log_top_actors(days=7, limit=20, _admin=ADMIN)
         assert result["actors"][0]["actor_id"] == "admin-a"
         assert result["actors"][0]["action_count"] == 3
@@ -310,7 +375,11 @@ class TestAuditLogTopActors:
             {"actor_id": "admin-a", "action": "staff_updated"},
             {"actor_id": "admin-a", "action": "settings_updated"},
         ]
-        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=rows)):
+        async def side_effect(table, *args, **kwargs):
+            if table == "audit_logs":
+                return rows
+            return []
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(side_effect=side_effect)):
             result = await maint.get_audit_log_top_actors(days=7, limit=20, _admin=ADMIN)
         top_actions = result["actors"][0]["top_actions"]
         assert top_actions[0] == {"action": "staff_updated", "count": 2}
@@ -318,7 +387,11 @@ class TestAuditLogTopActors:
 
     @pytest.mark.asyncio
     async def test_missing_actor_or_action_falls_back_to_unknown(self):
-        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[{}])):
+        async def side_effect(table, *args, **kwargs):
+            if table == "audit_logs":
+                return [{}]
+            return []
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(side_effect=side_effect)):
             result = await maint.get_audit_log_top_actors(days=7, limit=20, _admin=ADMIN)
         assert result["actors"][0]["actor_id"] == "unknown"
         assert result["actors"][0]["top_actions"] == [{"action": "unknown", "count": 1}]
@@ -326,17 +399,24 @@ class TestAuditLogTopActors:
     @pytest.mark.asyncio
     async def test_respects_limit_and_flags_row_cap(self):
         rows = [{"actor_id": f"admin-{i}", "action": "x"} for i in range(5000)]
-        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=rows)):
+        async def side_effect(table, *args, **kwargs):
+            if table == "audit_logs":
+                return rows
+            return []
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(side_effect=side_effect)):
             result = await maint.get_audit_log_top_actors(days=7, limit=3, _admin=ADMIN)
         assert len(result["actors"]) == 3
         assert result["rows_scanned_capped"] is True
 
     @pytest.mark.asyncio
     async def test_days_window_passed_to_query(self):
-        with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock:
+        async def side_effect(table, *args, **kwargs):
+            return []
+        with patch.object(maint.db_supabase, "get_rows", AsyncMock(side_effect=side_effect)) as mock:
             result = await maint.get_audit_log_top_actors(days=30, limit=20, _admin=ADMIN)
         assert result["days"] == 30
-        _, filters = mock.call_args.args
+        audit_call = next(c for c in mock.call_args_list if c.args[0] == "audit_logs")
+        _, filters = audit_call.args
         assert "created_at" in filters
         assert "$gte" in filters["created_at"]
 

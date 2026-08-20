@@ -15,7 +15,7 @@ try:
     from ...routes.drivers._shared import _encrypt_driver_pii, _vault_decrypt
     from ...routes.users import store_profile_image
     from ...services import lms_service
-    from ...services.driver_import_service import sin_source
+    from ...services.driver_import_service import dob_source, sin_source
     from ...utils.audit_logger import log_admin_action
     from ...utils.datetime_utils import parse_iso_utc
     from ...utils.driver_status_notifications import (
@@ -34,7 +34,7 @@ except ImportError:
     from routes.drivers._shared import _encrypt_driver_pii, _vault_decrypt  # type: ignore
     from routes.users import store_profile_image  # type: ignore
     from services import lms_service  # type: ignore
-    from services.driver_import_service import sin_source  # type: ignore
+    from services.driver_import_service import dob_source, sin_source  # type: ignore
     from utils.audit_logger import log_admin_action  # noqa: F401
     from utils.datetime_utils import parse_iso_utc
     from utils.driver_status_notifications import (  # type: ignore
@@ -2125,6 +2125,13 @@ async def admin_get_driver_live_stats(driver_id: str):
         # driver self-entry (both stamp the same field); this derived value
         # doesn't change what sin_collected_at means or stores.
         "sin_source": sin_source(drv),
+        # DOB itself is never surfaced here (PIPEDA: never expose the raw
+        # value outside the existing edit form) — only whether one is on
+        # file and its provenance. See dob_source() docstring; mirrors the
+        # sin_on_file/sin_source pair above, minus a last4-style value since
+        # a date has no equivalent partial-disclosure convention.
+        "dob_on_file": bool(drv and drv.get("date_of_birth")),
+        "dob_source": dob_source(drv),
     }
 
 

@@ -64,6 +64,7 @@ interface LogRow {
     distance_km: number | null;
     distance_source: string | null;
     open: boolean;
+    is_reconstructed: boolean;
 }
 
 const PHASE_TINT: Record<number, string> = {
@@ -111,6 +112,15 @@ function DayLogs({ driverId, date }: { driverId: string; date: string }) {
                             <td className="px-3 py-1.5 font-mono">{l.ride_code || (l.ride_id ? l.ride_id.slice(0, 8) : "—")}</td>
                             <td className="px-3 py-1.5">
                                 <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${PHASE_TINT[l.period] || ""}`}>{l.phase}</span>
+                                {l.is_reconstructed && (
+                                    <span
+                                        className="ml-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground bg-muted"
+                                        title="Backfilled from timestamps during legacy migration — not logged live"
+                                        aria-label="Reconstructed: backfilled from timestamps during legacy migration, not logged live"
+                                    >
+                                        Reconstructed
+                                    </span>
+                                )}
                             </td>
                             <td className="px-3 py-1.5 text-right tabular-nums" title={l.distance_source || undefined}>
                                 {l.distance_km == null ? "—" : `${l.distance_km.toFixed(2)} km`}

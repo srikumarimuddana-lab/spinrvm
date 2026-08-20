@@ -200,7 +200,7 @@ describe('car surface route presentation contract (carSurface.tsx)', () => {
   it('draws the stored route through the shared RouteLine + RoutePins', () => {
     expect(source).toContain("RouteLine = require('@shared/components/RouteLine').RouteLine");
     expect(source).toContain("RoutePins = require('@shared/components/RoutePins').RoutePins");
-    expect(source).toContain('<RouteLine path={route.polyline} />');
+    expect(source).toContain('<RouteLine path={livePath ?? route.polyline} />');
     expect(source).toContain('<RoutePins');
     expect(source).toContain('dropoff={route.leg === \'dropoff\' ? route.destination : null}');
   });

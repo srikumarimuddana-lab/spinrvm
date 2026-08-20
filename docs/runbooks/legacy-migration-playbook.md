@@ -229,10 +229,12 @@ rushed).
    > real export (157/157 now resolve). See
    > `docs/change-log/2026-08-20-mongo-export-header-normalization-bug.md`.
    >
-   > **What's still open:** no `--apply` has run against any environment, and — unlike the SIN/DOB/
-   > duration-estimated/booking-import trio — this specific capability's rollout timing has **not**
-   > been put to the product owner yet (it was built after that decision was recorded); see
-   > `docs/runbooks/legacy-backfill-scripts-rollout.md`'s "Sign-off" section.
+   > **[RE-VERIFIED 2026-08-20, SAME DAY — ROLLOUT TIMING NOW DECIDED TOO.]** Put to the product owner
+   > directly via `AskUserQuestion` (the same session, right after this capability merged): run now,
+   > same as the other three. See `docs/runbooks/legacy-backfill-scripts-rollout.md`'s "Decision
+   > recorded — fourth capability" section. **What's still open:** no `--apply` has run against any
+   > environment yet — the product owner will execute it directly, per that same section (no session
+   > in this repo has live Supabase credentials).
 5. **Insurance-period reconstruction, redone with the better source, and finally surfaced**: (a)
    re-run migration 332's approach using `driverlocationlogs.csv`'s real phase-boundary timestamps
    instead of the `driver_arrived_at` fallback; (b) wire `is_reconstructed` into
@@ -246,6 +248,21 @@ rushed).
    > `is_reconstructed` reference exists anywhere in `admin-dashboard/src/`. (a) — re-running
    > migration 332's reconstruction using `driverlocationlogs.csv`'s real phase-boundary timestamps
    > — was not attempted in any of today's PRs; still fully open.
+   >
+   > **[RE-VERIFIED 2026-08-20, SAME DAY — (b) NOW FULLY DONE.]** The remaining half of (b) is
+   > closed: `admin_driver_distance_logs` (`backend/routes/admin/driver_distance.py`, `GET
+   > /drivers/{id}/distance-logs`) — the existing per-span drill-down that already lists one row
+   > per `driver_insurance_periods` span for a Regina day — now includes `is_reconstructed` per
+   > row (additive field; no other field changed). The admin-dashboard `DayLogs` table
+   > (`admin-dashboard/src/app/dashboard/drivers/_components/driver-distance.tsx`) renders a small
+   > "Reconstructed" badge next to the phase badge when true, styled like the existing "Imported"
+   > badge (`docs/change-log/2026-08-19-legacy-migration-transparency-admin-dashboard.md`), with an
+   > `aria-label`/`title` text alternative (not color-only). No new screen was added — this route/
+   > table was judged the natural home since it is already the one place that lists raw insurance-
+   > period spans one row at a time rather than an aggregate; the daily-activity summary tab
+   > (`admin_driver_daily_activity`) aggregates spans into per-phase totals and has no natural
+   > per-row slot. See `docs/change-log/2026-08-20-insurance-period-reconstructed-admin-column.md`.
+   > **(a) is unchanged and still fully open** — out of scope for this pass, not attempted.
 6. **SIN/DOB and any other PII-sensitive backfill — minimization + encryption sign-off before any
    `--apply` run**, keeping the already-recorded scope narrow (SIN+DOB via existing encrypted
    columns, not raw banking numbers with no live consumer).
@@ -292,6 +309,37 @@ rushed).
    > badge applies. So: SIN is a clean yes, name/email get a coarser whole-profile signal rather than
    > a per-field decision, and DOB has no equivalent treatment at all — genuinely partial, not
    > "decide and document even if no" for every field as the item asks.
+   >
+   > **2026-08-20, seventh pass — FULLY ADDRESSED, all four fields now have an explicit decision.**
+   > DOB: built `driver_import_service.dob_source()`, same `"legacy_import" | "self_entry" | None`
+   > contract as `sin_source()`, wired into the admin driver live-stats read path
+   > (`dob_source`/`dob_on_file` keys, mirroring `sin_source`/`sin_on_file`). **Deliberately NOT**
+   > wired into the T4A filer-handoff export — checked `_t4a_filer_handoff_rows`'s drivers-column
+   > projection first; DOB is not a field that export reads or displays at all (only SIN/earnings/
+   > Stripe-verified legal name), so there is nothing there to attach provenance to. Unlike SIN,
+   > DOB has a second legacy-import write path (the original Saskatoon CSV import writes
+   > `date_of_birth` directly at driver creation, not just the later `banks.csv` backfill — `sin` is
+   > never written by that CSV import at all), so `dob_source()` is not a literal copy of
+   > `sin_source()`'s single-marker check; see its docstring for the full derivation and the
+   > mislabeling trap a literal copy would have caused. Raw DOB is never surfaced by either new
+   > field — provenance/presence only, per PIPEDA.
+   >
+   > Email: investigated and decided **no dedicated flag**, documented in
+   > `docs/change-log/2026-08-20-legacy-dob-email-provenance-flags.md`. Reason: email is not a
+   > set-once, verification-sensitive field the way SIN (locked after first entry, tax-filing use)
+   > and DOB (no self-entry route at all today, so an unverified legacy value can persist
+   > indefinitely) are. `routes/users.py`'s `create_profile` (`POST /profile`, the primary profile-
+   > completion flow every phone-first signup goes through) unconditionally overwrites `users.email`
+   > with whatever the person types, with no guard protecting a legacy-imported value — so the instant
+   > a legacy-imported rider or driver completes their profile, their email is fully self-entered and
+   > the import-sourced value is gone. There is also no existing timestamp/marker analogous to
+   > `sin_collected_at` to derive a provenance label from without a new column, which would not be a
+   > pure-additive, zero-migration change like `sin_source()`/`dob_source()` are. The existing
+   > whole-profile "Imported" badge already discloses "this profile may carry unverified legacy data"
+   > at the right granularity for a field that self-corrects through ordinary use. All four fields in
+   > this item now have an explicit, documented decision — SIN and DOB: yes, with flags; name: whole-
+   > profile signal only (existing, unchanged); email: no, with the above reasoning. Item #7 is
+   > closed.
 8. **Explicit include/exclude sign-off, recorded per collection**, for every `REVIEW`-tagged
    collection from the inventory doc — a silent drop at decommission time is not acceptable for
    data about to become permanently unrecoverable.

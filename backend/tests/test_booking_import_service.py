@@ -358,9 +358,20 @@ def test_provenance_metadata_carries_no_pii(monkeypatch):
 # --------------------------------------------------------------------------
 
 
-def test_non_completed_bookings_are_skipped(monkeypatch):
+def test_unrecognized_status_bookings_are_skipped(monkeypatch):
+    """A booking_status that is neither 'completed' nor one of
+    LEGACY_CANCELLED_STATUSES is unsafe to guess and always skipped -- this
+    is exactly the export's 2 blank (`""`) booking_status rows.
+
+    Was `test_non_completed_bookings_are_skipped`, asserting 'cancelled'/
+    'failed' bookings were unconditionally skipped here -- true only before
+    the 2026-08-20 cancelled/failed import path (see
+    test_booking_import_cancelled_failed.py) existed. Updated, not left
+    stale, once that path made the old assertion false: 'cancelled'/'failed'
+    now route to their own branch instead of `skipped_not_completed`.
+    """
     _install_fake(monkeypatch)
-    plan = _plan([_booking(booking_status="cancelled"), _booking(_id="bk-2", booking_status="failed")])
+    plan = _plan([_booking(booking_status=""), _booking(_id="bk-2", booking_status="pending_review")])
     assert plan.rides_to_insert == []
     assert plan.stats["skipped_not_completed"] == 2
 

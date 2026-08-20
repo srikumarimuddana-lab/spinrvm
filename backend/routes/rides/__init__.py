@@ -225,8 +225,10 @@ from .receipts import (  # noqa: F401
 )
 from .safety import (  # noqa: F401
     EmergencyRequest,
+    RidelessEmergencyRequest,
     safety_checkin_response,
     trigger_emergency,
+    trigger_emergency_rideless,
 )
 from .sharing import (  # noqa: F401
     LiveActivityRegisterRequest,

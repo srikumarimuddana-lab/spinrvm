@@ -365,6 +365,11 @@ class SettingsUpdateRequest(BaseModel):
     # dark-launched, driver-app only. Not a credential, no masking/
     # super-admin gate needed.
     driver_discreet_sos_enabled: Optional[bool] = None
+    # Ride-less SOS rollout gate (ACTION_ITEMS.md B15(c)) -- dark-launched,
+    # rider-app only. Not a credential, no masking/super-admin gate needed.
+    # See schemas.py::AppSettings.rideless_sos_enabled for the sign-off
+    # requirement before enabling in any environment.
+    rideless_sos_enabled: Optional[bool] = None
     # Kill switches (ACTION_ITEMS.md E5). scheduled_dispatch_enabled already
     # existed in AppSettings/gated the loop (2026-08-02) but was never added
     # here — there was previously no way to set it via the admin API at all,

@@ -98,3 +98,41 @@ parameter with no production-code diff, and inconsistent with the precedent
 this exact file already set.
 **Reversible?** N/A (a documentation-process choice, not a code change) —
 if a human reviewer disagrees, the entry can be added at PR time with no cost.
+
+## Decision: Confirm (Stage 8, Finance/Legal/People) — no Change Impact & Risk Log entry required
+**Stage:** 8 (Change Review)
+**What was decided:** Independently re-checked, rather than just carrying forward,
+Stage 3-4/6/7's shared conclusion that CLAUDE.md's mandatory Change Impact & Risk
+Log does not apply to this change. Confirmed it does not.
+**Why:** CLAUDE.md's trigger is explicit: "Any commit or PR that fixes a bug, closes
+a gap, or changes existing behavior must include a Change Impact & Risk entry ... for
+anything touching a live-tested surface (rides, dispatch, payments, auth, corporate,
+safety)." Re-verified directly (not on trust) via `git diff 5f55bad95..HEAD --stat`:
+the only code file touched across both commits on this branch is
+`rider-app/__tests__/verifyEmailScreen.test.tsx` (26 lines: one `it(...)` call's
+third argument plus its comment). `rider-app/app/verify-email.tsx` — the actual
+application screen — has zero diff since `915dca9ca` (#4219), which predates this
+branch entirely. `rider-app/jest.config.js` has zero diff. None of rides, dispatch,
+payments, auth, corporate billing, or safety are touched by a Jest per-test timeout
+literal in a test file. This is CI test infrastructure, not a live-tested surface, so
+the mandatory-entry trigger is not met — consistent with CR-4138's own PR reaching
+the identical conclusion for the identical file.
+**Rollback-plan check (this role's other Stage 8 responsibility per
+`roles/finance-legal-people.md`):** N/A for the same reason a Change Impact Log entry
+is N/A — there is no live data, wallet balance, Stripe charge, or ride state this
+change could put in an inconsistent state. If `15000ms` proves wrong (too tight or
+unnecessary), the rollback is a literal one-line `git revert` of `31d9da225` — and
+unlike CLAUDE.md's warning that "a `git revert` is not a rollback plan for anything
+already applied to live data," that caveat doesn't bind here: nothing this diff
+touches is live data. This is the one case in the run where a plain revert *is* an
+adequate rollback plan, and it's stated as such rather than reflexively over-applying
+the live-data caveat to a change that isn't one.
+**GST/PST disclosure, driver-classification language checks (this role's other
+standing concerns):** not applicable — no receipt, fare, billing, or onboarding/app
+copy is touched by this diff.
+**Alternatives considered:** Writing an entry anyway "to be safe" — rejected again at
+this stage for the same reason Stage 3-4 rejected it: CLAUDE.md scopes the
+requirement to live-tested surfaces by explicit list, and stretching it to cover a
+test-only CI timeout would blur that list for every future run, not just add caution
+to this one.
+**Reversible?** N/A — documentation-process confirmation, not a code change.

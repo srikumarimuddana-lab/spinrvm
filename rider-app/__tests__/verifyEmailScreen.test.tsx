@@ -232,14 +232,24 @@ describe('VerifyEmailScreen — request on entry', () => {
   it('fires POST /users/verify-email/request on mount', async () => {
     await renderScreen();
     expect(mockApiPost).toHaveBeenCalledWith('/users/verify-email/request');
-    // CR-4138: this test previously carried a widened 20000ms timeout as
-    // a CR-4102/C31-follow-up band-aid for a flake under full-suite
-    // parallelism (see the `flush`/fake-timers comment above for the real
-    // root cause — a real 1s countdown timer racing `unmount()`). Fake
-    // timers remove the wall-clock dependency entirely, so this reverts
-    // to Jest's default per-test timeout; if this test is ever genuinely
-    // slow again it should show up as an honest failure, not more slack.
-  });
+    // CR-4138 correctly fixed a real bug (a real 1s countdown timer racing
+    // `unmount()` — see the `flush`/fake-timers comment above) and, on the
+    // assumption that fixing that race also fixed whatever had originally
+    // justified the CR-4102/C31 20000ms band-aid, reverted this test to
+    // Jest's bare 5000ms default. Root-cause follow-up
+    // (agents/runs/fix-verify-email-test-flake/) found that assumption only
+    // half-held: C31's own writeup already attributed the 20000ms need to
+    // "CI-runner-specific timing... rather than a second logic bug", and a
+    // local repro (1 failure in 14 isolated runs, tied to a cold
+    // Jest-transform-cache run — 17s wall vs. ~1.1-1.2s warm — with no
+    // act()/leak symptoms in the failing run) confirms the race and the
+    // cold-start timing margin are two separate issues. This restores a
+    // scoped per-test timeout for just this one test (the only one that
+    // showed the symptom), matching the existing narrow-override precedent
+    // at searchDestinationPinIntegrity.test.tsx:186, rather than reverting
+    // to CR-4138's old file-wide 20000ms or widening jest.config.js's
+    // suite-wide default.
+  }, 15000);
 
   it('short-circuits to the already-verified screen when the response says already_verified', async () => {
     mockApiPost.mockImplementation((url: string) => {

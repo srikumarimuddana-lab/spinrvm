@@ -246,19 +246,36 @@ export default function RideDetailsScreen() {
   }, [ride?.planned_route_polyline]);
   const isV2Route = _num(ride?.route_schema_version) >= 2;
   const hasActualRoute = actualSections.length > 0;
+  // Booked-route dashed underlay: whenever the v2 pipeline could not deliver a
+  // complete actual route (still processing, finalized incomplete, or no
+  // drawable sections at all — e.g. GPS capture died mid-trip), the booked
+  // route draws as dashed grey context so the map never shows a missing path.
+  // Dashed = context, solid = actual GPS evidence; the pill stays honest.
+  const showPlannedUnderlay =
+    isV2Route && plannedSegments.length > 0 && (!hasActualRoute || ride?.route_geometry_status !== 'complete');
   const mapCoordinates = useMemo(
-    () => hasActualRoute
-      ? actualSections.reduce(
-          (coordinates, section) => coordinates.concat(section.coordinates),
-          [] as { latitude: number; longitude: number }[],
-        )
-      : (isV2Route ? [] : plannedSegments).reduce(
-          (coordinates, segment) => coordinates.concat(segment),
-          [] as { latitude: number; longitude: number }[],
-        ),
-    [actualSections, hasActualRoute, isV2Route, plannedSegments],
+    () => [
+      ...(hasActualRoute
+        ? actualSections.reduce(
+            (coordinates, section) => coordinates.concat(section.coordinates),
+            [] as { latitude: number; longitude: number }[],
+          )
+        : []),
+      // Legacy rides keep their planned solid line; v2 rides include booked
+      // coords only while the dashed underlay is on screen, so the camera
+      // frames it alongside any fragments.
+      ...((showPlannedUnderlay || (!isV2Route && !hasActualRoute)) ? plannedSegments : []).reduce(
+        (coordinates, segment) => coordinates.concat(segment),
+        [] as { latitude: number; longitude: number }[],
+      ),
+    ],
+    [actualSections, hasActualRoute, isV2Route, plannedSegments, showPlannedUnderlay],
   );
-  const routeLabel = hasActualRoute ? 'Actual route' : isV2Route ? 'Actual route' : 'Planned route';
+  const routeLabel = hasActualRoute
+    ? 'Actual route'
+    : isV2Route
+      ? (showPlannedUnderlay ? 'Booked route' : 'Actual route')
+      : 'Planned route';
   const routeQuality = routeQualityLabel(ride?.route_quality);
   const routeIsProcessing =
     ride?.route_geometry_status === 'pending' || ride?.route_geometry_status === 'processing';
@@ -350,6 +367,20 @@ export default function RideDetailsScreen() {
               }}
               onMapReady={() => setRouteMapReady(true)}
             >
+              {/* Booked-route dashed underlay (v2 only): drawn when the actual
+                  route is missing or incomplete so the map never shows an
+                  empty/fragmented path — dashed grey context, never a
+                  substitute solid line. */}
+              {showPlannedUnderlay && plannedSegments.map((segment, index) => (
+                <Polyline
+                  key={`planned-underlay-${index}`}
+                  coordinates={segment}
+                  strokeColor="#9CA3AF"
+                  strokeWidth={3}
+                  lineDashPattern={[6, 6]}
+                  lineCap="round"
+                />
+              ))}
               {/* Pickup leg (P2) as dashed grey context UNDER the trip line —
                   present only when the server flag sends non-trip phases. */}
               {pickupLegSections.map((s) => (
@@ -366,7 +397,7 @@ export default function RideDetailsScreen() {
                   bridged by a false chord; legacy planned polyline is one path. */}
               {hasActualRoute ? (
                 <RouteLine paths={actualSections.map((s) => s.coordinates)} />
-              ) : (
+              ) : isV2Route ? null : (
                 <RouteLine path={mapCoordinates} />
               )}
               <RoutePins

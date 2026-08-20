@@ -1300,6 +1300,28 @@ def _parse_legacy_epoch_ms(value: str) -> str | None:
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
 
 
+def _epoch_ms_from_iso(value: str) -> int | None:
+    """Parse an ISO-8601 timestamp back to epoch milliseconds, for
+    idempotency comparisons that must be format-independent.
+
+    Postgres/PostgREST trims trailing zero fractional digits on output
+    (``.123000`` -> ``.123``), which never string-matches Python's
+    zero-padded ``isoformat()`` output for the exact same instant (every
+    epoch-ms-derived timestamp has microseconds that are an exact multiple
+    of 1000, so this hits essentially every row). Comparing as epoch-ms
+    after parsing both sides sidesteps the serialization format entirely.
+    Found by spinr-migration-reviewer, 2026-08-20 -- see
+    docs/change-log/2026-08-20-legacy-vehicle-history-backfill.md.
+    """
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return round(dt.timestamp() * 1000)
+
+
 def join_legacy_vehicle_details(
     vehicle_rows: list[dict[str, str]], mongo_driver_rows: list[dict[str, str]]
 ) -> list[dict[str, Any]]:
@@ -1385,18 +1407,28 @@ def plan_legacy_vehicle_history_backfill(
         return plan
 
     driver_ids = sorted({r["driver_id"] for r in resolved})
-    existing_keys: set[tuple[str, str, str, str]] = set()
+    # Keyed on epoch-ms, not the raw created_at string -- Postgres/PostgREST
+    # trims trailing zero fractional digits on output, which would never
+    # string-match Python's zero-padded isoformat() for the same instant.
+    # See _epoch_ms_from_iso's docstring.
+    existing_keys: set[tuple[str, str, int | None, str]] = set()
     if driver_ids:
         cols = "driver_id,field,created_at,new_value"
         for r in _select_in("driver_vehicle_history", cols, "driver_id", driver_ids):
-            existing_keys.add((r["driver_id"], r["field"], r["created_at"], r.get("new_value") or ""))
+            existing_keys.add(
+                (r["driver_id"], r["field"], _epoch_ms_from_iso(r["created_at"]), r.get("new_value") or "")
+            )
 
     by_driver: dict[str, list[dict[str, Any]]] = {}
     for row in resolved:
         by_driver.setdefault(row["driver_id"], []).append(row)
 
     for driver_id, rows in by_driver.items():
-        rows_sorted = sorted(rows, key=lambda r: r["created_at"])
+        # Secondary sort key (old_vehicle_id, the legacy Mongo ObjectId) for
+        # a deterministic tiebreak when two legacy rows share an identical
+        # created_at -- Mongo ObjectIds embed their own creation order, so
+        # this is a meaningful tiebreaker, not an arbitrary one.
+        rows_sorted = sorted(rows, key=lambda r: (r["created_at"], r["old_vehicle_id"] or ""))
         last_value: dict[str, str | None] = {}
         for row in rows_sorted:
             for field_name, value in row["fields"].items():
@@ -1405,7 +1437,7 @@ def plan_legacy_vehicle_history_backfill(
                 prev = last_value.get(field_name)
                 if prev == value:
                     continue  # no change from the previously-known value -- nothing to log
-                key = (driver_id, field_name, row["created_at"], value)
+                key = (driver_id, field_name, _epoch_ms_from_iso(row["created_at"]), value)
                 if key in existing_keys:
                     plan.skipped_already_backfilled += 1
                 else:

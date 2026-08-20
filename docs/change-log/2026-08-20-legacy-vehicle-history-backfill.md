@@ -51,6 +51,26 @@ backfill (`backfill_legacy_driver_sin_dob.py`) already built this session, plus 
   double-run could at worst insert one harmless duplicate history row, never lose or overwrite data.
   Acceptable for a one-shot, human-run CLI script — same operational model as every other backfill this
   session built.
+  - **Fixed same day (spinr-migration-reviewer finding):** the comparison originally used the raw
+    `created_at` string, which would never have actually matched on a re-run — Postgres/PostgREST
+    trims a `timestamptz`'s trailing zero fractional digits on output (`.123000` → `.123`), which
+    never string-matches Python's zero-padded `isoformat()` for the same instant. This would have
+    broken the documented "safe to re-run after a partial failure" guarantee on essentially every row
+    (every epoch-ms-derived timestamp has microseconds that are an exact multiple of 1000). Fixed by
+    comparing a canonicalized epoch-ms value (`_epoch_ms_from_iso`) on both sides instead of the raw
+    string. New regression test manually rewrites a committed row's `created_at` into Postgres's
+    trimmed form before re-planning, proving the fix survives real round-trip serialization (the
+    original fake-store test only ever echoed back the literal Python dict, which couldn't catch
+    this). Also added a deterministic secondary sort key (`old_vehicle_id`, the legacy Mongo
+    ObjectId) for the same-reviewer's finding that two legacy rows sharing an identical `created_at`
+    had no tiebreaker beyond arbitrary CSV-row order.
+  - **Known, accepted gap (also flagged by review, not fixed):** `driver_vehicle_history` has no
+    `legacy_import_metadata`-equivalent provenance column (unlike `drivers`/`rides`), so a backfilled
+    row is schema-indistinguishable from any other automated "system"-authored write to this table.
+    The only signal is the implicit heuristic that its `created_at` is anomalously old relative to
+    when it was actually inserted — real, used correctly in this document's rollback-plan reasoning,
+    but undocumented at the schema level. Acceptable for a one-shot backfill; flag as a follow-up if
+    a second legacy-audit backfill against this table is ever proposed.
 - **PII**: report items carry only `old_driver_id`/`old_vehicle_id`/field-name/generic message — never
   a raw phone, plate, or VIN value, matching every other importer's report convention in this codebase.
 
@@ -134,11 +154,12 @@ date), which cannot collide with a real live edit's history row — the id set i
 
 - `ruff check` on both new/touched Python files — clean.
 - `python3 -m py_compile` — clean.
-- 20 new unit tests: phone crosswalk, legacy-driver-only gate, all-tracked-fields staging, blank-field
+- 17 new unit tests: phone crosswalk, legacy-driver-only gate, all-tracked-fields staging, blank-field
   skip, unparseable-timestamp error handling, multi-vehicle before/after chain (including out-of-order
-  input, and same-value-no-duplicate), idempotency against already-committed rows, apply-path insert
-  shape (report-only keys stripped before the actual DB write), refuse-on-errors, no-op-with-nothing-
-  to-apply, and a report-printer smoke test.
+  input, same-value-no-duplicate, a deterministic same-`created_at` tiebreak on `old_vehicle_id`, and
+  idempotency surviving Postgres's timestamp-fraction-trimming round-trip — see §3's "Fixed same day"
+  note), apply-path insert shape (report-only keys stripped before the actual DB write),
+  refuse-on-errors, no-op-with-nothing-to-apply, and a report-printer smoke test.
 - Full `driver_import`-scoped suite (103 tests across 4 files) re-run after the change — all pass,
   nothing broken.
 - Confirmed via grep that the one existing reader (`routes/admin/drivers.py`) and its frontend consumer

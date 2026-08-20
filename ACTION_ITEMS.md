@@ -11778,9 +11778,15 @@ how much they de-risk a public launch._
   vehicle-linkage regulatory retention gap. Writes only to
   `driver_vehicle_history`, never `drivers`' own current vehicle columns; a
   driver with more than one legacy vehicle row gets a real before/after
-  change chain, sorted by the legacy row's own timestamp. 20 new tests;
-  real-export crosswalk verified (308/355 rows resolve a Spinr driver).
-  `docs/change-log/2026-08-20-legacy-vehicle-history-backfill.md`.
+  change chain, sorted by the legacy row's own timestamp (with a
+  deterministic tiebreak on `old_vehicle_id` for identical timestamps). 17
+  new tests; real-export crosswalk verified (308/355 rows resolve a Spinr
+  driver). Manual review (`spinr-migration-reviewer`) also caught a real
+  idempotency bug — the "already backfilled" dedup compared raw
+  `created_at` strings, which would never have matched Postgres's trimmed-
+  fraction serialization on a re-run; fixed same day (canonicalized
+  epoch-ms comparison instead), with a regression test that actually
+  simulates the round-trip. `docs/change-log/2026-08-20-legacy-vehicle-history-backfill.md`.
   - **Also found and fixed while building this (CRITICAL, filed as B32):**
     the already-merged, product-owner-approved-to-run SIN/DOB backfill's CSV
     reader silently mangled the Mongo export's `_id` column and would have

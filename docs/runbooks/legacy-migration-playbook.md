@@ -212,11 +212,15 @@ rushed).
    > **[RE-VERIFIED 2026-08-20, SIXTH PASS — BUILT, NOT YET RUN.]** Still accurate at the fifth pass,
    > now built: `backend/scripts/backfill_legacy_vehicle_history.py` +
    > `driver_import_service.plan_legacy_vehicle_history_backfill`/`apply_legacy_vehicle_history_backfill`
-   > (20 new tests, real-export crosswalk verified: 308/355 `vehicle_details.csv` rows resolve a Spinr
+   > (17 new tests, real-export crosswalk verified: 308/355 `vehicle_details.csv` rows resolve a Spinr
    > driver). Writes only to `driver_vehicle_history` (never `drivers`' own current vehicle columns);
    > a driver with more than one legacy vehicle row gets a real before/after change chain, sorted by
    > the legacy row's own timestamp — not import time, matching this playbook's own Stage 3 provenance
-   > principle. See `docs/change-log/2026-08-20-legacy-vehicle-history-backfill.md`.
+   > principle, with a deterministic tiebreak for identical timestamps. `spinr-migration-reviewer`
+   > also caught and this fix closed same day: the idempotency dedup originally compared raw
+   > `created_at` strings, which never matches Postgres's trimmed-fraction serialization on a re-run
+   > (would have broken the "safe to re-run" guarantee on nearly every row). See
+   > `docs/change-log/2026-08-20-legacy-vehicle-history-backfill.md`.
    >
    > **Building this also surfaced and fixed a real bug in the already-merged SIN/DOB backfill
    > (item #6 below)**: its CSV reader silently mangled the raw Mongo export's `_id` column, which

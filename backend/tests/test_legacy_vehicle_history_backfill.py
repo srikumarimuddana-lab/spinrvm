@@ -248,6 +248,58 @@ def test_plan_idempotent_against_already_committed_rows(monkeypatch):
     assert plan2.skipped_already_backfilled == 6
 
 
+def test_plan_idempotent_survives_postgres_timestamp_fraction_trimming(monkeypatch):
+    """spinr-migration-reviewer finding, 2026-08-20: Postgres/PostgREST
+    trims trailing zero fractional digits on a timestamptz's text output
+    (".123000" -> ".123"), which never string-matches Python's zero-padded
+    isoformat() for the same instant. The fake store used by every other
+    test in this file just echoes back the literal Python dict it was
+    given, so it can't catch this -- this test manually rewrites the
+    already-committed row's created_at into Postgres's trimmed form before
+    re-planning, proving the dedup survives real round-trip serialization,
+    not just an exact Python-string match against itself."""
+    fake = _install(monkeypatch, drivers=[_spinr_driver()])
+    plan1 = svc.plan_legacy_vehicle_history_backfill([_vehicle_row()], [_mongo_driver_row()])
+    svc.apply_legacy_vehicle_history_backfill(plan1)
+    assert len(fake.store["driver_vehicle_history"]) == 6
+
+    for row in fake.store["driver_vehicle_history"]:
+        assert row["created_at"].endswith("+00:00")
+        head, _, _tz = row["created_at"].partition("+")
+        base, _, frac = head.partition(".")
+        # 6-digit zero-padded microseconds -> Postgres's trimmed form.
+        trimmed = frac.rstrip("0") or "0"
+        row["created_at"] = f"{base}.{trimmed}+00:00"
+
+    plan2 = svc.plan_legacy_vehicle_history_backfill([_vehicle_row()], [_mongo_driver_row()])
+    assert plan2.rows_to_insert == []
+    assert plan2.skipped_already_backfilled == 6
+
+
+def test_plan_same_created_at_tiebreaks_deterministically_on_old_vehicle_id(monkeypatch):
+    """Two legacy vehicle rows sharing an identical created_at (plausible
+    for a bulk-seeded old-app dataset) must not fall back to arbitrary
+    input-order tiebreaking -- old_vehicle_id (the legacy Mongo ObjectId,
+    which embeds its own creation order) is a meaningful, deterministic
+    secondary sort key."""
+    _install(monkeypatch, drivers=[_spinr_driver()])
+    row_a = _vehicle_row(_id="veh-aaa", color="White", created_at="1700000000000")
+    row_b = _vehicle_row(_id="veh-bbb", color="Red", created_at="1700000000000")  # identical timestamp
+
+    plan_forward = svc.plan_legacy_vehicle_history_backfill([row_a, row_b], [_mongo_driver_row()])
+    plan_reversed = svc.plan_legacy_vehicle_history_backfill([row_b, row_a], [_mongo_driver_row()])
+
+    for plan in (plan_forward, plan_reversed):
+        color_rows = [r for r in plan.rows_to_insert if r["field"] == "vehicle_color"]
+        assert len(color_rows) == 2
+        # "veh-aaa" sorts before "veh-bbb" lexicographically -- deterministic
+        # regardless of which order the CSV rows were fed in.
+        assert color_rows[0]["new_value"] == "White"
+        assert color_rows[0]["old_value"] is None
+        assert color_rows[1]["new_value"] == "Red"
+        assert color_rows[1]["old_value"] == "White"
+
+
 # ── apply_legacy_vehicle_history_backfill ──────────────────────────────
 
 

@@ -138,7 +138,9 @@ the real export) gets a real before/after change chain reconstructed, sorted by 
 timestamp. Idempotent across re-runs (skips any `(driver_id, field, created_at, new_value)` tuple
 already on file) — see `docs/change-log/2026-08-20-legacy-vehicle-history-backfill.md` for why this
 table's append-only shape needs a different (simpler) idempotency approach than the SIN/DOB backfill's
-write-time guard. **Status: built, unit-tested (20 tests) against a real-export crosswalk check
+write-time guard. Idempotency dedup fixed same day (spinr-migration-reviewer finding) to compare a
+canonicalized timestamp rather than a raw string that would never have matched Postgres's own output
+format on a re-run. **Status: built, unit-tested (17 tests) against a real-export crosswalk check
 (308/355 rows resolve a phone; the remainder are genuinely unmatched), never run with `--apply`.**
 
 ## The concurrent-writer risk, and how it's addressed

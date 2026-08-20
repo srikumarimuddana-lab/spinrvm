@@ -42,7 +42,7 @@ const ALL_AREAS = "__all__";
  *  server-side here: a client-side sort only reorders the rows already on
  *  the page, which is what let the worst performers stay invisible. */
 type DriverSort =
-  | "acceptance_rate" | "cancellation_rate" | "total_rides"
+  | "completion_rate" | "cancellation_rate" | "total_rides"
   | "completed" | "rating" | "name";
 
 const DATE_RANGES = [
@@ -91,7 +91,7 @@ export default function AnalyticsPage() {
   // filter) so the table can reach every driver the summary cards count —
   // not just the first page of the default descending sort.
   const [driverPage, setDriverPage] = useState(0);
-  const [driverSort, setDriverSort] = useState<DriverSort>("acceptance_rate");
+  const [driverSort, setDriverSort] = useState<DriverSort>("completion_rate");
   const [driverOrder, setDriverOrder] = useState<"asc" | "desc">("desc");
   const [lowOnly, setLowOnly] = useState(false);
   const [searchInput, setSearchInput] = useState("");
@@ -205,7 +205,8 @@ export default function AnalyticsPage() {
   // and the `low_performers_only` filter can't disagree.
   const isLowPerformer = useCallback(
     (d: any) =>
-      Number(d?.acceptance_rate ?? 0) < (driverRates?.low_performer_threshold?.rate_below ?? 70) &&
+      Number(d?.completion_rate ?? d?.acceptance_rate ?? 0) <
+        (driverRates?.low_performer_threshold?.rate_below ?? 70) &&
       Number(d?.total_rides ?? 0) >= (driverRates?.low_performer_threshold?.min_rides ?? 5),
     [driverRates],
   );
@@ -352,7 +353,7 @@ export default function AnalyticsPage() {
               <DollarSign className="h-3.5 w-3.5" /> Financial
             </TabsTrigger>
             <TabsTrigger value="cancellations">Cancellations</TabsTrigger>
-            <TabsTrigger value="acceptance">Driver Acceptance</TabsTrigger>
+            <TabsTrigger value="acceptance">Driver Completion</TabsTrigger>
             <TabsTrigger value="offers" className="gap-1.5">
               <Send className="h-3.5 w-3.5" /> Dispatch Offers
             </TabsTrigger>
@@ -483,23 +484,31 @@ export default function AnalyticsPage() {
           <div className="grid grid-cols-3 gap-4">
             <Card>
               <CardContent className="pt-4">
-                <div className="text-sm text-muted-foreground">Avg Acceptance Rate</div>
-                <div className="text-2xl font-bold text-green-600">
-                  {driverRates?.avg_acceptance_rate || 0}%
+                <div className="text-sm text-muted-foreground">Avg Completion Rate</div>
+                <div className="text-2xl font-bold text-green-600 dark:text-green-400">
+                  {driverRates?.avg_completion_rate_active ?? 0}%
                 </div>
+                {/* Averaging over every registered driver (idle ones score 0)
+                    made this read ~9% for a fleet actually running at ~90%. */}
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  drivers with rides only
+                </p>
               </CardContent>
             </Card>
             <Card>
               <CardContent className="pt-4">
-                <div className="text-sm text-muted-foreground">Total Active Drivers</div>
+                <div className="text-sm text-muted-foreground">Drivers</div>
                 <div className="text-2xl font-bold">{driverRates?.total_drivers || 0}</div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {driverRates?.drivers_with_rides ?? 0} with rides this period
+                </p>
               </CardContent>
             </Card>
             <Card className={lowOnly ? "ring-2 ring-red-500" : undefined}>
               <CardContent className="pt-4">
                 <div className="text-sm text-muted-foreground flex items-center gap-1">
                   <TrendingDown className="h-3 w-3 text-red-500" />
-                  Low Performers (&lt;{driverRates?.low_performer_threshold?.rate_below ?? 70}%)
+                  Low completion (&lt;{driverRates?.low_performer_threshold?.rate_below ?? 70}%)
                 </div>
                 <div className="text-2xl font-bold text-red-600">
                   {driverRates?.low_performer_count || 0}
@@ -524,9 +533,16 @@ export default function AnalyticsPage() {
               <CardTitle>
                 <div className="flex items-center gap-2">
                   <Target className="h-5 w-5" />
-                  Driver Acceptance Rankings
+                  Driver Completion Rankings
                 </div>
               </CardTitle>
+              {/* This tab measures completed/assigned. A driver who accepts
+                  every offer but whose riders cancel scores low here — true
+                  acceptance is offer-ledger data, on the Dispatch Offers tab. */}
+              <p className="text-xs text-muted-foreground">
+                Completed rides as a share of rides assigned. For true offer
+                acceptance (accepted vs offered), see the Dispatch Offers tab.
+              </p>
               <div className="flex flex-wrap items-center gap-2">
                 <div className="relative flex-1 min-w-[200px]">
                   <Search className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -567,7 +583,7 @@ export default function AnalyticsPage() {
                   <TableRow>
                     <TableHead>#</TableHead>
                     <SortableHead column="name" sort={headSort} onSort={onHeadSort}>Driver</SortableHead>
-                    <SortableHead column="acceptance_rate" sort={headSort} onSort={onHeadSort}>Acceptance Rate</SortableHead>
+                    <SortableHead column="completion_rate" sort={headSort} onSort={onHeadSort}>Completion Rate</SortableHead>
                     <SortableHead column="total_rides" sort={headSort} onSort={onHeadSort} align="right">Total Rides</SortableHead>
                     <SortableHead column="completed" sort={headSort} onSort={onHeadSort} align="right">Completed</SortableHead>
                     <SortableHead column="cancellation_rate" sort={headSort} onSort={onHeadSort} align="right">Cancel Rate</SortableHead>
@@ -590,13 +606,13 @@ export default function AnalyticsPage() {
                             <div
                               className="h-full rounded-full"
                               style={{
-                                width: `${Math.max(0, Math.min(100, Number(d.acceptance_rate) || 0))}%`,
-                                backgroundColor: d.acceptance_rate >= 80 ? '#10B981'
-                                  : d.acceptance_rate >= 60 ? '#F59E0B' : '#EF4444',
+                                width: `${Math.max(0, Math.min(100, Number(d.completion_rate) || 0))}%`,
+                                backgroundColor: d.completion_rate >= 80 ? '#10B981'
+                                  : d.completion_rate >= 60 ? '#F59E0B' : '#EF4444',
                               }}
                             />
                           </div>
-                          <span className="text-sm font-mono">{d.acceptance_rate}%</span>
+                          <span className="text-sm font-mono">{d.completion_rate}%</span>
                         </div>
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{d.total_rides}</TableCell>

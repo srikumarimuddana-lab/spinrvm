@@ -1097,3 +1097,79 @@ class TestMarketplaceMigration352:
         body = self._body()
         assert "o.status = 'accepted'" in body
         assert "o.eta_seconds" in body
+
+
+# ── metric definitions: completion vs acceptance ──────────────────────
+
+
+class TestDriverMetricNaming:
+    """The endpoint reports completed/assigned, which is a COMPLETION rate.
+
+    Calling it "acceptance" mislabels a driver who accepts every offer but
+    whose riders cancel. True acceptance lives in the ride_offers ledger.
+    """
+
+    def _call(self, admin_client, drivers, acc, users, **params):
+        with (
+            patch("backend.routes.admin.analytics.db.get_rows", AsyncMock(side_effect=[drivers, users])),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(return_value=acc)),
+        ):
+            return admin_client.get("/api/admin/analytics/driver-acceptance", params=params)
+
+    def test_reports_completion_rate_and_keeps_the_old_alias(self, admin_client):
+        drivers, acc, users = _acc_fixture(n_good=1, n_low=0)
+        d = self._call(admin_client, drivers, acc, users).json()["drivers"][0]
+        assert d["completion_rate"] == 100.0
+        assert d["acceptance_rate"] == d["completion_rate"], "alias must not diverge"
+
+    def test_payload_declares_which_metric_it_is(self, admin_client):
+        drivers, acc, users = _acc_fixture(n_good=1, n_low=0)
+        data = self._call(admin_client, drivers, acc, users).json()
+        assert data["metric"] == "completion_rate"
+        assert data["true_acceptance_source"].endswith("/driver-offer-stats")
+
+    def test_active_average_excludes_idle_drivers(self, admin_client):
+        """The old average counted zero-ride drivers at 0%, sinking the figure."""
+        drivers = [
+            {"id": "busy", "user_id": "ub", "rating": 4.8, "is_online": True},
+            *[{"id": f"idle{i}", "user_id": f"ui{i}", "rating": 4.0, "is_online": False} for i in range(9)],
+        ]
+        acc = [{"driver_id": "busy", "total_rides": 10, "completed": 9, "cancelled_by_driver": 1}]
+        users = [{"id": "ub", "first_name": "Busy", "last_name": "D"}] + [
+            {"id": f"ui{i}", "first_name": "Idle", "last_name": str(i)} for i in range(9)
+        ]
+        data = self._call(admin_client, drivers, acc, users).json()
+        # One driver at 90%, nine idle at 0%.
+        assert data["avg_completion_rate_active"] == 90.0
+        assert data["avg_completion_rate_all"] == 9.0
+        assert data["avg_acceptance_rate"] == 9.0, "deprecated alias keeps the old all-driver meaning"
+
+    def test_drivers_with_rides_is_distinct_from_total(self, admin_client):
+        """'Total Active Drivers' was never active drivers — both are reported now."""
+        drivers = [
+            {"id": "busy", "user_id": "ub", "is_online": True},
+            {"id": "idle", "user_id": "ui", "is_online": False},
+        ]
+        acc = [{"driver_id": "busy", "total_rides": 3, "completed": 3, "cancelled_by_driver": 0}]
+        users = [
+            {"id": "ub", "first_name": "B", "last_name": "D"},
+            {"id": "ui", "first_name": "I", "last_name": "D"},
+        ]
+        data = self._call(admin_client, drivers, acc, users).json()
+        assert data["total_drivers"] == 2
+        assert data["drivers_with_rides"] == 1
+
+    def test_deprecated_sort_key_still_sorts(self, admin_client):
+        drivers, acc, users = _acc_fixture(n_good=2, n_low=2)
+        data = self._call(admin_client, drivers, acc, users, sort_by="acceptance_rate", order="asc").json()
+        assert data["drivers"][0]["completion_rate"] == 20.0
+
+    def test_new_sort_key_is_the_default(self, admin_client):
+        drivers, acc, users = _acc_fixture(n_good=2, n_low=2)
+        data = self._call(admin_client, drivers, acc, users).json()
+        assert data["sort_by"] == "completion_rate"
+        assert data["drivers"][0]["completion_rate"] == 100.0
+
+    def test_low_performer_rule_reads_the_new_key(self, admin_client):
+        drivers, acc, users = _acc_fixture(n_good=1, n_low=2)
+        assert self._call(admin_client, drivers, acc, users).json()["low_performer_count"] == 2

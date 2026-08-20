@@ -74,8 +74,9 @@ _LOW_PERFORMER_MIN_RIDES = 5
 
 
 def _is_low_performer(row: dict) -> bool:
-    """Below the acceptance threshold, with enough rides for it to mean anything."""
-    return row.get("acceptance_rate", 0) < _LOW_PERFORMER_RATE and row.get("total_rides", 0) >= _LOW_PERFORMER_MIN_RIDES
+    """Below the completion threshold, with enough rides for it to mean anything."""
+    rate = row.get("completion_rate", row.get("acceptance_rate", 0))
+    return rate < _LOW_PERFORMER_RATE and row.get("total_rides", 0) >= _LOW_PERFORMER_MIN_RIDES
 
 
 def _parse_date_range(date_range: str) -> datetime:
@@ -202,8 +203,8 @@ async def get_driver_acceptance_rates(
     offset: int = Query(0, ge=0),
     search: Optional[str] = Query(None, max_length=100),
     sort_by: str = Query(
-        "acceptance_rate",
-        pattern="^(acceptance_rate|cancellation_rate|total_rides|completed|cancelled_by_driver|rating|name)$",
+        "completion_rate",
+        pattern="^(completion_rate|acceptance_rate|cancellation_rate|total_rides|completed|cancelled_by_driver|rating|name)$",
     ),
     order: str = Query("desc", pattern="^(asc|desc)$"),
     min_rides: int = Query(0, ge=0),
@@ -300,7 +301,11 @@ async def get_driver_acceptance_rates(
         completed = int(agg.get("completed") or 0)
         cancelled_by_driver = int(agg.get("cancelled_by_driver") or 0)
 
-        acceptance_rate = round((completed / total_assigned * 100), 1) if total_assigned > 0 else 0
+        # completed / assigned. This is a COMPLETION rate, not an acceptance
+        # rate: a driver who accepts every offer but whose riders cancel
+        # scores badly here. True acceptance (accepted / offered) comes from
+        # the ride_offers ledger — see /analytics/driver-offer-stats.
+        completion_rate = round((completed / total_assigned * 100), 1) if total_assigned > 0 else 0
         cancellation_rate = round((cancelled_by_driver / total_assigned * 100), 1) if total_assigned > 0 else 0
 
         user = users_map.get(driver.get("user_id"))
@@ -313,7 +318,9 @@ async def get_driver_acceptance_rates(
                 "total_rides": total_assigned,
                 "completed": completed,
                 "cancelled_by_driver": cancelled_by_driver,
-                "acceptance_rate": acceptance_rate,
+                "completion_rate": completion_rate,
+                # Deprecated alias, kept so an un-updated client keeps working.
+                "acceptance_rate": completion_rate,
                 "cancellation_rate": cancellation_rate,
                 "rating": driver.get("rating", 0),
                 "lat": driver.get("lat"),
@@ -333,11 +340,23 @@ async def get_driver_acceptance_rates(
         result = [r for r in result if _is_low_performer(r)]
 
     # Summary stats over the full filtered set, not the returned page.
-    avg_acceptance = round(sum(r["acceptance_rate"] for r in result) / len(result), 1) if result else 0
+    #
+    # Two averages, because one number here was actively misleading: the old
+    # average spanned EVERY driver row including those with no rides in the
+    # window (rate 0), so 200 registered drivers with 20 active at ~90%
+    # displayed as ~9%. `avg_completion_rate_active` averages only drivers who
+    # actually had a ride — the figure an operator means — while the
+    # all-driver average is kept, correctly labelled, since that is what the
+    # previous field reported.
+    active = [r for r in result if r["total_rides"] > 0]
+    avg_all = round(sum(r["completion_rate"] for r in result) / len(result), 1) if result else 0
+    avg_active = round(sum(r["completion_rate"] for r in active) / len(active), 1) if active else 0
     low_performer_count = sum(1 for r in result if _is_low_performer(r))
 
     # ── Sort, then paginate ──────────────────────────────────────────
     reverse = order == "desc"
+    if sort_by == "acceptance_rate":
+        sort_by = "completion_rate"  # deprecated spelling, same column
     if sort_by == "name":
         result.sort(key=lambda x: (x["name"] or "").lower(), reverse=reverse)
     else:
@@ -350,8 +369,19 @@ async def get_driver_acceptance_rates(
 
     return {
         "date_range": date_range,
+        "service_area_id": service_area_id,
+        # Every driver matching the filters — NOT "active drivers". The UI
+        # previously labelled this "Total Active Drivers", which it never was.
         "total_drivers": total,
-        "avg_acceptance_rate": avg_acceptance,
+        "drivers_with_rides": len(active),
+        "avg_completion_rate_active": avg_active,
+        "avg_completion_rate_all": avg_all,
+        # Deprecated alias of avg_completion_rate_all.
+        "avg_acceptance_rate": avg_all,
+        # This endpoint reports COMPLETION, not acceptance — stated in the
+        # payload so a consumer cannot mislabel it by accident.
+        "metric": "completion_rate",
+        "true_acceptance_source": "/api/admin/analytics/driver-offer-stats",
         "low_performer_count": low_performer_count,
         "low_performer_threshold": {"rate_below": _LOW_PERFORMER_RATE, "min_rides": _LOW_PERFORMER_MIN_RIDES},
         "drivers": page,

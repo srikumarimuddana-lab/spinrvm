@@ -26,7 +26,10 @@ export const getCancellationBreakdown = (dateRange = "30d", serviceAreaId?: stri
     request<any>(`/api/admin/analytics/cancellation-reasons?date_range=${dateRange}${serviceAreaId ? `&service_area_id=${serviceAreaId}` : ''}`);
 
 export type DriverAcceptanceSort =
-    | "acceptance_rate" | "cancellation_rate" | "total_rides"
+    // `completion_rate` is the honest name — this endpoint reports
+    // completed/assigned, not accepted/offered. `acceptance_rate` is kept as
+    // a deprecated alias the server still accepts.
+    | "completion_rate" | "acceptance_rate" | "cancellation_rate" | "total_rides"
     | "completed" | "cancelled_by_driver" | "rating" | "name";
 
 export interface DriverAcceptanceOpts {

@@ -52,14 +52,36 @@
 --       "cancelled/funnel keys need no exclusion (completed-only
 --       importer)" -- that assumption is exactly what this session's
 --       importer change invalidates. Fixed via a NEW `cancelled_src` CTE
---       (legacy-excluded) feeding only the existing `cancelled` CTE. The
---       shared `cohort` CTE (fn_requested/fn_reached_searching/fn_completed/
---       fn_price_searches) is deliberately LEFT UNCHANGED: those funnel keys
---       already could include legacy-imported COMPLETED rides today (a
---       pre-existing question predating this session, out of scope here --
---       narrowing the fix to just the cancellation-counting CTEs keeps this
---       migration's blast radius to exactly what this session's change
---       affects, per CLAUDE.md's "additive over destructive").
+--       (legacy-excluded) feeding only the existing `cancelled` CTE.
+--
+--       `cohort` (fn_requested/fn_reached_searching/fn_completed/
+--       fn_price_searches) gets a narrower, targeted fix, NOT the blanket
+--       `legacy_import_metadata = '{}'::jsonb` predicate used everywhere
+--       else in this migration: `AND NOT (status = 'cancelled' AND
+--       legacy_import_metadata != '{}'::jsonb)`. Reasoning (caught in
+--       review -- the first draft of this migration left `cohort` fully
+--       unfiltered and mis-framed the whole gap as "pre-existing"):
+--         - Legacy-imported CANCELLED rows are brand new as of this exact
+--           change set (booking_import_service.py's new branch, same
+--           session) -- before this, `cohort` could never contain one.
+--           Leaving them unfiltered would have silently inflated
+--           fn_requested/fn_reached_searching the moment this ships,
+--           depressing the apparent funnel conversion rate for any window
+--           overlapping the legacy booking dates (2026-07 era) -- a REAL,
+--           NEWLY-INTRODUCED skew, not a pre-existing one.
+--         - Legacy-imported COMPLETED rides, by contrast, are NOT new --
+--           271 of them have been importable and counted in this exact
+--           funnel since migration 227 shipped, 2026-07-29-cutover-adjacent,
+--           predating this session entirely. Blanket-filtering `cohort`
+--           would retroactively change fn_requested/fn_reached_searching/
+--           fn_completed numbers for those already-live, already-relied-on
+--           rows too -- a materially different, separate decision this
+--           migration does not make (CLAUDE.md: no silent behavior change
+--           to a live-tested flow; additive over destructive).
+--       The narrower predicate closes exactly the new gap and nothing more:
+--       a legacy-imported COMPLETED row still counts in cohort exactly as
+--       it always has; a legacy-imported CANCELLED row now correctly never
+--       does, since it never could have before this session's change.
 --
 --   NOT changed (verified, no fix needed):
 --     admin_earnings_daily_series (341) -- status='completed' only, already
@@ -252,16 +274,22 @@ WITH completed AS (
 cohort AS (
     -- Rides REQUESTED in the window (created_at cohort, any status) — feeds
     -- the funnel keys only (fn_requested/fn_reached_searching/fn_completed).
-    -- Deliberately UNCHANGED by migration 349: whether legacy-imported
-    -- COMPLETED rides should count toward funnel volume is a separate,
-    -- pre-existing question this migration does not decide — see 349's
-    -- header. cancellation counting below reads `cancelled_src` instead,
-    -- not this CTE.
+    -- Whether legacy-imported COMPLETED rides should count toward funnel
+    -- volume is a separate, pre-existing question (271 such rides have been
+    -- counted here since migration 227, predating this session) that this
+    -- migration deliberately does NOT decide — those rows are untouched.
+    -- Legacy-imported CANCELLED rides are different: they did not exist
+    -- until this exact change set (booking_import_service.py's new branch,
+    -- same session), so excluding them here closes a gap this migration
+    -- itself introduces, not a pre-existing one — see 349's header for the
+    -- full reasoning. cancellation counting below reads `cancelled_src`
+    -- instead of this CTE for the same reason.
     SELECT status, cancelled_by, cancellation_reason, cancellation_fee_admin,
            ride_started_at, is_scheduled, scheduled_dispatched
     FROM rides
     WHERE created_at >= p_start AND created_at <= p_end
       AND (p_service_area_id IS NULL OR service_area_id::text = p_service_area_id)
+      AND NOT (status = 'cancelled' AND legacy_import_metadata != '{}'::jsonb)
 ),
 cancelled_src AS (
     -- Same window as `cohort`, plus the legacy exclusion migration 349 adds:
@@ -334,7 +362,7 @@ SELECT jsonb_build_object(
 $$;
 
 COMMENT ON FUNCTION public.admin_earnings_overview_agg(timestamptz, timestamptz, text) IS
-    'Completed + cancelled ride aggregates plus ops-funnel counts for one /earnings/overview window. Completed-ride and cancelled-ride money/count keys exclude legacy-imported rides (migrations 341, 349). fn_requested/fn_reached_searching/fn_completed funnel keys are unchanged by 349 (pre-existing, out of scope). Cancel attribution via rides.cancelled_by (reason-string fallback for legacy NULLs).';
+    'Completed + cancelled ride aggregates plus ops-funnel counts for one /earnings/overview window. Completed-ride and cancelled-ride money/count keys exclude legacy-imported rides (migrations 341, 349). fn_requested/fn_reached_searching/fn_completed exclude legacy-imported CANCELLED rides only (new as of 349, closing a gap this migration itself introduces); legacy-imported COMPLETED rides still count in the funnel as they have since migration 227 (pre-existing, unchanged, out of scope). Cancel attribution via rides.cancelled_by (reason-string fallback for legacy NULLs).';
 
 REVOKE EXECUTE ON FUNCTION public.admin_earnings_overview_agg(timestamptz, timestamptz, text) FROM anon, authenticated;
 GRANT  EXECUTE ON FUNCTION public.admin_earnings_overview_agg(timestamptz, timestamptz, text) TO service_role;

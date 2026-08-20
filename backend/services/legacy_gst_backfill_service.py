@@ -31,6 +31,32 @@ Idempotent by construction: only selects rows where
 ``legacy_import_metadata`` does NOT already have the key, so a second run
 after some rows already got it (e.g. from a future import batch, or a
 partial prior application) is a no-op for those rows, not a re-write.
+
+**Concurrent-writer requirement for whoever adds the commit path.**
+``booking_import_service.py`` gained a second, independent backfill
+(``plan_duration_estimated_backfill`` / ``apply_duration_estimated_backfill``)
+that also read-merge-writes ``rides.legacy_import_metadata`` — see
+docs/change-log/2026-08-19-legacy-backfill-concurrent-writer-fix.md for the
+full reasoning. Once an apply/commit function is written here, it MUST use
+the same whole-column optimistic-concurrency guard
+``apply_duration_estimated_backfill`` uses, not just a check on this
+backfill's own key: read the row's current ``legacy_import_metadata``
+immediately before writing, merge in ``old_payout_gst_amount`` locally, and
+guard the ``UPDATE`` with a second PostgREST filter,
+``.filter("legacy_import_metadata", "eq", json.dumps(<the exact dict just
+read>, sort_keys=True, default=str))``, in addition to whatever
+"key not already present" guard protects this backfill's own field. Without
+that whole-column guard, this backfill's write and the duration_estimated
+backfill's write can race: each one's stale local snapshot silently drops
+whatever key the OTHER one just added, even though neither backfill's own
+key ever collides with the other's. A Postgres advisory lock was
+considered and rejected for this: these scripts only have the
+``supabase-py``/PostgREST client (see ``backend/supabase_client.py``), no
+raw psycopg connection, and PostgREST issues each ``.execute()`` as a
+separate request against a pooled connection — a session-level
+``pg_advisory_lock`` can't reliably span a multi-request read-then-write
+critical section from application code here, and wrapping the lock in a new
+RPC function would require a migration, which this fix was scoped to avoid.
 """
 
 from __future__ import annotations

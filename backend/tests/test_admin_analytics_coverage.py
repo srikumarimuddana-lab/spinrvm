@@ -899,3 +899,201 @@ class TestMarketplaceMigration351:
         body = self._body()
         assert "cancelled_by IN ('rider', 'driver', 'admin', 'system')" in body
         assert "cancellation_type = 'no_drivers_found'" in body
+
+
+# ── efficiency + financial (migration 352) ────────────────────────────
+
+
+class TestEfficiencyMetrics:
+    EFF = {
+        "matched_sample": 120,
+        "time_to_match_p50_secs": 42.0,
+        "time_to_match_p95_secs": 118.0,
+        "pickup_sample": 110,
+        "time_to_pickup_p50_secs": 300.0,
+        "time_to_pickup_p95_secs": 720.0,
+        "eta_sample": 95,
+        "eta_error_p50_secs": -15.0,
+        "eta_error_p95_secs": 180.0,
+        "eta_on_time_pct": 63.2,
+        "deadhead_km": 840.5,
+        "paid_km": 4200.0,
+        "deadhead_ratio_pct": 20.0,
+    }
+
+    def _call(self, admin_client, payload=_UNSET, **params):
+        body = self.EFF if payload is _UNSET else payload
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(return_value=[body])),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock()),
+        ):
+            return admin_client.get("/api/admin/analytics/efficiency", params=params)
+
+    def test_percentiles_ship_with_their_sample_size(self, admin_client):
+        """A P95 over 11 rides is not a fleet statistic — the caller must see N."""
+        d = self._call(admin_client).json()
+        assert d["time_to_match"] == {"p50_secs": 42.0, "p95_secs": 118.0, "sample": 120}
+        assert d["pickup_eta_error"]["sample"] == 95
+
+    def test_missing_percentile_stays_null_not_zero(self, admin_client):
+        """An empty window must not report a 0-second time-to-match."""
+        d = self._call(admin_client, payload={}).json()
+        assert d["time_to_match"]["p50_secs"] is None
+        assert d["time_to_match"]["sample"] == 0
+
+    def test_negative_eta_error_is_preserved(self, admin_client):
+        """Negative = beat the promise; clamping it would hide good performance."""
+        assert self._call(admin_client).json()["pickup_eta_error"]["p50_secs"] == -15.0
+
+    def test_deadhead_block(self, admin_client):
+        d = self._call(admin_client).json()["deadhead"]
+        assert d["unpaid_km"] == 840.5 and d["paid_km"] == 4200.0 and d["ratio_pct"] == 20.0
+
+    def test_rpc_error_returns_503(self, admin_client):
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(side_effect=RuntimeError("boom"))),
+        ):
+            assert admin_client.get("/api/admin/analytics/efficiency").status_code == 503
+
+
+class TestFinancialMetrics:
+    FIN = {
+        "completed_rides": 200,
+        "gross_bookings": "5000.00",
+        "avg_fare": "25.00",
+        "tips": "300.50",
+        "tax": "550.00",
+        "discounts": "120.25",
+        "surge_rides": 40,
+        "surge_pct": 20.0,
+        "avg_surge_multiplier": 1.5,
+        "surge_revenue": "410.10",
+        "corporate_rides": 50,
+        "corporate_bookings": "1500.00",
+        "consumer_rides": 150,
+        "consumer_bookings": "3500.00",
+        "unique_riders": 90,
+        "repeat_riders": 36,
+        "repeat_rate_pct": 40.0,
+        "daily": [],
+    }
+    SUPPLY = {"online_seconds": 360000}  # 100h
+
+    def _call(self, admin_client, fin=_UNSET, supply=_UNSET, **params):
+        fin_body = self.FIN if fin is _UNSET else fin
+        sup_body = self.SUPPLY if supply is _UNSET else supply
+
+        async def _rpc(name, args):
+            if name == "admin_financial_metrics":
+                return [fin_body]
+            if name == "admin_supply_utilization":
+                if isinstance(sup_body, Exception):
+                    raise sup_body
+                return [sup_body]
+            raise AssertionError(f"unexpected rpc {name}")
+
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", _rpc),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock()),
+        ):
+            return admin_client.get("/api/admin/analytics/financial", params=params)
+
+    def test_money_fields_round_trip_through_decimal(self, admin_client):
+        d = self._call(admin_client).json()
+        assert d["gross_bookings"] == 5000.00
+        assert d["avg_fare"] == 25.00
+        assert d["tips"] == 300.50
+
+    def test_gross_bookings_is_not_named_revenue(self, admin_client):
+        """Drivers keep 100% of the fare — this must never read as company revenue."""
+        d = self._call(admin_client).json()
+        assert "gross_bookings" in d
+        assert "revenue" not in d
+        assert "total_revenue" not in d
+
+    def test_bookings_per_online_hour_combines_the_supply_ledger(self, admin_client):
+        # 5000.00 over 100 online hours
+        assert self._call(admin_client).json()["bookings_per_online_hour"] == 50.0
+
+    def test_supply_failure_nulls_the_derived_field_but_keeps_the_rest(self, admin_client):
+        """Unknown must not render as zero, and must not fail the endpoint."""
+        d = self._call(admin_client, supply=RuntimeError("supply down")).json()
+        assert d["bookings_per_online_hour"] is None
+        assert d["online_hours"] is None
+        assert d["gross_bookings"] == 5000.00  # financials still valid
+
+    def test_zero_online_hours_does_not_divide_by_zero(self, admin_client):
+        d = self._call(admin_client, supply={"online_seconds": 0}).json()
+        assert d["bookings_per_online_hour"] is None
+
+    def test_surge_and_mix_blocks(self, admin_client):
+        d = self._call(admin_client).json()
+        assert d["surge"]["pct_of_rides"] == 20.0
+        assert d["surge"]["avg_multiplier"] == 1.5
+        assert d["mix"]["corporate_rides"] == 50
+        assert d["mix"]["consumer_bookings"] == 3500.00
+
+    def test_repeat_rate_declares_its_basis(self, admin_client):
+        """Within-window repeat share is not a retention cohort; say so."""
+        assert self._call(admin_client).json()["riders"]["repeat_rate_basis"] == "within_window"
+
+    def test_empty_window_is_all_zeros_not_an_error(self, admin_client):
+        d = self._call(admin_client, fin={}, supply={"online_seconds": 0}).json()
+        assert d["gross_bookings"] == 0.0
+        assert d["completed_rides"] == 0
+
+    def test_financial_rpc_error_returns_503(self, admin_client):
+        async def _rpc(name, args):
+            raise RuntimeError("boom")
+
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", _rpc),
+        ):
+            assert admin_client.get("/api/admin/analytics/financial").status_code == 503
+
+
+class TestMarketplaceMigration352:
+    """Static checks on migration 352 — no database is available to run it."""
+
+    @staticmethod
+    def _body() -> str:
+        from pathlib import Path
+
+        p = Path(__file__).resolve().parents[1] / "migrations" / "352_efficiency_and_financial_fns.sql"
+        return "\n".join(ln for ln in p.read_text().split("\n") if not ln.lstrip().startswith("--"))
+
+    def test_both_functions_exclude_legacy_imports(self):
+        assert self._body().count("legacy_import_metadata = '{}'::jsonb") == 2
+
+    def test_both_functions_are_locked_down(self):
+        body = self._body()
+        assert body.count("REVOKE EXECUTE") == 2
+        assert body.count("SECURITY DEFINER") == 2
+        assert body.count("SET search_path = public, pg_catalog") == 2
+
+    def test_no_utc_bucketing(self):
+        assert "AT TIME ZONE 'UTC'" not in self._body()
+
+    def test_deadhead_is_a_ratio_of_sums_not_a_mean_of_ratios(self):
+        """One short trip with a long approach must not dominate."""
+        assert "SUM(pickup_to_driver_km) / SUM(actual_distance_km)" in self._body()
+
+    def test_percentiles_ship_alongside_sample_counts(self):
+        body = self._body()
+        for k in ("matched_sample", "pickup_sample", "eta_sample"):
+            assert k in body
+
+    def test_money_divisions_stay_in_numeric(self):
+        """Float division on fare columns would violate the Decimal-only rule."""
+        body = self._body()
+        assert "::text::numeric" in body
+        assert "ROUND(SUM(fare) / COUNT(*), 2)" in body
+
+    def test_eta_error_uses_the_accepted_offers_promise(self):
+        body = self._body()
+        assert "o.status = 'accepted'" in body
+        assert "o.eta_seconds" in body

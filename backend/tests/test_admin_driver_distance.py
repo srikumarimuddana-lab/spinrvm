@@ -222,6 +222,11 @@ async def test_distance_logs_joins_spans_with_current_distances():
     assert p3["distance_km"] == 12.4
     assert p3["distance_source"] == "late_tail_rederivation"
     assert out["total_km"] == pytest.approx(22.75)
+    # Spans with no is_reconstructed column (or an explicit False) default to
+    # live-logged, not reconstructed.
+    assert p1["is_reconstructed"] is False
+    assert p2["is_reconstructed"] is False
+    assert p3["is_reconstructed"] is False
 
 
 @pytest.mark.asyncio
@@ -292,3 +297,45 @@ async def test_distance_logs_clips_spans_to_the_regina_day():
     assert len(out["logs"]) == 1
     assert out["logs"][0]["from"] == ws.isoformat()
     assert out["logs"][0]["seconds"] == 3600
+
+
+@pytest.mark.asyncio
+async def test_distance_logs_surfaces_is_reconstructed_per_span():
+    """Migration 332's `is_reconstructed` marker (legacy-migration-playbook.md
+    checklist item #5(b)) must pass through per span, not be dropped or
+    collapsed to a single day-level flag — a driver can have a mix of
+    live-logged and backfilled spans in the same day."""
+    ws = datetime(2026, 8, 10, 6, 0, 0, tzinfo=timezone.utc)
+    spans = [
+        {  # live-logged
+            "period": 1,
+            "started_at": (ws + timedelta(hours=1)).isoformat(),
+            "ended_at": (ws + timedelta(hours=2)).isoformat(),
+            "ride_id": None,
+            "is_reconstructed": False,
+        },
+        {  # backfilled from driverlocationlogs.csv timestamps
+            "period": 2,
+            "started_at": (ws + timedelta(hours=2)).isoformat(),
+            "ended_at": (ws + timedelta(hours=2, minutes=10)).isoformat(),
+            "ride_id": "ride-1",
+            "is_reconstructed": True,
+        },
+    ]
+
+    async def _get_rows(table, filters=None, **kw):
+        if table == "driver_insurance_periods":
+            return spans
+        if table == "driver_period_distances_current":
+            return []
+        if table == "rides":
+            return [{"id": "ride-1", "ride_code": "SPR-PE7TTB"}]
+        return []
+
+    with patch.object(mod.db_supabase, "get_rows", AsyncMock(side_effect=_get_rows)):
+        out = await mod.admin_driver_distance_logs(driver_id="drv-1", date=DAY, admin_user=ADMIN)
+
+    assert len(out["logs"]) == 2
+    live, backfilled = out["logs"]
+    assert live["is_reconstructed"] is False
+    assert backfilled["is_reconstructed"] is True

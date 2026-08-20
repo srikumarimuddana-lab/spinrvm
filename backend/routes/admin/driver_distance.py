@@ -307,6 +307,12 @@ async def admin_driver_distance_logs(
                 "distance_km": float(dist["distance_km"]) if dist and dist.get("distance_km") is not None else None,
                 "distance_source": dist.get("source") if dist else None,
                 "open": s.get("ended_at") is None,
+                # Migration 332: True when this span's boundaries were backfilled
+                # from timestamps during legacy migration rather than logged live.
+                # Regulator-facing scripts/compliance_export.py already surfaces
+                # this; this is the admin-dashboard read-only counterpart
+                # (legacy-migration-playbook.md checklist item #5(b)).
+                "is_reconstructed": bool(s.get("is_reconstructed", False)),
             }
         )
 

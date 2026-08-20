@@ -9,8 +9,8 @@ import and vehicle-history backfill, verified against the real cached export's a
 crosswalk-resolution numbers), and reviewed — but **none has ever been run with `--apply`/`commit`
 against any environment** (mocked, staging, or production) **by any Claude Code session**. This
 document describes the safe procedure for whoever runs them. **It is not, itself, the sign-off to run
-any of them** — for the original three, the sign-off now exists (see "Decision recorded" immediately
-below); for the fourth, it does not yet.
+any of them** — the sign-off now exists for all four (see "Decision recorded" and its "fourth
+capability" follow-up immediately below).
 
 ## Decision recorded (2026-08-20)
 
@@ -27,6 +27,20 @@ Put to the product owner directly via `AskUserQuestion` (not inferred or assumed
    itself. How should the runs actually happen?** → **The product owner will run them directly**,
    using this runbook (pre-flight checklist, dry-run-first, rollback path per capability) — not
    delegated to a Claude Code session.
+
+## Decision recorded — fourth capability (2026-08-20, same day, separate ask)
+
+The vehicle-history backfill (built same day as the decision above, *after* it was recorded — see the
+Status line) was not covered by that original ask. Put separately, once built and reviewed:
+
+4. **Timing for the vehicle-history backfill (`backfill_legacy_vehicle_history.py`): run now, or wait
+   for Oct 30?** → **Run now** — same reasoning and same execution model as the other three: the
+   product owner will run it directly via this runbook, no session in this repo has live Supabase
+   credentials.
+
+This closes the "not yet" caveat in this document's Status line — all four capabilities now have
+product-owner sign-off to run now, against their existing cached exports, self-executed by the product
+owner. **No `--apply`/commit run has happened for any of the four as of this update.**
 
 **What this decision does *not* cover:** the underlying legal-sufficiency judgment on old-app consent
 (business/counsel decision) remains open and unrelated to this rollout decision. The 7-anomalous-row

@@ -180,7 +180,7 @@ vi.mock("@/components/ui/table", () => tableStubs);
 const dialogStubs = stubComponents(["Dialog", "DialogContent", "DialogHeader", "DialogTitle", "DialogDescription", "DialogFooter", "DialogTrigger"]);
 vi.mock("@/components/ui/dialog", () => dialogStubs);
 
-const selectStubs = stubComponents(["Select", "SelectContent", "SelectItem", "SelectTrigger", "SelectValue", "SelectGroup"]);
+const selectStubs = stubComponents(["Select", "SelectContent", "SelectItem", "SelectTrigger", "SelectValue", "SelectGroup", "SelectLabel"]);
 vi.mock("@/components/ui/select", () => ({
   ...selectStubs,
   Select: ({ children, onValueChange, value }: React.PropsWithChildren<{ onValueChange?: (v: string) => void; value?: string }>) => (

@@ -754,6 +754,7 @@ def build_plan(
                     "batch": import_batch,
                     "old_driver_id": old_id,
                     "source": IMPORT_SOURCE,
+                    "dob_present_at_import": bool(dob),
                     "address_present": bool(row.get("address")),
                     "drivers_abstract_status": row.get("drivers_abstract_status") or None,
                 },
@@ -1186,6 +1187,91 @@ def sin_source(driver: dict[str, Any] | None) -> str | None:
     if driver.get("sin_collected_at"):
         return "self_entry"
     return None
+
+
+def dob_source(driver: dict[str, Any] | None) -> str | None:
+    """Derive date-of-birth provenance for display — the DOB counterpart of
+    ``sin_source()`` above (Oct 30 checklist item #7,
+    docs/runbooks/legacy-migration-playbook.md). Same return-value contract
+    (``"legacy_import" | "self_entry" | None``), same no-DB-access, pure-
+    function shape, and same rule: never changes what ``date_of_birth``
+    means or is written as, and never returns the DOB itself.
+
+    Deliberately NOT a literal copy of ``sin_source()``'s check, because DOB
+    has an extra legacy-import write path SIN never had:
+
+      1. ``build_plan()`` (the original Saskatoon driver CSV import) writes
+         ``date_of_birth`` directly at driver creation when the CSV row has
+         one — every driver from that import carries
+         ``legacy_import_metadata.source == IMPORT_SOURCE``. ``build_plan()``
+         never writes ``sin`` at all, so this path has no SIN equivalent.
+      2. ``apply_legacy_sin_dob_import()`` (the ``banks.csv`` backfill) writes
+         DOB later, but ONLY when the column was still NULL at that point
+         (see its own "never clobbers" docstring) — a driver whose DOB was
+         already set by (1) gets no ``dob_written`` marker at all from this
+         path, because ``plan_legacy_sin_dob_import`` skips a column that's
+         already on file.
+
+    Checking only the banks.csv marker (the literal mirror of
+    ``sin_source()``'s single-marker check) would silently mislabel the more
+    common case — a DOB set at initial import and never touched by the later
+    backfill — as ``"self_entry"``, i.e. it would UNDER-disclose, claiming
+    driver-verified provenance for raw, unverified legacy CSV data. That is
+    the opposite of what an accuracy-disclosure flag is for, so this
+    function also checks a CSV-import marker directly.
+
+    That marker must be field-level, not record-level: ``legacy_import_
+    metadata.source == IMPORT_SOURCE`` is stamped on EVERY driver from the
+    Saskatoon CSV import regardless of whether that specific row's DOB
+    column was populated (``build_plan()`` never rejects a row for a blank
+    DOB). A driver whose CSV row had no DOB, was never matched by the
+    banks.csv backfill (phone-crosswalk miss), and later had DOB entered by
+    a ``super_admin`` via ``admin_update_driver`` would have
+    ``source == IMPORT_SOURCE`` forever true despite the value being
+    admin-entered, not legacy CSV data — checking that field alone would
+    OVER-disclose in the opposite direction (found by `spinr-security-
+    auditor`, 2026-08-20, BLOCKER). ``build_plan()`` instead stamps a
+    per-row ``dob_present_at_import`` boolean unconditionally (true or
+    false, never omitted) recording whether *this specific row's* DOB
+    column actually had a value at import time — that is the marker this
+    function checks, not the record-level ``source`` field.
+
+    - ``"legacy_import"`` — either the ``banks.csv`` backfill marker's
+      ``dob_written`` is ``True``, OR this driver's own CSV row had a DOB
+      value at import time (``legacy_import_metadata.dob_present_at_import
+      is True``) and ``date_of_birth`` is still set. Like ``sin_source()``,
+      this is a permanent provenance marker, not a live freshness flag: a
+      ``super_admin`` correction via ``admin_update_driver``
+      (``routes/admin/drivers.py``) does not clear either marker, matching
+      ``sin_source()``'s identical behaviour for an admin-corrected SIN
+      (``admin_update_driver_sin`` doesn't clear the ``sin_written`` marker
+      either — see that function's own docstring). Once a value has ever
+      been legacy-imported, this label sticks even if since corrected.
+    - ``"self_entry"`` — ``date_of_birth`` is set but neither of the above
+      applies. This covers both: a driver with no legacy-import lineage at
+      all, and a legacy-imported driver whose CSV row had no DOB
+      (``dob_present_at_import`` is ``False``) and whose current value was
+      therefore written later — by an admin via ``admin_update_driver``, the
+      only route that writes ``date_of_birth`` as of 2026-08-20 (checked
+      ``routes/drivers/``, ``routes/auth.py``, ``schemas.py`` — no
+      driver-facing route exists). Named ``"self_entry"`` rather than
+      ``"admin_entry"`` to keep the same three-value contract ``sin_source()``
+      already established (callers branch on the literal strings).
+    - ``None`` — no DOB on file (or no driver row).
+    """
+    if not driver:
+        return None
+    if not driver.get("date_of_birth"):
+        return None
+    meta = driver.get("legacy_import_metadata") or {}
+    if not isinstance(meta, dict):
+        return "self_entry"
+    marker = meta.get(LEGACY_BANK_SIN_DOB_SOURCE)
+    if isinstance(marker, dict) and marker.get("dob_written"):
+        return "legacy_import"
+    if meta.get("dob_present_at_import") is True:
+        return "legacy_import"
+    return "self_entry"
 
 
 def print_sin_dob_report(plan: SinDobImportPlan, *, dry_run: bool) -> None:

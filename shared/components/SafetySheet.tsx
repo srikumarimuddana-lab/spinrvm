@@ -24,8 +24,8 @@
  *
  * Never claims to replace emergency services, and never auto-dials.
  */
-import React, { useRef, useState } from 'react';
-import { View, Text, StyleSheet, Modal, Pressable, Linking, Animated, Share, ScrollView } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { View, Text, StyleSheet, Pressable, Linking, Animated, Share, ScrollView, BackHandler } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useHoldToConfirm } from '../hooks/useHoldToConfirm';
@@ -69,6 +69,19 @@ export function SafetySheet({
   const [outcome, setOutcome] = useState<string | null>(null);
   const [shareState, setShareState] = useState<'idle' | 'loading' | 'failed'>('idle');
   const shareTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Dropping <Modal> also dropped its onRequestClose, which is what handled
+  // the Android hardware back button. Without this an Android user has no way
+  // out of the panel at all -- exactly the "it won't close" failure this
+  // change is fixing, just on a different input.
+  useEffect(() => {
+    if (!visible) return undefined;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      onClose();
+      return true; // consumed: don't also pop the navigation stack
+    });
+    return () => sub.remove();
+  }, [visible, onClose]);
 
   const callEmergency = () => Linking.openURL(`tel:${cfg.emergencyNumber}`);
 
@@ -132,9 +145,29 @@ export function SafetySheet({
     return 'Hold 2s — alerts your contacts and our safety team';
   };
 
+  // Deliberately NOT react-native's <Modal>. Neither of this app's two
+  // existing root overlays uses it -- ConfirmSheet renders a gorhom
+  // <BottomSheet> behind `if (!visible) return null`, and Toast uses
+  // position:'absolute'. Modal did not overlay here: it laid out as a flex
+  // sibling of the navigator, which squashed the app into the top of the
+  // screen, left the backdrop showing as a grey band, kept the panel on screen
+  // across navigation, and made it impossible to dismiss. An absolute-fill
+  // overlay behaves correctly on top of the @gorhom bottom sheets the rider
+  // screens already use.
+  if (!visible) return null;
+
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={styles.backdrop}>
+    <View style={styles.overlayRoot} pointerEvents="box-none">
+      {/* Tapping the dimmed area closes the panel -- an escape hatch that
+          matters more here than elsewhere: this is the screen someone reaches
+          in distress, and it must never feel trapping. */}
+      <Pressable
+        style={StyleSheet.absoluteFill}
+        onPress={onClose}
+        accessibilityRole="button"
+        accessibilityLabel="Close safety options"
+      />
+      <View style={styles.backdrop} pointerEvents="box-none">
         {/* Bottom inset so the home indicator never sits on top of the last
             row. Capped: on devices with no inset this stays at the base 16. */}
         <View style={[styles.sheet, { paddingBottom: Math.max(16, insets.bottom + 8) }]}>
@@ -284,12 +317,33 @@ export function SafetySheet({
           </ScrollView>
         </View>
       </View>
-    </Modal>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
+  // Fills the window and sits above everything, including the @gorhom bottom
+  // sheets on the rider screens. elevation is the Android counterpart to
+  // zIndex for stacking against native views.
+  overlayRoot: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 9999,
+    elevation: 9999,
+    justifyContent: 'flex-end',
+  },
+  backdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'flex-end',
+  },
   sheet: {
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 20,

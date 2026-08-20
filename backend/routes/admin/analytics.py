@@ -24,6 +24,11 @@ api_router = APIRouter(prefix="/analytics", tags=["Admin Analytics"])
 
 _OVERVIEW_CACHE_TTL = 300  # 5 minutes
 
+# Day/hour buckets in the analytics RPCs are America/Regina business time,
+# not UTC (migration 350). Reported in every payload so the dashboard can
+# label its axes rather than rendering a bare, ambiguous "14:00".
+_ANALYTICS_TZ = "America/Regina"
+
 # Upper bound on how many driver rows one acceptance-rate request will scan.
 # Hitting it sets `scan_truncated` in the response rather than silently
 # returning a partial list.
@@ -88,7 +93,9 @@ async def get_cancellation_breakdown(
     """
     import json as _json
 
-    cache_key = f"analytics:cancellation-reasons:{date_range}:{service_area_id or 'all'}"
+    # `v2` marks the America/Regina hour bucketing (migration 350) — see
+    # the same note on /overview.
+    cache_key = f"analytics:cancellation-reasons:v2:{date_range}:{service_area_id or 'all'}"
     cached = await redis_get(cache_key)
     if cached:
         try:
@@ -139,6 +146,8 @@ async def get_cancellation_breakdown(
     result = {
         "total_cancellations": total,
         "date_range": date_range,
+        "service_area_id": service_area_id,
+        "timezone": _ANALYTICS_TZ,
         "reasons": reasons,
         "by_party": by_party,
         "hourly_distribution": hourly,
@@ -330,12 +339,22 @@ async def get_driver_acceptance_rates(
 @api_router.get("/overview")
 async def get_analytics_overview(
     date_range: str = Query("30d", pattern="^(today|7d|30d|90d|1y)$"),
+    service_area_id: Optional[str] = None,
     admin: dict = Depends(get_admin_user),
 ):
-    """High-level operational metrics for the analytics dashboard. Cached 5 min (F-50)."""
+    """High-level operational metrics for the analytics dashboard. Cached 5 min (F-50).
+
+    Optionally scoped to one service area (migration 350) — the headline KPI
+    cards previously blended every market together, which makes the
+    per-market CLAUDE.md KPI targets unreadable for an operator running more
+    than one city.
+    """
     import json as _json
 
-    cache_key = f"analytics:overview:{date_range}"
+    # `v2` marks the America/Regina bucketing switch (migration 350). Without
+    # it, entries cached under the old UTC bucketing would keep being served
+    # for up to _OVERVIEW_CACHE_TTL after deploy.
+    cache_key = f"analytics:overview:v2:{date_range}:{service_area_id or 'all'}"
     cached = await redis_get(cache_key)
     if cached:
         try:
@@ -349,7 +368,10 @@ async def get_analytics_overview(
     # aggregated in Postgres (admin_analytics_overview) instead of fetching up to
     # 10,000 rides and summing in Python.
     try:
-        ov = await db.rpc("admin_analytics_overview", {"p_start": start_date.isoformat()})
+        ov = await db.rpc(
+            "admin_analytics_overview",
+            {"p_start": start_date.isoformat(), "p_service_area_id": service_area_id},
+        )
     except Exception as e:
         logger.error(f"Failed to aggregate rides for overview: {e}", exc_info=True)
         from fastapi import HTTPException as _HTTPException
@@ -392,6 +414,8 @@ async def get_analytics_overview(
 
     result = {
         "date_range": date_range,
+        "service_area_id": service_area_id,
+        "timezone": _ANALYTICS_TZ,
         "total_rides": total,
         "completed": completed,
         "cancelled": cancelled,

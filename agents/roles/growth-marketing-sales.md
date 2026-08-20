@@ -41,6 +41,7 @@ a cheaper implementation would satisfy the same goal.
 - [Growth / Marketing Manager](growth-marketing-sales/growth-marketing-manager.md)
 - [Community / Social Media Manager](growth-marketing-sales/community-social-manager.md)
 - [Corporate Sales Representative](growth-marketing-sales/corporate-sales-rep.md)
-- [Corporate Account Exec / Customer Success](growth-marketing-sales/corporate-account-exec-success.md)
+- [Corporate Account Executive](growth-marketing-sales/corporate-account-exec.md)
+- [Customer Success](growth-marketing-sales/customer-success.md)
 - [Performance Marketing](growth-marketing-sales/performance-marketing.md)
 - [Brand / Content](growth-marketing-sales/brand-content.md)

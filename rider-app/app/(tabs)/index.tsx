@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback, useContext } from 'react';
 import {
   View,
   Text,
@@ -28,6 +28,7 @@ import { CarMarker, resolveMarkerVariant } from '@shared/components/CarMarker';
 import { useVehicleTypeStore } from '@shared/store/vehicleTypeStore';
 import { showToast } from '../../store/toastStore';
 import { RiderSOS } from '../../components/RiderSOS';
+import { RidelessSosEnabledContext } from '../_layout';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import {
@@ -65,7 +66,8 @@ const PROMO_ROTATE_MS = 6000;
 export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
-  const { fetchSavedAddresses, setUserLocation, currentRide, triggerEmergency, fetchActiveRide } = useRideStore();
+  const { fetchSavedAddresses, setUserLocation, currentRide, triggerEmergency, triggerRidelessEmergency, fetchActiveRide } = useRideStore();
+  const ridelessSosEnabled = useContext(RidelessSosEnabledContext);
   const { t } = useTranslation();
 
   // Home is a navigation root: the Android back button must background the app,
@@ -561,15 +563,26 @@ export default function HomeScreen() {
               used to carry an `else { Linking.openURL('tel:911') }` branch
               that was unreachable for that reason, but would have become an
               UNPROMPTED 911 dial the moment anyone made SOSButton call
-              onTrigger without a rideId -- the obvious shape of the pending
-              rideless-SOS work (ACTION_ITEMS.md B15(c)). domain-safety.md's
-              hardest rule is "Never auto-dial 911" (wrong-PSAP routing wastes
-              seconds), so the branch is removed rather than left as a trap. */}
+              onTrigger without a rideId. domain-safety.md's hardest rule is
+              "Never auto-dial 911" (wrong-PSAP routing wastes seconds), so
+              that branch was removed rather than left as a trap.
+
+              Ride-less SOS (ACTION_ITEMS.md B15(c)): ridelessSosEnabled is
+              read from AppSettings.rideless_sos_enabled (dark-launched,
+              default off) via RidelessSosEnabledContext. Off, this mount is
+              byte-identical to before -- SOSButton still shows the "No
+              Active Ride / Call 911" prompt whenever currentRide is unset.
+              On, a rider with no active ride can send a real alert. This is
+              the ONLY RiderSOS mount site in rider-app that passes these two
+              props -- the other three (ride-in-progress, driver-arriving,
+              driver-arrived) always have a real rideId and are unaffected. */}
           <RiderSOS
             rideId={currentRide?.id}
             onTrigger={triggerEmergency}
             size="small"
             t={t}
+            ridelessSosEnabled={ridelessSosEnabled}
+            onTriggerRideless={triggerRidelessEmergency}
           />
         </View>
       </View>

@@ -565,6 +565,18 @@ class AppSettings(BaseModel):
     # — this flag is read by driver-app only. Not a credential/destination
     # field, no masking/super-admin gate needed.
     driver_discreet_sos_enabled: bool = False
+    # ── Rideless SOS (ACTION_ITEMS.md B15(c)) ─────────────────────────────
+    # Dark-launched rollout gate: with this off (default), POST /rides/emergency
+    # (the new ride-less sibling of trigger_emergency, backend/routes/rides/
+    # safety.py) 404s and rider-app's home-screen SOS button keeps showing the
+    # existing "No Active Ride / Call 911" prompt. On, a rider with no active
+    # ride can send a real alert (safety_incidents.ride_id = NULL). Rider-app
+    # only -- driver-app's idle-screen gap is explicitly out of scope for this
+    # flag (see agents/runs/sos-rideless-path/). Not a credential/destination
+    # field, no masking/super-admin gate needed. Must not be enabled in ANY
+    # environment before Product + Trust & Safety sign off on SMS/push copy
+    # and triage-runbook readiness -- see agents/runs/sos-rideless-path/decisions.md.
+    rideless_sos_enabled: bool = False
     # ── Legacy/re-consent notice (2026-08-19 legacy-migration audit) ─────
     # Dark-launch gate for GET/POST /consent/* (routes/legacy_consent.py).
     # Off (default): endpoint reports needs_notice=false unconditionally and

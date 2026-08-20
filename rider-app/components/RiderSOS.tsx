@@ -26,9 +26,27 @@ interface RiderSOSProps {
   ) => Promise<SOSTriggerResult | void>;
   size?: 'small' | 'large';
   t?: (key: string) => string;
+  /**
+   * Ride-less SOS (ACTION_ITEMS.md B15(c)). Both optional and forwarded
+   * as-is to SOSButton — omitted at every RiderSOS mount site except the
+   * home screen, so those stay byte-identical.
+   */
+  ridelessSosEnabled?: boolean;
+  onTriggerRideless?: (
+    lat?: number,
+    lng?: number,
+    idempotencyKey?: string,
+  ) => Promise<SOSTriggerResult | void>;
 }
 
-export function RiderSOS({ rideId, onTrigger, size = 'small', t }: RiderSOSProps) {
+export function RiderSOS({
+  rideId,
+  onTrigger,
+  size = 'small',
+  t,
+  ridelessSosEnabled,
+  onTriggerRideless,
+}: RiderSOSProps) {
   const openSheet = useSafetySheetStore((s) => s.open);
 
   return (
@@ -38,6 +56,8 @@ export function RiderSOS({ rideId, onTrigger, size = 'small', t }: RiderSOSProps
       size={size}
       t={t}
       onTap={() => openSheet(rideId)}
+      ridelessSosEnabled={ridelessSosEnabled}
+      onTriggerRideless={onTriggerRideless}
     />
   );
 }

@@ -32,6 +32,7 @@ import { CarOfferPanel } from './CarOfferPanel';
 import { useCarMapCamera } from './carMapCamera';
 import { normalizeHeading, shouldCommitHeading, zoomForSpan } from './carCameraMath';
 import { useCarLocation } from './useCarLocation';
+import { useCarLiveRoute } from './useCarLiveRoute';
 import { pushDebug, setDebugFact } from './carDebug';
 import { CarDebugPanel } from './CarDebugPanel';
 import { useCarSurfaceGeneration } from './carSurfaceGeneration';
@@ -236,6 +237,13 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
   // turning a deliberately-offset view under them is disorienting. Holding the
   // last bearing (rather than snapping back to north, which is what this did
   // before) means Recenter resumes tracking without a spin.
+  // Live OSRM route from the driver's CURRENT position, replacing the static
+  // booking-time planned line once it arrives. Null when there is no
+  // trustworthy one (wrong ride, wrong leg, or too old) and the planned line
+  // stands in. See useCarLiveRoute for why the car may poll for itself.
+  const liveRoute = useCarLiveRoute(activeRide?.ride?.id ?? null, route?.leg ?? null, !!route);
+  const livePath = liveRoute?.polyline ?? null;
+
   const isPannedAway = offsetLat !== 0 || offsetLng !== 0;
   // Adjusted during render rather than in an effect — React's documented
   // "adjusting state when a prop changes" pattern, the same one CarMarker.tsx
@@ -361,9 +369,19 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
         : `${offsetLat.toFixed(4)}, ${offsetLng.toFixed(4)} (recenter to clear)`,
     );
     setDebugFact('location', here ? `${here.latitude.toFixed(4)}, ${here.longitude.toFixed(4)}` : 'no fix (fallback)');
-    setDebugFact('route', route ? `${route.leg}, ${route.polyline.length} pts` : 'none');
+    // Says WHICH line is on screen. "planned" on a moving trip is the symptom
+    // of the live poll failing, and was previously indistinguishable from
+    // working correctly.
+    setDebugFact(
+      'route',
+      route
+        ? livePath
+          ? `${route.leg}, ${livePath.length} pts (live OSRM)`
+          : `${route.leg}, ${route.polyline.length} pts (planned, booking-time)`
+        : 'none',
+    );
     setDebugFact('heatmap', `${heatmapStatus}, ${carHeatCells.length} cells`);
-  }, [rideState, card.leg, delta, here, route, heatmapStatus, carHeatCells.length, offsetLat, offsetLng, todayEarnings, cameraHeading, isPannedAway, viewport.w, viewport.h, centerLat]);
+  }, [rideState, card.leg, delta, here, route, heatmapStatus, carHeatCells.length, offsetLat, offsetLng, todayEarnings, cameraHeading, isPannedAway, viewport.w, viewport.h, centerLat, livePath]);
 
   let Maps: typeof import('react-native-maps') | null = null;
   try {
@@ -498,13 +516,26 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
           );
         })}
 
-        {/* THE uniform route line + pins. `route.polyline` is the SAME stored
-            pickup→dropoff geometry as before (empty on the pre-pickup leg); it is
-            now drawn as one orange→red gradient via the shared RouteLine so the
-            car surface reads identically to the phone. Pins follow the leg: green
-            pickup while heading to the rider; green pickup (route start) + red
-            dropoff once the trip is under way. */}
-        {route && RouteLine && <RouteLine path={route.polyline} />}
+        {/* THE uniform route line + pins, drawn as one orange→red gradient via
+            the shared RouteLine so the car reads identically to the phone.
+
+            The line PREFERS the live OSRM route — road-matched from where the
+            driver actually is, refreshed every 20s — and falls back to the
+            stored `planned_route_polyline` only when there is no trustworthy
+            live one. Until now only the stored line existed, so a driver who
+            took a different road watched the head unit insist on the route
+            planned at booking for the whole trip.
+
+            The live line also fills a gap the stored one could never cover: it
+            exists on the PRE-PICKUP leg too (`route.polyline` is empty there,
+            because the stored geometry runs pickup→dropoff and drawing it while
+            the driver heads to the rider pointed the wrong way entirely).
+
+            Pins follow the leg: green pickup while heading to the rider; green
+            pickup (route start) + red dropoff once the trip is under way. */}
+        {route && RouteLine && (livePath ?? route.polyline).length > 1 && (
+          <RouteLine path={livePath ?? route.polyline} />
+        )}
         {route && RoutePins && (
           <RoutePins
             pickup={route.leg === 'pickup' ? route.destination : (route.polyline[0] ?? null)}

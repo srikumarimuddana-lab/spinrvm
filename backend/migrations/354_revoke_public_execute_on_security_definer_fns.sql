@@ -1,4 +1,4 @@
--- 353_revoke_public_execute_on_security_definer_fns.sql
+-- 354_revoke_public_execute_on_security_definer_fns.sql
 --
 -- Purpose:
 --   Codify a production hotfix so it survives environment rebuilds.
@@ -95,13 +95,13 @@ BEGIN
         EXECUTE format(
             'GRANT EXECUTE ON FUNCTION %s TO service_role', f.sig);
         touched := touched + 1;
-        RAISE NOTICE 'migration 353: locked down %', f.sig;
+        RAISE NOTICE 'migration 354: locked down %', f.sig;
     END LOOP;
 
     IF touched = 0 THEN
-        RAISE NOTICE 'migration 353: no-op — no SECURITY DEFINER function in public was anon/authenticated-executable';
+        RAISE NOTICE 'migration 354: no-op — no SECURITY DEFINER function in public was anon/authenticated-executable';
     ELSE
-        RAISE NOTICE 'migration 353: locked down % function(s)', touched;
+        RAISE NOTICE 'migration 354: locked down % function(s)', touched;
     END IF;
 END $$;
 
@@ -118,7 +118,7 @@ BEGIN
 
     IF leaked > 0 THEN
         RAISE EXCEPTION
-          'migration 353 post-condition failed: % SECURITY DEFINER function(s) still anon/authenticated-executable',
+          'migration 354 post-condition failed: % SECURITY DEFINER function(s) still anon/authenticated-executable',
           leaked;
     END IF;
 END $$;

@@ -46,7 +46,7 @@ permanently was the wrong call.
 
 ## 3. Fix / remediation
 
-**A.** Migration 353 sweeps every `SECURITY DEFINER` function in `public` that
+**A.** Migration 354 sweeps every `SECURITY DEFINER` function in `public` that
 is `anon`- or `authenticated`-executable, revokes `PUBLIC, anon,
 authenticated`, and grants `service_role` **in the same loop iteration**.
 
@@ -68,7 +68,7 @@ written.** The grants were fixed directly against the live database on
 read-only: **0** anon-executable `SECURITY DEFINER` functions remain (of 45
 total), and **0** lack a `service_role` grant.
 
-**So migration 353 is expected to be a no-op against production.** Its purpose
+**So migration 354 is expected to be a no-op against production.** Its purpose
 is reproducibility: `schema_migrations` carries no record of the hotfix, so a
 staging refresh, DR restore, or Supabase branch database rebuilt from
 migrations would come back vulnerable. This file makes the corrected state part
@@ -101,7 +101,7 @@ the matching tab rather than 404ing.
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/migrations/353_revoke_public_execute_on_security_definer_fns.sql` | New. Sweep + post-condition | Codify the hotfix so rebuilt environments aren't vulnerable |
+| `backend/migrations/354_revoke_public_execute_on_security_definer_fns.sql` | New. Sweep + post-condition | Codify the hotfix so rebuilt environments aren't vulnerable |
 | `backend/tests/test_admin_analytics_coverage.py` | +8 tests | Pin the sweep's shape and safety properties |
 | `admin-dashboard/src/components/sidebar.tsx` | Removed 2 entries + 2 orphaned icon imports | Content lives in tabs now |
 | `admin-dashboard/src/app/dashboard/analytics/page.tsx` | URL tab state, `TAB_IDS` allowlist, `Suspense` wrapper | Make tabs addressable |
@@ -117,10 +117,10 @@ REVOKE EXECUTE ON FUNCTION public.wallet_pay_for_ride(uuid, uuid, numeric, numer
 ```
 
 ```sql
--- After — migration 353, applied to whatever is actually still reachable
+-- After — migration 354, applied to whatever is actually still reachable
 EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC, anon, authenticated', f.sig);
 EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO service_role', f.sig);
-RAISE NOTICE 'migration 353: locked down %', f.sig;
+RAISE NOTICE 'migration 354: locked down %', f.sig;
 ```
 
 ## 8. Rollback plan
@@ -136,7 +136,7 @@ Frontend: `git revert` is complete — no migration, no persisted state.
 
 ## 9. Verification performed
 
-- [x] **Reproduced the defect and the fix on a real database.** PostgreSQL 16.13: created a `SECURITY DEFINER` function with only the weak revoke → `anon_exec = true`. Applied migration 353 → `anon_exec = false`, `authenticated = false`, `service_role = true`. The `RAISE NOTICE` named the function it touched.
+- [x] **Reproduced the defect and the fix on a real database.** PostgreSQL 16.13: created a `SECURITY DEFINER` function with only the weak revoke → `anon_exec = true`. Applied migration 354 → `anon_exec = false`, `authenticated = false`, `service_role = true`. The `RAISE NOTICE` named the function it touched.
 - [x] **Idempotency confirmed** — re-running emits `no-op — no SECURITY DEFINER function in public was anon/authenticated-executable` and changes nothing. This is the expected production outcome.
 - [x] **Verified the migration doesn't disturb the analytics functions** from 350–352 on the same instance: `admin_analytics_overview`, `admin_marketplace_funnel`, `admin_financial_metrics` all return values identical to before.
 - [x] **Production state verified read-only** (`pg_proc`/`pg_namespace` only): 0 of 45 `SECURITY DEFINER` functions are anon-executable; 0 lack `service_role`.
@@ -144,14 +144,14 @@ Frontend: `git revert` is complete — no migration, no persisted state.
 - [x] `ruff check` + `ruff format` clean.
 - [x] **Real production build run** — `npm run build`, exit 0. All three routes present (`/dashboard/analytics`, and the two redirect routes). `tsc --noEmit` exit 0.
 - [x] `npm run lint` — **0 errors**; warning count dropped 336 → 334 after removing the two imports my own change orphaned.
-- [x] Migration numbering — 353 confirmed free; `schema_migrations` confirmed to hold no 35x entry beyond `35_refresh_tokens_revoked_at_backfill.sql`.
+- [x] Migration numbering — originally written as 353, which was free at the time. `main` then merged `353_rideless_sos_enabled_flag.sql` first, so this file was renamed to **354** per `backend/migrations/CLAUDE.md` ("if two PRs conflict on a number, the second one renames to the next free slot before merge"). Safe to rename because it has never been applied anywhere — the runner keys on full filename, so renaming an *applied* migration is what must be avoided. `schema_migrations` confirmed to hold no 35x entry beyond `35_refresh_tokens_revoked_at_backfill.sql`.
 
 ## 10. What was NOT verified
 
-- **I did not apply migration 353 to production.** It should be a no-op, but that is an inference from the read-only privilege check, not an observed run. Apply it through `run_migrations.py` so `schema_migrations` records it — otherwise the reproducibility gap this migration exists to close stays open.
+- **I did not apply migration 354 to production.** It should be a no-op, but that is an inference from the read-only privilege check, not an observed run. Apply it through `run_migrations.py` so `schema_migrations` records it — otherwise the reproducibility gap this migration exists to close stays open.
 - **I never confirmed the exposure was reachable over HTTP.** The database half is proven (grants + schema `USAGE`); whether PostgREST actually routed those RPCs depends on its `db-schemas` config, which isn't readable from SQL. I did not attempt to call any function as `anon` — probing a live money path isn't appropriate unasked. **The severity of what was exposed between deploy and hotfix is therefore still unquantified**, and worth a look at PostgREST logs if anyone wants to rule out actual use.
 - **Who applied the production hotfix, and exactly when, is not established** — only that the grants changed between two of my queries roughly 20 minutes apart, and that no migration recorded it.
-- **The remaining 12 migrations still contain the weak `REVOKE` text.** Migration 353 corrects the *database*, but re-running any of those older migrations against a fresh environment would re-grant `PUBLIC` before 353 runs and re-fix it. Ordering saves it; the source text is still wrong and should be swept separately.
+- **The remaining 12 migrations still contain the weak `REVOKE` text.** Migration 354 corrects the *database*, but re-running any of those older migrations against a fresh environment would re-grant `PUBLIC` before 354 runs and re-fix it. Ordering saves it; the source text is still wrong and should be swept separately.
 - **Nothing was rendered.** The redirects, the tab deep-linking, and the sidebar with two fewer entries are covered by typecheck and build only. No repo visual-regression tooling exists for admin-dashboard.
 - **The redirects were not exercised** — no request was made to `/dashboard/driver-offers` to confirm it lands on `?tab=offers`.
 
@@ -160,5 +160,5 @@ Frontend: `git revert` is complete — no migration, no persisted state.
 - [x] Rollback plan is concrete and testable
 - [x] Blast radius is stated, not assumed
 - [x] Defect and fix both reproduced on a real database, not reasoned about
-- [ ] **Open: apply migration 353 via `run_migrations.py`** so the fix is recorded (see §10)
+- [ ] **Open: apply migration 354 via `run_migrations.py`** so the fix is recorded (see §10)
 - [ ] **Open: manual render pass** on the redirects and tab deep-links

@@ -189,20 +189,24 @@ rushed).
 3. **Cancelled/failed-booking import path must exist and run before decommission** — closing the
    78% gap (941/1,210 old-app bookings). At minimum: GPS pickup/dropoff trace + timestamps, no
    payout/earnings reconstruction attempted. This is the one hard data-loss deadline on this list.
-   > **[RE-VERIFIED 2026-08-20 — STILL ACCURATE AS WRITTEN. This is the cross-cutting gap the task
-   > asked to confirm explicitly.]** Confirmed directly against
-   > `backend/services/booking_import_service.py`: `TARGET_BOOKING_STATUS = "completed"` (line 60)
-   > and `build_plan()` skips any row where `booking_status != "completed"` (line 318) — unchanged
-   > by any of today's three PRs. The module's own header comment (lines 57–59) still asserts
-   > "cancelled/failed legacy bookings carry no fare, no earnings, and no history value" — a claim
-   > the audit doc directly contradicts ("They still carry full pickup/dropoff GPS and `created_at`.
-   > If the old app is decommissioned before a cancelled-booking importer exists, this data is gone
-   > permanently"). No cancelled/failed import path exists, is scheduled, or was even discussed in
-   > today's remediation work. **Do not treat this as covered by anything else on this list** — none
-   > of the three PRs' fixes (tip guard, admin-money-aggregate exclusion, SIN/DOB backfill,
-   > duration-estimated marker, consent notice, entity-name correction, transparency badges) touch
-   > booking import scope at all. This remains the one hard, irreversible-after-decommission
-   > data-loss deadline on the whole list.
+   > **[RE-VERIFIED 2026-08-20 — BUILT, NOT YET RUN.]** This item was still accurate as of the
+   > fifth-pass re-verification above, but is now built: PR #4278 (2026-08-20) added a
+   > `cancelled`/`failed` branch to `booking_import_service.py` (GPS/timestamps/cancellation
+   > attribution only, no fare/earnings/payout, matching this item's own "at minimum" spec exactly),
+   > and PR #4281 (same day) closed a follow-on gap where 7 of those rows structurally completed a
+   > real trip (imported as `$0`-fare `completed` rows instead, per
+   > `docs/change-log/2026-08-20-anomalous-rows-zero-fare-completed-import.md`, since a plain
+   > cancelled-status write would have violated the ride-state-machine's
+   > never-cancelled-after-trip-start invariant). Both merged into `main`. **The hard deadline this
+   > item exists to prevent is no longer live-blocking decommission** — the code path now exists,
+   > is tested (109 tests across both), and was reviewed by `spinr-migration-reviewer`/
+   > `spinr-money-auditor` (both SAFE TO MERGE). **What's still open:** no `--apply`/`commit` has
+   > run against any environment — see `docs/runbooks/legacy-backfill-scripts-rollout.md`'s "Decision
+   > recorded" section: the product owner has approved running it now (against the existing
+   > 2026-07-26-vintage `bookings.csv`, not waiting for Oct 30) and will execute it directly, since no
+   > session in this repo has live Supabase credentials. Until that `--apply` actually runs, the data
+   > is still only *recoverable*, not yet *recovered* — this item should stay open on this checklist
+   > until that execution is confirmed, but the code/design risk this item was tracking is closed.
 4. **Vehicle-at-trip-time linkage backfill** using `vehicle_details.csv` into `driver_vehicle_history`
    (migration 157) — closes the P0 §0.4 7-year driver/vehicle-linkage gap.
    > **[RE-VERIFIED 2026-08-20 — STILL ACCURATE AS WRITTEN.]** No importer targeting

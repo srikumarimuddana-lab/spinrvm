@@ -1,11 +1,39 @@
 # Legacy Backfill Scripts — Rollout Runbook
 
-**Status:** written 2026-08-20, updated same day to add a third capability. All three covered here
-have been built, tested against a local fake Supabase client (and, for the booking import, verified
-against the real cached `bookings.csv` export's actual row counts), and reviewed — but **none has
-ever been run with `--apply`/`commit` against any environment** (mocked, staging, or production).
-This document describes the safe procedure for whoever eventually runs them. **It is not, itself,
-the sign-off to run any of them** — see "Sign-off" at the bottom.
+**Status:** written 2026-08-20, updated same day to add a third capability, then updated again same
+day to record the product owner's rollout decision (see "Decision recorded" below). All three
+covered here have been built, tested against a local fake Supabase client (and, for the booking
+import, verified against the real cached `bookings.csv` export's actual row counts), and reviewed —
+but **none has ever been run with `--apply`/`commit` against any environment** (mocked, staging, or
+production) **by any Claude Code session**. This document describes the safe procedure for whoever
+runs them. **It is not, itself, the sign-off to run any of them** — the sign-off now exists (see
+"Decision recorded" immediately below), but the actual `--apply`/commit execution is the product
+owner's own action, still outstanding as of this update.
+
+## Decision recorded (2026-08-20)
+
+Put to the product owner directly via `AskUserQuestion` (not inferred or assumed):
+
+1. **Timing for the two CLI backfill scripts (SIN/DOB, duration-estimated): run now, or wait for
+   the Oct 30 final cutover?** → **Run now.**
+2. **Which `bookings.csv` vintage should the cancelled/failed booking import run against?** →
+   **Run now, against the existing 2026-07-26-vintage export** — not wait for a fresh Oct 30 pull.
+   Accepted trade-off (see "The three capabilities" §3 and "Recommended run order / sequencing"
+   below, both unchanged by this decision): anything cancelled/failed between 2026-07-26 and Oct 30
+   will need a second, harmless, idempotent commit pass against the later export.
+3. **Execution: this session has no live Supabase credentials and cannot run any `--apply`/commit
+   itself. How should the runs actually happen?** → **The product owner will run them directly**,
+   using this runbook (pre-flight checklist, dry-run-first, rollback path per capability) — not
+   delegated to a Claude Code session.
+
+**What this decision does *not* cover:** the 7-anomalous-row disposition (booking import, needs
+live-DB/Stripe access to resolve — tracked separately in `ACTION_ITEMS.md` A41) and the underlying
+legal-sufficiency judgment on old-app consent (business/counsel decision) are both still open,
+unrelated questions this rollout decision does not resolve or block on.
+
+**As of this update, no `--apply`/commit run has actually happened yet** — this section records the
+go-ahead and the execution plan, not a completed run. The pre-flight checklist, rollback paths, and
+sign-off steps below remain exactly as written and still apply to every run.
 
 Related reading:
 - `docs/change-log/2026-08-19-legacy-duration-estimated-backfill.md` — build history for the
@@ -210,15 +238,17 @@ any of the three.
 ## Sign-off
 
 **Flipping `--apply`/commit on any of the three requires explicit product-owner sign-off before it
-happens.** This runbook documents the safe procedure for all three; it is not that sign-off, and no
-session has provided it. Whoever eventually runs any of the three should:
+happens.** That sign-off now exists — see "Decision recorded" at the top: run all three now, the
+booking import against the existing 2026-07-26-vintage CSV, executed by the product owner directly
+(no live Supabase credentials are available to any Claude Code session). This runbook is the
+documented safe procedure for that execution, not a substitute for it. Before each actual run:
 
 1. Confirm the target environment and expected row counts (pre-flight checklist above) with a fresh
-   dry run/validate.
-2. Get explicit go-ahead from the product owner for that specific run (environment, expected row
-   count, and — for the booking import specifically — which CSV vintage; timing relative to Oct 30
-   for all three) — referencing this runbook and the relevant change-log entries above.
+   dry run/validate — the "Decision recorded" go-ahead is not a substitute for this per-run check.
+2. Re-confirm nothing has materially changed since 2026-08-20 (e.g. a fresher CSV export becoming
+   available, in which case revisit whether the "run against the existing export" choice above still
+   holds) before passing `--apply`/click commit.
 3. Only then pass `--apply`/click commit.
 
 No `--apply`/commit run has happened yet for any of the three, against any environment, as of this
-document (last updated 2026-08-20, cancelled/failed booking import capability).
+document (last updated 2026-08-20, decision recorded).

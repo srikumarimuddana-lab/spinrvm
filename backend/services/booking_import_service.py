@@ -907,7 +907,12 @@ def build_plan(
                 "admin_earnings": 0.0,
                 "driver_earnings_snapshot": build_earnings_snapshot(fare=ZERO, tip=ZERO),
                 "fare_breakdown_snapshot": {
-                    "lines": [],
+                    # An explicit $0 line, not an empty list -- an empty
+                    # `lines` array would render as a blank receipt breakdown
+                    # instead of a disclosed $0 charge if the matched rider
+                    # ever opens this ride's receipt (spinr-money-auditor
+                    # finding, 2026-08-20).
+                    "lines": [{"label": "Ride fare (legacy import, no charge)", "amount": 0.0, "type": "ride"}],
                     "grand_total": 0.0,
                     "imported": True,
                 },

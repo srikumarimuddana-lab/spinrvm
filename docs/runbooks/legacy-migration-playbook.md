@@ -209,9 +209,26 @@ rushed).
    > until that execution is confirmed, but the code/design risk this item was tracking is closed.
 4. **Vehicle-at-trip-time linkage backfill** using `vehicle_details.csv` into `driver_vehicle_history`
    (migration 157) — closes the P0 §0.4 7-year driver/vehicle-linkage gap.
-   > **[RE-VERIFIED 2026-08-20 — STILL ACCURATE AS WRITTEN.]** No importer targeting
-   > `driver_vehicle_history` from `vehicle_details.csv` was built in any of today's three PRs — none
-   > of the change-logs cross-referenced for this pass mention it. Still fully open.
+   > **[RE-VERIFIED 2026-08-20, SIXTH PASS — BUILT, NOT YET RUN.]** Still accurate at the fifth pass,
+   > now built: `backend/scripts/backfill_legacy_vehicle_history.py` +
+   > `driver_import_service.plan_legacy_vehicle_history_backfill`/`apply_legacy_vehicle_history_backfill`
+   > (20 new tests, real-export crosswalk verified: 308/355 `vehicle_details.csv` rows resolve a Spinr
+   > driver). Writes only to `driver_vehicle_history` (never `drivers`' own current vehicle columns);
+   > a driver with more than one legacy vehicle row gets a real before/after change chain, sorted by
+   > the legacy row's own timestamp — not import time, matching this playbook's own Stage 3 provenance
+   > principle. See `docs/change-log/2026-08-20-legacy-vehicle-history-backfill.md`.
+   >
+   > **Building this also surfaced and fixed a real bug in the already-merged SIN/DOB backfill
+   > (item #6 below)**: its CSV reader silently mangled the raw Mongo export's `_id` column, which
+   > would have made the already-approved SIN/DOB `--apply` run resolve 0/157 rows while reporting a
+   > clean "0 errors" — a silent no-op, not a visible failure. Fixed same day, verified against the
+   > real export (157/157 now resolve). See
+   > `docs/change-log/2026-08-20-mongo-export-header-normalization-bug.md`.
+   >
+   > **What's still open:** no `--apply` has run against any environment, and — unlike the SIN/DOB/
+   > duration-estimated/booking-import trio — this specific capability's rollout timing has **not**
+   > been put to the product owner yet (it was built after that decision was recorded); see
+   > `docs/runbooks/legacy-backfill-scripts-rollout.md`'s "Sign-off" section.
 5. **Insurance-period reconstruction, redone with the better source, and finally surfaced**: (a)
    re-run migration 332's approach using `driverlocationlogs.csv`'s real phase-boundary timestamps
    instead of the `driver_arrived_at` fallback; (b) wire `is_reconstructed` into
@@ -239,7 +256,19 @@ rushed).
    > was applied before any `--apply` run, per that same change-log's amendment. **`--apply` has
    > still never been run against production** (confirmed — the CLI wrapper remains dry-run-only in
    > every verification note read for this pass), so the ordering this item requires (sign-off
-   > before apply) has not been violated. Note this is a narrower ask than item #1's broader
+   > before apply) has not been violated.
+   >
+   > **2026-08-20, sixth pass — CRITICAL: a bug was found and fixed that would have made this script
+   > silently no-op if `--apply` had been run before this fix.** Its CSV reader routed through header
+   > normalization built for a different CSV dialect, which mangled the Mongo export's `_id` column
+   > and would have resolved 0/157 real rows (0 updates, 0 errors — indistinguishable from a clean
+   > successful run). Caught while building item #4 above, fixed same day, verified against the real
+   > export (157/157 now resolve correctly). See
+   > `docs/change-log/2026-08-20-mongo-export-header-normalization-bug.md`. This does not change this
+   > item's status (the minimization sign-off itself was always correct) but is essential context for
+   > anyone about to run `--apply`: confirm your checkout includes this fix first.
+   >
+   > Note this is a narrower ask than item #1's broader
    > consent-basis decision, which is still only partially addressed — see #1.
 7. **Accuracy-disclosure pass**: for every field imported without independent verification (SIN,
    DOB, name, email), decide and document whether a provenance/verified flag should be surfaced

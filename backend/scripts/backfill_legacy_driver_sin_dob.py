@@ -82,8 +82,13 @@ def main() -> int:
     except ImportError:  # pragma: no cover - CLI convenience
         from backend.services import driver_import_service as svc  # type: ignore
 
-    bank_rows = svc.read_csv(args.banks_csv)
-    driver_rows = svc.read_csv(args.drivers_csv)
+    # read_mongo_export_csv, NOT read_csv: banks.csv/drivers.csv are the raw
+    # Mongo export, and read_csv's header normalization (built for the
+    # bespoke Saskatoon driver CSV) silently mangles "_id" -> "id", breaking
+    # this exact phone crosswalk. Fixed 2026-08-20 -- see
+    # docs/change-log/2026-08-20-mongo-export-header-normalization-bug.md.
+    bank_rows = svc.read_mongo_export_csv(args.banks_csv)
+    driver_rows = svc.read_mongo_export_csv(args.drivers_csv)
 
     plan = svc.plan_legacy_sin_dob_import(bank_rows, driver_rows)
     svc.print_sin_dob_report(plan, dry_run=not args.apply)

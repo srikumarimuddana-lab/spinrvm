@@ -169,6 +169,38 @@ def parse_csv_rows(reader: csv.DictReader) -> list[dict[str, str]]:
     return [{k: (v or "").strip() for k, v in row.items()} for row in reader]
 
 
+def read_mongo_export_csv(path: Path) -> list[dict[str, str]]:
+    """Parse a raw MongoDB-export CSV (``banks.csv``, ``drivers.csv``,
+    ``vehicle_details.csv``, ...) preserving column names exactly as
+    exported.
+
+    Deliberately does NOT go through ``normalize_header`` / ``read_csv``:
+    that header-normalization pass is tuned for the bespoke Saskatoon driver
+    recruitment CSV and actively corrupts a raw Mongo export's own field
+    names -- confirmed 2026-08-20 while building the vehicle-history
+    backfill below, and it also silently broke the already-merged SIN/DOB
+    backfill's phone crosswalk the same way (fixed in the same commit; see
+    docs/change-log/2026-08-20-mongo-export-header-normalization-bug.md):
+
+      - ``_id`` (Mongo's own ObjectId column) has its leading underscore
+        stripped by the alias regex, becoming ``id`` -- every join keyed on
+        ``row["_id"]`` (``join_legacy_bank_sin_dob``,
+        ``join_legacy_vehicle_details``) silently matched nothing.
+      - ``vehicle_details.csv``'s ``name`` column (the vehicle's make, e.g.
+        "Toyota") collides with the alias table's ``"name": "full_name"``
+        rewrite (meant for a *person's* name on the Saskatoon CSV), silently
+        renaming it.
+
+    Any importer reading one of the raw Mongo export's own CSVs (not the
+    bespoke Saskatoon CSV) must use this function, not ``read_csv``. Mirrors
+    ``booking_import_service.read_csv``'s raw-preservation convention for
+    the same class of file.
+    """
+    with path.open(newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        return [{k: (v or "").strip() for k, v in row.items()} for row in reader]
+
+
 def read_csv(path: Path) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8-sig") as f:
         return parse_csv_rows(csv.DictReader(f))
@@ -1164,6 +1196,261 @@ def print_sin_dob_report(plan: SinDobImportPlan, *, dry_run: bool) -> None:
     print(f"  skipped (not a known legacy driver): {plan.skipped_not_legacy_driver}")
     print(f"  skipped (already on file): {plan.skipped_already_on_file}")
     print(f"  skipped (duplicate match within batch): {plan.skipped_duplicate_match}")
+    print(f"  warnings: {len(plan.warnings)}")
+    print(f"  errors: {len(plan.errors)}")
+    for item in plan.warnings[:50]:
+        print(f"WARNING old_driver_id={item.old_driver_id} field={item.field}: {item.message}")
+    for item in plan.errors[:100]:
+        print(f"ERROR old_driver_id={item.old_driver_id} field={item.field}: {item.message}")
+
+
+# ---------------------------------------------------------------------------
+# Legacy vehicle-linkage backfill (added 2026-08-20, A41 Oct 30 checklist item
+# #4 -- docs/runbooks/legacy-migration-playbook.md). Regulatory basis:
+# .claude/context/regulatory-sk.md's "driver/vehicle linkage at trip time, 7
+# years" retention row.
+#
+# Source is two files from the raw MongoDB export of the old app:
+# ``vehicle_details.csv`` (vehicle make/model/colour/year/plate/VIN, keyed by
+# a Mongo ObjectId ``driver_id``) and ``drivers.csv`` (the same export's
+# driver collection, used only to resolve that ObjectId to a phone number --
+# the identical crosswalk the SIN/DOB backfill above already established as
+# 100% joinable).
+#
+# Target is ``driver_vehicle_history`` (migration 157), NOT the ``drivers``
+# table's own current vehicle_make/model/etc columns -- this backfill only
+# ever appends historical rows to the audit trail, matching the checklist
+# item's own wording ("backfill ... into driver_vehicle_history") and never
+# touches the values a driver, admin, or the original Saskatoon-CSV import
+# already wrote as the driver's *current* vehicle. Writes exactly the same
+# field-name vocabulary ``utils/vehicle_history.py``'s live writer uses
+# (``TRACKED_FIELDS``), minus ``vehicle_type_id`` -- the legacy export has no
+# reliable source column for it (no vehicle-type slug in vehicle_details.csv,
+# unlike the Saskatoon CSV import's own ``vehicle_type`` column).
+#
+# A driver can have more than one vehicle_details.csv row (24 of 330 in the
+# real export) -- each represents a real vehicle re-registration over time,
+# so this reconstructs an actual before/after chain per field (sorted by the
+# legacy row's own created_at, not import time), the same semantic the live
+# writer (``record_vehicle_changes``) produces for a real-time edit: a row is
+# only inserted when a field's value actually changed from the
+# previously-known value for that driver, with ``old_value`` set to that
+# prior value (``None`` for the first-ever row).
+#
+# Safety rules:
+#   - only touches drivers already tagged with this module's own
+#     ``IMPORT_SOURCE`` in ``legacy_import_metadata`` -- same phone-coincidence
+#     guard as the SIN/DOB backfill.
+#   - append-only, matching the target table's own invariant (migration 157's
+#     comment: "rows are inserted, never updated/deleted") -- this backfill
+#     never touches an existing driver_vehicle_history row, only ever adds
+#     new ones.
+#   - idempotent across re-runs: plan-time checks each candidate row against
+#     already-committed (driver_id, field, created_at, new_value) tuples and
+#     skips an exact duplicate. Unlike the SIN/DOB backfill's UPDATE-based
+#     never-clobber guard, there is no write-time race to close here -- this
+#     is a pure INSERT into an append-only table with no column being
+#     conditionally overwritten, so a genuine concurrent double-run (two
+#     operators running --apply against the same CSV at the same moment)
+#     could at worst insert a harmless duplicate history row, never silently
+#     lose or overwrite data. Not expected in practice (this is a one-shot,
+#     human-run CLI script, same operational model as the SIN/DOB and
+#     duration-estimated backfills), and documented here rather than papered
+#     over with a guard the append-only schema doesn't actually need.
+#   - report items carry only ``old_driver_id``/``old_vehicle_id``/field
+#     name/generic message -- never a raw phone, VIN, or plate number.
+
+TRACKED_VEHICLE_FIELDS = (
+    ("name", "vehicle_make"),
+    ("model", "vehicle_model"),
+    ("color", "vehicle_color"),
+    ("year", "vehicle_year"),
+    ("number", "license_plate"),
+    ("vin", "vehicle_vin"),
+)
+
+
+@dataclass
+class VehicleHistoryBackfillPlan:
+    rows_to_insert: list[dict[str, Any]] = field(default_factory=list)
+    warnings: list[ImportErrorItem] = field(default_factory=list)
+    errors: list[ImportErrorItem] = field(default_factory=list)
+    skipped_unmatched: int = 0
+    skipped_not_legacy_driver: int = 0
+    skipped_already_backfilled: int = 0
+
+
+def _parse_legacy_epoch_ms(value: str) -> str | None:
+    """Legacy epoch-milliseconds timestamp -> ISO-8601 UTC string.
+
+    Duplicated (not imported) from ``booking_import_service.parse_epoch_ms``
+    -- this module doesn't otherwise depend on the booking importer, matching
+    this repo's existing per-module ``_select_in`` duplication convention
+    rather than adding a new cross-module coupling for one helper.
+    """
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    try:
+        ms = int(float(raw))
+    except (TypeError, ValueError):
+        return None
+    if ms <= 0:
+        return None
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
+
+
+def join_legacy_vehicle_details(
+    vehicle_rows: list[dict[str, str]], mongo_driver_rows: list[dict[str, str]]
+) -> list[dict[str, Any]]:
+    """Resolve each ``vehicle_details.csv`` row to a phone number via
+    ``drivers.csv`` -- the same crosswalk ``join_legacy_bank_sin_dob`` above
+    already established as 100% joinable for this export.
+    """
+    phone_by_object_id = {r["_id"]: r.get("phone", "") for r in mongo_driver_rows if r.get("_id")}
+    out: list[dict[str, Any]] = []
+    for row in vehicle_rows:
+        old_driver_id = (row.get("driver_id") or "").strip()
+        phone_raw = phone_by_object_id.get(old_driver_id) if old_driver_id else None
+        out.append(
+            {
+                "old_driver_id": old_driver_id or None,
+                "old_vehicle_id": (row.get("_id") or "").strip() or None,
+                "phone": normalize_phone(phone_raw) if phone_raw else None,
+                "created_at_raw": row.get("created_at", ""),
+                "fields": {new: (row.get(old) or "").strip() for old, new in TRACKED_VEHICLE_FIELDS},
+            }
+        )
+    return out
+
+
+def plan_legacy_vehicle_history_backfill(
+    vehicle_rows: list[dict[str, str]], mongo_driver_rows: list[dict[str, str]]
+) -> VehicleHistoryBackfillPlan:
+    plan = VehicleHistoryBackfillPlan()
+    joined = join_legacy_vehicle_details(vehicle_rows, mongo_driver_rows)
+
+    phones = sorted({r["phone"] for r in joined if r["phone"]})
+    drivers_by_phone: dict[str, dict[str, Any]] = {}
+    if phones:
+        cols = "id,phone,legacy_import_metadata"
+        for d in _select_in("drivers", cols, "phone", phones):
+            key = d.get("phone")
+            if key and key not in drivers_by_phone:
+                drivers_by_phone[key] = d
+
+    resolved: list[dict[str, Any]] = []
+    for row in joined:
+        old_id = row["old_driver_id"] or "unknown"
+
+        if not row["phone"]:
+            plan.warnings.append(
+                ImportErrorItem(old_id, "phone", "driver_id has no matching row in the Mongo drivers export")
+            )
+            plan.skipped_unmatched += 1
+            continue
+
+        driver = drivers_by_phone.get(row["phone"])
+        if not driver:
+            plan.warnings.append(ImportErrorItem(old_id, "phone", "no Spinr driver with this phone number"))
+            plan.skipped_unmatched += 1
+            continue
+
+        meta = driver.get("legacy_import_metadata") or {}
+        if meta.get("source") != IMPORT_SOURCE:
+            plan.warnings.append(
+                ImportErrorItem(
+                    old_id, "legacy_import_metadata", "matched driver is not a known legacy-imported driver; skipped"
+                )
+            )
+            plan.skipped_not_legacy_driver += 1
+            continue
+
+        created_at = _parse_legacy_epoch_ms(row["created_at_raw"])
+        if not created_at:
+            plan.errors.append(ImportErrorItem(old_id, "created_at", "missing or unparseable created_at"))
+            continue
+
+        resolved.append(
+            {
+                "old_driver_id": old_id,
+                "old_vehicle_id": row["old_vehicle_id"],
+                "driver_id": driver["id"],
+                "created_at": created_at,
+                "fields": row["fields"],
+            }
+        )
+
+    if plan.errors:
+        return plan
+
+    driver_ids = sorted({r["driver_id"] for r in resolved})
+    existing_keys: set[tuple[str, str, str, str]] = set()
+    if driver_ids:
+        cols = "driver_id,field,created_at,new_value"
+        for r in _select_in("driver_vehicle_history", cols, "driver_id", driver_ids):
+            existing_keys.add((r["driver_id"], r["field"], r["created_at"], r.get("new_value") or ""))
+
+    by_driver: dict[str, list[dict[str, Any]]] = {}
+    for row in resolved:
+        by_driver.setdefault(row["driver_id"], []).append(row)
+
+    for driver_id, rows in by_driver.items():
+        rows_sorted = sorted(rows, key=lambda r: r["created_at"])
+        last_value: dict[str, str | None] = {}
+        for row in rows_sorted:
+            for field_name, value in row["fields"].items():
+                if not value:
+                    continue
+                prev = last_value.get(field_name)
+                if prev == value:
+                    continue  # no change from the previously-known value -- nothing to log
+                key = (driver_id, field_name, row["created_at"], value)
+                if key in existing_keys:
+                    plan.skipped_already_backfilled += 1
+                else:
+                    plan.rows_to_insert.append(
+                        {
+                            "driver_id": driver_id,
+                            "changed_by_user_id": None,
+                            "changed_by_role": "system",
+                            "field": field_name,
+                            "old_value": prev,
+                            "new_value": value,
+                            "created_at": row["created_at"],
+                            "_old_driver_id": row["old_driver_id"],
+                            "_old_vehicle_id": row["old_vehicle_id"],
+                        }
+                    )
+                last_value[field_name] = value
+
+    return plan
+
+
+def apply_legacy_vehicle_history_backfill(plan: VehicleHistoryBackfillPlan) -> None:
+    """Insert ``plan.rows_to_insert`` into ``driver_vehicle_history``.
+
+    Append-only, so there is nothing to "conflict" with at apply time the way
+    the SIN/DOB backfill's UPDATE guard can -- see the module-level safety
+    note above for why. Re-running after a partial failure is safe: rows
+    already committed are excluded by ``plan_legacy_vehicle_history_backfill``
+    itself on the next planning pass.
+    """
+    if plan.errors:
+        raise RuntimeError("refusing to apply with validation errors")
+    rows = [{k: v for k, v in r.items() if not k.startswith("_")} for r in plan.rows_to_insert]
+    for i in range(0, len(rows), 200):
+        supabase.table("driver_vehicle_history").insert(rows[i : i + 200]).execute()
+
+
+def print_vehicle_history_report(plan: VehicleHistoryBackfillPlan, *, dry_run: bool) -> None:
+    """Print counts and legacy ids only -- never plate/VIN/make/model values."""
+    mode = "DRY RUN" if dry_run else "COMMIT"
+    print(f"{mode} report -- legacy vehicle-history backfill")
+    print(f"  history rows to insert: {len(plan.rows_to_insert)}")
+    print(f"  skipped (no matching driver): {plan.skipped_unmatched}")
+    print(f"  skipped (not a known legacy driver): {plan.skipped_not_legacy_driver}")
+    print(f"  skipped (already backfilled): {plan.skipped_already_backfilled}")
     print(f"  warnings: {len(plan.warnings)}")
     print(f"  errors: {len(plan.errors)}")
     for item in plan.warnings[:50]:

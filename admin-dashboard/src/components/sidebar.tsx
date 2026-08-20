@@ -9,7 +9,7 @@ import {
     Menu, X,
     Shield, ShieldAlert, Cloud, Trophy, TrendingUp, Activity,
     Inbox, Clock, Headphones, BarChart3, Send, Sparkles, Gift, Upload, FileText, Bug, Mail, Gavel,
-    PackageSearch, Flag, FileWarning, ScrollText,
+    PackageSearch, Flag, FileWarning, ScrollText, BookOpen,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Suspense, useState, useEffect } from "react";
@@ -43,7 +43,7 @@ interface NavItem {
      *  route, instead of the default muted grey every other item shares.
      *  Reserved for genuinely higher-severity destinations (currently just
      *  Safety) that shouldn't visually blend into an otherwise flat list
-     *  of same-weight items like FAQs/Disputes in the same group. */
+     *  of same-weight items like Notifications in the same group. */
     emphasize?: boolean;
 }
 
@@ -123,18 +123,23 @@ const NAV_GROUPS: NavGroup[] = [
                 label: "Support & Issues",
                 icon: LifeBuoy,
                 module: "support",
-                // Real nav children only for the sub-views with no other nav
-                // entry. Disputes and FAQs deliberately excluded — each
-                // already has its own top-level entry below, and both are
-                // covered by a separate documented decision not to merge
-                // them into this page (see support/_tabs/{disputes,faqs}.tsx)
-                // — adding a second nav path to an already-unreconciled pair
-                // would add duplication, not remove it (IA audit, Finding G).
+                // All 7 sub-views are now real nav children (IA audit,
+                // Finding G). Disputes and FAQs were excluded when this was
+                // first added — each still had its own top-level entry, and
+                // both were covered by a documented "don't merge" product
+                // decision. That decision was escalated and approved for a
+                // full merge (Findings A/B follow-up): support/_tabs/
+                // {disputes,faqs}.tsx now render the same components their
+                // old standalone pages did, so those two top-level entries
+                // were removed in favour of the children below — one nav
+                // path per view, matching the rest of this group.
                 children: [
                     { href: "/dashboard/support?tab=tickets", label: "Support Tickets", icon: LifeBuoy, module: "support" },
+                    { href: "/dashboard/support?tab=disputes", label: "Disputes & Refunds", icon: HelpCircle, module: "support" },
                     { href: "/dashboard/support?tab=complaints", label: "Complaints", icon: FileWarning, module: "support" },
                     { href: "/dashboard/support?tab=lost-found", label: "Lost & Found", icon: PackageSearch, module: "support" },
                     { href: "/dashboard/support?tab=flags", label: "Flags", icon: Flag, module: "support" },
+                    { href: "/dashboard/support?tab=faqs", label: "FAQs", icon: BookOpen, module: "support" },
                     { href: "/dashboard/support?tab=legal", label: "Legal", icon: ScrollText, module: "support" },
                 ],
             },
@@ -150,10 +155,10 @@ const NAV_GROUPS: NavGroup[] = [
             },
             // emphasize: Safety (SOS, insurance-period audit trail) is the
             // one P0-severity destination in this group — visually flat
-            // next to FAQs/Disputes previously undersold what it's for.
+            // next to same-weight siblings like Notifications previously
+            // undersold what it's for. (Disputes & FAQs moved under
+            // Support & Issues as children — see above.)
             { href: "/dashboard/safety", label: "Safety", icon: ShieldAlert, module: "support", emphasize: true },
-            { href: "/dashboard/disputes", label: "Disputes & Refunds", icon: Shield, module: "support" },
-            { href: "/dashboard/faqs", label: "FAQs", icon: HelpCircle, module: "support" },
             { href: "/dashboard/cloud-messaging", label: "Notifications", icon: Cloud, module: "notifications" },
         ],
     },

@@ -11657,22 +11657,45 @@ how much they de-risk a public launch._
   - Verification: 95 tests pass (23 new import-path tests + 15 new
     migration-349 regression tests + all pre-existing booking-import/
     migration-341 tests re-run unmodified), `ruff check` clean.
-- **NEW finding, deferred (2026-08-20, money-relevant, needs Stripe/live-DB
-  access this session doesn't have):** 7 of the 225 legacy `failed`
-  bookings are **not actually failed rides** — they have a real matched
-  `driver_id`, `start_ride_at`, `complete_delivery_at`, a real
-  `total_amount` ($5.75–$9.48), and real driver earnings ($6.22–$9.75),
-  structurally indistinguishable from a genuinely completed trip. Most
-  likely a payment-settlement failure flag in the old app, not "the ride
-  never happened." **Not imported by any path this session** — importing
-  them via the new cancelled/failed path would violate the ride state
-  machine's never-cancelled-after-trip-start invariant and lose real
-  earnings data; importing them via the completed path needs the same
-  rigor as any earnings-bearing write plus Stripe-side context to confirm
-  the payment-failure hypothesis. A future session with that access needs
-  to decide what to do with them.
+- **FIXED (2026-08-20, sixth pass — 7-anomalous-row disposition):** the 7
+  anomalous `failed` bookings flagged in the finding above (real
+  `driver_id`/`start_ride_at`/`complete_delivery_at`, real `total_amount`
+  $5.75–$9.48/`you_earn` $6.22–$9.75, structurally a completed trip) turned
+  out **not to need Stripe/live-DB access to resolve** — the old app's own
+  `payments.csv` export, already cached in this session's scratchpad from
+  the original migration audit, answers it directly:
+  `docs/change-log/2026-08-20-anomalous-legacy-rows-payment-verification.md`
+  confirms **0 of the 7 (and 0/225 of the whole `failed` bucket) have any
+  `payments.csv` row**, vs. 257/271 (94.8%) of `completed` bookings — the
+  trip happened but was never paid for; the driver was not paid in the old
+  app either. Corroborating: 5 of the 7 share a `customer_id` whose
+  `customers.csv` record carries `block_reason: "Card issue."`; 2 of the 7
+  have `you_earn > total_amount` (internally impossible under this app's
+  fare model, independent evidence the dollar figures aren't trustworthy
+  regardless of the payment question).
+  Disposition put to the product owner via `AskUserQuestion` with three
+  grounded options; answer: **"Completed, $0 fare"** — import as
+  `rides.status='completed'` (required by the state machine's
+  never-cancelled-after-trip-start invariant, since these rows have real
+  start/end timestamps) with real GPS/distance/duration but $0 fare, $0
+  driver earnings, no payout. Implemented in `booking_import_service.py`
+  (new branch, `cancelled_failed_zero_fare_completed` stat), with
+  `payment_status='pending'`/`auth_status` unset specifically so
+  `payment_retry.py`/`preauth_capture.py`'s background loops can never treat
+  a committed row as something to actually collect payment on. No migration
+  needed — these land in the same already-established "legacy completed
+  row" analytics treatment (341/349) as the other 271. 8 new unit tests (76
+  total across both booking-import test files), `ruff check` clean.
+  `docs/change-log/2026-08-20-anomalous-rows-zero-fare-completed-import.md`
+  has the full Change Impact Log.
+  - **STILL OPEN, not decided this pass:** whether any of the 7 drivers/
+    riders were compensated through a completely separate old-app channel
+    (wallet credit, manual support adjustment) outside this export —
+    `wallets.csv`/`refrals.csv` exist in the cached export but were not
+    cross-checked for this fix; not needed for the $0-fare disposition
+    actually shipped, but would matter if a future decision revisits option
+    2 (real payout) from the investigation finding.
 - **STILL OPEN:**
-  - **7-anomalous-row disposition** — see finding immediately above.
   - **Rollout decision — MADE (2026-08-20), execution still pending**: three
     dry-run-only backfill/import scripts existed (`backfill_legacy_driver_sin_dob.py`,
     `backfill_legacy_ride_duration_estimated.py`, and the cancelled/failed

@@ -263,6 +263,36 @@ rushed).
    > (`admin_driver_daily_activity`) aggregates spans into per-phase totals and has no natural
    > per-row slot. See `docs/change-log/2026-08-20-insurance-period-reconstructed-admin-column.md`.
    > **(a) is unchanged and still fully open** — out of scope for this pass, not attempted.
+   >
+   > **[RE-VERIFIED 2026-08-20, LATER SAME DAY — (a) NOW ADDRESSED AS A VERIFICATION PASS, NOT A
+   > RE-INSERT.]** `backend/services/insurance_period_reconstruction_verification.py` +
+   > `backend/scripts/verify_legacy_insurance_period_reconstruction.py` (14 new tests) stream the real
+   > `driverlocationlogs.csv` (148 MB, 7,948 rows — never loading `way_points` into memory beyond the row
+   > it's part of) and compare its real phase-boundary timestamps against migration 332's already-inserted
+   > rows for the same 186 rides. Only 3 distinct `phase` values exist in the real export (`idle`,
+   > `going_to_pickup`, `on_ride` — no separate "arrived" phase), enumerated via a streaming script before
+   > any mapping was assumed; `going_to_pickup` maps to the whole of Period 2 and `on_ride` to Period 3.
+   > **Finding, verified against the real 186-row set (read-only, via Supabase MCP)**: Period 3's boundary
+   > was accurate (median 0.6s divergence from `ride_completed_at`) but Period 2's start was systematically
+   > understated by migration 332's `driver_arrived_at` proxy — median ~580s (~9.7 min) earlier, up to
+   > ~10.5h in one outlier — for every one of the 156 cleanly-reconstructable rides (25 have ambiguous
+   > phase-span counts, 1 has no CSV data, 4 remain migration-332-excluded). This *confirms and quantifies*
+   > a limitation migration 332's own header comment already disclosed, rather than surfacing something
+   > unknown.
+   >
+   > **No new `driver_insurance_periods` rows were written, and none will be by this tool.** Migration
+   > 332's rows are all closed (`ended_at` set); its immutability trigger unconditionally blocks any
+   > `UPDATE` to a closed row regardless of which column changes — re-read directly from the trigger
+   > function, not assumed. Inserting a second, competing set of rows for an already-covered ride was
+   > considered and rejected: nothing in the schema says which of two overlapping spans for the same
+   > `ride_id`/`period` is authoritative, and `.claude/context/domain-safety.md`'s intended fix for exactly
+   > this — a `driver_insurance_period_corrections` table — does not exist (confirmed by grep and a live
+   > `information_schema.tables` query). Building that table is filed as `ACTION_ITEMS.md` B34, not
+   > attempted here. `apply_verification_plan()` always raises; this pass is read-only by design. See
+   > `docs/change-log/2026-08-20-insurance-period-reconstruction-verification.md` for the full reasoning
+   > and numbers. **Item #5 is now fully addressed**: (a) is a verification pass with a documented,
+   > quantified finding and an explicit non-decision on correction (flagged for a human/compliance call);
+   > (b) was already closed in the same-day re-verification above.
 6. **SIN/DOB and any other PII-sensitive backfill — minimization + encryption sign-off before any
    `--apply` run**, keeping the already-recorded scope narrow (SIN+DOB via existing encrypted
    columns, not raw banking numbers with no live consumer).

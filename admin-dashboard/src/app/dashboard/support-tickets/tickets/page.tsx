@@ -198,7 +198,7 @@ export default function TicketListPage() {
         <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <h1 className="flex items-center gap-2 text-2xl font-bold">
-                    <Inbox className="h-6 w-6" /> Tickets
+                    <Inbox className="h-6 w-6" /> Zoho Tickets
                 </h1>
                 <div className="flex items-center gap-2">
                     <Button onClick={() => setCreateOpen(true)}>

@@ -53,6 +53,12 @@ export const StripeKeyContext = React.createContext<string | null>(null);
 // until the admin configures it. Consumers should disable the share
 // action when null/empty rather than fall back to a hardcoded URL.
 export const TrackBaseUrlContext = React.createContext<string | null>(null);
+// Ride-less SOS rollout gate (ACTION_ITEMS.md B15(c)), served from
+// app_settings.rideless_sos_enabled via GET /settings. False while loading
+// and by default — matches the backend's own fail-closed default, so a
+// slow/failed settings fetch never accidentally exposes the ride-less SOS
+// call path before the flag is confirmed on.
+export const RidelessSosEnabledContext = React.createContext<boolean>(false);
 
 // Minimum time the branded splash (logo + tagline) stays on screen, even when
 // auth/location init finishes sooner — otherwise the tagline animation (which
@@ -282,6 +288,7 @@ function RootLayout() {
   }, [navReady]);
   const [stripePublishableKey, setStripePublishableKey] = useState<string | null>(null);
   const [trackBaseUrl, setTrackBaseUrl] = useState<string | null>(null);
+  const [ridelessSosEnabled, setRidelessSosEnabled] = useState<boolean>(false);
   const fcmRegisteredRef = useRef(false);
   const backgroundedAtRef = useRef<number | null>(null);
   // Current route, mirrored into a ref so the AppState listener (registered
@@ -314,11 +321,16 @@ function RootLayout() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await api.get<{ stripe_publishable_key?: string; track_base_url?: string }>('/settings');
+        const res = await api.get<{
+          stripe_publishable_key?: string;
+          track_base_url?: string;
+          rideless_sos_enabled?: boolean;
+        }>('/settings');
         const key = res.data?.stripe_publishable_key;
         if (key) setStripePublishableKey(key);
         const trackUrl = (res.data?.track_base_url || '').replace(/\/$/, '');
         setTrackBaseUrl(trackUrl.length > 0 ? trackUrl : null);
+        setRidelessSosEnabled(res.data?.rideless_sos_enabled === true);
       } catch (e) {
         console.log('[Settings] Failed to fetch public settings:', e);
       }
@@ -830,7 +842,7 @@ function RootLayout() {
       }}
     >
       <ThemeProvider>
-        <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} trackBaseUrl={trackBaseUrl} wsState={wsState} confirmSheet={confirmSheet} setConfirmSheet={setConfirmSheet} forceUpdate={forceUpdate} />
+        <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} trackBaseUrl={trackBaseUrl} ridelessSosEnabled={ridelessSosEnabled} wsState={wsState} confirmSheet={confirmSheet} setConfirmSheet={setConfirmSheet} forceUpdate={forceUpdate} />
       </ThemeProvider>
     </PersistQueryClientProvider>
   );
@@ -860,6 +872,7 @@ function RootLayoutInner({
   setIsOffline,
   stripePublishableKey,
   trackBaseUrl,
+  ridelessSosEnabled,
   wsState,
   confirmSheet,
   setConfirmSheet,
@@ -869,6 +882,7 @@ function RootLayoutInner({
   setIsOffline: (v: boolean) => void;
   stripePublishableKey: string | null;
   trackBaseUrl: string | null;
+  ridelessSosEnabled: boolean;
   wsState: import('../hooks/useRiderSocket').RiderSocketState;
   confirmSheet: { visible: boolean; title: string; message: string; variant: 'info' | 'warning' | 'danger' | 'success'; buttons: ConfirmSheetButton[] };
   setConfirmSheet: React.Dispatch<React.SetStateAction<typeof confirmSheet>>;
@@ -896,6 +910,7 @@ function RootLayoutInner({
           )}
           <StripeKeyContext.Provider value={stripePublishableKey}>
           <TrackBaseUrlContext.Provider value={trackBaseUrl}>
+          <RidelessSosEnabledContext.Provider value={ridelessSosEnabled}>
           <MaybeStripeProvider publishableKey={stripePublishableKey}>
           <Stack
             screenOptions={{
@@ -953,6 +968,7 @@ function RootLayoutInner({
             <Stack.Screen name="lost-and-found-chat" />
           </Stack>
           </MaybeStripeProvider>
+          </RidelessSosEnabledContext.Provider>
           </TrackBaseUrlContext.Provider>
           </StripeKeyContext.Provider>
           <ConfirmSheet

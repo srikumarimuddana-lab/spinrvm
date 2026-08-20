@@ -90,6 +90,23 @@ interface SOSButtonProps {
    * omit it and the button behaves exactly as it always has.
    */
   onTap?: () => void;
+  /**
+   * Ride-less SOS (ACTION_ITEMS.md B15(c)). Dark-launched: both this and
+   * `onTriggerRideless` must be supplied for the no-`rideId` path to call the
+   * backend at all — omit either (as every mount site except rider-app's home
+   * screen does) and the existing `sos.no_active_ride_*` "Call 911 directly"
+   * block below is byte-identical to before this prop existed.
+   */
+  ridelessSosEnabled?: boolean;
+  /**
+   * Fires the ride-less backend alert (no `rideId` in scope). Same retry
+   * ladder and same response contract as `onTrigger` — see its doc comment.
+   */
+  onTriggerRideless?: (
+    lat?: number,
+    lng?: number,
+    idempotencyKey?: string,
+  ) => Promise<SOSTriggerResult | void>;
 }
 
 /**
@@ -108,7 +125,15 @@ const SOS_HOLD_MS = 1200;
 const SOS_MAX_ATTEMPTS = 3;
 const SOS_RETRY_DELAYS_MS = [1000, 2000];
 
-export function SOSButton({ rideId, onTrigger, size = 'small', t, onTap }: SOSButtonProps) {
+export function SOSButton({
+  rideId,
+  onTrigger,
+  size = 'small',
+  t,
+  onTap,
+  ridelessSosEnabled = false,
+  onTriggerRideless,
+}: SOSButtonProps) {
   const translate = t ?? defaultT;
   const [triggered, setTriggered] = useState(false);
   const [sending, setSending] = useState(false);
@@ -238,16 +263,26 @@ export function SOSButton({ rideId, onTrigger, size = 'small', t, onTap }: SOSBu
     // 1 s / 2 s backoff before declaring failure. Never treat missing
     // rideId as success — that would show "Alert Sent" without any
     // backend notification going out.
+    //
+    // Ride-less SOS (ACTION_ITEMS.md B15(c)): when there's no rideId but the
+    // caller has opted in (both ridelessSosEnabled and onTriggerRideless
+    // supplied), the same retry ladder calls onTriggerRideless instead of
+    // falling straight to the "No Active Ride / Call 911" block below. Any
+    // caller that doesn't pass both — every mount site except rider-app's
+    // home screen — keeps today's behavior exactly.
+    const canTriggerRideless = !rideId && ridelessSosEnabled && !!onTriggerRideless;
     let backendOk = false;
     let contactOutcome: SOSContactOutcome = 'unknown';
-    if (rideId) {
+    if (rideId || canTriggerRideless) {
       for (let attempt = 0; attempt < SOS_MAX_ATTEMPTS && !backendOk; attempt++) {
         if (attempt > 0) {
           const delay = SOS_RETRY_DELAYS_MS[attempt - 1] ?? SOS_RETRY_DELAYS_MS[SOS_RETRY_DELAYS_MS.length - 1];
           await new Promise<void>((r) => setTimeout(r, delay));
         }
         try {
-          const result = await onTrigger(rideId, lat, lng, idempotencyKey);
+          const result = rideId
+            ? await onTrigger(rideId, lat, lng, idempotencyKey)
+            : await onTriggerRideless!(lat, lng, idempotencyKey);
           // Derived, never assumed: deriveContactOutcome falls back to
           // 'unknown' for a void-returning caller or a deduped replay, so a
           // caller that can't report contact status never causes us to claim
@@ -260,8 +295,10 @@ export function SOSButton({ rideId, onTrigger, size = 'small', t, onTap }: SOSBu
 
     setSending(false);
 
-    if (!rideId) {
-      // No active ride context — direct user to call 911 immediately.
+    if (!rideId && !canTriggerRideless) {
+      // No active ride context, and no ride-less path available — direct
+      // user to call 911 immediately. Unchanged from before this prop
+      // existed for every caller that doesn't opt in.
       Alert.alert(
         translate('sos.no_active_ride_title'),
         translate('sos.no_active_ride_msg'),

@@ -12,6 +12,23 @@ document describes the safe procedure for whoever runs them. **It is not, itself
 any of them** — the sign-off now exists for all four (see "Decision recorded" and its "fourth
 capability" follow-up immediately below).
 
+## Correction (2026-08-20, same day): "no live Supabase credentials" was imprecise
+
+Every "no live Supabase credentials"/"no session has live DB access" statement below (written earlier
+the same day) described the CLI backfill scripts' own env-var path (`SUPABASE_URL`/
+`SUPABASE_SERVICE_ROLE_KEY`, read by `backend/scripts/backfill_*.py` directly) — that part is still
+accurate; those two env vars are not configured for this session's backend process, so the CLI
+scripts genuinely cannot run `--apply` here. It was **not** accurate as a blanket claim: a separate,
+live, read-only Supabase MCP connection to the real production project (`spinrmobileapp`,
+`soavhtdhefowwvforzwb`, `ca-central-1`) is available in this environment and was used (SELECT-only,
+confirmed no writes) by the insurance-period reconstruction verification pass (checklist item #5(a)
+below). Put to the product owner directly via `AskUserQuestion` once discovered: confirmed real,
+**read-only use authorized, any write (via this MCP path or otherwise) still requires the product
+owner's explicit go-ahead per run** — same as the CLI scripts' `--apply` flag already required.
+Practical effect on this runbook: unchanged. No `--apply`/commit has been authorized for execution by
+a Claude Code session through any path; the product owner still runs the actual writes, per the
+"Decision recorded" sections below.
+
 ## Decision recorded (2026-08-20)
 
 Put to the product owner directly via `AskUserQuestion` (not inferred or assumed):
@@ -23,10 +40,12 @@ Put to the product owner directly via `AskUserQuestion` (not inferred or assumed
    Accepted trade-off (see "The three capabilities" §3 and "Recommended run order / sequencing"
    below, both unchanged by this decision): anything cancelled/failed between 2026-07-26 and Oct 30
    will need a second, harmless, idempotent commit pass against the later export.
-3. **Execution: this session has no live Supabase credentials and cannot run any `--apply`/commit
-   itself. How should the runs actually happen?** → **The product owner will run them directly**,
-   using this runbook (pre-flight checklist, dry-run-first, rollback path per capability) — not
-   delegated to a Claude Code session.
+3. **Execution: the CLI scripts have no `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` configured for
+   this session, so they cannot run `--apply` themselves. How should the runs actually happen?** →
+   **The product owner will run them directly**, using this runbook (pre-flight checklist,
+   dry-run-first, rollback path per capability) — not delegated to a Claude Code session. (See the
+   "Correction" section above — a separate read-only Supabase MCP path exists but writes through it
+   also require the product owner's per-run go-ahead, so this conclusion is unchanged.)
 
 ## Decision recorded — fourth capability (2026-08-20, same day, separate ask)
 
@@ -35,8 +54,8 @@ Status line) was not covered by that original ask. Put separately, once built an
 
 4. **Timing for the vehicle-history backfill (`backfill_legacy_vehicle_history.py`): run now, or wait
    for Oct 30?** → **Run now** — same reasoning and same execution model as the other three: the
-   product owner will run it directly via this runbook, no session in this repo has live Supabase
-   credentials.
+   product owner will run it directly via this runbook (see the "Correction" section above for why —
+   the CLI script itself has no configured Supabase credentials in this session).
 
 This closes the "not yet" caveat in this document's Status line — all four capabilities now have
 product-owner sign-off to run now, against their existing cached exports, self-executed by the product
@@ -315,7 +334,9 @@ any of the four.
 **Flipping `--apply`/commit on any of these requires explicit product-owner sign-off before it
 happens.** For the original three — see "Decision recorded" at the top: run all three now, the
 booking import against the existing 2026-07-26-vintage CSV, executed by the product owner directly
-(no live Supabase credentials are available to any Claude Code session).
+(the CLI scripts have no Supabase credentials configured in this session, and the separate read-only
+MCP path described in "Correction" above is authorized for verification only, not for writes without
+the product owner's explicit go-ahead).
 
 **The vehicle-history backfill (§4) is NOT covered by that existing decision** — it was built after
 the "Decision recorded" section above was written, and has not been put to the product owner. Treat it

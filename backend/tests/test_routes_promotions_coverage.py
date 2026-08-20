@@ -691,6 +691,175 @@ class TestListAvailablePromos:
         assert ordered_ids == ["rich", "cheap", "ineligible"]
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# ACTION_ITEMS.md B31 — legacy-imported rides must not count toward
+# first_ride_only / min_total_rides / max_total_rides eligibility.
+#
+# A legacy-imported ride (booking_import_service.py) carries a non-empty
+# ``legacy_import_metadata`` and represents old-app history, not a real
+# Spinr ride. Before this fix, all 5 count_documents("rides", ...) call
+# sites in promotions.py (rule 6 first_ride_only, rule 8 inactive_days,
+# rule 9 min/max_total_rides, and their /promo/available twins in
+# list_available_promos) counted these rides toward eligibility gates —
+# so a rider with only legacy history could be wrongly denied a
+# first-time-rider promo, or wrongly appear to meet a min-rides tier they
+# never actually reached on Spinr. Option B (product decision): exclude
+# legacy-imported rides from all of these counts via the same
+# EXCLUDE_LEGACY_RIDES predicate already used by
+# routes/admin/drivers.py, routes/drivers/earnings.py, etc.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _ride(*, legacy: bool, status: str = "completed") -> dict:
+    return {
+        "rider_id": USER_ID,
+        "status": status,
+        "legacy_import_metadata": ({"rider_csv_import": True, "import_batch": "b1"} if legacy else {}),
+    }
+
+
+def _fake_rides_count_documents(rides: list):
+    """Filter-aware fake for db_supabase.count_documents("rides", ...).
+
+    Applies rider_id/status equality and, when present, the
+    EXCLUDE_LEGACY_RIDES ``{"legacy_import_metadata": {"$eq": {}}}``
+    predicate — so a test can assert the *filter itself* excludes legacy
+    rows, not just that some hardcoded return_value was passed through.
+    """
+
+    async def _inner(table, filters=None, **kwargs):
+        assert table == "rides"
+        filters = filters or {}
+        count = 0
+        for r in rides:
+            if "rider_id" in filters and r.get("rider_id") != filters["rider_id"]:
+                continue
+            if "status" in filters and r.get("status") != filters["status"]:
+                continue
+            legacy_filter = filters.get("legacy_import_metadata")
+            if legacy_filter is not None:
+                if (r.get("legacy_import_metadata") or {}) != legacy_filter.get("$eq"):
+                    continue
+            count += 1
+        return count
+
+    return _inner
+
+
+class TestValidatePromoForUserExcludesLegacyRides:
+    """_validate_promo_for_user: first_ride_only and min_total_rides must
+    key off REAL Spinr rides only."""
+
+    async def _call(self, promo, rides, **kwargs):
+        from backend.routes.promotions import _validate_promo_for_user
+
+        async def _get_rows(table, *args, **kw):
+            if table == "promotions":
+                return [promo]
+            return []
+
+        with (
+            patch(f"{PROMO_MOD}.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch(
+                f"{PROMO_MOD}.db_supabase.count_documents", AsyncMock(side_effect=_fake_rides_count_documents(rides))
+            ),
+            patch(
+                f"{PROMO_MOD}.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"id": USER_ID, "created_at": "2020-01-01T00:00:00"}),
+            ),
+        ):
+            return await _validate_promo_for_user(
+                code=promo["code"], user_id=USER_ID, ride_fare=kwargs.get("ride_fare", Decimal("20.00"))
+            )
+
+    # -- Before/after scenario: rider has ONLY legacy-imported completed
+    # rides. Before the fix, first_ride_only wrongly denied them (the
+    # unfiltered count included the legacy rows); after the fix they
+    # correctly qualify as a first-time Spinr rider.
+    async def test_first_ride_only_passes_for_rider_with_only_legacy_rides(self):
+        promo = _promo(first_ride_only=True, max_uses_per_user=0)
+        rides = [_ride(legacy=True), _ride(legacy=True)]
+        result = await self._call(promo, rides)
+        assert result["valid"] is True
+
+    async def test_first_ride_only_blocks_rider_with_a_real_completed_ride(self):
+        promo = _promo(first_ride_only=True, max_uses_per_user=0)
+        rides = [_ride(legacy=True), _ride(legacy=False)]
+        with pytest.raises(HTTPException) as exc:
+            await self._call(promo, rides)
+        assert exc.value.status_code == 400
+        assert "first-time" in exc.value.detail.lower()
+
+    async def test_min_total_rides_not_met_when_only_legacy_rides_count(self):
+        # 3 legacy rides would satisfy min_total_rides=2 if counted; 0 real
+        # rides must not.
+        promo = _promo(min_total_rides=2, max_uses_per_user=0)
+        rides = [_ride(legacy=True), _ride(legacy=True), _ride(legacy=True)]
+        with pytest.raises(HTTPException) as exc:
+            await self._call(promo, rides)
+        assert exc.value.status_code == 400
+        assert "at least" in exc.value.detail.lower()
+
+    async def test_min_total_rides_met_by_real_rides_alongside_legacy(self):
+        promo = _promo(min_total_rides=2, max_uses_per_user=0)
+        rides = [_ride(legacy=True), _ride(legacy=True), _ride(legacy=False), _ride(legacy=False)]
+        result = await self._call(promo, rides)
+        assert result["valid"] is True
+
+
+class TestListAvailablePromosExcludesLegacyRides:
+    """list_available_promos (GET /promo/available) — same eligibility
+    engine, must agree with _validate_promo_for_user on legacy exclusion
+    so a promo shown as available is never later rejected at /promo/apply."""
+
+    async def _call(self, promo, rides):
+        from backend.routes.promotions import list_available_promos
+
+        async def _get_rows(table, *args, **kwargs):
+            if table == "promotions":
+                return [promo]
+            return []
+
+        with (
+            patch(f"{PROMO_MOD}.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch(f"{PROMO_MOD}.db_supabase.rpc", AsyncMock(return_value=[])),
+            patch(
+                f"{PROMO_MOD}.db_supabase.count_documents", AsyncMock(side_effect=_fake_rides_count_documents(rides))
+            ),
+            patch(
+                f"{PROMO_MOD}.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"id": USER_ID, "created_at": "2020-01-01T00:00:00"}),
+            ),
+        ):
+            return await list_available_promos(USER_ID, ride_fare=20.0)
+
+    async def test_first_ride_only_shown_eligible_for_rider_with_only_legacy_rides(self):
+        promo = _promo(id="fr-legacy", first_ride_only=True)
+        rides = [_ride(legacy=True), _ride(legacy=True)]
+        result = await self._call(promo, rides)
+        assert len(result) == 1
+        assert result[0]["eligible"] is True
+
+    async def test_first_ride_only_hidden_for_rider_with_a_real_completed_ride(self):
+        promo = _promo(id="fr-real", first_ride_only=True)
+        rides = [_ride(legacy=True), _ride(legacy=False)]
+        result = await self._call(promo, rides)
+        assert result == []
+
+    async def test_min_total_rides_excludes_promo_when_only_legacy_rides_exist(self):
+        promo = _promo(id="min-legacy", min_total_rides=2)
+        rides = [_ride(legacy=True), _ride(legacy=True), _ride(legacy=True)]
+        result = await self._call(promo, rides)
+        assert result == []
+
+    async def test_min_total_rides_shows_promo_when_real_rides_meet_threshold(self):
+        promo = _promo(id="min-real", min_total_rides=2)
+        rides = [_ride(legacy=True), _ride(legacy=False), _ride(legacy=False)]
+        result = await self._call(promo, rides)
+        assert len(result) == 1
+        assert result[0]["eligible"] is True
+
+
 class TestGetAvailablePromosRoute:
     async def test_route_delegates_to_list_available_promos(self):
         from backend.routes.promotions import get_available_promos

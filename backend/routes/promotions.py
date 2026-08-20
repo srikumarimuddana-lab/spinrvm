@@ -18,6 +18,7 @@ try:
     from ..models.ride_status import RideStatus
     from ..settings_loader import get_app_settings
     from ..utils.datetime_utils import parse_iso_utc
+    from ..utils.legacy_rides import EXCLUDE_LEGACY_RIDES
     from ..utils.pii import geohash as _geohash
     from ..utils.rate_limiter import promo_available_limit, promo_validate_limit
 except ImportError:
@@ -27,6 +28,7 @@ except ImportError:
     from models.ride_status import RideStatus
     from settings_loader import get_app_settings
     from utils.datetime_utils import parse_iso_utc
+    from utils.legacy_rides import EXCLUDE_LEGACY_RIDES  # type: ignore
     from utils.pii import geohash as _geohash
     from utils.rate_limiter import promo_available_limit, promo_validate_limit
 
@@ -222,7 +224,9 @@ async def _validate_promo_for_user(
 
     # 6. First ride only
     if promo.get("first_ride_only"):
-        ride_count = await db_supabase.count_documents("rides", {"rider_id": user_id, "status": RideStatus.COMPLETED})
+        ride_count = await db_supabase.count_documents(
+            "rides", {"rider_id": user_id, "status": RideStatus.COMPLETED, **EXCLUDE_LEGACY_RIDES}
+        )
         if ride_count > 0:
             raise HTTPException(status_code=400, detail="This promo is for first-time riders only")
 
@@ -250,6 +254,7 @@ async def _validate_promo_for_user(
                 "rider_id": user_id,
                 "status": RideStatus.COMPLETED,
                 "ride_completed_at": {"$gte": cutoff},
+                **EXCLUDE_LEGACY_RIDES,
             },
         )
         if recent_rides > 0:
@@ -262,7 +267,9 @@ async def _validate_promo_for_user(
     min_rides = promo.get("min_total_rides", 0)
     max_rides = promo.get("max_total_rides", 0)
     if min_rides > 0 or max_rides > 0:
-        total_rides = await db_supabase.count_documents("rides", {"rider_id": user_id, "status": RideStatus.COMPLETED})
+        total_rides = await db_supabase.count_documents(
+            "rides", {"rider_id": user_id, "status": RideStatus.COMPLETED, **EXCLUDE_LEGACY_RIDES}
+        )
         if min_rides > 0 and total_rides < min_rides:
             raise HTTPException(
                 status_code=400,
@@ -515,7 +522,9 @@ async def list_available_promos(
 
     # Pre-fetch user data for targeting checks
     user = await db_supabase.get_user_by_id(user_id)
-    total_rides = await db_supabase.count_documents("rides", {"rider_id": user_id, "status": RideStatus.COMPLETED})
+    total_rides = await db_supabase.count_documents(
+        "rides", {"rider_id": user_id, "status": RideStatus.COMPLETED, **EXCLUDE_LEGACY_RIDES}
+    )
     recent_cutoff_30 = (now - timedelta(days=30)).isoformat()
     await db_supabase.count_documents(
         "rides",
@@ -523,6 +532,7 @@ async def list_available_promos(
             "rider_id": user_id,
             "status": RideStatus.COMPLETED,
             "ride_completed_at": {"$gte": recent_cutoff_30},
+            **EXCLUDE_LEGACY_RIDES,
         },
     )
 
@@ -596,6 +606,7 @@ async def list_available_promos(
                         "rider_id": user_id,
                         "status": RideStatus.COMPLETED,
                         "ride_completed_at": {"$gte": cutoff},
+                        **EXCLUDE_LEGACY_RIDES,
                     },
                 )
                 if recent > 0:

@@ -142,4 +142,32 @@ there is no partially-applied state and no live-data remediation.
 - [x] Rollback plan is concrete and testable
 - [x] Blast radius is stated, not assumed
 - [x] Additive-only; no silent behavior change
-- [ ] **Open gate: migration 352 must be dry-run against a real database before merge** (see §10)
+- [x] **Gate closed** — migration applied and its functions executed against a real PostgreSQL 16 instance; see §12.
+
+## 12. Migration verification — gate CLOSED (2026-08-20)
+
+The open gate above ("migration has never been executed") is now closed. A
+local PostgreSQL 16.13 instance was stood up, a minimal schema built from the
+column definitions in the migrations that created them, and **all three
+migrations (350, 351, 352) applied successfully with `ON_ERROR_STOP=1`**.
+
+Verified by executing the functions against seeded data, not just by parsing:
+
+| Claim | Result |
+|---|---|
+| Regina bucketing | A ride created `2026-08-20T04:00Z` buckets to Regina day **2026-08-19**, hour **22**. Under the old UTC bucketing it was day 20, hour 4. |
+| Legacy-import exclusion (349's guarantee) | A `legacy_import_metadata`-tagged ride with `total_fare` 999 is absent from revenue (115.00, not 1114.00) and from every count. |
+| Service-area scope | Saskatoon 4 rides / Regina 1 — correctly partitioned. |
+| Backward-compatible 1-arg call | `admin_analytics_overview(timestamptz)` still resolves via the new parameter's DEFAULT. |
+| Funnel stages | requested 5 → matched 4 → accepted 3 → completed 3, cancelled 2, no_supply 1. |
+| Structured vs fallback attribution | `cancels_by_party {rider:1, system:1}` with `cancels_unattributed_fallback: 1` — exactly the one row lacking `cancelled_by`. |
+| Period 0 excluded from online time | P1 1h + P2 0.5h + P3 1h = 2.5h online, utilization 40%, engaged 60%. The 10h Period-0 row is correctly ignored (it would have driven utilization to 8%). |
+| Insurance-period clamping | Periods clamp to the window as designed. |
+| Deadhead ratio | 7.0 unpaid / 35.0 paid = 20.0% — ratio of sums, completed rides only. |
+| ETA error | Promised 120s vs actual 240s → +120s; second ride exactly on time → p50 60s, on-time 50%. |
+| Financial arithmetic | gross 115.00, avg fare 38.33, surge revenue 20.00 (= 60 − 60/1.5), corporate 60.00 / consumer 55.00, repeat rate 50%. |
+
+**A real defect was found by this verification and fixed** — see the grant
+issue in `docs/change-log/2026-08-20-analytics-function-grants.md`. Static
+assertions had passed on the original text; only executing it revealed the
+`REVOKE` was a no-op.

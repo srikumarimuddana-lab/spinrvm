@@ -80,6 +80,17 @@
 -- Forward-compatible: two new functions and one new index. No table, column,
 -- constraint, or existing function is altered. Nothing is written or migrated.
 --
+--
+-- Grants: Postgres grants EXECUTE to PUBLIC by default on CREATE FUNCTION, so
+-- `REVOKE ... FROM anon, authenticated` alone is a NO-OP — both roles keep
+-- EXECUTE through PUBLIC. Verified locally on Postgres 16: proacl showed
+-- `=X/postgres` (the PUBLIC grant) and has_function_privilege('anon', ...)
+-- returned true until PUBLIC was revoked. These are SECURITY DEFINER
+-- functions that bypass RLS and return aggregate business data, so the
+-- revoke must name PUBLIC. service_role is then granted back explicitly,
+-- because it does NOT inherit EXECUTE any other way and the backend calls
+-- these through it. Same pattern as migrations 50/296 (purge_pii_retention)
+-- and 216 (encrypt/decrypt_driver_pii).
 -- Rollback:
 --   DROP FUNCTION IF EXISTS public.admin_marketplace_funnel(timestamptz, timestamptz, text);
 --   DROP FUNCTION IF EXISTS public.admin_supply_utilization(timestamptz, timestamptz, text);
@@ -188,7 +199,8 @@ COMMENT ON FUNCTION public.admin_marketplace_funnel(timestamptz, timestamptz, te
     'Prefers structured cancelled_by/cancellation_type (38) over reason-string parsing, and '
     'reports how many rows needed the legacy fallback.';
 
-REVOKE EXECUTE ON FUNCTION public.admin_marketplace_funnel(timestamptz, timestamptz, text) FROM anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.admin_marketplace_funnel(timestamptz, timestamptz, text) FROM PUBLIC, anon, authenticated;
+GRANT  EXECUTE ON FUNCTION public.admin_marketplace_funnel(timestamptz, timestamptz, text) TO service_role;
 
 -- ── Supply & utilization ────────────────────────────────────────────────
 
@@ -277,4 +289,5 @@ COMMENT ON FUNCTION public.admin_supply_utilization(timestamptz, timestamptz, te
     '/analytics/supply-utilization. Periods clamped to the window. Regina business days (350). '
     'Reports utilization_pct (P3/online, CLAUDE.md KPI) and engaged_pct ((P2+P3)/online) separately.';
 
-REVOKE EXECUTE ON FUNCTION public.admin_supply_utilization(timestamptz, timestamptz, text) FROM anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.admin_supply_utilization(timestamptz, timestamptz, text) FROM PUBLIC, anon, authenticated;
+GRANT  EXECUTE ON FUNCTION public.admin_supply_utilization(timestamptz, timestamptz, text) TO service_role;

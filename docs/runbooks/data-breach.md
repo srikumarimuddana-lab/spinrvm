@@ -190,7 +190,7 @@ OF WHAT HAPPENED]. The information that may have been affected includes: [LIST].
 We have [ACTIONS TAKEN]. We recommend you [USER ACTIONS, e.g. change passwords on
 other services if email was exposed].
 
-If you have questions, contact privacy@spinr.ca.
+If you have questions, contact security@spinr.ca.
 
 We take your privacy seriously and apologize for any concern this may cause.
 ```

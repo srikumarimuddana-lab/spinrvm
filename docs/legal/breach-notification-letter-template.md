@@ -120,3 +120,11 @@ content:
 4. Keep this template current with actual practice — if `security@spinr.ca`
    or the incident-response process described in `docs/runbooks/data-breach.md`
    changes, update this template to match.
+5. **Fixed 2026-08-20** (`spinr-legal-readiness-reviewer`): found the
+   runbook's own inline §4c template (`docs/runbooks/data-breach.md`) told
+   the user to contact `privacy@spinr.ca`, while this standalone template
+   uses `security@spinr.ca` — the two governing documents disagreed. Per
+   `docs/legal/privacy-policy.md`'s own convention (`security@spinr.ca` is
+   specifically for reporting a suspected security/privacy incident, which
+   a breach notification is), aligned the runbook's copy to
+   `security@spinr.ca` to match this template rather than the reverse.

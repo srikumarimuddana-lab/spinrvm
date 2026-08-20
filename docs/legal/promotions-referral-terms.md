@@ -58,10 +58,12 @@ referral) — after 30 days with no qualifying action, the referral expires
 unpaid. Once the qualifying action is completed, the bonus is credited to
 both accounts.
 
-Spinr monitors referral activity for abuse, including unusual referral
-velocity from a single device, phone number, or payment method. An account
-found to be abusing the referral program may have pending or already-issued
-bonuses reversed and may be suspended under the Community Guidelines.
+Spinr monitors referral activity for abuse, including an unusually high
+rate of referral bonuses paid to the same account in a short period, and
+does not count a ride toward a referral's qualifying activity if the ride
+itself was free. An account found to be abusing the referral program may
+have pending or already-issued bonuses reversed and may be suspended under
+the Community Guidelines.
 
 DRIVER REFERRAL BONUSES
 
@@ -106,7 +108,14 @@ yet earned as of the date an offer changes or ends.
 2. Cross-reference `backend/utils/referral_terms.py` and migration 176 for
    the actual per-service-area terms already configured, and make sure this
    public page doesn't promise something broader than what's enforced.
-3. The anti-abuse language here should match, not exceed, the actual
-   referral-velocity and self-referral guards CLAUDE.md's fraud-auditor
-   context describes — this page states policy; enforcement is a separate,
-   already-built concern.
+3. **Fixed 2026-08-20** (`spinr-legal-readiness-reviewer`): the anti-abuse
+   paragraph previously named device, phone-number, and payment-method
+   velocity signals — none of those exist in code. The only real guard is a
+   rolling 24-hour cap on referral-bonus payouts per `referrer_user_id`
+   (`backend/utils/referral_payout.py:107-189`, default 5/day,
+   admin-tunable via `settings.referral_payout_velocity_cap_per_day`,
+   migration 336) plus a rule that a ride only counts toward the
+   qualification threshold when `grand_total > 0` (blocks $0 free-ride
+   farming). Reworded to describe only what's actually enforced — the
+   self-referral check (`backend/routes/users.py:1011`) is unaffected and
+   still accurately described above.

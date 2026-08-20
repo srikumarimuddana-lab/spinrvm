@@ -1188,11 +1188,11 @@ class TestDriverMetricNaming:
         assert self._call(admin_client, drivers, acc, users).json()["low_performer_count"] == 2
 
 
-# ── migration 353: SECURITY DEFINER lockdown sweep ────────────────────
+# ── migration 354: SECURITY DEFINER lockdown sweep ────────────────────
 
 
 class TestSecurityDefinerLockdownMigration:
-    """Migration 353 codifies a production hotfix.
+    """Migration 354 codifies a production hotfix.
 
     18 SECURITY DEFINER functions in `public` were `anon`-executable in
     production because `REVOKE ... FROM anon, authenticated` is a no-op —
@@ -1206,7 +1206,7 @@ class TestSecurityDefinerLockdownMigration:
     def _body() -> str:
         from pathlib import Path
 
-        p = Path(__file__).resolve().parents[1] / "migrations" / "353_revoke_public_execute_on_security_definer_fns.sql"
+        p = Path(__file__).resolve().parents[1] / "migrations" / "354_revoke_public_execute_on_security_definer_fns.sql"
         return "\n".join(ln for ln in p.read_text().split("\n") if not ln.lstrip().startswith("--"))
 
     def test_revokes_from_public_not_just_the_named_roles(self):
@@ -1235,7 +1235,7 @@ class TestSecurityDefinerLockdownMigration:
 
     def test_names_each_function_it_touches(self):
         """Silent bulk privilege changes are not auditable."""
-        assert "RAISE NOTICE 'migration 353: locked down %'" in self._body()
+        assert "RAISE NOTICE 'migration 354: locked down %'" in self._body()
 
     def test_reports_a_clean_no_op(self):
         """Expected outcome against production, which is already corrected."""

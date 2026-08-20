@@ -14,12 +14,14 @@ describe('ride-details v2 route rendering contract', () => {
     expect(source).toContain('<RouteLine path={mapCoordinates} />');
     expect(source).toContain('<RoutePins');
     expect(source).toContain('completion={ride.actual_completion_point || null}');
-    // The ONE sanctioned raw-Polyline use: the dashed Period-2 pickup leg
-    // (server-flag-gated) rendered as separate grey context, never joined
-    // into the RouteLine trip gradient. Any other raw Polyline is a
-    // regression to the per-section stroke rendering this contract retired.
-    expect(source.match(/<Polyline/g) ?? []).toHaveLength(1);
+    // The TWO sanctioned raw-Polyline uses, both dashed grey CONTEXT (never a
+    // substitute for actual evidence): the Period-2 pickup leg and the
+    // booked-route underlay shown when a v2 actual route is missing/incomplete
+    // ("never show a missing path", owner directive 2026-08-20). Any other raw
+    // Polyline is a regression to per-section stroke rendering.
+    expect(source.match(/<Polyline/g) ?? []).toHaveLength(2);
     expect(source).toContain('pickupLegSections.map');
+    expect(source).toContain('showPlannedUnderlay && plannedSegments.map');
     expect(source).toContain('lineDashPattern={[6, 6]}');
     expect(source).toContain("s.phase === 'trip_in_progress'");
     expect(source).not.toContain('INFERRED_ROUTE_STROKE');
@@ -31,11 +33,15 @@ describe('ride-details v2 route rendering contract', () => {
     expect(source).not.toContain('/route/v1/');
   });
 
-  it('keeps planned geometry legacy-only and never rebuilds a completed actual route with Directions', () => {
+  it('keeps planned geometry out of the v2 solid line and never rebuilds an actual route with Directions', () => {
     expect(source).toContain('const isV2Route =');
-    // mapCoordinates (the RouteLine path) drops planned geometry for v2 rides.
-    expect(source).toContain('isV2Route ? [] : plannedSegments');
-    expect(source).toContain("const routeLabel = hasActualRoute ? 'Actual route' : isV2Route ? 'Actual route' : 'Planned route';");
+    // Legacy rides still draw the planned line solid; a v2 ride NEVER routes
+    // planned coords into the solid RouteLine — its planned geometry appears
+    // only as the dashed underlay when the actual route is missing/incomplete.
+    expect(source).toContain('const showPlannedUnderlay =');
+    expect(source).toContain("(!hasActualRoute || ride?.route_geometry_status !== 'complete')");
+    expect(source).toContain(') : isV2Route ? null : (');
+    expect(source).toContain("? (showPlannedUnderlay ? 'Booked route' : 'Actual route')");
     expect(source).not.toContain('decodePolyline');
     expect(source).not.toContain('fetchFallbackRoute');
   });

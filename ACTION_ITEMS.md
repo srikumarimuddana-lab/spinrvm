@@ -6845,6 +6845,48 @@ record of what was assumed vs. what was actually true</summary>
 
 </details>
 
+### B36. `services/fare_service.py`'s `recalculate_fare_for_distance` float-cast `grand_total` on the same `NUMERIC` `rides` column B30/B35 fixed — CLOSED (2026-08-20)
+
+- **Source:** flagged as an unverified adjacent observation in B35's own filing (PR #4312,
+  "New adjacent finding, NOT fixed here") — independently re-verified from scratch per B35's
+  own precedent (its 8-of-9 false-positive history is exactly why a grep-only claim isn't
+  trusted here without a live schema check).
+- **Status:** ✅ FIXED (2026-08-20). `recalculate_fare_for_distance` — the fare recompute run
+  on ride completion when actual distance differs >0.1 km from the booking-time estimate
+  (called from `routes/drivers/ride_complete.py` line 547; its return dict is merged into
+  `update_fields` and written via `db_supabase.update_one("rides", ...)` at ride completion,
+  confirming B35's "runs on ride completion" note was correct) — returns five fields.
+  Checked each against live `information_schema.columns` (project `soavhtdhefowwvforzwb`)
+  individually, not assumed as a block:
+  - **Genuinely NUMERIC, was buggy, fixed**: `grand_total` — `NUMERIC(10,2)`. Was
+    `_f(new_grand_total)` (float cast); swapped to a new local `_money_str()` helper added to
+    `fare_service.py` (mirrors `routes/rides/_shared.py`'s helper of the same name; not
+    imported directly — `_shared.py` imports `_deps`, which imports back into
+    `fare_service.py`, so a direct cross-import would be circular).
+  - **Genuinely FLOAT8, `_f()` is correct, left untouched**: `distance_fare`, `total_fare`,
+    `driver_earnings` — all `double precision`, matching B35's finding that these same column
+    names are FLOAT8 elsewhere on `rides` too. `distance_km` is also FLOAT8 but was never
+    routed through `_f()` in the first place (plain `round(actual_distance_km, 2)`).
+  - So only 1 of the 5 fields this function writes was the real bug — same "verify every
+    field individually" outcome B35 already demonstrated for `booking.py`.
+- **Blast radius:** isolated to this one write site. Grepped every reader of
+  `rides.grand_total` (36 call sites across `ai/`, `services/`, `utils/`, `routes/`) — all
+  parse it via `_d(...)`/`Decimal(str(...))`, which already handles both float and str input
+  identically, so no caller assumes a specifically-float type. One unrelated pre-existing
+  float write of a *different*, JSONB `grand_total` sub-field
+  (`routes/rides/_shared.py` line ~436, `fare_breakdown_snapshot`) was found and correctly
+  left alone — same JSONB carve-out B30 already established, not the scalar NUMERIC column.
+- **Tests:** new `test_fare_service_recalc_rides_numeric_no_float_cast.py` (static-scan +
+  runtime pins, 7 tests — verified to actually fail when the fix is reverted); one
+  pre-existing assertion in `test_fare_service.py` updated from a hardcoded float
+  (`out["grand_total"] == 11.50`) to the corrected Decimal-safe string (`== "11.50"`). Full
+  fare-service + B28–B35-sibling + payments/webhooks/receipt/preauth surface: 50 + 97 + 292
+  passed (1 skipped), 0 failed. `ruff check`/`ruff format --check` clean.
+- **Full detail:** `docs/change-log/2026-08-20-fare-service-recalc-float-fix.md`.
+- **Files:** `backend/services/fare_service.py`,
+  `backend/tests/test_fare_service_recalc_rides_numeric_no_float_cast.py` (new),
+  `backend/tests/services/test_fare_service.py`.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly

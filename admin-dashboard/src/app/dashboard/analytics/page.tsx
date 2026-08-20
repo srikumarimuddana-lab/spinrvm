@@ -15,18 +15,24 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   BarChart3, TrendingDown, XCircle, CheckCircle,
   RefreshCw, Activity, Car, DollarSign, Target, Search, AlertTriangle,
+  MapPin, Send, TrendingUp,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { DriverOffersPanel } from "@/components/analytics/driver-offers-panel";
+import { DemandForecastPanel } from "@/components/analytics/demand-forecast-panel";
 import { Pagination } from "@/components/ui/pagination";
 import {
   BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
 import {
-  getAnalyticsOverview, getCancellationBreakdown, getDriverAcceptanceRates,
+  getAnalyticsOverview, getCancellationBreakdown, getDriverAcceptanceRates, getServiceAreas,
 } from "@/lib/api";
 
 const DRIVER_PAGE_SIZE = 25;
+
+/** Sentinel for "no area filter" — Radix Select cannot hold an empty value. */
+const ALL_AREAS = "__all__";
 
 /** Server-side sortable columns on /driver-acceptance. Sorting must be
  *  server-side here: a client-side sort only reorders the rows already on
@@ -65,6 +71,12 @@ const REASON_LABELS: Record<string, string> = {
 
 export default function AnalyticsPage() {
   const [dateRange, setDateRange] = useState("30d");
+  // One service-area filter shared by every tab, so "Saskatoon" means the
+  // same thing on the funnel, the cancellations, and the offer ledger.
+  const [areaId, setAreaId] = useState<string>(ALL_AREAS);
+  const [areas, setAreas] = useState<any[]>([]);
+  // Bumped by Refresh; the embedded panels watch it to refetch.
+  const [refreshToken, setRefreshToken] = useState(0);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(false);
   const [overview, setOverview] = useState<any>(null);
@@ -82,6 +94,18 @@ export default function AnalyticsPage() {
   const [driverSearch, setDriverSearch] = useState("");
   const [driversLoading, setDriversLoading] = useState(true);
 
+  const svcArea = areaId === ALL_AREAS ? undefined : areaId;
+
+  // Buckets are America/Regina business time (migration 350), not UTC nor the
+  // viewer's browser zone. Label it — a bare "14:00" is ambiguous, and it was
+  // silently six hours out before that migration.
+  const bucketTz: string = overview?.timezone || cancellations?.timezone || "America/Regina";
+  const tzLabel = bucketTz.split("/").pop()?.replace(/_/g, " ") || bucketTz;
+
+  useEffect(() => {
+    getServiceAreas().then((a) => setAreas(Array.isArray(a) ? a : [])).catch(() => setAreas([]));
+  }, []);
+
   // Debounce the search box so typing doesn't fire a request per keystroke.
   useEffect(() => {
     const t = setTimeout(() => setDriverSearch(searchInput.trim()), 300);
@@ -92,14 +116,14 @@ export default function AnalyticsPage() {
   // otherwise page 3 of a 2-page result silently renders empty.
   useEffect(() => {
     setDriverPage(0);
-  }, [dateRange, driverSearch, driverSort, driverOrder, lowOnly]);
+  }, [dateRange, svcArea, driverSearch, driverSort, driverOrder, lowOnly]);
 
   const fetchCore = useCallback(async () => {
     setLoading(true);
     try {
       const [ov, cancel] = await Promise.all([
-        getAnalyticsOverview(dateRange).catch(() => null),
-        getCancellationBreakdown(dateRange).catch(() => null),
+        getAnalyticsOverview(dateRange, svcArea).catch(() => null),
+        getCancellationBreakdown(dateRange, svcArea).catch(() => null),
       ]);
       if (ov === null || cancel === null) setFetchError(true);
       else setFetchError(false);
@@ -108,12 +132,13 @@ export default function AnalyticsPage() {
     } finally {
       setLoading(false);
     }
-  }, [dateRange]);
+  }, [dateRange, svcArea]);
 
   const fetchDrivers = useCallback(async () => {
     setDriversLoading(true);
     try {
       const drivers = await getDriverAcceptanceRates(dateRange, {
+        serviceAreaId: svcArea,
         limit: DRIVER_PAGE_SIZE,
         offset: driverPage * DRIVER_PAGE_SIZE,
         search: driverSearch || undefined,
@@ -126,11 +151,12 @@ export default function AnalyticsPage() {
     } finally {
       setDriversLoading(false);
     }
-  }, [dateRange, driverPage, driverSearch, driverSort, driverOrder, lowOnly]);
+  }, [dateRange, svcArea, driverPage, driverSearch, driverSort, driverOrder, lowOnly]);
 
   const fetchAll = useCallback(() => {
     void fetchCore();
     void fetchDrivers();
+    setRefreshToken((t) => t + 1); // embedded panels own their own fetches
   }, [fetchCore, fetchDrivers]);
 
   useEffect(() => { void fetchCore(); }, [fetchCore]);
@@ -190,10 +216,28 @@ export default function AnalyticsPage() {
             Operational Analytics
           </h1>
           <p className="text-muted-foreground mt-1">
-            Acceptance rates, cancellation breakdown, and operational insights
+            {svcArea
+              ? `${areas.find((a: any) => a.id === svcArea)?.name || "Selected area"} — acceptance, cancellations, dispatch and demand`
+              : "All service areas — acceptance, cancellations, dispatch and demand"}
           </p>
         </div>
-        <div className="flex gap-2 items-center">
+        <div className="flex gap-2 items-center flex-wrap">
+          <Select value={areaId} onValueChange={setAreaId}>
+            <SelectTrigger className="w-44" aria-label="Filter by service area">
+              <span className="flex items-center gap-1.5 truncate">
+                <MapPin className="h-3.5 w-3.5 shrink-0" />
+                <SelectValue />
+              </span>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_AREAS}>All service areas</SelectItem>
+              {areas
+                .filter((a: any) => a.is_active !== false && !a.parent_service_area_id)
+                .map((a: any) => (
+                  <SelectItem key={a.id} value={a.id}>{a.name || a.id}</SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
           <Select value={dateRange} onValueChange={setDateRange}>
             <SelectTrigger className="w-32" aria-label="Date range">
               <SelectValue />
@@ -264,6 +308,7 @@ export default function AnalyticsPage() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Activity className="h-5 w-5" /> Daily Ride Trend
+            <span className="text-xs font-normal text-muted-foreground">({tzLabel} days)</span>
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -286,10 +331,20 @@ export default function AnalyticsPage() {
       </Card>
 
       <Tabs defaultValue="cancellations">
-        <TabsList>
-          <TabsTrigger value="cancellations">Cancellation Breakdown</TabsTrigger>
-          <TabsTrigger value="acceptance">Driver Acceptance Rates</TabsTrigger>
-        </TabsList>
+        {/* Horizontally scrollable so the tab row degrades gracefully on
+            narrow screens instead of wrapping into the content below. */}
+        <div className="overflow-x-auto">
+          <TabsList>
+            <TabsTrigger value="cancellations">Cancellations</TabsTrigger>
+            <TabsTrigger value="acceptance">Driver Acceptance</TabsTrigger>
+            <TabsTrigger value="offers" className="gap-1.5">
+              <Send className="h-3.5 w-3.5" /> Dispatch Offers
+            </TabsTrigger>
+            <TabsTrigger value="forecast" className="gap-1.5">
+              <TrendingUp className="h-3.5 w-3.5" /> Demand Forecast
+            </TabsTrigger>
+          </TabsList>
+        </div>
 
         {/* Cancellation Breakdown Tab */}
         <TabsContent value="cancellations" className="space-y-4">
@@ -327,7 +382,10 @@ export default function AnalyticsPage() {
             {/* Hourly Distribution */}
             <Card>
               <CardHeader>
-                <CardTitle>Cancellations by Hour</CardTitle>
+                <CardTitle className="flex items-baseline gap-2">
+                  Cancellations by Hour
+                  <span className="text-xs font-normal text-muted-foreground">({tzLabel} time)</span>
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 {(cancellations?.hourly_distribution?.length ?? 0) > 0 ? (
@@ -546,6 +604,26 @@ export default function AnalyticsPage() {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* Dispatch Offers — the offer ledger's real accept/decline/ignore
+            rates. Same component the standalone /dashboard/driver-offers
+            page renders, driven by this page's shared filter bar. */}
+        <TabsContent value="offers" className="space-y-4">
+          <DriverOffersPanel
+            dateRange={dateRange}
+            serviceAreaId={svcArea}
+            refreshToken={refreshToken}
+          />
+        </TabsContent>
+
+        {/* Demand Forecast — forward-looking, so it keeps its own
+            hours-ahead control and ignores the backward-looking date range. */}
+        <TabsContent value="forecast" className="space-y-4">
+          <DemandForecastPanel
+            serviceAreaId={svcArea}
+            refreshToken={refreshToken}
+          />
         </TabsContent>
       </Tabs>
     </div>

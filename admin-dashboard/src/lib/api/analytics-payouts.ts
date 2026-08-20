@@ -6,8 +6,13 @@ import { request } from "./client";
 import type { EarningsPeriod, MetricWithDelta } from "./earnings";
 
 /* ── Analytics ──────────────────────────── */
-export const getAnalyticsOverview = (dateRange = "30d") =>
-    request<any>(`/api/admin/analytics/overview?date_range=${dateRange}`);
+/** `serviceAreaId` omitted means all areas (migration 350 added the scope —
+ *  the headline KPI cards previously blended every market together). */
+export const getAnalyticsOverview = (dateRange = "30d", serviceAreaId?: string) => {
+    const sp = new URLSearchParams({ date_range: dateRange });
+    if (serviceAreaId) sp.set("service_area_id", serviceAreaId);
+    return request<any>(`/api/admin/analytics/overview?${sp.toString()}`);
+};
 
 /** Main-dashboard stat cards aggregated by time window + optional service area. */
 export const getDashboardOverview = (opts: { range?: string; service_area_id?: string | null } = {}) => {

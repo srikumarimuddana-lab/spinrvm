@@ -1,5 +1,35 @@
 # Full MongoDB Export — Collection-by-Collection Inventory & Migration Readiness
 
+## Sign-off recorded (2026-08-20) — Oct 30 checklist item #8
+
+Every `REVIEW`-tagged collection below now has an explicit, recorded include/exclude decision —
+closing `ACTION_ITEMS.md` A41's Oct 30 checklist item #8 ("explicit include/exclude sign-off,
+recorded per collection... a silent drop at decommission time is not acceptable"). Put to the
+product owner directly (not inferred): apply this audit's own recommended defaults across the
+board, rather than a collection-by-collection individual review.
+
+| Collection | Decision | Basis |
+|---|---|---|
+| `banks` | **Already resolved** — SIN+DOB imported via existing encrypted columns (narrow, minimized scope); raw banking numbers (`account_number`/`transit_number`/`institute_number`) never touched | `ACTION_ITEMS.md` A41 item #6, `docs/change-log/2026-08-19-legacy-sin-dob-import.md` |
+| `coupons` | **EXCLUDE** — neither active codes nor redemption history imported. No "redeemed in old app" marker exists to build against; importing without one would let the same customers re-redeem equivalent promos under Spinr's own promo engine | This audit's own recommendation |
+| `subscriptions` / `driversubscriptions` / `userpasses` / `passtypes` | **EXCLUDE** — accepted as feature-testing debris (4 rows total, 3 `isActive: false`), not live revenue | This audit's finding #1 |
+| `refrals` | **EXCLUDE** — campaign configuration only, no individual redemption ledger in this collection; Spinr has its own independent referral system | This audit's own recommendation |
+| `docsupdatehistories` | **EXCLUDE** — not itself a regulatory record; Spinr's own `driver_insurance_periods`/document-expiry checks are the authoritative regulatory surface | This audit's own recommendation |
+| `connections` / `chats` | **EXCLUDE** — no in-app chat-history-carryover feature exists in Spinr; old-app trip chat history is not preserved | This audit's own recommendation |
+| `complaints` | **EXCLUDE** — support-ticket-shaped rows, no import path built or planned | This audit's own recommendation |
+| `reviews` | **EXCLUDE** — a driver's/rider's historical star rating does **not** carry over; Spinr ratings start fresh | This audit's own recommendation |
+| `servicelocations` (Regina/Saskatoon polygons) | **EXCLUDE (informational only)** — Spinr's own service-area config is authoritative, no import needed | Already noted in this audit as informational |
+| `servicelocations` (India-region rows, incl. one `ACTIVE` Chandigarh-area polygon) | **EXCLUDE, confirmed dev/template cruft** — not real Spinr customer activity | Finding #6, now confirmed by the product owner rather than left on inference |
+| `pages` | **Entity-name question already resolved** (`ACTION_ITEMS.md` A42 — "Spinr Mobility Inc." confirmed correct/unchanged). Finding #7's narrower ask (a direct diff of `pages.csv`'s ToS/Privacy text against what the live rider-app/driver-app currently serve) is **not verified** — no live app content was read for a line-by-line diff this session. Not blocking item #8's closure (this collection was never an import candidate — it's reference/comparison material), but tracked as a residual, low-priority gap; see "What was NOT verified" note below | A42 for the entity-name aspect; finding #7's diff remains open |
+| `faqs` | **Not verified** — `faqs.csv`'s 4 rows (cancel ride ×2, track ride, schedule ride) were not diffed against the live `faqs` admin-managed table (`backend/routes/admin/faqs.py`, with dedicated embedding/semantic-search migrations 208/209/211/327) for content-completeness, since no live DB access exists in this session. One data-quality note found while reading the CSV: row 1's answer text says "open the **HF-Taxi** app" — old-app/pre-rebrand template text, not Spinr's current name — informational only, this collection is not an import candidate | Not blocking item #8's closure — `faqs` was never an import target, only a comparison-content check |
+
+**What was NOT verified for this sign-off**: no live database or live-app-content access exists in
+this session. The `pages`/`faqs` diffs above are genuinely unverified, not just deprioritized — if
+either the current legal-document text or FAQ content is later found to be missing something the
+old app had, that's a distinct, separate finding from this sign-off, which only covers the
+include/exclude decision for migration purposes (none of the 12 collections above are being
+imported, so nothing here creates new legacy-migration risk either way).
+
 **Date:** 2026-08-19 · **Posture:** AUDIT-ONLY — no data imported, no code or migrations changed.
 **Source:** `Mongo.zip` supplied directly by the user this session (55 files, 177 MB extracted,
 internal file timestamps 2026-07-26 — this is the same-vintage export that fed the

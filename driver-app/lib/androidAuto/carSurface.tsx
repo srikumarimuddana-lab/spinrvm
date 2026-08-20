@@ -77,6 +77,14 @@ function cellCorners(lat: number, lng: number, cellLat: number, cellLng: number)
   ];
 }
 
+/**
+ * Convert a latitudeDelta (degrees of visible span) to a Google Maps zoom
+ * level for the `camera` prop. Smaller delta = more zoomed in.
+ */
+function deltaToZoom(d: number): number {
+  return Math.log2(360 / d);
+}
+
 function rampColor(weight: number, max: number): { fill: string; stroke: string; sw: number } {
   const r = max > 0 ? weight / max : 0;
   const idx = r < 0.2 ? 0 : r < 0.4 ? 1 : r < 0.6 ? 2 : r < 0.8 ? 3 : 4;
@@ -241,7 +249,7 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
     );
     setDebugFact('rideState', String(rideState));
     setDebugFact('leg', card.leg);
-    setDebugFact('zoomDelta', delta.toFixed(4));
+    setDebugFact('zoomDelta', `${delta.toFixed(4)} → z${deltaToZoom(delta).toFixed(1)}`);
     setDebugFact(
       'pan',
       offsetLat === 0 && offsetLng === 0
@@ -324,13 +332,27 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
     longitude: followTarget.longitude + offsetLng,
   };
 
+  // Course-up heading for the map camera. The map rotates so the driver's
+  // direction of travel points up — standard nav-display behavior.
+  // Disabled when the driver has panned away (rotating a deliberately-offset
+  // view is disorienting); the Recenter button clears the pan and resumes
+  // heading tracking.
+  const isPannedAway = offsetLat !== 0 || offsetLng !== 0;
+  const mapHeading =
+    !isPannedAway &&
+    here?.heading != null &&
+    Number.isFinite(here.heading) &&
+    here.heading >= 0
+      ? here.heading
+      : 0;
+
   return (
     <View style={[styles.fill, styles.mapBackdrop]}>
       <MapView
         // Re-mount on a leg / idle transition so Android's Google Maps native
         // layer fully drops a leftover route overlay; within a leg the camera is
-        // driven by `region` (below), not a remount, so live location + zoom
-        // updates don't thrash the surface.
+        // driven by the `camera` prop (below), not a remount, so live location,
+        // zoom, and heading updates don't thrash the surface.
         key={`${route ? route.leg : 'idle'}-${surfaceGeneration}`}
         style={styles.fill}
         // Match shared/components/AppMap.tsx rather than relying on the
@@ -354,18 +376,19 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
         onMapLoaded={onMapLoaded}
         // The projected car surface is non-interactive (Android Auto drives
         // interaction through template buttons, not in-surface touches); the
-        // controlled region lets the zoom buttons + follow-me drive the camera.
+        // controlled camera lets the zoom buttons + follow-me drive position,
+        // zoom, and heading.
         pointerEvents="none"
         showsUserLocation={false}
         // Android Auto flips this at dusk from the car's own ambient state. A
         // daylight map at night on a dashboard is genuinely dangerous, not just
         // ugly — it is the brightest object in the cabin and it is at eye level.
         customMapStyle={isNight ? NIGHT_MAP_STYLE : undefined}
-        region={{
-          latitude: center.latitude,
-          longitude: center.longitude,
-          latitudeDelta: delta,
-          longitudeDelta: delta,
+        camera={{
+          center,
+          zoom: deltaToZoom(delta),
+          heading: mapHeading,
+          pitch: 0,
         }}
       >
         {/* Heatmap demand cells — idle state only (HM-30) */}

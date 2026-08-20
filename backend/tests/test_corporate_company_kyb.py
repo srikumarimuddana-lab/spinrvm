@@ -108,6 +108,25 @@ def test_upload_url_rejects_disallowed_content_type(test_client, rider_override)
     assert resp.status_code == 415
 
 
+def test_upload_url_cross_tenant_403(test_client, rider_override):
+    # Caller is an admin of c1 only; hitting c2's upload-url must be denied
+    # by require_company_admin itself, not by any path-string check.
+    with _admin_guard():
+        resp = test_client.post("/company/c2/kyb/upload-url", json={"content_type": "application/pdf"})
+    assert resp.status_code == 403
+
+
+def test_upload_url_member_role_403(test_client, rider_override):
+    # Non-admin member of c1 must be denied on the write path, same as the
+    # existing GET /kyb member-role coverage above.
+    with patch(
+        "dependencies.company_guard.list_active_memberships_for_user",
+        AsyncMock(return_value=[{"company_id": "c1", "role": "member", "id": "m1"}]),
+    ):
+        resp = test_client.post("/company/c1/kyb/upload-url", json={"content_type": "application/pdf"})
+    assert resp.status_code == 403
+
+
 def test_upload_url_staff_suspended_409(test_client, rider_override):
     with (
         _admin_guard(),
@@ -164,6 +183,26 @@ def test_submit_rejects_foreign_or_traversal_paths(test_client, rider_override):
         for bad in ("kyb/OTHER/doc.pdf", "kyb/c1/../c2/doc.pdf", "etc/passwd"):
             resp = test_client.post("/company/c1/kyb/submit", json={"path": bad})
             assert resp.status_code == 400, bad
+
+
+def test_submit_cross_tenant_403(test_client, rider_override):
+    # Caller is an admin of c1 only; hitting c2's submit must be denied by
+    # require_company_admin itself, before the path-prefix/traversal guard
+    # ever runs.
+    with _admin_guard():
+        resp = test_client.post("/company/c2/kyb/submit", json={"path": "kyb/c2/doc.pdf"})
+    assert resp.status_code == 403
+
+
+def test_submit_member_role_403(test_client, rider_override):
+    # Non-admin member of c1 must be denied on the write path, same as the
+    # existing GET /kyb member-role coverage above.
+    with patch(
+        "dependencies.company_guard.list_active_memberships_for_user",
+        AsyncMock(return_value=[{"company_id": "c1", "role": "member", "id": "m1"}]),
+    ):
+        resp = test_client.post("/company/c1/kyb/submit", json={"path": "kyb/c1/doc.pdf"})
+    assert resp.status_code == 403
 
 
 def test_submit_requires_uploaded_object(test_client, rider_override):

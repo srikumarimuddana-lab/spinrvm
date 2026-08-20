@@ -24,6 +24,22 @@ api_router = APIRouter(prefix="/analytics", tags=["Admin Analytics"])
 
 _OVERVIEW_CACHE_TTL = 300  # 5 minutes
 
+# Upper bound on how many driver rows one acceptance-rate request will scan.
+# Hitting it sets `scan_truncated` in the response rather than silently
+# returning a partial list.
+_DRIVER_SCAN_CAP = 2000
+
+# A "low performer" is flagged in one place so the summary count, the
+# `low_performers_only` filter, and the threshold reported to the UI can
+# never drift apart.
+_LOW_PERFORMER_RATE = 70.0
+_LOW_PERFORMER_MIN_RIDES = 5
+
+
+def _is_low_performer(row: dict) -> bool:
+    """Below the acceptance threshold, with enough rides for it to mean anything."""
+    return row.get("acceptance_rate", 0) < _LOW_PERFORMER_RATE and row.get("total_rides", 0) >= _LOW_PERFORMER_MIN_RIDES
+
 
 def _parse_date_range(date_range: str) -> datetime:
     """Convert a shorthand range like '7d', '30d', '90d' to a start datetime."""
@@ -142,19 +158,54 @@ async def get_driver_acceptance_rates(
     date_range: str = Query("30d", pattern="^(today|7d|30d|90d|1y)$"),
     service_area_id: Optional[str] = None,
     limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    search: Optional[str] = Query(None, max_length=100),
+    sort_by: str = Query(
+        "acceptance_rate",
+        pattern="^(acceptance_rate|cancellation_rate|total_rides|completed|cancelled_by_driver|rating|name)$",
+    ),
+    order: str = Query("desc", pattern="^(asc|desc)$"),
+    min_rides: int = Query(0, ge=0),
+    low_performers_only: bool = False,
     admin: dict = Depends(get_admin_user),
 ):
-    """Driver acceptance rate rankings and performance metrics."""
+    """Driver acceptance rate rankings and performance metrics.
+
+    Paginated + sortable + searchable server-side. This matters for more than
+    convenience: the response previously sorted by acceptance rate DESC and
+    returned only the first `limit` rows, so the drivers the
+    `low_performer_count` summary counts (worst rates) were exactly the rows
+    the slice discarded. Ops could see that N drivers were underperforming
+    and had no way to find out which. `sort_by`/`order`/`offset` and
+    `low_performers_only` make every counted driver reachable.
+
+    Summary stats (`total_drivers`, `avg_acceptance_rate`,
+    `low_performer_count`) are computed over the whole filtered set, never
+    over the returned page — a page-scoped average would change as you
+    paginate.
+    """
     start_date = _parse_date_range(date_range)
 
+    # Service-area scoping is pushed into the query rather than applied in
+    # Python after the fetch: filtering post-cap meant an operator with more
+    # than _DRIVER_SCAN_CAP drivers silently filtered an arbitrary subset.
+    driver_filters: dict = {}
+    if service_area_id:
+        driver_filters["service_area_id"] = service_area_id
+
     try:
-        drivers = await db.get_rows("drivers", {}, limit=500)
+        drivers = await db.get_rows("drivers", driver_filters, limit=_DRIVER_SCAN_CAP)
     except Exception as e:
         logger.error(f"Failed to fetch drivers: {e}", exc_info=True, extra={"domain": "admin"})
         raise HTTPException(status_code=503, detail="analytics_unavailable") from e
 
-    if service_area_id:
-        drivers = [d for d in drivers if d.get("service_area_id") == service_area_id]
+    # Never truncate silently — surface it so the UI can say the list is partial.
+    scan_truncated = len(drivers) >= _DRIVER_SCAN_CAP
+    if scan_truncated:
+        logger.warning(
+            "driver-acceptance hit the driver scan cap; results are partial",
+            extra={"domain": "admin", "cap": _DRIVER_SCAN_CAP, "service_area_id": service_area_id},
+        )
 
     driver_ids = [d["id"] for d in drivers]
     user_ids = [d["user_id"] for d in drivers if d.get("user_id")]
@@ -230,19 +281,46 @@ async def get_driver_acceptance_rates(
             }
         )
 
-    # Sort by acceptance rate descending
-    result.sort(key=lambda x: x["acceptance_rate"], reverse=True)
+    # ── Filters (applied before summary + pagination) ────────────────
+    if search:
+        needle = search.strip().lower()
+        if needle:
+            result = [r for r in result if needle in (r["name"] or "").lower()]
+    if min_rides > 0:
+        result = [r for r in result if r["total_rides"] >= min_rides]
+    if low_performers_only:
+        result = [r for r in result if _is_low_performer(r)]
 
-    # Summary stats
+    # Summary stats over the full filtered set, not the returned page.
     avg_acceptance = round(sum(r["acceptance_rate"] for r in result) / len(result), 1) if result else 0
-    low_performers = [r for r in result if r["acceptance_rate"] < 70 and r["total_rides"] >= 5]
+    low_performer_count = sum(1 for r in result if _is_low_performer(r))
+
+    # ── Sort, then paginate ──────────────────────────────────────────
+    reverse = order == "desc"
+    if sort_by == "name":
+        result.sort(key=lambda x: (x["name"] or "").lower(), reverse=reverse)
+    else:
+        # Stable secondary key so equal rates keep a deterministic order across
+        # pages — without it, a driver can appear on two pages or on neither.
+        result.sort(key=lambda x: (x.get(sort_by) or 0, x["driver_id"]), reverse=reverse)
+
+    total = len(result)
+    page = result[offset : offset + limit]
 
     return {
         "date_range": date_range,
-        "total_drivers": len(result),
+        "total_drivers": total,
         "avg_acceptance_rate": avg_acceptance,
-        "low_performer_count": len(low_performers),
-        "drivers": result[:limit],
+        "low_performer_count": low_performer_count,
+        "low_performer_threshold": {"rate_below": _LOW_PERFORMER_RATE, "min_rides": _LOW_PERFORMER_MIN_RIDES},
+        "drivers": page,
+        "returned": len(page),
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + len(page) < total,
+        "scan_truncated": scan_truncated,
+        "sort_by": sort_by,
+        "order": order,
     }
 
 

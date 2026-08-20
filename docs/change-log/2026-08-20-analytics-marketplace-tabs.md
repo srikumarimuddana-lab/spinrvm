@@ -158,7 +158,10 @@ change, which is trivially revertible on its own.
 - **Nothing was rendered.** No dev server, no browser, no screenshots. Four new tabs containing eleven charts are verified only by type-check and a successful production build. **A manual pass is required before merge** — chart label collisions, funnel bar-label overflow at small widths, and the tab row's horizontal scroll behaviour are all things a clean compile says nothing about. The dataviz guidance itself says to render and look at the output; that step could not be completed in this environment.
 - **This repo has no visual/snapshot regression tooling for admin-dashboard** (standing gap).
 - **Dark mode was never viewed.** The palette is validated numerically and the classes carry `dark:` variants, but no one has looked at these tabs in dark mode.
-- **No data has ever flowed through these panels.** Every one is driven by an endpoint whose SQL has never been executed (migrations 351/352 are un-run). Field names in the panels were written against the endpoints' Python response shapes; a mismatch between those and what the un-run SQL actually returns would surface only at runtime. This is the largest single risk in this branch.
+- **No data has ever flowed through these panels** in a browser. Two parts of this risk are now closed and one is not:
+  - *Closed:* migrations 351/352 have since been applied to a real PostgreSQL 16 instance and their functions executed against seeded data — see §12 of the funnel/supply and efficiency/financial change logs. The SQL runs and returns arithmetically correct values.
+  - *Closed:* every field name the four panels read was cross-checked against the keys the endpoints actually build — 36 top-level reads and 30 nested reads across `rates`, `dropoff`, `time_to_match`, `assignment_to_trip_start`, `pickup_eta_error`, `deadhead`, `surge`, `mix` and `riders`. All resolve; no typos.
+  - *Still open:* nothing has been rendered in a browser, so layout, chart geometry and dark-mode appearance remain unverified.
 - **No tests.** `admin-dashboard/__tests__` has no analytics coverage and none was added; the panels' formatting helpers (`fmtSecs`, `fmtMoney`, the null-vs-zero handling) are unit-testable and untested.
 - Responsive behaviour reasoned from Tailwind breakpoints, not measured at real viewport sizes.
 

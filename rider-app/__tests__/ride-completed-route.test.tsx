@@ -22,10 +22,13 @@ describe('completed ride route presentation contract', () => {
     expect(screenSource).toContain('<RouteLine path={mapCoordinates} />');
     expect(screenSource).toContain('<RoutePins');
     expect(screenSource).toContain('completion={currentRide.actual_completion_point || null}');
-    // The ONE sanctioned raw-Polyline use: the dashed Period-2 pickup leg
-    // (server-flag-gated) as separate grey context under the trip gradient.
-    expect(screenSource.match(/<Polyline/g) ?? []).toHaveLength(1);
+    // The TWO sanctioned raw-Polyline uses, both dashed grey CONTEXT (never a
+    // substitute for actual evidence): the Period-2 pickup leg and the
+    // booked-route underlay shown when a v2 actual route is missing/incomplete
+    // ("never show a missing path", owner directive 2026-08-20).
+    expect(screenSource.match(/<Polyline/g) ?? []).toHaveLength(2);
     expect(screenSource).toContain('pickupLegSections.map');
+    expect(screenSource).toContain('showPlannedUnderlay && plannedSegments.map');
     expect(screenSource).toContain('lineDashPattern={[6, 6]}');
     expect(screenSource).not.toContain('INFERRED_ROUTE_STROKE');
     expect(screenSource).not.toContain('ACTUAL_ROUTE_STROKE');
@@ -44,8 +47,13 @@ describe('completed ride route presentation contract', () => {
 
   it('never feeds the planned route into RouteLine for completed v2 rides', () => {
     expect(screenSource).toContain('const isV2Route =');
-    // mapCoordinates (the RouteLine path) suppresses planned geometry for v2.
-    expect(screenSource).toContain('isV2Route ? [] : plannedSegments');
+    // A v2 ride NEVER routes planned coords into the solid RouteLine — its
+    // planned geometry appears only as the dashed underlay when the actual
+    // route is missing/incomplete; legacy rides keep their solid planned line.
+    expect(screenSource).toContain('const showPlannedUnderlay =');
+    expect(screenSource).toContain("(!hasActualRoute || currentRide?.route_geometry_status !== 'complete')");
+    expect(screenSource).toContain(') : isV2Route ? null : (');
+    expect(screenSource).toContain("? (showPlannedUnderlay ? 'Booked route' : 'Actual route')");
     expect(screenSource).toContain("? 'Actual route processing'");
     expect(screenSource).toContain("? 'Actual route'");
     expect(screenSource).toContain('routeQualityLabel');

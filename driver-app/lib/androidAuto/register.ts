@@ -493,14 +493,32 @@ export default function registerAutoPlay(): void {
 
     clearOfferAlert(); // dismiss any stale offer before showing the new one
     const card = buildOfferCard(offer);
-    const sub = [
-      card.fareLabel,
-      card.bonusLabel,
+
+    // Title: rider name + rating when available, e.g. "New ride · Sarah ★4.9"
+    let title = 'New ride request';
+    if (card.riderName) {
+      title = card.riderRating
+        ? `New ride · ${card.riderName} ★${card.riderRating}`
+        : `New ride · ${card.riderName}`;
+    }
+
+    // Structured subtitle — group money on line 1, trip details on line 2,
+    // destination on line 3. The NavigationAlert renders '\n' as line breaks.
+    const moneyLine = [card.fareLabel, card.bonusLabel].filter(Boolean).join(' · ');
+    const detailLine = [
       card.etaLabel ? `${card.etaLabel} away` : null,
+      card.distanceLabel,
       card.surgeLabel ? `${card.surgeLabel} surge` : null,
+      card.wav ? 'WAV' : null,
     ]
       .filter(Boolean)
       .join(' · ');
+    const destLine = offer?.dropoff_address?.trim()
+      ? `→ ${offer.dropoff_address.trim()}`
+      : null;
+    const sub = [moneyLine || null, detailLine || null, destLine]
+      .filter(Boolean)
+      .join('\n');
 
     const num = alertSeq++;
     shownOfferId = rideId;
@@ -508,7 +526,7 @@ export default function registerAutoPlay(): void {
     try {
       template.showAlert({
         id: num,
-        title: { text: card.riderName ? `New ride · ${card.riderName}` : 'New ride request' },
+        title: { text: title },
         subtitle: sub.length > 0 ? { text: sub } : undefined,
         primaryAction: {
           title: 'Accept',
@@ -570,8 +588,8 @@ export default function registerAutoPlay(): void {
     } else if (navLegKey && navLegKey !== handedOffFor) {
       handedOffFor = navLegKey;
       log('auto hand-off for leg', navLegKey);
-      setDebugFact('navHandoff', `${route?.leg} → ${navProvider}`);
-      handoffToNav(navProvider);
+      setDebugFact('navHandoff', `${route?.leg} → google`);
+      handoffToNav('google');
     } else if (!navLegKey) {
       handedOffFor = null; // ride ended; the next leg is a fresh hand-off
     }

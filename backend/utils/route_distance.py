@@ -31,6 +31,7 @@ Why map-matching (OSRM /match) and not routing (OSRM /route or Directions)?
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -63,6 +64,12 @@ logger = logging.getLogger(__name__)
 # ms; Google Roads in 200-500 ms. Anything slower falls back to the haversine-
 # filtered value (already spike-protected by the P0 filter in complete_ride).
 _TIMEOUT_S = 2.0
+# One bounded second attempt per failed OSRM /match chunk (see
+# compute_segmented_road_route): a single failed chunk downgrades its whole
+# observed segment to raw jagged GPS in the published display geometry, and
+# production failures are predominantly transient (SPR-JE4G7T 2026-08-19: 20
+# provider_unavailable chunk failures in one otherwise healthy ride).
+_OSRM_CHUNK_RETRY_DELAY_S = 0.25
 _MIN_POINTS = 5  # below this, snap-to-road isn't reliable
 
 # Google Roads snapToRoads
@@ -368,6 +375,11 @@ async def compute_segmented_road_route(observed_segments: list[Any]) -> dict:
             provider: Optional[str] = None
             if osrm_url:
                 matchings = await _compute_osrm_chunk_matchings(chunk, osrm_url)
+                if not matchings:
+                    # Bounded retry (see _OSRM_CHUNK_RETRY_DELAY_S) before
+                    # falling through to Google Roads / raw-GPS fallback.
+                    await asyncio.sleep(_OSRM_CHUNK_RETRY_DELAY_S)
+                    matchings = await _compute_osrm_chunk_matchings(chunk, osrm_url)
                 if matchings:
                     provider = "osrm_match"
             if not matchings and google_api_key:

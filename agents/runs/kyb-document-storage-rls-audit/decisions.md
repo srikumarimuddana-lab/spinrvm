@@ -46,3 +46,87 @@
 **Why:** This run's own acceptance criteria (criterion 3) scope the `ACTION_ITEMS.md` update to describe what actually shipped (migration filename, final wording) — writing it now, before the migration exists, risks the update drifting from the real Stage 5 output. `STORAGE_BUCKETS.md` isn't named in the acceptance criteria at all; updating it preemptively would be scope creep this stage wasn't asked to take on, even though it's a reasonable follow-up.
 **Alternative(s) considered:** Update `ACTION_ITEMS.md` now with forward-looking language ("a migration is planned") — rejected as it would need a second edit once Stage 5 lands anyway, and CLAUDE.md's surgical-changes principle favors not touching a file twice for one logical change when once will do.
 **Reversible?** Yes — these are simply deferred to a later stage, not decided against.
+
+## Decision: A Change Impact & Risk Log entry is required for this diff
+**Stage:** Change Review
+**What was decided:** CLAUDE.md's Change Impact & Risk Log requirement applies here even though no application/route code changed. It requires the entry "for anything touching a live-tested surface (rides, dispatch, payments, auth, corporate, safety)" whenever a commit "fixes a bug, closes a gap, or changes existing behavior" — this diff closes the ACTION_ITEMS.md B12 storage-layer gap and writes to a live `storage.buckets` row that backs the corporate KYB onboarding flow, which is squarely the "corporate" surface named in that list. The entry is filled in below.
+**Why:** The migration is additive/idempotent and application-layer authorization is unchanged, but "no behavior change for a human" is not the same test CLAUDE.md sets — the test is whether the change touches a live-tested surface's live data, and a metadata write to a bucket that (per Stage 3-4/5's own finding) may already hold live, unaudited-by-this-repo corporate KYB documents clearly does. Skipping the log because "it's just a migration + tests" would be exactly the kind of silent judgment call CLAUDE.md's "Escalate, don't silently ship" rule warns against.
+**Alternative(s) considered:** Skip the log on the theory that additive/test-only changes with no route-code diff are exempt — rejected; CLAUDE.md draws the line at surface + gap-closing/behavior-adjacent, not at "did a `.py` route file change," and this migration's own comments acknowledge real uncertainty about the live bucket's current state, which is exactly the kind of risk the log exists to surface.
+**Reversible?** N/A — this is a documentation decision, not a code change.
+
+## Change Impact & Risk Log
+
+### Summary
+
+| Field | Value |
+|---|---|
+| Date | 2026-08-20 |
+| Author | Claude (Stage 8, Change Review) — spinr SDLC pipeline, run `kyb-document-storage-rls-audit` |
+| Surface(s) | backend |
+| Domain (Sentry tag) | corporate |
+| PR / commit link | commit `9f0492803` on branch `claude/rideshare-team-roles-w8wazs` (not pushed; no PR opened yet) |
+| Related issue or gap ID | ACTION_ITEMS.md B12 (storage-layer half: "verify KYB document Storage bucket RLS/access scoping (not confirmed in the audit)") |
+
+### 1. Issue / gap identified
+The `kyb-documents` Supabase Storage bucket — which holds corporate KYB (Know Your Business) verification documents (incorporation records, business licenses) — was created by hand in the Supabase dashboard and its intended posture (private, 10MB size limit, PDF/PNG/JPEG only) was never expressed in source control, unlike every other recently-provisioned bucket (migrations 202, 236, 339, 340). Nobody could confirm from the repo alone that the live bucket actually matches what the application code assumes. Separately, no existing test proved that a cross-tenant company or a non-admin member is denied on the two KYB *write* endpoints (`/kyb/upload-url`, `/kyb/submit`) specifically — only `GET /kyb` had member-role coverage, and no endpoint had cross-tenant coverage.
+
+### 2. Root cause
+`backend/docs/STORAGE_BUCKETS.md` documents a "create it once via the dashboard, then the app writes to it at runtime" workflow for this bucket that was never followed up with a migration, unlike the pattern established for later buckets. The missing test coverage is simply a gap that was never filled when the write endpoints were built — the tenancy/path-traversal string check was tested, but the `require_company_admin` dependency itself (the real boundary) was not separately exercised on the write paths.
+
+### 3. Fix / remediation
+Two additive, non-destructive changes, nothing else:
+1. `backend/migrations/354_kyb_documents_bucket_private.sql` — idempotent `INSERT ... ON CONFLICT (id) DO UPDATE` asserting `public=false`, `file_size_limit=10485760`, `allowed_mime_types={application/pdf,image/png,image/jpeg}` on the existing `kyb-documents` row in `storage.buckets`. No RLS policy is granted (correct, since every KYB storage call already goes through the service-role client, which bypasses RLS). Rollback is deliberately config-only (`UPDATE ... SET public = false`), not the `DROP`/`DELETE` pattern migration 340 used, because unlike 340's bucket this one is not net-new and may already hold live documents.
+2. `backend/tests/test_corporate_company_kyb.py` — four new tests (`test_upload_url_cross_tenant_403`, `test_upload_url_member_role_403`, `test_submit_cross_tenant_403`, `test_submit_member_role_403`) proving `require_company_admin` itself denies both a cross-tenant `company_id` and a non-admin member role on both write endpoints. No application code changed.
+
+### 4. Risk & impact on existing functionality
+- **What else reads/writes `kyb-documents`:** grepped the whole repo — exactly `backend/repositories/corporate_repo.py` (`kyb_object_exists()`, `create_kyb_upload_url()`) and `backend/routes/corporate_accounts.py` (`admin_view_kyb_document()`). Both use the service-role client; neither is modified by this diff. No other migration or RLS policy references this bucket. Blast radius: **isolated** (confirmed independently three times across Stages 3-4, 6, and 7 of this run, not merely re-asserted).
+- **What else calls `require_company_admin`** (the guard the new tests exercise, unmodified): `corporate_company_bookings.py` and `corporate_company.py` also depend on it for their own company-scoped endpoints. Neither is touched, and the guard function itself is unchanged, so their existing tests are unaffected.
+- **Could this regress a flow that currently works?** The migration only writes `storage.buckets` metadata — it never touches `storage.objects`, so no already-uploaded KYB document is read, moved, or affected. The one real risk: this migration asserts what the *application code* already assumes the live bucket's `public`/`file_size_limit`/`allowed_mime_types` values to be, but nobody on this run connected to the real Supabase project to confirm the live values match before writing them (see "What was NOT verified"). If the live bucket is currently *more permissive* (e.g., a wider MIME allow-list configured by hand at some point) than what the code enforces, applying this migration would tighten it — which is desired, not a regression, but it's an assumption, not a confirmed fact, and if the live bucket differs in a way nobody anticipated (e.g., `public=true` today for an undocumented reason), the migration would silently change that too.
+- **No interaction** with any of the 16 background loops, the ride state machine, or money/wallet deltas — this diff is entirely outside those systems.
+
+### 5. User-experience effect
+None. No rider, driver, corporate-admin, or internal-admin sees any difference — `require_company_admin`'s cross-tenant/role 403 already fires today; the new tests only prove existing behavior, they don't change it. The migration's only effect is on bucket-level metadata that the backend's service-role client already bypasses for its own authorization decisions. Nothing is visible mid-session to anyone.
+
+### 6. Files modified
+
+| File path | What changed | Why |
+|---|---|---|
+| `backend/migrations/354_kyb_documents_bucket_private.sql` | New. Idempotent upsert of `kyb-documents` bucket metadata (`public=false`, 10MB limit, PDF/PNG/JPEG only). | Closes the source-control drift gap (ACTION_ITEMS.md B12) — the live bucket's intended posture was previously undocumented anywhere in the repo. |
+| `backend/tests/test_corporate_company_kyb.py` | Extended. Added 4 tests for cross-tenant and member-role 403 on the two KYB write endpoints. | Closes the one denial path the existing suite didn't exercise on `/kyb/upload-url` and `/kyb/submit`. |
+
+### 7. Before / after
+Not applicable — this is pure additive code (a new migration file, new test functions) with no existing caller whose behavior changes. No before/after snippet is required per the template's own instruction ("only required for behavior-changing diffs").
+
+### 8. Rollback plan
+- **Migration:** `UPDATE storage.buckets SET public = false WHERE id = 'kyb-documents'; NOTIFY pgrst, 'reload schema';` — reverts the one field this repo has ever asserted a value for. This is a real, testable, non-destructive rollback (unlike a `DROP`/`DELETE`, which would destroy live corporate KYB documents this migration never uploaded and has no authority to remove — explicitly ruled out in the migration's own comment). Since the migration was never applied to any real environment by this run (no `DATABASE_URL`), there is nothing to roll back yet in practice; this rollback SQL is prepared for whenever a human does apply it.
+- **Tests:** plain `git revert` is sufficient — no data or live state is touched by adding test functions.
+
+### 9. Verification performed
+- [x] Automated tests run: `pytest tests/test_corporate_company_kyb.py -q` from `backend/` — **22 passed, 0 failed** (18 pre-existing + 4 new), independently re-run at Stage 8 (in addition to Stages 5, 6, and 7 each re-running it), same result every time.
+- [x] Migration SQL executed (not just read) against a local, non-production, throwaway Postgres 16 database at Stage 7 — `INSERT ... ON CONFLICT DO UPDATE` succeeded on first and second run (idempotency confirmed), values read back matched exactly. This is a syntax/shape check, not a production-equivalence guarantee (see below).
+- [x] Blast-radius grep performed: every reader/writer of the `kyb-documents` bucket and every caller of `require_company_admin`, listed in section 4 above and in `progress-report.md`'s Stage 3-4/6/7 sections.
+- [x] Reviewed against CLAUDE.md conventions: migration naming/sequencing (`backend/migrations/CLAUDE.md`), additive-over-destructive rollback rule, RLS/service-role authorization model, money/PII/insurance-period sections (all confirmed not applicable to this diff).
+- [ ] Manual repro steps followed in staging — **not done**; no staging environment access from this pipeline.
+- [ ] Feature-flagged — **not applicable**; nothing user-visible changes (see section 5), so CLAUDE.md's flag rule for "user-visible and non-trivial" changes does not apply here.
+- `ruff check` on the test file: clean, re-run independently at Stages 5, 6, and 7.
+- No production build applies — backend-only diff (SQL + Python test file), no `admin-dashboard`/`rider-app`/`driver-app` surface touched.
+
+### What was NOT verified (stated explicitly, per CLAUDE.md and GUARDRAILS.md)
+- **The live `kyb-documents` bucket's actual current `public`/`file_size_limit`/`allowed_mime_types` values were never inspected in the real Supabase project** — no stage of this run had a `DATABASE_URL` or Supabase credentials for it, and GUARDRAILS.md's hard stops forbid this pipeline from applying anything to production regardless. Every value in the migration is derived from what the *application code* assumes, not from a live read. This is the single largest open risk in this change and is exactly why it needs a human's eyes before Release, not just this pipeline's own passing checks.
+- **The migration was never applied to any Supabase instance, staging or production.** The Stage 7 local-Postgres execution check (a throwaway, non-Spinr scratch database) confirms the SQL is syntactically valid and the `ON CONFLICT DO UPDATE` is idempotent, but does not confirm it applies cleanly against the real `storage.buckets` table, which may have more columns, constraints, or triggers the scratch table didn't reproduce.
+- **No production build was run** — not applicable to this diff (backend-only).
+- **Only the single test file was run**, not the full backend suite or its coverage-gated command. The whole-suite coverage floor failure observed when running this file in isolation (20.95% vs. a 60% floor) is a pre-existing artifact of running one file against a codebase-wide coverage config, re-confirmed at Stages 5, 6, and 7 — not a regression from this diff.
+- **No live production storage access-log review** was performed to confirm the bucket has never been read by an unauthorized party — no path to production logs from this pipeline.
+
+### 10. Sign-off
+- [x] Rollback plan is concrete and testable (config-only `UPDATE`, explicitly not a destructive option).
+- [x] Blast radius is stated, not assumed (re-derived independently at three separate stages of this run).
+- [x] No silent behavior change to an already-shipped flow — section 5 states plainly that there is none.
+
+## Decision: Update ACTION_ITEMS.md's B12 entry post-pipeline
+
+**Stage:** Post-pipeline (human-directed follow-up, closing a stage-ownership gap)
+**What was decided:** Every pipeline stage (Ideation, Architecture, Development, Change Review) correctly deferred updating `ACTION_ITEMS.md`'s B12 entry — each one reasoned that it "wasn't the file this stage was scoped to touch" and that it should reflect the real shipped outcome, not a plan. That reasoning was right at each individual stage, but no stage actually owned doing it once the real outcome existed, so it fell through a gap between stages. Updated the B12 entry now to mark the KYB storage-layer sub-item DONE with the actual finding, migration filename, and what was/wasn't verified.
+**Why:** This was explicitly named in this run's own acceptance criteria (criterion 3) as required — just never actually executed by any stage. Leaving it undone would mean the next audit re-discovers the same "not confirmed" language and re-does this investigation from scratch.
+**Reversible?** Yes — a documentation-only edit to a tracking file, no code or schema affected.
+**Note for a future pipeline revision:** `agents/PIPELINE_DESIGN.md` doesn't currently assign explicit ownership of "update the source ACTION_ITEMS.md item once real output exists" to any single stage — Change Review or Release would be the natural owner. Worth fixing in a future pipeline-design pass so this doesn't require a manual catch each time.

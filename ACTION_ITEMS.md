@@ -5259,8 +5259,31 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   here so it isn't lost.
 - **Still open (out of scope for this pass, tracked here per the audit's own
   note):**
-  - KYB document Storage bucket RLS/access scoping — flagged "not confirmed"
-    by the audit; needs its own security-focused pass, not attempted here.
+  - ~~KYB document Storage bucket RLS/access scoping~~ **DONE (2026-08-20)**
+    — the security-focused pass happened. Finding: application-layer
+    authorization was already correctly scoped (`require_company_admin`
+    restricts the company portal per company; every KYB storage call goes
+    through the backend's service-role Supabase client, which bypasses
+    Postgres RLS entirely, so the real access boundary is the FastAPI route
+    guards, not Storage-layer RLS). The actual gap was verifiability, not
+    broken access control: the `kyb-documents` bucket was created by hand
+    in the Supabase dashboard and its intended posture (private, 10MB size
+    limit, PDF/PNG/JPEG only) was never expressed in source control, unlike
+    every other recently-provisioned bucket. Closed by
+    `backend/migrations/354_kyb_documents_bucket_private.sql` (idempotent,
+    metadata-only, config-only rollback — deliberately not the
+    `DROP`/`DELETE` pattern used for net-new buckets, since this one may
+    already hold live corporate documents) plus four new regression tests
+    in `backend/tests/test_corporate_company_kyb.py` proving cross-tenant
+    and non-admin-member 403s on both KYB write endpoints (previously only
+    `GET /kyb` had member-role coverage, and no endpoint had cross-tenant
+    coverage). **Not verified:** the live Supabase project's actual current
+    bucket configuration was never inspected — no stage had production
+    credentials, and applying anything to production is outside this
+    pipeline's authority regardless. Every value in the migration is
+    derived from what the application code already assumes, not confirmed
+    against the live bucket. Full detail:
+    `agents/runs/kyb-document-storage-rls-audit/{progress-report,decisions}.md`.
   - v2-deferred corporate scope (cost centers, approval workflows, SSO/HRIS)
     — see `docs/superpowers/specs/2026-04-15-corporate-accounts-b2b-design.md`.
 - **Files:** `backend/services/corporate_wallet_service.py`,

@@ -6,8 +6,13 @@ import { request } from "./client";
 import type { EarningsPeriod, MetricWithDelta } from "./earnings";
 
 /* ── Analytics ──────────────────────────── */
-export const getAnalyticsOverview = (dateRange = "30d") =>
-    request<any>(`/api/admin/analytics/overview?date_range=${dateRange}`);
+/** `serviceAreaId` omitted means all areas (migration 350 added the scope —
+ *  the headline KPI cards previously blended every market together). */
+export const getAnalyticsOverview = (dateRange = "30d", serviceAreaId?: string) => {
+    const sp = new URLSearchParams({ date_range: dateRange });
+    if (serviceAreaId) sp.set("service_area_id", serviceAreaId);
+    return request<any>(`/api/admin/analytics/overview?${sp.toString()}`);
+};
 
 /** Main-dashboard stat cards aggregated by time window + optional service area. */
 export const getDashboardOverview = (opts: { range?: string; service_area_id?: string | null } = {}) => {
@@ -20,8 +25,40 @@ export const getDashboardOverview = (opts: { range?: string; service_area_id?: s
 export const getCancellationBreakdown = (dateRange = "30d", serviceAreaId?: string) =>
     request<any>(`/api/admin/analytics/cancellation-reasons?date_range=${dateRange}${serviceAreaId ? `&service_area_id=${serviceAreaId}` : ''}`);
 
-export const getDriverAcceptanceRates = (dateRange = "30d", serviceAreaId?: string) =>
-    request<any>(`/api/admin/analytics/driver-acceptance?date_range=${dateRange}${serviceAreaId ? `&service_area_id=${serviceAreaId}` : ''}`);
+export type DriverAcceptanceSort =
+    // `completion_rate` is the honest name — this endpoint reports
+    // completed/assigned, not accepted/offered. `acceptance_rate` is kept as
+    // a deprecated alias the server still accepts.
+    | "completion_rate" | "acceptance_rate" | "cancellation_rate" | "total_rides"
+    | "completed" | "cancelled_by_driver" | "rating" | "name";
+
+export interface DriverAcceptanceOpts {
+    serviceAreaId?: string;
+    limit?: number;
+    offset?: number;
+    search?: string;
+    sortBy?: DriverAcceptanceSort;
+    order?: "asc" | "desc";
+    minRides?: number;
+    lowPerformersOnly?: boolean;
+}
+
+/** Paginated/sortable server-side — the summary counts cover the whole
+ *  filtered set, so `low_performer_count` stays reachable via
+ *  `lowPerformersOnly` (or an ascending sort) rather than being sliced off
+ *  the end of the default descending page. */
+export const getDriverAcceptanceRates = (dateRange = "30d", opts: DriverAcceptanceOpts = {}) => {
+    const sp = new URLSearchParams({ date_range: dateRange });
+    if (opts.serviceAreaId) sp.set("service_area_id", opts.serviceAreaId);
+    if (opts.limit != null) sp.set("limit", String(opts.limit));
+    if (opts.offset) sp.set("offset", String(opts.offset));
+    if (opts.search) sp.set("search", opts.search);
+    if (opts.sortBy) sp.set("sort_by", opts.sortBy);
+    if (opts.order) sp.set("order", opts.order);
+    if (opts.minRides) sp.set("min_rides", String(opts.minRides));
+    if (opts.lowPerformersOnly) sp.set("low_performers_only", "true");
+    return request<any>(`/api/admin/analytics/driver-acceptance?${sp.toString()}`);
+};
 
 export const getDriverOfferStats = (dateRange = "30d", serviceAreaId?: string) =>
     request<any>(`/api/admin/analytics/driver-offer-stats?date_range=${dateRange}${serviceAreaId ? `&service_area_id=${serviceAreaId}` : ''}`);
@@ -34,6 +71,43 @@ export const getDriverOfferTrends = (dateRange = "30d", opts?: { driverId?: stri
         `/api/admin/analytics/driver-offer-trends?${sp.toString()}`,
     );
 };
+
+/* ── Marketplace metrics (migrations 351/352) ─────────────── */
+
+/** One CLAUDE.md KPI target paired with its actual and a pass/fail verdict. */
+export interface KpiReading {
+    key: string;
+    label: string;
+    actual: number;
+    target: number;
+    direction: "min" | "max";
+    meeting_target: boolean;
+}
+
+const marketplaceQuery = (dateRange: string, serviceAreaId?: string) => {
+    const sp = new URLSearchParams({ date_range: dateRange });
+    if (serviceAreaId) sp.set("service_area_id", serviceAreaId);
+    return sp.toString();
+};
+
+/** requested → matched → accepted → completed, with per-stage drop-off. */
+export const getMarketplaceFunnel = (dateRange = "30d", serviceAreaId?: string) =>
+    request<any>(`/api/admin/analytics/marketplace-funnel?${marketplaceQuery(dateRange, serviceAreaId)}`);
+
+/** Online/en-route/on-trip hours and driver utilization, from the
+ *  driver_insurance_periods ledger. */
+export const getSupplyUtilization = (dateRange = "30d", serviceAreaId?: string) =>
+    request<any>(`/api/admin/analytics/supply-utilization?${marketplaceQuery(dateRange, serviceAreaId)}`);
+
+/** Time-to-match, assignment→trip-start, pickup ETA error, deadhead ratio.
+ *  Every percentile arrives with its sample size. */
+export const getEfficiencyMetrics = (dateRange = "30d", serviceAreaId?: string) =>
+    request<any>(`/api/admin/analytics/efficiency?${marketplaceQuery(dateRange, serviceAreaId)}`);
+
+/** Gross bookings (rider-paid volume, NOT company revenue — drivers keep
+ *  100% of the fare), fare composition, surge penetration, corporate mix. */
+export const getFinancialMetrics = (dateRange = "30d", serviceAreaId?: string) =>
+    request<any>(`/api/admin/analytics/financial?${marketplaceQuery(dateRange, serviceAreaId)}`);
 
 export const getDemandForecast = (hoursAhead = 24, areaId?: string) =>
     request<any>(`/api/admin/analytics/demand-forecast?hours_ahead=${hoursAhead}${areaId ? `&area_id=${areaId}` : ''}`);

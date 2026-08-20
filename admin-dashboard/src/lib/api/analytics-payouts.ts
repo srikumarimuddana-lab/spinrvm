@@ -69,6 +69,43 @@ export const getDriverOfferTrends = (dateRange = "30d", opts?: { driverId?: stri
     );
 };
 
+/* ── Marketplace metrics (migrations 351/352) ─────────────── */
+
+/** One CLAUDE.md KPI target paired with its actual and a pass/fail verdict. */
+export interface KpiReading {
+    key: string;
+    label: string;
+    actual: number;
+    target: number;
+    direction: "min" | "max";
+    meeting_target: boolean;
+}
+
+const marketplaceQuery = (dateRange: string, serviceAreaId?: string) => {
+    const sp = new URLSearchParams({ date_range: dateRange });
+    if (serviceAreaId) sp.set("service_area_id", serviceAreaId);
+    return sp.toString();
+};
+
+/** requested → matched → accepted → completed, with per-stage drop-off. */
+export const getMarketplaceFunnel = (dateRange = "30d", serviceAreaId?: string) =>
+    request<any>(`/api/admin/analytics/marketplace-funnel?${marketplaceQuery(dateRange, serviceAreaId)}`);
+
+/** Online/en-route/on-trip hours and driver utilization, from the
+ *  driver_insurance_periods ledger. */
+export const getSupplyUtilization = (dateRange = "30d", serviceAreaId?: string) =>
+    request<any>(`/api/admin/analytics/supply-utilization?${marketplaceQuery(dateRange, serviceAreaId)}`);
+
+/** Time-to-match, assignment→trip-start, pickup ETA error, deadhead ratio.
+ *  Every percentile arrives with its sample size. */
+export const getEfficiencyMetrics = (dateRange = "30d", serviceAreaId?: string) =>
+    request<any>(`/api/admin/analytics/efficiency?${marketplaceQuery(dateRange, serviceAreaId)}`);
+
+/** Gross bookings (rider-paid volume, NOT company revenue — drivers keep
+ *  100% of the fare), fare composition, surge penetration, corporate mix. */
+export const getFinancialMetrics = (dateRange = "30d", serviceAreaId?: string) =>
+    request<any>(`/api/admin/analytics/financial?${marketplaceQuery(dateRange, serviceAreaId)}`);
+
 export const getDemandForecast = (hoursAhead = 24, areaId?: string) =>
     request<any>(`/api/admin/analytics/demand-forecast?hours_ahead=${hoursAhead}${areaId ? `&area_id=${areaId}` : ''}`);
 

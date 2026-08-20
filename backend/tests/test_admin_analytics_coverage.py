@@ -688,3 +688,214 @@ class TestReginaBucketingMigration:
     def test_area_predicate_present_on_both_functions(self):
         body = self._body(self._sql())
         assert body.count("p_service_area_id IS NULL OR service_area_id::text = p_service_area_id") == 2
+
+
+# ── marketplace funnel + supply utilization (migration 351) ───────────
+
+
+_UNSET = object()  # distinguishes "no payload given" from an empty {} payload
+
+
+class TestMarketplaceFunnel:
+    FUNNEL = {
+        "requested": 100,
+        "matched": 90,
+        "accepted": 80,
+        "completed": 72,
+        "cancelled": 20,
+        "in_flight": 8,
+        "no_supply": 6,
+        "cancels_by_party": {"rider": 9, "driver": 2, "system": 6, "unknown": 3},
+        "cancels_unattributed_fallback": 3,
+        "daily": [{"date": "2026-08-19", "requested": 50}],
+    }
+
+    def _call(self, admin_client, payload=_UNSET, **params):
+        # Sentinel, not `payload or DEFAULT` — an intentionally empty {} payload
+        # is falsy and would otherwise silently fall back to the fixture.
+        body = self.FUNNEL if payload is _UNSET else payload
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(return_value=[body])),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock()),
+        ):
+            return admin_client.get("/api/admin/analytics/marketplace-funnel", params=params)
+
+    def test_stages_and_dropoff(self, admin_client):
+        data = self._call(admin_client).json()
+        assert [s["count"] for s in data["stages"]] == [100, 90, 80, 72]
+        assert data["dropoff"] == {
+            "request_to_match": 10,
+            "match_to_accept": 10,
+            "accept_to_complete": 8,
+        }
+
+    def test_rates_are_computed_against_requested(self, admin_client):
+        r = self._call(admin_client).json()["rates"]
+        assert r["match_rate"] == 90.0
+        assert r["fulfilment_rate"] == 72.0
+        assert r["rider_cancel_rate"] == 9.0
+        assert r["driver_cancel_rate"] == 2.0
+        assert r["unmet_demand_rate"] == 6.0
+
+    def test_kpis_carry_claude_md_targets_and_verdicts(self, admin_client):
+        kpis = {k["key"]: k for k in self._call(admin_client).json()["kpis"]}
+        # match rate 90 >= target 85 -> meeting
+        assert kpis["match_rate"]["target"] == 85.0
+        assert kpis["match_rate"]["meeting_target"] is True
+        # rider cancels 9 > target 8 -> NOT meeting (max-direction)
+        assert kpis["rider_cancel_rate"]["direction"] == "max"
+        assert kpis["rider_cancel_rate"]["meeting_target"] is False
+        # driver cancels 2 <= target 3 -> meeting
+        assert kpis["driver_cancel_rate"]["meeting_target"] is True
+
+    def test_unattributed_fallback_count_is_surfaced(self, admin_client):
+        """Operators must be able to see how much of the split is string-matched."""
+        assert self._call(admin_client).json()["cancels_unattributed_fallback"] == 3
+
+    def test_empty_window_does_not_divide_by_zero(self, admin_client):
+        data = self._call(admin_client, payload={}).json()
+        assert data["rates"]["match_rate"] == 0.0
+        assert data["rates"]["fulfilment_rate"] == 0.0
+        assert all(s["count"] == 0 for s in data["stages"])
+
+    def test_service_area_is_forwarded(self, admin_client):
+        rpc = AsyncMock(return_value=[self.FUNNEL])
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", rpc),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock()),
+        ):
+            admin_client.get("/api/admin/analytics/marketplace-funnel", params={"service_area_id": "regina"})
+        assert rpc.await_args.args[1]["p_service_area_id"] == "regina"
+
+    def test_rpc_error_returns_503_not_a_half_valid_payload(self, admin_client):
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(side_effect=RuntimeError("boom"))),
+        ):
+            resp = admin_client.get("/api/admin/analytics/marketplace-funnel")
+        assert resp.status_code == 503
+
+    def test_cache_hit_skips_the_rpc(self, admin_client):
+        import json
+
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=json.dumps({"cached": True}))),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(side_effect=AssertionError("should not run"))),
+        ):
+            assert admin_client.get("/api/admin/analytics/marketplace-funnel").json() == {"cached": True}
+
+
+class TestSupplyUtilization:
+    SUPPLY = {
+        "idle_seconds": 36000,  # 10h
+        "en_route_seconds": 7200,  # 2h
+        "on_trip_seconds": 28800,  # 8h
+        "online_seconds": 72000,  # 20h
+        "utilization_pct": 40.0,
+        "engaged_pct": 50.0,
+        "active_drivers": 4,
+        "daily": [],
+    }
+
+    def _call(self, admin_client, payload=_UNSET, **params):
+        body = self.SUPPLY if payload is _UNSET else payload
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(return_value=[body])),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock()),
+        ):
+            return admin_client.get("/api/admin/analytics/supply-utilization", params=params)
+
+    def test_seconds_convert_to_hours(self, admin_client):
+        data = self._call(admin_client).json()
+        assert data["online_hours"] == 20.0
+        assert data["on_trip_hours"] == 8.0
+        assert data["idle_hours"] == 10.0
+        assert data["en_route_hours"] == 2.0
+
+    def test_reports_both_utilization_readings(self, admin_client):
+        """utilization_pct and engaged_pct must not be conflated."""
+        data = self._call(admin_client).json()
+        assert data["utilization_pct"] == 40.0
+        assert data["engaged_pct"] == 50.0
+
+    def test_utilization_kpi_against_the_55_percent_target(self, admin_client):
+        kpi = self._call(admin_client).json()["kpis"][0]
+        assert kpi["key"] == "utilization_pct"
+        assert kpi["target"] == 55.0
+        assert kpi["meeting_target"] is False  # 40 < 55
+
+    def test_avg_online_hours_per_driver(self, admin_client):
+        assert self._call(admin_client).json()["avg_online_hours_per_driver"] == 5.0
+
+    def test_no_active_drivers_does_not_divide_by_zero(self, admin_client):
+        data = self._call(admin_client, payload={"online_seconds": 0, "active_drivers": 0}).json()
+        assert data["avg_online_hours_per_driver"] == 0.0
+        assert data["online_hours"] == 0.0
+
+    def test_window_bounds_are_forwarded_to_the_rpc(self, admin_client):
+        """The RPC clamps open periods to p_end, so it must receive one."""
+        rpc = AsyncMock(return_value=[self.SUPPLY])
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", rpc),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock()),
+        ):
+            admin_client.get("/api/admin/analytics/supply-utilization")
+        args = rpc.await_args.args[1]
+        assert args["p_start"] and args["p_end"]
+        assert args["p_end"] > args["p_start"]
+
+    def test_rpc_error_returns_503(self, admin_client):
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(side_effect=RuntimeError("boom"))),
+        ):
+            assert admin_client.get("/api/admin/analytics/supply-utilization").status_code == 503
+
+
+class TestMarketplaceMigration351:
+    """Static checks on migration 351 — no database is available to run it."""
+
+    @staticmethod
+    def _body() -> str:
+        from pathlib import Path
+
+        p = Path(__file__).resolve().parents[1] / "migrations" / "351_marketplace_funnel_and_supply_fns.sql"
+        return "\n".join(ln for ln in p.read_text().split("\n") if not ln.lstrip().startswith("--"))
+
+    def test_funnel_excludes_legacy_imports(self):
+        assert "legacy_import_metadata = '{}'::jsonb" in self._body()
+
+    def test_buckets_are_regina_never_utc(self):
+        body = self._body()
+        assert "AT TIME ZONE 'UTC'" not in body
+        assert body.count("America/Regina") == 2
+
+    def test_both_functions_are_locked_down(self):
+        body = self._body()
+        assert body.count("REVOKE EXECUTE") == 2
+        assert body.count("SECURITY DEFINER") == 2
+        assert body.count("SET search_path = public, pg_catalog") == 2
+
+    def test_ships_the_index_for_its_own_new_query_pattern(self):
+        """driver_insurance_periods had no started_at index before this."""
+        assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dip_started_at" in self._body()
+
+    def test_periods_are_clamped_to_the_window(self):
+        """Without the clamp, a driver online for a month inflates a 7-day window."""
+        body = self._body()
+        assert "GREATEST(p.started_at, p_start)" in body
+        assert "LEAST(COALESCE(p.ended_at, p_end), p_end)" in body
+
+    def test_period_zero_is_excluded_from_online_time(self):
+        """Period 0 is app-off — counting it as online would sink utilization."""
+        assert "p.period > 0" in self._body()
+
+    def test_cancellation_attribution_prefers_structured_columns(self):
+        """Migration 38 added these expressly to stop reason-string parsing."""
+        body = self._body()
+        assert "cancelled_by IN ('rider', 'driver', 'admin', 'system')" in body
+        assert "cancellation_type = 'no_drivers_found'" in body

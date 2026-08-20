@@ -29,6 +29,36 @@ _OVERVIEW_CACHE_TTL = 300  # 5 minutes
 # label its axes rather than rendering a bare, ambiguous "14:00".
 _ANALYTICS_TZ = "America/Regina"
 
+# Business KPI targets, quoted from CLAUDE.md's "KPI Targets" table so the
+# dashboard can render actual-vs-target instead of a bare number an operator
+# has to remember the threshold for. `direction` says which side is healthy.
+_KPI_TARGETS: dict = {
+    "match_rate": {"target": 85.0, "direction": "min", "label": "Match rate"},
+    "rider_cancel_rate": {"target": 8.0, "direction": "max", "label": "Rider cancellation rate"},
+    "driver_cancel_rate": {"target": 3.0, "direction": "max", "label": "Driver cancellation rate"},
+    "utilization_pct": {"target": 55.0, "direction": "min", "label": "Driver utilization"},
+}
+
+
+def _pct(numerator: float, denominator: float) -> float:
+    """Percentage, or 0.0 when the denominator is empty. Display-only — not money."""
+    return round(numerator / denominator * 100, 1) if denominator else 0.0
+
+
+def _kpi(key: str, actual: float) -> dict:
+    """Pair an actual with its CLAUDE.md target and whether it is being met."""
+    spec = _KPI_TARGETS[key]
+    meeting = actual >= spec["target"] if spec["direction"] == "min" else actual <= spec["target"]
+    return {
+        "key": key,
+        "label": spec["label"],
+        "actual": actual,
+        "target": spec["target"],
+        "direction": spec["direction"],
+        "meeting_target": meeting,
+    }
+
+
 # Upper bound on how many driver rows one acceptance-rate request will scan.
 # Hitting it sets `scan_truncated` in the response rather than silently
 # returning a partial list.
@@ -843,3 +873,205 @@ async def get_driver_offer_trends(
         "service_area_id": service_area_id,
         "daily_chart": daily_chart,
     }
+
+
+# ── Marketplace funnel ───────────────────────────────────────────────
+
+
+@api_router.get("/marketplace-funnel")
+async def get_marketplace_funnel(
+    date_range: str = Query("30d", pattern="^(today|7d|30d|90d|1y)$"),
+    service_area_id: Optional[str] = None,
+    admin: dict = Depends(get_admin_user),
+):
+    """Request -> matched -> accepted -> completed, with drop-off per stage.
+
+    This is the "is the marketplace working" view. Three of CLAUDE.md's KPI
+    targets (match rate, rider cancellation rate, driver cancellation rate)
+    had no surface anywhere in the dashboard before this endpoint; the
+    Analytics page showed a single blended cancellation rate that mapped to
+    neither of the two cancellation targets.
+
+    Aggregated in Postgres (admin_marketplace_funnel, migration 351).
+    Cached 5 min, per range + area.
+    """
+    import json as _json
+
+    cache_key = f"analytics:marketplace-funnel:v1:{date_range}:{service_area_id or 'all'}"
+    cached = await redis_get(cache_key)
+    if cached:
+        try:
+            return _json.loads(cached)
+        except Exception:  # noqa: S110
+            pass  # corrupt cache entry — fall through to fresh fetch
+
+    start_date = _parse_date_range(date_range)
+    now = datetime.now(timezone.utc)
+
+    try:
+        fn = await db.rpc(
+            "admin_marketplace_funnel",
+            {
+                "p_start": start_date.isoformat(),
+                "p_end": now.isoformat(),
+                "p_service_area_id": service_area_id,
+            },
+        )
+    except Exception as e:
+        logger.error(
+            f"Failed to aggregate marketplace funnel: {e}",
+            exc_info=True,
+            extra={"domain": "admin"},
+        )
+        raise HTTPException(status_code=503, detail="analytics_unavailable") from e
+
+    fn = fn[0] if isinstance(fn, list) and fn else fn
+    if not isinstance(fn, dict):
+        fn = {}
+
+    requested = int(fn.get("requested") or 0)
+    matched = int(fn.get("matched") or 0)
+    accepted = int(fn.get("accepted") or 0)
+    completed = int(fn.get("completed") or 0)
+    cancelled = int(fn.get("cancelled") or 0)
+    no_supply = int(fn.get("no_supply") or 0)
+    by_party = fn.get("cancels_by_party") or {}
+
+    rider_cancels = int(by_party.get("rider") or 0)
+    driver_cancels = int(by_party.get("driver") or 0)
+
+    result = {
+        "date_range": date_range,
+        "service_area_id": service_area_id,
+        "timezone": _ANALYTICS_TZ,
+        # Absolute stage counts — the funnel itself.
+        "stages": [
+            {"key": "requested", "label": "Requested", "count": requested},
+            {"key": "matched", "label": "Driver matched", "count": matched},
+            {"key": "accepted", "label": "Driver accepted", "count": accepted},
+            {"key": "completed", "label": "Completed", "count": completed},
+        ],
+        # Drop-off between consecutive stages, so the worst step is obvious.
+        "dropoff": {
+            "request_to_match": requested - matched,
+            "match_to_accept": matched - accepted,
+            "accept_to_complete": accepted - completed,
+        },
+        "in_flight": int(fn.get("in_flight") or 0),
+        "cancelled": cancelled,
+        "no_supply": no_supply,
+        "cancels_by_party": by_party,
+        # How much of the split rests on legacy reason-string matching rather
+        # than the structured columns — surfaced, not hidden.
+        "cancels_unattributed_fallback": int(fn.get("cancels_unattributed_fallback") or 0),
+        "rates": {
+            "match_rate": _pct(matched, requested),
+            "acceptance_rate": _pct(accepted, requested),
+            "fulfilment_rate": _pct(completed, requested),
+            "cancellation_rate": _pct(cancelled, requested),
+            "rider_cancel_rate": _pct(rider_cancels, requested),
+            "driver_cancel_rate": _pct(driver_cancels, requested),
+            "unmet_demand_rate": _pct(no_supply, requested),
+        },
+        "kpis": [
+            _kpi("match_rate", _pct(matched, requested)),
+            _kpi("rider_cancel_rate", _pct(rider_cancels, requested)),
+            _kpi("driver_cancel_rate", _pct(driver_cancels, requested)),
+        ],
+        "daily": fn.get("daily") or [],
+    }
+    try:
+        await redis_set(cache_key, _json.dumps(result), ttl=_OVERVIEW_CACHE_TTL)
+    except Exception:  # noqa: S110
+        pass  # Redis unavailable — return fresh result uncached
+    return result
+
+
+# ── Supply & driver utilization ──────────────────────────────────────
+
+
+@api_router.get("/supply-utilization")
+async def get_supply_utilization(
+    date_range: str = Query("30d", pattern="^(today|7d|30d|90d|1y)$"),
+    service_area_id: Optional[str] = None,
+    admin: dict = Depends(get_admin_user),
+):
+    """Online / en-route / on-trip hours and driver utilization.
+
+    Derived from the append-only ``driver_insurance_periods`` ledger — the
+    same rows the SGI/Saskatchewan Transportation Act audit trail is built
+    from — so utilization can never disagree with the regulatory record.
+
+    Reports utilization two ways on purpose: ``utilization_pct`` is
+    CLAUDE.md's stated on-trip/online definition (target >= 55%), while
+    ``engaged_pct`` counts Period 2 (en route to pickup) as working, which is
+    how a driver experiences it. Quoting only one invites the two readings to
+    be conflated.
+
+    Aggregated in Postgres (admin_supply_utilization, migration 351).
+    Cached 5 min, per range + area.
+    """
+    import json as _json
+
+    cache_key = f"analytics:supply-utilization:v1:{date_range}:{service_area_id or 'all'}"
+    cached = await redis_get(cache_key)
+    if cached:
+        try:
+            return _json.loads(cached)
+        except Exception:  # noqa: S110
+            pass  # corrupt cache entry — fall through to fresh fetch
+
+    start_date = _parse_date_range(date_range)
+    now = datetime.now(timezone.utc)
+
+    try:
+        su = await db.rpc(
+            "admin_supply_utilization",
+            {
+                "p_start": start_date.isoformat(),
+                "p_end": now.isoformat(),
+                "p_service_area_id": service_area_id,
+            },
+        )
+    except Exception as e:
+        logger.error(
+            f"Failed to aggregate supply utilization: {e}",
+            exc_info=True,
+            extra={"domain": "admin"},
+        )
+        raise HTTPException(status_code=503, detail="analytics_unavailable") from e
+
+    su = su[0] if isinstance(su, list) and su else su
+    if not isinstance(su, dict):
+        su = {}
+
+    def _hours(seconds_key: str) -> float:
+        return round(float(su.get(seconds_key) or 0) / 3600.0, 2)
+
+    online_hours = _hours("online_seconds")
+    on_trip_hours = _hours("on_trip_seconds")
+    active_drivers = int(su.get("active_drivers") or 0)
+    utilization = float(su.get("utilization_pct") or 0)
+
+    result = {
+        "date_range": date_range,
+        "service_area_id": service_area_id,
+        "timezone": _ANALYTICS_TZ,
+        "online_hours": online_hours,
+        "idle_hours": _hours("idle_seconds"),
+        "en_route_hours": _hours("en_route_seconds"),
+        "on_trip_hours": on_trip_hours,
+        "utilization_pct": utilization,
+        "engaged_pct": float(su.get("engaged_pct") or 0),
+        "active_drivers": active_drivers,
+        # Average online hours per driver who was online at all in the window —
+        # the supply-depth question "are a few drivers carrying everything?"
+        "avg_online_hours_per_driver": round(online_hours / active_drivers, 2) if active_drivers else 0.0,
+        "kpis": [_kpi("utilization_pct", utilization)],
+        "daily": su.get("daily") or [],
+    }
+    try:
+        await redis_set(cache_key, _json.dumps(result), ttl=_OVERVIEW_CACHE_TTL)
+    except Exception:  # noqa: S110
+        pass  # Redis unavailable — return fresh result uncached
+    return result

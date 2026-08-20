@@ -852,6 +852,15 @@ def _fetch_legacy_rides_for_duration_backfill() -> list[dict[str, Any]]:
     Selects id/ride_started_at/legacy_import_metadata rather than '*' — this
     backfill has no reason to pull fare/address/PII columns into memory for a
     marker-only operation.
+
+    Single unpaginated query, matching this file's own `_fetch_already_imported`
+    (same filter, same table) rather than `legacy_gst_backfill_service.py`'s
+    `.range()`-paginated sibling query — as of the 2026-08-18 insurance-period
+    backfill audit (migration 332) there are 186 legacy-imported rides total,
+    well under any PostgREST default row cap. If the legacy-imported row count
+    ever grows past that (e.g. a much larger future migration), add the same
+    `.range()` pagination `legacy_gst_backfill_service._fetch_rows_missing_field`
+    already uses before relying on this function returning every row.
     """
     rows = (
         supabase.table("rides")

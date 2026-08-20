@@ -1,5 +1,10 @@
 # Change Impact & Risk Log
 
+> **Update, later on 2026-08-19:** the `payments.py` 86.1%-vs-90%-target escalation this doc
+> raises (§6, §8) was closed the same day — see
+> `docs/change-log/2026-08-19-payments-coverage-gap-closure-fix.md`. This doc is left as-written
+> below (the historical record of the gate's introduction), not edited retroactively.
+
 ## Summary
 
 | Field | Value |

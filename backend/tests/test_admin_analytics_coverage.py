@@ -1186,3 +1186,68 @@ class TestDriverMetricNaming:
     def test_low_performer_rule_reads_the_new_key(self, admin_client):
         drivers, acc, users = _acc_fixture(n_good=1, n_low=2)
         assert self._call(admin_client, drivers, acc, users).json()["low_performer_count"] == 2
+
+
+# ── migration 353: SECURITY DEFINER lockdown sweep ────────────────────
+
+
+class TestSecurityDefinerLockdownMigration:
+    """Migration 353 codifies a production hotfix.
+
+    18 SECURITY DEFINER functions in `public` were `anon`-executable in
+    production because `REVOKE ... FROM anon, authenticated` is a no-op —
+    Postgres grants EXECUTE to PUBLIC on CREATE FUNCTION. The grants were
+    corrected directly against the live database, so this migration is a
+    no-op there; it exists so an environment rebuilt from migrations does
+    not come back vulnerable.
+    """
+
+    @staticmethod
+    def _body() -> str:
+        from pathlib import Path
+
+        p = Path(__file__).resolve().parents[1] / "migrations" / "353_revoke_public_execute_on_security_definer_fns.sql"
+        return "\n".join(ln for ln in p.read_text().split("\n") if not ln.lstrip().startswith("--"))
+
+    def test_revokes_from_public_not_just_the_named_roles(self):
+        """Naming only anon/authenticated is precisely the bug being fixed."""
+        assert "FROM PUBLIC, anon, authenticated" in self._body()
+
+    def test_grants_service_role_in_the_same_loop_as_the_revoke(self):
+        """A revoke without this strands the backend, which is service_role."""
+        body = self._body()
+        assert "GRANT EXECUTE ON FUNCTION %s TO service_role" in body
+        revoke_at = body.index("REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC")
+        grant_at = body.index("GRANT EXECUTE ON FUNCTION %s TO service_role")
+        assert grant_at > revoke_at, "grant must follow the revoke inside the loop body"
+
+    def test_scoped_to_security_definer_functions_only(self):
+        """A blanket sweep over every function would be far wider than the defect."""
+        body = self._body()
+        assert "p.prosecdef" in body
+        assert "n.nspname = 'public'" in body
+
+    def test_sweeps_rather_than_hardcoding_a_name_list(self):
+        """The defect is a copied pattern, so a fixed list would go stale."""
+        body = self._body()
+        assert "FOR f IN" in body
+        assert "wallet_pay_for_ride" not in body, "should not hardcode signatures in the executable body"
+
+    def test_names_each_function_it_touches(self):
+        """Silent bulk privilege changes are not auditable."""
+        assert "RAISE NOTICE 'migration 353: locked down %'" in self._body()
+
+    def test_reports_a_clean_no_op(self):
+        """Expected outcome against production, which is already corrected."""
+        assert "no-op" in self._body()
+
+    def test_has_a_failing_post_condition(self):
+        """A half-applied lockdown must not report success."""
+        body = self._body()
+        assert "RAISE EXCEPTION" in body
+        assert "post-condition failed" in body
+
+    def test_checks_both_anon_and_authenticated(self):
+        body = self._body()
+        assert body.count("has_function_privilege('anon'") >= 2
+        assert body.count("has_function_privilege('authenticated'") >= 2

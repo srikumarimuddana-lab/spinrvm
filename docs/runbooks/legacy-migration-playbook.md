@@ -343,13 +343,19 @@ rushed).
 8. **Explicit include/exclude sign-off, recorded per collection**, for every `REVIEW`-tagged
    collection from the inventory doc — a silent drop at decommission time is not acceptable for
    data about to become permanently unrecoverable.
-   > **[RE-VERIFIED 2026-08-20 — STILL ACCURATE AS WRITTEN.]** Today's PRs made per-field decisions
-   > for two specific collections already flagged in the inventory (`banks.csv` → SIN+DOB narrow
-   > backfill, item #6; `driverlocationlogs.csv` and `vehicle_details.csv` referenced as future
-   > source material for items #4/#5(a) but not yet acted on) — that is progress on individual
-   > `REVIEW` rows, not the systematic "sign-off recorded per collection, for every `REVIEW`-tagged
-   > collection" sweep this item calls for. No evidence any of today's PRs revisited the full
-   > inventory doc's `REVIEW` list as a checklist. Still open as a systematic pass.
+   > **[RE-VERIFIED 2026-08-20, SEVENTH PASS — FULLY ADDRESSED.]** The systematic sweep this item
+   > calls for is now done: every `REVIEW`-tagged collection in
+   > `docs/audit/2026-08-19-full-mongodb-export-collection-inventory.md` has an explicit, recorded
+   > include/exclude decision (see that file's new "Sign-off recorded (2026-08-20)" section at the
+   > top). Put to the product owner directly via `AskUserQuestion` — not inferred: apply the audit's
+   > own recommended defaults across all remaining collections (exclude coupons/old-subscriptions/
+   > referral-config/doc-history/chat-history/complaints/ratings-carryover, and confirm
+   > `servicelocations`' India-region rows as dev/template cruft) rather than a case-by-case review.
+   > `banks.csv` was already resolved via item #6. Two residual, non-blocking, low-priority gaps
+   > remain and are explicitly flagged as unverified rather than silently assumed: `pages.csv`'s and
+   > `faqs.csv`'s specific "diff against live app content" sub-asks (findings #7 and the `faqs` row)
+   > were never import candidates either way, so neither creates new migration risk — just an
+   > unverified content-completeness question for a future session with live-app-content access.
 9. **Never-import list re-confirmed against the Oct 30 export specifically** (`sessions.csv`,
    `admins.csv` from the 07-26 snapshot) — verify the new pull doesn't introduce an equivalent-
    sensitivity collection the earlier snapshot didn't have.

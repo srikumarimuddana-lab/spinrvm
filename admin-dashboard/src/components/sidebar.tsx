@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
     LayoutDashboard, Car, Users, DollarSign, Settings, MapPin, Ticket,
@@ -9,9 +9,10 @@ import {
     Menu, X,
     Shield, ShieldAlert, Cloud, Trophy, Activity,
     Inbox, Clock, Headphones, BarChart3, Sparkles, Gift, Upload, FileText, Bug, Mail, Gavel,
+    PackageSearch, Flag, FileWarning, ScrollText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useState, useEffect } from "react";
+import { Suspense, useState, useEffect } from "react";
 import { useAuthStore } from "@/store/authStore";
 import { useSidebarStore } from "@/store/sidebarStore";
 import { getApprovalQueue, getExpiringDocs } from "@/lib/api";
@@ -118,14 +119,33 @@ const NAV_GROUPS: NavGroup[] = [
     {
         title: "Support",
         items: [
-            { href: "/dashboard/support", label: "Support & Issues", icon: LifeBuoy, module: "support" },
+            {
+                href: "/dashboard/support",
+                label: "Support & Issues",
+                icon: LifeBuoy,
+                module: "support",
+                // Real nav children only for the sub-views with no other nav
+                // entry. Disputes and FAQs deliberately excluded — each
+                // already has its own top-level entry below, and both are
+                // covered by a separate documented decision not to merge
+                // them into this page (see support/_tabs/{disputes,faqs}.tsx)
+                // — adding a second nav path to an already-unreconciled pair
+                // would add duplication, not remove it (IA audit, Finding G).
+                children: [
+                    { href: "/dashboard/support?tab=tickets", label: "Support Tickets", icon: LifeBuoy, module: "support" },
+                    { href: "/dashboard/support?tab=complaints", label: "Complaints", icon: FileWarning, module: "support" },
+                    { href: "/dashboard/support?tab=lost-found", label: "Lost & Found", icon: PackageSearch, module: "support" },
+                    { href: "/dashboard/support?tab=flags", label: "Flags", icon: Flag, module: "support" },
+                    { href: "/dashboard/support?tab=legal", label: "Legal", icon: ScrollText, module: "support" },
+                ],
+            },
             {
                 href: "/dashboard/support-tickets",
                 label: "Help Desk",
                 icon: Headphones,
                 module: "support_tickets",
                 children: [
-                    { href: "/dashboard/support-tickets/tickets", label: "Tickets", icon: Inbox, module: "support_tickets" },
+                    { href: "/dashboard/support-tickets/tickets", label: "Zoho Tickets", icon: Inbox, module: "support_tickets" },
                     { href: "/dashboard/support-tickets/trends", label: "Trends", icon: BarChart3, module: "support_tickets" },
                 ],
             },
@@ -185,8 +205,12 @@ const NAV_GROUPS: NavGroup[] = [
     },
 ];
 
-export function Sidebar() {
+function SidebarInner() {
     const pathname = usePathname();
+    // Only needed for the Support & Issues nav children added in Finding G
+    // (IA audit) — their href carries a `?tab=` query param, which
+    // usePathname() strips, so highlighting them needs the actual query too.
+    const searchParams = useSearchParams();
     const [mobileOpen, setMobileOpen] = useState(false);
     const collapsed = useSidebarStore((s) => s.collapsed);
     const hydrateSidebar = useSidebarStore((s) => s.hydrate);
@@ -248,6 +272,22 @@ export function Sidebar() {
         return null;
     };
 
+    // Shared active-route check for both parents and children. Handles two
+    // shapes: a plain route (existing behaviour, unchanged — exact match or
+    // the current pathname starts with it) and a `?tab=` query-param route
+    // (Support & Issues' children, Finding G) — those share one pathname
+    // with 6 other tabs, so highlighting needs the query too, not just the
+    // path.
+    const isActiveHref = (href: string): boolean => {
+        const [path, query] = href.split("?");
+        if (!query) {
+            return pathname === href || (href !== "/dashboard" && pathname.startsWith(href));
+        }
+        if (pathname !== path) return false;
+        const wantTab = new URLSearchParams(query).get("tab");
+        return wantTab != null && searchParams.get("tab") === wantTab;
+    };
+
     return (
         <>
             <Button variant="ghost" size="icon" className="fixed top-4 left-4 z-50 md:hidden" onClick={() => setMobileOpen(!mobileOpen)}>
@@ -290,8 +330,7 @@ export function Sidebar() {
                                 )}
                                 {collapsed && gi > 0 && <div className="border-t border-sidebar-border my-1" />}
                                 {visibleItems.map((item) => {
-                                    const active = pathname === item.href ||
-                                        (item.href !== "/dashboard" && pathname.startsWith(item.href));
+                                    const active = isActiveHref(item.href);
                                     // Filter children the same way we filtered the parent group
                                     // — admin/super_admin always see them; other staff only see
                                     // children whose module they hold.
@@ -329,7 +368,7 @@ export function Sidebar() {
                                             {childItems.length > 0 && (
                                                 collapsed ? (
                                                     childItems.map(child => {
-                                                        const childActive = pathname === child.href || pathname.startsWith(child.href);
+                                                        const childActive = isActiveHref(child.href);
                                                         const childBadge = badgeFor(child.href);
                                                         return (
                                                             <Link
@@ -362,7 +401,7 @@ export function Sidebar() {
                                                 ) : (
                                                     <div className="ml-[18px] pl-3 border-l border-sidebar-border/50 my-0.5">
                                                         {childItems.map(child => {
-                                                            const childActive = pathname === child.href || pathname.startsWith(child.href);
+                                                            const childActive = isActiveHref(child.href);
                                                             const childBadge = badgeFor(child.href);
                                                             return (
                                                                 <Link
@@ -407,5 +446,18 @@ export function Sidebar() {
                     footer entirely rather than duplicated in both places. */}
             </aside>
         </>
+    );
+}
+
+export function Sidebar() {
+    // useSearchParams (added for the Support & Issues query-param children,
+    // Finding G) requires a Suspense boundary in the App Router. The
+    // sidebar renders on every /dashboard/* route already, so a null
+    // fallback here would only ever show for one initial paint before
+    // hydration, same tradeoff records/page.tsx already accepts.
+    return (
+        <Suspense fallback={null}>
+            <SidebarInner />
+        </Suspense>
     );
 }

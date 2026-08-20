@@ -136,3 +136,65 @@ describe('rideStore — triggerEmergency (P2-14 / R13)', () => {
     expect(result.contacts[1].notified).toBe(false);
   });
 });
+
+// --- Ride-less SOS (ACTION_ITEMS.md B15(c)) ---
+// Same contract as triggerEmergency above, minus rideId. Code under test:
+// rider-app/store/rideStore.ts::triggerRidelessEmergency.
+
+describe('rideStore — triggerRidelessEmergency (ACTION_ITEMS.md B15(c))', () => {
+  it('calls POST /rides/emergency (no ride_id segment) with message and lat/lon', async () => {
+    mockPost.mockResolvedValue({ data: { success: true, incident_id: 'inc-rl-001' } });
+
+    await useRideStore.getState().triggerRidelessEmergency(43.651, -79.347);
+
+    expect(mockPost).toHaveBeenCalledWith('/rides/emergency', {
+      message: 'Emergency assistance requested via app button',
+      latitude: 43.651,
+      longitude: -79.347,
+    });
+  });
+
+  it('on API failure (e.g. 404 when rideless_sos_enabled is off) throws so SOSButton can show its failure UX', async () => {
+    const err = new Error('Not found');
+    mockPost.mockRejectedValue(err);
+
+    let caughtErr: unknown;
+    try {
+      await useRideStore.getState().triggerRidelessEmergency(43.0, -79.0);
+      throw new Error('Expected triggerRidelessEmergency to throw but it resolved');
+    } catch (e) {
+      caughtErr = e;
+    }
+
+    expect((caughtErr as Error).message).toBe('Not found');
+    expect(mockAlert).not.toHaveBeenCalled();
+  });
+
+  it('issues exactly ONE POST per call — same no-nested-retry invariant as triggerEmergency', async () => {
+    const err = new Error('Network error');
+    mockPost.mockRejectedValue(err);
+
+    await expect(
+      useRideStore.getState().triggerRidelessEmergency(43.0, -79.0),
+    ).rejects.toThrow('Network error');
+
+    expect(mockPost).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns the response body so the caller can report real contact status', async () => {
+    mockPost.mockResolvedValue({
+      data: {
+        success: true,
+        incident_id: 'inc-rl-002',
+        contacts_notified: 0,
+        contacts: [],
+        notification_warning: 'Emergency contacts could not be reached — please call them directly.',
+      },
+    });
+
+    const result = await useRideStore.getState().triggerRidelessEmergency();
+
+    expect(result.incident_id).toBe('inc-rl-002');
+    expect(result.notification_warning).toBeTruthy();
+  });
+});

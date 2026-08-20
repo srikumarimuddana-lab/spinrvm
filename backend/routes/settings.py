@@ -57,6 +57,12 @@ async def get_public_settings():
         # B16) -- dark-launched, driver-app only. Default False = the
         # driver dashboard keeps rendering the existing shared SOSButton.
         "driver_discreet_sos_enabled": bool(settings.get("driver_discreet_sos_enabled", False)),
+        # Ride-less SOS rollout gate (ACTION_ITEMS.md B15(c)) -- dark-launched,
+        # rider-app only. Default False = rider-app keeps showing the existing
+        # "No Active Ride / Call 911" prompt when no ride is active. The
+        # backend endpoint (POST /rides/emergency) also enforces this flag
+        # itself (fail-closed), so this is a UX gate, not the only gate.
+        "rideless_sos_enabled": bool(settings.get("rideless_sos_enabled", False)),
         # Safety panel — global config. Only the LOCAL AUTHORITY varies per
         # service area (migration 316); the Spinr-side contacts and tile
         # toggles are the same everywhere, so keeping them here means changing

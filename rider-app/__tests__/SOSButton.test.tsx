@@ -171,3 +171,87 @@ describe('SOSButton localization', () => {
     }
   });
 });
+
+// --- Ride-less SOS (ACTION_ITEMS.md B15(c)) ---
+// ridelessSosEnabled + onTriggerRideless are additive/optional: omitted (as
+// every existing test above does), the "No Active Ride / Call 911" prompt
+// fires exactly as before. This block pins the new opt-in path.
+describe('SOSButton ride-less SOS', () => {
+  it('without rideId, calls onTriggerRideless (not onTrigger) when ridelessSosEnabled is true', async () => {
+    const onTrigger = jest.fn();
+    const onTriggerRideless = jest.fn().mockResolvedValue(undefined);
+    const { getByLabelText } = render(
+      <SOSButton
+        onTrigger={onTrigger}
+        onTriggerRideless={onTriggerRideless}
+        ridelessSosEnabled
+      />,
+    );
+
+    const button = getByLabelText('Emergency SOS');
+    fireEvent(button, 'pressIn');
+    jest.advanceTimersByTime(1200); // SOS_HOLD_MS
+
+    await waitFor(() => expect(onTriggerRideless).toHaveBeenCalled());
+    expect(onTrigger).not.toHaveBeenCalled();
+  });
+
+  it('without rideId, still shows "No Active Ride" when ridelessSosEnabled is false (default, unchanged)', async () => {
+    const onTrigger = jest.fn();
+    const onTriggerRideless = jest.fn();
+    const { getByLabelText } = render(
+      <SOSButton onTrigger={onTrigger} onTriggerRideless={onTriggerRideless} />,
+    );
+
+    const button = getByLabelText('Emergency SOS');
+    fireEvent(button, 'pressIn');
+    jest.advanceTimersByTime(1200);
+
+    await waitFor(() =>
+      expect(Alert.alert).toHaveBeenCalledWith(
+        'No Active Ride',
+        expect.stringContaining('Call 911 directly'),
+        expect.any(Array),
+      ),
+    );
+    expect(onTrigger).not.toHaveBeenCalled();
+    expect(onTriggerRideless).not.toHaveBeenCalled();
+  });
+
+  it('without rideId, still shows "No Active Ride" when ridelessSosEnabled is true but onTriggerRideless is not supplied', async () => {
+    const onTrigger = jest.fn();
+    const { getByLabelText } = render(<SOSButton onTrigger={onTrigger} ridelessSosEnabled />);
+
+    const button = getByLabelText('Emergency SOS');
+    fireEvent(button, 'pressIn');
+    jest.advanceTimersByTime(1200);
+
+    await waitFor(() =>
+      expect(Alert.alert).toHaveBeenCalledWith(
+        'No Active Ride',
+        expect.stringContaining('Call 911 directly'),
+        expect.any(Array),
+      ),
+    );
+  });
+
+  it('with a real rideId, still calls onTrigger even when ridelessSosEnabled is true (rideId takes priority)', async () => {
+    const onTrigger = jest.fn().mockResolvedValue(undefined);
+    const onTriggerRideless = jest.fn();
+    const { getByLabelText } = render(
+      <SOSButton
+        rideId="ride-1"
+        onTrigger={onTrigger}
+        onTriggerRideless={onTriggerRideless}
+        ridelessSosEnabled
+      />,
+    );
+
+    const button = getByLabelText('Emergency SOS');
+    fireEvent(button, 'pressIn');
+    jest.advanceTimersByTime(1200);
+
+    await waitFor(() => expect(onTrigger).toHaveBeenCalledWith('ride-1', undefined, undefined, expect.any(String)));
+    expect(onTriggerRideless).not.toHaveBeenCalled();
+  });
+});

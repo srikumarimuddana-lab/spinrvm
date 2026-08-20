@@ -324,6 +324,14 @@ interface RideState {
     longitude?: number,
     idempotencyKey?: string,
   ) => Promise<SOSTriggerResult>;
+  // Ride-less SOS (ACTION_ITEMS.md B15(c)). Same contract as triggerEmergency
+  // minus rideId — see that action's implementation comment for why there is
+  // deliberately no retry ladder here either (SOSButton.triggerSOS owns it).
+  triggerRidelessEmergency: (
+    latitude?: number,
+    longitude?: number,
+    idempotencyKey?: string,
+  ) => Promise<SOSTriggerResult>;
   addRecentSearch: (location: Location) => void;
   loadRecentSearches: () => Promise<void>;
   syncOfflineRequests: () => Promise<void>;
@@ -971,6 +979,25 @@ export const useRideStore = create<RideState>((set, get) => ({
     const res = await api.post<SOSTriggerResult>(`/rides/${rideId}/emergency`, payload);
     // Returned (not discarded) so the success dialog can tell the rider what
     // actually happened to their emergency contacts. See shared/types/safety.ts.
+    return res.data as SOSTriggerResult;
+  },
+
+  triggerRidelessEmergency: async (
+    latitude?: number,
+    longitude?: number,
+    idempotencyKey?: string,
+  ) => {
+    const payload = {
+      message: 'Emergency assistance requested via app button',
+      latitude,
+      longitude,
+      ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
+    };
+    // Same "no retry ladder here" reasoning as triggerEmergency — SOSButton
+    // already retries 3x with backoff. Backend 404s (rideless_sos_enabled
+    // flag off) or 503s propagate here unchanged so SOSButton's failure UX
+    // fires exactly as it does for the in-ride path.
+    const res = await api.post<SOSTriggerResult>('/rides/emergency', payload);
     return res.data as SOSTriggerResult;
   },
 

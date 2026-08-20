@@ -33,6 +33,11 @@ import { useDriverSafetyTrigger } from '../../../hooks/useDriverSafetyTrigger';
 import { useDriverDiscreetSosFlag } from '../../../hooks/useDriverDiscreetSosFlag';
 import { useLanguageStore } from '../../../store/languageStore';
 import { showToast } from '../../../hooks/useToast';
+import {
+  clearLiveRoute,
+  publishLiveRoute,
+  registerLiveRoutePublisher,
+} from '../../../hooks/liveRouteShared';
 import api, { isAppCheckTokenReady } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -466,10 +471,32 @@ function DriverDashboard() {
         }>(`/rides/${rid}/live-route`);
         if (cancelled || !data) return;
         if (Array.isArray(data.polyline) && data.polyline.length > 1) {
-          setRouteCoords(data.polyline.map((p) => ({ latitude: p[0], longitude: p[1] })));
+          const coords = data.polyline.map((p) => ({ latitude: p[0], longitude: p[1] }));
+          setRouteCoords(coords);
           setOsrmRouteActive(true);
+          // Share it with the Android Auto surface, which otherwise has no way
+          // to see this — it lives in component state the car cannot read, and
+          // the car was left drawing the booking-time planned line for the whole
+          // trip. One poller, both surfaces (hooks/liveRouteShared.ts).
+          publishLiveRoute({
+            polyline: coords,
+            destination: rideState === 'trip_in_progress' ? 'dropoff' : 'pickup',
+            rideId: rid,
+            etaMinutes:
+              typeof data.eta_seconds === 'number' && data.eta_seconds > 0
+                ? Math.max(1, Math.ceil(data.eta_seconds / 60))
+                : null,
+            distanceKm:
+              typeof data.distance_km === 'number' && data.distance_km > 0
+                ? data.distance_km
+                : null,
+          });
         } else {
           setOsrmRouteActive(false);
+          // Nothing routable — drop the shared line too, so the car falls back
+          // to the planned polyline rather than holding a line to a leg that
+          // may already be done.
+          clearLiveRoute();
           if (rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup') {
             setRouteCoords([]);
           }
@@ -485,16 +512,21 @@ function DriverDashboard() {
         // fallback. Pre-pickup must never retain pickup -> dropoff geometry.
         if (!cancelled) {
           setOsrmRouteActive(false);
+          clearLiveRoute();
           if (rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup') {
             setRouteCoords([]);
           }
         }
       }
     };
+    // Claim publisher for as long as this effect is polling, so the car defers
+    // to us instead of running a second timer against the same endpoint.
+    const releasePublisher = registerLiveRoutePublisher();
     fetchLiveRoute();
     const id = setInterval(fetchLiveRoute, 20000);
     return () => {
       cancelled = true;
+      releasePublisher();
       clearInterval(id);
     };
      

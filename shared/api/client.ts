@@ -806,7 +806,15 @@ const recordApiError = (entry: ApiErrorLogEntry) => {
 // the user out, which is the same hazard. The error propagates to the
 // SOSButton retry/failure UX instead. (/users/emergency-contacts is NOT
 // exempt — that's a normal authenticated CRUD surface.)
-const isSosUrl = (url: string): boolean => /^\/rides\/[^/]+\/emergency$/.test(url);
+//
+// Also matches the bare POST /rides/emergency (no ride_id segment) added for
+// the ride-less SOS path (ACTION_ITEMS.md B15(c), backend/routes/rides/
+// safety.py::trigger_emergency_rideless) — same get_current_user_allow_expired
+// dependency, same "never gate SOS behind auth refresh" rule applies. Checked
+// at the time this was widened: no other route in the codebase is shaped
+// `/rides/.../emergency` or `/rides/emergency`, so this adds exactly one real
+// endpoint to the exemption set, not an unbounded one.
+const isSosUrl = (url: string): boolean => /^\/rides\/(?:[^/]+\/)?emergency$/.test(url);
 
 // Request paths currently inside their single allowed 503 retry (see the
 // 503 branch in handleApiError). Keyed by "METHOD url" — same-path

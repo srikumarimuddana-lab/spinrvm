@@ -39,6 +39,10 @@ import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 //                     grantable is a product decision about who may reach tax
 //                     and compliance reporting, not a cleanup. Tracked as a
 //                     follow-up rather than decided here.
+//   surge, pricing    removed 2026-08-21 (decision-log item 3, docs/audit/
+//                     2026-08-19-decision-writeups.md): both were grantable
+//                     but gated no backend route. The real surge/pricing admin
+//                     capability is entirely gated by require_module("service_areas").
 //
 // A test in backend/tests/test_admin_module_list_parity.py now compares the two
 // lists so this cannot drift again silently.
@@ -49,10 +53,8 @@ const ALL_MODULES = [
   { key: "rides", label: "Rides" },
   { key: "earnings", label: "Earnings" },
   { key: "promotions", label: "Promotions" },
-  { key: "surge", label: "Surge Pricing" },
   { key: "service_areas", label: "Service Areas" },
   { key: "vehicle_types", label: "Vehicle Types" },
-  { key: "pricing", label: "Pricing" },
   { key: "support", label: "Support" },
   { key: "disputes", label: "Disputes" },
   { key: "notifications", label: "Cloud Messaging" },
@@ -66,9 +68,9 @@ const ALL_MODULES = [
 
 const ROLE_PRESETS: Record<string, string[]> = {
   super_admin: ALL_MODULES.map((m) => m.key),
-  operations: ["dashboard", "rides", "drivers", "surge", "service_areas", "vehicle_types"],
+  operations: ["dashboard", "rides", "drivers", "service_areas", "vehicle_types"],
   support: ["dashboard", "support", "support_tickets", "disputes", "notifications", "users"],
-  finance: ["dashboard", "earnings", "promotions", "corporate_accounts", "pricing", "audit"],
+  finance: ["dashboard", "earnings", "promotions", "corporate_accounts", "audit"],
 };
 
 const ROLE_COLORS: Record<string, string> = {

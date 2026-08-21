@@ -170,6 +170,16 @@ distinct from `service_areas` — building it now would be solving a problem nob
 that need surfaces later, B can be revisited as a fresh feature request, not bundled into this
 cleanup.
 
+**Implemented 2026-08-21** (Option A). `"surge"` and `"pricing"` removed from `AVAILABLE_MODULES`
+and `ROLE_PRESETS["operations"]`/`ROLE_PRESETS["finance"]` in `backend/routes/admin/staff.py`,
+from `ALL_MODULES` in `backend/routes/admin/auth.py`, and from the `ALL_MODULES` checkbox picker
+and `operations`/`finance` presets in `admin-dashboard/src/app/dashboard/staff/page.tsx` — same
+pattern as the `"heatmap"` precedent. `test_admin_module_list_parity.py` updated: both strings
+removed from `_KNOWN_UNGATED_GRANTS` (they are no longer grantable at all, so there is nothing left
+to pin as "ungated") and added to `test_removed_modules_stay_removed`'s regression pin alongside
+`"heatmap"`/`"bulk_operations"`. See `docs/change-log/2026-08-21-retire-surge-pricing-modules-fix.md`
+for the full Change Impact & Risk Log.
+
 ---
 
 ## 4. `payments.py` coverage: 86.1% measured vs. 90% documented target

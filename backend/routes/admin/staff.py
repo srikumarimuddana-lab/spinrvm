@@ -52,10 +52,8 @@ AVAILABLE_MODULES = [
     "rides",
     "earnings",
     "promotions",
-    "surge",
     "service_areas",
     "vehicle_types",
-    "pricing",
     "support",
     "disputes",
     "notifications",
@@ -84,18 +82,33 @@ AVAILABLE_MODULES = [
 # below filter submitted modules against AVAILABLE_MODULES, so the next edit
 # drops it. No migration needed.
 
+# NOTE — "surge" and "pricing" were removed from this list (and from
+# ALL_MODULES in routes/admin/auth.py) for the same reason as "heatmap"
+# above. Both were grantable but gated no backend route: the real surge/
+# pricing admin capability (PUT /service-areas/{area_id}/surge, GET
+# /surge/status, and the general service-area PUT that carries surge
+# fields) is entirely gated by require_module("service_areas")
+# (routes/admin/__init__.py). An admin granted "surge"/"pricing" without
+# "service_areas" believed they had surge control (checkbox on) but every
+# call 403'd; an admin denied "surge"/"pricing" but holding "service_areas"
+# had full surge/pricing control anyway. Decision-log item 3,
+# docs/audit/2026-08-19-decision-writeups.md, recommendation A.
+#
+# Existing admin_staff rows may still carry "surge"/"pricing" in their
+# modules array. That is inert (nothing reads it) and self-cleaning, same
+# as the "heatmap" note above. No migration needed.
+
 ROLE_PRESETS = {
     "super_admin": AVAILABLE_MODULES,
     "operations": [
         "dashboard",
         "rides",
         "drivers",
-        "surge",
         "service_areas",
         "vehicle_types",
     ],
     "support": ["dashboard", "support", "support_tickets", "disputes", "notifications", "users"],
-    "finance": ["dashboard", "earnings", "promotions", "corporate_accounts", "pricing", "audit"],
+    "finance": ["dashboard", "earnings", "promotions", "corporate_accounts", "audit"],
 }
 
 

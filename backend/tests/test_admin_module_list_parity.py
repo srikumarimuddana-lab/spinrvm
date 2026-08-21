@@ -78,17 +78,14 @@ def _enforced_module_gates() -> set[str]:
 # removing one is a decision about the permission model, not a cleanup, so they
 # are pinned here rather than deleted as a side effect of the heatmap work.
 # Surfaced by this test on 2026-08-14; see the change log entry.
-_KNOWN_UNGATED_GRANTS = {
-    # Ranked blocker #28 / audit finding N16 (2026-08-19): "pricing" used to
-    # gate the Vehicle Types sidebar link and page-level check, but that
-    # page's API has always used require_module("vehicle_types") — the
-    # mismatch silently locked out staff granted "vehicle_types" (no
-    # sidebar link, page-level denial) while a "pricing"-only grant looked
-    # like access but 403'd on every API call. Both frontend sites were
-    # repointed to "vehicle_types"; "pricing" itself now gates nothing.
-    "pricing",
-    "surge",  # surge endpoints live on the service_areas router and use that gate
-}
+#
+# "pricing" and "surge" were pinned here until 2026-08-21, when decision-log
+# item 3 (docs/audit/2026-08-19-decision-writeups.md, recommendation A) retired
+# both outright rather than leaving them ungated — same treatment as
+# "heatmap"/"bulk_operations" below. They are no longer grantable at all, so
+# this set is empty; see test_removed_modules_stay_removed for their
+# regression pin.
+_KNOWN_UNGATED_GRANTS: set[str] = set()
 
 # Modules the sidebar gates links on that no grant can satisfy, so only
 # super_admin ever sees those links.
@@ -257,15 +254,18 @@ def test_vehicle_types_and_audit_logs_frontend_strings_match_backend_gate():
     )
 
 
-@pytest.mark.parametrize("dead_module", ["heatmap", "bulk_operations"])
+@pytest.mark.parametrize("dead_module", ["heatmap", "bulk_operations", "surge", "pricing"])
 def test_removed_modules_stay_removed(dead_module):
-    """Regression pin for the two strings removed on 2026-08-14.
+    """Regression pin for the strings removed on 2026-08-14 and 2026-08-21.
 
-    Both were removed for a documented reason (see the note on AVAILABLE_MODULES
+    All were removed for a documented reason (see the note on AVAILABLE_MODULES
     and the bulk_operations comment in routes/admin/__init__.py). Re-adding
-    either should be a deliberate act that fails this test first, not a quiet
+    any should be a deliberate act that fails this test first, not a quiet
     edit — bulk_operations especially, since re-granting it would reopen a
-    full-fidelity, unredacted PII export surface.
+    full-fidelity, unredacted PII export surface. "surge" and "pricing" were
+    retired 2026-08-21 (decision-log item 3, docs/audit/2026-08-19-decision-
+    writeups.md, recommendation A) — both were grantable but gated no backend
+    route; the real gate is require_module("service_areas").
     """
     assert dead_module not in AVAILABLE_MODULES
     assert dead_module not in ALL_MODULES

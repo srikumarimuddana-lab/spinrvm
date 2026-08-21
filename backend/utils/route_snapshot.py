@@ -24,6 +24,12 @@ logger = logging.getLogger(__name__)
 
 _WIDTH = 640
 _HEIGHT = 320
+
+# Shared route-pin fills, mirrored from shared/constants/routeMapStyle.ts
+# (ROUTE_PIN_COLORS). Static Maps wants them as 0xRRGGBB with no '#'.
+_PICKUP_HEX = "10B981"
+_DROPOFF_HEX = "EF4444"
+_COMPLETION_HEX = "F59E0B"
 _STATIC_MAPS_URL = "https://maps.googleapis.com/maps/api/staticmap"
 
 # Uniform route styling — mirrors shared/constants/routeMapStyle.ts so the receipt
@@ -105,12 +111,21 @@ async def render_ride_snapshot_google(
     params: list[str] = [
         f"size={_WIDTH}x{_HEIGHT}",
         "maptype=roadmap",
-        f"markers=color:green|label:P|{pickup_lat},{pickup_lng}",
-        f"markers=color:red|label:D|{dropoff_lat},{dropoff_lng}",
+        # Marker fills are the shared route-pin palette (ROUTE_PIN_COLORS in
+        # shared/constants/routeMapStyle.ts): green pickup, red drop-off, amber
+        # completion. DOCUMENTED DEGRADATION: Static Maps only draws its own
+        # teardrop pin with an optional single-character label, so this renderer
+        # alone cannot draw the shared disc-and-glyph. It keeps the colours and
+        # falls back to P / D / C letters. Every interactive surface (rider,
+        # driver, Android Auto, admin, the tracking page) draws the real pin.
+        f"markers=color:0x{_PICKUP_HEX}|label:P|{pickup_lat},{pickup_lng}",
+        f"markers=color:0x{_DROPOFF_HEX}|label:D|{dropoff_lat},{dropoff_lng}",
     ]
     completion = _coerce_coordinate(completion_point)
     if completion:
-        params.append(f"markers=color:orange|label:C|{completion[0]},{completion[1]}")
+        params.append(
+            f"markers=color:0x{_COMPLETION_HEX}|label:C|{completion[0]},{completion[1]}"
+        )
 
     # The REAL route trail, coloured as one orange→red gradient along its length
     # (uniform with every in-app map). Segment boundaries / gaps are still
@@ -362,6 +377,9 @@ def render_ride_snapshot(
     try:
         _OSM_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
         m = StaticMap(640, 320, url_template=_OSM_TILE_URL, padding_x=30, padding_y=30)
+        # Disc + white ring, matching the shared route pin. The glyph inside it
+        # is the one thing this renderer omits (staticmap draws circles only) —
+        # the colour and the ring carry the meaning here.
         m.add_marker(CircleMarker((pickup_lng, pickup_lat), "#ffffff", 14))
         m.add_marker(CircleMarker((pickup_lng, pickup_lat), "#10b981", 10))
         m.add_marker(CircleMarker((dropoff_lng, dropoff_lat), "#ffffff", 14))

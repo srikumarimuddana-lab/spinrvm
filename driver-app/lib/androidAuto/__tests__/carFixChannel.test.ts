@@ -11,7 +11,10 @@ import {
   _resetCarFixChannel,
   adoptCarFix,
   carFixAgeMs,
-  carryHeading,
+  bearingBetween,
+  CARRIED_HEADING_MAX_AGE_MS,
+  MIN_COURSE_MOVE_M,
+  resolveHeading,
   getLastCarFix,
   LAST_LOCATION_KEY,
   metresBetween,
@@ -77,35 +80,72 @@ describe('seed vs live ordering', () => {
   });
 });
 
-describe('heading carry-over', () => {
+describe('heading resolution', () => {
   const at = (heading: number | null) => ({ ...SASKATOON, heading });
+  const FRESH = 0;
+  const STALE = CARRIED_HEADING_MAX_AGE_MS + 1;
+  /** A point `m` metres due north — so the true course is 0°. */
+  const north = (m: number, heading: number | null = null) => ({ ...move(m), heading });
 
-  it('keeps a fix that already has a bearing', () => {
-    expect(carryHeading(at(271), at(90)).heading).toBe(271);
+  it('keeps a fix that already has a GPS course', () => {
+    const r = resolveHeading(at(271), at(90), FRESH);
+    expect(r.fix.heading).toBe(271);
+    expect(r.source).toBe('gps');
   });
 
-  it('carries the last bearing onto a fix that has none', () => {
-    // THE bug: a one-shot getCurrentPositionAsync has no course over ground, so
-    // the watchdog's fix wiped the watcher's good bearing and the marker
-    // snapped back to north every few seconds.
-    expect(carryHeading(at(null), at(271)).heading).toBe(271);
+  it('derives the course from movement when the fix has none', () => {
+    // THE fix for the head unit: one-shot getCurrentPositionAsync carries no
+    // course, and on Android Auto it is the dominant path — but the direction
+    // between two fixes is always available and always current.
+    const r = resolveHeading(north(50), SASKATOON, FRESH);
+    expect(r.source).toBe('derived');
+    expect(r.fix.heading).toBeCloseTo(0, 0);
+  });
+
+  it('a derived course beats a stale carried one', () => {
+    const r = resolveHeading(north(50), at(271), STALE);
+    expect(r.source).toBe('derived');
+    expect(r.fix.heading).toBeCloseTo(0, 0);
+  });
+
+  it('ignores sub-threshold movement — noise is not a course', () => {
+    const r = resolveHeading(north(MIN_COURSE_MOVE_M - 2), at(271), FRESH);
+    expect(r.source).toBe('carried');
+    expect(r.fix.heading).toBe(271);
+  });
+
+  it('carries a RECENT bearing onto a course-less fix that has not moved', () => {
+    const r = resolveHeading(at(null), at(271), FRESH);
+    expect(r.source).toBe('carried');
+    expect(r.fix.heading).toBe(271);
+  });
+
+  it('EXPIRES a carried bearing rather than pointing the wrong way all trip', () => {
+    // The regression this test exists for: with the watcher starved, one early
+    // bearing was republished on every watchdog fix forever, so the icon sat
+    // pointing north while the driver drove west. Past the age limit the honest
+    // answer is null — the marker then shows its own travel direction.
+    const r = resolveHeading(at(null), at(271), STALE);
+    expect(r.source).toBe('none');
+    expect(r.fix.heading).toBeNull();
   });
 
   it('treats expo’s -1 "unknown" as no bearing, in both directions', () => {
-    expect(carryHeading(at(-1), at(271)).heading).toBe(271);
-    expect(carryHeading(at(null), at(-1)).heading).toBeNull();
+    expect(resolveHeading(at(-1), at(271), FRESH).fix.heading).toBe(271);
+    expect(resolveHeading(at(null), at(-1), FRESH).fix.heading).toBeNull();
   });
 
-  it('has nothing to carry on the very first fix', () => {
-    expect(carryHeading(at(null), null).heading).toBeNull();
+  it('has nothing to carry or derive on the very first fix', () => {
+    const r = resolveHeading(at(null), null, Infinity);
+    expect(r.source).toBe('none');
+    expect(r.fix.heading).toBeNull();
   });
 
   it('never carries POSITION forward — only the bearing', () => {
     const moved = { ...move(500), heading: null };
-    const merged = carryHeading(moved, at(271));
-    expect(merged.latitude).toBe(moved.latitude);
-    expect(merged.longitude).toBe(moved.longitude);
-    expect(merged.heading).toBe(271);
+    const { fix } = resolveHeading(moved, at(271), FRESH);
+    expect(fix.latitude).toBe(moved.latitude);
+    expect(fix.longitude).toBe(moved.longitude);
   });
 
   it('adoptCarFix returns the merged fix so callers render the true bearing', () => {
@@ -120,12 +160,47 @@ describe('heading carry-over', () => {
     expect(adoptCarFix(at(15)).heading).toBe(15);
   });
 
+  it('a carried bearing does not renew its own clock on every watchdog fix', () => {
+    // Each course-less fix must AGE the bearing, not restamp it. Restamping is
+    // how "carry the last bearing" became "carry the first bearing forever".
+    jest.useFakeTimers();
+    try {
+      jest.setSystemTime(new Date('2026-08-21T00:00:00Z'));
+      adoptCarFix(at(271));
+      // Watchdog ticks: course-less, stationary, every 3s past the limit.
+      for (let t = 3; t <= CARRIED_HEADING_MAX_AGE_MS / 1000 + 3; t += 3) {
+        jest.setSystemTime(new Date(`2026-08-21T00:00:${String(t).padStart(2, '0')}Z`));
+        adoptCarFix(at(null));
+      }
+      expect(getLastCarFix()?.heading).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('publishCarFix hands subscribers the merged fix, not the raw one', () => {
     adoptCarFix(at(271));
     const seen: (number | null)[] = [];
     subscribeCarFix((f) => seen.push(f.heading));
     publishCarFix(at(null));
     expect(seen).toEqual([271]);
+  });
+});
+
+describe('bearingBetween', () => {
+  it('reads the four cardinals', () => {
+    const from = SASKATOON;
+    const dLat = 1 / 111_320;
+    const dLng = 1 / (111_320 * Math.cos((from.latitude * Math.PI) / 180));
+    const p = (dy: number, dx: number) => ({
+      latitude: from.latitude + dy * dLat * 200,
+      longitude: from.longitude + dx * dLng * 200,
+      heading: null,
+    });
+    expect(bearingBetween(from, p(1, 0))).toBeCloseTo(0, 0);
+    expect(bearingBetween(from, p(0, 1))).toBeCloseTo(90, 0);
+    expect(bearingBetween(from, p(-1, 0))).toBeCloseTo(180, 0);
+    expect(bearingBetween(from, p(0, -1))).toBeCloseTo(270, 0);
   });
 });
 

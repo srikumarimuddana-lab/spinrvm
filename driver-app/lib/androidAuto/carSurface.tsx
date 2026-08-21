@@ -33,6 +33,7 @@ import { useCarMapCamera } from './carMapCamera';
 import { normalizeHeading, shouldCommitHeading, zoomForSpan } from './carCameraMath';
 import { useCarLocation } from './useCarLocation';
 import { useCarLiveRoute } from './useCarLiveRoute';
+import { displayEarnings, useCarEarningsPrivacy } from './carEarningsPrivacy';
 import { pushDebug, setDebugFact } from './carDebug';
 import { CarDebugPanel } from './CarDebugPanel';
 import { useCarSurfaceGeneration } from './carSurfaceGeneration';
@@ -171,6 +172,7 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
   // is what Uber and Lyft both show; and hiding the pill makes "no earnings yet"
   // indistinguishable from "this feature is broken", which is exactly how it was
   // first reported. Only a genuinely absent summary hides it now.
+  const earningsHidden = useCarEarningsPrivacy((s) => s.hidden);
   const todayEarnings = useMemo(() => {
     if (!earningsCtx) return null;
     const total = Number(earningsCtx.total);
@@ -329,11 +331,17 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
     // --environment), which says nothing about the installed binary.
     setDebugFact('mapsKey(js)', GOOGLE_MAPS_API_KEY ? `present (${GOOGLE_MAPS_API_KEY.length} ch)` : 'empty — OTA env?');
     setDebugFact('renderer', 'full (liteMode off)');
-    setDebugFact('earnings', todayEarnings ? `${todayEarnings} today` : 'none yet (pill hidden)');
-    // expo-location reports -1 for "heading unknown" and null when the provider
-    // gives no bearing at all. Either way CarMarker falls back to a bearing
-    // derived from consecutive fixes, so this tells you WHICH path is driving
-    // the marker's rotation rather than leaving it to guesswork.
+    setDebugFact(
+      'earnings',
+      todayEarnings
+        ? `today ${earningsHidden ? 'masked' : 'shown'}`
+        : 'none yet (pill hidden)',
+    );
+    // carFixChannel resolves this: a real GPS course, else the bearing between
+    // consecutive fixes once the driver has moved, else a recent bearing
+    // carried forward, else null. Null reaches CarMarker as "no course" and it
+    // falls back to its own travel bearing. This says which of those is
+    // actually driving the icon rather than leaving it to guesswork.
     setDebugFact(
       'heading',
       here == null
@@ -381,7 +389,7 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
         : 'none',
     );
     setDebugFact('heatmap', `${heatmapStatus}, ${carHeatCells.length} cells`);
-  }, [rideState, card.leg, delta, here, route, heatmapStatus, carHeatCells.length, offsetLat, offsetLng, todayEarnings, cameraHeading, isPannedAway, viewport.w, viewport.h, centerLat, livePath]);
+  }, [rideState, card.leg, delta, here, route, heatmapStatus, carHeatCells.length, offsetLat, offsetLng, todayEarnings, earningsHidden, cameraHeading, isPannedAway, viewport.w, viewport.h, centerLat, livePath]);
 
   let Maps: typeof import('react-native-maps') | null = null;
   try {
@@ -545,19 +553,25 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
         {here && CarMarker && (
           <CarMarker
             coordinate={{ latitude: here.latitude, longitude: here.longitude }}
-            // The camera's committed bearing, NOT the raw fix.
+            // The TRUE course, never the camera's committed bearing.
             //
             // CarMarker is `flat`, so react-native-maps applies its rotation
-            // relative to the MAP, not the screen — the icon's on-screen angle
-            // is therefore (marker heading − camera bearing). Feeding it the
-            // same value the camera is using makes that zero, so the car sits
-            // still pointing up while the world turns underneath, which is what
-            // Google Maps does and what "the car keeps rotating up and down"
-            // was asking for. Falls back to the raw bearing when no course has
-            // been observed yet: the map is north-up then, so the marker must
-            // show the true direction itself (and CarMarker derives one from
-            // travel when even that is missing).
-            heading={cameraHeading ?? here.heading}
+            // relative to the MAP: Google Maps subtracts the camera bearing
+            // itself, and the icon's on-screen angle comes out as (course −
+            // camera bearing) whichever way the map is turned. So the marker
+            // wants the world-space course, and it wants it in BOTH modes —
+            // north-up and course-up.
+            //
+            // This used to be `cameraHeading ?? here.heading`, on the theory
+            // that feeding the camera's own value cancels to zero on screen.
+            // It does — while the two agree. They deliberately do not: the
+            // camera ignores turns under 4°, holds null until the first course
+            // is observed, and FREEZES entirely while the driver has panned
+            // away. Every one of those is right for a map that shouldn't
+            // twitch, and every one of them was also silently freezing the car
+            // icon — which is how the head unit ended up showing a car
+            // pointing north while it drove west.
+            heading={here.heading}
           />
         )}
       </MapView>
@@ -596,11 +610,27 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
             the day adding up, which is the whole point of putting earnings on
             this screen. Hidden when the store has no summary (a car-only cold
             launch never ran the phone's fetch) rather than showing $0.00 — a
-            zero on the earnings pill would read as "you've made nothing". */}
+            zero on the earnings pill would read as "you've made nothing".
+
+            MASKED BY DEFAULT. The head unit is a shared screen — the rider in
+            the back reads it as easily as the driver does — so the amount is
+            replaced by dots until the driver presses the eye map button
+            (register.ts). The eye glyph stays visible either way so the pill
+            still reads as "your earnings, hidden" rather than as a bug. */}
         {todayEarnings && (
           <View style={styles.earningsPill}>
             <Text style={styles.earningsPillLabel}>TODAY</Text>
-            <Text style={styles.earningsPillValue}>{todayEarnings}</Text>
+            <Text
+              style={[styles.earningsPillEye, earningsHidden && styles.earningsPillEyeMuted]}
+              accessibilityLabel={
+                earningsHidden ? 'Earnings hidden' : 'Earnings visible'
+              }
+            >
+              {earningsHidden ? '\u25CF\u20E0' : '\u25C9'}
+            </Text>
+            <Text style={styles.earningsPillValue}>
+              {displayEarnings(todayEarnings, earningsHidden)}
+            </Text>
           </View>
         )}
       </View>
@@ -649,6 +679,8 @@ const styles = StyleSheet.create({
   },
   earningsPillLabel: { color: carColors.textMuted, fontSize: 11, fontWeight: '700', letterSpacing: 1 },
   earningsPillValue: { color: carColors.gold, fontSize: 17, fontWeight: '800' },
+  earningsPillEye: { color: carColors.gold, fontSize: 14, fontWeight: '700' },
+  earningsPillEyeMuted: { color: carColors.textMuted },
   statusDot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
   statusText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
 });

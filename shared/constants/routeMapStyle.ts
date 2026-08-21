@@ -6,7 +6,10 @@
  *   • Draw the REAL route geometry (the actual driven / road path).
  *   • Colour it as ONE orange → red gradient along the path (orange at the
  *     start/pickup end, red at the destination end).
- *   • Markers: green pickup, red dropoff, amber completion — one style + size.
+ *   • Markers: green pickup (dot), red dropoff (square), amber completion
+ *     (check) — one disc style, one size scale, centre-anchored, glyphs drawn
+ *     as plain shapes so no surface depends on an icon font. See
+ *     ROUTE_PIN_SPEC / routePinSvg below.
  *
  * Only the colours + markers are unified here; each surface supplies its own
  * real route coordinates. Do not restyle a route inline in any screen — derive
@@ -29,6 +32,89 @@ export const ROUTE_PIN_COLORS = {
   completion: '#F59E0B',
 } as const;
 export const ROUTE_MARKER_SIZE = 30;
+
+/**
+ * ─── THE marker, spelled out ─────────────────────────────────────────────────
+ *
+ * One coloured disc, a white ring, and a white glyph drawn as PLAIN SHAPES.
+ * Every renderer we have — react-native-maps, the Android Auto surface,
+ * MapLibre in the admin dashboard, raw SVG on the public tracking page, and the
+ * Static-Maps PNG — can draw a circle and a rectangle. None of them can be
+ * trusted to draw an icon FONT: the head-unit surface is a React root inside a
+ * Presentation on a VirtualDisplay, and @expo/vector-icons glyphs have been
+ * observed there as empty boxes, which is why the car screen showed a bare red
+ * dot where every other surface showed a flag.
+ *
+ * Shapes, not letters: a letter needs a font too, and 'P'/'D' read as debug
+ * chrome on a customer-facing map.
+ *
+ *   pickup      green disc + white DOT      "you get in here"
+ *   dropoff     red disc   + white SQUARE   "the trip ends here"
+ *   completion  amber disc + white CHECK    "this is where it actually ended"
+ *
+ * Anchored at the CENTRE on every surface — the disc marks the point itself,
+ * so nothing has to agree about where a pin's tip is.
+ */
+export type RoutePinKind = 'pickup' | 'dropoff' | 'completion';
+
+/** Glyph geometry as a fraction of the marker's diameter. */
+export const ROUTE_PIN_GEOMETRY = {
+  /** White outline around the disc, in px, at ROUTE_MARKER_SIZE. */
+  ringWidth: 2,
+  /** Pickup dot diameter. */
+  dotRatio: 0.34,
+  /** Drop-off square side. */
+  squareRatio: 0.3,
+  /** Completion check: arm lengths + stroke, all as a fraction of the disc. */
+  checkShortRatio: 0.2,
+  checkLongRatio: 0.36,
+  checkStrokeRatio: 0.11,
+} as const;
+
+/** The glyph each kind draws, and the disc colour it sits on. */
+export const ROUTE_PIN_SPEC: Record<RoutePinKind, { color: string; glyph: 'dot' | 'square' | 'check' }> = {
+  pickup: { color: ROUTE_PIN_COLORS.pickup, glyph: 'dot' },
+  dropoff: { color: ROUTE_PIN_COLORS.dropoff, glyph: 'square' },
+  completion: { color: ROUTE_PIN_COLORS.completion, glyph: 'check' },
+};
+
+/**
+ * The marker as one self-contained SVG string, sized to `size` px.
+ *
+ * For every surface that draws into the DOM or into an <img>: the admin
+ * dashboard's MapLibre markers and the public tracking page both build DOM
+ * elements, and this keeps them from re-deriving the geometry (which is how
+ * they drifted to plain 16px and 20px circles with no glyph at all).
+ */
+export function routePinSvg(kind: RoutePinKind, size: number = ROUTE_MARKER_SIZE): string {
+  const { color, glyph } = ROUTE_PIN_SPEC[kind];
+  const g = ROUTE_PIN_GEOMETRY;
+  const c = size / 2;
+  // Scale the ring with the marker so a 20px admin pin isn't mostly outline.
+  const ring = Math.max(1, (g.ringWidth * size) / ROUTE_MARKER_SIZE);
+  const r = c - ring / 2;
+  let inner = '';
+  if (glyph === 'dot') {
+    inner = `<circle cx="${c}" cy="${c}" r="${(size * g.dotRatio) / 2}" fill="#FFFFFF"/>`;
+  } else if (glyph === 'square') {
+    const side = size * g.squareRatio;
+    inner = `<rect x="${c - side / 2}" y="${c - side / 2}" width="${side}" height="${side}" rx="${side * 0.18}" fill="#FFFFFF"/>`;
+  } else {
+    const sw = size * g.checkStrokeRatio;
+    const short = size * g.checkShortRatio;
+    const long = size * g.checkLongRatio;
+    // Two-segment tick, drawn as a polyline so no font is involved.
+    inner =
+      `<polyline points="${c - short},${c} ${c - short / 3},${c + short * 0.7} ${c - short / 3 + long * 0.72},${c - long * 0.6}" ` +
+      `fill="none" stroke="#FFFFFF" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  }
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">` +
+    `<circle cx="${c}" cy="${c}" r="${r}" fill="${color}" stroke="#FFFFFF" stroke-width="${ring}"/>` +
+    inner +
+    `</svg>`
+  );
+}
 
 /** A [lat, lng] point. */
 export type LatLng = [number, number];

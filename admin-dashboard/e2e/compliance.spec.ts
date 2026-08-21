@@ -27,6 +27,11 @@ const SERVICE_AREAS = [
 
 async function mockCompliance(page: any, opts: { serviceAreas?: unknown[] } = {}) {
   await setupAdminMocks(page, {
+    // /dashboard/compliance gates its whole render on useRequireModule("compliance"),
+    // which admin-mocks.ts's default MOCK_ADMIN_USER (modules: ['dashboard']) doesn't
+    // satisfy — without this override every test here redirects to /403 before any
+    // page content mounts. Mirrors data-transfer.spec.ts's pattern for its own module.
+    user: { modules: ['compliance'] },
     extra: async (route, url, method) => {
       if (url.includes('/api/admin/service-areas') && method === 'GET') {
         await route.fulfill({
@@ -125,6 +130,7 @@ test.describe('admin dashboard: compliance — interaction', () => {
 
   test('failed report generation shows an error toast, not a crash', async ({ page }) => {
     await setupAdminMocks(page, {
+      user: { modules: ['compliance'] }, // see mockCompliance() above for why
       extra: async (route, url, method) => {
         if (url.includes('/api/admin/compliance/gst-pst-remittance') && method === 'GET') {
           await route.fulfill({
@@ -217,6 +223,7 @@ test.describe('admin dashboard: compliance — service area multi-select', () =>
 
   test('a failed service-areas fetch says so instead of showing an empty dropdown', async ({ page }) => {
     await setupAdminMocks(page, {
+      user: { modules: ['compliance'] }, // see mockCompliance() above for why
       extra: async (route, url, method) => {
         if (url.includes('/api/admin/service-areas') && method === 'GET') {
           await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({}) });

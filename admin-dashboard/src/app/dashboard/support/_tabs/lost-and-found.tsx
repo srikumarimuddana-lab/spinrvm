@@ -25,10 +25,11 @@ import {
 const PAGE_SIZE = 50;
 
 const S_CFG: Record<string, { l: string; c: string }> = {
-    reported: { l: "Reported", c: "bg-amber-500/15 text-amber-600" },
+    reported: { l: "Reported", c: "bg-warning/15 text-warning" },
+    // eslint-disable-next-line no-restricted-syntax -- "driver_notified" (in progress, neither good nor bad) has no semantic-token equivalent; must stay distinct from reported/resolved/unresolved (#2816)
     driver_notified: { l: "Driver Notified", c: "bg-blue-500/15 text-blue-600" },
-    resolved: { l: "Resolved", c: "bg-emerald-500/15 text-emerald-600" },
-    unresolved: { l: "Unresolved", c: "bg-red-500/15 text-red-600" },
+    resolved: { l: "Resolved", c: "bg-success/15 text-success" },
+    unresolved: { l: "Unresolved", c: "bg-destructive/15 text-destructive" },
 };
 
 export default function LostAndFoundTab() {
@@ -133,7 +134,7 @@ export default function LostAndFoundTab() {
                             <TableCell><Badge className={`text-[10px] ${(S_CFG[item.status] || S_CFG.reported).c}`}>{(S_CFG[item.status] || S_CFG.reported).l}</Badge></TableCell>
                             <TableCell className="text-[10px] text-muted-foreground">{formatDate(item.created_at)}</TableCell>
                             <TableCell className="text-right"><div className="flex justify-end gap-0.5">
-                                {item.status !== "resolved" && <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleResolve(item.id, "resolved")} title="Resolve"><CheckCircle className="h-3.5 w-3.5 text-emerald-500" /></Button>}
+                                {item.status !== "resolved" && <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleResolve(item.id, "resolved")} title="Resolve"><CheckCircle className="h-3.5 w-3.5 text-success" /></Button>}
                                 <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditing(item); setEditForm({ item_description: item.item_description || "", admin_notes: item.admin_notes || "", status: item.status || "reported" }); setEditDialog(true); }}><Pencil className="h-3.5 w-3.5" /></Button>
                                 <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => setDeleteTarget(item.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
                             </div></TableCell>

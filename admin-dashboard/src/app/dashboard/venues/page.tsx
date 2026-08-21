@@ -312,7 +312,7 @@ export default function VenuesPage() {
                           {Number.isFinite(dist) ? `${Math.round(dist)} m` : "—"}
                           {outside && " outside"}
                         </span>
-                        <button onClick={() => removePoint(i)} aria-label={`Delete pickup point ${i + 1}`} className="text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg p-2"><Trash2 className="h-4 w-4" /></button>
+                        <button onClick={() => removePoint(i)} aria-label={`Delete pickup point ${i + 1}`} className="text-destructive hover:bg-destructive/10 rounded-lg p-2"><Trash2 className="h-4 w-4" /></button>
                       </div>
                     );
                   })}
@@ -433,7 +433,7 @@ export default function VenuesPage() {
                             >
                               <Crosshair className="h-3.5 w-3.5" /> Edit
                             </button>
-                            <button onClick={() => remove(v)} aria-label={`Delete ${v.name}`} className="text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg p-2"><Trash2 className="h-4 w-4" /></button>
+                            <button onClick={() => remove(v)} aria-label={`Delete ${v.name}`} className="text-destructive hover:bg-destructive/10 rounded-lg p-2"><Trash2 className="h-4 w-4" /></button>
                           </div>
                         </TableCell>
                       </TableRow>

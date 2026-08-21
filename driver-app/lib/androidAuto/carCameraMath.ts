@@ -107,17 +107,21 @@ export function zoomForSpan(
 }
 
 /**
- * The one-line heading readout drawn on the car surface.
+ * The one-line heading summary shown in the on-surface DEBUG PANEL.
  *
  * Exists because "the car is pointing the wrong way" was reported from a
  * photograph, and a photograph cannot say WHY — a bearing the GPS supplied, one
  * derived from two positions, one carried from an earlier reading, and none at
- * all all look identical on screen. The car has no console, no red box and no
- * Metro output, and the debug panel behind them is compiled out of production,
- * so a driver on a real head unit had nothing to report but the picture.
+ * all all look identical on the map.
  *
- * Deliberately terse: it sits on a dashboard beside the map and has to cost the
- * driver nothing to ignore. Examples:
+ * It was briefly drawn on the live surface so a production build could report
+ * it, and taken back off: a line of instrumentation on a dashboard is something
+ * a driver has to decide to ignore, and "271° gps · course-up" reads like a
+ * warning to someone who has no idea what it means. Diagnosis stays in the
+ * debug panel, which is dev-only by design; hardware confirmation comes from a
+ * non-production build.
+ *
+ * Deliberately terse — it is one row of a fact table. Examples:
  *   "271° gps · course-up"      healthy — real course, map rotating
  *   "271° derived · course-up"  no GPS course; bearing from movement
  *   "271° held · north-up"      carried from an earlier reading

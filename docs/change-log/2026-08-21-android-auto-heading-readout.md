@@ -1,5 +1,16 @@
 # Change Impact & Risk Log — heading readout on the car screen (production)
 
+> **REVERSED BEFORE MERGE (2026-08-21).** The on-surface pill was removed at the
+> product owner's call: a line of instrumentation on a dashboard is something a
+> driver has to decide to ignore, and `271° gps · course-up` reads like a
+> warning to someone who has no idea what it means. The plumbing it added —
+> `getHeadingSource()` and `formatHeadingReadout()` — is kept and now feeds the
+> **dev-only debug panel's** `heading` fact, which already existed but printed
+> less. Net effect on a production build: nothing new is drawn. Hardware
+> confirmation of the heading fix therefore needs a non-production build, as it
+> did before. The entry below describes the reverted state and is left for the
+> record.
+
 ## Summary
 
 | Field | Value |

@@ -5,6 +5,15 @@ on:
     branches: [main, develop]
     types: [opened, synchronize, reopened]
 
+  # Runs this job against the merge queue's temporary merge commit once
+  # GitHub's native merge queue is enabled on this repo (branch protection ->
+  # require merge queue). Closes the CR #4187 cross-PR migration-collision
+  # race window: a per-PR check only sees its own fork point, but a
+  # merge_group run sees the actual would-be post-merge state. See
+  # docs/audit/2026-08-19-decision-writeups.md section 5 and ACTION_ITEMS.md
+  # C36. No filters needed -- fires on every PR added to the queue.
+  merge_group:
+
   # Allow manual check against any branch
   workflow_dispatch:
     inputs:

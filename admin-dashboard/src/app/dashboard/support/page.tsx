@@ -22,7 +22,7 @@
  * the children below like every other sub-view.
  */
 
-import { Suspense, useState } from "react";
+import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { LifeBuoy, HelpCircle, PackageSearch, Flag, FileWarning, BookOpen, ScrollText } from "lucide-react";
 import dynamic from "next/dynamic";
@@ -64,13 +64,21 @@ function SupportPageInner() {
     const router = useRouter();
     const searchParams = useSearchParams();
 
+    // Derived straight from the URL on every render — not local state seeded
+    // once at mount. This page is also reached via sidebar.tsx's Support &
+    // Issues children (?tab=<slug> links to this same route), and Next.js
+    // reuses this component instance across those same-route navigations
+    // rather than remounting it. A `useState(initialTab)` seeded only once
+    // went stale on every subsequent sidebar click — the sidebar highlighted
+    // the newly-clicked child correctly (it reads searchParams live) while
+    // the Tabs content kept showing whichever tab was active on first load.
+    // Deriving activeTab fresh each render removes the state/URL sync bug
+    // entirely instead of patching it with an effect.
     const requestedTab = searchParams.get("tab");
-    const initialTab = isValidTab(requestedTab) ? requestedTab : "tickets";
-    const [activeTab, setActiveTab] = useState<TabSlug>(initialTab);
+    const activeTab: TabSlug = isValidTab(requestedTab) ? requestedTab : "tickets";
 
     const onTabChange = (value: string) => {
         if (!isValidTab(value)) return;
-        setActiveTab(value);
         router.replace(`/dashboard/support?tab=${value}`, { scroll: false });
     };
 

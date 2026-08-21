@@ -188,6 +188,11 @@ except ImportError:
     from utils.safety_paging import page_on_call as page_sos_on_call  # type: ignore
 
 try:
+    from ...utils.vault_pii import vault_decrypt
+except ImportError:
+    from utils.vault_pii import vault_decrypt  # type: ignore
+
+try:
     from ...services.cancellation_service import (
         calculate_cancellation_fee,
         calculate_scheduled_cancel_notice_fee,

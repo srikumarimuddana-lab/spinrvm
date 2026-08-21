@@ -10,29 +10,29 @@
  * Per-tab permission model (this is the part worth reading before editing):
  * each of the four tab bodies below is the SAME component the old
  * standalone page rendered, imported and reused as-is — not rewritten, not
- * duplicated. Each of those components already does its own internal
- * permission check:
+ * duplicated. All four are now strict super_admin-only (decision log
+ * 2026-08-19, section 2, option B — "compliance" was never a grantable
+ * module, so this just states the existing restriction explicitly):
  *   - DataTransferPage:    useRequireSuperAdmin() — redirects to /403
- *   - CompliancePage:      useRequireModule("compliance") — redirects to /403
+ *   - CompliancePage:      useRequireSuperAdmin() — redirects to /403
  *   - BulkOperationsPage:  inline role === "super_admin" check — renders a
  *                          denial card, no redirect
  *   - ExportApprovalsPage: inline role === "super_admin" check — renders a
  *                          denial card, no redirect
  *
  * Two of those four REDIRECT the whole page away on failure. That's fine
- * for a page occupying its own route, but wrong here — a compliance-role
- * staffer who lacks Data Transfer's super_admin requirement must not be
- * bounced to /403 just because that tab's content exists somewhere on the
- * page. The fix is that Radix Tabs only mounts the ACTIVE TabsContent by
- * default (no forceMount below) — so a tab's inner permission hook only
- * ever runs if that tab is actually selected. This page additionally hides
- * the TabsTrigger for any tab the user can't access at all, so they can
- * never select into (and therefore never mount, therefore never get
- * redirected by) a tab they don't have permission for. The embedded
- * pages' own checks remain as a defense-in-depth backstop — if this page's
- * visibility logic ever drifts from theirs, the worst case is a hidden tab
- * becoming reachable via direct tab-param URL, and the embedded page's own
- * check still catches it.
+ * for a page occupying its own route, but wrong here — a non-super-admin
+ * viewing this consolidated page must not be bounced to /403 just because
+ * a tab's content exists somewhere on the page. The fix is that Radix Tabs
+ * only mounts the ACTIVE TabsContent by default (no forceMount below) — so
+ * a tab's inner permission hook only ever runs if that tab is actually
+ * selected. This page additionally hides the TabsTrigger for any tab the
+ * user can't access at all, so they can never select into (and therefore
+ * never mount, therefore never get redirected by) a tab they don't have
+ * permission for. The embedded pages' own checks remain as a
+ * defense-in-depth backstop — if this page's visibility logic ever drifts
+ * from theirs, the worst case is a hidden tab becoming reachable via
+ * direct tab-param URL, and the embedded page's own check still catches it.
  */
 
 import { Suspense, useMemo, useState } from "react";
@@ -72,23 +72,21 @@ function RecordsPageInner() {
 
     // Mirrors the exact checks each embedded page's own hook/inline gate
     // uses — kept as plain booleans here (no redirect side effect) since
-    // multiple tabs with different requirements share this one page.
-    // Corporate + admin portal review, Admin #4: dropped the
-    // role === "admin" bypass — "admin" does not bypass the backend's
-    // require_module("compliance") check, so it must not bypass it here
-    // either (an admin-role user with no compliance module previously
-    // saw this tab and got 403'd on every call inside it).
+    // multiple tabs share this one page. All four tabs are strict
+    // super_admin-only (decision log 2026-08-19, section 2, option B —
+    // "compliance" was never a grantable module, so this drops the
+    // now-dead module-array check rather than leaving a condition that
+    // could never evaluate true for a non-super-admin).
     const isSuperAdmin = user?.role === "super_admin";
-    const hasComplianceModule = isSuperAdmin || (user?.modules ?? []).includes("compliance");
 
     const canView: Record<TabSlug, boolean> = {
         "data-transfer": isSuperAdmin,
-        compliance: hasComplianceModule,
+        compliance: isSuperAdmin,
         "bulk-operations": isSuperAdmin,
         "export-approvals": isSuperAdmin,
     };
 
-    const visibleTabs = useMemo(() => TAB_ORDER.filter((slug) => canView[slug]), [isSuperAdmin, hasComplianceModule]); // eslint-disable-line react-hooks/exhaustive-deps
+    const visibleTabs = useMemo(() => TAB_ORDER.filter((slug) => canView[slug]), [isSuperAdmin]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const requestedTab = searchParams.get("tab");
     const initialTab = isValidTab(requestedTab) && canView[requestedTab] ? requestedTab : visibleTabs[0];

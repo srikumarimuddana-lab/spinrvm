@@ -63,8 +63,10 @@ def test_compliance_routes_denied_without_module_grant(test_client):
     from backend.server import app
     from dependencies import get_admin_user
 
-    # A real (non-super) admin missing the "compliance" module grant — the
-    # exact scenario G1 fixed by making the module grantable at all.
+    # A plain "admin" role, holding every other grantable module, is still
+    # not super_admin — the compliance router is mounted under
+    # require_super_admin (decision log 2026-08-19, section 2, option B),
+    # so no module grant can ever satisfy it.
     app.dependency_overrides[get_admin_user] = lambda: {"id": "a1", "role": "admin", "modules": ["dashboard"]}
     try:
         resp = test_client.get("/api/admin/compliance/gst-pst-remittance")

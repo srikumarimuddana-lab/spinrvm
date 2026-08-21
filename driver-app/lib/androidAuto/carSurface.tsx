@@ -30,8 +30,13 @@ import { buildTripCard, type OfferLike } from './carCard';
 import { CarTripCard } from './CarTripCard';
 import { CarOfferPanel } from './CarOfferPanel';
 import { useCarMapCamera } from './carMapCamera';
-import { normalizeHeading, shouldCommitHeading, zoomForSpan } from './carCameraMath';
-import { useCarLocation } from './useCarLocation';
+import {
+  formatHeadingReadout,
+  normalizeHeading,
+  shouldCommitHeading,
+  zoomForSpan,
+} from './carCameraMath';
+import { useCarLocation, getHeadingSource } from './useCarLocation';
 import { useCarLiveRoute } from './useCarLiveRoute';
 import { displayEarnings, useCarEarningsPrivacy } from './carEarningsPrivacy';
 import { pushDebug, setDebugFact } from './carDebug';
@@ -68,6 +73,20 @@ const CAMERA_ANIM_MS = 700;
 // the car surface needs the same guard, because a white void on a head unit is
 // indistinguishable from "the integration is broken".
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';
+
+/**
+ * Show the heading readout, in EVERY build including production.
+ *
+ * The on-surface debug panel is compiled out of production
+ * (`isCarDebugAvailable`), which is right for a 40-line log table and wrong for
+ * the single line that says whether the car marker has a real course. Field
+ * reports come from drivers on production builds; without this they can only
+ * send a photo of an icon pointing the wrong way, which is where this whole
+ * investigation started.
+ *
+ * Flip to false to remove it — one constant, no other change needed.
+ */
+const SHOW_HEADING_READOUT = true;
 
 // Heatmap cell geometry. Fallbacks only — the server sends the grid size it
 // actually bucketed with, because cell size is tunable per service area. Same
@@ -610,6 +629,22 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
             root itself never rendered. That distinction previously needed a
             throwaway build to establish. */}
       <View style={styles.pillRow} pointerEvents="none">
+        {/* Heading readout — SHIPS IN PRODUCTION, unlike the debug panel.
+            "which way am I pointing, and where did that number come from" is
+            the one fact a driver cannot report from a photo of this screen, and
+            it is exactly the fact the wrong-way car marker turns on. Muted and
+            tiny: a diagnostic a driver can ignore, not a control.
+
+            TEMPORARY. Remove (or fold back into the debug panel) once the
+            heading fix is confirmed on real hardware — tracked in the change
+            log for this branch. */}
+        {SHOW_HEADING_READOUT && (
+          <View style={styles.headingPill}>
+            <Text style={styles.headingText}>
+              {formatHeadingReadout(here?.heading, getHeadingSource(), cameraHeading)}
+            </Text>
+          </View>
+        )}
         <View style={styles.statusPill}>
           <View style={[styles.statusDot, { backgroundColor: card.accent }]} />
           <Text style={styles.statusText}>
@@ -694,4 +729,13 @@ const styles = StyleSheet.create({
   earningsPillEyeMuted: { color: carColors.textMuted },
   statusDot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
   statusText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
+  headingPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(11,11,15,0.82)',
+  },
+  // Muted and small on purpose: it must read as instrumentation, never compete
+  // with the status pill or the map for the driver's attention.
+  headingText: { color: carColors.textDim, fontSize: 11, fontWeight: '600' },
 });

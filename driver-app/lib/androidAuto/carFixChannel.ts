@@ -86,6 +86,8 @@ let lastFix: CarLatLng | null = null;
 let lastFixAt = 0;
 /** When the CURRENT bearing was last established (not merely carried). */
 let lastHeadingAt = 0;
+/** How the CURRENT bearing was arrived at. Drives the on-screen readout. */
+let lastHeadingSource: HeadingSource = 'none';
 
 /**
  * The last fix, readable from outside React.
@@ -253,10 +255,21 @@ export function adoptCarFix(fix: CarLatLng): CarLatLng {
   // from, or it would renew itself on every watchdog tick and never expire —
   // which is exactly the bug this block exists to end.
   if (source === 'gps' || source === 'derived') lastHeadingAt = now;
+  lastHeadingSource = source;
   lastFix = merged;
   lastFixAt = now;
   return merged;
 }
+
+/**
+ * How the bearing currently in `lastFix` was arrived at.
+ *
+ * Read by the surface's heading readout: "which way am I pointing" is only half
+ * the answer when the marker looks wrong — the other half is WHERE that number
+ * came from, and 'gps' vs 'derived' vs 'carried' is the difference between a
+ * healthy pipeline and one running on a two-fix guess.
+ */
+export const getHeadingSource = (): HeadingSource => lastHeadingSource;
 
 /** Seed the module cache only if nothing better has landed. Returns what won. */
 export function seedCarFix(fix: CarLatLng): CarLatLng {
@@ -365,6 +378,7 @@ export function _resetCarFixChannel(): void {
   lastFix = null;
   lastFixAt = 0;
   lastHeadingAt = 0;
+  lastHeadingSource = 'none';
   lastCacheWriteAt = 0;
   lastCachedPoint = null;
   publishedSinceRead = 0;

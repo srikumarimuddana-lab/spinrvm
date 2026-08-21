@@ -583,6 +583,18 @@ export default function registerAutoPlay(): void {
     const key = `${rideState}:${rideIdOf(activeRide)}:${route ? route.leg : 'none'}`;
     if (key !== lastKey) {
       lastKey = key;
+      // Re-mask the day's total the moment a ride starts.
+      //
+      // The reveal is scoped to the moment the driver asked for it, and the eye
+      // button is only on the no-route strip (Android Auto caps it at 4 and a
+      // ride fills it with Navigate + Recenter + 2 zoom). Without this a driver
+      // who revealed while idle would carry their earnings on screen through
+      // pickup, the passenger's whole trip and drop-off, with no control left
+      // to hide them — the exact situation the mask exists for.
+      if (rideState !== 'idle' && !useCarEarningsPrivacy.getState().hidden) {
+        useCarEarningsPrivacy.getState().reset();
+        log('earnings re-masked for', rideState);
+      }
       try {
         template.setMapButtons(mapButtonsFor(!!route));
         template.setHeaderActions(headerActionsFor(rideState));

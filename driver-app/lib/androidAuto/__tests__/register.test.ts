@@ -228,6 +228,23 @@ describe('earnings privacy toggle', () => {
     expect(useCarEarningsPrivacy.getState().hidden).toBe(true);
   });
 
+  it('re-masks when a ride starts — the reveal never outlives the idle screen', () => {
+    // The eye button only exists on the no-route strip, so a reveal carried
+    // into a ride would sit on screen through the passenger's whole trip with
+    // no control left to hide it.
+    registerAutoPlay();
+    mockListeners.didConnect();
+    const t = lastTpl();
+    lastMapButtons(t)[1].onPress(); // reveal while idle
+    expect(useCarEarningsPrivacy.getState().hidden).toBe(false);
+
+    const apply = mockSubscribe.mock.calls[0][0] as () => void;
+    mockState.rideState = 'navigating_to_pickup';
+    mockState.activeRide = navRide();
+    apply();
+    expect(useCarEarningsPrivacy.getState().hidden).toBe(true);
+  });
+
   it('is dropped mid-ride — the 4-slot strip belongs to Navigate + zoom there', () => {
     mockState.rideState = 'trip_in_progress';
     mockState.activeRide = navRide();

@@ -30,8 +30,13 @@ import { buildTripCard, type OfferLike } from './carCard';
 import { CarTripCard } from './CarTripCard';
 import { CarOfferPanel } from './CarOfferPanel';
 import { useCarMapCamera } from './carMapCamera';
-import { normalizeHeading, shouldCommitHeading, zoomForSpan } from './carCameraMath';
-import { useCarLocation } from './useCarLocation';
+import {
+  formatHeadingReadout,
+  normalizeHeading,
+  shouldCommitHeading,
+  zoomForSpan,
+} from './carCameraMath';
+import { useCarLocation, getHeadingSource } from './useCarLocation';
 import { useCarLiveRoute } from './useCarLiveRoute';
 import { displayEarnings, useCarEarningsPrivacy } from './carEarningsPrivacy';
 import { pushDebug, setDebugFact } from './carDebug';
@@ -68,6 +73,7 @@ const CAMERA_ANIM_MS = 700;
 // the car surface needs the same guard, because a white void on a head unit is
 // indistinguishable from "the integration is broken".
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';
+
 
 // Heatmap cell geometry. Fallbacks only — the server sends the grid size it
 // actually bucketed with, because cell size is tunable per service area. Same
@@ -344,13 +350,7 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
     // actually driving the icon rather than leaving it to guesswork.
     setDebugFact(
       'heading',
-      here == null
-        ? 'no fix'
-        : here.heading == null
-          ? 'null → derived from travel'
-          : here.heading < 0
-            ? `${here.heading} (unknown) → derived`
-            : `${here.heading.toFixed(0)}° from GPS`,
+      here == null ? 'no fix' : formatHeadingReadout(here.heading, getHeadingSource(), cameraHeading),
     );
     setDebugFact('rideState', String(rideState));
     setDebugFact('leg', card.leg);
@@ -589,7 +589,18 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
       {/* Slim status bar for every engaged leg (display-only; interaction is via
           template header actions / map buttons). Hidden when `idle` — nothing to
           say, so the screen stays an uncluttered map. */}
-      {card.leg !== 'idle' && card.leg !== 'offer' && <CarTripCard card={card} />}
+      {card.leg !== 'idle' && card.leg !== 'offer' && (
+        <CarTripCard
+          card={card}
+          // What is LEFT of this leg, from the live route the surface is already
+          // drawing (server-derived from the driver's current position). The
+          // card falls back to the ride's booking-time figures when there is no
+          // trustworthy live route — those describe the whole trip, so they are
+          // the fallback, never the preference.
+          remainingKm={liveRoute?.distanceKm ?? null}
+          remainingMinutes={liveRoute?.etaMinutes ?? null}
+        />
+      )}
       {/* Always-on status pill. Two jobs:
           - UX: the idle car screen is otherwise a bare map with no indication
             the app is alive or connected, which is what Uber/Lyft put here.

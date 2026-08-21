@@ -86,6 +86,8 @@ let lastFix: CarLatLng | null = null;
 let lastFixAt = 0;
 /** When the CURRENT bearing was last established (not merely carried). */
 let lastHeadingAt = 0;
+/** How the CURRENT bearing was arrived at. Drives the on-screen readout. */
+let lastHeadingSource: HeadingSource = 'none';
 
 /**
  * The last fix, readable from outside React.
@@ -127,6 +129,23 @@ export function bearingBetween(a: CarLatLng, b: CarLatLng): number {
 export const MIN_COURSE_MOVE_M = 10;
 
 /**
+ * Oldest previous fix a course may be derived FROM.
+ *
+ * Distance alone is not enough to make a direction a course: it also has to be
+ * recent. `seedCarFix` can put a fix up to MAX_SEED_AGE_MS old — in the worst
+ * case the position the driver logged in at — into the cache without stamping
+ * the age clock, and a process resumed after a spell in the background holds a
+ * fix from wherever it was suspended. Deriving across either baseline produces
+ * the direction of the whole intervening journey, not of the car, and it would
+ * then be treated as freshly established for CARRIED_HEADING_MAX_AGE_MS.
+ *
+ * 15s spans a couple of watchdog cycles, so a normally-delivering pipeline
+ * always derives; anything longer is a gap we have no course for and should
+ * say so.
+ */
+export const MAX_COURSE_BASELINE_AGE_MS = 15_000;
+
+/**
  * How long a bearing survives with nothing to confirm it.
  *
  * ─── Why the car marker pointed the wrong way for a whole trip ───────────────
@@ -159,8 +178,10 @@ export const CARRIED_HEADING_MAX_AGE_MS = 12_000;
  * Priority, best evidence first:
  *   1. A real GPS course on this fix.
  *   2. The direction from the previous fix, once the driver has moved
- *      MIN_COURSE_MOVE_M. This is the signal that is always available at road
- *      speed and always current — the one the old carry-forward hid.
+ *      MIN_COURSE_MOVE_M — and only when that fix is itself recent enough to
+ *      be a baseline (MAX_COURSE_BASELINE_AGE_MS). This is the signal that is
+ *      always available at road speed and always current — the one the old
+ *      carry-forward hid.
  *   3. The previous bearing, but only while it is younger than
  *      CARRIED_HEADING_MAX_AGE_MS.
  *   4. null. The surface treats that as "no course", which is a state it draws
@@ -178,6 +199,7 @@ export function resolveHeading(
   next: CarLatLng,
   prev: CarLatLng | null,
   prevHeadingAgeMs: number,
+  prevFixAgeMs: number = 0,
 ): { fix: CarLatLng; source: HeadingSource } {
   // Negative is expo's "unknown" sentinel; null is "provider gave nothing".
   const own = next.heading;
@@ -185,7 +207,11 @@ export function resolveHeading(
     return { fix: next, source: 'gps' };
   }
 
-  if (prev && metresBetween(prev, next) >= MIN_COURSE_MOVE_M) {
+  if (
+    prev &&
+    prevFixAgeMs <= MAX_COURSE_BASELINE_AGE_MS &&
+    metresBetween(prev, next) >= MIN_COURSE_MOVE_M
+  ) {
     return { fix: { ...next, heading: bearingBetween(prev, next) }, source: 'derived' };
   }
 
@@ -220,16 +246,30 @@ export function adoptCarFix(fix: CarLatLng): CarLatLng {
     fix,
     lastFix,
     lastHeadingAt === 0 ? Infinity : now - lastHeadingAt,
+    // Infinity for a seeded fix: seedCarFix deliberately never stamps the age
+    // clock, so a seed can never become the baseline for a derived course.
+    carFixAgeMs(),
   );
   // Stamped only when this fix ESTABLISHED a bearing (GPS course, or derived
   // from real movement). A carried one keeps the age of the reading it came
   // from, or it would renew itself on every watchdog tick and never expire —
   // which is exactly the bug this block exists to end.
   if (source === 'gps' || source === 'derived') lastHeadingAt = now;
+  lastHeadingSource = source;
   lastFix = merged;
   lastFixAt = now;
   return merged;
 }
+
+/**
+ * How the bearing currently in `lastFix` was arrived at.
+ *
+ * Read by the surface's heading readout: "which way am I pointing" is only half
+ * the answer when the marker looks wrong — the other half is WHERE that number
+ * came from, and 'gps' vs 'derived' vs 'carried' is the difference between a
+ * healthy pipeline and one running on a two-fix guess.
+ */
+export const getHeadingSource = (): HeadingSource => lastHeadingSource;
 
 /** Seed the module cache only if nothing better has landed. Returns what won. */
 export function seedCarFix(fix: CarLatLng): CarLatLng {
@@ -338,6 +378,7 @@ export function _resetCarFixChannel(): void {
   lastFix = null;
   lastFixAt = 0;
   lastHeadingAt = 0;
+  lastHeadingSource = 'none';
   lastCacheWriteAt = 0;
   lastCachedPoint = null;
   publishedSinceRead = 0;

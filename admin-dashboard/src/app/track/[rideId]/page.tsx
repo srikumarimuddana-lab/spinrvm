@@ -177,9 +177,10 @@ export default function TrackRide() {
 
     // Helper: create or move an AdvancedMarkerElement.
     // centerAnchor=true wraps the image in a zero-height div so the image
-    // center (not its bottom edge) lands on the map position — used for the
-    // circular car icon. Pin markers use the default bottom-center anchor so
-    // the teardrop tip naturally points at the location.
+    // center (not its bottom edge) lands on the map position. Every marker on
+    // this page wants that now: the car is a round puck, and the shared route
+    // pin is a disc that marks the point itself (it replaced a teardrop, which
+    // was the one thing here that needed the default bottom-center anchor).
     const upsertMarker = (
       ref: React.MutableRefObject<G>,
       lat: number | undefined,

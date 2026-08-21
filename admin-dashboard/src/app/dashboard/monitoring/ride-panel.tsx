@@ -23,12 +23,14 @@ const STATUS_LABELS: Record<string, string> = {
 
 const STATUS_STEPS = ["searching", "driver_assigned", "driver_arrived", "in_progress"];
 
+/* eslint-disable no-restricted-syntax -- solid-fill white-text ride-progress badge; token substitution risks a dark-mode contrast regression (see #2816 Batch 1 finding on --success vs white text), and yellow/purple have no token equivalent regardless */
 const STATUS_COLORS: Record<string, string> = {
     searching: "bg-yellow-500",
     driver_assigned: "bg-blue-500",
     driver_arrived: "bg-purple-500",
     in_progress: "bg-green-500",
 };
+/* eslint-enable no-restricted-syntax */
 
 export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }: RidePanelProps) {
     const currentStepIdx = STATUS_STEPS.indexOf(ride.status);
@@ -54,6 +56,7 @@ export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }:
                         </button>
                     </div>
                     <Badge
+                        // eslint-disable-next-line no-restricted-syntax -- fallback for the solid-fill white-text badge above; same contrast-risk exclusion (#2816)
                         className={`mt-1 text-white ${STATUS_COLORS[ride.status] ?? "bg-gray-500"}`}
                     >
                         {STATUS_LABELS[ride.status] ?? ride.status}
@@ -132,7 +135,7 @@ export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }:
                         <p className="text-muted-foreground">Distance</p>
                     </div>
                     <div className="rounded-lg bg-muted p-2">
-                        <p className="font-bold text-green-600">
+                        <p className="font-bold text-success">
                             {ride.total_fare ? `$${ride.total_fare.toFixed(2)}` : "—"}
                         </p>
                         <p className="text-muted-foreground">Fare</p>

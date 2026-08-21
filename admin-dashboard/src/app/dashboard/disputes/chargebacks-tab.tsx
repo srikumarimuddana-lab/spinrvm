@@ -39,13 +39,13 @@ function triggerBrowserDownload(blob: Blob, filename: string) {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  needs_response: "bg-red-100 text-red-700",
-  warning_needs_response: "bg-red-100 text-red-700",
-  under_review: "bg-amber-100 text-amber-700",
-  warning_under_review: "bg-amber-100 text-amber-700",
-  won: "bg-green-100 text-green-700",
-  lost: "bg-gray-100 text-gray-500",
-  warning_closed: "bg-green-100 text-green-700",
+  needs_response: "bg-destructive/15 text-destructive",
+  warning_needs_response: "bg-destructive/15 text-destructive",
+  under_review: "bg-warning/15 text-warning",
+  warning_under_review: "bg-warning/15 text-warning",
+  won: "bg-success/15 text-success",
+  lost: "bg-muted text-muted-foreground",
+  warning_closed: "bg-success/15 text-success",
 };
 
 const OPEN_STATUSES = new Set(["needs_response", "warning_needs_response", "under_review", "warning_under_review"]);
@@ -62,8 +62,8 @@ function daysRemainingLabel(days: number | null, status: string): string {
 
 function daysRemainingColor(days: number | null, status: string): string {
   if (!OPEN_STATUSES.has(status) || days == null) return "text-muted-foreground";
-  if (days <= 1) return "text-red-600 font-semibold";
-  if (days <= 3) return "text-amber-600 font-medium";
+  if (days <= 1) return "text-destructive font-semibold";
+  if (days <= 3) return "text-warning font-medium";
   return "text-muted-foreground";
 }
 
@@ -267,7 +267,7 @@ export default function ChargebacksTab() {
                           ${(c.amount_cents / 100).toFixed(2)}
                         </TableCell>
                         <TableCell>
-                          <Badge className={STATUS_COLORS[c.status] || "bg-gray-100"}>
+                          <Badge className={STATUS_COLORS[c.status] || "bg-muted"}>
                             {c.status?.replace(/_/g, " ")}
                           </Badge>
                         </TableCell>

@@ -265,6 +265,33 @@ Next action:     Implement both together: (1) pgsodium/Vault encryption for
                  the combined size and the safety-critical surface touched
                  (backend/routes/rides/safety.py). Tracked as its own
                  implementation effort from this decision.
+Implementation:  COMPLETE 2026-08-21. All 6 subtasks of the /plan
+                 decomposition landed on claude/spinr-app-all-surfaces-de596c:
+                 (1) migration 357 — encrypt_emergency_contact_pii()/
+                 decrypt_emergency_contact_pii() RPCs (mirrors migration 138's
+                 corrected end state, not 32's original draft — reviewed
+                 twice by spinr-migration-reviewer); (2) routes/users.py wired
+                 to those RPCs (fail-closed write, fail-open read); (3)
+                 migration 358 + services/sos_contact_consent.py — SOS-contact
+                 suppression storage, fail-open by design (reviewed by
+                 spinr-migration-reviewer, PASS); (4) routes/rides/safety.py's
+                 two SOS SMS paths gated on suppression, fail-open end-to-end
+                 (reviewed by spinr-safety-sos-reviewer, SAFE TO MERGE, no
+                 blockers); (5) routes/webhooks.py's inbound Twilio STOP/START
+                 extended to update SOS-contact suppression unconditionally
+                 (not gated on Spinr user_id resolution); (6) a one-time
+                 opt-out notice SMS (utils/sos_contact_notice.py) sent
+                 best-effort on contact add, closing R-002. Full detail and
+                 verification record in docs/change-log/2026-08-21-emergency-
+                 contact-encryption-consent.md, -sos-contact-suppression-
+                 migration.md, -sos-suppression-filtering-wired.md, and
+                 -emergency-contact-encryption-consent-app-wiring.md. Two
+                 non-blocking follow-up notes surfaced during review (added
+                 latency on the suppression-check step within its existing
+                 fail-open bound; sos_contact_consent.normalize_phone() sits
+                 outside is_suppressed()'s own try/except, currently covered
+                 by an outer caller-side guard) — tracked for a future pass,
+                 not blocking, per the reviewing agents' verdicts.
 ```
 
 ---

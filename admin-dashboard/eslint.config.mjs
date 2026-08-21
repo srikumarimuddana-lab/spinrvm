@@ -94,6 +94,14 @@ const eslintConfig = defineConfig([
   // both themes — see its own comment) suppress with
   // `eslint-disable-next-line no-restricted-syntax` and a one-line reason,
   // not by working around the regex.
+  //
+  // IMPORTANT: this rule alone adds ~1,419 new project-wide warnings
+  // (332 baseline -> 1,751) — package.json's `lint` script's
+  // `--max-warnings` was bumped from 600 to 1751 (exact current count,
+  // same ratchet-not-buffer philosophy as e2e/a11y-baseline.json) to
+  // avoid silently breaking CI's admin-test job. Ratchet that number
+  // DOWN as each #2816 migration batch lands — never raise it further
+  // for an unrelated reason.
   {
     rules: {
       "no-restricted-syntax": [

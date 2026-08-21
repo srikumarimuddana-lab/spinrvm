@@ -50,15 +50,28 @@ the suppression convention this rule's own error message documents.
   comment.** No component logic, styling, or runtime behavior changed —
   `statusColor()`'s actual returned class strings are byte-identical to
   before.
-- **`warn`-level means this cannot break CI on any existing PR.** Verified
-  directly: ran `npx eslint` against the two largest offenders
-  (`lib/utils.ts` pre-suppression, `drivers/page.tsx`) — 184 warnings, 0
-  errors.
+- **`warn`-level alone was NOT sufficient to guarantee this doesn't break
+  CI — caught and fixed after initial push.** `package.json`'s `lint`
+  script runs `eslint --max-warnings 600`, a repo-wide warning-count
+  ceiling `npm run lint` (CI's `admin-test` job) actually enforces
+  regardless of individual rule severity. This rule alone adds ~1,419 new
+  project-wide warnings (332 baseline → 1,751 total via `npx eslint .`),
+  which blew straight through the 600 cap and failed `admin-test` on the
+  first push (confirmed via the real CI run, not just local `npx eslint`
+  on two files — that check only proves 0 *errors*, not that the
+  repo-wide *warning count* stays under the script's actual ceiling).
+  Fixed by bumping `--max-warnings` to 1751 (exact current count, same
+  ratchet-not-buffer philosophy as `e2e/a11y-baseline.json` — never raise
+  it further for an unrelated reason; ratchet down as batches land).
+  Re-verified: `npm run lint` now exits 0.
 - **Every other admin-dashboard PR in flight or merged today is
-  unaffected** — this only adds visibility (a warning in `eslint`/CI
-  output), not a new blocking gate. The eventual `error` flip (out of
-  scope for this PR) is what actually changes CI behavior, and only after
-  the migration batches land.
+  unaffected** — the `--max-warnings` bump only raises the ceiling this
+  PR's own new warnings needed; it doesn't loosen anything for unrelated
+  future warnings (a PR that pushes the count past 1751 for an unrelated
+  reason still fails, same as before at the old 600 ceiling). The
+  eventual `error` flip on this specific rule (out of scope for this PR)
+  is what actually changes CI *behavior* for new violations, and only
+  after the migration batches land.
 - This rule does not touch `.claude/hooks/pre-commit`'s grep-based checks
   — `.husky/pre-commit` already runs `eslint` unconditionally on every
   staged TS file (not IDE-dependent), so no second enforcement layer is
@@ -76,6 +89,7 @@ behavior changes.
 |---|---|---|
 | `admin-dashboard/eslint.config.mjs` | Added `no-restricted-syntax` (warn) flagging raw Tailwind color utilities | Stop the #2816 backlog from growing while it's migrated |
 | `admin-dashboard/src/lib/utils.ts` | Added `eslint-disable`/`eslint-enable` block + comment around `statusColor()`'s map | Documented, intentional exception — categorical status coloring, not a token-migration target |
+| `admin-dashboard/package.json` | `lint` script's `--max-warnings` bumped 600 → 1751 | The new rule's ~1,419 project-wide warnings blew through the old cap and failed CI's `admin-test` job — caught after first push, see §4 |
 | `docs/change-log/2026-08-21-admin-color-token-migration-plan.md` | New — Stage 1 batching plan | Tracks the actual migration work this rule is a prerequisite for |
 
 ## 7. Before / after
@@ -129,11 +143,20 @@ runtime change.
   config.
 - [x] Re-ran `npx eslint src/lib/utils.ts` after adding the suppression —
   confirmed 0 warnings, proving the exclusion works as intended.
-- [ ] Did not run the full-repo `eslint` (all 115 backlog files) — that
-  would just reproduce the same warning count as the earlier grep-based
-  scoping pass; not needed to verify this PR's own change (config +
-  one file), and the migration-plan doc already captures the current
-  per-file counts from the grep pass, not from a full eslint run.
+- [x] **Correction, added after the first push**: initially skipped
+  running full-repo `eslint` (reasoned it would "just reproduce the
+  grep-based scoping count") — that reasoning was wrong. The two-file
+  spot-check proved the rule fires and produces 0 *errors*, but never
+  checked the repo-wide *warning count* against `package.json`'s actual
+  `lint` script (`eslint --max-warnings 600`), which CI enforces
+  regardless of individual rule severity. Ran `npx eslint .` for real
+  after CI's `admin-test` job failed on the first push: 1,751 total
+  warnings vs. the 600 cap. Fixed (see §4/§6) and re-verified: `npm run
+  lint` (the exact command CI runs) now exits 0.
+- [x] Ran the full `admin-test` job's actual steps locally in sequence
+  after the fix — `npm run lint`, `npm run check:middleware`, `npm test`,
+  `npm run build` (with CI's own `BACKEND_URL`/`NEXT_PUBLIC_API_URL` env
+  vars) — all four exit 0, not just the subset this PR touches.
 
 ## 10. Sign-off
 

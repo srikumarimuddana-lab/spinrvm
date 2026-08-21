@@ -699,7 +699,7 @@ function PayoutsOpsQueues({ overview }: { overview: PayoutsOverview }) {
                 <Card className="border-border/50">
                     <CardHeader className="pb-2">
                         <CardTitle className="text-sm flex items-center gap-2">
-                            <AlertTriangle className="h-4 w-4 text-red-500" />
+                            <AlertTriangle className="h-4 w-4 text-destructive" />
                             Why payouts are failing
                         </CardTitle>
                     </CardHeader>
@@ -738,7 +738,7 @@ function PayoutsOpsQueues({ overview }: { overview: PayoutsOverview }) {
                 <Card className="border-border/50">
                     <CardHeader className="pb-2">
                         <CardTitle className="text-sm flex items-center gap-2">
-                            <UserCheck className="h-4 w-4 text-amber-500" />
+                            <UserCheck className="h-4 w-4 text-warning" />
                             At-risk drivers
                         </CardTitle>
                     </CardHeader>
@@ -788,7 +788,7 @@ function PayoutsOpsQueues({ overview }: { overview: PayoutsOverview }) {
             <Card className="border-border/50">
                 <CardHeader className="pb-2">
                     <CardTitle className="text-sm flex items-center gap-2">
-                        <TrendingUp className="h-4 w-4 text-emerald-500" />
+                        <TrendingUp className="h-4 w-4 text-success" />
                         Top drivers by payout volume
                     </CardTitle>
                 </CardHeader>
@@ -1736,10 +1736,10 @@ function PayoutsTab() {
     const { sorted: sortedFiltered, sort: payoutsSort, toggle: payoutsToggle } = useTableSort<any>(filtered);
 
     const statusBadge = (s: string) => {
-        if (s === "completed") return "bg-emerald-500/15 text-emerald-600";
-        if (s === "pending") return "bg-amber-500/15 text-amber-600";
-        if (s === "failed") return "bg-red-500/15 text-red-600";
-        return "bg-zinc-500/15 text-zinc-600";
+        if (s === "completed") return "bg-success/15 text-success";
+        if (s === "pending") return "bg-warning/15 text-warning";
+        if (s === "failed") return "bg-destructive/15 text-destructive";
+        return "bg-muted text-muted-foreground";
     };
 
     return (
@@ -1768,17 +1768,17 @@ function PayoutsTab() {
             ) : stats && (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <Card><CardContent className="pt-4">
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground"><CheckCircle className="h-4 w-4 text-green-500" /> Total Paid</div>
-                        <div className="text-2xl font-bold text-green-600">${stats.total_paid?.toLocaleString()}</div>
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground"><CheckCircle className="h-4 w-4 text-success" /> Total Paid</div>
+                        <div className="text-2xl font-bold text-success">${stats.total_paid?.toLocaleString()}</div>
                     </CardContent></Card>
                     <Card><CardContent className="pt-4">
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground"><Clock className="h-4 w-4 text-amber-500" /> Pending</div>
-                        <div className="text-2xl font-bold text-amber-600">${stats.total_pending?.toLocaleString()}</div>
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground"><Clock className="h-4 w-4 text-warning" /> Pending</div>
+                        <div className="text-2xl font-bold text-warning">${stats.total_pending?.toLocaleString()}</div>
                         <p className="text-xs text-muted-foreground">{stats.pending_count} payouts</p>
                     </CardContent></Card>
                     <Card><CardContent className="pt-4">
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground"><AlertTriangle className="h-4 w-4 text-red-500" /> Failed</div>
-                        <div className="text-2xl font-bold text-red-600">${stats.total_failed?.toLocaleString()}</div>
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground"><AlertTriangle className="h-4 w-4 text-destructive" /> Failed</div>
+                        <div className="text-2xl font-bold text-destructive">${stats.total_failed?.toLocaleString()}</div>
                     </CardContent></Card>
                     <Card><CardContent className="pt-4">
                         <div className="flex items-center gap-2 text-sm text-muted-foreground"><Wallet className="h-4 w-4" /> Total Payouts</div>

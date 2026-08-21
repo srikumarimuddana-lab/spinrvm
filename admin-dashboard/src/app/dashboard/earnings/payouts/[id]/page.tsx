@@ -49,12 +49,12 @@ interface Payout {
 // ---------------------------------------------------------------------------
 
 const STATUS_CONFIG: Record<string, { label: string; cls: string; Icon: React.ElementType }> = {
-    completed: { label: "Completed", cls: "bg-green-500/15 text-green-700", Icon: CircleCheck },
-    paid:      { label: "Paid",      cls: "bg-green-500/15 text-green-700", Icon: CircleCheck },
-    pending:   { label: "Pending",   cls: "bg-yellow-500/15 text-yellow-700", Icon: Clock },
-    processing:{ label: "Processing",cls: "bg-blue-500/15 text-blue-700", Icon: Clock },
-    failed:    { label: "Failed",    cls: "bg-red-500/15 text-red-700", Icon: CircleAlert },
-    cancelled: { label: "Cancelled", cls: "bg-zinc-400/20 text-zinc-600", Icon: Ban },
+    completed: { label: "Completed", cls: "bg-success/15 text-success", Icon: CircleCheck },
+    paid:      { label: "Paid",      cls: "bg-success/15 text-success", Icon: CircleCheck },
+    pending:   { label: "Pending",   cls: "bg-warning/15 text-warning", Icon: Clock },
+    processing:{ label: "Processing",cls: "bg-blue-500/15 text-blue-700 dark:text-blue-400", Icon: Clock },
+    failed:    { label: "Failed",    cls: "bg-destructive/15 text-destructive", Icon: CircleAlert },
+    cancelled: { label: "Cancelled", cls: "bg-muted text-muted-foreground", Icon: Ban },
 };
 
 function formatCurrency(v: number | string | undefined) {
@@ -98,7 +98,7 @@ function CopyableField({ label, value }: { label: string; value?: string }) {
                     className="text-muted-foreground hover:text-foreground transition-colors"
                     title="Copy"
                 >
-                    {copied ? <CircleCheck className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
+                    {copied ? <CircleCheck className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
                 </button>
             </div>
         </div>
@@ -199,7 +199,7 @@ export default function PayoutDetailPage() {
         );
     }
 
-    const sc = payout ? (STATUS_CONFIG[payout.status] ?? { label: payout.status, cls: "bg-zinc-500/15 text-zinc-600", Icon: Clock }) : null;
+    const sc = payout ? (STATUS_CONFIG[payout.status] ?? { label: payout.status, cls: "bg-muted text-muted-foreground", Icon: Clock }) : null;
     const canRetry = payout?.status === "failed" || payout?.status === "cancelled";
 
     return (
@@ -219,7 +219,7 @@ export default function PayoutDetailPage() {
                 </div>
                 <div className="flex gap-2 items-center">
                     {toast && (
-                        <span className="text-sm text-green-700 bg-green-100 px-3 py-1 rounded-full">{toast}</span>
+                        <span className="text-sm text-success bg-success/15 px-3 py-1 rounded-full">{toast}</span>
                     )}
                     <Button variant="outline" onClick={load} disabled={loading}>
                         <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />

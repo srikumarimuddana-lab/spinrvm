@@ -8,11 +8,11 @@ import {
     addStandardControls,
     fitBoundsToPoints,
     makeCircleMarkerEl,
+    makeRoutePinEl,
 } from "@/lib/map/maplibre-base";
 import {
     buildPathGradient,
     buildStraightRouteGradient,
-    ROUTE_PIN_COLORS,
     ROUTE_STROKE_WIDTH,
 } from "@spinr/shared/constants/routeMapStyle";
 
@@ -77,7 +77,7 @@ export default function LiveRideMap({ pickupLat, pickupLng, dropoffLat, dropoffL
 
             // Pickup marker (green)
             new maplibregl.Marker({
-                element: makeCircleMarkerEl({ color: ROUTE_PIN_COLORS.pickup, size: 20 }),
+                element: makeRoutePinEl({ kind: "pickup", size: 26, title: "Pickup" }),
             })
                 .setLngLat([pickupLng, pickupLat])
                 .setPopup(new maplibregl.Popup({ closeButton: false, offset: 8 }).setText("Pickup"))
@@ -85,7 +85,7 @@ export default function LiveRideMap({ pickupLat, pickupLng, dropoffLat, dropoffL
 
             // Dropoff marker (red)
             new maplibregl.Marker({
-                element: makeCircleMarkerEl({ color: ROUTE_PIN_COLORS.dropoff, size: 20 }),
+                element: makeRoutePinEl({ kind: "dropoff", size: 26, title: "Dropoff" }),
             })
                 .setLngLat([dropoffLng, dropoffLat])
                 .setPopup(new maplibregl.Popup({ closeButton: false, offset: 8 }).setText("Dropoff"))

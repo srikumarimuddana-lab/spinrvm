@@ -10,10 +10,10 @@ import {
     addStandardControls,
     fitBoundsToGeoJSON,
     makeCircleMarkerEl,
+    makeRoutePinEl,
 } from "@/lib/map/maplibre-base";
 import {
     buildPathGradient,
-    ROUTE_PIN_COLORS,
     ROUTE_STROKE_WIDTH,
 } from "@spinr/shared/constants/routeMapStyle";
 import { AreaDemandSupply, MonitoringDriver, MonitoringFilters, MonitoringRide, SelectedItem } from "./types";
@@ -302,20 +302,18 @@ export function MonitoringMap({
         const dropoffLngLat: [number, number] = [ride.dropoff_lng, ride.dropoff_lat];
 
         if (!entry) {
-            const pickupEl = makeCircleMarkerEl({
-                color: ROUTE_PIN_COLORS.pickup,
-                label: "P",
+            const pickupEl = makeRoutePinEl({
+                kind: "pickup",
                 title: `Pickup: ${ride.pickup_address ?? ""}`,
-                size: 20,
+                size: 22,
             });
             pickupEl.addEventListener("click", () => onSelectRideRef.current(ride.id));
             const pickup = new maplibregl.Marker({ element: pickupEl }).setLngLat(pickupLngLat);
 
-            const dropoffEl = makeCircleMarkerEl({
-                color: ROUTE_PIN_COLORS.dropoff,
-                label: "D",
+            const dropoffEl = makeRoutePinEl({
+                kind: "dropoff",
                 title: `Dropoff: ${ride.dropoff_address ?? ""}`,
-                size: 20,
+                size: 22,
             });
             dropoffEl.addEventListener("click", () => onSelectRideRef.current(ride.id));
             const dropoff = new maplibregl.Marker({ element: dropoffEl }).setLngLat(dropoffLngLat);

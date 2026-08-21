@@ -84,6 +84,8 @@ export function metresBetween(a: CarLatLng, b: CarLatLng): number {
 let lastFix: CarLatLng | null = null;
 /** When `lastFix` was set, so staleness is measurable. */
 let lastFixAt = 0;
+/** When the CURRENT bearing was last established (not merely carried). */
+let lastHeadingAt = 0;
 
 /**
  * The last fix, readable from outside React.
@@ -100,33 +102,104 @@ export const getLastCarFix = (): CarLatLng | null => lastFix;
 export const carFixAgeMs = (): number => (lastFixAt === 0 ? Infinity : Date.now() - lastFixAt);
 
 /**
- * Carry the last known bearing onto a fix that has none.
+ * Bearing from `a` to `b` in degrees [0, 360). Great-circle initial bearing —
+ * the same formula CarMarker.tsx uses for its own fallback, kept here so the
+ * whole surface agrees on one course instead of two components each guessing.
+ */
+export function bearingBetween(a: CarLatLng, b: CarLatLng): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLng = toRad(b.longitude - a.longitude);
+  const y = Math.sin(dLng) * Math.cos(toRad(b.latitude));
+  const x =
+    Math.cos(toRad(a.latitude)) * Math.sin(toRad(b.latitude)) -
+    Math.sin(toRad(a.latitude)) * Math.cos(toRad(b.latitude)) * Math.cos(dLng);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+/**
+ * Far enough between two fixes for the direction between them to BE a course.
  *
- * ─── Why the car marker never turned while the phone's did ───────────────────
+ * Below this, the "movement" is GPS noise and its bearing is random — which is
+ * worse than no bearing at all, because a random bearing looks authoritative.
+ * 10m is about half a second at road speed and several times typical urban
+ * scatter.
+ */
+export const MIN_COURSE_MOVE_M = 10;
+
+/**
+ * How long a bearing survives with nothing to confirm it.
+ *
+ * ─── Why the car marker pointed the wrong way for a whole trip ───────────────
  * Only `watchPositionAsync` produces a course over ground; a one-shot
  * `getCurrentPositionAsync` almost never does, and reports 0 or -1 instead. The
  * car has THREE such one-shot paths (the startup fix, and the staleness
  * watchdog every 3s) where the phone dashboard has none — and on Android Auto
- * they are the paths that dominate, because the phone app is backgrounded in a
- * cradle and Android throttles its foreground watcher hard. So the good bearing
- * from the occasional watcher callback was being overwritten seconds later by a
- * watchdog fix carrying no bearing at all, and the marker snapped back to north.
+ * they are the paths that DOMINATE, because the phone is backgrounded in a
+ * cradle and Android throttles its foreground watcher hard.
  *
- * A bearing does not stop being true because the next fix forgot to mention it:
- * a car pointing west at the last real reading is still pointing west. Holding
- * it is strictly better than discarding it — and when the driver genuinely
- * turns, the watcher supplies a new one that replaces it.
+ * The first version of this module answered that by carrying the last real
+ * bearing forward — with no expiry. That fixed the marker snapping to north
+ * every few seconds and replaced it with something worse: on a starved watcher
+ * the bearing from one early reading (often the one taken pulling out of a
+ * parking spot) was republished for the whole drive, so the car icon sat
+ * pointing north up while the driver went west, through every turn. Being
+ * non-null, it also SUPPRESSED CarMarker's own derive-from-travel fallback.
  *
- * Position is never carried this way; only the bearing. A stale POSITION is the
- * "map shows where I started" bug this whole module exists to prevent.
+ * So a carried bearing now expires. Past this age, if the driver has not moved
+ * far enough for a derived course either, the honest answer is null — the map
+ * goes north-up and the marker shows the direction of travel rather than a
+ * confident lie. 12s is a couple of watchdog cycles: long enough to bridge a
+ * gap between watcher callbacks, short enough that it cannot outlive a turn.
  */
-export function carryHeading(next: CarLatLng, prev: CarLatLng | null): CarLatLng {
+export const CARRIED_HEADING_MAX_AGE_MS = 12_000;
+
+/**
+ * The bearing a fix should actually be stored with.
+ *
+ * Priority, best evidence first:
+ *   1. A real GPS course on this fix.
+ *   2. The direction from the previous fix, once the driver has moved
+ *      MIN_COURSE_MOVE_M. This is the signal that is always available at road
+ *      speed and always current — the one the old carry-forward hid.
+ *   3. The previous bearing, but only while it is younger than
+ *      CARRIED_HEADING_MAX_AGE_MS.
+ *   4. null. The surface treats that as "no course", which is a state it draws
+ *      correctly (north-up map, marker on travel direction).
+ *
+ * Pure, so all four branches are testable without a head unit. Returns the
+ * fix AND how its bearing was arrived at — the caller needs that to know
+ * whether the bearing's clock restarts (GPS/derived) or keeps running
+ * (carried); an "is it a different number?" test gets this wrong the moment a
+ * fresh reading happens to match the carried one.
+ */
+export type HeadingSource = 'gps' | 'derived' | 'carried' | 'none';
+
+export function resolveHeading(
+  next: CarLatLng,
+  prev: CarLatLng | null,
+  prevHeadingAgeMs: number,
+): { fix: CarLatLng; source: HeadingSource } {
   // Negative is expo's "unknown" sentinel; null is "provider gave nothing".
-  const hasHeading = typeof next.heading === 'number' && Number.isFinite(next.heading) && next.heading >= 0;
-  if (hasHeading) return next;
+  const own = next.heading;
+  if (typeof own === 'number' && Number.isFinite(own) && own >= 0) {
+    return { fix: next, source: 'gps' };
+  }
+
+  if (prev && metresBetween(prev, next) >= MIN_COURSE_MOVE_M) {
+    return { fix: { ...next, heading: bearingBetween(prev, next) }, source: 'derived' };
+  }
+
   const carried = prev?.heading;
-  if (typeof carried !== 'number' || !Number.isFinite(carried) || carried < 0) return next;
-  return { ...next, heading: carried };
+  if (
+    typeof carried === 'number' &&
+    Number.isFinite(carried) &&
+    carried >= 0 &&
+    prevHeadingAgeMs <= CARRIED_HEADING_MAX_AGE_MS
+  ) {
+    return { fix: { ...next, heading: carried }, source: 'carried' };
+  }
+
+  return { fix: { ...next, heading: null }, source: 'none' };
 }
 
 /**
@@ -136,15 +209,25 @@ export function carryHeading(next: CarLatLng, prev: CarLatLng | null): CarLatLng
  * state — re-publishing it would loop straight back into the setState that
  * produced it.
  *
- * Returns what was actually stored, which may carry a bearing forward from the
- * previous fix (see `carryHeading`) — callers should use the return value for
- * their own setState rather than the fix they passed in, or the marker and the
- * module cache disagree about which way the car is pointing.
+ * Returns what was actually stored, whose bearing may be derived from movement
+ * or carried from the previous fix (see `resolveHeading`) — callers should use
+ * the return value for their own setState rather than the fix they passed in,
+ * or the marker and the module cache disagree about which way the car points.
  */
 export function adoptCarFix(fix: CarLatLng): CarLatLng {
-  const merged = carryHeading(fix, lastFix);
+  const now = Date.now();
+  const { fix: merged, source } = resolveHeading(
+    fix,
+    lastFix,
+    lastHeadingAt === 0 ? Infinity : now - lastHeadingAt,
+  );
+  // Stamped only when this fix ESTABLISHED a bearing (GPS course, or derived
+  // from real movement). A carried one keeps the age of the reading it came
+  // from, or it would renew itself on every watchdog tick and never expire —
+  // which is exactly the bug this block exists to end.
+  if (source === 'gps' || source === 'derived') lastHeadingAt = now;
   lastFix = merged;
-  lastFixAt = Date.now();
+  lastFixAt = now;
   return merged;
 }
 
@@ -254,6 +337,7 @@ export function persistFix(fix: CarLatLng, force = false): void {
 export function _resetCarFixChannel(): void {
   lastFix = null;
   lastFixAt = 0;
+  lastHeadingAt = 0;
   lastCacheWriteAt = 0;
   lastCachedPoint = null;
   publishedSinceRead = 0;

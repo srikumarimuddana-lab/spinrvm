@@ -115,6 +115,8 @@ jest.mock('@iternio/react-native-auto-play', () => {
 
 // eslint-disable-next-line import/first -- must follow the jest.mock() calls above
 import registerAutoPlay from '../register';
+// eslint-disable-next-line import/first -- must follow the jest.mock() calls above
+import { useCarEarningsPrivacy } from '../carEarningsPrivacy';
 
 const navRide = () =>
   ({
@@ -162,6 +164,7 @@ beforeEach(() => {
   mockStopCarSession.mockClear();
   mockConnected = true;
   mockState.rideState = 'idle';
+  useCarEarningsPrivacy.getState().reset();
   mockState.activeRide = null;
   mockState.incomingRide = null;
 });
@@ -196,10 +199,10 @@ it('creates ONE live MapTemplate with zoom-only buttons and no header action whe
   const buttons = lastMapButtons(t);
   // Recenter is always present — once the head unit can pan (onDidPan), a
   // driver who has dragged away needs a way back regardless of ride state.
-  expect(buttons).toHaveLength(3); // recenter + zoom out + zoom in
+  expect(buttons).toHaveLength(4); // recenter + earnings privacy + zoom out + zoom in
   buttons[0].onPress(); // recenter
-  buttons[1].onPress(); // zoom out
-  buttons[2].onPress(); // zoom in
+  buttons[2].onPress(); // zoom out
+  buttons[3].onPress(); // zoom in
   expect(mockRecenter).toHaveBeenCalledTimes(1);
   expect(mockZoomOut).toHaveBeenCalledTimes(1);
   expect(mockZoomIn).toHaveBeenCalledTimes(1);
@@ -207,6 +210,36 @@ it('creates ONE live MapTemplate with zoom-only buttons and no header action whe
   expect(lastHeader(t)).toBeUndefined(); // no progress action when idle
   expect(mockReset).toHaveBeenCalled();
   expect(mockSubscribe).toHaveBeenCalled();
+});
+
+describe('earnings privacy toggle', () => {
+  it('starts masked on every connect and flips only when the driver presses it', () => {
+    useCarEarningsPrivacy.getState().toggle(); // leftover reveal from a prior session
+    registerAutoPlay();
+    mockListeners.didConnect();
+    // Connecting re-masks: a reveal is about who can see the screen right now.
+    expect(useCarEarningsPrivacy.getState().hidden).toBe(true);
+
+    const t = lastTpl();
+    lastMapButtons(t)[1].onPress();
+    expect(useCarEarningsPrivacy.getState().hidden).toBe(false);
+    // The glyph is part of the state it toggles, so the strip is rebuilt.
+    lastMapButtons(t)[1].onPress();
+    expect(useCarEarningsPrivacy.getState().hidden).toBe(true);
+  });
+
+  it('is dropped mid-ride — the 4-slot strip belongs to Navigate + zoom there', () => {
+    mockState.rideState = 'trip_in_progress';
+    mockState.activeRide = navRide();
+    registerAutoPlay();
+    mockListeners.didConnect();
+
+    const buttons = lastMapButtons(lastTpl());
+    expect(buttons).toHaveLength(4);
+    // Pressing every button in a ride must never flip privacy.
+    for (const b of buttons) b.onPress();
+    expect(useCarEarningsPrivacy.getState().hidden).toBe(true);
+  });
 });
 
 it('adds a single Navigate hand-off (before zoom) and a Complete action while in trip', () => {

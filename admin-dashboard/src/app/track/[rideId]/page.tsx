@@ -3,7 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Script from 'next/script';
-import { buildPathGradient, ROUTE_STROKE_WIDTH } from '@spinr/shared/constants/routeMapStyle';
+import {
+  buildPathGradient,
+  routePinSvg,
+  ROUTE_STROKE_WIDTH,
+  type RoutePinKind,
+} from '@spinr/shared/constants/routeMapStyle';
 
 // Google Maps API key — add NEXT_PUBLIC_GOOGLE_MAPS_API_KEY to Vercel env vars.
 // Same value as EXPO_PUBLIC_GOOGLE_MAPS_API_KEY used by the mobile apps;
@@ -38,6 +43,10 @@ interface RideInfo {
     photo_url?: string;
   };
 }
+
+/** Pin diameter on the tracking map — bigger than in-app, this is a phone
+ *  browser at arm's length with no other chrome competing for attention. */
+const TRACK_PIN_SIZE = 34;
 
 const STATUS_LABEL: Record<string, { label: string; color: string }> = {
   searching:        { label: 'Finding driver',    color: '#B45309' },
@@ -127,25 +136,15 @@ export default function TrackRide() {
     if (!g || !mapRef.current || !ride) return;
     const map = mapRef.current;
 
-    // Green navigation-arrow icon for the pickup location.
-    const pickupNavSvg =
-      `data:image/svg+xml,${encodeURIComponent(
-        `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
-          <circle cx="20" cy="21" r="17" fill="#000000" opacity="0.18"/>
-          <circle cx="20" cy="20" r="17" fill="#10B981" stroke="white" stroke-width="2.5"/>
-          <path d="M20 8 L30 31 L20 25.5 L10 31 Z" fill="white"/>
-        </svg>`
-      )}`;
-
-    // Red teardrop pin for the dropoff location.
-    const dropoffPinSvg =
-      `data:image/svg+xml,${encodeURIComponent(
-        `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="40" viewBox="0 0 32 40">
-          <path d="M16 0C7.163 0 0 7.163 0 16c0 10 16 24 16 24S32 26 32 16C32 7.163 24.837 0 16 0z" fill="#EF4444"/>
-          <circle cx="16" cy="16" r="7" fill="white" opacity="0.9"/>
-          <circle cx="16" cy="16" r="4" fill="#EF4444"/>
-        </svg>`
-      )}`;
+    // Pickup + drop-off markers come from the SHARED spec (routePinSvg), so
+    // the page a rider watches their ride on draws exactly the pins the rider
+    // app, the driver app, the head unit and the admin maps draw. This page
+    // used to invent its own — a green nav-arrow disc and a red teardrop — so
+    // the one surface we send to riders by link was the odd one out.
+    const svgUrl = (kind: RoutePinKind, size: number) =>
+      `data:image/svg+xml,${encodeURIComponent(routePinSvg(kind, size))}`;
+    const pickupNavSvg = svgUrl('pickup', TRACK_PIN_SIZE);
+    const dropoffPinSvg = svgUrl('dropoff', TRACK_PIN_SIZE);
 
     // Lyft-style driver marker: a clean top-down sedan. Single dark body with
     // a soft drop shadow, tinted windshield, roof panel, rear window, and
@@ -219,8 +218,10 @@ export default function TrackRide() {
       }
     };
 
-    upsertMarker(pickupMarkerRef,  ride.pickup_lat,  ride.pickup_lng,  pickupNavSvg,  40);
-    upsertMarker(dropoffMarkerRef, ride.dropoff_lat, ride.dropoff_lng, dropoffPinSvg, 36);
+    // Both centre-anchored: the shared pin is a disc that marks the point
+    // itself, so there is no teardrop tip for the two ends to disagree about.
+    upsertMarker(pickupMarkerRef,  ride.pickup_lat,  ride.pickup_lng,  pickupNavSvg,  TRACK_PIN_SIZE, true);
+    upsertMarker(dropoffMarkerRef, ride.dropoff_lat, ride.dropoff_lng, dropoffPinSvg, TRACK_PIN_SIZE, true);
 
     const d = ride.driver;
     // Args: (ref, lat, lng, svgUrl, size, centerAnchor, zIndex).

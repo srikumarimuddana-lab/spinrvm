@@ -78,9 +78,9 @@ function formatNumber(n: number | null | undefined): string {
 
 function memoryColor(percent: number | null | undefined): string {
     if (percent == null) return "bg-muted";
-    if (percent >= 85) return "bg-red-500";
-    if (percent >= 60) return "bg-yellow-500";
-    return "bg-emerald-500";
+    if (percent >= 85) return "bg-destructive";
+    if (percent >= 60) return "bg-warning";
+    return "bg-success";
 }
 
 function connectivityBadge(status: "ok" | "degraded" | "error" | "unset") {
@@ -279,8 +279,8 @@ export default function RedisMonitoringPage() {
 
             {/* Backend-offline banner */}
             {stats && !stats.connected && (
-                <Card className="border-yellow-500/50">
-                    <CardContent className="pt-6 flex items-center gap-2 text-yellow-600 dark:text-yellow-400">
+                <Card className="border-warning/50">
+                    <CardContent className="pt-6 flex items-center gap-2 text-warning">
                         <CircleSlash className="h-5 w-5" />
                         <div>
                             <p className="font-medium">
@@ -297,8 +297,8 @@ export default function RedisMonitoringPage() {
 
             {/* Eviction alert */}
             {stats?.connected && (stats.evicted_keys_total ?? 0) > 0 && (
-                <Card className="border-yellow-500/50">
-                    <CardContent className="pt-6 flex items-center gap-2 text-yellow-600 dark:text-yellow-400">
+                <Card className="border-warning/50">
+                    <CardContent className="pt-6 flex items-center gap-2 text-warning">
                         <AlertTriangle className="h-5 w-5" />
                         <span>
                             Redis has evicted{" "}
@@ -453,8 +453,8 @@ export default function RedisMonitoringPage() {
 
             {/* WebSocket fan-out degraded banner — the live-map failure mode */}
             {ws?.fanout?.configured && !ws.fanout.active && (
-                <Card className="border-red-500/50">
-                    <CardContent className="pt-6 flex items-start gap-2 text-red-600 dark:text-red-400">
+                <Card className="border-destructive/50">
+                    <CardContent className="pt-6 flex items-start gap-2 text-destructive">
                         <WifiOff className="mt-0.5 h-5 w-5 shrink-0" />
                         <div>
                             <p className="font-medium">

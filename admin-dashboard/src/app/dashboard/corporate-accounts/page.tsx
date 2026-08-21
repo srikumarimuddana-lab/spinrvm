@@ -105,8 +105,8 @@ export default function CorporateAccountsPage() {
         getWalletRiskPortfolio()
             .then((res) => {
                 if (cancelled) return;
-                setFlaggedWallets(res.wallets.filter((w) => w.risk_flags.length > 0));
-                setTotalWallets(res.total_wallets);
+                setFlaggedWallets((res.wallets ?? []).filter((w) => (w.risk_flags?.length ?? 0) > 0));
+                setTotalWallets(res.total_wallets ?? 0);
             })
             .catch(() => {
                 if (!cancelled) {
@@ -133,7 +133,7 @@ export default function CorporateAccountsPage() {
         getKybReverificationDue()
             .then((res) => {
                 if (cancelled) return;
-                setKybDue(res.companies);
+                setKybDue(res.companies ?? []);
                 setKybThresholdMonths(res.threshold_months);
             })
             .catch(() => {

@@ -72,6 +72,15 @@ const ENTITY_ICONS: Record<string, any> = {
     disputes: FileText,
 };
 
+// Categorical audit-action-type map (35 distinct action types across 8
+// hues: purple/red/orange/emerald/blue/amber/cyan) — not a #2816
+// migration target. Same class as lib/utils.ts's statusColor(), just far
+// larger: a 3-token semantic system (success/warning/destructive) can't
+// express "this was a KYB submission vs. a settings update vs. an
+// export" — these are audit-event *categories*, not app states. Each
+// entry's `/15`-tint + matching-hue text pairing is theme-invariant by
+// construction (both halves derive from the same fixed hue).
+/* eslint-disable no-restricted-syntax -- categorical audit-action-type map, see comment above (#2816) */
 const ACTION_CONFIG: Record<string, { label: string; color: string }> = {
     // Access / Auth
     login: { label: "Login", color: "bg-purple-500/15 text-purple-600" },
@@ -132,6 +141,7 @@ const ACTION_CONFIG: Record<string, { label: string; color: string }> = {
     deleted: { label: "Deleted", color: "bg-red-500/15 text-red-600" },
     status_change: { label: "Status Change", color: "bg-amber-500/15 text-amber-600" },
 };
+/* eslint-enable no-restricted-syntax */
 
 function formatDetails(details: string | null | undefined): string {
     if (!details) return "";
@@ -190,7 +200,7 @@ export default function AuditLogsPage() {
         setTopActorsLoading(true);
         getAuditLogTopActors({ days: topActorsDays, limit: 10 })
             .then((res) => {
-                if (!cancelled) setTopActors(res.actors);
+                if (!cancelled) setTopActors(res.actors ?? []);
             })
             .catch(() => {
                 if (!cancelled) setTopActors([]);
@@ -529,7 +539,7 @@ export default function AuditLogsPage() {
                                                         {log.actor_email || (log.actor_id ? log.actor_id.slice(0, 8) + "..." : "System")}
                                                     </TableCell>
                                                     <TableCell>
-                                                        <Badge className={actionCfg?.color || "bg-zinc-500/15 text-zinc-600"}>
+                                                        <Badge className={actionCfg?.color || "bg-muted text-muted-foreground"}>
                                                             {actionCfg?.label || log.action.replace(/_/g, " ")}
                                                         </Badge>
                                                     </TableCell>

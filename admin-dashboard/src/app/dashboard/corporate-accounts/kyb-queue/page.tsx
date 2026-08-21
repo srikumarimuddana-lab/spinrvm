@@ -147,7 +147,7 @@ export default function KybQueuePage() {
             </div>
 
             {error && (
-                <div className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+                <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
                     {error}
                 </div>
             )}
@@ -299,7 +299,7 @@ export default function KybQueuePage() {
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
                         <AlertDialogAction
                             onClick={confirmReject}
-                            className="bg-red-600 hover:bg-red-700"
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                         >
                             {busyId && busyId === rejectTarget?.id ? "Rejecting…" : "Reject"}
                         </AlertDialogAction>

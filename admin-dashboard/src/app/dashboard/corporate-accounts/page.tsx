@@ -60,10 +60,10 @@ import { useRequireModule } from "@/hooks/useRequireModule";
 import { useToast } from "@/components/ui/use-toast";
 
 const STATUS_PILL_CLASSES: Record<CompanyStatus, string> = {
-    pending_verification: "bg-yellow-100 text-yellow-800 hover:bg-yellow-100",
-    active: "bg-emerald-100 text-emerald-800 hover:bg-emerald-100",
-    suspended: "bg-orange-100 text-orange-800 hover:bg-orange-100",
-    closed: "bg-gray-200 text-gray-700 hover:bg-gray-200",
+    pending_verification: "bg-yellow-100 text-yellow-800 hover:bg-yellow-100 dark:bg-yellow-900/40 dark:text-yellow-300",
+    active: "bg-success/15 text-success hover:bg-success/15",
+    suspended: "bg-orange-100 text-orange-800 hover:bg-orange-100 dark:bg-orange-900/30 dark:text-orange-300",
+    closed: "bg-muted text-muted-foreground hover:bg-muted",
 };
 
 const RISK_FLAG_LABELS: Record<string, string> = {
@@ -340,7 +340,7 @@ export default function CorporateAccountsPage() {
                                 <Link
                                     key={w.wallet_id}
                                     href={`/dashboard/corporate-accounts/${w.company_id}`}
-                                    className="flex items-center gap-1.5 rounded-md border border-amber-300/60 bg-background px-2.5 py-1 text-xs hover:border-amber-500 transition"
+                                    className="flex items-center gap-1.5 rounded-md border border-amber-300/60 dark:border-amber-700/60 bg-background px-2.5 py-1 text-xs hover:border-amber-500 dark:hover:border-amber-400 transition"
                                     title={w.risk_flags.map((f) => RISK_FLAG_LABELS[f] || f).join(", ")}
                                 >
                                     <span className="font-medium">{w.company_name || w.company_id.slice(0, 8)}</span>
@@ -376,7 +376,7 @@ export default function CorporateAccountsPage() {
                                 <Link
                                     key={c.id}
                                     href={`/dashboard/corporate-accounts/${c.id}`}
-                                    className="flex items-center gap-1.5 rounded-md border border-sky-300/60 bg-background px-2.5 py-1 text-xs hover:border-sky-500 transition"
+                                    className="flex items-center gap-1.5 rounded-md border border-sky-300/60 dark:border-sky-700/60 bg-background px-2.5 py-1 text-xs hover:border-sky-500 dark:hover:border-sky-400 transition"
                                     title={c.kyb_reviewed_at ? `Last reviewed ${c.kyb_reviewed_at.slice(0, 10)}` : ""}
                                 >
                                     <span className="font-medium">{c.legal_name || c.name || c.id.slice(0, 8)}</span>
@@ -495,7 +495,7 @@ export default function CorporateAccountsPage() {
                                                     <Pencil className="h-4 w-4 text-muted-foreground" />
                                                 </Button>
                                                 <Button variant="ghost" size="icon" onClick={() => handleOpenDelete(account)}>
-                                                    <Trash2 className="h-4 w-4 text-red-500" />
+                                                    <Trash2 className="h-4 w-4 text-destructive" />
                                                 </Button>
                                             </div>
                                         </TableCell>

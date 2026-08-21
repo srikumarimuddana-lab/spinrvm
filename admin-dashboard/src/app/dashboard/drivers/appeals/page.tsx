@@ -20,9 +20,9 @@ import { getDriverAppeals, getDriverAppealStats, resolveDriverAppeal, type Drive
 import { useRequireModule } from "@/hooks/useRequireModule";
 
 const STATUS_COLORS: Record<string, string> = {
-  pending: "bg-amber-100 text-amber-700",
-  approved: "bg-green-100 text-green-700",
-  denied: "bg-red-100 text-red-700",
+  pending: "bg-warning/15 text-warning",
+  approved: "bg-success/15 text-success",
+  denied: "bg-destructive/15 text-destructive",
 };
 
 const APPEAL_TYPE_LABELS: Record<string, string> = {
@@ -115,16 +115,16 @@ export default function DriverAppealsPage() {
 
       <div className="grid grid-cols-3 gap-4">
         <Card><CardContent className="pt-4">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground"><Clock className="h-4 w-4 text-amber-500" /> Pending</div>
-          <div className="text-2xl font-bold text-amber-600">{stats?.pending ?? "—"}</div>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground"><Clock className="h-4 w-4 text-warning" /> Pending</div>
+          <div className="text-2xl font-bold text-warning">{stats?.pending ?? "—"}</div>
         </CardContent></Card>
         <Card><CardContent className="pt-4">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground"><CheckCircle className="h-4 w-4 text-green-500" /> Approved</div>
-          <div className="text-2xl font-bold text-green-600">{stats?.approved ?? "—"}</div>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground"><CheckCircle className="h-4 w-4 text-success" /> Approved</div>
+          <div className="text-2xl font-bold text-success">{stats?.approved ?? "—"}</div>
         </CardContent></Card>
         <Card><CardContent className="pt-4">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground"><XCircle className="h-4 w-4 text-red-500" /> Denied</div>
-          <div className="text-2xl font-bold text-red-600">{stats?.denied ?? "—"}</div>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground"><XCircle className="h-4 w-4 text-destructive" /> Denied</div>
+          <div className="text-2xl font-bold text-destructive">{stats?.denied ?? "—"}</div>
         </CardContent></Card>
       </div>
 
@@ -166,7 +166,7 @@ export default function DriverAppealsPage() {
                     <TableCell className="font-mono text-xs">{a.driver_id.slice(0, 8)}…</TableCell>
                     <TableCell><Badge variant="outline">{APPEAL_TYPE_LABELS[a.appeal_type] || a.appeal_type}</Badge></TableCell>
                     <TableCell className="max-w-xs truncate text-sm">{a.driver_message}</TableCell>
-                    <TableCell><Badge className={STATUS_COLORS[a.status] || "bg-gray-100"}>{a.status}</Badge></TableCell>
+                    <TableCell><Badge className={STATUS_COLORS[a.status] || "bg-muted"}>{a.status}</Badge></TableCell>
                     <TableCell className="text-xs text-muted-foreground">{formatDate(a.created_at)}</TableCell>
                     <TableCell>
                       {a.status === "pending" ? (

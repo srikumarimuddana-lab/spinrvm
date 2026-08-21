@@ -953,7 +953,7 @@ export default function DriversPage() {
                                                         one image per row slowed the page down. Initials stand in here;
                                                         the real photo still renders in the detail slideout. */}
                                                     <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center text-sm font-bold text-primary ring-1 ring-border shadow-sm">{(driver.first_name?.[0] || "")}{(driver.last_name?.[0] || "")}</div>
-                                                    <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-card ${driver.is_online ? "bg-emerald-500" : "bg-gray-300"}`} />
+                                                    <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-card ${driver.is_online ? "bg-success" : "bg-muted-foreground/40"}`} />
                                                 </div>
                                                 <div className="flex-1 min-w-0">
                                                     <p className="text-sm font-semibold truncate flex items-center gap-1.5">
@@ -986,7 +986,7 @@ export default function DriversPage() {
                                         <TableCell>
                                             <div className="flex flex-col gap-0.5 items-start">
                                                 <Badge variant={driver.is_online ? "default" : "outline"} className={driver.is_online ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0 border-emerald-200 dark:border-emerald-800" : "text-[10px] px-1.5 py-0 text-muted-foreground"}>
-                                                    <span className={`h-1.5 w-1.5 rounded-full mr-1 ${driver.is_online ? "bg-emerald-500" : "bg-gray-400"}`} />
+                                                    <span className={`h-1.5 w-1.5 rounded-full mr-1 ${driver.is_online ? "bg-success" : "bg-muted-foreground/40"}`} />
                                                     {driver.is_online ? "Online" : "Offline"}
                                                 </Badge>
                                                 {driver.last_status_changed_at && (
@@ -1065,7 +1065,7 @@ export default function DriversPage() {
                                             ) : (
                                                 <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center text-xl font-bold text-primary">{(selected.first_name?.[0] || "")}{(selected.last_name?.[0] || "")}</div>
                                             )}
-                                            <span className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-background ${selected.is_online ? "bg-emerald-500" : "bg-gray-300"}`} />
+                                            <span className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-background ${selected.is_online ? "bg-success" : "bg-muted-foreground/40"}`} />
                                             <button
                                                 type="button"
                                                 title="Upload / change profile photo"
@@ -1125,7 +1125,7 @@ export default function DriversPage() {
                                                 : selected.status === "suspended" ? <Badge className="bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400"><Pause className="h-3 w-3" /> Suspended</Badge>
                                                 : selected.status === "banned" ? <Badge className="bg-red-200 text-red-800 dark:bg-red-900/40 dark:text-red-400"><Ban className="h-3 w-3" /> Banned</Badge>
                                                 : <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"><ShieldAlert className="h-3 w-3" /> Pending</Badge>}
-                                                <Badge variant="outline" className={selected.is_online && !selected.account_deleted ? "border-emerald-300 text-emerald-600" : ""}>
+                                                <Badge variant="outline" className={selected.is_online && !selected.account_deleted ? "border-success/40 text-success" : ""}>
                                                     {selected.is_online && !selected.account_deleted ? "Online" : "Offline"}
                                                     {selected.last_status_changed_at && (
                                                         <span className="ml-1.5 text-[10px] opacity-70">
@@ -1306,7 +1306,7 @@ export default function DriversPage() {
                                                             </SelectContent>
                                                         </Select>
                                                         {areaId && !areaHasConfigs && (
-                                                            <p className="text-[10px] text-amber-600 mt-1">
+                                                            <p className="text-[10px] text-warning mt-1">
                                                                 No fare configs for this area — set them up in Service Areas → Vehicle Pricing.
                                                             </p>
                                                         )}
@@ -1897,11 +1897,11 @@ export default function DriversPage() {
                         {reviewingDoc?.action === "approved" ? (
                             <div>
                                 <label className="text-sm font-medium mb-1.5 block">
-                                    Expiry Date {reviewingDoc?.requiresExpiry ? <span className="text-red-500">*</span> : "(optional)"}
+                                    Expiry Date {reviewingDoc?.requiresExpiry ? <span className="text-destructive">*</span> : "(optional)"}
                                 </label>
                                 <Input type="date" value={reviewExpiry} onChange={e => setReviewExpiry(e.target.value)} className="w-full" />
                                 {reviewingDoc?.requiresExpiry && !reviewExpiry && (
-                                    <p className="text-xs text-red-500 mt-1 flex items-center gap-1"><AlertTriangle className="h-3 w-3" /> Expiry date is required for this document type. This will update the driver&apos;s profile.</p>
+                                    <p className="text-xs text-destructive mt-1 flex items-center gap-1"><AlertTriangle className="h-3 w-3" /> Expiry date is required for this document type. This will update the driver&apos;s profile.</p>
                                 )}
                                 {!reviewingDoc?.requiresExpiry && <p className="text-xs text-muted-foreground mt-1">Leave empty if no expiry.</p>}
                             </div>
@@ -1974,7 +1974,7 @@ function VerificationSummaryCard({
         <div className="rounded-xl border border-border bg-card overflow-hidden">
             <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
-                    <CheckCircle className={`h-4 w-4 ${allClear ? "text-emerald-500" : "text-muted-foreground"}`} />
+                    <CheckCircle className={`h-4 w-4 ${allClear ? "text-success" : "text-muted-foreground"}`} />
                     <h4 className="text-sm font-semibold tracking-tight">Verification</h4>
                     <span className="text-xs text-muted-foreground">{approved} / {total} approved</span>
                 </div>
@@ -1986,7 +1986,7 @@ function VerificationSummaryCard({
             <div className="px-4 py-3 space-y-3">
                 <div className="h-1.5 bg-muted rounded-full overflow-hidden">
                     <div
-                        className={`h-full transition-all ${allClear ? "bg-emerald-500" : pct >= 75 ? "bg-amber-500" : "bg-muted-foreground/40"}`}
+                        className={`h-full transition-all ${allClear ? "bg-success" : pct >= 75 ? "bg-warning" : "bg-muted-foreground/40"}`}
                         style={{ width: `${pct}%` }}
                     />
                 </div>
@@ -2013,11 +2013,11 @@ function VerificationSummaryCard({
                 </div>
                 <div className="flex items-center justify-between pt-1 text-xs border-t border-border">
                     <div className="flex items-center gap-2">
-                        <div className={`w-2 h-2 rounded-full ${driver.profile_image_status && driver.profile_image_status !== "rejected" ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
+                        <div className={`w-2 h-2 rounded-full ${driver.profile_image_status && driver.profile_image_status !== "rejected" ? "bg-success" : "bg-muted-foreground/30"}`} />
                         <span className="text-muted-foreground">Profile photo</span>
                     </div>
                     <div className="flex items-center gap-2">
-                        <div className={`w-2 h-2 rounded-full ${driver.vehicle_photo_url ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
+                        <div className={`w-2 h-2 rounded-full ${driver.vehicle_photo_url ? "bg-success" : "bg-muted-foreground/30"}`} />
                         <span className="text-muted-foreground">Vehicle photo</span>
                     </div>
                 </div>
@@ -2243,7 +2243,7 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, isLegacyImporte
                                 <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">Stripe Connect</p>
                                 {pm.stripe_connected ? (
                                     <p className="text-sm font-medium mt-0.5 inline-flex items-center gap-1.5">
-                                        <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                                        <span className="w-2 h-2 rounded-full bg-success" />
                                         Connected
                                         {pm.stripe_account_hint && <span className="text-xs text-muted-foreground font-mono">acct…{pm.stripe_account_hint}</span>}
                                     </p>
@@ -2788,7 +2788,7 @@ function DriverTrainingTab({ data, loading, error, onRefresh, fmtDate }: {
                     <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium">Completion</p>
                     <p className="text-xl font-bold mt-0.5">{pct}%</p>
                     <div className="h-1.5 rounded-full bg-muted overflow-hidden mt-1.5">
-                        <div className={`h-full rounded-full ${pct >= 100 ? "bg-emerald-500" : "bg-primary"}`} style={{ width: `${pct}%` }} />
+                        <div className={`h-full rounded-full ${pct >= 100 ? "bg-success" : "bg-primary"}`} style={{ width: `${pct}%` }} />
                     </div>
                 </div>
                 <div className="rounded-xl border border-border/50 p-3">
@@ -2844,7 +2844,7 @@ function DriverTrainingTab({ data, loading, error, onRefresh, fmtDate }: {
                                         <span className="text-[11px] text-muted-foreground shrink-0">{coursePct}% · {(c.status || "").replace(/_/g, " ")}</span>
                                     </div>
                                     <div className="h-1.5 rounded-full bg-muted overflow-hidden mt-1.5">
-                                        <div className={`h-full rounded-full ${coursePct >= 100 ? "bg-emerald-500" : "bg-primary"}`} style={{ width: `${coursePct}%` }} />
+                                        <div className={`h-full rounded-full ${coursePct >= 100 ? "bg-success" : "bg-primary"}`} style={{ width: `${coursePct}%` }} />
                                     </div>
                                     <p className="text-[11px] text-muted-foreground mt-1">
                                         Enrolled {c.enrolled_at ? fmtDate(c.enrolled_at) : "—"}
@@ -3428,7 +3428,7 @@ function DocExpirySummaryCard({ label, summary }: { label: string; summary: DocS
     }
 
     const styles = {
-        neutral: { bg: "bg-muted/30 border-border", dot: "bg-gray-300", primary: "text-muted-foreground", secondary: "text-muted-foreground" },
+        neutral: { bg: "bg-muted/30 border-border", dot: "bg-muted-foreground/40", primary: "text-muted-foreground", secondary: "text-muted-foreground" },
         emerald: { bg: "bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800", dot: "bg-emerald-500", primary: "text-emerald-700 dark:text-emerald-300", secondary: "text-emerald-600/70 dark:text-emerald-400/70" },
         amber:   { bg: "bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800",       dot: "bg-amber-500",   primary: "text-amber-700 dark:text-amber-300",   secondary: "text-amber-600/80 dark:text-amber-400/80" },
         red:     { bg: "bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-800",               dot: "bg-red-500",     primary: "text-red-700 dark:text-red-300",       secondary: "text-red-600/80 dark:text-red-400/80" },
@@ -3480,7 +3480,7 @@ function DocCard({ d, docBusy, driverName, onPreview, onReview }: { d: any; docB
                 <p className="text-sm font-semibold truncate">{d.document_type||"Document"}{d.side?` (${d.side})`:""}</p>
                 <div className="space-y-1">
                     {d.created_at && <p className="text-[11px] text-muted-foreground flex items-center gap-1"><CalendarRange className="h-3 w-3" />Uploaded: {new Date(d.created_at).toLocaleDateString("en-CA",{month:"short",day:"numeric",year:"numeric"})}</p>}
-                    {exp && <p className={`text-[11px] flex items-center gap-1 ${expired?"text-red-500 font-medium":"text-muted-foreground"}`}><Clock className="h-3 w-3" />Expires: {new Date(exp).toLocaleDateString("en-CA",{month:"short",day:"numeric",year:"numeric"})}{expired&&" (EXPIRED)"}</p>}
+                    {exp && <p className={`text-[11px] flex items-center gap-1 ${expired?"text-destructive font-medium":"text-muted-foreground"}`}><Clock className="h-3 w-3" />Expires: {new Date(exp).toLocaleDateString("en-CA",{month:"short",day:"numeric",year:"numeric"})}{expired&&" (EXPIRED)"}</p>}
                 </div>
                 {d.rejection_reason && <p className="text-[11px] text-red-500 bg-red-50 dark:bg-red-900/20 rounded-lg px-2 py-1"><AlertTriangle className="h-3 w-3 inline mr-1" />{d.rejection_reason}</p>}
                 <div className="flex items-center gap-1.5 pt-1">

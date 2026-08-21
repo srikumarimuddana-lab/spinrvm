@@ -211,7 +211,7 @@ export default function ChargebacksTab() {
               {error && (
                 <div
                   role="alert"
-                  className="flex items-center justify-between gap-3 border-b bg-red-50 dark:bg-red-950/30 px-4 py-3 text-sm text-red-700 dark:text-red-400"
+                  className="flex items-center justify-between gap-3 border-b bg-destructive/10 px-4 py-3 text-sm text-destructive"
                 >
                   <span className="flex items-center gap-2">
                     <AlertTriangle className="h-4 w-4" />
@@ -225,7 +225,7 @@ export default function ChargebacksTab() {
               {downloadError && (
                 <div
                   role="alert"
-                  className="flex items-center justify-between gap-3 border-b bg-red-50 dark:bg-red-950/30 px-4 py-3 text-sm text-red-700 dark:text-red-400"
+                  className="flex items-center justify-between gap-3 border-b bg-destructive/10 px-4 py-3 text-sm text-destructive"
                 >
                   <span className="flex items-center gap-2">
                     <AlertTriangle className="h-4 w-4" />
@@ -337,7 +337,7 @@ export default function ChargebacksTab() {
           </DialogHeader>
           {submitTarget && (
             <div className="space-y-4">
-              <div className="bg-amber-50 dark:bg-amber-950/30 rounded-lg p-3 text-sm text-amber-800 dark:text-amber-300">
+              <div className="bg-warning/10 rounded-lg p-3 text-sm text-warning">
                 <p className="font-semibold">
                   This immediately submits evidence to Stripe and cannot be undone.
                 </p>

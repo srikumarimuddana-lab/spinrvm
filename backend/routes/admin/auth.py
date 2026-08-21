@@ -164,10 +164,8 @@ ALL_MODULES = [
     "rides",
     "earnings",
     "promotions",
-    "surge",
     "service_areas",
     "vehicle_types",
-    "pricing",
     "support",
     "disputes",
     "notifications",
@@ -180,6 +178,8 @@ ALL_MODULES = [
 ]
 # "heatmap" was removed here and from AVAILABLE_MODULES (routes/admin/staff.py)
 # — it gated no backend route; see the note at that list for the full reasoning.
+# "surge" and "pricing" were removed here and from AVAILABLE_MODULES for the
+# same reason — see the note at that list for the full reasoning.
 
 # Auth sub-router — mounted at /admin/auth by server.py directly
 admin_auth_router = APIRouter(prefix="/admin/auth", tags=["Admin Auth"])

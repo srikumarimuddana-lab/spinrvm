@@ -16,8 +16,8 @@ def _make_admin(role: str, modules: list[str]) -> dict:
 
 
 SUPPORT_MODULES = ["dashboard", "support", "disputes", "notifications", "users"]
-FINANCE_MODULES = ["dashboard", "earnings", "promotions", "corporate_accounts", "pricing"]
-OPERATIONS_MODULES = ["dashboard", "rides", "drivers", "surge", "service_areas", "vehicle_types"]
+FINANCE_MODULES = ["dashboard", "earnings", "promotions", "corporate_accounts"]
+OPERATIONS_MODULES = ["dashboard", "rides", "drivers", "service_areas", "vehicle_types"]
 SUPER_ADMIN_MODULES = [
     "dashboard",
     "users",
@@ -25,10 +25,8 @@ SUPER_ADMIN_MODULES = [
     "rides",
     "earnings",
     "promotions",
-    "surge",
     "service_areas",
     "vehicle_types",
-    "pricing",
     "support",
     "disputes",
     "notifications",

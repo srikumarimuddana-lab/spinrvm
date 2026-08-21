@@ -252,7 +252,7 @@ Auto-mode tiers (demand / supply ratio → multiplier):
 
 - `SURGE_CAP = 2.5` is the ceiling for auto mode. Never suggest raising it without explicit business + legal review.
 - Surge engine runs every 2 minutes; updates only service areas where `surge_source == 'auto'`
-- Admin manual override accepts 1.0–10.0 but any value > 2.5 requires documented justification (regulatory + reputational risk)
+- Admin manual override accepts 1.0–10.0 but any value > 2.5 requires documented justification (regulatory + reputational risk). This wide range is record/audit-only: values above 2.5 are stored verbatim and audit-logged for justification purposes, but every fare-calc call site (`fare_service.py`, `routes/fares.py`, `features.py`) always clamps to `SURGE_CAP` (2.5×) — the override never actually reaches a rider's fare above the cap.
 - Surge must be visible to the rider *before* booking — never apply retroactively
 - Never apply surge to scheduled rides booked outside the surge window
 - Surge does not apply to corporate account-paid rides (policy; verify in fare service)

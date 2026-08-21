@@ -36,10 +36,10 @@ import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Copy, Mail, PauseCircle, PlayCircle, RefreshCw, UserPlus } from "lucide-react";
 
 const STATUS_COLORS: Record<CorporateMemberStatus, string> = {
-    invited: "bg-yellow-100 text-yellow-800",
-    active: "bg-emerald-100 text-emerald-800",
-    suspended: "bg-orange-100 text-orange-800",
-    removed: "bg-gray-200 text-gray-600",
+    invited: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300",
+    active: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
+    suspended: "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300",
+    removed: "bg-gray-200 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
 };
 
 type Filter = "all" | CorporateMemberStatus;

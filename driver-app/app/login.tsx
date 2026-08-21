@@ -292,6 +292,7 @@ export default function LoginScreen() {
             legal documents. */}
         <View style={styles.consentRow} accessible={false}>
           <TouchableOpacity
+            testID="consent-checkbox"
             onPress={() => setConsentAccepted((c) => !c)}
             activeOpacity={0.7}
             disabled={loading}

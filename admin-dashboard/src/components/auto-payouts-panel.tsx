@@ -35,12 +35,13 @@ import {
 } from "@/lib/api";
 
 const STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
-    completed: { label: "Completed", cls: "bg-green-500/15 text-green-700" },
+    completed: { label: "Completed", cls: "bg-success/15 text-success" },
     // "some paid, some not" — resumable, and deliberately distinct from
     // completed so a partial week can't read as a clean run.
-    partial: { label: "Partial", cls: "bg-amber-500/15 text-amber-700" },
+    partial: { label: "Partial", cls: "bg-warning/15 text-warning" },
+    // eslint-disable-next-line no-restricted-syntax -- "running" (in progress, neither good nor bad) has no semantic-token equivalent; must stay distinct from the other three (#2816)
     running: { label: "Running", cls: "bg-blue-500/15 text-blue-700" },
-    failed: { label: "Failed", cls: "bg-red-500/15 text-red-700" },
+    failed: { label: "Failed", cls: "bg-destructive/15 text-destructive" },
 };
 
 /** Backend skip reasons → what an operator should read. */
@@ -92,7 +93,7 @@ function weekRangeLabel(weekKey: string): string {
 }
 
 function StatusBadge({ status }: { status: string }) {
-    const cfg = STATUS_CONFIG[status] ?? { label: status, cls: "bg-zinc-500/15 text-zinc-600" };
+    const cfg = STATUS_CONFIG[status] ?? { label: status, cls: "bg-muted text-muted-foreground" };
     return <Badge className={cfg.cls}>{cfg.label}</Badge>;
 }
 
@@ -407,7 +408,7 @@ export default function AutoPayoutsPanel() {
                 <CardContent>
                     {blocked.length === 0 ? (
                         <div className="py-10 text-center text-muted-foreground">
-                            <CheckCircle className="h-8 w-8 mx-auto mb-2 text-green-600" />
+                            <CheckCircle className="h-8 w-8 mx-auto mb-2 text-success" />
                             <p className="text-sm">
                                 No blocked drivers in {scopeLabel} — everyone with a payable balance is ready to be paid.
                             </p>

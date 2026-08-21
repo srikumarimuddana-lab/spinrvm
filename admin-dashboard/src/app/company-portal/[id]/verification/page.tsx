@@ -118,7 +118,7 @@ export default function VerificationPage() {
             ) : !kyb ? (
                 <Card>
                     <CardContent className="flex items-center gap-3 p-6 text-sm">
-                        <Clock className="h-5 w-5 text-amber-500" />
+                        <Clock className="h-5 w-5 text-warning" />
                         Your company is pending approval. A company admin handles the
                         verification documents — check back once it&apos;s approved.
                     </CardContent>
@@ -128,7 +128,7 @@ export default function VerificationPage() {
                     {state === "approved" && (
                         <Card>
                             <CardContent className="flex items-center gap-3 p-6 text-sm">
-                                <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                                <CheckCircle2 className="h-5 w-5 text-success" />
                                 Your company is verified and active — you&apos;re all set.
                             </CardContent>
                         </Card>
@@ -137,7 +137,7 @@ export default function VerificationPage() {
                     {state === "suspended" && (
                         <Card>
                             <CardContent className="flex items-center gap-3 p-6 text-sm">
-                                <ShieldAlert className="h-5 w-5 text-red-600" />
+                                <ShieldAlert className="h-5 w-5 text-destructive" />
                                 Your account has been suspended by Spinr. Contact support to
                                 resolve this — documents cannot be resubmitted from here.
                             </CardContent>
@@ -154,10 +154,10 @@ export default function VerificationPage() {
                     )}
 
                     {state === "rejected" && (
-                        <Card className="border-red-200">
+                        <Card className="border-destructive/40">
                             <CardHeader>
                                 <CardTitle className="flex items-center gap-2 text-base">
-                                    <ShieldAlert className="h-5 w-5 text-red-600" />
+                                    <ShieldAlert className="h-5 w-5 text-destructive" />
                                     Verification needs attention
                                 </CardTitle>
                             </CardHeader>
@@ -176,7 +176,7 @@ export default function VerificationPage() {
                     {state === "under_review" && (
                         <Card>
                             <CardContent className="flex items-center gap-3 p-6 text-sm">
-                                <Clock className="h-5 w-5 text-amber-500" />
+                                <Clock className="h-5 w-5 text-warning" />
                                 <span>
                                     Your document is under review
                                     {kyb.submitted_at &&

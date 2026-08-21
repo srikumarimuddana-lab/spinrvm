@@ -68,7 +68,7 @@ export function DriverPanel({ driver, onRideClick }: DriverPanelProps) {
                     {isStale && (
                         <Badge
                             variant="outline"
-                            className="border-amber-500/50 text-[10px] text-amber-600"
+                            className="border-warning/50 text-[10px] text-warning"
                             title="Driver tapped Go Online but their app is not reachable (no heartbeat within 90s)."
                         >
                             Stale
@@ -100,7 +100,7 @@ export function DriverPanel({ driver, onRideClick }: DriverPanelProps) {
                             <p className="text-xs text-muted-foreground">Rides</p>
                         </div>
                         <div className="rounded-lg bg-muted p-2 text-center">
-                            <p className={`text-sm font-bold ${driver.is_online ? "text-green-600" : "text-muted-foreground"}`}>
+                            <p className={`text-sm font-bold ${driver.is_online ? "text-success" : "text-muted-foreground"}`}>
                                 {driver.is_online ? (driver.active_ride_id ? "On Ride" : "Online") : "Offline"}
                             </p>
                             <p className="text-xs text-muted-foreground">Status</p>
@@ -135,7 +135,7 @@ export function DriverPanel({ driver, onRideClick }: DriverPanelProps) {
                             </p>
                             <button
                                 onClick={() => onRideClick(driver.active_ride_id!)}
-                                className="mt-1 w-full rounded-lg border border-blue-500/30 bg-blue-500/5 px-3 py-2 text-left text-xs text-blue-600 hover:bg-blue-500/10"
+                                className="mt-1 w-full rounded-lg border border-blue-500/30 bg-blue-500/5 px-3 py-2 text-left text-xs text-blue-600 dark:text-blue-400 hover:bg-blue-500/10"
                             >
                                 Ride #{driver.active_ride_id.slice(-8)} →
                             </button>
@@ -184,7 +184,7 @@ export function DriverPanel({ driver, onRideClick }: DriverPanelProps) {
                                 <div key={r.id} className="rounded-lg border border-border px-3 py-2 text-xs">
                                     <div className="flex items-center justify-between">
                                         <span className="font-medium">{r.pickup_address?.split(',')[0] ?? 'Pickup'} → {r.dropoff_address?.split(',')[0] ?? 'Dropoff'}</span>
-                                        <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${r.status === 'completed' ? 'bg-green-100 text-green-700' : r.status === 'cancelled' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>{r.status}</span>
+                                        <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${r.status === 'completed' ? 'bg-success/15 text-success' : r.status === 'cancelled' ? 'bg-destructive/15 text-destructive' : 'bg-warning/15 text-warning'}`}>{r.status}</span>
                                     </div>
                                     <div className="mt-0.5 flex items-center justify-between text-muted-foreground">
                                         <span>{r.created_at ? new Date(r.created_at).toLocaleDateString('en-CA') : '—'}</span>
@@ -207,7 +207,7 @@ export function DriverPanel({ driver, onRideClick }: DriverPanelProps) {
                             {docs.map((doc: any) => (
                                 <div key={doc.id} className="flex items-center justify-between rounded-lg border border-border px-3 py-2 text-xs">
                                     <span className="font-medium capitalize">{(doc.document_type ?? 'Document').replace(/_/g, ' ')}</span>
-                                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${doc.status === 'verified' ? 'bg-green-100 text-green-700' : doc.status === 'expired' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>{doc.status ?? 'pending'}</span>
+                                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${doc.status === 'verified' ? 'bg-success/15 text-success' : doc.status === 'expired' ? 'bg-destructive/15 text-destructive' : 'bg-warning/15 text-warning'}`}>{doc.status ?? 'pending'}</span>
                                 </div>
                             ))}
                         </div>

@@ -105,7 +105,7 @@ export default function FlagsTab() {
                             <TableCell><Badge variant="outline" className="text-[10px]">{f.reason?.replace(/_/g, " ") || "other"}</Badge></TableCell>
                             <TableCell className="text-xs text-muted-foreground">{areaName(f.service_area_id) || "—"}</TableCell>
                             <TableCell className="max-w-[200px] truncate text-xs text-muted-foreground">{f.description || "—"}</TableCell>
-                            <TableCell>{f.is_active === false ? <Badge className="text-[10px] bg-zinc-500/15 text-zinc-600">Inactive</Badge> : <Badge className="text-[10px] bg-amber-500/15 text-amber-600">Active</Badge>}</TableCell>
+                            <TableCell>{f.is_active === false ? <Badge className="text-[10px] bg-muted text-muted-foreground">Inactive</Badge> : <Badge className="text-[10px] bg-warning/15 text-warning">Active</Badge>}</TableCell>
                             <TableCell className="text-[10px] text-muted-foreground">{formatDate(f.created_at)}</TableCell>
                             <TableCell className="text-right"><div className="flex justify-end gap-0.5">
                                 <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); setSelected(f); }}><Eye className="h-3.5 w-3.5" /></Button>

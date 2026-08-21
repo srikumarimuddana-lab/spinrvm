@@ -609,7 +609,7 @@ export function CreateRideModal({
                     <div className="grid gap-2">
                         <Label>
                             Total Fare
-                            {fareEdited && <span className="ml-2 text-xs text-amber-600">(overridden)</span>}
+                            {fareEdited && <span className="ml-2 text-xs text-warning">(overridden)</span>}
                         </Label>
                         <div className="relative">
                             <span className="absolute left-3 top-2.5 text-sm text-muted-foreground">$</span>
@@ -659,7 +659,7 @@ function FareRow({
 }) {
     return (
         <div
-            className={`flex items-center justify-between py-0.5 ${bold ? "font-semibold" : ""} ${accent ? "text-emerald-600" : ""}`}
+            className={`flex items-center justify-between py-0.5 ${bold ? "font-semibold" : ""} ${accent ? "text-success" : ""}`}
         >
             <span>{label}</span>
             <span>{value == null ? "" : `$${value.toFixed(2)}`}</span>

@@ -146,7 +146,7 @@ export function DemandForecastPanel({
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Clock className="h-4 w-4" /> Peak Hours
               </div>
-              <div className="text-2xl font-bold mt-1 text-amber-600">{summary.peak_hours_count || 0}</div>
+              <div className="text-2xl font-bold mt-1 text-amber-600 dark:text-amber-400">{summary.peak_hours_count || 0}</div>
               <p className="text-xs text-muted-foreground">of next 24h</p>
             </CardContent>
           </Card>
@@ -222,7 +222,7 @@ export function DemandForecastPanel({
                   <p className={`text-sm font-bold mt-1 ${f.is_peak ? "text-amber-600 dark:text-amber-400" : "text-foreground"}`}>
                     {f.predicted_rides}
                   </p>
-                  {f.is_peak && <Zap className="h-3 w-3 text-amber-500 mx-auto mt-0.5" />}
+                  {f.is_peak && <Zap className="h-3 w-3 text-amber-500 dark:text-amber-400 mx-auto mt-0.5" />}
                 </div>
               ))}
             </div>

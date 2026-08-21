@@ -347,7 +347,7 @@ export default function BulkImportPage() {
             {committedSummary && (
                 <Card className="border-emerald-300 dark:border-emerald-800">
                     <CardContent className="flex items-center gap-3 py-4">
-                        <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                        <CheckCircle2 className="h-5 w-5 text-success" />
                         <span className="text-sm">{committedSummary}</span>
                     </CardContent>
                 </Card>
@@ -376,7 +376,7 @@ export default function BulkImportPage() {
                         {report.errors.length > 0 && (
                             <div className="space-y-2">
                                 <div className="flex items-center justify-between">
-                                    <h3 className="flex items-center gap-2 text-sm font-semibold text-red-600">
+                                    <h3 className="flex items-center gap-2 text-sm font-semibold text-destructive">
                                         <AlertTriangle className="h-4 w-4" /> Errors ({report.errors.length})
                                     </h3>
                                     <Button
@@ -396,7 +396,7 @@ export default function BulkImportPage() {
 
                         {report.warnings.length > 0 && (
                             <div className="space-y-2">
-                                <h3 className="flex items-center gap-2 text-sm font-semibold text-amber-600">
+                                <h3 className="flex items-center gap-2 text-sm font-semibold text-warning">
                                     <Info className="h-4 w-4" /> Warnings ({report.warnings.length})
                                 </h3>
                                 <IssueTable items={report.warnings} />
@@ -439,9 +439,9 @@ function Stat({
 }) {
     const toneCls =
         tone === "error" && value > 0
-            ? "text-red-600"
+            ? "text-destructive"
             : tone === "warn" && value > 0
-              ? "text-amber-600"
+              ? "text-warning"
               : "text-foreground";
     return (
         <div className="rounded-md border p-3">

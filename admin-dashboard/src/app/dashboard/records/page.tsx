@@ -35,7 +35,7 @@
  * direct tab-param URL, and the embedded page's own check still catches it.
  */
 
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ShieldAlert } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -89,12 +89,11 @@ function RecordsPageInner() {
     const visibleTabs = useMemo(() => TAB_ORDER.filter((slug) => canView[slug]), [isSuperAdmin]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const requestedTab = searchParams.get("tab");
-    const initialTab = isValidTab(requestedTab) && canView[requestedTab] ? requestedTab : visibleTabs[0];
-    const [activeTab, setActiveTab] = useState<TabSlug | undefined>(initialTab);
+    const activeTab: TabSlug | undefined =
+        isValidTab(requestedTab) && canView[requestedTab] ? requestedTab : visibleTabs[0];
 
     const onTabChange = (value: string) => {
         if (!isValidTab(value)) return;
-        setActiveTab(value);
         router.replace(`/dashboard/records?tab=${value}`, { scroll: false });
     };
 

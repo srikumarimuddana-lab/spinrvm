@@ -72,6 +72,12 @@ encryption in isolation.
 **What NOT to do:** don't introduce a second, inconsistent encryption mechanism (raw `pgcrypto`) when
 pgsodium/Vault is already the proven, running pattern for the same class of problem in `drivers`.
 
+**Decided 2026-08-21** (@vikas, standing in for Privacy/Legal — full record in
+`docs/audit/2026-08-21-emergency-contact-pia-memo.md` Section 9): **both** recommendations approved
+together — encrypt `name`/`phone` at rest (mirroring migration 32) **and** build the third-party
+consent/opt-out handshake alongside it, not sequenced apart. Implementation not yet built as of this
+decision; tracked as its own effort.
+
 ---
 
 ## 2. `compliance` admin module: add to `AVAILABLE_MODULES` or switch to `require_super_admin`
@@ -511,6 +517,12 @@ motivated the current wait is concrete and already occurred once; B would need a
 value and an explicit acceptance of the resulting undercharge tail before shipping, which is a
 Product call on risk tolerance, not an engineering one. No action recommended without Product/Eng
 lead's explicit sign-off either way — that's the actual ask of this decision item.
+
+**Decided 2026-08-21** (@vikas, standing in for Product/Eng lead): **Option A approved** — accept
+the 3.5s worst-case Directions wait as a permanent, documented SLA exception. No code change; the
+exception is already documented in CLAUDE.md's Performance SLA section (ranked blocker #24). This
+closes the open half of that item — the exception is no longer just documented, it is now the
+accepted permanent trade-off, not a placeholder pending a future ceiling decision.
 
 ---
 

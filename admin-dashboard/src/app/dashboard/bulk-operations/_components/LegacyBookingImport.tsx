@@ -115,9 +115,9 @@ function Stat({
 }) {
     const toneCls =
         tone === "error" && value > 0
-            ? "text-red-600"
+            ? "text-destructive"
             : tone === "warn" && value > 0
-              ? "text-amber-600"
+              ? "text-warning"
               : "text-foreground";
     return (
         <div className="rounded-md border p-3">
@@ -244,7 +244,7 @@ export function LegacyBookingImport() {
             </CardHeader>
             <CardContent className="space-y-6">
                 <div className="flex gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-900 dark:bg-amber-950/40">
-                    <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                    <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
                     <div className="space-y-1">
                         <p className="font-medium">Driver payouts were already settled off-platform.</p>
                         <p className="text-muted-foreground">
@@ -264,7 +264,7 @@ export function LegacyBookingImport() {
                                 <Label htmlFor={`booking-import-${f.key}`} className="text-xs">
                                     {f.label}
                                     {files[f.key] ? (
-                                        <CheckCircle2 className="ml-1 inline h-3 w-3 text-green-600" />
+                                        <CheckCircle2 className="ml-1 inline h-3 w-3 text-success" />
                                     ) : null}
                                 </Label>
                                 <Input
@@ -347,7 +347,7 @@ export function LegacyBookingImport() {
                         {report.errors.length > 0 ? (
                             <div className="space-y-2">
                                 <div className="flex items-center justify-between">
-                                    <p className="flex items-center gap-2 text-sm font-medium text-red-600">
+                                    <p className="flex items-center gap-2 text-sm font-medium text-destructive">
                                         <AlertTriangle className="h-4 w-4" />
                                         {report.errors.length} error(s) — commit is blocked
                                     </p>
@@ -372,7 +372,7 @@ export function LegacyBookingImport() {
 
                         {report.warnings.length > 0 ? (
                             <div className="space-y-2">
-                                <p className="text-sm font-medium text-amber-600">
+                                <p className="text-sm font-medium text-warning">
                                     {report.warnings.length} warning(s) — these do not block the import
                                 </p>
                                 <IssueTable items={report.warnings} />
@@ -381,7 +381,7 @@ export function LegacyBookingImport() {
 
                         {committed?.committed ? (
                             <div className="flex items-center gap-2 rounded-md border border-green-300 bg-green-50 p-3 text-sm dark:border-green-900 dark:bg-green-950/40">
-                                <CheckCircle2 className="h-4 w-4 text-green-600" />
+                                <CheckCircle2 className="h-4 w-4 text-success" />
                                 <span>
                                     Imported {committed.imported_rides} ride(s) and{" "}
                                     {committed.offset_payouts} offset payout(s);{" "}

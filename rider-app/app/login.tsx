@@ -25,6 +25,13 @@ export default function LoginScreen() {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [loading, setLoading] = useState(false);
   const [focused, setFocused] = useState(false);
+  // Explicit, unchecked-by-default consent gesture — the account-creation
+  // endpoint (POST /auth/verify-otp, called from otp.tsx) now rejects a
+  // brand-new signup unless this was actively checked. Previously this
+  // screen only showed passive "by continuing you agree" text with no
+  // tappable action behind it. See
+  // docs/change-log/2026-08-20-explicit-signup-consent-checkbox.md.
+  const [consentAccepted, setConsentAccepted] = useState(false);
   const inputRef = useRef<TextInput>(null);
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -54,13 +61,19 @@ export default function LoginScreen() {
   };
 
   const handleSendCode = async () => {
-    if (!isValid || loading) return;
+    if (!isValid || !consentAccepted || loading) return;
     setLoading(true);
     const formattedNumber = `+1${phoneNumber}`;
     try {
       const response = await api.post<{ success?: boolean }>('/auth/send-otp', { phone: formattedNumber });
       if (response.data.success) {
-        router.push({ pathname: '/otp', params: { phoneNumber: formattedNumber } } as any);
+        // Carried to otp.tsx so its POST /auth/verify-otp call can send
+        // consent_accepted — the account isn't created here, it's created
+        // (or not, if this checkbox was unchecked) on that later call.
+        router.push({
+          pathname: '/otp',
+          params: { phoneNumber: formattedNumber, consentAccepted: String(consentAccepted) },
+        } as any);
       } else {
         showToast('Code Not Sent', 'Could not send verification code. Please try again.', 'danger');
       }
@@ -82,6 +95,7 @@ export default function LoginScreen() {
   };
 
   const isValid = phoneNumber.length === 10;
+  const canContinue = isValid && consentAccepted;
 
   return (
     <KeyboardAvoidingView
@@ -178,21 +192,21 @@ export default function LoginScreen() {
         </View>
 
         <TouchableOpacity
-          style={[styles.button, !isValid && styles.buttonInactive, loading && styles.buttonLoading]}
+          style={[styles.button, !canContinue && styles.buttonInactive, loading && styles.buttonLoading]}
           onPress={handleSendCode}
-          disabled={loading || !isValid}
+          disabled={loading || !canContinue}
           activeOpacity={0.85}
           accessibilityLabel="Send verification code"
-          accessibilityState={{ disabled: loading || !isValid }}
+          accessibilityState={{ disabled: loading || !canContinue }}
         >
           {loading ? (
             <ActivityIndicator color="#fff" size="small" />
           ) : (
             <View style={styles.buttonContent}>
-              <Text style={[styles.buttonText, !isValid && styles.buttonTextInactive]}>
+              <Text style={[styles.buttonText, !canContinue && styles.buttonTextInactive]}>
                 Send Verification Code
               </Text>
-              <Ionicons name="arrow-forward" size={20} color={isValid ? '#fff' : colors.textDim} />
+              <Ionicons name="arrow-forward" size={20} color={canContinue ? '#fff' : colors.textDim} />
             </View>
           )}
         </TouchableOpacity>
@@ -206,12 +220,44 @@ export default function LoginScreen() {
       </View>
 
       <View style={[styles.terms, { paddingBottom: insets.bottom + 16 }]}>
-        <Text style={styles.termsText}>
-          By continuing, you agree to our{' '}
-          <Text style={styles.termsLink}>Terms of Service</Text>
-          {' '}and{' '}
-          <Text style={styles.termsLink}>Privacy Policy</Text>
-        </Text>
+        {/* Explicit, unchecked-by-default consent checkbox — replaces the
+            old passive "by continuing you agree" text, which had no
+            tappable action or opt-in gesture behind it. Icon (not color
+            alone) signals checked state for WCAG 2.1 AA. */}
+        <TouchableOpacity
+          style={styles.consentRow}
+          onPress={() => setConsentAccepted((c) => !c)}
+          activeOpacity={0.7}
+          disabled={loading}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: consentAccepted, disabled: loading }}
+          accessibilityLabel="I agree to Spinr's Terms of Service and Privacy Policy"
+        >
+          <Ionicons
+            name={consentAccepted ? 'checkbox' : 'square-outline'}
+            size={22}
+            color={consentAccepted ? colors.primary : colors.textDim}
+          />
+          <Text style={styles.termsText}>
+            I agree to Spinr&apos;s{' '}
+            <Text
+              style={styles.termsLink}
+              onPress={() => router.push({ pathname: '/legal', params: { type: 'tos' } } as any)}
+              accessibilityRole="link"
+            >
+              Terms of Service
+            </Text>
+            {' '}and{' '}
+            <Text
+              style={styles.termsLink}
+              onPress={() => router.push({ pathname: '/legal', params: { type: 'privacy' } } as any)}
+              accessibilityRole="link"
+            >
+              Privacy Policy
+            </Text>
+          </Text>
+        </TouchableOpacity>
       </View>
       </ScrollView>
 
@@ -286,7 +332,11 @@ function createStyles(colors: ThemeColors) {
     footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
     footerText: { fontSize: 12, color: colors.textDim, flex: 1 },
     terms: { paddingHorizontal: 24, alignItems: 'center' },
-    termsText: { fontSize: 12, color: '#B0B0B0', textAlign: 'center', lineHeight: 18 },
+    consentRow: {
+      flexDirection: 'row', alignItems: 'flex-start', gap: 10,
+      minHeight: 44, paddingVertical: 4,
+    },
+    termsText: { flex: 1, fontSize: 12, color: '#B0B0B0', lineHeight: 18, paddingTop: 3 },
     termsLink: { color: colors.primary, fontWeight: '600' },
   });
 }

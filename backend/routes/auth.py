@@ -1157,6 +1157,22 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                 admin_ttl_minutes=15,
             )
         else:
+            # PIPEDA: a brand-new account may only be created off an actual,
+            # logged user gesture — the signup screen's "I agree to the Terms
+            # of Service and Privacy Policy" checkbox (rider-app / driver-app
+            # login.tsx), not an auto-stamped consent_version with no action
+            # behind it. Reject the whole signup (no row is created, no
+            # consent_version is stamped) rather than silently proceeding
+            # without consent or creating the account minus the stamp — see
+            # docs/change-log/2026-08-20-explicit-signup-consent-checkbox.md.
+            if not body.consent_accepted:
+                raise SpinrException(
+                    message="Please agree to the Terms of Service and Privacy Policy to continue.",
+                    error_code=ErrorCode.VALIDATION_MISSING_FIELD,
+                    status_code=400,
+                    message_key=ErrorKeys.AUTH_CONSENT_REQUIRED,
+                    action_hint="Check the consent checkbox and try again",
+                )
             logger.info("Creating new user")
             user_id = str(uuid.uuid4())
             session_id = str(uuid.uuid4())

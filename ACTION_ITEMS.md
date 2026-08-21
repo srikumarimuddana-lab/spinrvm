@@ -11674,6 +11674,23 @@ how much they de-risk a public launch._
     land its commits after this one; check the branch directly rather than
     trusting this note's snapshot. Full write-up:
     `docs/change-log/2026-08-20-consent-version-bump-re-consent-rollout.md`.
+  - **[RE-VERIFIED 2026-08-20, LATER SAME DAY — NEW-SIGNUP CHECKBOX (PIECE 3) NOW BUILT.]**
+    The status-not-confirmed checkbox piece above is done: both apps' `login.tsx` now show a
+    real, unchecked-by-default checkbox (accessible label, `accessibilityRole="checkbox"`, icon —
+    not color alone — signals checked state) gating the "Send Verification Code" button, with
+    tappable links to the actual in-app `/legal?type=tos` / `/legal?type=privacy` screens (the
+    same destination `legacy-consent-notice.tsx`'s "View Policy" link already uses). The checked
+    state is carried as a route param into `otp.tsx`, whose `POST /auth/verify-otp` call now sends
+    `consent_accepted`; `backend/routes/auth.py`'s new-user-creation branch rejects the signup
+    (400, no row created, no `consent_version` stamped) unless that's `true` — the auto-stamp this
+    entry originally flagged as evidence-less is now gated on a real logged gesture. Existing/
+    returning-user logins are unaffected (that branch never reads the field). Backend: 3 new
+    tests in `test_verify_otp_login_flow.py` (146/146 auth-suite tests green). Frontend: 10 new
+    tests across both apps' `loginConsentCheckbox.test.tsx`, full rider-app suite (560/560) and
+    full driver-app suite (657/657) green, `tsc --noEmit` clean on both. **Not verified:** no
+    simulator/device available this session — same standing gap as the rest of this item; no
+    automated visual/snapshot regression tooling exists in this repo at all. Full write-up:
+    `docs/change-log/2026-08-20-explicit-signup-consent-checkbox.md`.
 - **FIXED (2026-08-19, second pass — 4 parallel worktree-isolated tracks,
   no file overlap between them, verified before dispatch and again by full
   regression across all 4 merged results — 539 backend tests green,

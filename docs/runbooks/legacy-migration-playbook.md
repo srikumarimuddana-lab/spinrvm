@@ -213,6 +213,20 @@ rushed).
    >      branch — check the branch directly, don't trust this snapshot.
    > Net effect right now: nothing user-visible has shipped from any of the three pieces yet. Full
    > write-up: `docs/change-log/2026-08-20-consent-version-bump-re-consent-rollout.md`.
+   >
+   > **[RE-VERIFIED 2026-08-20, LATER SAME DAY — PIECE 3 (NEW-SIGNUP CHECKBOX) NOW BUILT.]** Piece 3
+   > above is done: both apps' `login.tsx` now show a real, unchecked-by-default checkbox (accessible
+   > label, `accessibilityRole="checkbox"`, icon — not color alone — signals checked state) gating the
+   > "Send Verification Code" button's disabled state, with tappable links to the actual in-app
+   > `/legal?type=tos` / `/legal?type=privacy` screens (the same destination `legacy-consent-notice.tsx`'s
+   > "View Policy" link already uses). The checked state is carried as a route param into `otp.tsx`,
+   > whose `POST /auth/verify-otp` call now sends `consent_accepted`; `backend/routes/auth.py`'s
+   > new-user-creation branch rejects the signup (400, no row created, no `consent_version` stamped) if
+   > that isn't `true` — the auto-stamp this item originally flagged as evidence-less is now gated on a
+   > real logged gesture. Existing/returning-user logins are unaffected (that branch never reads the
+   > field). Full write-up: `docs/change-log/2026-08-20-explicit-signup-consent-checkbox.md`. Net effect
+   > now: 2 of 3 pieces are code-complete (1 and 3); piece 2 (the flag flip) is still explicitly pending
+   > a separate actor, so existing users still see no re-consent prompt yet.
 2. **Retention-window correctness proof, per data class**, run as a query against the actual Oct 30
    export before import: for each of the four regulatory retention rows (trip record 7yr, driver/
    vehicle linkage 7yr, GPS pickup/dropoff 3yr, insurance-period transitions 7yr), confirm the

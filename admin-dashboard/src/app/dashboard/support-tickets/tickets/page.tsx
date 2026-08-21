@@ -43,18 +43,19 @@ const PAGE_SIZES = [25, 50, 100];
 
 function statusClass(status: string): string {
     const s = (status || "").toLowerCase();
+    // eslint-disable-next-line no-restricted-syntax -- "open" (new/active) has no semantic-token equivalent; must stay visually distinct from hold/escalated/closed (#2816)
     if (s.includes("open")) return "bg-blue-100 text-blue-800 hover:bg-blue-100";
-    if (s.includes("hold")) return "bg-amber-100 text-amber-800 hover:bg-amber-100";
-    if (s.includes("escal")) return "bg-red-100 text-red-800 hover:bg-red-100";
-    if (s.includes("closed")) return "bg-gray-200 text-gray-700 hover:bg-gray-200";
-    return "bg-slate-100 text-slate-700 hover:bg-slate-100";
+    if (s.includes("hold")) return "bg-warning/15 text-warning hover:bg-warning/15";
+    if (s.includes("escal")) return "bg-destructive/15 text-destructive hover:bg-destructive/15";
+    if (s.includes("closed")) return "bg-muted text-muted-foreground hover:bg-muted";
+    return "bg-muted text-muted-foreground hover:bg-muted";
 }
 
 function priorityClass(p: string): string {
     const s = (p || "").toLowerCase();
-    if (s === "high" || s === "urgent") return "bg-red-100 text-red-800 hover:bg-red-100";
-    if (s === "medium") return "bg-amber-100 text-amber-800 hover:bg-amber-100";
-    return "bg-slate-100 text-slate-700 hover:bg-slate-100";
+    if (s === "high" || s === "urgent") return "bg-destructive/15 text-destructive hover:bg-destructive/15";
+    if (s === "medium") return "bg-warning/15 text-warning hover:bg-warning/15";
+    return "bg-muted text-muted-foreground hover:bg-muted";
 }
 
 function tagNames(t: any): string {

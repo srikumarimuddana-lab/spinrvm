@@ -77,6 +77,36 @@ const eslintConfig = defineConfig([
       "react/jsx-no-target-blank": "error",
     },
   },
+  // Design-system Stage 1 (#2816, 113-file hardcoded-color backlog):
+  // flag raw Tailwind color utilities so the backlog can't keep growing
+  // while it's migrated to the semantic tokens in globals.css (bg-card,
+  // text-foreground, text-muted-foreground, border-border, bg-primary,
+  // text-warning/text-success/text-destructive, etc.).
+  //
+  // "warn", not "error" — same gradual-migration pattern as
+  // @typescript-eslint/no-explicit-any above. Flipping to "error" is the
+  // last step of the migration, once the batches in
+  // docs/change-log/2026-08-21-admin-color-token-migration-plan.md land,
+  // not the first.
+  //
+  // Legitimate exceptions (a categorical status-color map like
+  // lib/utils.ts's statusColor(), already contrast-verified per-shade in
+  // both themes — see its own comment) suppress with
+  // `eslint-disable-next-line no-restricted-syntax` and a one-line reason,
+  // not by working around the regex.
+  {
+    rules: {
+      "no-restricted-syntax": [
+        "warn",
+        {
+          selector:
+            "Literal[value=/\\b(bg|text|border|ring|fill|stroke|from|to|via)-(red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|gray|grey|slate|zinc|neutral|stone)-[0-9]{2,3}\\b/]",
+          message:
+            "Raw Tailwind color utility — use a semantic theme token from globals.css instead (bg-card, text-foreground, text-muted-foreground, border-border, bg-primary, text-warning, text-success, text-destructive, ...). If this is a deliberate, contrast-verified exception (e.g. a categorical status-color map), suppress with eslint-disable-next-line and a one-line reason. Tracked: #2816.",
+        },
+      ],
+    },
+  },
 ]);
 
 export default eslintConfig;

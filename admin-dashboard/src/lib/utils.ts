@@ -45,6 +45,13 @@ export function statusColor(status: string) {
   // bg, just under WCAG AA's 4.5:1; darkened to -800 (6.19:1/6.25:1). Every
   // other entry here was empirically confirmed passing in both themes and
   // left unchanged.
+  //
+  // Deliberately NOT a #2816 semantic-token migration target: this is
+  // categorical status coloring (10 distinct ride/ticket states), not a
+  // warning/success/destructive tri-state the token system can express —
+  // "scheduled" and "driver_arrived" have no natural semantic-token
+  // equivalent. Already per-shade contrast-verified above.
+  /* eslint-disable no-restricted-syntax -- categorical status map, contrast-verified per-shade, see comment above (#2816) */
   const map: Record<string, string> = {
     searching: "bg-yellow-500/15 text-yellow-800 dark:text-yellow-400",
     driver_assigned: "bg-blue-500/15 text-blue-700 dark:text-blue-400",
@@ -58,4 +65,5 @@ export function statusColor(status: string) {
     closed: "bg-zinc-500/15 text-zinc-700 dark:text-zinc-400",
   };
   return map[status] || "bg-zinc-500/15 text-zinc-600";
+  /* eslint-enable no-restricted-syntax */
 }

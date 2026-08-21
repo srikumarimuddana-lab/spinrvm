@@ -527,7 +527,7 @@ failure mode. This is a small, well-scoped observability fix with an exact templ
 be picked up as a normal engineering task rather than left open as a "decision," but flagged here
 since it was in the decision log as posed.
 
-**Status: implemented 2026-08-21** (commit `PENDING_COMMIT_SHA`). `retention_purge_loop` now calls
+**Status: implemented 2026-08-21** (commit `bb6a0f5`). `retention_purge_loop` now calls
 a new `_escalate_tick_failure()` on tick failure — CRITICAL log + `sentry_sdk.capture_message(...,
 level="fatal", tags={"domain": "admin", "surface": "backend", ...})`, matching
 `retention_guard_monitor.py`'s `_escalate()` shape — and `_record_heartbeat("retention_purge

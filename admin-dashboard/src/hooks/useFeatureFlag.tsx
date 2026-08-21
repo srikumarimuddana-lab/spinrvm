@@ -58,6 +58,13 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
 }
 
 export function useFeatureFlag(key: FlagKey): boolean {
-  const flags = useContext(FeatureFlagsContext);
-  return flags[key] ?? false;
+  // PREVIEW-ONLY OVERRIDE — DO NOT MERGE. Forces every flag on regardless of
+  // the live app_settings row, so this branch's Vercel preview renders
+  // Phase 3 (epic #2785) for visual review without touching production
+  // data. See docs/change-log/2026-08-21-phase3-preview-branch.md.
+  // Real implementation, restore on revert:
+  //   const flags = useContext(FeatureFlagsContext);
+  //   return flags[key] ?? false;
+  void key;
+  return true;
 }

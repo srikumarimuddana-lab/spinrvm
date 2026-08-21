@@ -252,11 +252,11 @@ export default function DriverTimeline({ driverId, driver }: { driverId: string;
                                                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">{meta.old_status}</span>
                                                             <span className="text-[10px] text-muted-foreground">&rarr;</span>
                                                             <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
-                                                                meta.new_status === "active" ? "bg-emerald-100 text-emerald-700" :
-                                                                meta.new_status === "banned" ? "bg-red-100 text-red-700" :
-                                                                meta.new_status === "suspended" ? "bg-orange-100 text-orange-700" :
-                                                                meta.new_status === "rejected" ? "bg-red-100 text-red-700" :
-                                                                "bg-amber-100 text-amber-700"
+                                                                meta.new_status === "active" ? "bg-success/15 text-success" :
+                                                                meta.new_status === "banned" ? "bg-destructive/15 text-destructive" :
+                                                                meta.new_status === "suspended" ? "bg-warning/15 text-warning" :
+                                                                meta.new_status === "rejected" ? "bg-destructive/15 text-destructive" :
+                                                                "bg-warning/15 text-warning"
                                                             }`}>{meta.new_status}</span>
                                                         </div>
                                                     )}

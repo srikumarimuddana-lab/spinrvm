@@ -295,7 +295,7 @@ export default function ApprovalQueuePage() {
                             <div className="text-sm tabular-nums">
                                 {it.pending_docs_count > 0 ? (
                                     <span className="inline-flex items-center gap-1 font-medium">
-                                        <FileWarning className="h-3.5 w-3.5 text-amber-600" />
+                                        <FileWarning className="h-3.5 w-3.5 text-warning" />
                                         {it.pending_docs_count}
                                     </span>
                                 ) : (

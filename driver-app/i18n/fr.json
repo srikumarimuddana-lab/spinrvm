@@ -232,7 +232,8 @@
     "termsPrefix": "En continuant, vous acceptez nos",
     "termsOfService": "Conditions d'utilisation",
     "and": "et",
-    "privacyPolicy": "Politique de confidentialité"
+    "privacyPolicy": "Politique de confidentialité",
+    "consentPrefix": "J'accepte nos"
   },
   "otp": {
     "title": "Vérifiez votre numéro",

@@ -252,6 +252,10 @@ export async function loginAsDriver(
 
   await page.goto('/');
   await page.getByTestId('phone-input').fill('3065550100');
+  // Explicit consent checkbox (added alongside the signup consent-gate
+  // change) must be checked before send-otp-btn enables — see
+  // app/login.tsx's canContinue = isValid && consentAccepted.
+  await page.getByTestId('consent-checkbox').click();
   await page.getByTestId('send-otp-btn').click();
 
   // OTP screen — the code input is a hidden, autoFocus TextInput with no

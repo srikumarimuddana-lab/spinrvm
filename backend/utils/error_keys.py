@@ -16,6 +16,7 @@ class ErrorKeys:
     AUTH_OTP_INVALID: Final[str] = "errors.auth.otp_invalid"
     AUTH_OTP_EXPIRED: Final[str] = "errors.auth.otp_expired"
     AUTH_OTP_LOCKED: Final[str] = "errors.auth.otp_locked"
+    AUTH_CONSENT_REQUIRED: Final[str] = "errors.auth.consent_required"
     AUTH_INVALID_CREDENTIALS: Final[str] = "errors.auth.invalid_credentials"
     AUTH_TOKEN_EXPIRED: Final[str] = "errors.auth.token_expired"
 

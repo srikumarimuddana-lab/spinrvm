@@ -137,7 +137,20 @@ _CORPORATE_EMAIL_OTP_TABLE = "corporate_email_otp_records"
 # CONSENT_VERSION constant for CASL consent) until a real consent screen
 # lands; bump it whenever the shipped ToS/Privacy Policy text materially
 # changes.
-CONSENT_VERSION = "consumer-tos-2026-01-draft"
+#
+# Bumped 2026-08-20 (consumer-tos-2026-01-draft -> consumer-tos-2026-08-v1):
+# product owner decision to re-run consent for both existing and new users,
+# per docs/audit/2026-08-20-legacy-consent-legal-sufficiency-factsheet.md —
+# no old-app user has any recorded affirmative acceptance, and the old app's
+# text materially diverges from Spinr's current text (surge cap, GPS
+# retention window, undisclosed subprocessors). Ties to the real
+# docs/legal/terms-of-service.md + privacy-policy.md publication event
+# (legal_documents version 1, rider+driver rows, 2026-08-17 — see
+# docs/legal/legal-text-publication-checklist.md). This bump alone changes
+# nothing live: existing users are only re-prompted once
+# app_settings.legacy_consent_notice_enabled flips true (routes/legacy_consent.py,
+# separate change, not this commit).
+CONSENT_VERSION = "consumer-tos-2026-08-v1"
 
 
 class CompanyEmailOtpSendRequest(BaseModel):
@@ -1144,6 +1157,22 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                 admin_ttl_minutes=15,
             )
         else:
+            # PIPEDA: a brand-new account may only be created off an actual,
+            # logged user gesture — the signup screen's "I agree to the Terms
+            # of Service and Privacy Policy" checkbox (rider-app / driver-app
+            # login.tsx), not an auto-stamped consent_version with no action
+            # behind it. Reject the whole signup (no row is created, no
+            # consent_version is stamped) rather than silently proceeding
+            # without consent or creating the account minus the stamp — see
+            # docs/change-log/2026-08-20-explicit-signup-consent-checkbox.md.
+            if not body.consent_accepted:
+                raise SpinrException(
+                    message="Please agree to the Terms of Service and Privacy Policy to continue.",
+                    error_code=ErrorCode.VALIDATION_MISSING_FIELD,
+                    status_code=400,
+                    message_key=ErrorKeys.AUTH_CONSENT_REQUIRED,
+                    action_hint="Check the consent checkbox and try again",
+                )
             logger.info("Creating new user")
             user_id = str(uuid.uuid4())
             session_id = str(uuid.uuid4())

@@ -81,6 +81,7 @@
       "otp_invalid": "That code didn't match. Check the SMS and try again.",
       "otp_expired": "That code has expired. Tap Resend to get a new one.",
       "otp_locked": "Too many failed tries. Please wait a moment before trying again.",
+      "consent_required": "Please agree to the Terms of Service and Privacy Policy to continue.",
       "invalid_credentials": "Sign-in details didn't match. Please try again.",
       "token_expired": "Your session has expired. Please sign in again."
     },

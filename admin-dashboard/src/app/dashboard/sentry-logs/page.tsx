@@ -347,7 +347,7 @@ export default function SentryLogsPage() {
                 entire app's errors. On a triage screen that must be stated
                 outright — "no issues" and "we couldn't ask" look identical. */}
             {issuesResp?.partial && (
-                <Card className="border-yellow-500/50">
+                <Card className="border-warning/50">
                     <CardContent className="flex flex-col gap-1 pt-6 text-sm">
                         <span className="flex items-center gap-2 font-medium text-yellow-600 dark:text-yellow-400">
                             <AlertTriangle className="h-5 w-5" />
@@ -370,7 +370,7 @@ export default function SentryLogsPage() {
 
             {/* Not-configured setup panel */}
             {config && !config.configured && (
-                <Card className="border-yellow-500/50">
+                <Card className="border-warning/50">
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2 text-yellow-600 dark:text-yellow-400">
                             <AlertTriangle className="h-5 w-5" />
@@ -466,7 +466,7 @@ export default function SentryLogsPage() {
                     {!errorMsg && issues.length === 0 && !issuesResp?.partial && (
                         <Card>
                             <CardContent className="flex flex-col items-center gap-2 py-12 text-muted-foreground">
-                                <CheckCircle2 className="h-8 w-8 text-emerald-500" />
+                                <CheckCircle2 className="h-8 w-8 text-success" />
                                 <p>No {status} issues in this window. Nothing to triage.</p>
                             </CardContent>
                         </Card>

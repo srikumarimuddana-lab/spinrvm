@@ -495,7 +495,7 @@ export default function TicketDetailPage() {
                             </CardContent>
                         </Card>
 
-                        <Card className={areaInfo?.needs_assignment ? "border-amber-400 bg-amber-50/50 dark:bg-amber-950/20" : undefined}>
+                        <Card className={areaInfo?.needs_assignment ? "border-warning/40 bg-warning/5" : undefined}>
                             <CardHeader>
                                 <CardTitle className="flex items-center gap-2 text-base">
                                     <MapPin className="h-4 w-4" /> Service area
@@ -506,7 +506,7 @@ export default function TicketDetailPage() {
                             </CardHeader>
                             <CardContent className="space-y-2">
                                 {areaInfo?.needs_assignment && (
-                                    <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+                                    <p className="flex items-start gap-1.5 text-xs text-warning">
                                         <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                                         No service area on file for this requester — assign one (optional, helps routing & reporting).
                                     </p>

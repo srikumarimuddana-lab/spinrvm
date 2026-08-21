@@ -21,6 +21,11 @@ on:
     branches: [main]
   push:
     branches: [main]
+  # See docs/audit/2026-08-19-decision-writeups.md section 5 -- runs this
+  # required check against the merge queue's temporary merge commit once
+  # GitHub's native merge queue is enabled, closing the CR #4187 cross-PR
+  # migration-collision race window a per-PR check can't see.
+  merge_group:
   schedule:
     # Daily 02:00 UTC — catches drift in main between PRs
     - cron: '0 2 * * *'

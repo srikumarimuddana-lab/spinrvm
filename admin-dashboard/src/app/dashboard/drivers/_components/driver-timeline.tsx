@@ -15,6 +15,14 @@ import {
 
 const TIMELINE_PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 
+// Categorical driver-activity-event-type map (19 distinct event types across
+// 8 hues) — not a #2816 migration target. Same class as audit-logs/page.tsx's
+// ACTION_CONFIG: a 3-token semantic system (success/warning/destructive) can't
+// distinguish "document uploaded" from "vehicle updated" from "went online" —
+// these are timeline event *categories*, not app states. Each entry's tint +
+// matching-hue text/border pairing is theme-invariant by construction (all
+// three derive from the same fixed hue).
+/* eslint-disable no-restricted-syntax -- categorical driver-activity-event-type map, see comment above (#2816) */
 const EVENT_CONFIG: Record<string, { icon: any; color: string; bg: string; pipeColor: string }> = {
     registered:             { icon: UserPlus,     color: "text-blue-600",    bg: "bg-blue-100 dark:bg-blue-900/30",    pipeColor: "border-blue-300" },
     document_uploaded:      { icon: FileText,     color: "text-violet-600",  bg: "bg-violet-100 dark:bg-violet-900/30",pipeColor: "border-violet-300" },
@@ -39,6 +47,7 @@ const EVENT_CONFIG: Record<string, { icon: any; color: string; bg: string; pipeC
 };
 
 const DEFAULT_CONFIG = { icon: AlertTriangle, color: "text-gray-500", bg: "bg-gray-100 dark:bg-gray-800/30", pipeColor: "border-gray-300" };
+/* eslint-enable no-restricted-syntax */
 
 function fmtDateTime(d: string) {
     if (!d) return "";

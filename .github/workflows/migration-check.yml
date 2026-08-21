@@ -4,6 +4,15 @@ on:
   pull_request:
     paths:
       - 'backend/migrations/*.sql'
+  # This is the specific gap this trigger closes: CHECK B (below) only
+  # evaluates a PR's own diff against its own merge-base, so it cannot see a
+  # true cross-PR race where two PRs both branch before either merges. A
+  # merge_group run sees the actual would-be post-merge state instead. See
+  # docs/audit/2026-08-19-decision-writeups.md section 5 and ACTION_ITEMS.md
+  # C36. Fires once GitHub's native merge queue is enabled on this repo.
+  merge_group:
+    paths:
+      - 'backend/migrations/*.sql'
 
 concurrency:
   group: migration-check-${{ github.ref }}

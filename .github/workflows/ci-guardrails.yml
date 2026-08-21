@@ -5,6 +5,15 @@ on:
     branches: [main, develop]
     types: [opened, synchronize, reopened]
 
+  # Runs this job against the merge queue's temporary merge commit once
+  # GitHub's native merge queue is enabled on this repo (branch protection ->
+  # require merge queue). Closes the CR #4187 cross-PR migration-collision
+  # race window: a per-PR check only sees its own fork point, but a
+  # merge_group run sees the actual would-be post-merge state. See
+  # docs/audit/2026-08-19-decision-writeups.md section 5 and ACTION_ITEMS.md
+  # C36. No filters needed -- fires on every PR added to the queue.
+  merge_group:
+
   # Allow manual check against any branch
   workflow_dispatch:
     inputs:
@@ -827,8 +836,26 @@ jobs:
           HEAD_SHA = os.environ.get('HEAD_SHA', '')
           PR_BODY = os.environ.get('PR_BODY') or ''
 
+          # Diff from the actual merge-base, not raw BASE_SHA.
+          # `pull_request.base.sha` is the base branch's CURRENT tip, which
+          # keeps moving as main advances -- a PR branch that hasn't
+          # rebased/merged main in a while would otherwise show every file
+          # main gained since the PR's fork point as "changed by this PR",
+          # tripping this gate on files the PR never touched. Same bug class
+          # already found and fixed in migration-check.yml (PR #3497) --
+          # mirroring that fix here rather than reinventing it. Found
+          # 2026-08-21 on PR #4319: a stale BASE_SHA made the two-dot diff
+          # surface backend/migrations/356_legacy_consent_notice_enabled_flag.sql
+          # as "changed" even though this PR touches only CI workflow files
+          # and one new doc.
+          merge_base_result = subprocess.run(
+              ['git', 'merge-base', BASE_SHA, HEAD_SHA],
+              capture_output=True, text=True,
+          )
+          MERGE_BASE = merge_base_result.stdout.strip() or BASE_SHA
+
           result = subprocess.run(
-              ['git', 'diff', '--name-only', BASE_SHA, HEAD_SHA],
+              ['git', 'diff', '--name-only', MERGE_BASE, HEAD_SHA],
               capture_output=True, text=True,
           )
           changed = [f for f in result.stdout.strip().split('\n') if f]

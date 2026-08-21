@@ -54,11 +54,11 @@ interface PayoutStats {
 }
 
 const STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
-    completed: { label: "Completed", cls: "bg-green-500/15 text-green-700" },
-    pending:   { label: "Pending",   cls: "bg-amber-500/15 text-amber-700" },
-    processing:{ label: "Processing",cls: "bg-blue-500/15 text-blue-700" },
-    failed:    { label: "Failed",    cls: "bg-red-500/15 text-red-700" },
-    cancelled: { label: "Cancelled", cls: "bg-zinc-500/15 text-zinc-600" },
+    completed: { label: "Completed", cls: "bg-success/15 text-success" },
+    pending:   { label: "Pending",   cls: "bg-warning/15 text-warning" },
+    processing:{ label: "Processing",cls: "bg-blue-500/15 text-blue-700 dark:text-blue-400" },
+    failed:    { label: "Failed",    cls: "bg-destructive/15 text-destructive" },
+    cancelled: { label: "Cancelled", cls: "bg-muted text-muted-foreground" },
 };
 
 const PAGE_SIZE = 25;
@@ -251,29 +251,29 @@ export default function PayoutsPage() {
                     <Card>
                         <CardContent className="pt-4 pb-3">
                             <div className="flex items-center gap-1 mb-1">
-                                <CheckCircle className="h-3 w-3 text-green-500" />
+                                <CheckCircle className="h-3 w-3 text-success" />
                                 <p className="text-xs text-muted-foreground">Total Paid</p>
                             </div>
-                            <p className="text-2xl font-bold text-green-600">{formatCurrency(stats.total_paid)}</p>
+                            <p className="text-2xl font-bold text-success">{formatCurrency(stats.total_paid)}</p>
                         </CardContent>
                     </Card>
                     <Card>
                         <CardContent className="pt-4 pb-3">
                             <div className="flex items-center gap-1 mb-1">
-                                <Clock className="h-3 w-3 text-amber-500" />
+                                <Clock className="h-3 w-3 text-warning" />
                                 <p className="text-xs text-muted-foreground">Pending</p>
                             </div>
-                            <p className="text-2xl font-bold text-amber-600">{formatCurrency(stats.total_pending)}</p>
+                            <p className="text-2xl font-bold text-warning">{formatCurrency(stats.total_pending)}</p>
                             <p className="text-xs text-muted-foreground">{stats.pending_count} payouts</p>
                         </CardContent>
                     </Card>
                     <Card>
                         <CardContent className="pt-4 pb-3">
                             <div className="flex items-center gap-1 mb-1">
-                                <AlertTriangle className="h-3 w-3 text-red-500" />
+                                <AlertTriangle className="h-3 w-3 text-destructive" />
                                 <p className="text-xs text-muted-foreground">Failed</p>
                             </div>
-                            <p className="text-2xl font-bold text-red-600">{formatCurrency(stats.total_failed)}</p>
+                            <p className="text-2xl font-bold text-destructive">{formatCurrency(stats.total_failed)}</p>
                         </CardContent>
                     </Card>
                     <Card>
@@ -371,7 +371,7 @@ export default function PayoutsPage() {
                                     </TableCell>
                                 </TableRow>
                             ) : paged.map((p) => {
-                                const sc = STATUS_CONFIG[p.status] ?? { label: p.status, cls: "bg-zinc-500/15 text-zinc-600" };
+                                const sc = STATUS_CONFIG[p.status] ?? { label: p.status, cls: "bg-muted text-muted-foreground" };
                                 return (
                                     <TableRow key={p.id}>
                                         <TableCell className="font-medium">
@@ -413,7 +413,7 @@ export default function PayoutsPage() {
                                                         variant="outline"
                                                         onClick={() => setRetryModal(p)}
                                                     >
-                                                        <RotateCcw className="h-3 w-3 text-amber-600" />
+                                                        <RotateCcw className="h-3 w-3 text-warning" />
                                                     </Button>
                                                 )}
                                             </div>

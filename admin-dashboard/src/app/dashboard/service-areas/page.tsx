@@ -1923,7 +1923,7 @@ function CascadeEditor({
 
       {vehicleTypes.length === 0 ? (
         <div className="text-center py-10 bg-amber-50 rounded-xl border-2 border-dashed border-amber-200 dark:bg-amber-900/10 dark:border-amber-800">
-          <Car className="h-10 w-10 text-amber-300 mx-auto mb-3" />
+          <Car className="h-10 w-10 text-amber-300 dark:text-amber-400 mx-auto mb-3" />
           <p className="text-amber-700 dark:text-amber-400 font-medium">No vehicle types configured for this area</p>
           <p className="text-amber-600 dark:text-amber-400 text-sm mt-1">
             Add vehicle types under the <span className="font-semibold">Vehicle Pricing</span> tab first,
@@ -2175,7 +2175,7 @@ function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; are
                   )}
                 </div>
                 <button onClick={() => handleToggle(inc.id)}
-                  className={`p-2 rounded-lg ${inc.is_active ? 'text-success hover:bg-green-50' : 'text-muted-foreground hover:bg-muted'}`}
+                  className={`p-2 rounded-lg ${inc.is_active ? 'text-success hover:bg-success/10' : 'text-muted-foreground hover:bg-muted'}`}
                   title={inc.is_active ? 'Deactivate' : 'Activate'}>
                   {inc.is_active ? <ToggleRight className="h-5 w-5" /> : <ToggleLeft className="h-5 w-5" />}
                 </button>

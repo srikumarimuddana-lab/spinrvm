@@ -1610,7 +1610,9 @@ class TestSnapshotTrailSelection:
     def test_no_trail_at_all_renders_markers_only(self, monkeypatch):
         url = self._render(monkeypatch)
         assert "path=" not in url
-        assert "markers=color:green" in url and "markers=color:red" in url
+        # Shared route-pin palette (ROUTE_PIN_COLORS), not Static Maps' named
+        # colours — the PNG must match what every interactive map draws.
+        assert "markers=color:0x10B981" in url and "markers=color:0xEF4444" in url
 
     def test_v2_segments_render_as_separate_paths_without_a_cross_gap_chord(self, monkeypatch):
         url = self._render(
@@ -1642,8 +1644,8 @@ class TestSnapshotTrailSelection:
             route_quality={"missing_tail": True, "coverage_ratio": 0.54},
         )
 
-        assert "markers=color:red|label:D|50.41,-104.63" in url
-        assert "markers=color:orange|label:C|50.452,-104.612" in url
+        assert "markers=color:0xEF4444|label:D|50.41,-104.63" in url
+        assert "markers=color:0xF59E0B|label:C|50.452,-104.612" in url
         assert banner_calls == [{"missing_tail": True, "coverage_ratio": 0.54}]
 
     def test_outlier_hop_not_bridged_by_straight_chord(self, monkeypatch):

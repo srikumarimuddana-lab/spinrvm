@@ -384,11 +384,11 @@ function CeoMetricsHeader({
                             />
                             <div className="flex items-center gap-4 mt-2 text-[11px] text-muted-foreground">
                                 <span className="inline-flex items-center gap-1.5">
-                                    <span className="w-2 h-2 rounded-full bg-amber-500" />
+                                    <span className="w-2 h-2 rounded-full bg-warning" />
                                     Rider {cx.current.rider}
                                 </span>
                                 <span className="inline-flex items-center gap-1.5">
-                                    <span className="w-2 h-2 rounded-full bg-red-500" />
+                                    <span className="w-2 h-2 rounded-full bg-destructive" />
                                     Driver {cx.current.driver}
                                 </span>
                                 <span className="inline-flex items-center gap-1.5">
@@ -412,8 +412,8 @@ function CancellationMixBar({ rider, driver, system }: { rider: number; driver: 
     const pct = (n: number) => `${(n / total) * 100}%`;
     return (
         <div className="flex h-3 w-full rounded-md overflow-hidden bg-muted">
-            <div className="bg-amber-500" style={{ width: pct(rider) }} title={`${rider} rider-cancelled`} />
-            <div className="bg-red-500" style={{ width: pct(driver) }} title={`${driver} driver-cancelled`} />
+            <div className="bg-warning" style={{ width: pct(rider) }} title={`${rider} rider-cancelled`} />
+            <div className="bg-destructive" style={{ width: pct(driver) }} title={`${driver} driver-cancelled`} />
             <div className="bg-muted-foreground/60" style={{ width: pct(system) }} title={`${system} system / no-driver-found`} />
         </div>
     );
@@ -1387,7 +1387,7 @@ function SpinrPassRevenueTab() {
                             <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground flex items-center gap-1.5"><Users className="h-4 w-4" /> Total Subscribers</CardTitle></CardHeader>
                             <CardContent><p className="text-2xl font-bold">{stats.total_subscribers}</p>
                                 <p className="text-xs text-muted-foreground mt-1">
-                                    <span className="text-emerald-500 font-semibold">{stats.active} active</span> · {stats.expired} expired · {stats.cancelled} cancelled
+                                    <span className="text-success font-semibold">{stats.active} active</span> · {stats.expired} expired · {stats.cancelled} cancelled
                                 </p>
                             </CardContent>
                         </Card>

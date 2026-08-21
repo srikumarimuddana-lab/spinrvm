@@ -276,13 +276,13 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                                 <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 mb-1.5">Actual (GPS)</p>
                                                                 <div className="flex gap-4">
                                                                     <div className="flex items-center gap-1.5">
-                                                                        <Route className="h-3.5 w-3.5 text-emerald-500" />
+                                                                        <Route className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" />
                                                                         <span className="text-sm font-extrabold tabular-nums text-emerald-700 dark:text-emerald-300">
                                                                             {actualKm != null ? `${Number(actualKm).toFixed(1)} km` : "—"}
                                                                         </span>
                                                                     </div>
                                                                     <div className="flex items-center gap-1.5">
-                                                                        <Clock className="h-3.5 w-3.5 text-emerald-500" />
+                                                                        <Clock className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" />
                                                                         <span className="text-sm font-extrabold tabular-nums text-emerald-700 dark:text-emerald-300">
                                                                             {actualMin != null ? `${actualMin} min` : "—"}
                                                                         </span>
@@ -486,7 +486,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     {discount > 0 && (
                                                         <div className="flex justify-between items-center">
                                                             <span className="flex items-center gap-2 text-sm"><Ticket className="h-4 w-4 text-violet-500" />Promo{ride.promo_code ? <b className="font-mono text-xs bg-violet-50 dark:bg-violet-900/20 px-1.5 py-0.5 rounded">{ride.promo_code}</b> : null}</span>
-                                                            <span className="text-sm font-semibold text-emerald-600">-{formatCurrency(discount)}</span>
+                                                            <span className="text-sm font-semibold text-success">-{formatCurrency(discount)}</span>
                                                         </div>
                                                     )}
                                                     {taxEntries.length > 0

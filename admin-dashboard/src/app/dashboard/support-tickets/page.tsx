@@ -25,11 +25,12 @@ function timeAgo(iso?: string | null): string {
 
 function statusClass(status: string): string {
     const s = (status || "").toLowerCase();
+    // eslint-disable-next-line no-restricted-syntax -- "open" (new/active) has no semantic-token equivalent; must stay visually distinct from hold/escalated/closed (#2816)
     if (s.includes("open")) return "bg-blue-100 text-blue-800 hover:bg-blue-100";
-    if (s.includes("hold")) return "bg-amber-100 text-amber-800 hover:bg-amber-100";
-    if (s.includes("escal")) return "bg-red-100 text-red-800 hover:bg-red-100";
-    if (s.includes("closed")) return "bg-gray-200 text-gray-700 hover:bg-gray-200";
-    return "bg-slate-100 text-slate-700 hover:bg-slate-100";
+    if (s.includes("hold")) return "bg-warning/15 text-warning hover:bg-warning/15";
+    if (s.includes("escal")) return "bg-destructive/15 text-destructive hover:bg-destructive/15";
+    if (s.includes("closed")) return "bg-muted text-muted-foreground hover:bg-muted";
+    return "bg-muted text-muted-foreground hover:bg-muted";
 }
 
 export default function HelpDeskPage() {
@@ -126,7 +127,7 @@ export default function HelpDeskPage() {
 
             {!loading && connected === false && (
                 <Card>
-                    <CardContent className="flex items-center gap-3 p-4 text-sm text-amber-700">
+                    <CardContent className="flex items-center gap-3 p-4 text-sm text-warning">
                         <AlertCircle className="h-5 w-5" />
                         Zoho Desk is not connected yet. Add your credentials below to enable the Help Desk.
                     </CardContent>

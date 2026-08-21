@@ -51,6 +51,14 @@ import type { TripCard } from './carCard';
 import { displayEarnings, useCarEarningsPrivacy } from './carEarningsPrivacy';
 import { carColors, carSpace, carType } from './carTheme';
 
+/** "3.2 km" — same formatting as carCard's, for the live remaining distance. */
+const fmtKm = (v: number | null): string | null =>
+  typeof v === 'number' && Number.isFinite(v) && v > 0 ? `${v.toFixed(1)} km` : null;
+
+/** "8 min" — same formatting as carCard's, for the live remaining ETA. */
+const fmtMin = (v: number | null): string | null =>
+  typeof v === 'number' && Number.isFinite(v) && v > 0 ? `${Math.max(1, Math.round(v))} min` : null;
+
 /** A small rounded chip (WAV, surge). */
 function Chip({
   label,
@@ -70,20 +78,37 @@ function Chip({
   );
 }
 
-export function CarTripCard({ card }: { card: TripCard }): React.ReactElement {
+export function CarTripCard({
+  card,
+  remainingKm = null,
+  remainingMinutes = null,
+}: {
+  card: TripCard;
+  /** Kilometres left on this leg (live route). Null → fall back to the trip's. */
+  remainingKm?: number | null;
+  /** Minutes left on this leg (live route). Null → fall back to the trip's. */
+  remainingMinutes?: number | null;
+}): React.ReactElement {
   const earningsHidden = useCarEarningsPrivacy((s) => s.hidden);
   // The one leg where money belongs on this bar at all: the trip is over and
   // what it paid is the whole message. During pickup and the trip itself the
   // fare is deliberately absent — see the header note.
   const moneyLeads = card.leg === 'complete';
   const fareText = moneyLeads ? displayEarnings(card.fareLabel, earningsHidden) : null;
-  // With the fare gone from the engaged legs, the trip's own numbers take the
-  // right-hand column: distance leads, ETA sits under it. They are what the
-  // driver is actually tracking between here and the drop-off.
+  // With the fare gone from the engaged legs, the leg's own numbers take the
+  // right-hand column: distance leads, ETA sits under it.
+  //
+  // REMAINING, not the whole trip, whenever the live route can say so. The
+  // card's own etaLabel/distanceLabel come from the ride record — the distance
+  // and duration quoted at BOOKING — which is fine as small print beside a fare
+  // and misleading in the slot the fare used to occupy, where a driver reads it
+  // as "how far to the drop-off".
+  const liveKm = fmtKm(remainingKm);
+  const liveMin = fmtMin(remainingMinutes);
   const meta = moneyLeads
     ? [card.etaLabel, card.distanceLabel].filter(Boolean).join(' · ')
-    : card.etaLabel;
-  const lead = moneyLeads ? null : card.distanceLabel;
+    : (liveMin ?? card.etaLabel);
+  const lead = moneyLeads ? null : (liveKm ?? card.distanceLabel);
   // Caption line doubles as the rider identifier so the name costs no extra row.
   const caption = [card.destinationCaption, card.riderName].filter(Boolean).join(' · ');
 

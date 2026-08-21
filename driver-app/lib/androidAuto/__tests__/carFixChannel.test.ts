@@ -13,6 +13,7 @@ import {
   carFixAgeMs,
   bearingBetween,
   CARRIED_HEADING_MAX_AGE_MS,
+  MAX_COURSE_BASELINE_AGE_MS,
   MIN_COURSE_MOVE_M,
   resolveHeading,
   getLastCarFix,
@@ -97,13 +98,29 @@ describe('heading resolution', () => {
     // THE fix for the head unit: one-shot getCurrentPositionAsync carries no
     // course, and on Android Auto it is the dominant path — but the direction
     // between two fixes is always available and always current.
-    const r = resolveHeading(north(50), SASKATOON, FRESH);
+    const r = resolveHeading(north(50), SASKATOON, FRESH, FRESH);
     expect(r.source).toBe('derived');
     expect(r.fix.heading).toBeCloseTo(0, 0);
   });
 
+  it('refuses to derive across a STALE baseline', () => {
+    // A seed can be a login position from an hour ago, and a resumed process
+    // holds the fix it was suspended on. The direction across either is the
+    // journey's, not the car's — and it would then be trusted as freshly
+    // established. Better to admit we have no course.
+    const r = resolveHeading(north(500), SASKATOON, Infinity, MAX_COURSE_BASELINE_AGE_MS + 1);
+    expect(r.source).toBe('none');
+    expect(r.fix.heading).toBeNull();
+  });
+
+  it('a seeded previous fix is never a baseline (its age clock is Infinity)', () => {
+    seedCarFix(SASKATOON);
+    const merged = adoptCarFix(north(500));
+    expect(merged.heading).toBeNull();
+  });
+
   it('a derived course beats a stale carried one', () => {
-    const r = resolveHeading(north(50), at(271), STALE);
+    const r = resolveHeading(north(50), at(271), STALE, FRESH);
     expect(r.source).toBe('derived');
     expect(r.fix.heading).toBeCloseTo(0, 0);
   });

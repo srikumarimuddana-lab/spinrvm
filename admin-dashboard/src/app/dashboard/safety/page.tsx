@@ -267,7 +267,7 @@ export default function SafetyPage() {
                 <div className="flex items-center gap-3 text-xs text-muted-foreground">
                     {openCount != null && (
                         <span className="inline-flex items-center gap-1.5">
-                            <AlertTriangle className="h-3.5 w-3.5 text-red-600" />
+                            <AlertTriangle className="h-3.5 w-3.5 text-destructive" />
                             <span className="font-semibold text-foreground">{openCount}</span> open
                         </span>
                     )}

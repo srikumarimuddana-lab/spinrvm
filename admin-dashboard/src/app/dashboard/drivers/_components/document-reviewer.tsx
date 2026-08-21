@@ -424,7 +424,7 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
                                             <label className="flex items-start gap-2 cursor-pointer text-xs">
                                                 <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} className="mt-0.5" />
                                                 <span className="flex items-center gap-1.5">
-                                                    {notify ? <Bell className="h-3.5 w-3.5 text-blue-600" /> : <BellOff className="h-3.5 w-3.5 text-muted-foreground" />}
+                                                    {notify ? <Bell className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" /> : <BellOff className="h-3.5 w-3.5 text-muted-foreground" />}
                                                     Notify driver via push so they can re-upload
                                                 </span>
                                             </label>

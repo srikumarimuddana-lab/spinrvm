@@ -527,6 +527,16 @@ failure mode. This is a small, well-scoped observability fix with an exact templ
 be picked up as a normal engineering task rather than left open as a "decision," but flagged here
 since it was in the decision log as posed.
 
+**Status: implemented 2026-08-21** (commit `PENDING_COMMIT_SHA`). `retention_purge_loop` now calls
+a new `_escalate_tick_failure()` on tick failure — CRITICAL log + `sentry_sdk.capture_message(...,
+level="fatal", tags={"domain": "admin", "surface": "backend", ...})`, matching
+`retention_guard_monitor.py`'s `_escalate()` shape — and `_record_heartbeat("retention_purge
+(24h)")` now fires only on a successful tick (a leader-lock skip still counts as success), so the
+watchdog can detect a stuck-but-still-ticking failure. See
+`docs/change-log/2026-08-21-purge-pii-retention-alerting-fix.md` for the full Change Impact & Risk
+Log, including the blast-radius grep confirming the heartbeat key and metric names are read only
+by the watchdog itself.
+
 ---
 
 ## Summary table

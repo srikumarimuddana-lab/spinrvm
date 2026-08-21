@@ -219,6 +219,118 @@ async def test_retention_purge_loop_emits_error_counter_on_failure():
 
 
 @pytest.mark.anyio
+async def test_retention_purge_loop_heartbeat_recorded_on_success():
+    """A successful tick refreshes the loop watchdog heartbeat, as before."""
+    heartbeat_calls: list[str] = []
+
+    async def capture_sleep(seconds):
+        raise asyncio.CancelledError()
+
+    with (
+        patch("asyncio.sleep", capture_sleep),
+        patch("backend.utils.retention_purge._tick", AsyncMock()),
+        patch("backend.utils.retention_purge._record_heartbeat", heartbeat_calls.append),
+    ):
+        try:
+            await retention_purge_loop()
+        except asyncio.CancelledError:
+            pass
+
+    assert heartbeat_calls == ["retention_purge (24h)"]
+
+
+@pytest.mark.anyio
+async def test_retention_purge_loop_heartbeat_not_recorded_on_failure():
+    """A failing tick must NOT refresh the heartbeat, so the loop watchdog
+    can actually detect a stuck-but-still-ticking failure mode (the loop
+    keeps running every 24h on schedule while every individual run fails) —
+    see docs/audit/2026-08-19-decision-writeups.md section 9."""
+    heartbeat_calls: list[str] = []
+
+    async def failing_tick():
+        raise RuntimeError("simulated DB failure")
+
+    async def capture_sleep(seconds):
+        raise asyncio.CancelledError()
+
+    with (
+        patch("asyncio.sleep", capture_sleep),
+        patch("backend.utils.retention_purge._tick", failing_tick),
+        patch("backend.utils.retention_purge._metric_gauge", MagicMock()),
+        patch("backend.utils.retention_purge._metric_inc", MagicMock()),
+        patch("backend.utils.retention_purge._record_heartbeat", heartbeat_calls.append),
+        patch("sentry_sdk.capture_message", MagicMock(), create=True),
+    ):
+        try:
+            await retention_purge_loop()
+        except asyncio.CancelledError:
+            pass
+
+    assert heartbeat_calls == []
+
+
+@pytest.mark.anyio
+async def test_retention_purge_loop_sentry_capture_on_failure():
+    """A failing tick fires a Sentry `fatal` capture tagged domain=admin,
+    mirroring retention_guard_monitor.py's _escalate pattern, so a repeat
+    failure actually pages instead of producing only a log line."""
+    sentry_capture = MagicMock()
+
+    async def failing_tick():
+        raise RuntimeError("simulated DB failure")
+
+    async def capture_sleep(seconds):
+        raise asyncio.CancelledError()
+
+    with (
+        patch("asyncio.sleep", capture_sleep),
+        patch("backend.utils.retention_purge._tick", failing_tick),
+        patch("backend.utils.retention_purge._metric_gauge", MagicMock()),
+        patch("backend.utils.retention_purge._metric_inc", MagicMock()),
+        patch("sentry_sdk.capture_message", sentry_capture, create=True),
+    ):
+        try:
+            await retention_purge_loop()
+        except asyncio.CancelledError:
+            pass
+
+    sentry_capture.assert_called_once()
+    _, kwargs = sentry_capture.call_args
+    assert kwargs["level"] == "fatal"
+    assert kwargs["tags"]["domain"] == "admin"
+    assert kwargs["tags"]["surface"] == "backend"
+
+
+@pytest.mark.anyio
+async def test_retention_purge_loop_sentry_capture_carries_no_pii():
+    """PIPEDA: the Sentry capture must carry only the exception type, never
+    raw PII (names, GPS, emails, etc. — CLAUDE.md's PIPEDA logging rules)."""
+    sentry_capture = MagicMock()
+
+    async def failing_tick():
+        raise RuntimeError("simulated DB failure")
+
+    async def capture_sleep(seconds):
+        raise asyncio.CancelledError()
+
+    with (
+        patch("asyncio.sleep", capture_sleep),
+        patch("backend.utils.retention_purge._tick", failing_tick),
+        patch("backend.utils.retention_purge._metric_gauge", MagicMock()),
+        patch("backend.utils.retention_purge._metric_inc", MagicMock()),
+        patch("sentry_sdk.capture_message", sentry_capture, create=True),
+    ):
+        try:
+            await retention_purge_loop()
+        except asyncio.CancelledError:
+            pass
+
+    _, kwargs = sentry_capture.call_args
+    ctx = kwargs["contexts"]["retention_purge"]
+    assert ctx == {"exception_type": "RuntimeError"}
+
+
+@pytest.mark.anyio
 async def test_retention_purge_loop_no_error_counter_on_success():
     """spinr_bgloop_errors_total is NOT emitted when the tick succeeds."""
     inc_calls: list[tuple] = []

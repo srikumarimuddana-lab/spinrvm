@@ -105,3 +105,34 @@ export function zoomForSpan(
   if (!Number.isFinite(zoom)) return null;
   return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom));
 }
+
+/**
+ * The one-line heading readout drawn on the car surface.
+ *
+ * Exists because "the car is pointing the wrong way" was reported from a
+ * photograph, and a photograph cannot say WHY — a bearing the GPS supplied, one
+ * derived from two positions, one carried from an earlier reading, and none at
+ * all all look identical on screen. The car has no console, no red box and no
+ * Metro output, and the debug panel behind them is compiled out of production,
+ * so a driver on a real head unit had nothing to report but the picture.
+ *
+ * Deliberately terse: it sits on a dashboard beside the map and has to cost the
+ * driver nothing to ignore. Examples:
+ *   "271° gps · course-up"      healthy — real course, map rotating
+ *   "271° derived · course-up"  no GPS course; bearing from movement
+ *   "271° held · north-up"      carried from an earlier reading
+ *   "no course · north-up"      nothing to point with (the reported symptom)
+ */
+export function formatHeadingReadout(
+  headingDeg: number | null | undefined,
+  source: 'gps' | 'derived' | 'carried' | 'none',
+  cameraHeadingDeg: number | null,
+): string {
+  const label =
+    source === 'gps' ? 'gps' : source === 'derived' ? 'derived' : source === 'carried' ? 'held' : null;
+  const bearing = normalizeHeading(headingDeg);
+  const left =
+    bearing === null || label === null ? 'no course' : `${Math.round(bearing)}° ${label}`;
+  const right = cameraHeadingDeg === null ? 'north-up' : 'course-up';
+  return `${left} · ${right}`;
+}

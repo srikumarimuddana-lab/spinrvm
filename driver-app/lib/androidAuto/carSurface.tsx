@@ -589,7 +589,18 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
       {/* Slim status bar for every engaged leg (display-only; interaction is via
           template header actions / map buttons). Hidden when `idle` — nothing to
           say, so the screen stays an uncluttered map. */}
-      {card.leg !== 'idle' && card.leg !== 'offer' && <CarTripCard card={card} />}
+      {card.leg !== 'idle' && card.leg !== 'offer' && (
+        <CarTripCard
+          card={card}
+          // What is LEFT of this leg, from the live route the surface is already
+          // drawing (server-derived from the driver's current position). The
+          // card falls back to the ride's booking-time figures when there is no
+          // trustworthy live route — those describe the whole trip, so they are
+          // the fallback, never the preference.
+          remainingKm={liveRoute?.distanceKm ?? null}
+          remainingMinutes={liveRoute?.etaMinutes ?? null}
+        />
+      )}
       {/* Always-on status pill. Two jobs:
           - UX: the idle car screen is otherwise a bare map with no indication
             the app is alive or connected, which is what Uber/Lyft put here.

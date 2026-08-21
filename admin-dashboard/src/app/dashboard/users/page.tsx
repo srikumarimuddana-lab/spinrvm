@@ -541,10 +541,11 @@ export default function UsersPage() {
                                                 </TableCell>
                                                 <TableCell>
                                                     <Badge className={
-                                                        user.status === "banned" ? "bg-red-500/15 text-red-600"
-                                                        : user.status === "suspended" ? "bg-amber-500/15 text-amber-600"
+                                                        user.status === "banned" ? "bg-destructive/15 text-destructive"
+                                                        : user.status === "suspended" ? "bg-warning/15 text-warning"
+                                                        // eslint-disable-next-line no-restricted-syntax -- pending_deletion has no semantic-token equivalent (#2816)
                                                         : user.status === "pending_deletion" ? "bg-orange-500/15 text-orange-600"
-                                                        : "bg-emerald-500/15 text-emerald-600"
+                                                        : "bg-success/15 text-success"
                                                     }>
                                                         {user.status === "banned" ? "Banned"
                                                         : user.status === "suspended" ? "Suspended"
@@ -678,10 +679,11 @@ export default function UsersPage() {
                                 <Label className="text-xs text-muted-foreground mb-2 block">Account Status</Label>
                                 <div className="flex items-center gap-2 mb-3">
                                     <Badge className={
-                                        selectedUser.status === "banned" ? "bg-red-500/15 text-red-600"
-                                        : selectedUser.status === "suspended" ? "bg-amber-500/15 text-amber-600"
+                                        selectedUser.status === "banned" ? "bg-destructive/15 text-destructive"
+                                        : selectedUser.status === "suspended" ? "bg-warning/15 text-warning"
+                                        // eslint-disable-next-line no-restricted-syntax -- pending_deletion has no semantic-token equivalent (#2816)
                                         : selectedUser.status === "pending_deletion" ? "bg-orange-500/15 text-orange-600"
-                                        : "bg-emerald-500/15 text-emerald-600"
+                                        : "bg-success/15 text-success"
                                     }>
                                         {selectedUser.status === "banned" ? "Banned"
                                         : selectedUser.status === "suspended" ? "Suspended"
@@ -722,7 +724,7 @@ export default function UsersPage() {
                                                 } finally { setStatusUpdating(null); }
                                             }}
                                         >
-                                            <CheckCircle className="h-4 w-4 mr-2 text-green-600" /> Activate
+                                            <CheckCircle className="h-4 w-4 mr-2 text-success" /> Activate
                                         </Button>
                                     )}
                                     {selectedUser.status !== "suspended" && (
@@ -736,7 +738,7 @@ export default function UsersPage() {
                                                 name: `${selectedUser.first_name || ''} ${selectedUser.last_name || ''}`.trim() || selectedUser.phone,
                                             })}
                                         >
-                                            <AlertTriangle className="h-4 w-4 mr-2 text-amber-600" /> Suspend
+                                            <AlertTriangle className="h-4 w-4 mr-2 text-warning" /> Suspend
                                         </Button>
                                     )}
                                     {selectedUser.status !== "banned" && (
@@ -913,7 +915,7 @@ export default function UsersPage() {
                                                                     )}
                                                                 </div>
                                                                 <div className="text-right shrink-0">
-                                                                    <p className={`text-sm font-semibold ${isCredit ? "text-emerald-600" : "text-red-600"}`}>
+                                                                    <p className={`text-sm font-semibold ${isCredit ? "text-success" : "text-destructive"}`}>
                                                                         {isCredit ? "+" : ""}${amt.toFixed(2)}
                                                                     </p>
                                                                     <p className="text-[10px] text-muted-foreground">
@@ -1002,8 +1004,8 @@ export default function UsersPage() {
                                                             {(r.pickup_address || "Pickup").split(",")[0]} → {(r.dropoff_address || "Dropoff").split(",")[0]}
                                                         </span>
                                                         <Badge variant="outline" className={`text-[10px] shrink-0 ${
-                                                            r.status === "completed" ? "text-emerald-600"
-                                                            : r.status === "cancelled" ? "text-red-600" : "text-amber-600"}`}>
+                                                            r.status === "completed" ? "text-success"
+                                                            : r.status === "cancelled" ? "text-destructive" : "text-warning"}`}>
                                                             {r.status}
                                                         </Badge>
                                                     </div>
@@ -1081,7 +1083,7 @@ export default function UsersPage() {
 
                     <div className="space-y-3 py-1">
                         <div className="space-y-1.5">
-                            <Label className="text-xs">Reason <span className="text-red-500">*</span></Label>
+                            <Label className="text-xs">Reason <span className="text-destructive">*</span></Label>
                             <div className="flex flex-wrap gap-1.5">
                                 {["Payment / chargeback", "Safety report", "Policy violation", "Fraud / abuse"].map((r) => (
                                     <button

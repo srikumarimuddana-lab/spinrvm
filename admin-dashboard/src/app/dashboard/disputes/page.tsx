@@ -167,7 +167,7 @@ export default function DisputesPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
-            <AlertTriangle className="h-6 w-6 text-amber-500" />
+            <AlertTriangle className="h-6 w-6 text-warning" />
             Dispute Resolution
           </h1>
           <p className="text-muted-foreground mt-1">
@@ -291,7 +291,7 @@ export default function DisputesPage() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              <AlertTriangle className="h-5 w-5 text-warning" />
               Resolve Dispute
             </DialogTitle>
           </DialogHeader>
@@ -354,8 +354,8 @@ export default function DisputesPage() {
                   </div>
                 </>
               ) : (
-                <div className="bg-green-50 dark:bg-green-950/30 rounded-lg p-3 space-y-1">
-                  <p className="text-sm font-medium text-green-700 dark:text-green-400">Resolution: {selected.resolution}</p>
+                <div className="bg-success/10 rounded-lg p-3 space-y-1">
+                  <p className="text-sm font-medium text-success">Resolution: {selected.resolution}</p>
                   {selected.refund_amount > 0 && <p className="text-sm">Refunded: ${Number(selected.refund_amount).toFixed(2)}</p>}
                   {selected.admin_note && <p className="text-xs text-muted-foreground">Note: {selected.admin_note}</p>}
                   <p className="text-xs text-muted-foreground">Resolved: {formatDate(selected.resolved_at)}</p>

@@ -78,10 +78,10 @@ interface ProfileFormData {
 }
 
 const STATUS_PILL_CLASSES: Record<CompanyStatus, string> = {
-    pending_verification: "bg-yellow-100 text-yellow-800 hover:bg-yellow-100",
-    active: "bg-emerald-100 text-emerald-800 hover:bg-emerald-100",
-    suspended: "bg-orange-100 text-orange-800 hover:bg-orange-100",
-    closed: "bg-gray-200 text-gray-700 hover:bg-gray-200",
+    pending_verification: "bg-yellow-100 text-yellow-800 hover:bg-yellow-100 dark:bg-yellow-900/40 dark:text-yellow-300",
+    active: "bg-success/15 text-success hover:bg-success/15",
+    suspended: "bg-orange-100 text-orange-800 hover:bg-orange-100 dark:bg-orange-900/30 dark:text-orange-300",
+    closed: "bg-muted text-muted-foreground hover:bg-muted",
 };
 
 type TransitionKind = "suspend" | "reactivate" | "close";
@@ -302,7 +302,7 @@ export default function CompanyDetailPage() {
 
     if (error) {
         return (
-            <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <div className="rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
                 {error}
             </div>
         );
@@ -475,7 +475,7 @@ export default function CompanyDetailPage() {
                             <div className="md:col-span-2">
                                 <button
                                     type="button"
-                                    className="inline-flex items-center gap-1 text-blue-600 hover:underline"
+                                    className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:underline"
                                     onClick={async () => {
                                         try {
                                             const blob = await fetchKybDocumentBlob(company.id);

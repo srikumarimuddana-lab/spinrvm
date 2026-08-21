@@ -3,19 +3,20 @@
 | Field | Value |
 |---|---|
 | PIA Reference | SPINR-PIA-2026-01 |
-| Version | 1.0 — Draft, for Privacy/Legal review |
+| Version | 1.1 — Decided 2026-08-21 |
 | Program/System | Rider emergency-contact storage (`emergency_contacts` table) and its use in the SOS/safety-check-in flow |
 | Prepared by | Claude (session), on behalf of @vikas |
 | Assessment date | 2026-08-21 |
-| Next review | On Privacy/Legal decision, or 2026-08-25 (the due date already carried in `docs/audit/2026-08-19-decision-writeups.md`, whichever is later) |
+| Decision date | 2026-08-21 (@vikas, standing in for Privacy/Legal) |
 | Applicable legislation | PIPEDA (federal, private-sector) — Spinr is a commercial ride-share operator, not a government institution, so FOIP/HIPA do not apply here |
-| Status | **For decision** — this document does not resolve the question; it exists so the decision, once made, has a durable record of what was evaluated, when, and why |
+| Status | **DECIDED** — see Section 9. Both recommendations approved together: encrypt at rest (mirroring migration 32) AND build the third-party consent/opt-out handshake alongside it, not sequenced apart. Implementation tracked separately (not yet built as of this decision). |
 
-This memo exists purely as historical evidence for Privacy/Legal's decision, per
+This memo was historical evidence for Privacy/Legal's decision, per
 `docs/audit/2026-08-19-decision-writeups.md`'s ranked blocker #13 and the corresponding decision-log
-row (owner: Privacy/Legal, due 2026-08-25). Nothing here has been implemented — the question is
-still open. Every code claim below was independently re-verified against the current codebase on
-2026-08-21, not carried forward from an earlier pass without re-checking.
+row. The decision has now been made (Section 9) — this document is retained as the record of what
+was evaluated and why, ahead of implementation. Every code claim below was independently re-verified
+against the current codebase on 2026-08-21, not carried forward from an earlier pass without
+re-checking.
 
 ---
 
@@ -252,11 +253,18 @@ tracked in the safety-toolkit gap analysis (finding F13) as its own scoped effor
 ## Section 9: Sign-off
 
 ```
-Reviewed by:     _______________________          Date: ___
-Approved by:     _______________________          Date: ___
-Decision:        [ ] Encrypt (mirror migration 32)   [ ] Accept plaintext with compensating controls
-                  [ ] Build consent/opt-out handshake now   [ ] Sequence as fast-follow
-Next action:     _______________________________________________
+Reviewed by:     @vikas (session decision-maker, standing in for Privacy/Legal)
+                                                    Date: 2026-08-21
+Approved by:     @vikas                            Date: 2026-08-21
+Decision:        [x] Encrypt (mirror migration 32)   [ ] Accept plaintext with compensating controls
+                  [x] Build consent/opt-out handshake now (alongside encryption, not sequenced apart)
+Next action:     Implement both together: (1) pgsodium/Vault encryption for
+                 emergency_contacts.name/phone mirroring migration 32's pattern,
+                 (2) a third-party consent/opt-out (SMS opt-in + STOP-keyword)
+                 handshake for the SOS disclosure flow. Scoped via /plan given
+                 the combined size and the safety-critical surface touched
+                 (backend/routes/rides/safety.py). Tracked as its own
+                 implementation effort from this decision.
 ```
 
 ---

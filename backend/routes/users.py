@@ -764,6 +764,69 @@ class EmergencyContactResponse(BaseModel):
     relationship: str
 
 
+async def _encrypt_emergency_contact_pii(value: str) -> str:
+    """Encrypt an emergency-contact PII string via Supabase Vault
+    (encrypt_emergency_contact_pii RPC, migration 357).
+
+    Fail-closed: any failure raises 503 rather than storing plaintext PII.
+    Mirrors routes/drivers/_shared.py's `_vault_encrypt` for driver PII.
+    """
+    if not value:
+        return value
+    try:
+        from supabase_client import supabase as _sb  # type: ignore[import]
+    except ImportError as exc:
+        logger.error(
+            "emergency_contact encrypt: supabase_client unavailable — refusing to store plaintext",
+            exc_info=True,
+        )
+        raise HTTPException(status_code=503, detail="Encryption service unavailable") from exc
+    if not _sb:
+        logger.error("emergency_contact encrypt: Supabase client not initialised — refusing to store plaintext")
+        raise HTTPException(status_code=503, detail="Encryption service unavailable")
+    try:
+        res = await db_supabase.run_sync(
+            lambda: _sb.rpc("encrypt_emergency_contact_pii", {"plaintext": value}).execute()
+        )
+        if not res.data:
+            logger.error("emergency_contact encrypt: RPC returned no data — refusing to store plaintext")
+            raise HTTPException(status_code=503, detail="Encryption service unavailable")
+        return str(res.data)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("emergency_contact encrypt: RPC failed — refusing to store plaintext", exc_info=True)
+        raise HTTPException(status_code=503, detail="Encryption service unavailable") from exc
+
+
+async def _decrypt_emergency_contact_pii(value: str) -> str:
+    """Decrypt a Vault-encrypted emergency-contact PII token
+    (decrypt_emergency_contact_pii RPC, migration 357).
+
+    Fail-open: returns the raw stored value on RPC failure rather than
+    raising — the stored value is either a vault-secret UUID or (for
+    pre-migration rows) plaintext, so degrading to an unreadable token on a
+    Vault outage is acceptable; a 503 on every contact-list read is not.
+    Mirrors routes/drivers/_shared.py's `_vault_decrypt` for driver PII.
+    """
+    if not value:
+        return value
+    try:
+        from supabase_client import supabase as _sb  # type: ignore[import]
+    except ImportError:
+        return value
+    if not _sb:
+        return value
+    try:
+        res = await db_supabase.run_sync(
+            lambda: _sb.rpc("decrypt_emergency_contact_pii", {"secret_id": value}).execute()
+        )
+        return str(res.data) if res.data else value
+    except Exception:
+        logger.error("emergency_contact decrypt: RPC failed — returning raw token", exc_info=True)
+        return value
+
+
 @api_router.get("/emergency-contacts")
 async def get_emergency_contacts(current_user: dict = Depends(get_current_user)):
     """Get the user's emergency contacts."""
@@ -778,7 +841,17 @@ async def get_emergency_contacts(current_user: dict = Depends(get_current_user))
             status_code=503,
             detail="Could not load emergency contacts. Please try again.",
         ) from e
-    return {"contacts": contacts}
+
+    decrypted_contacts = []
+    for contact in contacts:
+        contact = dict(contact)
+        if contact.get("name"):
+            contact["name"] = await _decrypt_emergency_contact_pii(str(contact["name"]))
+        if contact.get("phone"):
+            contact["phone"] = await _decrypt_emergency_contact_pii(str(contact["phone"]))
+        decrypted_contacts.append(contact)
+
+    return {"contacts": decrypted_contacts}
 
 
 @api_router.post("/emergency-contacts")
@@ -807,15 +880,24 @@ async def add_emergency_contact(contact: EmergencyContactCreate, current_user: d
     if len(phone) < 10:
         raise HTTPException(status_code=400, detail="Invalid phone number for emergency contact")
 
+    name = contact.name.strip()
+
     contact_doc = {
         "id": str(uuid.uuid4()),
         "user_id": current_user["id"],
-        "name": contact.name.strip(),
+        "name": name,
         "phone": phone,
         "relationship": contact.relationship,
     }
 
-    await db_supabase.insert_one("emergency_contacts", contact_doc)
+    # Encrypt before writing (fail-closed — see _encrypt_emergency_contact_pii).
+    # The response below returns the plaintext `contact_doc` built above, not
+    # this encrypted copy, so the rider sees back what they just typed.
+    encrypted_doc = dict(contact_doc)
+    encrypted_doc["name"] = await _encrypt_emergency_contact_pii(name)
+    encrypted_doc["phone"] = await _encrypt_emergency_contact_pii(phone)
+
+    await db_supabase.insert_one("emergency_contacts", encrypted_doc)
     return {"success": True, "contact": contact_doc}
 
 

@@ -9,7 +9,7 @@
 | Assessment date | 2026-08-21 |
 | Decision date | 2026-08-21 (@vikas, standing in for Privacy/Legal) |
 | Applicable legislation | PIPEDA (federal, private-sector) — Spinr is a commercial ride-share operator, not a government institution, so FOIP/HIPA do not apply here |
-| Status | **DECIDED** — see Section 9. Both recommendations approved together: encrypt at rest (mirroring migration 32) AND build the third-party consent/opt-out handshake alongside it, not sequenced apart. Implementation tracked separately (not yet built as of this decision). |
+| Status | **IMPLEMENTED** — see Section 9. Both recommendations approved together (encrypt at rest AND the third-party consent/opt-out handshake, not sequenced apart) and both are now fully built and merged; see Section 9's implementation record and the linked Change Impact Log entries. |
 
 This memo was historical evidence for Privacy/Legal's decision, per
 `docs/audit/2026-08-19-decision-writeups.md`'s ranked blocker #13 and the corresponding decision-log
@@ -292,6 +292,28 @@ Implementation:  COMPLETE 2026-08-21. All 6 subtasks of the /plan
                  outside is_suppressed()'s own try/except, currently covered
                  by an outer caller-side guard) — tracked for a future pass,
                  not blocking, per the reviewing agents' verdicts.
+Parallel work note: an independent session (PR #4322, "feat(safety,privacy):
+                 encrypt emergency-contact PII, resolve 3 decision-log items")
+                 concurrently built and merged its own encryption-only
+                 implementation before this branch's work merged, reproducing
+                 migration 32's original (pre-137/138-fix) buggy pattern —
+                 raw `INSERT INTO vault.secrets` instead of
+                 `vault.create_secret()`, no `OWNER TO supabase_admin` — the
+                 exact historical bug this memo's own migration-reviewer
+                 catches deliberately avoided. Resolved on merge: main's
+                 already-applied migration 357 (append-only, left untouched)
+                 is patched forward by a new migration
+                 (see docs/change-log/ for the exact filename) that
+                 `CREATE OR REPLACE`s its two functions with the correct
+                 vault.create_secret()/OWNER-TO-supabase_admin pattern under
+                 the same RPC names, so no app-code call site needed to
+                 change. #4322's app-code wiring (routes/users.py,
+                 routes/rides/safety.py, utils/vault_pii.py) was superseded
+                 by this branch's equivalent, already-tested wiring, which
+                 additionally decrypts contacts before the SOS SMS send
+                 (an auto-merge combined #4322's decrypt-before-SMS fix with
+                 this branch's suppression-check filtering, which needs the
+                 decrypted phone number to match correctly).
 ```
 
 ---

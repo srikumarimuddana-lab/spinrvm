@@ -26,6 +26,7 @@ from ._deps import (  # noqa: F401
     ride_action_limit,
     timezone,
     uuid,
+    vault_decrypt,
 )
 
 try:
@@ -34,6 +35,32 @@ except ImportError:
     from services import sos_contact_consent  # type: ignore
 
 router = APIRouter()
+
+
+async def _decrypt_emergency_contacts(contacts_rows) -> list:
+    """Decrypt name/phone on emergency-contact rows (migration 357 Vault
+    fields) before any SOS use — the stored values are vault.secrets UUIDs,
+    not dialable numbers. Shared by trigger_emergency and
+    trigger_emergency_rideless: security review (2026-08-21) caught the
+    rideless path missing this exact decrypt when it was only inlined once,
+    so both SOS entry points now go through this one function instead of
+    duplicating the mapping.
+
+    vault_decrypt degrades to returning the raw stored value on any failure
+    (never raises) — a decrypt hiccup can't silently drop an SOS.
+    """
+    return [
+        {
+            **c,
+            "name": await vault_decrypt("decrypt_emergency_contact_pii", str(c["name"]), "sos.contact.name")
+            if c.get("name")
+            else c.get("name"),
+            "phone": await vault_decrypt("decrypt_emergency_contact_pii", str(c["phone"]), "sos.contact.phone")
+            if c.get("phone")
+            else c.get("phone"),
+        }
+        for c in (contacts_rows or [])
+    ]
 
 
 class EmergencyRequest(BaseModel):
@@ -318,7 +345,7 @@ async def trigger_emergency(
     try:
         sms_settings = await _deps.get_app_settings()
         contacts_rows = await _deps.db_supabase.get_rows("emergency_contacts", {"user_id": current_user["id"]}, limit=5)
-        contacts = list(contacts_rows) if contacts_rows else []
+        contacts = await _decrypt_emergency_contacts(contacts_rows)
 
         user = await _deps.db_supabase.get_user_by_id(current_user["id"])
         user_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "A Spinr user"
@@ -669,7 +696,7 @@ async def trigger_emergency_rideless(
     try:
         sms_settings = app_settings
         contacts_rows = await _deps.db_supabase.get_rows("emergency_contacts", {"user_id": current_user["id"]}, limit=5)
-        contacts = list(contacts_rows) if contacts_rows else []
+        contacts = await _decrypt_emergency_contacts(contacts_rows)
 
         user = await _deps.db_supabase.get_user_by_id(current_user["id"])
         user_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "A Spinr user"

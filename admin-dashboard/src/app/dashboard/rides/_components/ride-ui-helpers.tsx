@@ -52,6 +52,16 @@ export function TL({ l, t, d, km }: { l: string; t?: string; d?: boolean; km?: n
     );
 }
 
+// Categorical ride-status map (6 states: completed/cancelled/in_progress/
+// searching/driver_assigned/driver_arrived), same class as lib/utils.ts's
+// statusColor() — not a #2816 migration target. bg/text pairs already
+// carry their own dark: variant; the dot fields are solid mid-tone (400/
+// 500-shade) fills, which only need to clear the 3:1 non-text-UI contrast
+// threshold (not text's 4.5:1) and read fine as a small indicator dot in
+// either theme without a dark: variant of their own. A 3-token semantic
+// system (success/warning/destructive) also can't express 6 distinct
+// states — in_progress/driver_assigned/driver_arrived have no equivalent.
+/* eslint-disable no-restricted-syntax -- categorical ride-status map, see comment above (#2816) */
 const STATUS_CONFIG: Record<string, { bg: string; text: string; dot: string; label: string }> = {
     completed: {
         bg: "bg-emerald-50 dark:bg-emerald-900/20",
@@ -98,6 +108,7 @@ export function getStatusBadge(status: string) {
         dot: "bg-gray-400",
         label: status?.replace(/_/g, " "),
     };
+    /* eslint-enable no-restricted-syntax */
 
     return (
         <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold ${config.bg} ${config.text}`}>

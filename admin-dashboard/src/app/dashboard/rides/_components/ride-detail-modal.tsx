@@ -22,6 +22,13 @@ import { routeQualityLabel } from "@spinr/shared/utils/routeSegments";
 const RideRouteMap = dynamic(() => import("./ride-route-map"), { ssr: false });
 
 // ── Status meta ──────────────────────────────────────────────────────────────
+// Categorical ride-state hero badge (the 7 states from CLAUDE.md's ride
+// state machine) — not a #2816 migration target. A gradient fill is a
+// deliberate, self-contained visual element regardless of page theme, and
+// a 3-token semantic system (success/warning/destructive) can't express 7
+// distinct lifecycle states (driver_assigned/driver_accepted/driver_arrived
+// have no success/warning/destructive equivalent).
+/* eslint-disable no-restricted-syntax -- categorical ride-state hero badge, see comment above (#2816) */
 const STATUS_META: Record<string, { label: string; gradient: string; ring: string; icon: React.ElementType }> = {
     searching:        { label: "Searching",        gradient: "from-amber-500 to-orange-500",    ring: "ring-amber-400",   icon: Route },
     driver_assigned:  { label: "Driver Assigned",  gradient: "from-blue-500 to-cyan-500",       ring: "ring-blue-400",    icon: Car },
@@ -31,6 +38,7 @@ const STATUS_META: Record<string, { label: string; gradient: string; ring: strin
     completed:        { label: "Completed",         gradient: "from-green-500 to-emerald-600",   ring: "ring-green-400",   icon: CheckCircle2 },
     cancelled:        { label: "Cancelled",         gradient: "from-red-500 to-rose-600",        ring: "ring-red-400",     icon: XCircle },
 };
+/* eslint-enable no-restricted-syntax */
 
 const PHASE_COLORS: Record<string, string> = {
     navigating_to_pickup: "text-blue-600 bg-blue-50 dark:bg-blue-900/30 dark:text-blue-400",
@@ -942,11 +950,11 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                             <div className="space-y-2">
                                                 {ride.complaints.map((c: any) => (
                                                     <div key={c.id} className="flex items-center gap-2.5 bg-muted/40 rounded-lg p-2.5">
-                                                        <FileWarning className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                                                        <FileWarning className="h-3.5 w-3.5 shrink-0 text-warning" />
                                                         <span className="text-xs font-semibold">{c.against_type}</span>
                                                         <span className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 px-1.5 py-0.5 rounded font-medium">{c.category}</span>
                                                         <span className="text-xs text-muted-foreground truncate flex-1">{c.description}</span>
-                                                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${c.status === "open" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>{c.status}</span>
+                                                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${c.status === "open" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"}`}>{c.status}</span>
                                                     </div>
                                                 ))}
                                             </div>
@@ -958,7 +966,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
 
                                         {(ride.rider_flag_count >= 2 || ride.driver_flag_count >= 2) && (
                                             <div className="flex items-center gap-2.5 bg-red-50 dark:bg-red-900/20 rounded-lg p-3">
-                                                <AlertTriangle className="h-4 w-4 text-red-500 shrink-0" />
+                                                <AlertTriangle className="h-4 w-4 text-destructive shrink-0" />
                                                 <p className="text-xs font-semibold text-red-600 dark:text-red-400">
                                                     {ride.rider_flag_count >= 2 && `Rider has ${ride.rider_flag_count} flags (1 more = ban). `}
                                                     {ride.driver_flag_count >= 2 && `Driver has ${ride.driver_flag_count} flags (1 more = ban).`}

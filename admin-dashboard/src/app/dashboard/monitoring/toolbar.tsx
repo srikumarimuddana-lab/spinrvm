@@ -55,11 +55,11 @@ export function MonitoringToolbar({
                     onClick={() => onFilterChange({ showOnline: !filters.showOnline })}
                     className={`flex items-center gap-1 rounded px-2 py-1 transition-colors ${
                         filters.showOnline
-                            ? "bg-green-500/10 text-green-600 ring-1 ring-green-500/30"
+                            ? "bg-success/10 text-success ring-1 ring-success/30"
                             : "text-muted-foreground hover:bg-muted"
                     }`}
                 >
-                    <span className="h-2 w-2 rounded-full bg-green-500" />
+                    <span className="h-2 w-2 rounded-full bg-success" />
                     {counts.online} Online
                 </button>
                 <div className="flex items-center gap-1 rounded bg-amber-500/10 px-2 py-1 text-amber-600 ring-1 ring-amber-500/30">
@@ -75,7 +75,7 @@ export function MonitoringToolbar({
                             : "text-muted-foreground hover:bg-muted"
                     }`}
                 >
-                    <span className="h-2 w-2 rounded-full bg-gray-400" />
+                    <span className="h-2 w-2 rounded-full bg-muted-foreground/40" />
                     {counts.offline} Offline
                 </button>
                 <button
@@ -180,7 +180,7 @@ export function MonitoringToolbar({
                 {/* WS status indicator */}
                 <span className="flex items-center gap-1 text-xs text-muted-foreground">
                     {wsStatus === "connected" ? (
-                        <Wifi className="h-3.5 w-3.5 text-green-500" />
+                        <Wifi className="h-3.5 w-3.5 text-success" />
                     ) : (
                         <WifiOff className="h-3.5 w-3.5 text-destructive" />
                     )}

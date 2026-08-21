@@ -62,11 +62,12 @@ function ticketTagNames(t: any): string[] {
 
 function statusClass(status: string): string {
     const s = (status || "").toLowerCase();
+    // eslint-disable-next-line no-restricted-syntax -- "open" (new/active) has no semantic-token equivalent; must stay visually distinct from hold/escalated/closed (#2816)
     if (s.includes("open")) return "bg-blue-100 text-blue-800 hover:bg-blue-100";
-    if (s.includes("hold")) return "bg-amber-100 text-amber-800 hover:bg-amber-100";
-    if (s.includes("escal")) return "bg-red-100 text-red-800 hover:bg-red-100";
-    if (s.includes("closed")) return "bg-gray-200 text-gray-700 hover:bg-gray-200";
-    return "bg-slate-100 text-slate-700 hover:bg-slate-100";
+    if (s.includes("hold")) return "bg-warning/15 text-warning hover:bg-warning/15";
+    if (s.includes("escal")) return "bg-destructive/15 text-destructive hover:bg-destructive/15";
+    if (s.includes("closed")) return "bg-muted text-muted-foreground hover:bg-muted";
+    return "bg-muted text-muted-foreground hover:bg-muted";
 }
 
 function fmtTime(s?: string): string {
@@ -403,7 +404,7 @@ export default function TicketDetailPage() {
                                             </p>
                                             <button
                                                 onClick={() => toggleMsg(m)}
-                                                className="mt-1 flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
+                                                className="mt-1 flex items-center gap-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline"
                                             >
                                                 {isOpen ? <><ChevronUp className="h-3 w-3" /> Show less</> : <><ChevronDown className="h-3 w-3" /> Show full message</>}
                                             </button>
@@ -454,7 +455,7 @@ export default function TicketDetailPage() {
                                     <div className="rounded-md border border-dashed bg-muted/30 p-3">
                                         <p className="mb-1 text-[11px] font-medium text-muted-foreground">Signature (auto-appended)</p>
                                         <div
-                                            className="text-sm text-muted-foreground [&_a]:text-blue-600 [&_a]:underline"
+                                            className="text-sm text-muted-foreground [&_a]:text-blue-600 dark:[&_a]:text-blue-400 [&_a]:underline"
                                             dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(emailSignature) }}
                                         />
                                     </div>

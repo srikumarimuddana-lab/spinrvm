@@ -9,7 +9,7 @@
 | Assessment date | 2026-08-21 |
 | Next review | On Privacy/Legal decision, or 2026-08-25 (the due date already carried in `docs/audit/2026-08-19-decision-writeups.md`, whichever is later) |
 | Applicable legislation | PIPEDA (federal, private-sector) — Spinr is a commercial ride-share operator, not a government institution, so FOIP/HIPA do not apply here |
-| Status | **For decision** — this document does not resolve the question; it exists so the decision, once made, has a durable record of what was evaluated, when, and why |
+| Status | **Decided 2026-08-21** — Recommendation 1 (encrypt) approved by @vikas; see Section 9 sign-off and migration 357. Recommendation 2 (third-party consent/opt-out handshake) is a separate, still-open decision — not part of this approval. |
 
 This memo exists purely as historical evidence for Privacy/Legal's decision, per
 `docs/audit/2026-08-19-decision-writeups.md`'s ranked blocker #13 and the corresponding decision-log
@@ -252,11 +252,13 @@ tracked in the safety-toolkit gap analysis (finding F13) as its own scoped effor
 ## Section 9: Sign-off
 
 ```
-Reviewed by:     _______________________          Date: ___
-Approved by:     _______________________          Date: ___
-Decision:        [ ] Encrypt (mirror migration 32)   [ ] Accept plaintext with compensating controls
-                  [ ] Build consent/opt-out handshake now   [ ] Sequence as fast-follow
-Next action:     _______________________________________________
+Reviewed by:     Claude (session), pulling this memo's own findings for review
+Approved by:     @vikas                            Date: 2026-08-21
+Decision:        [x] Encrypt (mirror migration 32)   [ ] Accept plaintext with compensating controls
+                  [ ] Build consent/opt-out handshake now   [x] Sequence as fast-follow (F13, not scoped here)
+Next action:     Implemented — migration 357, backend/routes/users.py + backend/routes/rides/safety.py
+                 (backend/utils/vault_pii.py). R-002 (third-party consent) remains open, tracked
+                 separately per Section 8's Recommendation 2 and safety-toolkit finding F13.
 ```
 
 ---

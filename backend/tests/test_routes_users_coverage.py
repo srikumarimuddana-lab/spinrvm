@@ -93,6 +93,12 @@ def _patches(**overrides):
         "backend.routes.users.log_admin_action": AsyncMock(),
         "backend.routes.users.revoke_all_for_user": AsyncMock(),
         "backend.routes.users.redis_delete": AsyncMock(),
+        # Emergency-contact Vault encryption (migration 357): default to a
+        # passthrough so tests unrelated to emergency contacts are
+        # unaffected; TestVaultEmergencyContact* below overrides these to
+        # assert on the actual RPC names/tokens.
+        "backend.routes.users.vault_encrypt": AsyncMock(side_effect=lambda _rpc, v, _hint="": v),
+        "backend.routes.users.vault_decrypt": AsyncMock(side_effect=lambda _rpc, v, _hint="": v),
     }
     defaults.update(overrides)
     return [patch(target, value) for target, value in defaults.items()]
@@ -841,6 +847,89 @@ class TestAddEmergencyContact:
             with pytest.raises(HTTPException) as exc:
                 await add_emergency_contact(EmergencyContactCreate(name="Mom", phone="123"), current_user=_CURRENT_USER)
             assert exc.value.status_code == 400
+        finally:
+            _stop(patches)
+
+
+class TestVaultEmergencyContactEncryption:
+    """Migration 357 / PIA SPINR-PIA-2026-01: name+phone must go through the
+    Vault RPCs on write and read, never touch the DB as plaintext."""
+
+    @pytest.mark.anyio
+    async def test_add_encrypts_name_and_phone_before_insert(self):
+        insert_one = AsyncMock()
+        vault_encrypt = AsyncMock(side_effect=lambda _rpc, v, _hint="": f"vault-token-{v}")
+        patches = _start(
+            _patches(
+                **{
+                    "backend.routes.users.db_supabase.get_rows": AsyncMock(return_value=[]),
+                    "backend.routes.users.db_supabase.insert_one": insert_one,
+                    "backend.routes.users.vault_encrypt": vault_encrypt,
+                }
+            )
+        )
+        try:
+            result = await add_emergency_contact(
+                EmergencyContactCreate(name="Mom", phone="+13060000000", relationship="Family"),
+                current_user=_CURRENT_USER,
+            )
+            stored = insert_one.call_args.args[1]
+            assert stored["name"] == "vault-token-Mom"
+            assert stored["phone"] == "vault-token-+13060000000"
+            for call in vault_encrypt.call_args_list:
+                assert call.args[0] == "encrypt_emergency_contact_pii"
+            # The response returned to the rider is plaintext, not the vault
+            # token they just wrote — this is their own submission, not a
+            # stored-row echo.
+            assert result["contact"]["name"] == "Mom"
+            assert result["contact"]["phone"] == "+13060000000"
+        finally:
+            _stop(patches)
+
+    @pytest.mark.anyio
+    async def test_add_fails_closed_when_vault_unavailable(self):
+        insert_one = AsyncMock()
+        vault_encrypt = AsyncMock(side_effect=HTTPException(status_code=503, detail="Encryption service unavailable"))
+        patches = _start(
+            _patches(
+                **{
+                    "backend.routes.users.db_supabase.get_rows": AsyncMock(return_value=[]),
+                    "backend.routes.users.db_supabase.insert_one": insert_one,
+                    "backend.routes.users.vault_encrypt": vault_encrypt,
+                }
+            )
+        )
+        try:
+            with pytest.raises(HTTPException) as exc:
+                await add_emergency_contact(
+                    EmergencyContactCreate(name="Mom", phone="+13060000000"), current_user=_CURRENT_USER
+                )
+            assert exc.value.status_code == 503
+            # Never falls through to writing plaintext on a Vault failure.
+            insert_one.assert_not_awaited()
+        finally:
+            _stop(patches)
+
+    @pytest.mark.anyio
+    async def test_get_decrypts_each_contact(self):
+        stored = [
+            {"id": "c1", "user_id": "user-1", "name": "vault-token-name", "phone": "vault-token-phone", "relationship": "Family"}
+        ]
+        vault_decrypt = AsyncMock(side_effect=lambda _rpc, v, _hint="": v.replace("vault-token-", ""))
+        patches = _start(
+            _patches(
+                **{
+                    "backend.routes.users.db_supabase.get_rows": AsyncMock(return_value=stored),
+                    "backend.routes.users.vault_decrypt": vault_decrypt,
+                }
+            )
+        )
+        try:
+            result = await get_emergency_contacts(current_user=_CURRENT_USER)
+            assert result["contacts"][0]["name"] == "name"
+            assert result["contacts"][0]["phone"] == "phone"
+            for call in vault_decrypt.call_args_list:
+                assert call.args[0] == "decrypt_emergency_contact_pii"
         finally:
             _stop(patches)
 

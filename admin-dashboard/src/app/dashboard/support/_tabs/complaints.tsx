@@ -25,10 +25,11 @@ import {
 const PAGE_SIZE = 50;
 
 const S_CFG: Record<string, { l: string; c: string }> = {
-    open: { l: "Open", c: "bg-amber-500/15 text-amber-600" },
+    open: { l: "Open", c: "bg-warning/15 text-warning" },
+    // eslint-disable-next-line no-restricted-syntax -- "investigating" (in progress, neither good nor bad) has no semantic-token equivalent; must stay distinct from open/resolved/dismissed (#2816)
     investigating: { l: "Investigating", c: "bg-blue-500/15 text-blue-600" },
-    resolved: { l: "Resolved", c: "bg-emerald-500/15 text-emerald-600" },
-    dismissed: { l: "Dismissed", c: "bg-zinc-500/15 text-zinc-600" },
+    resolved: { l: "Resolved", c: "bg-success/15 text-success" },
+    dismissed: { l: "Dismissed", c: "bg-muted text-muted-foreground" },
 };
 const CATS = ["rude_behavior", "unsafe_driving", "vehicle_condition", "route_issue", "overcharge", "harassment", "other"];
 

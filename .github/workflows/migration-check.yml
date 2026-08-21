@@ -124,6 +124,33 @@ jobs:
               )
               return result.returncode == 0
 
+          # ── Pre-classify: which changed files are genuinely NEW ───────────────
+          # CHECK B below must validate a new file's number only against
+          # PRE-EXISTING migrations plus its correct position among this PR's
+          # own batch of new files — not against every file currently in the
+          # working tree (`existing_nums`), which also includes this PR's
+          # *other* new migrations. Without this, a PR adding two properly
+          # sequential new migrations (e.g. 358 then 359) flags the
+          # lower-numbered one as "colliding with" the higher-numbered one it
+          # sits right before, since `existing_nums` already contains 359 by
+          # the time 358 is checked. Found 2026-08-21 on a PR that did exactly
+          # this — a real false positive, not a numbering mistake.
+          #
+          # Filtered by FILENAME identity, not by number value: a true
+          # cross-PR collision (two different files sharing the same prefix,
+          # the exact CR #4187 case this check exists to catch) must still
+          # fail. Filtering `existing_nums` by number would also strip out a
+          # *pre-existing* file's contribution whenever a new file happens to
+          # reuse its number — silently defeating collision detection instead
+          # of just fixing the multi-new-file false positive.
+          new_files_set = {
+              os.path.basename(rel_path) for rel_path in changed if not file_existed_on_base(rel_path)
+          }
+          base_files = [f for f in all_migrations if f not in new_files_set]
+          base_only_nums = [n for n in (seq_num(f) for f in base_files) if n is not None]
+          base_max = max(base_only_nums) if base_only_nums else 0
+          new_file_nums = sorted(n for f in new_files_set for n in [seq_num(f)] if n is not None)
+
           # ── Summary table header ─────────────────────────────────────────────
           rows = []   # (filename, check_name, status_icon, message)
 
@@ -154,31 +181,33 @@ jobs:
 
               # ── CHECK B: sequence gap / collision ────────────────────────────
               file_num = seq_num(filename)
-              if file_num is not None and existing_nums:
-                  # The highest number currently in the repo (including this new file)
-                  # When checking a new file, compare against the highest EXCLUDING itself.
-                  others = [n for n in existing_nums if n != file_num]
-                  if others:
-                      expected = max(others) + 1
-                      if file_num == expected:
-                          record(short, "sequence", STATUS_OK, f"prefix {file_num} is next after {max(others)}")
-                      elif file_num < expected:
-                          # True collision: this prefix already belongs to (or precedes)
-                          # a migration that exists elsewhere in the repo. This is a hard
-                          # failure, not a warning — CR #4187: two unrelated PRs (#4126,
-                          # #4129) both landed migration 327_*.sql on main because this
-                          # branch only ever appended to `warnings`, so it could never
-                          # actually block a merge even on a same-PR-visible collision.
-                          # The sequence-*gap* case below (missing numbers, no collision)
-                          # deliberately stays a warning — gaps are cosmetic and this repo
-                          # already carries accepted historical duplicates (319, 321, 327).
-                          msg = f"prefix {file_num} collides with or precedes existing max {max(others)} (expected {expected})"
-                          record(short, "sequence", STATUS_FAIL, msg)
-                          errors.append(f"{short}: {msg}")
-                      else:
-                          msg = f"sequence gap — expected {expected}, got {file_num} (missing numbers in between)"
-                          record(short, "sequence", STATUS_WARN, msg)
-                          warnings.append(f"{short}: {msg}")
+              if file_num is not None and file_num in new_file_nums:
+                  # This file's expected position accounts for pre-existing
+                  # migrations (base_max) plus its own rank among this PR's
+                  # other new migrations — NOT the raw working-tree max, which
+                  # would include this PR's own later files (see the
+                  # new_file_nums/base_max comment above for why).
+                  rank = new_file_nums.index(file_num) + 1
+                  expected = base_max + rank
+                  if file_num == expected:
+                      record(short, "sequence", STATUS_OK, f"prefix {file_num} is next after {expected - 1}")
+                  elif file_num < expected:
+                      # True collision: this prefix already belongs to (or precedes)
+                      # a migration that exists elsewhere in the repo. This is a hard
+                      # failure, not a warning — CR #4187: two unrelated PRs (#4126,
+                      # #4129) both landed migration 327_*.sql on main because this
+                      # branch only ever appended to `warnings`, so it could never
+                      # actually block a merge even on a same-PR-visible collision.
+                      # The sequence-*gap* case below (missing numbers, no collision)
+                      # deliberately stays a warning — gaps are cosmetic and this repo
+                      # already carries accepted historical duplicates (319, 321, 327).
+                      msg = f"prefix {file_num} collides with or precedes existing max {expected - 1} (expected {expected})"
+                      record(short, "sequence", STATUS_FAIL, msg)
+                      errors.append(f"{short}: {msg}")
+                  else:
+                      msg = f"sequence gap — expected {expected}, got {file_num} (missing numbers in between)"
+                      record(short, "sequence", STATUS_WARN, msg)
+                      warnings.append(f"{short}: {msg}")
 
               # ── Read file content ─────────────────────────────────────────────
               try:

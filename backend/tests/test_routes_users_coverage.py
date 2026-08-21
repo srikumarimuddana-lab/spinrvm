@@ -31,7 +31,7 @@ Test-only change — no application code modified.
 from __future__ import annotations
 
 from decimal import Decimal
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -81,6 +81,16 @@ _USER_ROW = {
 _CURRENT_USER = {"id": "user-1", "email": "sam@example.com", "role": "rider", "token_version": 1}
 
 
+def _noop_spawn(coro):
+    """Default test double for utils.background.spawn: never actually runs
+    the background coroutine (this is a unit test, not an integration test
+    of whatever it backgrounds) but closes it to avoid a "coroutine was
+    never awaited" warning. Individual tests that care about the backgrounded
+    work override this per-test (see _closing_spawn below)."""
+    coro.close()
+    return None
+
+
 def _patches(**overrides):
     defaults = {
         "backend.routes.users.db_supabase.get_user_by_id": AsyncMock(return_value=_USER_ROW),
@@ -93,12 +103,7 @@ def _patches(**overrides):
         "backend.routes.users.log_admin_action": AsyncMock(),
         "backend.routes.users.revoke_all_for_user": AsyncMock(),
         "backend.routes.users.redis_delete": AsyncMock(),
-        # Emergency-contact Vault encryption (migration 357): default to a
-        # passthrough so tests unrelated to emergency contacts are
-        # unaffected; TestVaultEmergencyContact* below overrides these to
-        # assert on the actual RPC names/tokens.
-        "backend.routes.users.vault_encrypt": AsyncMock(side_effect=lambda _rpc, v, _hint="": v),
-        "backend.routes.users.vault_decrypt": AsyncMock(side_effect=lambda _rpc, v, _hint="": v),
+        "backend.routes.users.spawn": _noop_spawn,
     }
     defaults.update(overrides)
     return [patch(target, value) for target, value in defaults.items()]
@@ -768,12 +773,62 @@ class TestLinkCorporateAccount:
 
 class TestGetEmergencyContacts:
     @pytest.mark.anyio
-    async def test_success(self):
-        contacts = [{"id": "c1", "user_id": "user-1", "name": "Mom", "phone": "+13060000000", "relationship": "Family"}]
+    async def test_success_decrypts_each_contact(self):
+        # Stored rows hold vault-secret tokens post-migration-357; the route
+        # must decrypt name/phone before returning them to the rider.
+        contacts = [
+            {
+                "id": "c1",
+                "user_id": "user-1",
+                "name": "vault-name-1",
+                "phone": "vault-phone-1",
+                "relationship": "Family",
+            }
+        ]
+        decrypt = AsyncMock(side_effect=lambda v: {"vault-name-1": "Mom", "vault-phone-1": "+13060000000"}[v])
         patches = _start(_patches(**{"backend.routes.users.db_supabase.get_rows": AsyncMock(return_value=contacts)}))
         try:
-            result = await get_emergency_contacts(current_user=_CURRENT_USER)
-            assert result == {"contacts": contacts}
+            with patch("backend.routes.users._decrypt_emergency_contact_pii", decrypt):
+                result = await get_emergency_contacts(current_user=_CURRENT_USER)
+            assert result == {
+                "contacts": [
+                    {"id": "c1", "user_id": "user-1", "name": "Mom", "phone": "+13060000000", "relationship": "Family"}
+                ]
+            }
+            assert decrypt.await_count == 2
+        finally:
+            _stop(patches)
+
+    @pytest.mark.anyio
+    async def test_decrypt_rpc_failure_returns_raw_token_not_raise(self):
+        # Fail-open: a Vault outage degrades to the raw stored token rather
+        # than a 503 on every contact-list read. Exercises the real RPC path
+        # (not a mocked-out helper) via a live-looking supabase_client whose
+        # rpc().execute() itself raises.
+        contacts = [
+            {
+                "id": "c1",
+                "user_id": "user-1",
+                "name": "vault-name-1",
+                "phone": "vault-phone-1",
+                "relationship": "Family",
+            }
+        ]
+        fake_sb = MagicMock()
+        fake_module = MagicMock()
+        fake_module.supabase = fake_sb
+        patches = _start(_patches(**{"backend.routes.users.db_supabase.get_rows": AsyncMock(return_value=contacts)}))
+        try:
+            with (
+                patch.dict("sys.modules", {"supabase_client": fake_module}),
+                patch(
+                    "backend.routes.users.db_supabase.run_sync",
+                    AsyncMock(side_effect=Exception("vault rpc down")),
+                ),
+            ):
+                result = await get_emergency_contacts(current_user=_CURRENT_USER)
+            assert result["contacts"][0]["name"] == "vault-name-1"
+            assert result["contacts"][0]["phone"] == "vault-phone-1"
         finally:
             _stop(patches)
 
@@ -792,7 +847,46 @@ class TestGetEmergencyContacts:
 
 class TestAddEmergencyContact:
     @pytest.mark.anyio
-    async def test_success(self):
+    async def test_success_encrypts_before_write_but_returns_plaintext(self):
+        insert_one = AsyncMock()
+        encrypt = AsyncMock(side_effect=lambda v: f"vault-token::{v}")
+        patches = _start(
+            _patches(
+                **{
+                    "backend.routes.users.db_supabase.get_rows": AsyncMock(return_value=[]),
+                    "backend.routes.users.db_supabase.insert_one": insert_one,
+                }
+            )
+        )
+        try:
+            with patch("backend.routes.users._encrypt_emergency_contact_pii", encrypt):
+                result = await add_emergency_contact(
+                    EmergencyContactCreate(name="Mom", phone="+13060000000", relationship="Family"),
+                    current_user=_CURRENT_USER,
+                )
+            # Response body must be the plaintext the rider just typed.
+            assert result["success"] is True
+            assert result["contact"]["name"] == "Mom"
+            assert result["contact"]["phone"] == "+13060000000"
+
+            # The DB write must carry the encrypted tokens, never plaintext.
+            insert_one.assert_awaited_once()
+            written_table, written_doc = insert_one.await_args.args
+            assert written_table == "emergency_contacts"
+            assert written_doc["name"] == "vault-token::Mom"
+            assert written_doc["phone"] == "vault-token::+13060000000"
+        finally:
+            _stop(patches)
+
+    @pytest.mark.anyio
+    async def test_encrypt_rpc_failure_raises_503_never_writes_plaintext(self):
+        # Fail-closed: encryption failure must never fall through to an
+        # unencrypted insert_one call. Exercises the real RPC path (not a
+        # mocked-out helper) via a live-looking supabase_client whose
+        # rpc().execute() itself raises.
+        fake_sb = MagicMock()
+        fake_module = MagicMock()
+        fake_module.supabase = fake_sb
         insert_one = AsyncMock()
         patches = _start(
             _patches(
@@ -803,13 +897,20 @@ class TestAddEmergencyContact:
             )
         )
         try:
-            result = await add_emergency_contact(
-                EmergencyContactCreate(name="Mom", phone="+13060000000", relationship="Family"),
-                current_user=_CURRENT_USER,
-            )
-            assert result["success"] is True
-            assert result["contact"]["name"] == "Mom"
-            insert_one.assert_awaited_once()
+            with (
+                patch.dict("sys.modules", {"supabase_client": fake_module}),
+                patch(
+                    "backend.routes.users.db_supabase.run_sync",
+                    AsyncMock(side_effect=Exception("vault rpc down")),
+                ),
+            ):
+                with pytest.raises(HTTPException) as exc:
+                    await add_emergency_contact(
+                        EmergencyContactCreate(name="Mom", phone="+13060000000", relationship="Family"),
+                        current_user=_CURRENT_USER,
+                    )
+            assert exc.value.status_code == 503
+            insert_one.assert_not_awaited()
         finally:
             _stop(patches)
 
@@ -850,86 +951,115 @@ class TestAddEmergencyContact:
         finally:
             _stop(patches)
 
+    # ── PIA R-002: opt-out notice to the newly-added contact ────────────
+    #
+    # The route only ever *spawns* the notice (fire-and-forget) — these
+    # tests capture the spawned coroutine instead of closing it, so they can
+    # await it directly to assert what it does, independent of whatever real
+    # event-loop scheduling `spawn`'s asyncio.create_task would use.
 
-class TestVaultEmergencyContactEncryption:
-    """Migration 357 / PIA SPINR-PIA-2026-01: name+phone must go through the
-    Vault RPCs on write and read, never touch the DB as plaintext."""
+    @staticmethod
+    def _capturing_spawn(captured):
+        def _spawn(coro):
+            captured["coro"] = coro
+            return None
+
+        return _spawn
 
     @pytest.mark.anyio
-    async def test_add_encrypts_name_and_phone_before_insert(self):
-        insert_one = AsyncMock()
-        vault_encrypt = AsyncMock(side_effect=lambda _rpc, v, _hint="": f"vault-token-{v}")
+    async def test_success_sends_opt_out_notice_and_stamps_consent(self):
+        captured = {}
+        notice = AsyncMock(return_value=True)
+        update_one = AsyncMock(return_value={})
         patches = _start(
             _patches(
                 **{
                     "backend.routes.users.db_supabase.get_rows": AsyncMock(return_value=[]),
-                    "backend.routes.users.db_supabase.insert_one": insert_one,
-                    "backend.routes.users.vault_encrypt": vault_encrypt,
+                    "backend.routes.users.db_supabase.update_one": update_one,
+                    "backend.routes.users.send_opt_out_notice": notice,
+                    "backend.routes.users.spawn": self._capturing_spawn(captured),
+                    "backend.routes.users._encrypt_emergency_contact_pii": AsyncMock(side_effect=lambda v: v),
                 }
             )
         )
         try:
             result = await add_emergency_contact(
                 EmergencyContactCreate(name="Mom", phone="+13060000000", relationship="Family"),
-                current_user=_CURRENT_USER,
+                current_user={**_CURRENT_USER, "first_name": "Sam"},
             )
-            stored = insert_one.call_args.args[1]
-            assert stored["name"] == "vault-token-Mom"
-            assert stored["phone"] == "vault-token-+13060000000"
-            for call in vault_encrypt.call_args_list:
-                assert call.args[0] == "encrypt_emergency_contact_pii"
-            # The response returned to the rider is plaintext, not the vault
-            # token they just wrote — this is their own submission, not a
-            # stored-row echo.
-            assert result["contact"]["name"] == "Mom"
-            assert result["contact"]["phone"] == "+13060000000"
+            assert result["success"] is True
+            assert "coro" in captured
+            await captured["coro"]
+
+            notice.assert_awaited_once_with("+13060000000", "Sam")
+            update_one.assert_awaited_once()
+            table, contact_filter, updates = update_one.await_args.args
+            assert table == "emergency_contacts"
+            assert contact_filter == {"id": result["contact"]["id"]}
+            assert "consent_notice_sent_at" in updates
         finally:
             _stop(patches)
 
     @pytest.mark.anyio
-    async def test_add_fails_closed_when_vault_unavailable(self):
-        insert_one = AsyncMock()
-        vault_encrypt = AsyncMock(side_effect=HTTPException(status_code=503, detail="Encryption service unavailable"))
+    async def test_notice_skipped_when_contact_already_suppressed(self):
+        # send_opt_out_notice returns False when the phone is already
+        # suppressed (its own contract, tested directly in
+        # test_sos_contact_notice.py) -- here we only need the route's
+        # background wrapper to honour that and skip the consent stamp.
+        captured = {}
+        notice = AsyncMock(return_value=False)
+        update_one = AsyncMock(return_value={})
         patches = _start(
             _patches(
                 **{
                     "backend.routes.users.db_supabase.get_rows": AsyncMock(return_value=[]),
-                    "backend.routes.users.db_supabase.insert_one": insert_one,
-                    "backend.routes.users.vault_encrypt": vault_encrypt,
+                    "backend.routes.users.db_supabase.update_one": update_one,
+                    "backend.routes.users.send_opt_out_notice": notice,
+                    "backend.routes.users.spawn": self._capturing_spawn(captured),
+                    "backend.routes.users._encrypt_emergency_contact_pii": AsyncMock(side_effect=lambda v: v),
                 }
             )
         )
         try:
-            with pytest.raises(HTTPException) as exc:
-                await add_emergency_contact(
-                    EmergencyContactCreate(name="Mom", phone="+13060000000"), current_user=_CURRENT_USER
-                )
-            assert exc.value.status_code == 503
-            # Never falls through to writing plaintext on a Vault failure.
-            insert_one.assert_not_awaited()
+            result = await add_emergency_contact(
+                EmergencyContactCreate(name="Mom", phone="+13060000000"), current_user=_CURRENT_USER
+            )
+            assert result["success"] is True
+            await captured["coro"]
+
+            notice.assert_awaited_once()
+            update_one.assert_not_awaited()
         finally:
             _stop(patches)
 
     @pytest.mark.anyio
-    async def test_get_decrypts_each_contact(self):
-        stored = [
-            {"id": "c1", "user_id": "user-1", "name": "vault-token-name", "phone": "vault-token-phone", "relationship": "Family"}
-        ]
-        vault_decrypt = AsyncMock(side_effect=lambda _rpc, v, _hint="": v.replace("vault-token-", ""))
+    async def test_notice_send_failure_does_not_fail_add_contact_response(self):
+        # The HTTP response must succeed regardless of the background notice
+        # -- add_emergency_contact never awaits it, so even a send that
+        # blows up outright (send_opt_out_notice's own contract is "never
+        # raise", but the route must not depend on that holding) can't turn
+        # a successful contact-add into a failed response.
+        captured = {}
+        notice = AsyncMock(side_effect=RuntimeError("sms provider down"))
         patches = _start(
             _patches(
                 **{
-                    "backend.routes.users.db_supabase.get_rows": AsyncMock(return_value=stored),
-                    "backend.routes.users.vault_decrypt": vault_decrypt,
+                    "backend.routes.users.db_supabase.get_rows": AsyncMock(return_value=[]),
+                    "backend.routes.users.send_opt_out_notice": notice,
+                    "backend.routes.users.spawn": self._capturing_spawn(captured),
+                    "backend.routes.users._encrypt_emergency_contact_pii": AsyncMock(side_effect=lambda v: v),
                 }
             )
         )
         try:
-            result = await get_emergency_contacts(current_user=_CURRENT_USER)
-            assert result["contacts"][0]["name"] == "name"
-            assert result["contacts"][0]["phone"] == "phone"
-            for call in vault_decrypt.call_args_list:
-                assert call.args[0] == "decrypt_emergency_contact_pii"
+            result = await add_emergency_contact(
+                EmergencyContactCreate(name="Mom", phone="+13060000000"), current_user=_CURRENT_USER
+            )
+            assert result["success"] is True
+            # The failure stays confined to the (unawaited-by-the-route)
+            # background coroutine -- it never reaches the response above.
+            with pytest.raises(RuntimeError):
+                await captured["coro"]
         finally:
             _stop(patches)
 

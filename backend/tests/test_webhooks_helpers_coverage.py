@@ -505,10 +505,14 @@ class TestHandleSmsKeyword:
             patch("routes.webhooks._resolve_user_id_by_phone", AsyncMock(return_value="user-1")),
             patch("services.marketing_consent.set_consent", AsyncMock()) as mock_set,
             patch("services.marketing_consent.add_marketing_suppression", AsyncMock()) as mock_suppress,
+            patch("services.sos_contact_consent.suppress", AsyncMock()) as mock_sos_suppress,
+            patch("services.sos_contact_consent.unsuppress", AsyncMock()) as mock_sos_unsuppress,
         ):
             await _handle_sms_keyword("+15551234567", opted_in=False)
         mock_set.assert_awaited_once_with("user-1", "sms", False, source="sms_stop")
         mock_suppress.assert_awaited_once()
+        mock_sos_suppress.assert_awaited_once_with("+15551234567", reason="sms_stop", source="twilio")
+        mock_sos_unsuppress.assert_not_called()
 
     async def test_opt_in_sets_consent_without_suppression(self):
         from routes.webhooks import _handle_sms_keyword
@@ -517,10 +521,14 @@ class TestHandleSmsKeyword:
             patch("routes.webhooks._resolve_user_id_by_phone", AsyncMock(return_value="user-1")),
             patch("services.marketing_consent.set_consent", AsyncMock()) as mock_set,
             patch("services.marketing_consent.add_marketing_suppression", AsyncMock()) as mock_suppress,
+            patch("services.sos_contact_consent.suppress", AsyncMock()) as mock_sos_suppress,
+            patch("services.sos_contact_consent.unsuppress", AsyncMock()) as mock_sos_unsuppress,
         ):
             await _handle_sms_keyword("+15551234567", opted_in=True)
         mock_set.assert_awaited_once_with("user-1", "sms", True, source="rider_app")
         mock_suppress.assert_not_called()
+        mock_sos_unsuppress.assert_awaited_once_with("+15551234567")
+        mock_sos_suppress.assert_not_called()
 
     async def test_unknown_user_still_suppresses_on_opt_out(self):
         from routes.webhooks import _handle_sms_keyword
@@ -529,7 +537,27 @@ class TestHandleSmsKeyword:
             patch("routes.webhooks._resolve_user_id_by_phone", AsyncMock(return_value=None)),
             patch("services.marketing_consent.set_consent", AsyncMock()) as mock_set,
             patch("services.marketing_consent.add_marketing_suppression", AsyncMock()) as mock_suppress,
+            patch("services.sos_contact_consent.suppress", AsyncMock()) as mock_sos_suppress,
         ):
             await _handle_sms_keyword("+15551234567", opted_in=False)
         mock_set.assert_not_called()
         mock_suppress.assert_awaited_once()
+        # Key new-behavior assertion: SOS suppression happens even when the
+        # sender doesn't resolve to any Spinr user_id (e.g. a pure
+        # third-party emergency contact with no account).
+        mock_sos_suppress.assert_awaited_once_with("+15551234567", reason="sms_stop", source="twilio")
+
+    async def test_sos_suppression_error_is_logged_not_raised(self):
+        """The webhook must never 500 back to Twilio because
+        sos_contact_consent raised — log and continue."""
+        from routes.webhooks import _handle_sms_keyword
+
+        with (
+            patch("routes.webhooks._resolve_user_id_by_phone", AsyncMock(return_value=None)),
+            patch("services.marketing_consent.add_marketing_suppression", AsyncMock()),
+            patch(
+                "services.sos_contact_consent.suppress",
+                AsyncMock(side_effect=RuntimeError("db down")),
+            ),
+        ):
+            await _handle_sms_keyword("+15551234567", opted_in=False)  # must not raise

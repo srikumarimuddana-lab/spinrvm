@@ -190,7 +190,7 @@ export default function AuditLogsPage() {
         setTopActorsLoading(true);
         getAuditLogTopActors({ days: topActorsDays, limit: 10 })
             .then((res) => {
-                if (!cancelled) setTopActors(res.actors);
+                if (!cancelled) setTopActors(res.actors ?? []);
             })
             .catch(() => {
                 if (!cancelled) setTopActors([]);

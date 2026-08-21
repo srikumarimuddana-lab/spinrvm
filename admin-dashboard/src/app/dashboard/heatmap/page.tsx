@@ -271,7 +271,12 @@ export default function HeatMapPage() {
         [settings?.heat_map_radius, settings?.heat_map_blur],
     );
 
-    const stats = heatMapData?.stats || { total_rides: 0, corporate_rides: 0, regular_rides: 0 };
+    const stats = {
+        total_rides: 0,
+        corporate_rides: 0,
+        regular_rides: 0,
+        ...(heatMapData?.stats || {}),
+    };
 
     return (
         <div className="space-y-6">

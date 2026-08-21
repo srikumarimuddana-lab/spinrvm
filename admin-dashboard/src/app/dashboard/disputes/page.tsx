@@ -28,10 +28,10 @@ import { useRequireModule } from "@/hooks/useRequireModule";
 import ChargebacksTab from "./chargebacks-tab";
 
 const STATUS_COLORS: Record<string, string> = {
-  open: "bg-red-100 text-red-700",
-  under_review: "bg-amber-100 text-amber-700",
-  resolved: "bg-green-100 text-green-700",
-  rejected: "bg-gray-100 text-gray-500",
+  open: "bg-destructive/15 text-destructive",
+  under_review: "bg-warning/15 text-warning",
+  resolved: "bg-success/15 text-success",
+  rejected: "bg-muted text-muted-foreground",
 };
 
 const REASON_LABELS: Record<string, string> = {
@@ -190,16 +190,16 @@ export default function DisputesPage() {
       {/* Stats (aggregate, not per-page) */}
       <div className="grid grid-cols-4 gap-4">
         <Card><CardContent className="pt-4">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground"><XCircle className="h-4 w-4 text-red-500" /> Open</div>
-          <div className="text-2xl font-bold text-red-600">{stats?.open ?? "—"}</div>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground"><XCircle className="h-4 w-4 text-destructive" /> Open</div>
+          <div className="text-2xl font-bold text-destructive">{stats?.open ?? "—"}</div>
         </CardContent></Card>
         <Card><CardContent className="pt-4">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground"><Clock className="h-4 w-4 text-amber-500" /> Under Review</div>
-          <div className="text-2xl font-bold text-amber-600">{stats?.under_review ?? "—"}</div>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground"><Clock className="h-4 w-4 text-warning" /> Under Review</div>
+          <div className="text-2xl font-bold text-warning">{stats?.under_review ?? "—"}</div>
         </CardContent></Card>
         <Card><CardContent className="pt-4">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground"><CheckCircle className="h-4 w-4 text-green-500" /> Resolved</div>
-          <div className="text-2xl font-bold text-green-600">{stats?.resolved ?? "—"}</div>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground"><CheckCircle className="h-4 w-4 text-success" /> Resolved</div>
+          <div className="text-2xl font-bold text-success">{stats?.resolved ?? "—"}</div>
         </CardContent></Card>
         <Card><CardContent className="pt-4">
           <div className="flex items-center gap-2 text-sm text-muted-foreground"><DollarSign className="h-4 w-4" /> Total Refunded</div>
@@ -255,9 +255,9 @@ export default function DisputesPage() {
                         <Badge variant="outline">{REASON_LABELS[d.reason] || d.reason}</Badge>
                       </TableCell>
                       <TableCell className="font-mono">${Number(d.original_fare || 0).toFixed(2)}</TableCell>
-                      <TableCell className="font-mono text-red-600">${Number(d.requested_amount || 0).toFixed(2)}</TableCell>
+                      <TableCell className="font-mono text-destructive">${Number(d.requested_amount || 0).toFixed(2)}</TableCell>
                       <TableCell>
-                        <Badge className={STATUS_COLORS[d.status] || "bg-gray-100"}>{d.status}</Badge>
+                        <Badge className={STATUS_COLORS[d.status] || "bg-muted"}>{d.status}</Badge>
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">{formatDate(d.created_at)}</TableCell>
                       <TableCell>
@@ -312,7 +312,7 @@ export default function DisputesPage() {
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Requested Refund</span>
-                  <span className="font-mono text-red-600">${Number(selected.requested_amount || 0).toFixed(2)}</span>
+                  <span className="font-mono text-destructive">${Number(selected.requested_amount || 0).toFixed(2)}</span>
                 </div>
               </div>
 

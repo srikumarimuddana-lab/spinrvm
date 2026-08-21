@@ -77,11 +77,11 @@ const ROLE_PRESETS: Record<string, string[]> = {
 };
 
 const ROLE_COLORS: Record<string, string> = {
-  super_admin: "bg-red-100 text-red-700",
-  operations: "bg-blue-100 text-blue-700",
-  support: "bg-green-100 text-green-700",
-  finance: "bg-purple-100 text-purple-700",
-  custom: "bg-gray-100 text-gray-700",
+  super_admin: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
+  operations: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+  support: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
+  finance: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
+  custom: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400",
 };
 
 interface Staff {
@@ -439,10 +439,10 @@ export default function StaffPage() {
                     <TableCell>
                       <div className="flex items-center gap-1.5">
                         {!s.is_active && (
-                          <span className="px-2 py-0.5 rounded-md text-xs font-bold bg-yellow-100 text-yellow-700">DISABLED</span>
+                          <span className="px-2 py-0.5 rounded-md text-xs font-bold bg-warning/15 text-warning">DISABLED</span>
                         )}
                         {s.mfa_enabled && (
-                          <span className="flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-bold bg-green-100 text-green-700">
+                          <span className="flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-bold bg-success/15 text-success">
                             <ShieldCheck className="h-3 w-3" />
                             MFA
                           </span>
@@ -460,10 +460,10 @@ export default function StaffPage() {
                         {user?.role === "super_admin" && s.mfa_enabled && s.id !== user?.id && (
                           <button
                             onClick={() => setMfaResetTarget(s)}
-                            className="p-2 hover:bg-orange-50 rounded-lg transition"
+                            className="p-2 hover:bg-warning/10 rounded-lg transition"
                             title="Reset MFA (lost phone)"
                           >
-                            <ShieldOff className="h-4 w-4 text-orange-500" />
+                            <ShieldOff className="h-4 w-4 text-warning" />
                           </button>
                         )}
                         <button onClick={() => handleEdit(s)} className="p-2 hover:bg-muted rounded-lg transition" title="Edit">
@@ -474,10 +474,10 @@ export default function StaffPage() {
                           className="p-2 hover:bg-muted rounded-lg transition"
                           title={s.is_active ? "Disable" : "Enable"}
                         >
-                          {s.is_active ? <X className="h-4 w-4 text-yellow-500" /> : <Check className="h-4 w-4 text-green-500" />}
+                          {s.is_active ? <X className="h-4 w-4 text-warning" /> : <Check className="h-4 w-4 text-success" />}
                         </button>
-                        <button onClick={() => handleDelete(s)} className="p-2 hover:bg-red-50 rounded-lg transition" title="Delete">
-                          <Trash2 className="h-4 w-4 text-red-400" />
+                        <button onClick={() => handleDelete(s)} className="p-2 hover:bg-destructive/10 rounded-lg transition" title="Delete">
+                          <Trash2 className="h-4 w-4 text-destructive" />
                         </button>
                       </div>
                     </TableCell>

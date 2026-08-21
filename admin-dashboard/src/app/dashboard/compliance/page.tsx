@@ -13,7 +13,7 @@ import { MultiSelect, type MultiSelectOption } from "@/components/ui/multi-selec
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/components/ui/use-toast";
 import { InfoHint as Hint } from "@/components/info-hint";
-import { useRequireModule } from "@/hooks/useRequireModule";
+import { useRequireSuperAdmin } from "@/hooks/useRequireSuperAdmin";
 import { useAuthStore } from "@/store/authStore";
 import { monthToDateDefaults } from "@/lib/utils";
 import { getServiceAreas } from "@/lib/api";
@@ -88,9 +88,17 @@ function triggerBrowserDownload(blob: Blob, filename: string) {
  * by operational analytics (/dashboard/analytics) or the fixed-format SGI
  * forms (Data Transfer tab). Every report here is Spinr-branded and logged
  * to compliance_export_events server-side.
+ *
+ * Gated on useRequireSuperAdmin, not useRequireModule("compliance") — the
+ * backend router is mounted under require_super_admin (decision log
+ * 2026-08-19, section 2, option B); "compliance" was never in
+ * AVAILABLE_MODULES/ROLE_PRESETS, so no non-super-admin could ever be
+ * granted it. This matches the other Records & Compliance tabs
+ * (Data Transfer, Bulk Operations, Export Approvals), which already use
+ * useRequireSuperAdmin.
  */
 export default function CompliancePage() {
-    const { allowed } = useRequireModule("compliance");
+    const { allowed } = useRequireSuperAdmin();
     const { toast } = useToast();
 
     const monthDefaults = monthToDateDefaults();

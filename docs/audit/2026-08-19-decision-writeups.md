@@ -121,6 +121,22 @@ removes a confusing "looks grantable, isn't" dead code path) and can ship today 
 decision needed. Recommend **B as the default** unless product actively wants to delegate this,
 since it requires zero new access-scoping judgment calls to get right.
 
+### Resolution — implemented 2026-08-21
+
+Shipped as **Option B**. `compliance_router`'s mount in `routes/admin/__init__.py` now uses
+`Depends(require_super_admin)` in place of the dead `Depends(require_module("compliance"))` — same
+posture as Data Transfer/Bulk Operations/Export Approvals and `ai-console`. `sidebar.tsx`'s "Records
+& Compliance" entry now uses `superAdminOnly: true` (matching the `ai-console` entry's exact
+pattern) instead of `module: "compliance"`; `records/page.tsx`'s `hasComplianceModule` derivation
+collapsed to plain `isSuperAdmin`, since `"compliance"` can never appear in a non-super-admin's
+`modules` array; `compliance/page.tsx` switched from `useRequireModule("compliance")` to
+`useRequireSuperAdmin()` (the hook already used by the router's sibling tabs). Zero functional
+change from the prior behavior — see
+`docs/change-log/2026-08-21-compliance-module-super-admin-fix.md` for the full Change Impact & Risk
+Log, including blast-radius confirmation that no other route reads the `"compliance"` module string.
+Option A (adding `"compliance"` to `AVAILABLE_MODULES`/a preset) remains available as a future
+product decision if a non-super-admin role is later found to need this reporting surface.
+
 ---
 
 ## 3. Inert `surge`/`pricing` grantable module strings — retire or wire up

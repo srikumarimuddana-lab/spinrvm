@@ -89,15 +89,20 @@ _KNOWN_UNGATED_GRANTS: set[str] = set()
 
 # Modules the sidebar gates links on that no grant can satisfy, so only
 # super_admin ever sees those links.
-_KNOWN_UNGRANTABLE_SIDEBAR = {
-    "compliance",  # a REAL require_module gate that is not in AVAILABLE_MODULES
-    # `ai_console` used to be here too: the sidebar hid that entry behind a
-    # module no role could hold, which produced the right outcome for the wrong
-    # reason — it depended on nobody ever adding that string to
-    # AVAILABLE_MODULES. It now uses the explicit `superAdminOnly` flag (same as
-    # Sentry) against a grantable module, and the router is mounted under
-    # require_super_admin. See test_ai_console_super_admin_mount.py.
-}
+#
+# Currently empty. `ai_console` used to be here: the sidebar hid that entry
+# behind a module no role could hold, which produced the right outcome for
+# the wrong reason — it depended on nobody ever adding that string to
+# AVAILABLE_MODULES. It now uses the explicit `superAdminOnly` flag (same as
+# Sentry) against a grantable module, and the router is mounted under
+# require_super_admin. See test_ai_console_super_admin_mount.py.
+#
+# `compliance` was here too, for the same reason, until decision log
+# 2026-08-19 section 2 option B: the sidebar's Records & Compliance entry now
+# uses `superAdminOnly` (module: "settings") and the backend router is
+# mounted under require_super_admin, same shape as ai_console/Sentry. See
+# test_compliance_super_admin_mount.py.
+_KNOWN_UNGRANTABLE_SIDEBAR: set[str] = set()
 
 
 def test_backend_grantable_and_jwt_lists_match():
@@ -167,9 +172,11 @@ def test_enforced_gates_are_reachable_through_a_grant():
     test lists the known ones and fails on any new one.
     """
     enforced = _enforced_module_gates()
-    # Known and deliberate: tracked as a follow-up decision about who may reach
-    # tax/compliance reporting. Documented here rather than silently tolerated.
-    known_unreachable = {"compliance"}
+    # "compliance" used to be pinned here as a known-deliberate exception —
+    # decision log 2026-08-19 section 2 resolved it as option B
+    # (require_super_admin), so the router no longer calls require_module() at
+    # all and there is nothing left to pin.
+    known_unreachable: set[str] = set()
     unreachable = sorted(enforced - set(AVAILABLE_MODULES) - known_unreachable)
 
     assert not unreachable, (

@@ -31,14 +31,17 @@ import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 //   bulk_operations   deliberately removed backend-side; the Data Transfer
 //                     surface is now require_super_admin, so offering it here
 //                     implied a full-fidelity PII export could be delegated
-//   compliance        the OPPOSITE drift — require_module("compliance") is a
-//                     real, enforced gate (routes/admin/__init__.py) that is
-//                     NOT in AVAILABLE_MODULES, so nobody can hold it and the
-//                     router is super_admin-only by omission. Removed from the
-//                     picker because it cannot currently be granted; making it
-//                     grantable is a product decision about who may reach tax
-//                     and compliance reporting, not a cleanup. Tracked as a
-//                     follow-up rather than decided here.
+//   compliance        the OPPOSITE drift — require_module("compliance") was a
+//                     real, enforced gate (routes/admin/__init__.py) that was
+//                     NOT in AVAILABLE_MODULES, so nobody could hold it and the
+//                     router was super_admin-only by omission. Removed from the
+//                     picker because it could not be granted; decision log
+//                     2026-08-19 section 2 resolved the follow-up as option B
+//                     (require_super_admin, stated explicitly rather than by
+//                     omission) — the backend mount no longer calls
+//                     require_module() at all, so this module string must stay
+//                     out of AVAILABLE_MODULES/this list rather than being
+//                     added back.
 //   surge, pricing    removed 2026-08-21 (decision-log item 3, docs/audit/
 //                     2026-08-19-decision-writeups.md): both were grantable
 //                     but gated no backend route. The real surge/pricing admin

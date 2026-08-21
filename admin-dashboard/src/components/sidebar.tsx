@@ -191,20 +191,15 @@ const NAV_GROUPS: NavGroup[] = [
             // to /dashboard/records?tab=<slug>), so nothing bookmarked or
             // linked from an old audit-log entry breaks.
             //
-            // Tab-level permissions differ (Data Transfer/Bulk
-            // Operations/Export Approvals require strict super_admin; the
-            // Compliance tab is grantable to non-super-admin staff via the
-            // "compliance" module) — this single nav entry is intentionally
-            // visible to EITHER group, matching /dashboard/records/page.tsx's
-            // own per-tab visibility logic exactly: `module: "compliance"`
-            // with no `superAdminOnly` means isSuperAdmin (role ===
-            // "super_admin" only, see NAV_GROUPS filter above) OR the
-            // compliance module makes this entry visible — the page itself
-            // then shows only the tabs that specific user can actually
-            // use, or a "no access" state if none apply (e.g. a staff
-            // member with no compliance module and no super_admin role
-            // never sees this entry at all).
-            { href: "/dashboard/records", label: "Records & Compliance", icon: Upload, module: "compliance" },
+            // All 4 tabs (Data Transfer, Compliance, Bulk Operations, Export
+            // Approvals) are super-admin-only: the backend mounts
+            // compliance_router under require_super_admin, same as the other
+            // three (decision log 2026-08-19, section 2, option B —
+            // "compliance" was never in AVAILABLE_MODULES/ROLE_PRESETS, so no
+            // non-super-admin could ever reach it; this just states that
+            // restriction explicitly instead of via a dead module string).
+            // Same shape as Sentry/AI Console above.
+            { href: "/dashboard/records", label: "Records & Compliance", icon: Upload, module: "settings", superAdminOnly: true },
             { href: "/dashboard/staff", label: "Staff", icon: Users, module: "staff" },
         ],
     },

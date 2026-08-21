@@ -248,7 +248,14 @@ admin_router.include_router(wallet_router, dependencies=[Depends(require_module(
 admin_router.include_router(auto_payouts_router, dependencies=[Depends(require_module("earnings"))])
 admin_router.include_router(incentives_router, dependencies=[Depends(require_module("service_areas"))])
 admin_router.include_router(disputes_admin_router, dependencies=[Depends(require_module("disputes"))])
-admin_router.include_router(compliance_router, dependencies=[Depends(require_module("compliance"))])
+# GST/PST remittance, SGI insurance billing, T4A filer handoff, airport report.
+# "compliance" is absent from AVAILABLE_MODULES/ROLE_PRESETS (staff.py) so no
+# non-super-admin has ever been grantable this module — require_super_admin
+# makes that existing restriction explicit instead of leaving a module string
+# that looks grantable but never has been. Same posture as Data Transfer /
+# Bulk Operations / Export Approvals above. See decision log 2026-08-19,
+# section 2, option B.
+admin_router.include_router(compliance_router, dependencies=[Depends(require_super_admin)])
 # Live Sentry issue viewer (read production errors across surfaces + resolve
 # them). Raw production error data is super_admin-only — same posture as the
 # data-transfer / booking-import surfaces above. As with stripe_payout_sync,

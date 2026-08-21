@@ -371,6 +371,15 @@ whether B is ever pursued. B is a legitimate feature idea (guaranteed-settlement
 good for riders) but is out of scope for a documentation-accuracy fix and should go through normal
 product scoping if wanted.
 
+**Status: Resolved (Option A).** `.claude/context/domain-payments.md`'s "Corporate billing"
+section was corrected to describe the upfront single `payment_method` selection, the no-fallback
+settlement dispatch, and the narrower allowance→master-wallet fallback (with its own hard-failure
+floor) — re-verified independently against `backend/routes/rides/payments.py`,
+`backend/services/payment_service.py::settle_wallet`/`settle_corporate`, and
+`backend/routes/rides/booking.py`/`_shared.py::_is_corporate_paid` before rewriting, confirming
+this write-up's characterization. Commit: `af5f5cb6904803ef8261b4c7ab9b79bfbdf1d6c5` (this branch). Option B (the literal
+four-source cascade) remains unbuilt and out of scope, per the recommendation above.
+
 ---
 
 ## 7. Admin surge override >2.5x accepted (1.0-10.0) but always clamped to 2.5x at fare-calc

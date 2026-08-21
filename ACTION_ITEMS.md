@@ -6887,6 +6887,34 @@ record of what was assumed vs. what was actually true</summary>
   `backend/tests/test_fare_service_recalc_rides_numeric_no_float_cast.py` (new),
   `backend/tests/services/test_fare_service.py`.
 
+### G1. Stripe first-payout delay + reserve-hold policy not priced into launch cash-flow plan
+- [ ] **Status:** open — identified 2026-08-21 during launch-readiness research; not previously tracked anywhere in this repo.
+- **Issue/gap:** Stripe imposes a non-waivable 7–14 day first-payout delay for new
+  platform accounts and can hold reserves for up to 180 days, explicitly triggered by
+  "a sales spike, a promotion, or a sudden increase in disputes." Spinr's planned
+  driver-acquisition blitz (`docs/growth/driver-acquisition-strategy.md`) and any
+  launch-week rider promo (`docs/growth/rider-acquisition-strategy.md`) are exactly
+  the kind of volume spike that clause names. Spinr holds zero float by design
+  (0% commission, driver keeps the fare), so there is no cushion to absorb a reserve
+  hold the way a float-holding platform could.
+- **Why it matters:** a driver promised a fast bonus payout, or a rider promised a
+  promo, right when Stripe is most likely to place a reserve hold because of the
+  resulting volume spike — the platform's first real payout moment could be the one
+  where it can't pay out reliably, which is reputationally the worst possible timing
+  for a new small-market entrant trying to build driver trust.
+- **Action:** confirm Spinr's actual account-specific Stripe payout timeline and
+  reserve policy directly with Stripe (not just public docs) before committing to any
+  bonus-payout timeline; model the cash-flow gap explicitly with finance; consider
+  staggering the driver blitz and rider promo rather than running both at full
+  intensity in week 1. Full detail and mitigation options:
+  `docs/finance/stripe-payout-readiness.md`.
+- **Files:** none (operational/financial planning, not a code fix) — reference doc at
+  `docs/finance/stripe-payout-readiness.md`; cross-referenced from
+  `docs/runbooks/saskatoon-launch.md` §P-5 (new gate added same pass).
+- **Acceptance:** real (not publicly-documented-default) Stripe payout timeline
+  confirmed for Spinr's account, and a written answer to "can operating cash cover
+  driver payouts if Stripe holds a reserve during the launch-week spike."
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly
@@ -9931,6 +9959,94 @@ record of what was assumed vs. what was actually true</summary>
   client-originated scheduled-ride requests, or its absence is logged so
   the gap is observable instead of silent.
 
+### G2. Saskatoon/Regina TNC bylaw number and fee schedule not confirmed with the City
+- [ ] **Status:** open — identified 2026-08-21.
+- **Issue/gap:** `docs/runbooks/saskatoon-launch.md` §I-2 already hedges the Saskatoon
+  bylaw number ("bylaw 9266 or successor"). External research this pass turned up
+  "Bylaw No. 9651" as a possible current cite, plus a comparable Regina "Vehicle(s) For
+  Hire Bylaw" with **conflicting reported fee figures** ($0.20/trip + $0.07 at launch
+  vs. a tiered annual $2,500–$25,000 + $0.27/trip schedule). Neither is confirmed
+  against the City directly.
+- **Why it matters:** launching without a confirmed bylaw number and fee schedule
+  risks non-compliant per-ride fee remittance from day one, which is a municipal
+  licensing risk, not just a documentation nit.
+- **Action:** call/email the City of Saskatoon (and Regina, if Regina is a near-term
+  follow-on market) licensing office directly, get the current bylaw number and fee
+  schedule in writing, and update `saskatoon-launch.md` §I-2 and
+  `docs/legal/company-insurance-and-licensing.md` §3 with the confirmed figures.
+- **Files:** none yet (verification task, not a code fix) — updates land in
+  `docs/runbooks/saskatoon-launch.md` and `docs/legal/company-insurance-and-licensing.md`
+  once confirmed.
+- **Acceptance:** bylaw number and fee schedule confirmed directly with the City,
+  written into both docs above, hedge language removed.
+
+### G3. SGI ride-share-endorsement and Vulnerable Sector Check turnaround times unconfirmed — gates driver-recruiting lead time
+- [ ] **Status:** open — identified 2026-08-21.
+- **Issue/gap:** how far in advance driver recruiting must start before launch depends
+  on how long SGI takes to process a ride-share endorsement and how long the relevant
+  police service takes to process a Vulnerable Sector Check. Neither turnaround time is
+  confirmed anywhere in this repo. This is distinct from the *quarterly SGI regulatory
+  reporting format* questions already tracked in
+  `docs/compliance/sgi-quarterly.md` — that's a separate open thread about reporting
+  Spinr's data to SGI; this item is about how long SGI takes to process one driver's
+  endorsement application.
+- **Why it matters:** a recruiting timeline built on an assumed turnaround (e.g. "start
+  T-14 days") could be off by weeks if the real number is longer, directly risking the
+  5–10 driver minimum in `saskatoon-launch.md` §J-2 not being met by launch day.
+- **Action:** place a direct call to SGI (endorsement processing) and the relevant local
+  police service (VSC processing); record real turnaround numbers in
+  `docs/growth/driver-acquisition-strategy.md` §2 and adjust the recruiting timeline in
+  §5 of that doc accordingly.
+- **Files:** none yet — updates land in `docs/growth/driver-acquisition-strategy.md`.
+- **Acceptance:** real turnaround numbers recorded, recruiting timeline adjusted to
+  match, hedge language in the strategy doc removed.
+
+### G4. Company-level insurance (CGL / Tech E&O / cyber) not confirmed to exist
+- [ ] **Status:** open — identified 2026-08-21.
+- **Issue/gap:** this repo documents driver-facing TNC insurance periods
+  (`docs/legal/insurance-coverage-periods.md`) and references a company TNC fleet
+  policy as a launch checklist item (`saskatoon-launch.md` §I-3), but has no
+  documentation of company-level Commercial General Liability, Technology E&O, or
+  cyber liability coverage — and no confirmation any of the three actually exists.
+- **Why it matters:** Uride's own Saskatchewan-market launch was reportedly delayed by
+  insurance-arrangement lead time (third-party reporting, not independently confirmed)
+  — a real same-province, same-industry precedent that insurance procurement can be a
+  multi-week critical-path item, not a same-week formality. Municipal licensing
+  (G2 above) may itself require proof of this coverage, meaning this gap can block
+  licensing too, not just stand alone.
+- **Action:** confirm with the insurance broker which coverage already exists under any
+  existing general business policy and which is genuinely missing; get a real lead-time
+  estimate for whatever's missing. Full detail:
+  `docs/legal/company-insurance-and-licensing.md`.
+- **Files:** none yet — updates land in `docs/legal/company-insurance-and-licensing.md`.
+- **Acceptance:** all three coverage layers confirmed present (with policy reference) or
+  a funded plan exists to obtain them before the municipal licensing filing.
+
+### G5. No "pause new ride requests" global kill-switch, distinct from the already-closed E5 feature-flag set
+- [ ] **Status:** open — identified 2026-08-21. **Not a re-proposal of E5** (CLOSED
+  2026-08-11 — `scheduled_dispatch_enabled`, `surge_engine_enabled`,
+  `promo_redemption_enabled`, `corporate_billing_enabled`); this is an additional flag
+  E5 does not cover.
+- **Issue/gap:** none of E5's four flags stop *new ride requests generally* — they gate
+  scheduled dispatch, surge, promo redemption, and corporate billing specifically.
+  `saskatoon-launch.md` §N-4's kill switch is a bulk `is_online = false` driver
+  operation, which is a supply-side lever, not a demand-side one — it doesn't stop the
+  rider app from accepting new booking requests.
+- **Why it matters:** a launch-week incident (e.g. a dispatch bug, a payment
+  processing problem, the Stripe reserve-hold scenario in G1) may call for pausing new
+  ride *requests* specifically — cleaner than forcing every driver offline — and no
+  such flag exists today.
+- **Action:** evaluate adding a `new_ride_requests_enabled` (or similarly named)
+  `app_settings` flag, checked at ride-creation time, following the same pattern as
+  E5's flags. Feature-flag/kill-switch design per CLAUDE.md's pre-merge release gates
+  — this is exactly the kind of additive, flagged control that section calls for.
+- **Files:** likely `backend/routes/rides/booking.py` (ride-creation entry point),
+  `backend/core/config.py` or wherever `app_settings` flags are read, a new migration
+  if `app_settings` needs a seed row.
+- **Acceptance:** flag exists, defaults to enabled (no behavior change), flipping it
+  off returns a clean rider-facing "temporarily unavailable" response instead of a
+  raw error, and it's documented in `saskatoon-launch.md` §N (rollback procedures).
+
 ## P3 — Post-launch backlog (tracked, not gating)
 
 ### Notification-channel coverage backlog (2026-08-08 audit, branch `claude/email-alerts-spinr-branding-l12lg2`)
@@ -11046,6 +11162,46 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   well-supported already; CLAUDE.md's guidance on destructive/hard-to-reverse
   actions favors skipping an unnecessary one over running it "just to be
   sure." Revisit if the table ever holds real data before this is re-verified.
+
+### G6. Driver retention program — no post-launch plan beyond onboarding
+- [ ] **Status:** open (backlog) — identified 2026-08-21.
+- **Issue/gap:** the repo has driver onboarding/eligibility checklists
+  (`saskatoon-launch.md` §J) and a deactivation-appeals policy, but no structured
+  post-launch retention plan. NBER driver-churn research indicates commission (which
+  Spinr already removes) is not the dominant churn driver — income unpredictability,
+  vehicle costs, and support responsiveness are bigger levers, per external research
+  this pass.
+- **Why it matters:** the CLAUDE.md KPI table already targets ≥80% weekly active
+  driver retention; without a deliberate program this is left to chance rather than
+  actively managed.
+- **Action:** stand up the tiered 6-month retention program drafted in
+  `docs/growth/driver-retention-strategy.md` once there's a real first driver cohort to
+  measure against — this is post-launch by design, not a launch blocker.
+- **Files:** none yet — draft plan at `docs/growth/driver-retention-strategy.md`.
+- **Acceptance:** baseline week-over-week retention measurement in place for the first
+  cohort; tiered program piloted with at least one real milestone check-in.
+
+### G7. Corporate/B2B GTM plan not yet actioned — Captain Taxi has an existing displaceable product in-market
+- [ ] **Status:** open (backlog) — identified 2026-08-21.
+- **Issue/gap:** `docs/CORPORATE_B2B.md` covers the architecture (system map, data
+  model, correctness invariants) for corporate accounts, but there is no sales/GTM plan
+  and no confirmed pipeline. Captain Taxi (an existing Saskatoon taxi operator) already
+  sells a comparable monthly-invoiced corporate account product to "businesses,
+  clinics, and government offices" today — real evidence of displaceable local demand,
+  not a hypothetical market.
+- **Why it matters:** corporate accounts are a stated monetization pillar (CLAUDE.md's
+  "What Spinr Is NOT" — SaaS corporate accounts, not per-trip commission) — leaving
+  this as architecture-only with no GTM motion means the monetization plan has no
+  active sales effort behind it.
+- **Action:** work the phased 90-day plan in `docs/CORPORATE_B2B_GTM.md` — self-serve
+  floor for clinics/small government offices first, sales-assisted for larger
+  institutional targets (e.g. SHA) later. Named early targets are research-identified
+  candidates, not confirmed conversations — validate each independently.
+- **Files:** none — this is a sales/business-development task, not a code change.
+  Reference: `docs/CORPORATE_B2B_GTM.md`.
+- **Acceptance:** at least one self-serve corporate account signed and actively booking
+  rides; Captain Taxi-style target segment validated or ruled out with a real
+  conversation.
 
 ## P4 — Industry-parity good-to-haves (verified missing 2026-06-09)
 

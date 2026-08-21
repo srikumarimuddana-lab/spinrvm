@@ -91,6 +91,14 @@ is the system of record for who is currently primary/secondary — this repo
 does not duplicate the live schedule (it would drift and become
 misleading). What belongs here instead, once decided:
 
+Sizing reference (not a decision — for whoever sets the "minimum team size"
+row below): Google's SRE literature states a sustainable 24/7 on-call
+rotation needs a floor of roughly 6–8 engineers split across ≥2 timezones
+per service, or a minimum of 3 people to cover a single-timezone rotation
+without unsustainable burnout. Spinr's actual staffing is smaller than that
+today — treat this as the target to grow toward, not a claim that it's
+already met.
+
 | Field | Value |
 |---|---|
 | Rotation cadence (weekly / bi-weekly) | *TBD* |

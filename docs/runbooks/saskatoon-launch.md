@@ -38,6 +38,7 @@
 - [ ] **P-2** Stripe webhook endpoint pointing at `https://<prod-backend>/payments/webhook` with the live signing secret in `app_settings`.
 - [ ] **P-3** Stripe Connect onboarding tested end-to-end with one real driver in Saskatoon (Express account, payout schedule confirmed).
 - [ ] **P-4** Test charge of $1 succeeds and reconciles correctly in the daily Stripe reconcile cron log.
+- [ ] **P-5** Stripe's non-waivable first-payout delay (typically 7–14 days for a new platform account) and reserve-hold policy reviewed against the launch cash-flow plan — see `docs/finance/stripe-payout-readiness.md`. A driver-acquisition blitz or promo spike is exactly the kind of "sudden increase" Stripe's own terms name as a reserve trigger; confirm this is priced in before committing to bonus payout timelines.
 
 ### Communications
 
@@ -420,7 +421,7 @@ Saskatchewan TNC regulation is under the Highway Traffic Board / Ministry of Hig
 
 ### I-2. Municipal Saskatoon bylaw
 
-City of Saskatoon currently has bylaw governing TNC operations (verify the current bylaw number — bylaws are renumbered periodically). Confirm compliance:
+City of Saskatoon currently has bylaw governing TNC operations (verify the current bylaw number — bylaws are renumbered periodically). External research this cycle turned up "Bylaw No. 9651" as a possible current cite and a comparable Regina "Vehicle(s) For Hire Bylaw" with conflicting reported per-trip/annual fee figures — **neither is confirmed against the City directly; treat as a lead to verify, not a fact to act on.** Details and the open verification question are tracked in `ACTION_ITEMS.md` (TNC licensing fee-schedule verification) and `docs/legal/company-insurance-and-licensing.md`. Confirm compliance:
 
 - Per-ride fee remittance (if any) to the City
 - Driver background check standard meets municipal requirement
@@ -435,6 +436,12 @@ Two layers:
 - **Each driver's personal SGI policy** must have the **ride-share endorsement** added — this is non-negotiable per CLAUDE.md.
 
 The driver onboarding flow already requires document upload of insurance with endorsement; confirm the verification step is gated on a human reviewer (or that the OCR-based check is robust) before driver `go_online` is allowed.
+
+**Turnaround time is an open operational unknown, not yet confirmed with SGI or local police services.** SGI endorsement processing time and Vulnerable Sector Check turnaround (I-3 above, J-1 below) both gate how far in advance driver recruiting must start before launch day — see `docs/growth/driver-acquisition-strategy.md` and the tracked item in `ACTION_ITEMS.md`. This is distinct from the SGI *quarterly regulatory reporting* format questions in `docs/compliance/sgi-quarterly.md`, which is a separate open thread with SGI.
+
+### I-7. Company-level insurance (separate from driver SGI endorsement)
+
+Section I above covers driver-facing insurance only. The company also needs its own commercial general liability, technology E&O, and cyber coverage before public launch — not yet documented anywhere in this repo. See `docs/legal/company-insurance-and-licensing.md` (new) and the tracked `ACTION_ITEMS.md` entry. Uride's own Saskatchewan-market launch was reportedly delayed by insurance-arrangement lead time — budget for this taking longer than expected.
 
 ### I-4. Privacy Policy + ToS
 
@@ -477,6 +484,8 @@ Each driver must meet CLAUDE.md's eligibility rules (enforced both at onboarding
 ### J-2. Minimum supply for soft launch
 
 At least **5–10 drivers** active in Saskatoon for the first 2 weeks. Below that, match rate suffers, riders churn, and the launch impression is bad.
+
+For the recruiting funnel, sourcing channels, and bonus-structure options to reach this minimum on schedule, see `docs/growth/driver-acquisition-strategy.md` — this section states the *gate*, that doc covers *how to fill it*.
 
 ### J-3. WAV driver
 

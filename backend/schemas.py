@@ -596,8 +596,12 @@ class AppSettings(BaseModel):
     # 334) is behind routes/auth.py's CONSENT_VERSION — legacy-imported
     # riders/drivers who never saw a Spinr consent flow, and organic users
     # who predate consent-version tracking — is shown the one-time notice.
-    # Neither app has the notice screen wired to check this endpoint yet;
-    # flipping this on ahead of that shipping is a no-op, not a live risk.
+    # Both apps' otp.tsx/profile-setup.tsx/index.tsx are now live-wired to
+    # check GET /consent/status on app-open/login and redirect to
+    # legacy-consent-notice.tsx — flipping this on is a real, immediate,
+    # user-facing change, not a no-op (this comment previously said
+    # otherwise; corrected alongside migration 356, which also adds the
+    # column this flag reads/writes — it didn't exist in the DB before).
     legacy_consent_notice_enabled: bool = False
     # ── Demand heatmap v2 (P1 HM-10/HM-13) ──────────────────────────────
     # v2 adds per-cell {live, baseline, scheduled} components + surge mirror

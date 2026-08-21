@@ -103,9 +103,9 @@ interface UserOption {
 // --- Constants ---
 
 const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
-    active: { label: "Active", color: "bg-emerald-500/15 text-emerald-600" },
-    inactive: { label: "Inactive", color: "bg-zinc-500/15 text-zinc-600" },
-    expired: { label: "Expired", color: "bg-red-500/15 text-red-600" },
+    active: { label: "Active", color: "bg-success/15 text-success" },
+    inactive: { label: "Inactive", color: "bg-muted text-muted-foreground" },
+    expired: { label: "Expired", color: "bg-destructive/15 text-destructive" },
 };
 
 const DATE_RANGES = [
@@ -619,7 +619,7 @@ export default function PromotionsPage() {
                                                 <TableCell><Badge className={sc.color}>{sc.label}</Badge></TableCell>
                                                 <TableCell className="text-right"><div className="flex gap-1 justify-end">
                                                     <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button>
-                                                    {promoTab !== "expired" && <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => toggleActive(p)}>{p.is_active ? <ToggleRight className="h-4 w-4 text-emerald-500" /> : <ToggleLeft className="h-4 w-4 text-muted-foreground" />}</Button>}
+                                                    {promoTab !== "expired" && <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => toggleActive(p)}>{p.is_active ? <ToggleRight className="h-4 w-4 text-success" /> : <ToggleLeft className="h-4 w-4 text-muted-foreground" />}</Button>}
                                                     <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => handleDelete(p.id)}><Trash2 className="h-4 w-4" /></Button>
                                                 </div></TableCell>
                                             </TableRow>
@@ -825,8 +825,8 @@ export default function PromotionsPage() {
                                 {form.discount_type === "percentage" && (
                                     <div className="grid grid-cols-2 gap-4">
                                         <div className="space-y-2">
-                                            <Label>Max Discount Cap ($) <span className="text-red-500 font-normal">*required</span></Label>
-                                            <Input type="number" placeholder="25.00" value={form.max_discount} onChange={(e) => setForm({ ...form, max_discount: e.target.value })} className={!form.max_discount ? "border-amber-400 focus-visible:ring-amber-400" : ""} />
+                                            <Label>Max Discount Cap ($) <span className="text-destructive font-normal">*required</span></Label>
+                                            <Input type="number" placeholder="25.00" value={form.max_discount} onChange={(e) => setForm({ ...form, max_discount: e.target.value })} className={!form.max_discount ? "border-warning focus-visible:ring-warning" : ""} />
                                             {!form.max_discount && (
                                                 <p className="text-xs text-amber-600 dark:text-amber-400">Without a cap, a 75% promo on a $100 fare gives $75 off. Set a cap to limit this.</p>
                                             )}
@@ -877,7 +877,7 @@ export default function PromotionsPage() {
                                             {selectedUsers.map((u) => (
                                                 <span key={u.id} className="inline-flex items-center gap-1 bg-violet-500/10 text-violet-700 dark:text-violet-300 rounded-full px-2.5 py-1 text-xs font-medium">
                                                     <User className="h-3 w-3" /> {u.label}
-                                                    <button onClick={() => toggleUserSelection(u)} className="ml-0.5 hover:text-red-500"><X className="h-3 w-3" /></button>
+                                                    <button onClick={() => toggleUserSelection(u)} className="ml-0.5 hover:text-destructive"><X className="h-3 w-3" /></button>
                                                 </span>
                                             ))}
                                         </div>

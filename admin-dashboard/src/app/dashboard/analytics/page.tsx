@@ -363,7 +363,7 @@ function AnalyticsPageInner() {
           <Card>
             <CardContent className="pt-4">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <CheckCircle className="h-4 w-4 text-green-500" /> Completion Rate
+                <CheckCircle className="h-4 w-4 text-success" /> Completion Rate
               </div>
               <div className="text-2xl font-bold mt-1 text-green-600 dark:text-green-400">{overview.completion_rate}%</div>
             </CardContent>
@@ -371,7 +371,7 @@ function AnalyticsPageInner() {
           <Card>
             <CardContent className="pt-4">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <XCircle className="h-4 w-4 text-red-500" /> Cancellation Rate
+                <XCircle className="h-4 w-4 text-destructive" /> Cancellation Rate
               </div>
               <div className="text-2xl font-bold mt-1 text-red-600 dark:text-red-400">{overview.cancellation_rate}%</div>
             </CardContent>
@@ -608,10 +608,10 @@ function AnalyticsPageInner() {
                 </p>
               </CardContent>
             </Card>
-            <Card className={lowOnly ? "ring-2 ring-red-500" : undefined}>
+            <Card className={lowOnly ? "ring-2 ring-destructive" : undefined}>
               <CardContent className="pt-4">
                 <div className="text-sm text-muted-foreground flex items-center gap-1">
-                  <TrendingDown className="h-3 w-3 text-red-500" />
+                  <TrendingDown className="h-3 w-3 text-destructive" />
                   Low completion (&lt;{driverRates?.low_performer_threshold?.rate_below ?? 70}%)
                 </div>
                 <div className="text-2xl font-bold text-red-600 dark:text-red-400">

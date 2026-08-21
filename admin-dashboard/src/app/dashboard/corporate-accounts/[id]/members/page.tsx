@@ -69,10 +69,10 @@ const STATUS_COLORS: Record<CorporateMember["status"], string> = {
 };
 
 const REQUEST_STATUS_COLORS: Record<AllowanceRequestRow["status"], string> = {
-    pending: "bg-yellow-100 text-yellow-800",
-    approved: "bg-emerald-100 text-emerald-800",
-    auto_approved: "bg-blue-100 text-blue-800",
-    denied: "bg-red-100 text-red-700",
+    pending: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300",
+    approved: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
+    auto_approved: "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300",
+    denied: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
 };
 
 type StatusFilter = "all" | CorporateMemberStatus;
@@ -321,7 +321,7 @@ export default function CompanyMembersPage() {
                     </form>
                     {inviteUrl && (
                         <div className="flex items-start gap-2 rounded border border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/40 p-3 text-sm">
-                            <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+                            <Check className="mt-0.5 h-4 w-4 shrink-0 text-success" />
                             <div>
                                 <p className="font-medium text-emerald-700 dark:text-emerald-300">Invite created</p>
                                 <code className="mt-1 block break-all text-xs text-emerald-800 dark:text-emerald-200">
@@ -527,7 +527,7 @@ export default function CompanyMembersPage() {
                                                     <Button
                                                         size="sm"
                                                         variant="outline"
-                                                        className="text-red-600 h-7"
+                                                        className="text-destructive h-7"
                                                         onClick={() => setDecisionTarget({ req: r, approve: false })}
                                                     >
                                                         <X className="mr-1 h-3 w-3" /> Deny

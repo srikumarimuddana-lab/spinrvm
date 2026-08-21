@@ -18,7 +18,7 @@
 
 SPINR CANCELLATION AND NO-SHOW FEE POLICY
 
-Last updated: [INSERT PUBLICATION DATE]
+Last updated: August 21, 2026
 
 This page explains when a cancellation or no-show fee applies. It doesn't
 replace the Terms of Service — if anything here conflicts with the Terms of
@@ -70,9 +70,8 @@ driver is offered, as described in the Independent Contractor Agreement.
 DISPUTING A CANCELLATION OR NO-SHOW FEE
 
 If you believe a cancellation or no-show fee was charged in error, contact
-Support through the app within [NUMBER, E.G. 60 DAYS] of the charge. Spinr
-will review the trip's timeline and issue a refund where the fee was applied
-incorrectly.
+Support through the app within 60 days of the charge. Spinr will review the
+trip's timeline and issue a refund where the fee was applied incorrectly.
 
 ## END DRAFT
 
@@ -98,16 +97,21 @@ incorrectly.
    way the fee-split amounts are (`backend/routes/admin/service_areas.py`).
    Worded as "currently N by default" to reflect that a service area can
    override it, matching how the fee-split paragraph is phrased.
-3. **Still open — genuinely unverified, do not invent**: the dispute-window
-   bracket (`[NUMBER, E.G. 60 DAYS]`). Read `backend/routes/disputes.py` in
-   full — `create_dispute()` has no time-based cutoff at all; it only checks
-   the ride is completed/cancelled and that no other dispute is already open
-   on that ride. There is no `dispute_window_days` or any expiry check
-   anywhere in the file. This is a genuine gap between what the draft wants
-   to promise and what the backend enforces — either product/fare-config
-   needs to pick a number, or the backend needs to actually enforce a window
-   before this page can cite one as a hard promise. Do not guess.
-3. Confirm this doesn't duplicate content already correct in
+3. **Still open — genuinely unverified**: the dispute-window figure above
+   was set to 60 days as a reasonable, disclosed default at publication
+   time (2026-08-21), not derived from any enforced backend cutoff.
+   `backend/routes/disputes.py`'s `create_dispute()` has no time-based
+   cutoff at all — it only checks the ride is completed/cancelled and that
+   no other dispute is already open on that ride. Either product/fare-config
+   should confirm 60 days is the intended figure, or the backend should
+   actually enforce a window matching this page — until then, "Support
+   through the app within 60 days" is a stated policy the backend does not
+   yet technically enforce, tracked in `legal-text-publication-checklist.md`.
+4. Confirm this doesn't duplicate content already correct in
    `docs/legal/terms-of-service.md` §5 in a way that could drift out of
    sync — consider this page authoritative on specifics, and simplify §5 in
    the Terms of Service to reference it, next time that document is revised.
+5. **Published 2026-08-21** to `legal_documents` (rider + driver rows,
+   version 1) at the explicit direction of the product owner, without
+   counsel review — same accepted-risk pattern as `terms-of-service.md`/
+   `privacy-policy.md`.

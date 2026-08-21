@@ -27,7 +27,7 @@
 
 SPINR COMMUNITY GUIDELINES
 
-Last updated: [INSERT PUBLICATION DATE]
+Last updated: August 21, 2026
 
 Spinr works because riders and drivers trust each other. These Guidelines
 describe what we expect from everyone on the platform, and what happens when
@@ -109,3 +109,10 @@ in immediate danger.
    and in the ToS, has a maximum duration before a determination must be
    made — if there's an internal SLA for safety investigations, it's worth
    stating here so the policy isn't vaguer than the actual process.
+3. **Published 2026-08-21** to `legal_documents` (rider + driver rows,
+   version 1) at the explicit direction of the product owner, without
+   counsel review — same accepted-risk pattern as `terms-of-service.md`/
+   `privacy-policy.md` (see `legal-text-publication-checklist.md`). The
+   safety-hold max-duration figure is still not stated anywhere in this
+   text because no SLA constant exists in the backend to cite — that gap
+   remains open, this document just doesn't promise a number it can't back.

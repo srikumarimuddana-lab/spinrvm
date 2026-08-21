@@ -18,7 +18,7 @@
 
 SPINR NON-DISCRIMINATION POLICY
 
-Last updated: [INSERT PUBLICATION DATE]
+Last updated: August 21, 2026
 
 Spinr is committed to providing a platform free of discrimination for every
 rider and driver, consistent with the Saskatchewan Human Rights Code and the
@@ -41,8 +41,7 @@ subjected to a lower standard of service on the basis of:
 - receipt of public assistance
 
 This list follows the protected grounds under the Saskatchewan Human Rights
-Code as of this policy's last update. [CONFIRM AGAINST THE CURRENT STATUTE
-BEFORE PUBLISHING — DO NOT TREAT THIS LIST AS PERMANENTLY FIXED.]
+Code as of this policy's last update.
 
 SERVICE ANIMALS
 
@@ -79,10 +78,9 @@ genuinely exceeded), and must be able to explain that reason if asked.
 HOW TO REPORT A CONCERN
 
 Report a discrimination concern through the app's Support flow, or by
-emailing [accessibility@spinr.ca / SUPPORT CONTACT]. Every report is
-reviewed by Spinr's safety team. A substantiated violation is handled under
-the Community Guidelines and, for drivers, the Driver Deactivation and
-Appeals Policy.
+emailing support@spinr.ca. Every report is reviewed by Spinr's safety team.
+A substantiated violation is handled under the Community Guidelines and,
+for drivers, the Driver Deactivation and Appeals Policy.
 
 ## END DRAFT
 
@@ -98,3 +96,12 @@ Appeals Policy.
    `.claude/context/domain-dispatch.md` should be the source of truth for
    how WAV matching actually works; don't let this policy promise more than
    the matching engine delivers.
+3. **Published 2026-08-21** to `legal_documents` (rider + driver rows,
+   version 1) at the explicit direction of the product owner, without
+   counsel review — same accepted-risk pattern as `terms-of-service.md`/
+   `privacy-policy.md`. The protected-grounds list still has not been
+   checked against the current Saskatchewan Human Rights Code text by
+   counsel; that review remains open and tracked in
+   `legal-text-publication-checklist.md`. The report contact was pointed at
+   `support@spinr.ca` (live, monitored) rather than the unprovisioned
+   `accessibility@spinr.ca`.

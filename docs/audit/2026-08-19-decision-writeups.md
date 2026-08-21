@@ -437,6 +437,14 @@ capability that may be intentionally in use for audit/record purposes without fi
 that. Recommend closing this purely as a documentation clarification unless Product/Legal has a
 specific reason to want A or B.
 
+**Resolved (2026-08-21):** Option C implemented — CLAUDE.md's "Surge pricing rules" section now
+states explicitly that the >2.5 admin override is record/audit-only and is always clamped to
+`SURGE_CAP` at every fare-calc call site, so it never reaches a rider's fare above the cap.
+Re-verified independently against `backend/routes/admin/service_areas.py`,
+`backend/services/fare_service.py`, `backend/routes/fares.py`, and `backend/features.py` before
+editing the doc — no divergence found from this write-up's claim. Pure documentation change, no
+code/behavior change. See commit 0243332.
+
 ---
 
 ## 8. Fare-estimate 3.5s Directions-wait: accept as permanent SLA exception, or add a hard ceiling

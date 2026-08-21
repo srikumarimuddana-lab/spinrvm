@@ -60,11 +60,21 @@ async def is_suppressed(phone: str) -> bool:
     fixed (per root CLAUDE.md's "do not silently swallow errors" rule) —
     logging loudly and returning False are not in tension here: the log is
     for us, False is what keeps the rider safe.
+
+    The fail-open try/except wraps normalize_phone() too, not just the DB
+    lookup — this function's docstring promises "on ANY lookup error", and a
+    malformed/unexpected phone value raising inside normalization is still a
+    lookup error from the caller's point of view. Today every caller in
+    routes/rides/safety.py also wraps its own suppression-check step in a
+    fail-open try/except, so this gap was never reachable in practice — but
+    this function's own contract should hold standalone, not just because of
+    an outer caller-side guard (found in review 2026-08-21, non-blocking at
+    the time; closed here).
     """
-    norm = normalize_phone(phone)
-    if not norm:
-        return False
     try:
+        norm = normalize_phone(phone)
+        if not norm:
+            return False
         row = await db_supabase.find_one(_TABLE, {"phone": norm})
         return row is not None
     except Exception:

@@ -60,6 +60,15 @@ async def test_is_suppressed_fails_open_on_db_error():
         assert await sc.is_suppressed(_PHONE_E164) is False
 
 
+async def test_is_suppressed_fails_open_when_normalize_phone_raises():
+    """is_suppressed()'s fail-open guarantee must hold even if normalize_phone
+    itself raises (e.g. a malformed/unexpected phone value) — not just DB
+    errors. Closes a review note (2026-08-21): the try/except previously only
+    wrapped the DB lookup, so a raise here would have propagated uncaught."""
+    with patch.object(sc, "normalize_phone", side_effect=ValueError("bad phone")):
+        assert await sc.is_suppressed("not-a-real-phone") is False
+
+
 async def test_suppress_writes_row():
     with patch("db_supabase.insert_one", AsyncMock(return_value=None)) as ins:
         await sc.suppress(_PHONE_BARE, reason="sms_stop", source="twilio")

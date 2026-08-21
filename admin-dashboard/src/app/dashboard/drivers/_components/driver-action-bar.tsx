@@ -400,7 +400,7 @@ export default function DriverActionBar({ driver, onActionComplete }: DriverActi
 
                         <div>
                             <label htmlFor="action-reason" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5 block">
-                                Reason {actionDialog?.requiresReason ? <span className="text-red-500 normal-case">*</span> : <span className="text-muted-foreground normal-case font-normal">(optional)</span>}
+                                Reason {actionDialog?.requiresReason ? <span className="text-destructive normal-case">*</span> : <span className="text-muted-foreground normal-case font-normal">(optional)</span>}
                             </label>
                             <Textarea
                                 id="action-reason"
@@ -410,7 +410,7 @@ export default function DriverActionBar({ driver, onActionComplete }: DriverActi
                                 className="text-sm min-h-[88px]"
                             />
                             {actionDialog?.requiresReason && !reasonProvided && (
-                                <p className="text-[11px] text-red-500 mt-1">A reason is required for this action.</p>
+                                <p className="text-[11px] text-destructive mt-1">A reason is required for this action.</p>
                             )}
                         </div>
                     </div>

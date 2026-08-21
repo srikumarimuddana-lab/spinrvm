@@ -85,6 +85,7 @@ const AUDIENCE_OPTIONS = [
     { value: "particular_driver", label: "Particular Driver", icon: User },
 ];
 
+// eslint-disable-next-line no-restricted-syntax -- categorical notification-type map (5 distinct types, no natural success/warning/destructive fit) (#2816)
 const NOTIFICATION_TYPES = [
     { value: "info", label: "Information", icon: Info, color: "text-blue-500" },
     { value: "alert", label: "Alert", icon: AlertCircle, color: "text-amber-500" },
@@ -94,11 +95,12 @@ const NOTIFICATION_TYPES = [
 ];
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
-    sent: { label: "Sent", color: "bg-emerald-500/15 text-emerald-600", icon: CheckCircle2 },
+    sent: { label: "Sent", color: "bg-success/15 text-success", icon: CheckCircle2 },
+    // eslint-disable-next-line no-restricted-syntax -- "scheduled" (future, neither good nor bad) has no semantic-token equivalent (#2816)
     scheduled: { label: "Scheduled", color: "bg-blue-500/15 text-blue-600", icon: Timer },
-    failed: { label: "Failed", color: "bg-red-500/15 text-red-600", icon: XCircle },
-    pending: { label: "Pending", color: "bg-amber-500/15 text-amber-600", icon: Clock },
-    cancelled: { label: "Cancelled", color: "bg-zinc-500/15 text-zinc-600", icon: XCircle },
+    failed: { label: "Failed", color: "bg-destructive/15 text-destructive", icon: XCircle },
+    pending: { label: "Pending", color: "bg-warning/15 text-warning", icon: Clock },
+    cancelled: { label: "Cancelled", color: "bg-muted text-muted-foreground", icon: XCircle },
 };
 
 const PER_PAGE = 20;
@@ -751,8 +753,8 @@ export default function CloudMessagingPage() {
                                                     <TableCell><div className="flex gap-1">{getChannels(msg).map((c) => <Badge key={c} variant="outline" className="text-[10px] capitalize">{c}</Badge>)}</div></TableCell>
                                                     <TableCell><Badge className={sc.color}><SI className="h-3 w-3 mr-1" />{sc.label}</Badge></TableCell>
                                                     <TableCell className="text-sm">{msg.total_recipients.toLocaleString()}</TableCell>
-                                                    <TableCell><span className="text-sm text-emerald-600 font-medium">{msg.successful.toLocaleString()}</span></TableCell>
-                                                    <TableCell><span className={`text-sm font-medium ${msg.failed_count > 0 ? "text-red-500" : "text-muted-foreground"}`}>{msg.failed_count.toLocaleString()}</span></TableCell>
+                                                    <TableCell><span className="text-sm text-success font-medium">{msg.successful.toLocaleString()}</span></TableCell>
+                                                    <TableCell><span className={`text-sm font-medium ${msg.failed_count > 0 ? "text-destructive" : "text-muted-foreground"}`}>{msg.failed_count.toLocaleString()}</span></TableCell>
                                                     <TableCell className="text-xs text-muted-foreground">{formatDate(msg.sent_at || msg.scheduled_at || msg.created_at)}</TableCell>
                                                     <TableCell className="text-right">
                                                         <div className="flex justify-end gap-1">
@@ -862,7 +864,7 @@ export default function CloudMessagingPage() {
                                 <div><Label className="text-xs text-muted-foreground">Audience</Label><p className="text-sm capitalize">{selectedMessage.audience.replace(/_/g, " ")}</p></div>
                                 <div><Label className="text-xs text-muted-foreground">Channels</Label><div className="flex gap-1 mt-0.5">{getChannels(selectedMessage).map((c) => <Badge key={c} variant="outline" className="text-xs capitalize">{c}</Badge>)}</div></div>
                             </div>
-                            <div><Label className="text-xs text-muted-foreground">Status</Label><div className="mt-1"><Badge className={STATUS_CONFIG[selectedMessage.status]?.color || "bg-zinc-500/15"}>{STATUS_CONFIG[selectedMessage.status]?.label || selectedMessage.status}</Badge></div></div>
+                            <div><Label className="text-xs text-muted-foreground">Status</Label><div className="mt-1"><Badge className={STATUS_CONFIG[selectedMessage.status]?.color || "bg-muted"}>{STATUS_CONFIG[selectedMessage.status]?.label || selectedMessage.status}</Badge></div></div>
                             <Separator />
                             <div>
                                 <Label className="text-xs text-muted-foreground mb-2 block">Delivery Report</Label>
@@ -874,7 +876,7 @@ export default function CloudMessagingPage() {
                                 {selectedMessage.total_recipients > 0 && selectedMessage.status === "sent" && (
                                     <div className="mt-3">
                                         <div className="flex justify-between text-xs text-muted-foreground mb-1"><span>Success Rate</span><span>{((selectedMessage.successful / selectedMessage.total_recipients) * 100).toFixed(1)}%</span></div>
-                                        <div className="h-2 rounded-full bg-muted overflow-hidden"><div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${(selectedMessage.successful / selectedMessage.total_recipients) * 100}%` }} /></div>
+                                        <div className="h-2 rounded-full bg-muted overflow-hidden"><div className="h-full rounded-full bg-success transition-all" style={{ width: `${(selectedMessage.successful / selectedMessage.total_recipients) * 100}%` }} /></div>
                                     </div>
                                 )}
                             </div>

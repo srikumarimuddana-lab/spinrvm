@@ -288,10 +288,16 @@ Implementation:  COMPLETE 2026-08-21. All 6 subtasks of the /plan
                  -emergency-contact-encryption-consent-app-wiring.md. Two
                  non-blocking follow-up notes surfaced during review (added
                  latency on the suppression-check step within its existing
-                 fail-open bound; sos_contact_consent.normalize_phone() sits
-                 outside is_suppressed()'s own try/except, currently covered
-                 by an outer caller-side guard) — tracked for a future pass,
-                 not blocking, per the reviewing agents' verdicts.
+                 fail-open bound — accepted, no action; sos_contact_consent.
+                 normalize_phone() sat outside is_suppressed()'s own
+                 try/except, previously covered only by an outer caller-side
+                 guard) — closed 2026-08-21, is_suppressed()'s try/except now
+                 wraps normalize_phone() too so the fail-open contract holds
+                 standalone, with a regression test
+                 (test_is_suppressed_fails_open_when_normalize_phone_raises).
+                 A third finding surfaced by spinr-migration-reviewer on
+                 migration 359 (non-blocking, documentation-only) is
+                 addressed below, not by a new migration.
 Parallel work note: an independent session (PR #4322, "feat(safety,privacy):
                  encrypt emergency-contact PII, resolve 3 decision-log items")
                  concurrently built and merged its own encryption-only
@@ -314,6 +320,30 @@ Parallel work note: an independent session (PR #4322, "feat(safety,privacy):
                  (an auto-merge combined #4322's decrypt-before-SMS fix with
                  this branch's suppression-check filtering, which needs the
                  decrypted phone number to match correctly).
+Vault key-isolation note (added 2026-08-21, documentation-only): migration
+                 357 creates a dedicated `emergency_contacts_pii_key`
+                 pgsodium key, stating the goal of isolating an
+                 emergency_contacts key compromise/rotation from the
+                 unrelated `drivers_pii_key`. Migration 359's
+                 `vault.create_secret(plaintext, NULL, 'emergency_contact_pii')`
+                 passes NULL for the key argument, so encryption actually
+                 goes through Vault's default key management, not the
+                 dedicated key 357 created — silently leaving that isolation
+                 goal unrealized (spinr-migration-reviewer, non-blocking).
+                 This is NOT a new gap unique to emergency-contact PII: it is
+                 the exact same choice already accepted and live in
+                 production for driver PII since migration 138
+                 (`drivers_pii_key`, created by migration 32, is likewise
+                 never passed to vault.create_secret() — confirmed by
+                 reading 138's function body). Given that precedent, this is
+                 recorded here as an accepted, consistent tradeoff rather
+                 than fixed with a new migration — actually wiring the
+                 dedicated key would be new, unreviewed scope beyond what
+                 this feature's sign-off covered, and would diverge from the
+                 driver-PII pattern rather than match it. If per-domain key
+                 isolation is later decided to matter, it should be fixed for
+                 both drivers_pii_key and emergency_contacts_pii_key together
+                 in one migration, not just this table.
 ```
 
 ---

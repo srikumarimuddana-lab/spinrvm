@@ -391,7 +391,7 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
                                         <div className="space-y-3 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50/40 dark:bg-emerald-900/10 p-3">
                                             <label htmlFor="reviewer-expiry" className="text-xs font-medium flex items-center gap-1.5">
                                                 <Calendar className="h-3.5 w-3.5" />
-                                                Expiry date {needsExpiry && <span className="text-red-500">*</span>}
+                                                Expiry date {needsExpiry && <span className="text-destructive">*</span>}
                                                 {!needsExpiry && <span className="text-muted-foreground font-normal">(optional)</span>}
                                             </label>
                                             <Input id="reviewer-expiry" type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} className="h-9" />
@@ -418,7 +418,7 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
                                                 </SelectContent>
                                             </Select>
 
-                                            <label htmlFor="reviewer-reason" className="text-xs font-medium">Reason text {template === "other" && <span className="text-red-500">*</span>}</label>
+                                            <label htmlFor="reviewer-reason" className="text-xs font-medium">Reason text {template === "other" && <span className="text-destructive">*</span>}</label>
                                             <Textarea id="reviewer-reason" ref={reasonRef} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Explain why this is rejected…" className="text-sm min-h-[80px]" />
 
                                             <label className="flex items-start gap-2 cursor-pointer text-xs">

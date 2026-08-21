@@ -344,6 +344,21 @@ class TestTriggerEmergency:
         assert result["contacts_notified"] == 1
         assert sms_calls[0]["phone"] == "+13065556666"
 
+    async def test_emergency_contacts_decrypted_before_sms(self):
+        """Migration 357: name/phone are Vault tokens in the DB row — the
+        SMS must go out to the decrypted phone, never the raw stored token."""
+        contacts = [{"id": "ec-1", "phone": "vault-token-phone", "name": "vault-token-name"}]
+        vault_decrypt = AsyncMock(
+            side_effect=lambda rpc, v, _hint="": v.replace("vault-token-", "+1306real") if rpc.startswith("decrypt") else v
+        )
+        with patch("backend.routes.rides.safety.vault_decrypt", vault_decrypt):
+            result, _, _, sms_calls = await self._trigger(RIDER_ID, emergency_contacts=contacts)
+
+        assert result["contacts_notified"] == 1
+        assert sms_calls[0]["phone"] == "+1306realphone"
+        for call in vault_decrypt.call_args_list:
+            assert call.args[0] == "decrypt_emergency_contact_pii"
+
     async def test_no_contacts_returns_zero_notified(self):
         result, _, _, sms_calls = await self._trigger(RIDER_ID, emergency_contacts=[])
 

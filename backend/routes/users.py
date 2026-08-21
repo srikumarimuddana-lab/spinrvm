@@ -33,6 +33,7 @@ try:
         send_email_verification_code,
         send_welcome_email,
     )
+    from ..utils.vault_pii import vault_decrypt, vault_encrypt  # type: ignore
 except ImportError:
     import db_supabase  # type: ignore
     from dependencies import OTP_EXPIRY_MINUTES, generate_otp, get_current_user  # type: ignore  # noqa: F811
@@ -65,6 +66,7 @@ except ImportError:
         send_email_verification_code,
         send_welcome_email,
     )
+    from utils.vault_pii import vault_decrypt, vault_encrypt  # type: ignore  # noqa: F811
 import asyncio
 import base64
 import hashlib
@@ -764,6 +766,23 @@ class EmergencyContactResponse(BaseModel):
     relationship: str
 
 
+async def _decrypt_contact(contact: dict) -> dict:
+    """Decrypt an emergency contact's name/phone (migration 357 Vault fields).
+
+    `vault_decrypt` degrades to returning the stored value unchanged on any
+    failure, including a pre-migration plaintext row (not a UUID) — never
+    raises, so a decrypt hiccup can't 500 the rider's own contact list.
+    """
+    out = dict(contact)
+    if out.get("name"):
+        out["name"] = await vault_decrypt("decrypt_emergency_contact_pii", str(out["name"]), "emergency_contact.name")
+    if out.get("phone"):
+        out["phone"] = await vault_decrypt(
+            "decrypt_emergency_contact_pii", str(out["phone"]), "emergency_contact.phone"
+        )
+    return out
+
+
 @api_router.get("/emergency-contacts")
 async def get_emergency_contacts(current_user: dict = Depends(get_current_user)):
     """Get the user's emergency contacts."""
@@ -778,6 +797,7 @@ async def get_emergency_contacts(current_user: dict = Depends(get_current_user))
             status_code=503,
             detail="Could not load emergency contacts. Please try again.",
         ) from e
+    contacts = [await _decrypt_contact(c) for c in contacts]
     return {"contacts": contacts}
 
 
@@ -807,16 +827,23 @@ async def add_emergency_contact(contact: EmergencyContactCreate, current_user: d
     if len(phone) < 10:
         raise HTTPException(status_code=400, detail="Invalid phone number for emergency contact")
 
+    name = contact.name.strip()
     contact_doc = {
         "id": str(uuid.uuid4()),
         "user_id": current_user["id"],
-        "name": contact.name.strip(),
-        "phone": phone,
+        # Encrypted at rest (migration 357 / PIA SPINR-PIA-2026-01): a
+        # third party's name+phone who never consented to being in Spinr's
+        # system. vault_encrypt fails closed (503) rather than ever writing
+        # plaintext — never soften this to a fallback that stores raw PII.
+        "name": await vault_encrypt("encrypt_emergency_contact_pii", name, "emergency_contact.name"),
+        "phone": await vault_encrypt("encrypt_emergency_contact_pii", phone, "emergency_contact.phone"),
         "relationship": contact.relationship,
     }
 
     await db_supabase.insert_one("emergency_contacts", contact_doc)
-    return {"success": True, "contact": contact_doc}
+    # Return the plaintext the rider just submitted, not the vault token —
+    # this response is theirs, not a stored-row echo.
+    return {"success": True, "contact": {**contact_doc, "name": name, "phone": phone}}
 
 
 @api_router.delete("/emergency-contacts/{contact_id}")

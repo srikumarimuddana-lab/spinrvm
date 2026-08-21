@@ -512,6 +512,14 @@ value and an explicit acceptance of the resulting undercharge tail before shippi
 Product call on risk tolerance, not an engineering one. No action recommended without Product/Eng
 lead's explicit sign-off either way — that's the actual ask of this decision item.
 
+### Resolution — decided 2026-08-21
+
+**Option A approved** (Product/Eng lead sign-off via @vikas, 2026-08-21): 3.5s remains the permanent,
+documented SLA exception. No code change — `_PRICING_ROUTE_WAIT_S` in
+`backend/routes/rides/estimates.py` is unchanged, and CLAUDE.md's SLA table already carries this as
+an accepted exception since 2026-08-19. The undercharge-risk tail that motivated widening the wait on
+2026-07-29 stays fully mitigated; Option B (a hard ceiling) was not adopted.
+
 ---
 
 ## 9. Confirm whether the silently-failed `purge_pii_retention()` job ever produced a loud alert

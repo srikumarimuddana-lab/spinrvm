@@ -94,10 +94,13 @@ const CREATABLE_QUEST_TYPES = QUEST_TYPES.filter((t) =>
 );
 
 const STATUS_COLORS: Record<string, string> = {
+  // eslint-disable-next-line no-restricted-syntax -- distinct quest lifecycle stages that must stay visually distinguishable; collapsing to success/warning tokens would make "completed" and "claimed" indistinguishable (#2816)
   active: "bg-blue-100 text-blue-700",
+  // eslint-disable-next-line no-restricted-syntax -- see above
   completed: "bg-green-100 text-green-700",
+  // eslint-disable-next-line no-restricted-syntax -- see above
   claimed: "bg-amber-100 text-amber-700",
-  expired: "bg-gray-100 text-gray-500",
+  expired: "bg-muted text-muted-foreground",
 };
 
 export default function QuestsPage() {
@@ -261,7 +264,7 @@ export default function QuestsPage() {
         <Card>
           <CardContent className="pt-4">
             <div className="text-sm text-muted-foreground">Active Now</div>
-            <div className="text-2xl font-bold text-green-600">{activeQuests}</div>
+            <div className="text-2xl font-bold text-success">{activeQuests}</div>
           </CardContent>
         </Card>
         <Card>
@@ -348,11 +351,11 @@ export default function QuestsPage() {
                       </TableCell>
                       <TableCell>
                         {isExpired(quest.end_date) ? (
-                          <Badge className="bg-gray-100 text-gray-500">Expired</Badge>
+                          <Badge className="bg-muted text-muted-foreground">Expired</Badge>
                         ) : quest.is_active ? (
-                          <Badge className="bg-green-100 text-green-700">Active</Badge>
+                          <Badge className="bg-success/15 text-success">Active</Badge>
                         ) : (
-                          <Badge className="bg-gray-100 text-gray-500">Paused</Badge>
+                          <Badge className="bg-muted text-muted-foreground">Paused</Badge>
                         )}
                       </TableCell>
                       <TableCell>
@@ -410,7 +413,7 @@ export default function QuestsPage() {
                                         </div>
                                       </TableCell>
                                       <TableCell>
-                                        <Badge className={STATUS_COLORS[p.status] || "bg-gray-100"}>
+                                        <Badge className={STATUS_COLORS[p.status] || "bg-muted"}>
                                           {p.status}
                                         </Badge>
                                       </TableCell>

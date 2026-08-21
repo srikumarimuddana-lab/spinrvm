@@ -1,6 +1,13 @@
 -- Migration 359: Fix encrypt_emergency_contact_pii()/decrypt_emergency_contact_pii()
 -- to use the corrected vault.create_secret() pattern
 --
+-- migration-override-ok: intentionally redefines encrypt_emergency_contact_pii()
+-- and decrypt_emergency_contact_pii() (both first defined in
+-- 357_encrypt_emergency_contacts.sql). This is the deliberate point of this
+-- migration -- see CONTEXT below for why 357's functions need fixing in
+-- place rather than left as-is. Same names/signatures preserved so no
+-- app-code call site changes.
+--
 -- CONTEXT: migration 357 was independently authored and merged twice, by two
 -- concurrent sessions, within minutes of each other on 2026-08-21:
 --   - This branch's own first draft (never shipped as 357 -- caught before

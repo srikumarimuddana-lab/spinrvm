@@ -223,28 +223,39 @@ export default function LoginScreen() {
         {/* Explicit, unchecked-by-default consent checkbox — replaces the
             old passive "by continuing you agree" text, which had no
             tappable action or opt-in gesture behind it. Icon (not color
-            alone) signals checked state for WCAG 2.1 AA. */}
-        <TouchableOpacity
-          style={styles.consentRow}
-          onPress={() => setConsentAccepted((c) => !c)}
-          activeOpacity={0.7}
-          disabled={loading}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          accessibilityRole="checkbox"
-          accessibilityState={{ checked: consentAccepted, disabled: loading }}
-          accessibilityLabel="I agree to Spinr's Terms of Service and Privacy Policy"
-        >
-          <Ionicons
-            name={consentAccepted ? 'checkbox' : 'square-outline'}
-            size={22}
-            color={consentAccepted ? colors.primary : colors.textDim}
-          />
+            alone) signals checked state for WCAG 2.1 AA. The checkbox
+            toggle and the Terms/Privacy links are deliberately separate
+            touchables (not one nested inside the other): a single outer
+            TouchableOpacity wrapping the link Text elements defaults to
+            accessible=true and collapses the whole row into one
+            accessibility node, making the links unreachable by
+            VoiceOver/TalkBack — flagged by an independent
+            spinr-accessibility-reviewer pass as a blocker specifically
+            because this screen has no other pre-account path to the
+            legal documents. */}
+        <View style={styles.consentRow} accessible={false}>
+          <TouchableOpacity
+            onPress={() => setConsentAccepted((c) => !c)}
+            activeOpacity={0.7}
+            disabled={loading}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: consentAccepted, disabled: loading }}
+            accessibilityLabel="I agree to Spinr's Terms of Service and Privacy Policy"
+          >
+            <Ionicons
+              name={consentAccepted ? 'checkbox' : 'square-outline'}
+              size={22}
+              color={consentAccepted ? colors.primary : colors.textDim}
+            />
+          </TouchableOpacity>
           <Text style={styles.termsText}>
             I agree to Spinr&apos;s{' '}
             <Text
               style={styles.termsLink}
               onPress={() => router.push({ pathname: '/legal', params: { type: 'tos' } } as any)}
               accessibilityRole="link"
+              accessibilityLabel="Terms of Service"
             >
               Terms of Service
             </Text>
@@ -253,11 +264,12 @@ export default function LoginScreen() {
               style={styles.termsLink}
               onPress={() => router.push({ pathname: '/legal', params: { type: 'privacy' } } as any)}
               accessibilityRole="link"
+              accessibilityLabel="Privacy Policy"
             >
               Privacy Policy
             </Text>
           </Text>
-        </TouchableOpacity>
+        </View>
       </View>
       </ScrollView>
 

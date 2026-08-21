@@ -3,19 +3,20 @@
 | Field | Value |
 |---|---|
 | PIA Reference | SPINR-PIA-2026-01 |
-| Version | 1.0 — Draft, for Privacy/Legal review |
+| Version | 1.1 — Decided 2026-08-21 |
 | Program/System | Rider emergency-contact storage (`emergency_contacts` table) and its use in the SOS/safety-check-in flow |
 | Prepared by | Claude (session), on behalf of @vikas |
 | Assessment date | 2026-08-21 |
-| Next review | On Privacy/Legal decision, or 2026-08-25 (the due date already carried in `docs/audit/2026-08-19-decision-writeups.md`, whichever is later) |
+| Decision date | 2026-08-21 (@vikas, standing in for Privacy/Legal) |
 | Applicable legislation | PIPEDA (federal, private-sector) — Spinr is a commercial ride-share operator, not a government institution, so FOIP/HIPA do not apply here |
-| Status | **Decided 2026-08-21** — Recommendation 1 (encrypt) approved by @vikas; see Section 9 sign-off and migration 357. Recommendation 2 (third-party consent/opt-out handshake) is a separate, still-open decision — not part of this approval. |
+| Status | **IMPLEMENTED** — see Section 9. Both recommendations approved together (encrypt at rest AND the third-party consent/opt-out handshake, not sequenced apart) and both are now fully built and merged; see Section 9's implementation record and the linked Change Impact Log entries. |
 
-This memo exists purely as historical evidence for Privacy/Legal's decision, per
+This memo was historical evidence for Privacy/Legal's decision, per
 `docs/audit/2026-08-19-decision-writeups.md`'s ranked blocker #13 and the corresponding decision-log
-row (owner: Privacy/Legal, due 2026-08-25). Nothing here has been implemented — the question is
-still open. Every code claim below was independently re-verified against the current codebase on
-2026-08-21, not carried forward from an earlier pass without re-checking.
+row. The decision has now been made (Section 9) — this document is retained as the record of what
+was evaluated and why, ahead of implementation. Every code claim below was independently re-verified
+against the current codebase on 2026-08-21, not carried forward from an earlier pass without
+re-checking.
 
 ---
 
@@ -252,13 +253,67 @@ tracked in the safety-toolkit gap analysis (finding F13) as its own scoped effor
 ## Section 9: Sign-off
 
 ```
-Reviewed by:     Claude (session), pulling this memo's own findings for review
+Reviewed by:     @vikas (session decision-maker, standing in for Privacy/Legal)
+                                                    Date: 2026-08-21
 Approved by:     @vikas                            Date: 2026-08-21
 Decision:        [x] Encrypt (mirror migration 32)   [ ] Accept plaintext with compensating controls
-                  [ ] Build consent/opt-out handshake now   [x] Sequence as fast-follow (F13, not scoped here)
-Next action:     Implemented — migration 357, backend/routes/users.py + backend/routes/rides/safety.py
-                 (backend/utils/vault_pii.py). R-002 (third-party consent) remains open, tracked
-                 separately per Section 8's Recommendation 2 and safety-toolkit finding F13.
+                  [x] Build consent/opt-out handshake now (alongside encryption, not sequenced apart)
+Next action:     Implement both together: (1) pgsodium/Vault encryption for
+                 emergency_contacts.name/phone mirroring migration 32's pattern,
+                 (2) a third-party consent/opt-out (SMS opt-in + STOP-keyword)
+                 handshake for the SOS disclosure flow. Scoped via /plan given
+                 the combined size and the safety-critical surface touched
+                 (backend/routes/rides/safety.py). Tracked as its own
+                 implementation effort from this decision.
+Implementation:  COMPLETE 2026-08-21. All 6 subtasks of the /plan
+                 decomposition landed on claude/spinr-app-all-surfaces-de596c:
+                 (1) migration 357 — encrypt_emergency_contact_pii()/
+                 decrypt_emergency_contact_pii() RPCs (mirrors migration 138's
+                 corrected end state, not 32's original draft — reviewed
+                 twice by spinr-migration-reviewer); (2) routes/users.py wired
+                 to those RPCs (fail-closed write, fail-open read); (3)
+                 migration 358 + services/sos_contact_consent.py — SOS-contact
+                 suppression storage, fail-open by design (reviewed by
+                 spinr-migration-reviewer, PASS); (4) routes/rides/safety.py's
+                 two SOS SMS paths gated on suppression, fail-open end-to-end
+                 (reviewed by spinr-safety-sos-reviewer, SAFE TO MERGE, no
+                 blockers); (5) routes/webhooks.py's inbound Twilio STOP/START
+                 extended to update SOS-contact suppression unconditionally
+                 (not gated on Spinr user_id resolution); (6) a one-time
+                 opt-out notice SMS (utils/sos_contact_notice.py) sent
+                 best-effort on contact add, closing R-002. Full detail and
+                 verification record in docs/change-log/2026-08-21-emergency-
+                 contact-encryption-consent.md, -sos-contact-suppression-
+                 migration.md, -sos-suppression-filtering-wired.md, and
+                 -emergency-contact-encryption-consent-app-wiring.md. Two
+                 non-blocking follow-up notes surfaced during review (added
+                 latency on the suppression-check step within its existing
+                 fail-open bound; sos_contact_consent.normalize_phone() sits
+                 outside is_suppressed()'s own try/except, currently covered
+                 by an outer caller-side guard) — tracked for a future pass,
+                 not blocking, per the reviewing agents' verdicts.
+Parallel work note: an independent session (PR #4322, "feat(safety,privacy):
+                 encrypt emergency-contact PII, resolve 3 decision-log items")
+                 concurrently built and merged its own encryption-only
+                 implementation before this branch's work merged, reproducing
+                 migration 32's original (pre-137/138-fix) buggy pattern —
+                 raw `INSERT INTO vault.secrets` instead of
+                 `vault.create_secret()`, no `OWNER TO supabase_admin` — the
+                 exact historical bug this memo's own migration-reviewer
+                 catches deliberately avoided. Resolved on merge: main's
+                 already-applied migration 357 (append-only, left untouched)
+                 is patched forward by a new migration
+                 (see docs/change-log/ for the exact filename) that
+                 `CREATE OR REPLACE`s its two functions with the correct
+                 vault.create_secret()/OWNER-TO-supabase_admin pattern under
+                 the same RPC names, so no app-code call site needed to
+                 change. #4322's app-code wiring (routes/users.py,
+                 routes/rides/safety.py, utils/vault_pii.py) was superseded
+                 by this branch's equivalent, already-tested wiring, which
+                 additionally decrypts contacts before the SOS SMS send
+                 (an auto-merge combined #4322's decrypt-before-SMS fix with
+                 this branch's suppression-check filtering, which needs the
+                 decrypted phone number to match correctly).
 ```
 
 ---

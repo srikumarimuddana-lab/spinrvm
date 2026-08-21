@@ -21,7 +21,7 @@ Run:
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID
 
 import pytest
@@ -448,6 +448,56 @@ class TestTriggerEmergency:
         )
 
         assert result["contacts"] == []
+
+    async def test_suppressed_contact_excluded_from_sos_sms(self):
+        """A contact who STOP'd out (sos_contact_consent.is_suppressed ->
+        True) must not receive the SOS SMS, must not count toward
+        contacts_notified, and must be flagged distinctly in the per-contact
+        status list -- while a non-suppressed contact in the same request
+        still gets the alert."""
+        contacts = [
+            {"id": "ec-1", "phone": "+13061112222", "name": "Mom"},
+            {"id": "ec-2", "phone": "+13063334444", "name": "Dad"},
+        ]
+
+        async def _is_suppressed(phone):
+            return phone == "+13061112222"
+
+        with patch(
+            "backend.routes.rides.safety.sos_contact_consent.is_suppressed",
+            AsyncMock(side_effect=_is_suppressed),
+        ):
+            result, _, _, sms_calls = await self._trigger(RIDER_ID, emergency_contacts=contacts)
+
+        assert result["contacts_notified"] == 1
+        phones_notified = {c["phone"] for c in sms_calls}
+        assert phones_notified == {"+13063334444"}
+        assert result["contacts"] == [
+            {"id": "ec-1", "name": "Mom", "notified": False, "status": "suppressed"},
+            {"id": "ec-2", "name": "Dad", "notified": True},
+        ]
+
+    async def test_suppression_check_failure_fails_open_sends_to_all(self):
+        """SAFETY-CRITICAL: if the suppression check step itself blows up
+        (e.g. the service is unreachable), the SOS SMS loop must still run
+        and reach every contact -- fail-open end to end, not just at the
+        sos_contact_consent service layer."""
+        contacts = [
+            {"id": "ec-1", "phone": "+13061112222", "name": "Mom"},
+            {"id": "ec-2", "phone": "+13063334444", "name": "Dad"},
+        ]
+        broken_is_suppressed = Mock(side_effect=RuntimeError("suppression service unreachable"))
+
+        with patch("backend.routes.rides.safety.sos_contact_consent.is_suppressed", broken_is_suppressed):
+            result, _, _, sms_calls = await self._trigger(RIDER_ID, emergency_contacts=contacts)
+
+        assert result["contacts_notified"] == 2
+        phones_notified = {c["phone"] for c in sms_calls}
+        assert phones_notified == {"+13061112222", "+13063334444"}
+        assert result["contacts"] == [
+            {"id": "ec-1", "name": "Mom", "notified": True},
+            {"id": "ec-2", "name": "Dad", "notified": True},
+        ]
 
     async def test_contact_notification_outer_failure_returns_warning(self):
         """A failure anywhere in the contact-notification block (e.g.

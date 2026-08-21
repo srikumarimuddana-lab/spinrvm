@@ -162,12 +162,26 @@ def _patch_estimate_deps():
 
 
 def _start_patches(patch_dict):
+    """Start every patch in patch_dict and return the patchers, in the order
+    _stop_patches must stop them (LIFO).
+
+    _patch_create_ride_deps() below patches both "routes.rides._deps.db_supabase.
+    find_one" and "routes.rides._deps.db.find_one" -- _deps.py's `db = db_supabase`
+    legacy alias means those two keys sit on the identical module attribute.
+    unittest.mock.patch captures whatever value is live *at start() time* as the
+    value to restore on stop(), so stopping two overlapping patches on the same
+    attribute in start order (rather than reverse/LIFO) restores the wrong thing:
+    the later patch's stop() puts back the earlier patch's mock instead of the
+    real original, permanently leaking a stub db_supabase.find_one into every
+    later test in the session (confirmed against test_corporate_ride_payment.py's
+    identical bug -- see that file's _apply_all_patches docstring).
+    """
     started = []
     for target, mock_obj in patch_dict.items():
         p = patch(target, mock_obj)
         p.start()
         started.append(p)
-    return started
+    return list(reversed(started))
 
 
 def _stop_patches(patches):

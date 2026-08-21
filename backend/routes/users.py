@@ -33,6 +33,7 @@ try:
         send_email_verification_code,
         send_welcome_email,
     )
+    from ..utils.sos_contact_notice import send_opt_out_notice  # type: ignore
 except ImportError:
     import db_supabase  # type: ignore
     from dependencies import OTP_EXPIRY_MINUTES, generate_otp, get_current_user  # type: ignore  # noqa: F811
@@ -65,6 +66,7 @@ except ImportError:
         send_email_verification_code,
         send_welcome_email,
     )
+    from utils.sos_contact_notice import send_opt_out_notice  # type: ignore  # noqa: F811
 import asyncio
 import base64
 import hashlib
@@ -898,7 +900,38 @@ async def add_emergency_contact(contact: EmergencyContactCreate, current_user: d
     encrypted_doc["phone"] = await _encrypt_emergency_contact_pii(phone)
 
     await db_supabase.insert_one("emergency_contacts", encrypted_doc)
+
+    # PIA R-002: notify the contact they've been added, with a STOP opt-out.
+    # Backgrounded and self-swallowing (send_opt_out_notice never raises) —
+    # the contact-add above is already committed and this must never delay
+    # or fail the rider's response.
+    spawn(_notify_and_record_sos_contact_consent(contact_doc["id"], phone, current_user.get("first_name") or ""))
+
     return {"success": True, "contact": contact_doc}
+
+
+async def _notify_and_record_sos_contact_consent(contact_id: str, phone: str, rider_first_name: str) -> None:
+    """Background task for add_emergency_contact: send the one-time opt-out
+    notice, then best-effort stamp `consent_notice_sent_at` on the contact
+    row if it sent. A failure to stamp is logged and dropped — the notice
+    itself already sent or didn't; a missed stamp only means a future retry
+    (if one is ever added) might re-send, not a lost/duplicated real effect.
+    """
+    sent = await send_opt_out_notice(phone, rider_first_name)
+    if not sent:
+        return
+    try:
+        await db_supabase.update_one(
+            "emergency_contacts",
+            {"id": contact_id},
+            {"consent_notice_sent_at": datetime.now(timezone.utc).isoformat()},
+        )
+    except Exception:
+        logger.error(
+            "Failed to record consent_notice_sent_at for emergency contact %s",
+            contact_id,
+            exc_info=True,
+        )
 
 
 @api_router.delete("/emergency-contacts/{contact_id}")

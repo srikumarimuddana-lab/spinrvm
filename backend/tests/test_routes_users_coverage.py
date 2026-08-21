@@ -81,6 +81,16 @@ _USER_ROW = {
 _CURRENT_USER = {"id": "user-1", "email": "sam@example.com", "role": "rider", "token_version": 1}
 
 
+def _noop_spawn(coro):
+    """Default test double for utils.background.spawn: never actually runs
+    the background coroutine (this is a unit test, not an integration test
+    of whatever it backgrounds) but closes it to avoid a "coroutine was
+    never awaited" warning. Individual tests that care about the backgrounded
+    work override this per-test (see _closing_spawn below)."""
+    coro.close()
+    return None
+
+
 def _patches(**overrides):
     defaults = {
         "backend.routes.users.db_supabase.get_user_by_id": AsyncMock(return_value=_USER_ROW),
@@ -93,6 +103,7 @@ def _patches(**overrides):
         "backend.routes.users.log_admin_action": AsyncMock(),
         "backend.routes.users.revoke_all_for_user": AsyncMock(),
         "backend.routes.users.redis_delete": AsyncMock(),
+        "backend.routes.users.spawn": _noop_spawn,
     }
     defaults.update(overrides)
     return [patch(target, value) for target, value in defaults.items()]
@@ -937,6 +948,118 @@ class TestAddEmergencyContact:
             with pytest.raises(HTTPException) as exc:
                 await add_emergency_contact(EmergencyContactCreate(name="Mom", phone="123"), current_user=_CURRENT_USER)
             assert exc.value.status_code == 400
+        finally:
+            _stop(patches)
+
+    # ── PIA R-002: opt-out notice to the newly-added contact ────────────
+    #
+    # The route only ever *spawns* the notice (fire-and-forget) — these
+    # tests capture the spawned coroutine instead of closing it, so they can
+    # await it directly to assert what it does, independent of whatever real
+    # event-loop scheduling `spawn`'s asyncio.create_task would use.
+
+    @staticmethod
+    def _capturing_spawn(captured):
+        def _spawn(coro):
+            captured["coro"] = coro
+            return None
+
+        return _spawn
+
+    @pytest.mark.anyio
+    async def test_success_sends_opt_out_notice_and_stamps_consent(self):
+        captured = {}
+        notice = AsyncMock(return_value=True)
+        update_one = AsyncMock(return_value={})
+        patches = _start(
+            _patches(
+                **{
+                    "backend.routes.users.db_supabase.get_rows": AsyncMock(return_value=[]),
+                    "backend.routes.users.db_supabase.update_one": update_one,
+                    "backend.routes.users.send_opt_out_notice": notice,
+                    "backend.routes.users.spawn": self._capturing_spawn(captured),
+                    "backend.routes.users._encrypt_emergency_contact_pii": AsyncMock(side_effect=lambda v: v),
+                }
+            )
+        )
+        try:
+            result = await add_emergency_contact(
+                EmergencyContactCreate(name="Mom", phone="+13060000000", relationship="Family"),
+                current_user={**_CURRENT_USER, "first_name": "Sam"},
+            )
+            assert result["success"] is True
+            assert "coro" in captured
+            await captured["coro"]
+
+            notice.assert_awaited_once_with("+13060000000", "Sam")
+            update_one.assert_awaited_once()
+            table, contact_filter, updates = update_one.await_args.args
+            assert table == "emergency_contacts"
+            assert contact_filter == {"id": result["contact"]["id"]}
+            assert "consent_notice_sent_at" in updates
+        finally:
+            _stop(patches)
+
+    @pytest.mark.anyio
+    async def test_notice_skipped_when_contact_already_suppressed(self):
+        # send_opt_out_notice returns False when the phone is already
+        # suppressed (its own contract, tested directly in
+        # test_sos_contact_notice.py) -- here we only need the route's
+        # background wrapper to honour that and skip the consent stamp.
+        captured = {}
+        notice = AsyncMock(return_value=False)
+        update_one = AsyncMock(return_value={})
+        patches = _start(
+            _patches(
+                **{
+                    "backend.routes.users.db_supabase.get_rows": AsyncMock(return_value=[]),
+                    "backend.routes.users.db_supabase.update_one": update_one,
+                    "backend.routes.users.send_opt_out_notice": notice,
+                    "backend.routes.users.spawn": self._capturing_spawn(captured),
+                    "backend.routes.users._encrypt_emergency_contact_pii": AsyncMock(side_effect=lambda v: v),
+                }
+            )
+        )
+        try:
+            result = await add_emergency_contact(
+                EmergencyContactCreate(name="Mom", phone="+13060000000"), current_user=_CURRENT_USER
+            )
+            assert result["success"] is True
+            await captured["coro"]
+
+            notice.assert_awaited_once()
+            update_one.assert_not_awaited()
+        finally:
+            _stop(patches)
+
+    @pytest.mark.anyio
+    async def test_notice_send_failure_does_not_fail_add_contact_response(self):
+        # The HTTP response must succeed regardless of the background notice
+        # -- add_emergency_contact never awaits it, so even a send that
+        # blows up outright (send_opt_out_notice's own contract is "never
+        # raise", but the route must not depend on that holding) can't turn
+        # a successful contact-add into a failed response.
+        captured = {}
+        notice = AsyncMock(side_effect=RuntimeError("sms provider down"))
+        patches = _start(
+            _patches(
+                **{
+                    "backend.routes.users.db_supabase.get_rows": AsyncMock(return_value=[]),
+                    "backend.routes.users.send_opt_out_notice": notice,
+                    "backend.routes.users.spawn": self._capturing_spawn(captured),
+                    "backend.routes.users._encrypt_emergency_contact_pii": AsyncMock(side_effect=lambda v: v),
+                }
+            )
+        )
+        try:
+            result = await add_emergency_contact(
+                EmergencyContactCreate(name="Mom", phone="+13060000000"), current_user=_CURRENT_USER
+            )
+            assert result["success"] is True
+            # The failure stays confined to the (unawaited-by-the-route)
+            # background coroutine -- it never reaches the response above.
+            with pytest.raises(RuntimeError):
+                await captured["coro"]
         finally:
             _stop(patches)
 

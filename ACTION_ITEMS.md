@@ -11762,6 +11762,65 @@ how much they de-risk a public launch._
   verification (no simulator/device available this session, same standing
   gap) and the underlying legal sufficiency-of-old-consent judgment itself
   (business/counsel decision, not a code task).
+  - **Fact-finding done for the legal-sufficiency judgment (2026-08-20,
+    same day) — the judgment itself is still open.** A read-only
+    investigation directly compared the old app's `pages.csv` legal text
+    against Spinr's own current, unreviewed `docs/legal/*.md` drafts and
+    checked for consent-acceptance evidence. Key findings: (1) **no
+    consent/acceptance field exists anywhere in the old-app export's
+    schema** for any rider or driver — a stored policy document is not
+    evidence anyone actually accepted it; (2) the old-app text and the
+    current draft are **not the same document** — different fare figures,
+    a 1.3× surge cap in the old text vs. today's real 2.5× cap, different
+    GPS-retention terms (old: 7yr full route; current: 90-day full trail /
+    3yr pickup-dropoff only); (3) current subprocessors Gemini and
+    LogRocket appear in **neither** document; (4) neither document mentions
+    data migration/successor-platform language at all. Full fact sheet,
+    with 7 open questions framed for counsel (not pre-answered), at
+    `docs/audit/2026-08-20-legacy-consent-legal-sufficiency-factsheet.md`.
+    This closes the "what facts does counsel need" gap, not the decision
+    itself.
+  - **Decision made, re-consent version bumped (2026-08-20, same day,
+    later).** The product owner decided directly in-session — given the
+    fact sheet above — to re-run consent for **both** existing and new
+    users, rather than wait on the sufficiency judgment. This PR ships
+    only the version-bump half of that decision:
+    `backend/routes/auth.py`'s `CONSENT_VERSION` moved
+    `consumer-tos-2026-01-draft` -> `consumer-tos-2026-08-v1`, tied to the
+    real `terms-of-service.md`/`privacy-policy.md` publication event
+    (`legal_documents` version 1, rider+driver rows, 2026-08-17 — see
+    `docs/legal/legal-text-publication-checklist.md`). New signups get the
+    new version auto-stamped immediately (unconditional on the flag). For
+    existing users the bump alone does **nothing visible** — two other
+    pieces gate the actual re-prompt and were explicitly **not** touched by
+    this change, each a separate/sequential unit of work: (1) flipping
+    `app_settings.legacy_consent_notice_enabled` to `true` in the live DB
+    (handled by a different actor, after this merges/deploys — not a code
+    change); (2) a new-signup consent checkbox on the mobile signup screens
+    (`rider-app/app/login.tsx` and the driver-app equivalent), being built
+    by a separate, parallel session on this same branch — **status not
+    confirmed from here**: as of this branch's base commit no checkbox
+    markup exists yet in `rider-app/app/login.tsx`, but that session may
+    land its commits after this one; check the branch directly rather than
+    trusting this note's snapshot. Full write-up:
+    `docs/change-log/2026-08-20-consent-version-bump-re-consent-rollout.md`.
+  - **[RE-VERIFIED 2026-08-20, LATER SAME DAY — NEW-SIGNUP CHECKBOX (PIECE 3) NOW BUILT.]**
+    The status-not-confirmed checkbox piece above is done: both apps' `login.tsx` now show a
+    real, unchecked-by-default checkbox (accessible label, `accessibilityRole="checkbox"`, icon —
+    not color alone — signals checked state) gating the "Send Verification Code" button, with
+    tappable links to the actual in-app `/legal?type=tos` / `/legal?type=privacy` screens (the
+    same destination `legacy-consent-notice.tsx`'s "View Policy" link already uses). The checked
+    state is carried as a route param into `otp.tsx`, whose `POST /auth/verify-otp` call now sends
+    `consent_accepted`; `backend/routes/auth.py`'s new-user-creation branch rejects the signup
+    (400, no row created, no `consent_version` stamped) unless that's `true` — the auto-stamp this
+    entry originally flagged as evidence-less is now gated on a real logged gesture. Existing/
+    returning-user logins are unaffected (that branch never reads the field). Backend: 3 new
+    tests in `test_verify_otp_login_flow.py` (146/146 auth-suite tests green). Frontend: 10 new
+    tests across both apps' `loginConsentCheckbox.test.tsx`, full rider-app suite (560/560) and
+    full driver-app suite (657/657) green, `tsc --noEmit` clean on both. **Not verified:** no
+    simulator/device available this session — same standing gap as the rest of this item; no
+    automated visual/snapshot regression tooling exists in this repo at all. Full write-up:
+    `docs/change-log/2026-08-20-explicit-signup-consent-checkbox.md`.
 - **FIXED (2026-08-19, second pass — 4 parallel worktree-isolated tracks,
   no file overlap between them, verified before dispatch and again by full
   regression across all 4 merged results — 539 backend tests green,

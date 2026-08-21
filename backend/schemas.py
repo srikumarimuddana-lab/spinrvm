@@ -65,6 +65,17 @@ class VerifyOTPRequest(BaseModel):
     # existed) keep working unchanged — it only affects conversion reporting,
     # never auth behaviour or the role assigned to the new row.
     client_app: Optional[Literal["rider", "driver"]] = "rider"
+    # Explicit-consent gesture from the new-signup screen's checkbox
+    # (rider-app / driver-app login.tsx) — true only when the user actively
+    # checked "I agree to the Terms of Service and Privacy Policy" before
+    # tapping continue. Optional and defaulting to False (not a required
+    # field) so an existing/returning-user login body that omits it never
+    # fails validation — routes/auth.py's verify_otp only *enforces* this
+    # field on the branch that creates a brand-new account; it is never read
+    # for an existing user, whose consent was already captured at their own
+    # original signup. See
+    # docs/change-log/2026-08-20-explicit-signup-consent-checkbox.md.
+    consent_accepted: bool = False
 
 
 class CreateProfileRequest(BaseModel):

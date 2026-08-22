@@ -277,7 +277,7 @@ export default function ApprovalQueuePage() {
                                     className={
                                         it.status === "pending"
                                             ? "bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300 border-blue-200 dark:border-blue-800"
-                                            : "bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300 border-amber-200 dark:border-amber-800"
+                                            : "bg-warning/15 text-warning border-warning/30"
                                     }
                                 >
                                     {it.status}

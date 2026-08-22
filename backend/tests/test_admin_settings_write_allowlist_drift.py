@@ -190,29 +190,18 @@ NOT_ADMIN_WRITABLE_BY_DESIGN = frozenset(
     }
 )
 
-# Real, confirmed-live gaps found by this test on 2026-08-22 (each column is
-# read by at least one non-test application code path but has no admin-write
-# field): company_city/company_postal_code/company_province
+# Real, confirmed-live gaps found by this test on 2026-08-22, fixed the same
+# day: company_city/company_postal_code/company_province
 # (utils/address_format.py), lifecycle_emails_enabled
 # (utils/email_notifications.py), marketing_from_email
 # (utils/marketing_email.py), route_location_gap_alert_seconds
 # (utils/route_gap_monitor.py), fare_distance_basis (routes/rides/_shared.py,
 # estimates.py, booking.py), route_integrity_v2_mode
-# (routes/drivers/ride_complete.py). Listed here (not silently excluded) so
-# this test passes today without hiding the debt -- remove an entry from this
-# set in the same PR that adds its field to SettingsUpdateRequest.
-KNOWN_UNFIXED_GAPS_2026_08_22 = frozenset(
-    {
-        "company_city",
-        "company_postal_code",
-        "company_province",
-        "lifecycle_emails_enabled",
-        "marketing_from_email",
-        "route_location_gap_alert_seconds",
-        "fare_distance_basis",
-        "route_integrity_v2_mode",
-    }
-)
+# (routes/drivers/ride_complete.py) -- all 8 now have SettingsUpdateRequest
+# fields, so this set is empty. Kept as a named constant (rather than deleted)
+# so the next real gap has an obvious place to land, with the same "list it,
+# don't silently exclude it" convention.
+KNOWN_UNFIXED_GAPS_2026_08_22 = frozenset()
 
 
 def test_every_settings_column_is_admin_writable_or_explicitly_excluded():

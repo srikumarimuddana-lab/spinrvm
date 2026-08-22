@@ -5552,7 +5552,49 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   the larger proposal.
 
 ### B15. Rider/driver SOS: DB insert has no fallback on failure, and "PagerDuty" in domain-safety.md doesn't exist in code
-- [ ] **Status:** partially done — the DB-insert-fallback / try-except
+- [x] **Status:** CLOSED (2026-08-22) — (c) was actually already resolved
+  and built (PR #4300, `agents/runs/sos-rideless-path/`), just never
+  reflected back into this entry; found while picking up this item as a
+  decision brief and checking the live code/DB first instead of drafting a
+  redundant brief for a question that had already been answered. **(c)
+  rideless/standalone SOS path — DECIDED and BUILT, rider-app only,
+  dark-launched:** new `POST /rides/emergency` (`trigger_emergency_rideless`,
+  `backend/routes/rides/safety.py`) mirrors `trigger_emergency`'s full
+  side-effect bundle (`safety_incidents` insert with `ride_id=None`, admin
+  WS broadcast, `notify_safety_team`, `page_sos_on_call`, confirmation push,
+  emergency-contact SMS) as a deliberately separate function rather than a
+  shared refactor, so the in-ride SOS path's diff for this work is zero.
+  Gated behind `app_settings.rideless_sos_enabled` (migration 353,
+  `default false`), checked server-side (fail-closed 404 even if a client
+  somehow calls it with the flag off) — not just a client-side gate.
+  Driver-app was explicitly scoped out of this pass (rider-app's `SOSButton`
+  already renders on the home screen with an existing `if (!rideId)` block
+  to unblock; driver-app has no equivalent always-visible SOS surface
+  outside an active ride, which is a separate, larger UI-placement design
+  question, not bundled into this fix). The two genuinely-human questions
+  this item's own "Also noted" text flagged as needing a real decision —
+  SMS/push copy approval, and whether the triage runbook is ready for
+  `ride_id=NULL` incidents from this new source — were both explicitly
+  signed off by the product owner (vikas@ngitservices.com, recorded in
+  `agents/runs/sos-rideless-path/decisions.md`'s "SMS/push copy and
+  triage-runbook readiness — signed off" entry): copy approved as-is (no
+  false "during a ride" claim); triage readiness accepted as adequate
+  (`/safety/report` already produces `ride_id=NULL` incidents today with no
+  reported triage problem). **Verified live against production
+  (`soavhtdhefowwvforzwb`) before writing this update, not just trusted the
+  decisions doc:** migration 353 is applied
+  (`schema_migrations` has the row) and `rideless_sos_enabled` currently
+  reads `false` — the flag is genuinely off, sign-off on the copy/readiness
+  questions is not the same action as enabling it, and nothing has flipped
+  it on. Enabling it for real remains a separate, later
+  `PATCH /api/admin/settings` action for whoever owns that rollout call.
+  Full verification detail (103 backend tests, 22 rider-app Jest tests,
+  blast-radius greps, what was/wasn't verified including no staging/device
+  QA and no production build run) is in `agents/runs/sos-rideless-path/decisions.md`'s
+  own Change Impact Log entry — not re-verified a second time here since
+  this update only corrects this file's stale status, no new code was
+  written.
+- **(historical) Status:** partially done — the DB-insert-fallback / try-except
   sub-finding is **fixed and merged**: PR #2931
   (https://github.com/srikumarimuddana-lab/spinrvm/pull/2931) wraps the
   `safety_incidents` insert in `trigger_emergency`
@@ -5713,8 +5755,10 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     (plan's subtask 12) — the shield's own hold-and-tap gestures already
     provide full functionality without it; (2) an admin-dashboard checkbox
     UI for the flag — flip via `PUT /api/admin/settings` directly until
-    built; (3) the rideless/standalone SOS path question from B15(c) is
-    still separately open, unrelated to this item.
+    built; (3) the rideless/standalone SOS path question from B15(c) — now
+    resolved and built (rider-app only, dark-launched), see B15's own entry
+    above (updated 2026-08-22) — was still separately open at the time this
+    B16 item shipped, unrelated to this item either way.
   - **Verification:** backend — `pytest` across `test_p2_sos.py`,
     `test_coverage_rides.py`, `test_driver_discreet_sos_flag.py`,
     `test_public_settings.py` (new/extended, all pass). Frontend — new

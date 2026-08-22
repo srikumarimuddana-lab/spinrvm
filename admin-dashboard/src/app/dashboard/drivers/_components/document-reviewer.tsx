@@ -78,9 +78,9 @@ const isPdf = (url?: string) => !!url && /\.pdf(\?|#|$)/i.test(url);
 
 const statusTone = (status?: string) => {
     switch (status) {
-        case "approved": return "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300";
-        case "rejected": return "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300";
-        case "pending": return "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300";
+        case "approved": return "bg-success/15 text-success";
+        case "rejected": return "bg-destructive/15 text-destructive";
+        case "pending": return "bg-warning/15 text-warning";
         default: return "bg-muted text-muted-foreground";
     }
 };
@@ -359,7 +359,7 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
                                 </div>
                             </div>
                             {current.rejection_reason && current.status === "rejected" && (
-                                <div className="rounded-md bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 px-3 py-2 text-xs text-red-700 dark:text-red-300">
+                                <div className="rounded-md bg-destructive/10 border border-destructive/30 px-3 py-2 text-xs text-destructive">
                                     <span className="font-semibold">Prior reason:</span> {current.rejection_reason}
                                 </div>
                             )}
@@ -380,7 +380,7 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
                                         <Button
                                             onClick={() => { setMode("reject"); setTimeout(() => reasonRef.current?.focus(), 0); }}
                                             variant={mode === "reject" ? "default" : "outline"}
-                                            className={mode === "reject" ? "flex-1 bg-red-600 hover:bg-red-700 text-white" : "flex-1"}
+                                            className={mode === "reject" ? "flex-1 bg-destructive hover:bg-destructive/90 text-destructive-foreground" : "flex-1"}
                                             disabled={busy}
                                         >
                                             <XCircle className="h-4 w-4 mr-1.5" /> Reject
@@ -388,7 +388,7 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
                                     </div>
 
                                     {mode === "approve" && (
-                                        <div className="space-y-3 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50/40 dark:bg-emerald-900/10 p-3">
+                                        <div className="space-y-3 rounded-lg border border-success/40 bg-success/10 p-3">
                                             <label htmlFor="reviewer-expiry" className="text-xs font-medium flex items-center gap-1.5">
                                                 <Calendar className="h-3.5 w-3.5" />
                                                 Expiry date {needsExpiry && <span className="text-destructive">*</span>}
@@ -403,7 +403,7 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
                                     )}
 
                                     {mode === "reject" && (
-                                        <div className="space-y-3 rounded-lg border border-red-200 dark:border-red-800 bg-red-50/40 dark:bg-red-900/10 p-3">
+                                        <div className="space-y-3 rounded-lg border border-destructive/40 bg-destructive/10 p-3">
                                             <p className="text-xs font-medium">Reason template</p>
                                             <Select value={template} onValueChange={(v) => {
                                                 const tmpl = v as RejectTemplate;
@@ -429,7 +429,7 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
                                                 </span>
                                             </label>
 
-                                            <Button onClick={() => submit("rejected")} disabled={busy} className="w-full bg-red-600 hover:bg-red-700 text-white">
+                                            <Button onClick={() => submit("rejected")} disabled={busy} className="w-full bg-destructive hover:bg-destructive/90 text-destructive-foreground">
                                                 {busy ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <XCircle className="h-4 w-4 mr-1.5" />}
                                                 Confirm rejection
                                             </Button>

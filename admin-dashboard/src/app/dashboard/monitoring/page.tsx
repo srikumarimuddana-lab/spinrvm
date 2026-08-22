@@ -586,6 +586,9 @@ export default function MonitoringPage() {
     <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden">
       {/* Page header */}
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
+        {/* eslint-disable no-restricted-syntax -- standard "live broadcast" red-dot
+            convention (Radio icon + pulsing dot), not a success/warning/destructive
+            signal (#2816) */}
         <h1 className="flex items-center gap-2 text-xl font-bold">
           <Radio className="h-5 w-5 text-red-500" />
           Live Ride Monitoring
@@ -594,6 +597,7 @@ export default function MonitoringPage() {
             <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
           </span>
         </h1>
+        {/* eslint-enable no-restricted-syntax */}
       </div>
 
       {/* Toolbar */}

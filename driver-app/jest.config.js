@@ -34,19 +34,26 @@ module.exports = {
     global: {
       // ACTION_ITEMS.md B37: tightened to a near-ceiling floor 2026-08-22
       // (user asked to "raise the thresholds toward the real ceiling").
-      // Every top-level source dir is now measured (store/, components/,
-      // hooks/, utils/, app/, lib/, services/, api/); fresh measurement:
-      // lines 32.91%, statements 31.97%, functions 26.26% (no `branches`
-      // key here, matching this config's pre-existing pattern).
-      // Previously carried several points of headroom
-      // (lines:29/functions:23/statements:28); now only ~1pt below
-      // measured, so this is a tight regression tripwire, not slack.
-      // Raising further requires new tests, not just re-measuring --
-      // this is NOT the user's stated 100% target, only the honest
-      // ceiling of what's currently tested.
-      lines: 31,
-      functions: 25,
-      statements: 30,
+      // Raised a third time same day after adding a second test file for
+      // services/backgroundMessaging.ts's Android/Notifee branches
+      // (__tests__/services/backgroundMessaging.android.test.ts) -- the
+      // existing test file deliberately stays on Platform.OS='ios' to
+      // exercise only the persist+republish path, leaving the Android
+      // notification render, the location_health recovery branch, and
+      // notifee.onBackgroundEvent's accept/decline/tap routing (a lock-
+      // screen decline while the app is killed is the ONLY place that
+      // reaches the backend headlessly) entirely untested.
+      // backgroundMessaging.ts: 48.57%/58.33%/46.95%
+      // (lines/functions/branches) -> 96.19%/100%/88.69%. Fresh
+      // aggregate: lines 34.62%, statements 33.66%, functions 27.05%
+      // (no `branches` key here, matching this config's pre-existing
+      // pattern; up from 33.9%/32.91%/26.77%). Raising further requires
+      // more new tests, not just re-measuring -- this is NOT the user's
+      // stated 100% target, only the honest ceiling of what's currently
+      // tested.
+      lines: 33,
+      functions: 26,
+      statements: 32,
     },
   },
   moduleNameMapper: {

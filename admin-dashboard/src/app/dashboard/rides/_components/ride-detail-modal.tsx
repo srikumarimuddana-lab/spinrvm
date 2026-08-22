@@ -600,10 +600,10 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                             </span>
                                             <span className={`text-xs font-bold px-2.5 py-1 rounded-lg ${
                                                 ride.payment_status === "paid" || ride.payment_status === "waived_admin"
-                                                    ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                                                    ? "bg-success/15 text-success"
                                                     : ride.payment_status === "failed"
-                                                        ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
-                                                        : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                                                        ? "bg-destructive/15 text-destructive"
+                                                        : "bg-warning/15 text-warning"
                                             }`}>
                                                 {(ride.payment_status || "pending").replace(/_/g, " ").toUpperCase()}
                                             </span>
@@ -850,9 +850,10 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 <p className="text-sm text-muted-foreground">No dispatch offers recorded for this ride. (Offers are logged for rides matched through the batch-dispatch engine.)</p>
                                             ) : (() => {
                                                 const OFFER_META: Record<string, { label: string; cls: string; Icon: React.ElementType }> = {
-                                                    accepted:  { label: "Accepted",  cls: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400", Icon: CheckCircle2 },
-                                                    declined:  { label: "Declined",  cls: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400", Icon: XCircle },
-                                                    expired:   { label: "Ignored",   cls: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400", Icon: Clock },
+                                                    accepted:  { label: "Accepted",  cls: "bg-success/15 text-success", Icon: CheckCircle2 },
+                                                    declined:  { label: "Declined",  cls: "bg-destructive/15 text-destructive", Icon: XCircle },
+                                                    expired:   { label: "Ignored",   cls: "bg-warning/15 text-warning", Icon: Clock },
+                                                    // eslint-disable-next-line no-restricted-syntax -- "preempted" is a neutral dispatch outcome, not success/warning/destructive; no dedicated token exists (#2816)
                                                     preempted: { label: "Preempted", cls: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400", Icon: Radio },
                                                     pending:   { label: "Pending",   cls: "bg-muted text-muted-foreground", Icon: Radio },
                                                 };
@@ -867,9 +868,10 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 }, {});
                                                 const summary = [
                                                     { k: "received", lbl: "Received", v: offers.length, cls: "text-foreground" },
-                                                    { k: "accepted", lbl: "Accepted", v: counts.accepted || 0, cls: "text-emerald-600 dark:text-emerald-400" },
-                                                    { k: "declined", lbl: "Rejected", v: counts.declined || 0, cls: "text-red-600 dark:text-red-400" },
-                                                    { k: "ignored", lbl: "Ignored", v: counts.ignored || 0, cls: "text-amber-600 dark:text-amber-400" },
+                                                    { k: "accepted", lbl: "Accepted", v: counts.accepted || 0, cls: "text-success" },
+                                                    { k: "declined", lbl: "Rejected", v: counts.declined || 0, cls: "text-destructive" },
+                                                    { k: "ignored", lbl: "Ignored", v: counts.ignored || 0, cls: "text-warning" },
+                                                    // eslint-disable-next-line no-restricted-syntax -- mirrors OFFER_META's "preempted" exception above (#2816)
                                                     { k: "preempted", lbl: "Preempted", v: counts.preempted || 0, cls: "text-blue-600 dark:text-blue-400" },
                                                 ];
                                                 return (
@@ -938,7 +940,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     <div key={f.id || i} className="flex items-center gap-2.5 bg-muted/40 rounded-lg p-2.5">
                                                         <Flag className={`h-3.5 w-3.5 shrink-0 ${f._party === "rider" ? "text-blue-500" : "text-emerald-500"}`} />
                                                         <span className="text-xs font-semibold">{f._party === "rider" ? "Rider" : "Driver"}</span>
-                                                        <span className="text-xs bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded font-medium">{f.reason?.replace(/_/g, " ")}</span>
+                                                        <span className="text-xs bg-destructive/15 text-destructive px-1.5 py-0.5 rounded font-medium">{f.reason?.replace(/_/g, " ")}</span>
                                                         {f.description && <span className="text-xs text-muted-foreground truncate flex-1">{f.description}</span>}
                                                         <span className="text-[10px] text-muted-foreground tabular-nums">{fmtTime(f.created_at)}</span>
                                                     </div>
@@ -952,7 +954,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     <div key={c.id} className="flex items-center gap-2.5 bg-muted/40 rounded-lg p-2.5">
                                                         <FileWarning className="h-3.5 w-3.5 shrink-0 text-warning" />
                                                         <span className="text-xs font-semibold">{c.against_type}</span>
-                                                        <span className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 px-1.5 py-0.5 rounded font-medium">{c.category}</span>
+                                                        <span className="text-xs bg-warning/15 text-warning px-1.5 py-0.5 rounded font-medium">{c.category}</span>
                                                         <span className="text-xs text-muted-foreground truncate flex-1">{c.description}</span>
                                                         <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${c.status === "open" ? "bg-warning/15 text-warning" : "bg-success/15 text-success"}`}>{c.status}</span>
                                                     </div>
@@ -1070,7 +1072,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                     setCancelling(false);
                                 }
                             }}
-                            className="px-4 py-2 text-sm font-semibold rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 transition-colors"
+                            className="px-4 py-2 text-sm font-semibold rounded-lg bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50 transition-colors"
                         >
                             {cancelling ? "Cancelling..." : "Confirm Cancel"}
                         </button>

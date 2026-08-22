@@ -875,12 +875,12 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
               <p className="text-[11px] text-muted-foreground pb-2">1.0 = no surge · 1.5 = +50% · 2.0 = double · Auto cap = 2.5×</p>
             </div>
             {needsJustification && (
-              <div className="rounded-lg border border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/10 p-3 space-y-2 mt-3">
+              <div className="rounded-lg border border-warning/40 bg-warning/10 p-3 space-y-2 mt-3">
                 <p className="text-xs font-semibold text-warning">
                   Surge above 2.5× requires documented justification (regulatory + reputational risk).
                 </p>
                 <textarea
-                  className="w-full border border-amber-300 dark:border-amber-800 rounded-lg px-3 py-2 text-sm"
+                  className="w-full border border-warning/40 rounded-lg px-3 py-2 text-sm"
                   rows={2}
                   placeholder="e.g. Major event surge — approved by ops lead @name on 2026-05-21"
                   value={form.surge_justification}
@@ -1288,7 +1288,7 @@ function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => 
           <Plus className="h-4 w-4" /> Add document type
         </button>
         <div className="flex-1" />
-        {dirty && <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">Unsaved changes</span>}
+        {dirty && <span className="text-xs text-warning font-medium">Unsaved changes</span>}
         <button onClick={() => { onSave(rows); setDirty(false); }} className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition ${dirty ? 'bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm' : 'bg-muted text-muted-foreground'}`}>
           <span className="flex items-center gap-1.5"><CheckCircle className="h-4 w-4" /> Save Documents</span>
         </button>
@@ -1669,7 +1669,7 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
   return (
     <div>
       {/* Kill switch */}
-      <div className={`flex items-center justify-between p-4 rounded-xl mb-3 ${enabled ? 'bg-green-50 border border-green-200 dark:bg-green-900/20 dark:border-green-800' : 'bg-muted border border-border'}`}>
+      <div className={`flex items-center justify-between p-4 rounded-xl mb-3 ${enabled ? 'bg-success/10 border border-success/30' : 'bg-muted border border-border'}`}>
         <div>
           <h4 className="font-bold text-foreground">Spinr Pass for {area.name}</h4>
           <p className="text-sm text-muted-foreground">
@@ -1680,7 +1680,7 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
       </div>
 
       {/* Mandatory-subscription toggle */}
-      <div className={`flex items-center justify-between p-4 rounded-xl mb-5 ${required ? 'bg-amber-50 border border-amber-200 dark:bg-amber-900/20 dark:border-amber-800' : 'bg-muted border border-border'}`}>
+      <div className={`flex items-center justify-between p-4 rounded-xl mb-5 ${required ? 'bg-warning/10 border border-warning/30' : 'bg-muted border border-border'}`}>
         <div>
           <h4 className="font-bold text-foreground">Require Subscription to Drive</h4>
           <p className="text-sm text-muted-foreground">
@@ -1814,7 +1814,7 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
                         <td className="px-4 py-2 font-mono text-xs">{s.driver_id?.slice(0, 8)}...</td>
                         <td className="px-4 py-2">{s.plan_name}</td>
                         <td className="px-4 py-2">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${s.status === 'active' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-muted text-muted-foreground'}`}>{s.status?.toUpperCase()}</span>
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${s.status === 'active' ? 'bg-success/15 text-success' : 'bg-muted text-muted-foreground'}`}>{s.status?.toUpperCase()}</span>
                         </td>
                         <td className="px-4 py-2 text-xs text-muted-foreground">{s.expires_at ? new Date(s.expires_at).toLocaleDateString() : '—'}</td>
                       </tr>
@@ -1922,10 +1922,10 @@ function CascadeEditor({
       </div>
 
       {vehicleTypes.length === 0 ? (
-        <div className="text-center py-10 bg-amber-50 rounded-xl border-2 border-dashed border-amber-200 dark:bg-amber-900/10 dark:border-amber-800">
-          <Car className="h-10 w-10 text-amber-300 mx-auto mb-3" />
-          <p className="text-amber-700 dark:text-amber-400 font-medium">No vehicle types configured for this area</p>
-          <p className="text-amber-600 dark:text-amber-400 text-sm mt-1">
+        <div className="text-center py-10 bg-warning/10 rounded-xl border-2 border-dashed border-warning/30">
+          <Car className="h-10 w-10 text-warning/60 mx-auto mb-3" />
+          <p className="text-warning font-medium">No vehicle types configured for this area</p>
+          <p className="text-warning text-sm mt-1">
             Add vehicle types under the <span className="font-semibold">Vehicle Pricing</span> tab first,
             then return here to set up cascade rules.
           </p>
@@ -2175,7 +2175,7 @@ function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; are
                   )}
                 </div>
                 <button onClick={() => handleToggle(inc.id)}
-                  className={`p-2 rounded-lg ${inc.is_active ? 'text-success hover:bg-green-50' : 'text-muted-foreground hover:bg-muted'}`}
+                  className={`p-2 rounded-lg ${inc.is_active ? 'text-success hover:bg-success/10' : 'text-muted-foreground hover:bg-muted'}`}
                   title={inc.is_active ? 'Deactivate' : 'Activate'}>
                   {inc.is_active ? <ToggleRight className="h-5 w-5" /> : <ToggleLeft className="h-5 w-5" />}
                 </button>
@@ -2271,7 +2271,7 @@ function SurgeHistoryChart({ areaId, areaName }: { areaId: string; areaName: str
       </div>
 
       {truncated && (
-        <p className="mb-2 text-xs text-amber-700 dark:text-amber-400">
+        <p className="mb-2 text-xs text-warning">
           Showing the most recent 500 readings — the selected range is longer than
           the server returns in one response, so earlier readings are not charted.
         </p>
@@ -2579,6 +2579,7 @@ export function AreaHeatmapOverrides({
                   className={`mt-2 rounded-md border px-2 py-1.5 text-xs ${
                     w.severity === "warning"
                       ? "border-destructive/40 bg-destructive/5 text-destructive"
+                      // eslint-disable-next-line no-restricted-syntax -- lower-severity ("info") tier below "warning"; no dedicated semantic token exists for it (#2816)
                       : "border-amber-500/40 bg-amber-500/5 text-amber-700 dark:text-amber-400"
                   }`}
                 >
@@ -2725,8 +2726,8 @@ function HeatmapConfigTab({ onSuccess, onError }: { onSuccess: () => void; onErr
             dashboard's own Heat Map page. Both facts have to be unmissable:
             an operator who reads this as "tuning Saskatoon's display" can change
             what every driver in every region sees in one click. */}
-        <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 px-3 py-2">
-          <p className="text-sm text-amber-900 dark:text-amber-200">
+        <div className="mt-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2">
+          <p className="text-sm text-warning">
             <span className="font-semibold">Applies to all service areas and all drivers.</span>{" "}
             These settings control the demand heatmap inside the <span className="font-semibold">driver app</span>,
             not the Heat Map page in this dashboard. They are not per-area.
@@ -2827,7 +2828,7 @@ function HeatmapConfigTab({ onSuccess, onError }: { onSuccess: () => void; onErr
                 // Surfaced, not dropped: the allowlist decides who gets v2
                 // during a dark launch, so an entry that matches nothing makes
                 // the rollout look like it did nothing.
-                <p role="alert" className="text-xs text-amber-700 dark:text-amber-400 mt-1">
+                <p role="alert" className="text-xs text-warning mt-1">
                   {invalid.length} entr{invalid.length === 1 ? "y does" : "ies do"} not look like a
                   user ID and will match no driver: {invalid.slice(0, 3).join(", ")}
                   {invalid.length > 3 ? "…" : ""}

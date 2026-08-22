@@ -424,10 +424,10 @@ export default function UsersPage() {
 
             {/* Error State */}
             {error && (
-                <Card className="border-red-200 dark:border-red-900/50">
+                <Card className="border-destructive/30">
                     <CardContent className="pt-4 pb-4">
                         <div className="flex items-center justify-between">
-                            <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+                            <p className="text-sm text-destructive">{error}</p>
                             <Button variant="outline" size="sm" onClick={fetchUsers}>Retry</Button>
                         </div>
                     </CardContent>
@@ -874,7 +874,7 @@ export default function UsersPage() {
                                         </div>
 
                                         {walletError && (
-                                            <p className="text-sm text-red-600 dark:text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-3 py-2">
+                                            <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md px-3 py-2">
                                                 {walletError}
                                             </p>
                                         )}
@@ -930,7 +930,7 @@ export default function UsersPage() {
                                         </div>
                                     </div>
                                 ) : walletError ? (
-                                    <p className="text-sm text-red-600 dark:text-red-400">{walletError}</p>
+                                    <p className="text-sm text-destructive">{walletError}</p>
                                 ) : (
                                     <p className="text-sm text-muted-foreground">Loading wallet...</p>
                                 )}
@@ -944,7 +944,7 @@ export default function UsersPage() {
                                 {userDetail == null ? (
                                     <p className="text-sm text-muted-foreground">Loading…</p>
                                 ) : userDetail.cards_error ? (
-                                    <p className="text-sm text-red-600 dark:text-red-400">{userDetail.cards_error}</p>
+                                    <p className="text-sm text-destructive">{userDetail.cards_error}</p>
                                 ) : !userDetail.cards || userDetail.cards.length === 0 ? (
                                     <p className="text-sm text-muted-foreground">No cards on file.</p>
                                 ) : (

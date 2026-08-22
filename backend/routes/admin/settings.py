@@ -385,6 +385,10 @@ class SettingsUpdateRequest(BaseModel):
     surge_engine_enabled: Optional[bool] = None
     promo_redemption_enabled: Optional[bool] = None
     corporate_billing_enabled: Optional[bool] = None
+    # Demand-side kill switch (ACTION_ITEMS.md G5) — pauses new ride requests
+    # generally, checked at the top of POST /rides. Same plain-boolean shape
+    # as the four flags above, no super-admin gate needed.
+    new_ride_requests_enabled: Optional[bool] = None
     # Rolling-window cap on referrer_reward payouts per referrer
     # (utils/referral_payout.py, ranked blocker #6 / audit finding N2,
     # 2026-08-19) — closes a real-money leak (a $0-cost first_ride_only promo

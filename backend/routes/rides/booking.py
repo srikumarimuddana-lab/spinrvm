@@ -386,6 +386,24 @@ async def create_ride(
     # "parameter `request` must be an instance of starlette.requests.Request"
     # for every call. The Pydantic body is ``body`` — do not rename it
     # back to ``request`` without also reworking the rate-limit decorator.
+    # ACTION_ITEMS.md G5: demand-side kill switch, checked before any DB write
+    # or side effect. Distinct from the E5 flags (scheduled dispatch/surge/
+    # promo/corporate billing) — this stops new bookings entirely, for an
+    # incident that calls for pausing ride requests rather than forcing every
+    # driver offline. Fails open on a settings-read error, same convention as
+    # every other kill switch in this codebase.
+    try:
+        _g5_settings = await _deps.get_app_settings()
+        if not _g5_settings.get("new_ride_requests_enabled", True):
+            raise HTTPException(
+                status_code=503,
+                detail="Ride requests are temporarily unavailable. Please try again shortly.",
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.warning("[BOOKING] app_settings lookup failed for new_ride_requests_enabled; proceeding as enabled")
+
     _deps.validate_ride_location(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
 
     # R-P1-7: Idempotency — if the client retries after a network drop, return

@@ -7496,6 +7496,58 @@ record of what was assumed vs. what was actually true</summary>
     (was `31/25/30`).
   - Verified locally: `yarn jest --coverage` exits 0 against the new
     thresholds (76/76 suites clean, no flake on this run).
+- **Fix applied (`services/backgroundMessaging.ts`'s remaining
+  coverage, driver-app, 2026-08-22, same day — user asked to "widen
+  backgroundMessaging.ts's remaining coverage too"):**
+  `backgroundMessaging.ts` had an existing test file
+  (`__tests__/services/backgroundMessaging.test.ts`), but that file
+  deliberately pins `Platform.OS='ios'` (jest-expo's default) "to keep
+  this suite on the persist + republish path" per its own header
+  comment — meaning every Android/Notifee branch was untested by
+  design, not by oversight: the rich ride-offer notification render,
+  the `location_health` GPS-recovery branch, and
+  `notifee.onBackgroundEvent`'s accept/decline/tap routing (the file's
+  own comment: this is the **only** place a lock-screen decline reaches
+  the backend while the app is killed — an undelivered decline costs
+  the driver a strike toward auto-offline, so this routing has real
+  driver-availability consequences, not just UX ones).
+  - Added a second test file,
+    `__tests__/services/backgroundMessaging.android.test.ts`, covering
+    exactly what the existing iOS-focused file skips: pure-function
+    tests for the exported `offerDisplayDataFromFcm` mapper, the
+    Android notification-render path (including the muted/unmuted
+    sound-preference branch), the `location_health` recovery branch
+    (success and failure), and all three `onBackgroundEvent` outcomes
+    (accept/decline/tap) including the decline flow's real HTTP-status
+    branches (200 delivered, 409 terminal-no-retry, 5xx/network-error/
+    no-token → stash for retry on next app open).
+  - This file reads `Platform.OS` in a **module-load-time** `if` block
+    (to decide whether to `require()` notifee/notifeeService at all),
+    unlike the other service files fixed earlier in this session that
+    read it per-call — so the fix used for those (mutate a shared
+    `Platform` object once, no `resetModules()`) doesn't apply here;
+    this file genuinely needs `resetModules()` per test (so the
+    Platform-gated require actually re-runs), so it uses the same
+    stable-mock-object pattern already proven in
+    `notifeeService.test.ts`.
+  - `backgroundMessaging.ts` itself: 48.57% lines / 58.33% functions /
+    46.95% branches → **96.19% lines / 100% functions / 93.33%
+    statements / 88.69% branches**. Full suite: 77 suites / 725 tests
+    (was 76/707), no flake on either run.
+  - Re-measured aggregate: **34.62% lines / 33.66% statements / 27.05%
+    functions** (up from 33.9%/32.91%/26.77%). Threshold tightened to
+    `lines:33, functions:26, statements:32` (was `32/25/31`).
+  - Verified locally: `yarn jest --coverage` exits 0 against the new
+    thresholds (77/77 suites clean).
+  - **This closes out the entirety of the B37 `lib/`+`services/`
+    test-authoring thread** across both apps — every file the user
+    asked to widen (rider-app's 5, driver-app's `alert.ts` +
+    `notifeeService.ts` + now `backgroundMessaging.ts`'s remaining
+    branches) is done. No further untested files remain in either
+    app's `lib/`/`services/` directories at a level worth its own pass
+    (the residual gaps that remain — e.g. `notifeeService.ts`'s two
+    `.catch(() => undefined)` no-op guards — are single defensive
+    lines, not meaningful behavior gaps).
 - **What's wrong (three distinct, compounding gaps):**
   1. **admin-dashboard's coverage threshold is configured but structurally
      dead in CI.** `admin-dashboard/vitest.config.ts` sets real thresholds

@@ -34,20 +34,26 @@ module.exports = {
     global: {
       // ACTION_ITEMS.md B37: tightened to a near-ceiling floor 2026-08-22
       // (user asked to "raise the thresholds toward the real ceiling").
-      // Raised again same day after adding real tests for lib/alert.ts
-      // (0% -> 100%) and services/notifeeService.ts (~15% -> ~90%), the
-      // two previously near-untested files in lib/+services/.
-      // services/backgroundMessaging.ts (48.57%) has its own existing
-      // test file already and wasn't touched in this pass. Fresh
-      // measurement: lines 33.9%, statements 32.91%, functions 26.77%
+      // Raised a third time same day after adding a second test file for
+      // services/backgroundMessaging.ts's Android/Notifee branches
+      // (__tests__/services/backgroundMessaging.android.test.ts) -- the
+      // existing test file deliberately stays on Platform.OS='ios' to
+      // exercise only the persist+republish path, leaving the Android
+      // notification render, the location_health recovery branch, and
+      // notifee.onBackgroundEvent's accept/decline/tap routing (a lock-
+      // screen decline while the app is killed is the ONLY place that
+      // reaches the backend headlessly) entirely untested.
+      // backgroundMessaging.ts: 48.57%/58.33%/46.95%
+      // (lines/functions/branches) -> 96.19%/100%/88.69%. Fresh
+      // aggregate: lines 34.62%, statements 33.66%, functions 27.05%
       // (no `branches` key here, matching this config's pre-existing
-      // pattern; up from 32.91%/31.97%/26.26%). Raising further requires
+      // pattern; up from 33.9%/32.91%/26.77%). Raising further requires
       // more new tests, not just re-measuring -- this is NOT the user's
       // stated 100% target, only the honest ceiling of what's currently
       // tested.
-      lines: 32,
-      functions: 25,
-      statements: 31,
+      lines: 33,
+      functions: 26,
+      statements: 32,
     },
   },
   moduleNameMapper: {

@@ -438,7 +438,7 @@ export default function RedisMonitoringPage() {
                                             {p.pubsub ? ` · pub/sub ${p.pubsub.ok ? "ok" : "FAILED"}` : ""}
                                         </p>
                                         {(p.error || p.warning || p.pubsub?.error) && (
-                                            <p className="text-xs text-red-600 dark:text-red-400">
+                                            <p className="text-xs text-destructive">
                                                 {p.error || p.pubsub?.error || p.warning}
                                             </p>
                                         )}

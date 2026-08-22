@@ -56,6 +56,7 @@ interface PayoutStats {
 const STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
     completed: { label: "Completed", cls: "bg-success/15 text-success" },
     pending:   { label: "Pending",   cls: "bg-warning/15 text-warning" },
+    // eslint-disable-next-line no-restricted-syntax -- "processing" (in progress, neither good nor bad) has no semantic-token equivalent; must stay distinct from the other four (#2816)
     processing:{ label: "Processing",cls: "bg-blue-500/15 text-blue-700 dark:text-blue-400" },
     failed:    { label: "Failed",    cls: "bg-destructive/15 text-destructive" },
     cancelled: { label: "Cancelled", cls: "bg-muted text-muted-foreground" },
@@ -224,14 +225,14 @@ export default function PayoutsPage() {
 
             {/* Toast */}
             {toast && (
-                <div className="rounded-md bg-green-50 dark:bg-green-900/10 border border-green-200 dark:border-green-800 text-green-800 dark:text-green-300 text-sm px-4 py-2">
+                <div className="rounded-md bg-success/10 border border-success text-success text-sm px-4 py-2">
                     {toast}
                 </div>
             )}
 
             {/* Failed alert */}
             {failedCount > 0 && (
-                <div className="rounded-md bg-red-50 dark:bg-red-900/10 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-300 text-sm px-4 py-3 flex items-center gap-2">
+                <div className="rounded-md bg-destructive/10 border border-destructive text-destructive text-sm px-4 py-3 flex items-center gap-2">
                     <AlertTriangle className="h-4 w-4 flex-shrink-0" />
                     <span>
                         <strong>{failedCount} failed payout{failedCount !== 1 ? "s" : ""}</strong> require attention.{" "}

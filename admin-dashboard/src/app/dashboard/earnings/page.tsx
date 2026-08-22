@@ -1590,9 +1590,9 @@ function SpinrPassRevenueTab() {
                                             <TableCell className="font-semibold text-emerald-500">{formatCurrency(t.price)}</TableCell>
                                             <TableCell>
                                                 <Badge variant="secondary" className={
-                                                    t.status === "active" ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" :
-                                                    t.status === "expired" ? "bg-amber-500/15 text-amber-700 dark:text-amber-400" :
-                                                    "bg-red-500/15 text-red-700 dark:text-red-400"
+                                                    t.status === "active" ? "bg-success/15 text-success" :
+                                                    t.status === "expired" ? "bg-warning/15 text-warning" :
+                                                    "bg-destructive/15 text-destructive"
                                                 }>{t.status}</Badge>
                                             </TableCell>
                                             <TableCell className="text-xs text-muted-foreground">{formatDate(t.started_at)}</TableCell>
@@ -1846,7 +1846,7 @@ function PayoutsTab() {
                                         <TableCell>
                                             <Badge className={statusBadge(p.status)}>{p.status}</Badge>
                                             {p.error_message && (
-                                                <p className="text-[10px] text-red-600 dark:text-red-400 mt-0.5 truncate max-w-[200px]" title={p.error_message}>
+                                                <p className="text-[10px] text-destructive mt-0.5 truncate max-w-[200px]" title={p.error_message}>
                                                     {p.error_message}
                                                 </p>
                                             )}

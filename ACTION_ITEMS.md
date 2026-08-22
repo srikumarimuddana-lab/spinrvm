@@ -7961,7 +7961,35 @@ record of what was assumed vs. what was actually true</summary>
   states for both tabs; infinite-scroll `onEndReached` page-append; and
   tap-through nav to `/ride-details`. No new footguns. 11 tests; full
   rider-app suite still green (977), `yarn tsc --noEmit` clean. **63 of
-  76 screens done, ~13 remain at 0%.**
+  76 screens done, ~13 remain at 0%. Continued, same day:** rider-app's
+  `ai-assistant.tsx` (AI chat screen — chose this over driver-app's
+  `driver/(tabs)/index.tsx` next-smallest-remaining candidate, whose
+  ~15 stacked hooks/components for a live dispatch/safety dashboard made
+  it a dedicated-session undertaking rather than a same-pass pickup).
+  Covers config/history load on mount; welcome-state quick-prompt chips;
+  handleSend's trim/clear/no-op-on-blank; the header-back AND hardware-
+  back routing through `activeRideRouteFor` (active ride -> its owning
+  screen with rideId; no ride -> `router.back()`); every support-action
+  bubble variant (cancel_ride to the ride's own screen or the
+  `/ride-status` fallback, lost-and-found, generic); map_picker bubbles
+  (approx-coord passthrough plus the AI8 stale-card disable once a newer
+  turn starts); fare_quote/location_suggestions selections calling
+  `handleSend` with their self-contained follow-up message; every
+  `RideStatusBanner` status copy plus its Share/Track actions; and the
+  default disclaimer fallback. New footgun: `expo-speech-recognition` is
+  an installed real native-module package (not stubbed by the jest-expo
+  preset), so the screen's own guarded `require('expo-speech-recognition')`
+  — meant to degrade gracefully only when the module is genuinely absent
+  from a build — resolves to the real package under Jest, and importing
+  its real code touches expo's winter-runtime fetch polyfill at
+  module-eval time, throwing `ReferenceError: You are trying to 'import'
+  a file outside of the scope of the test code` before any test body
+  runs at all (misleadingly reported as "Test suite failed to run", not
+  a per-test failure). Root-caused by bisecting down to a bare
+  `require('../app/ai-assistant')` with no render, confirming it fails
+  at import time; fixed by mocking `expo-speech-recognition` directly.
+  22 tests; full rider-app suite still green (999), `yarn tsc --noEmit`
+  clean. **64 of 76 screens done, ~12 remain at 0%.**
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

@@ -6953,29 +6953,33 @@ record of what was assumed vs. what was actually true</summary>
     migration (creates the table correctly if missing, `user_id TEXT`). Live DB
     already has the corrected table; 362 makes a fresh replay of migration history
     produce the same correct schema.
+- **Update 2026-08-22: item 1 below resolved — `OWNER TO supabase_admin` is not
+  actually required on this project.** This session's DB role could not run
+  `ALTER FUNCTION ... OWNER TO supabase_admin` (`must be able to SET ROLE
+  "supabase_admin"`), and the user's own Supabase Dashboard SQL editor session hit
+  the identical error — so this is a genuine platform restriction on this managed
+  project, not a session-specific gap. Rather than treat that as blocking, tested
+  empirically instead: called `encrypt_driver_pii()`/`decrypt_driver_pii()` (live
+  since migration 138, same pattern, also still owned by `postgres` not
+  `supabase_admin` despite 138's own comment claiming that ownership transfer was
+  required) and `encrypt_emergency_contact_pii()`/`decrypt_emergency_contact_pii()`
+  with real round-trip values — **all four succeeded**, full encrypt→decrypt
+  round-trip, no `42501`. Root cause of the discrepancy: `postgres` is a member of
+  `supabase_privileged_role` (`SELECT ... FROM pg_auth_members`), which on this
+  project's current Supabase Postgres image already carries the pgsodium
+  privileges `vault.create_secret()` needs — the `supabase_admin`-ownership
+  requirement documented in migrations 138's and 359's comments reflects an older
+  Supabase image/pattern that no longer matches this project. Test secrets were
+  deleted from `vault.secrets` after verification (`44dc9b06-...`, `9c8651b2-...`).
+  Function bodies, `search_path` pinning, and `EXECUTE` grants all verified to
+  exactly match what 359 specifies. **359 is now tracked as applied in
+  `schema_migrations`** (`applied_by = 'claude-session-apply'`). No migration file
+  changed — 359's file still contains the `OWNER TO` lines verbatim (append-only
+  rule; they're harmless no-ops if a future privileged run does execute them, just
+  not load-bearing on this project). The two `OWNER TO` lines in `359`'s file text
+  should not be read as still-required by a future reader of this doc.
 - **Still open (needs a human, not fixable from this session):**
-  1. **359's `OWNER TO supabase_admin` step could not be applied** — this session's
-     DB role lacks `SET ROLE supabase_admin` privilege
-     (`must be able to SET ROLE "supabase_admin"`). 357+359's corrected
-     `encrypt_emergency_contact_pii`/`decrypt_emergency_contact_pii` function bodies
-     (the `vault.create_secret()` pattern) ARE applied and live, but without the
-     ownership transfer they may still fail at runtime with the same `42501`
-     permission error 359 exists to fix (pgsodium internals need the
-     `supabase_admin`-owned privilege set). The app fails closed on RPC error (503,
-     not silent plaintext) per 359's own impact analysis, so this is a functionality
-     gap, not a data-safety one — but **someone with Supabase project owner/
-     `supabase_admin` access needs to run just these two lines** via the Supabase
-     Dashboard SQL editor (which runs with elevated rights) or a superuser `psql`
-     connection:
-     ```sql
-     ALTER FUNCTION encrypt_emergency_contact_pii(text) OWNER TO supabase_admin;
-     ALTER FUNCTION decrypt_emergency_contact_pii(text) OWNER TO supabase_admin;
-     ```
-     `359_fix_emergency_contact_pii_vault_functions.sql` is deliberately left
-     **untracked** in `schema_migrations` (not marked applied) so a proper
-     `run_migrations.py` run by someone with sufficient privilege will still pick it
-     up and complete the fix.
-  2. **Four migration files must NEVER be run as merged — applying them would be a
+  1. **Four migration files must NEVER be run as merged — applying them would be a
      security regression**, discovered by comparing their target state against the
      live (better) state:
      - `70_fix_financial_events_rls.sql` — would replace the live

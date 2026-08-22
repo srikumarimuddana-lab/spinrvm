@@ -388,7 +388,7 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
                                     </div>
 
                                     {mode === "approve" && (
-                                        <div className="space-y-3 rounded-lg border border-success/40 bg-success/10 p-3">
+                                        <div className="space-y-3 rounded-lg border border-success/30 bg-success/10 p-3">
                                             <label htmlFor="reviewer-expiry" className="text-xs font-medium flex items-center gap-1.5">
                                                 <Calendar className="h-3.5 w-3.5" />
                                                 Expiry date {needsExpiry && <span className="text-destructive">*</span>}
@@ -403,7 +403,7 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
                                     )}
 
                                     {mode === "reject" && (
-                                        <div className="space-y-3 rounded-lg border border-destructive/40 bg-destructive/10 p-3">
+                                        <div className="space-y-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3">
                                             <p className="text-xs font-medium">Reason template</p>
                                             <Select value={template} onValueChange={(v) => {
                                                 const tmpl = v as RejectTemplate;

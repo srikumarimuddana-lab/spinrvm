@@ -44,10 +44,11 @@ function triggerBrowserDownload(blob: Blob, filename: string) {
 }
 
 const STATUS_STYLE: Record<string, { label: string; cls: string }> = {
-    sent: { label: "Emailed", cls: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" },
+    sent: { label: "Emailed", cls: "bg-success/15 text-success" },
+    // eslint-disable-next-line no-restricted-syntax -- "claimed" (in progress, neither good nor bad) has no semantic-token equivalent; must stay distinct from sent/failed/skipped (#2816)
     claimed: { label: "In progress", cls: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" },
-    failed: { label: "Failed", cls: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300" },
-    skipped_no_email: { label: "No email on file", cls: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" },
+    failed: { label: "Failed", cls: "bg-destructive/15 text-destructive" },
+    skipped_no_email: { label: "No email on file", cls: "bg-warning/15 text-warning" },
     skipped_inactive: { label: "No activity", cls: "bg-muted text-muted-foreground" },
 };
 
@@ -205,7 +206,7 @@ export function DriverStatementsPanel({ driverId, driverName, notify }: DriverSt
                     </Button>
                 </div>
                 {rangeInvalid && (
-                    <p className="text-[11px] text-red-600 dark:text-red-400">
+                    <p className="text-[11px] text-destructive">
                         Pick a start and end date — the end date cannot be before the start date.
                     </p>
                 )}

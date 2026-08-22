@@ -484,7 +484,7 @@ export default function WelcomeLettersPage() {
                                             </Button>
                                         ) : (
                                             <span className="text-xs text-muted-foreground flex items-center gap-1">
-                                                <CheckCircle className="h-3 w-3 text-emerald-500" /> Done
+                                                <CheckCircle className="h-3 w-3 text-success" /> Done
                                             </span>
                                         )}
                                     </TableCell>

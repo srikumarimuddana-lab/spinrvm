@@ -4169,12 +4169,17 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     **A37**.
   - **What was NOT verified:** whether this script has ever been run against
     an account that *did* have real `driver_insurance_periods` history —
-    A34 only confirmed the 2026-08-14 runs were test accounts. Migration 317
-    itself has **not been applied to production** in this session (repo
-    convention is `scripts/migrate.py`, not ad-hoc application) — until it
-    is, the new loop logs an RPC-not-found error every 6h (never a false
-    positive/negative, verified by test) rather than actually detecting
-    anything.
+    A34 only confirmed the 2026-08-14 runs were test accounts.
+  - **2026-08-22 update: migration 317 (and 318, A37's) confirmed applied
+    to production.** Verified directly against `soavhtdhefowwvforzwb`:
+    `schema_migrations` has both rows, and `SELECT * FROM
+    check_disabled_guard_triggers()` returns cleanly (empty result — no
+    guard trigger currently disabled), not an RPC-not-found error. The
+    "logs an RPC-not-found error every 6h" caveat below is now stale —
+    the detection loop has real data to poll against, not a missing
+    function. Session/date this was applied not identified (predates this
+    check, same as several other migrations found already-applied this
+    session — see B13/B15c for the same pattern).
 
 ### A37. Real-time DDL detection for regulatory guard triggers (event trigger) — CLOSED (2026-08-17)
 - **Source:** surfaced by `spinr-regulatory-compliance-checker`'s review of

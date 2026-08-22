@@ -390,9 +390,19 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   tests/test_step_h_driver_rides_guard_migration.py -q --no-cov` → 56
   passed. See
   `docs/change-log/2026-08-19-purge-pii-planned-route-polyline-fix.md`.
-  **Not applied to production** — per this repo's standing convention,
-  applying a migration to live data needs explicit confirmation, not sought
-  this session; ships as a file for the normal deploy pipeline. **Known
+  **APPLIED 2026-08-22** (correction — this note previously said "not
+  applied," stale): verified live via Supabase (`soavhtdhefowwvforzwb`,
+  `ca-central-1`) that `334_users_consent_version.sql` and this migration
+  (`335_purge_pii_retention_step_a_planned_route_polyline.sql`) both show
+  in `schema_migrations` with `applied_at = 2026-08-21 23:29:45 UTC,
+  applied_by = postgres` — applied together, presumably as part of a
+  normal deploy-pipeline run, not by this session. Spot-checked
+  `users.consent_version`/`consent_accepted_at` actually exist as live
+  columns, confirming the apply was real, not just a tracking-table row.
+  Migration 334's "#12" entry above (this same status block) never
+  actually claimed "not applied" itself — only this one did — but noting
+  both are now confirmed live so nobody re-checks 334 for the same reason.
+  **Known
   residual gap, explicitly not silently left out:** the unchanged
   `gps_anonymized_at IS NULL` guard means rides already anonymized under
   the *old* function body are not retroactively re-swept to clear

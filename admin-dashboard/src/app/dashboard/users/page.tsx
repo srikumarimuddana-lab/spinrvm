@@ -855,6 +855,7 @@ export default function UsersPage() {
 
                                         <div className="flex gap-2">
                                             <Button
+                                                // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text button; dark-mode --success (2.02:1) fails WCAG AA against white text (#2816)
                                                 className="flex-1 bg-emerald-600 hover:bg-emerald-700"
                                                 disabled={walletSubmitting !== null}
                                                 onClick={() => requestWalletAction("credit")}
@@ -1053,6 +1054,7 @@ export default function UsersPage() {
                     <AlertDialogFooter>
                         <AlertDialogCancel disabled={walletSubmitting !== null}>Cancel</AlertDialogCancel>
                         <AlertDialogAction
+                            // eslint-disable-next-line no-restricted-syntax -- credit branch is a solid-fill white-text button; dark-mode --success fails WCAG AA against white text (#2816)
                             className={pendingWalletAction?.action === "credit" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-destructive text-destructive-foreground hover:bg-destructive/90"}
                             disabled={walletSubmitting !== null}
                             onClick={(e) => {

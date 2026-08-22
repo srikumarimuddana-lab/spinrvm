@@ -33,7 +33,7 @@ google-api-core==2.30.3   # via firebase-admin, google-ai-generativelanguage, go
 google-api-python-client==2.194.0  # via -r requirements.in, google-generativeai
 google-auth==2.49.2       # via -r requirements.in, google-ai-generativelanguage, google-api-core, google-api-python-client, google-auth-httplib2, google-cloud-core, google-cloud-firestore, google-cloud-storage, google-generativeai
 google-auth-httplib2==0.3.1  # via google-api-python-client
-google-cloud-core==2.5.1  # via google-cloud-firestore, google-cloud-storage
+google-cloud-core==2.6.1  # via google-cloud-firestore, google-cloud-storage
 google-cloud-firestore==2.27.0  # via -r requirements.in, firebase-admin
 google-cloud-storage==3.10.1  # via -r requirements.in, firebase-admin
 google-crc32c==1.8.0      # via google-cloud-storage, google-resumable-media

@@ -102,7 +102,7 @@ export default function ReferralAnalytics({ source }: { source: "driver" | "ride
             </div>
 
             {error ? (
-                <div className="text-sm text-red-600 dark:text-red-400 py-10 text-center">{error}</div>
+                <div className="text-sm text-destructive py-10 text-center">{error}</div>
             ) : loading || !f ? (
                 <div className="text-sm text-muted-foreground py-10 text-center">Loading referral analytics…</div>
             ) : (

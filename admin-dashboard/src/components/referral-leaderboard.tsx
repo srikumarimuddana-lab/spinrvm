@@ -32,7 +32,7 @@ export default function ReferralLeaderboard({ limit = 20, source = "driver" }: {
         return <div className="text-sm text-muted-foreground py-10 text-center">Loading referral stats…</div>;
     }
     if (error) {
-        return <div className="text-sm text-red-600 dark:text-red-400 py-10 text-center">{error}</div>;
+        return <div className="text-sm text-destructive py-10 text-center">{error}</div>;
     }
     if (!data) return null;
 

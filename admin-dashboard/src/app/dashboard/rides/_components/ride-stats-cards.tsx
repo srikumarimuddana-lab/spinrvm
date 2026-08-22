@@ -152,8 +152,8 @@ export default function RideStatsCards() {
                     label="Platform Sales (pre-promo)" value={formatCurrency(f.platform_before_promo ?? 0)}
                     tooltip="Booking + airport + area fees, before incentives/promo" />
                 <RevenueCard icon={platformAfterNeg ? TrendingDown : TrendingUp}
-                    color={platformAfterNeg ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}
-                    bg={platformAfterNeg ? "bg-red-100 dark:bg-red-900/30" : "bg-emerald-100 dark:bg-emerald-900/30"}
+                    color={platformAfterNeg ? "text-destructive" : "text-success"}
+                    bg={platformAfterNeg ? "bg-destructive/15" : "bg-success/15"}
                     label="Platform Net (post-promo)" value={formatCurrency(f.platform_after_promo ?? 0)}
                     tooltip="Platform sales after subtracting incentives funded and promo absorbed"
                     sub={[

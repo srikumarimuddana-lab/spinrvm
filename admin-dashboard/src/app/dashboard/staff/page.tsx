@@ -76,6 +76,9 @@ const ROLE_PRESETS: Record<string, string[]> = {
   finance: ["dashboard", "earnings", "promotions", "corporate_accounts", "audit"],
 };
 
+/* eslint-disable no-restricted-syntax -- categorical admin-role map (5 distinct
+   roles), not a success/warning/destructive signal — too many states for the
+   3-token system, see comment above (#2816) */
 const ROLE_COLORS: Record<string, string> = {
   super_admin: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
   operations: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
@@ -83,6 +86,7 @@ const ROLE_COLORS: Record<string, string> = {
   finance: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
   custom: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400",
 };
+/* eslint-enable no-restricted-syntax */
 
 interface Staff {
   id: string;
@@ -515,7 +519,7 @@ export default function StaffPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+            <AlertDialogAction onClick={confirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

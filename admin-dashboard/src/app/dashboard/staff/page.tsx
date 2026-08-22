@@ -506,7 +506,7 @@ export default function StaffPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmMfaReset} className="bg-orange-600 hover:bg-orange-700">Reset MFA</AlertDialogAction>
+            <AlertDialogAction onClick={confirmMfaReset} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Reset MFA</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

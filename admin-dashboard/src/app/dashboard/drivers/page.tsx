@@ -2030,18 +2030,22 @@ const DRIVER_RIDES_PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 
 type RidesSortKey = "created_at" | "rider_name" | "status" | "distance_km" | "duration_seconds" | "total_fare" | "tip_amount";
 
+// "processing" has no dedicated semantic token (only success/warning/destructive
+// exist), so this stays a hand-picked palette rather than a partial conversion. (#2816)
+/* eslint-disable no-restricted-syntax -- categorical payout-status map, no semantic token for "processing" (#2816) */
 const PAYOUT_STATUS_STYLE: Record<string, { bg: string; text: string; label: string }> = {
-    completed:  { bg: "bg-emerald-100 dark:bg-emerald-900/30", text: "text-emerald-700 dark:text-emerald-300", label: "Paid" },
-    pending:    { bg: "bg-amber-100 dark:bg-amber-900/30",     text: "text-amber-700 dark:text-amber-300",     label: "Pending" },
+    completed:  { bg: "bg-success/15", text: "text-success", label: "Paid" },
+    pending:    { bg: "bg-warning/15", text: "text-warning", label: "Pending" },
     processing: { bg: "bg-blue-100 dark:bg-blue-900/30",       text: "text-blue-700 dark:text-blue-300",       label: "Processing" },
-    failed:     { bg: "bg-red-100 dark:bg-red-900/30",         text: "text-red-700 dark:text-red-300",         label: "Failed" },
+    failed:     { bg: "bg-destructive/15", text: "text-destructive", label: "Failed" },
 };
+/* eslint-enable no-restricted-syntax */
 
 function PayoutMetric({ label, value, tone, sub }: { label: string; value: string; tone?: "emerald" | "amber" | "red" | "neutral"; sub?: string }) {
     const styles = {
-        emerald: { bg: "bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800", value: "text-emerald-700 dark:text-emerald-300" },
-        amber:   { bg: "bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800",         value: "text-amber-700 dark:text-amber-300" },
-        red:     { bg: "bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-800",                 value: "text-red-700 dark:text-red-300" },
+        emerald: { bg: "bg-success/10 border-success/30", value: "text-success" },
+        amber:   { bg: "bg-warning/10 border-warning/30", value: "text-warning" },
+        red:     { bg: "bg-destructive/10 border-destructive/30", value: "text-destructive" },
         neutral: { bg: "bg-card border-border",                                                            value: "text-foreground" },
     }[tone ?? "neutral"];
     return (
@@ -2195,11 +2199,11 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, isLegacyImporte
 
             {/* On-hold warning if any failed payouts */}
             {summary.on_hold > 0 && summary.last_failed_payout && (
-                <div className="rounded-xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/10 p-3 flex items-start gap-3">
-                    <AlertTriangle className="h-4 w-4 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+                <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 flex items-start gap-3">
+                    <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
                     <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold text-red-700 dark:text-red-300">{fmtMoney(summary.on_hold)} on hold from failed payouts</p>
-                        <p className="text-xs text-red-600/80 dark:text-red-400/80 mt-0.5">
+                        <p className="text-sm font-semibold text-destructive">{fmtMoney(summary.on_hold)} on hold from failed payouts</p>
+                        <p className="text-xs text-destructive/80 mt-0.5">
                             Most recent failure: {summary.last_failed_payout.error_message || "Unknown error"} · {fmtDateTime(summary.last_failed_payout.created_at)}
                         </p>
                     </div>
@@ -2214,9 +2218,9 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, isLegacyImporte
                         <h4 className="text-sm font-semibold">Payout method</h4>
                     </div>
                     {pm.has_bank_account ? (
-                        <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 text-[10px]">Linked</Badge>
+                        <Badge className="bg-success/15 text-success text-[10px]">Linked</Badge>
                     ) : (
-                        <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300 text-[10px]">No method linked</Badge>
+                        <Badge className="bg-destructive/15 text-destructive text-[10px]">No method linked</Badge>
                     )}
                 </div>
                 <div className="px-4 py-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -2257,7 +2261,7 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, isLegacyImporte
                             {pm.is_verified !== null && (
                                 <div>
                                     <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">Verification</p>
-                                    <p className={`text-sm font-medium mt-0.5 ${pm.is_verified ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}`}>
+                                    <p className={`text-sm font-medium mt-0.5 ${pm.is_verified ? "text-success" : "text-warning"}`}>
                                         {pm.is_verified ? "Verified" : "Unverified"}
                                     </p>
                                 </div>
@@ -2284,11 +2288,11 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, isLegacyImporte
                         <Shield className="h-4 w-4 text-muted-foreground" />
                         <h4 className="text-sm font-semibold">Tax &amp; Identity</h4>
                         {data.kyc.payouts_enabled ? (
-                            <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 text-[10px]">Verified</Badge>
+                            <Badge className="bg-success/15 text-success text-[10px]">Verified</Badge>
                         ) : data.kyc.details_submitted ? (
-                            <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 text-[10px]">Pending Stripe review</Badge>
+                            <Badge className="bg-warning/15 text-warning text-[10px]">Pending Stripe review</Badge>
                         ) : data.kyc.requirements_due.length > 0 || data.kyc.requirements_past_due.length > 0 ? (
-                            <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300 text-[10px]">Action required</Badge>
+                            <Badge className="bg-destructive/15 text-destructive text-[10px]">Action required</Badge>
                         ) : (
                             <Badge variant="outline" className="text-[10px]">Not started</Badge>
                         )}

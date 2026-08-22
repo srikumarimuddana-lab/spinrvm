@@ -2385,33 +2385,33 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, isLegacyImporte
                     </div>
 
                     {(data.kyc.requirements_due.length > 0 || data.kyc.requirements_past_due.length > 0) && (
-                        <div className="rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/10 p-2.5">
-                            <p className="text-[11px] font-semibold text-amber-700 dark:text-amber-300 mb-1">
+                        <div className="rounded-md border border-warning/30 bg-warning/10 p-2.5">
+                            <p className="text-[11px] font-semibold text-warning mb-1">
                                 {data.kyc.requirements_past_due.length > 0 && `${data.kyc.requirements_past_due.length} past due · `}
                                 {data.kyc.requirements_due.length} item{data.kyc.requirements_due.length === 1 ? "" : "s"} needed from driver
                             </p>
-                            <ul className="text-[11px] text-amber-700/80 dark:text-amber-300/80 space-y-0.5">
+                            <ul className="text-[11px] text-warning/80 space-y-0.5">
                                 {[...data.kyc.requirements_past_due, ...data.kyc.requirements_due].slice(0, 6).map((req) => (
                                     <li key={req} className="font-mono">{req}</li>
                                 ))}
                                 {data.kyc.requirements_due.length + data.kyc.requirements_past_due.length > 6 && (
-                                    <li className="text-amber-700/60 dark:text-amber-300/60 italic">…and {data.kyc.requirements_due.length + data.kyc.requirements_past_due.length - 6} more</li>
+                                    <li className="text-warning/60 italic">…and {data.kyc.requirements_due.length + data.kyc.requirements_past_due.length - 6} more</li>
                                 )}
                             </ul>
                         </div>
                     )}
 
                     {data.kyc.disabled_reason && (
-                        <div className="rounded-md border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/10 p-2.5">
-                            <p className="text-[11px] font-semibold text-red-700 dark:text-red-300">
+                        <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2.5">
+                            <p className="text-[11px] font-semibold text-destructive">
                                 Payouts disabled: <span className="font-mono">{data.kyc.disabled_reason}</span>
                             </p>
                         </div>
                     )}
 
                     {revealedSin && (
-                        <div className="rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/10 p-2.5">
-                            <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                        <div className="rounded-md border border-warning/30 bg-warning/10 p-2.5">
+                            <p className="text-[11px] text-warning">
                                 <AlertTriangle className="h-3 w-3 inline mr-1" />
                                 SIN revealed at {new Date(revealedSin.expiresAt - 30000).toLocaleTimeString()}.
                                 Auto-hides in {Math.max(0, Math.ceil((revealedSin.expiresAt - Date.now()) / 1000))}s.
@@ -2630,11 +2630,11 @@ function DriverReferralsTab({ data, loading, fmtDate }: {
                 </div>
                 <div className="rounded-xl border border-border/50 p-3">
                     <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium">Rewarded</p>
-                    <p className="text-xl font-bold mt-0.5 text-emerald-600 dark:text-emerald-400">{data.qualified_referrals}</p>
+                    <p className="text-xl font-bold mt-0.5 text-success">{data.qualified_referrals}</p>
                 </div>
                 <div className="rounded-xl border border-border/50 p-3">
                     <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium">Pending</p>
-                    <p className="text-xl font-bold mt-0.5 text-amber-600 dark:text-amber-400">{data.pending_referrals}</p>
+                    <p className="text-xl font-bold mt-0.5 text-warning">{data.pending_referrals}</p>
                 </div>
                 <div className="rounded-xl border border-border/50 p-3">
                     <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium">Earned</p>
@@ -2666,7 +2666,7 @@ function DriverReferralsTab({ data, loading, fmtDate }: {
                                         <span className="text-[11px] text-muted-foreground">{fmtDate(r.referred_at)}</span>
                                     </div>
                                     {r.qualified ? (
-                                        <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium mt-0.5">Reward earned</p>
+                                        <p className="text-xs text-success font-medium mt-0.5">Reward earned</p>
                                     ) : (
                                         <>
                                             <p className="text-xs text-muted-foreground mt-0.5">
@@ -2680,7 +2680,7 @@ function DriverReferralsTab({ data, loading, fmtDate }: {
                                         </>
                                     )}
                                 </div>
-                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide shrink-0 ${r.qualified ? "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300" : "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300"}`}>
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide shrink-0 ${r.qualified ? "bg-success/15 text-success" : "bg-warning/15 text-warning"}`}>
                                     {r.qualified ? "Earned" : "In progress"}
                                 </span>
                             </div>

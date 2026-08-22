@@ -974,6 +974,12 @@ export default function DriversPage() {
                                             <div className="flex flex-col gap-1.5 items-start">
                                                 {/* account_deleted wins over status: deletion cannot change
                                                     drivers.status, so a departed driver still carries "active". */}
+                                                {/* Driver-lifecycle-status categorical map (6 states, incl. online/
+                                                    offline) — mirrors the established exclusion documented on
+                                                    driver-action-bar.tsx's STATUS_CONFIG and
+                                                    driver-stats-cards.tsx's stat-tile set; kept as one hand-picked
+                                                    palette rather than partially converted. (#2816) */}
+                                                {/* eslint-disable no-restricted-syntax -- categorical driver-lifecycle-status badges, see comment above (#2816) */}
                                                 {driver.account_deleted ? <Badge variant="default" className="bg-zinc-200 text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 text-[10px] px-1.5 py-0 border-zinc-300 dark:border-zinc-700"><Trash2 className="h-3 w-3 mr-1" />Deleted</Badge>
                                                 : driver.status === "active" ? <Badge variant="default" className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0 border-emerald-200 dark:border-emerald-800"><ShieldCheck className="h-3 w-3 mr-1" />Active</Badge>
                                                 : driver.status === "needs_review" ? <Badge variant="default" className="bg-amber-100 text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-400 text-[10px] px-1.5 py-0 border-amber-200 dark:border-amber-800"><AlertTriangle className="h-3 w-3 mr-1" />Needs Review</Badge>
@@ -981,6 +987,7 @@ export default function DriversPage() {
                                                 : driver.status === "banned" ? <Badge variant="default" className="bg-red-200 text-red-800 hover:bg-red-200 dark:bg-red-900/40 dark:text-red-400 text-[10px] px-1.5 py-0 border-red-300 dark:border-red-800"><Ban className="h-3 w-3 mr-1" />Banned</Badge>
                                                 : <Badge variant="default" className="bg-blue-100 text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 text-[10px] px-1.5 py-0 border-blue-200 dark:border-blue-800"><ShieldAlert className="h-3 w-3 mr-1" />Pending</Badge>}
                                                 <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${driver.is_online && !driver.account_deleted ? "border-emerald-300 text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10" : ""}`}>{driver.is_online && !driver.account_deleted ? "Online" : "Offline"}</Badge>
+                                                {/* eslint-enable no-restricted-syntax */}
                                             </div>
                                         </TableCell>
                                         <TableCell>
@@ -1991,16 +1998,16 @@ function VerificationSummaryCard({
                     />
                 </div>
                 <div className="flex items-center gap-3 flex-wrap text-xs">
-                    {pending > 0 && <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400"><Clock className="h-3 w-3" />{pending} pending</span>}
-                    {missing > 0 && <span className="inline-flex items-center gap-1 text-red-600 dark:text-red-400"><AlertTriangle className="h-3 w-3" />{missing} missing</span>}
-                    {expired > 0 && <span className="inline-flex items-center gap-1 text-red-600 dark:text-red-400"><AlertTriangle className="h-3 w-3" />{expired} expired</span>}
-                    {allClear && <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400"><CheckCircle className="h-3 w-3" />All required documents are approved.</span>}
+                    {pending > 0 && <span className="inline-flex items-center gap-1 text-warning"><Clock className="h-3 w-3" />{pending} pending</span>}
+                    {missing > 0 && <span className="inline-flex items-center gap-1 text-destructive"><AlertTriangle className="h-3 w-3" />{missing} missing</span>}
+                    {expired > 0 && <span className="inline-flex items-center gap-1 text-destructive"><AlertTriangle className="h-3 w-3" />{expired} expired</span>}
+                    {allClear && <span className="inline-flex items-center gap-1 text-success"><CheckCircle className="h-3 w-3" />All required documents are approved.</span>}
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1">
                     {rows.map(({ rd, status }) => {
-                        const cfg = status === "approved" ? { icon: <CheckCircle className="h-3.5 w-3.5 text-emerald-500" />, text: "text-emerald-600 dark:text-emerald-400" }
-                            : status === "pending" ? { icon: <Clock className="h-3.5 w-3.5 text-amber-500" />, text: "text-amber-600 dark:text-amber-400" }
-                            : status === "expired" ? { icon: <AlertTriangle className="h-3.5 w-3.5 text-red-500" />, text: "text-red-600 dark:text-red-400" }
+                        const cfg = status === "approved" ? { icon: <CheckCircle className="h-3.5 w-3.5 text-success" />, text: "text-success" }
+                            : status === "pending" ? { icon: <Clock className="h-3.5 w-3.5 text-warning" />, text: "text-warning" }
+                            : status === "expired" ? { icon: <AlertTriangle className="h-3.5 w-3.5 text-destructive" />, text: "text-destructive" }
                             : { icon: <div className="w-3.5 h-3.5 rounded-full border-2 border-muted-foreground/30" />, text: "text-muted-foreground" };
                         return (
                             <div key={rd.key} className="flex items-center gap-2 text-xs">
@@ -3429,9 +3436,9 @@ function DocExpirySummaryCard({ label, summary }: { label: string; summary: DocS
 
     const styles = {
         neutral: { bg: "bg-muted/30 border-border", dot: "bg-muted-foreground/40", primary: "text-muted-foreground", secondary: "text-muted-foreground" },
-        emerald: { bg: "bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800", dot: "bg-emerald-500", primary: "text-emerald-700 dark:text-emerald-300", secondary: "text-emerald-600/70 dark:text-emerald-400/70" },
-        amber:   { bg: "bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800",       dot: "bg-amber-500",   primary: "text-amber-700 dark:text-amber-300",   secondary: "text-amber-600/80 dark:text-amber-400/80" },
-        red:     { bg: "bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-800",               dot: "bg-red-500",     primary: "text-red-700 dark:text-red-300",       secondary: "text-red-600/80 dark:text-red-400/80" },
+        emerald: { bg: "bg-success/10 border-success/30", dot: "bg-success", primary: "text-success", secondary: "text-success/70" },
+        amber:   { bg: "bg-warning/10 border-warning/30", dot: "bg-warning", primary: "text-warning", secondary: "text-warning/80" },
+        red:     { bg: "bg-destructive/10 border-destructive/30", dot: "bg-destructive", primary: "text-destructive", secondary: "text-destructive/80" },
     }[palette];
 
     return (

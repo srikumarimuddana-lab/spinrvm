@@ -7686,9 +7686,20 @@ record of what was assumed vs. what was actually true</summary>
   `useCallback` keyed on it, causing a silent infinite mount-effect loop
   that hangs the test with a misleading "Jest environment torn down"
   error rather than a clear stack trace — fix is a stable module-level
-  mock-state reference, not a fresh literal per call. This sub-item is
-  **still not closed** — continuing screen-by-screen in further sessions
-  per the user's explicit instruction.
+  mock-state reference, not a fresh literal per call. **Merge race:**
+  PR #4460 was merged (squash) while 3 more commits (`destination-mode.tsx`,
+  a progress-note update, `lost-and-found.tsx` rider-app) were still being
+  pushed to its branch — the merge commit captured an earlier state and
+  dropped them. Detected by diffing `origin/main` against the local branch
+  tip; recovered by cherry-picking all 3 onto a fresh branch off `main`,
+  re-verifying both apps' full suites from scratch, and opening PR #4465.
+  **Continued in PR #4465, same day:** 5 more screens — rider-app's
+  `scheduled-rides.tsx` (C29 notice-window-fee confirm branch), `loyalty.tsx`;
+  driver-app's `driver/lost-and-found.tsx`, `driver/tax-documents.tsx`
+  (T4A tap-to-email flow). 32 more tests; full suites still green
+  (rider-app 701, driver-app 814). **25 of 76 screens done, ~51 remain at
+  0%.** This sub-item is **still not closed** — continuing screen-by-screen
+  in further sessions per the user's explicit instruction.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

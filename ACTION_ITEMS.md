@@ -5857,7 +5857,21 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   </details>
 
 ### B23. `regulatory-sk.md` promises rider identity is hashed after 2 years; nothing implements it, and the literal fix breaks live rider trip history
-- [ ] **Status:** open — split out of B18 (2026-08-10) when B18's narrower
+- [x] **Status:** CLOSED (2026-08-22) — resolved via **option (c)** below,
+  per explicit user decision: the doc overstated the actual promise, so it
+  was corrected to match reality rather than building a 2-year hashing
+  step that would have broken every active rider's own trip-history/
+  admin-lookup by rider. `.claude/context/regulatory-sk.md`'s retention
+  table row changed from "7 years (hashed after 2)" to "7 years, kept
+  fully attributable (`rider_id` not hashed/nulled at any point during the
+  window)", with a note pointing at the product's actual, already-decided
+  retention model (migration 216/289's "Uber/Lyft attributable retention,"
+  ACTION_ITEMS.md B18). Cross-references in `CLAUDE.md`'s Compliance
+  section and `docs/runbooks/data-retention.md` (which had a stale B18
+  cross-reference — corrected to B23) updated to match. No application
+  code changed — no hashing step exists or is planned. See
+  `docs/change-log/2026-08-22-fix-b23-rider-identity-doc.md`.
+- **(historical) Status:** open — split out of B18 (2026-08-10) when B18's narrower
   30-day-scrub part closed. `.claude/context/regulatory-sk.md`'s trip-log
   retention table (line 43) promises "Rider identity linked to trip: 7 years
   (hashed after 2)" — a *general* rule for every ride, not just DSAR-deleted

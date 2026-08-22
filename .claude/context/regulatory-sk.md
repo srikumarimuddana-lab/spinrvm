@@ -40,7 +40,20 @@ See `domain-safety.md` and CLAUDE.md for the 0/1/2/3 table. Regulatory-specific 
 | GPS trace — pickup + dropoff only (not full route) | 3 years | Provincial audit |
 | Insurance period transitions | 7 years | SGI audit |
 | Receipts with tax line items | 7 years | CRA |
-| Rider identity linked to trip | 7 years (hashed after 2 — **not yet implemented, ACTION_ITEMS.md B23**) | Balance audit vs. privacy |
+| Rider identity linked to trip | 7 years, kept fully attributable (`rider_id` not hashed/nulled at any point during the window) | Balance audit vs. privacy — see note below |
+
+**Note on rider identity retention (corrected 2026-08-22, ACTION_ITEMS.md B23):**
+this table previously promised rider identity would be "hashed after 2 years" —
+that was never implemented, and the literal fix is now understood to be
+actively unsafe to build as originally stated: `rides.rider_id` is the same FK
+a rider's own "my trips" screen and every admin/support/refund lookup by rider
+actually join on, so hashing or nulling it at 2 years would break that lookup
+for every ride older than 2 years, for every still-active user — not a narrow
+backend fix. The product's actual, deliberate retention model (migration
+216/289, "Uber/Lyft attributable retention," already documented in root
+`CLAUDE.md`'s Compliance section) keeps ride records fully attributable for
+the entire 7-year window, then hard-deletes — no 2-year hashing step exists or
+is currently planned. This row now states what the product actually does.
 
 After the 7-year window, trip records are **hard-deleted**, not anonymized
 (recorded decision, ACTION_ITEMS.md B18, 2026-08-10 — corrects this file's

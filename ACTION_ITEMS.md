@@ -7750,9 +7750,26 @@ record of what was assumed vs. what was actually true</summary>
   ("Refer & Earn" — summary/list independent-failure handling, copy/share,
   earnings math, referred-drivers list). 49 more tests; full suites still
   green (rider-app 785, driver-app 890). **40 of 76 screens done, ~36
-  remain at 0%.** This sub-item is **still not closed** — continuing
-  screen-by-screen in further sessions per the user's explicit
-  instruction.
+  remain at 0%.** **Continued, same day:** driver-app's `driver/chat.tsx`
+  (driver<->rider in-ride chat — AsyncStorage-then-backend history load,
+  optimistic-send, quick replies, typing indicator) and rider-app's
+  `saved-places.tsx` (address book — type-chip label seeding, geocode
+  flow, delete confirm), `otp.tsx` (auth-critical OTP verification —
+  token/userData/reactivation branches, resend rate-limit handling, the
+  post-verify consent-check routing), `pick-on-map.tsx` (map-drag
+  picker — AI-mode vs. normal-mode location bootstrap, debounced
+  reverse-geocode, the ~60m address-staleness guard), and
+  `chat-driver.tsx` (rider<->driver chat, same shape as driver-app's).
+  55 more tests; full suites still green (rider-app 834, driver-app 904).
+  **45 of 76 screens done, ~31 remain at 0%.** Two new footguns hit and
+  documented inline: React's passive-effect commit is a microtask, so a
+  single large `jest.advanceTimersByTime()` call only fires the FIRST
+  timer in a self-rearming countdown loop (step 1s at a time, flushing
+  between each step); and wrapping a hand-rolled zustand-style mock in a
+  fresh arrow function inside `jest.mock()`'s factory silently drops any
+  static property (e.g. `.getState`) attached to the original function.
+  This sub-item is **still not closed** — continuing screen-by-screen in
+  further sessions per the user's explicit instruction.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

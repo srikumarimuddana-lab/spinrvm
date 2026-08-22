@@ -7989,7 +7989,22 @@ record of what was assumed vs. what was actually true</summary>
   `require('../app/ai-assistant')` with no render, confirming it fails
   at import time; fixed by mocking `expo-speech-recognition` directly.
   22 tests; full rider-app suite still green (999), `yarn tsc --noEmit`
-  clean. **64 of 76 screens done, ~12 remain at 0%.**
+  clean. **64 of 76 screens done, ~12 remain at 0%. Continued, same
+  day:** rider-app's `ride-in-progress.tsx` (ride-critical in-trip
+  screen — live map, ETA, end-ride-early flow, share trip). Covers
+  fetch-on-mount + no-rideId redirect home + 15s poll-only-when-not-
+  WS-connected; the redirect to `/ride-completed` on status flip; the
+  Tracking-Not-Configured gate on `handleShareTrip` (reused the
+  `TrackBaseUrlContext` Provider-wrap convention from
+  `driverArrivingScreen.test.tsx`) vs. its formatted share + LIVE-banner
+  activation; handleCopyTrackingLink; Live Map nav; the End Ride action
+  (footer button and the identical hardware-back dialog) quoting the
+  full agreed fare, POSTing `/complete` and refetching on confirm, with
+  a failure toast; Message Driver nav; and the driver-photo error
+  fallback. No new footguns — reused established map/bottom-sheet/
+  ConfirmSheet mock doubles verbatim. 14 tests; full rider-app suite
+  still green (1013), `yarn tsc --noEmit` clean. **65 of 76 screens
+  done, ~11 remain at 0%.**
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

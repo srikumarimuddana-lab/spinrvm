@@ -106,9 +106,9 @@ export function ImportTab() {
                 <div className="space-y-3">
                     <div className="flex items-center gap-2 text-sm">
                         {report.can_commit ? (
-                            <CheckCircle2 className="h-4 w-4 text-green-600" />
+                            <CheckCircle2 className="h-4 w-4 text-success" />
                         ) : (
-                            <AlertTriangle className="h-4 w-4 text-amber-600" />
+                            <AlertTriangle className="h-4 w-4 text-warning" />
                         )}
                         <span>
                             {report.counts.entities} entities — {report.counts.new} new,{" "}

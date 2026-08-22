@@ -36,10 +36,10 @@ import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Copy, Mail, PauseCircle, PlayCircle, RefreshCw, UserPlus } from "lucide-react";
 
 const STATUS_COLORS: Record<CorporateMemberStatus, string> = {
-    invited: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300",
-    active: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
-    suspended: "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300",
-    removed: "bg-gray-200 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
+    invited: "bg-warning/15 text-warning",
+    active: "bg-success/15 text-success",
+    suspended: "bg-destructive/15 text-destructive",
+    removed: "bg-muted text-muted-foreground",
 };
 
 type Filter = "all" | CorporateMemberStatus;
@@ -194,8 +194,8 @@ export default function MembersPage() {
                             className={
                                 "flex flex-wrap items-center gap-2 rounded p-2 text-xs " +
                                 (feedback.kind === "ok"
-                                    ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-800 dark:text-emerald-300"
-                                    : "bg-amber-50 dark:bg-amber-900/10 text-amber-800 dark:text-amber-300")
+                                    ? "bg-success/15 text-success"
+                                    : "bg-warning/15 text-warning")
                             }
                         >
                             <span>{feedback.text}</span>

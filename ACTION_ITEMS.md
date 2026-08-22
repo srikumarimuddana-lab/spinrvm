@@ -7793,9 +7793,35 @@ record of what was assumed vs. what was actually true</summary>
   was found and PINNED (not fixed — out of scope) while testing
   `ride-tracking-webview.tsx`: `fetchTrackingUrl` never clears a prior
   `error` state, so a successful retry after a failed fetch still shows
-  the stale error view instead of the WebView. This sub-item is **still
-  not closed** — continuing screen-by-screen in further sessions per the
-  user's explicit instruction.
+  the stale error view instead of the WebView. **Continued, same day:**
+  driver-app's `documents.tsx` (upload/verification center — camera/
+  gallery/file picker paths, legacy-import documents-gap notice gated on
+  BOTH legacy metadata AND zero documents) and `profile-setup.tsx`
+  (auth-critical onboarding form — field-specific validation order,
+  best-effort non-blocking driver auto-registration, referral-apply
+  idempotency on an "already applied" 400). 32 more tests; full suite
+  still green (driver-app 966). **54 of 76 screens done, ~22 remain at
+  0%.** Also fixed a **real, CI-blocking `tsc --noEmit` failure** found
+  while investigating a batch of `rider-app-test`/`driver-app-test`
+  check-run failure notifications on this PR: pulled the actual job log
+  (rather than assuming another stale-superseded-SHA false alarm, per
+  the many genuine ones earlier in this same session from rapid
+  sequential pushes) and confirmed 3 real, pre-existing type errors
+  across 4 test files already on this branch (`indexScreen.test.tsx`,
+  `supportScreen.test.tsx`, `helpScreen.test.tsx`,
+  `backgroundMessaging.android.test.ts`) — none introduced by this
+  session, all now fixed: (1) partial `user` objects passed to a mocked
+  `useAuthStore.setState()` not satisfying the real `User` type's
+  required fields, fixed with `as any`; (2) `jest.fn(() => null)`
+  inferring a zero-arg signature then called with a prop object
+  (TS2554), fixed by typing the mock's own parameter; (3) mocks declared
+  zero-arg while their `jest.mock()` factories spread a variadic
+  `...a: unknown[]` into them (TS2556), fixed with explicit rest-param
+  signatures; plus one `.mockResolvedValueOnce(null)` against a mock
+  typed to always resolve a bare `string`. `yarn tsc --noEmit` now
+  passes clean on both apps. This sub-item is **still not closed** —
+  continuing screen-by-screen in further sessions per the user's
+  explicit instruction.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

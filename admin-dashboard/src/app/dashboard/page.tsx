@@ -92,7 +92,7 @@ export default function DashboardPage() {
             </div>
 
             {error && (
-                <div className="rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
+                <div className="rounded-md border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
                     Dashboard data is temporarily unavailable. Check backend health and try again.
                 </div>
             )}
@@ -129,7 +129,7 @@ export default function DashboardPage() {
                     </div>
 
                     {aggOff && (
-                        <div className="rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/10 px-4 py-2 text-xs text-amber-800 dark:text-amber-300">
+                        <div className="rounded-md border border-warning/30 bg-warning/10 px-4 py-2 text-xs text-warning">
                             Revenue figures need PostgREST aggregate functions enabled on the Supabase project (counts are unaffected).
                         </div>
                     )}

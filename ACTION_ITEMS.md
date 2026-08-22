@@ -7782,8 +7782,19 @@ record of what was assumed vs. what was actually true</summary>
   'driver' funnel tag, hasAttemptedVerification gating the post-verify
   redirect effect so a stale store user can't fire it prematurely). 17
   more tests; full suite still green (driver-app 932). **49 of 76
-  screens done, ~27 remain at 0%.** This sub-item is **still not
-  closed** — continuing screen-by-screen in further sessions per the
+  screens done, ~27 remain at 0%.** **Continued, same day:** driver-app's
+  `driver/(tabs)/activity.tsx` (Activity tab wrapper) and rider-app's
+  `ride-tracking-webview.tsx` (security-relevant public live-tracking
+  WebView — trackingUrl host-allowlist sanitization against a deep-link
+  phishing-injection vector) and `driver-arrived.tsx` (ride-critical OTP
+  handoff/cancellation-fee flow, live map). 28 more tests; full suites
+  still green (rider-app 887, driver-app 934). **52 of 76 screens done,
+  ~24 remain at 0%.** A real (pre-existing, unrelated to this pass) bug
+  was found and PINNED (not fixed — out of scope) while testing
+  `ride-tracking-webview.tsx`: `fetchTrackingUrl` never clears a prior
+  `error` state, so a successful retry after a failed fetch still shows
+  the stale error view instead of the WebView. This sub-item is **still
+  not closed** — continuing screen-by-screen in further sessions per the
   user's explicit instruction.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),

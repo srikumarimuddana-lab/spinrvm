@@ -7402,6 +7402,162 @@ record of what was assumed vs. what was actually true</summary>
     *measured* number; only then does re-running this same
     tighten-to-measured-minus-one pass make sense — tightening the
     threshold alone with no new tests would just make the gate red.
+- **Fix applied (real tests for rider-app's `lib/`+`services/`,
+  2026-08-22, same day — user asked to "widen rider-app's lib/ and
+  services/ to raise coverage further"):** all 5 files in these two
+  directories had zero tests (`lib/alert.ts`, `lib/notifyError.ts`,
+  `lib/shareTripMessage.ts`, `services/rideLiveNotification.ts`,
+  `services/rideVoltraLiveActivity.ts`) — they were already inside
+  `collectCoverageFrom` (from the earlier widening pass above) but
+  contributed 0% each to the measured total. Wrote a real test file for
+  each:
+  - `lib/__tests__/alert.test.ts` — pins `showErrorAlert`'s documented
+    message-resolution order (messageKey → message → raw string →
+    `errors.unknown` fallback) and the actionHint append behavior.
+  - `lib/__tests__/notifyError.test.ts` — pins the severity→variant
+    remap this file exists for (`'error'` → `'danger'`, everything else
+    passes through), and both fallback-message paths.
+  - `lib/__tests__/shareTripMessage.test.ts` — pins the file's own
+    stated regression (never fabricate a placeholder address; the
+    message went to a rider's real emergency contacts) plus every
+    field's honest-fallback text (`'Unknown'`, `'Pending'`, etc.).
+  - `services/__tests__/rideLiveNotification.test.ts` — pins the
+    Android-only gate, the fixed notification id two call sites must
+    share, `handleFcmData`'s `end`→cancel vs. update routing, and that a
+    native-call failure is swallowed (this can run from a background FCM
+    handler with nothing to catch a throw).
+  - `services/__tests__/rideVoltraLiveActivity.test.ts` — same shape for
+    the iOS/Voltra counterpart: iOS-only gate, fixed activity name, and
+    swallowed native failures for start/end/listener-registration.
+  - One real bug caught in test-authoring, not production code: an
+    initial draft of both service tests called `jest.resetModules()`
+    before each Platform-gated case, which silently swapped in a *new*
+    mocked `Platform` object via the `jest.mock('react-native', ...)`
+    factory — decoupling the test's own `Platform.OS` mutation from the
+    module under test and producing a false pass (the "non-Android"/
+    "non-iOS" no-op assertions were actually exercising the Android/iOS
+    path). Caught because the tests failed loudly instead of silently;
+    fixed by requiring the module once and mutating the shared `Platform`
+    object directly.
+  - All 5 files now measure 100% lines/statements/functions and
+    90–100% branches (the couple of sub-100% branches are real
+    unreached edges, e.g. Voltra's optional-chaining `?.()` guard when
+    the native method itself is undefined — not gap-covered, left as
+    residual since testing it needs faking a *stub* SDK, no clean
+    conflict). Full suite: 75 suites / 603 tests passing (was 70/560).
+  - Re-measured aggregate: **21.37% lines / 21.28% statements / 17.85%
+    functions / 16.64% branches** (up from 20.08%/19.96%/16.77%/15.47%).
+    Threshold tightened again to `lines:20, functions:16, branches:15`
+    (was `19/15/14`) — same measured-minus-1 convention as every prior
+    tightening pass in this item.
+  - Verified locally: `yarn jest --coverage` exits 0 against the new
+    thresholds (75/75 suites clean).
+- **Fix applied (real tests for driver-app's `lib/`+`services/`,
+  2026-08-22, same day — user asked to "widen driver-app's lib/ and
+  services/ too"):** driver-app's `lib/`/`services/` already had partial
+  coverage (unlike rider-app's, which started at zero across the board —
+  `lib/notifyError.ts`, `services/pendingRideOffer.ts`, and all of
+  `lib/androidAuto/` already had real test files). Two files were the
+  actual gap: `lib/alert.ts` (0%, identical contract to rider-app's own
+  `alert.ts`) and `services/notifeeService.ts` (~15% lines, 0% functions
+  — the ride-offer "incoming call" notification, a safety/earnings-critical
+  surface: a driver who never sees an offer never gets the ride).
+  `services/backgroundMessaging.ts` (48.57%) already has its own test
+  file and wasn't touched here.
+  - `__tests__/lib/alert.test.ts` — same coverage shape as rider-app's,
+    adjusted for driver-app's own `i18n`/`react-native` mock paths.
+  - `__tests__/services/notifeeService.test.ts` — pins
+    `ensureNotifeeReady`'s Android-vs-iOS channel/category setup and its
+    once-only idempotency (critical: Android channel sound is
+    **immutable** once created on a device per the file's own comment,
+    so a double-create bug would be a silent, permanent regression),
+    `displayRideOfferNotification`'s timeout resolution and its two-tier
+    fallback (a failed rich render must still surface a basic, actionable
+    notification — the driver missing an offer notification is a direct
+    earnings-and-availability regression, not a cosmetic one),
+    `dismissRideOfferNotification`'s cleanup, and `parseRideOfferEvent`'s
+    accept/decline/tap routing.
+  - Same `jest.resetModules()` + `Platform.OS` mutation pitfall as the
+    rider-app pass above, caught before it shipped: this file's tests
+    *do* need `resetModules()` between cases (to clear
+    `ensureNotifeeReady`'s own `channelReadyPromise` singleton so each
+    test starts from an unconfigured state) — so instead of importing
+    `Platform` directly and mutating it, the mock factory returns a
+    stable object reference (`const mockPlatform = { OS: 'android' };
+    jest.mock('react-native', () => ({ Platform: mockPlatform }))`) so
+    mutating `.OS` survives the factory being re-invoked by
+    `resetModules()`. Also caught and fixed independently: an early
+    draft left `displayRideOfferNotification`'s real 15-second dismiss
+    `setTimeout` uncleared between tests, causing a "worker process
+    failed to exit gracefully" warning — fixed with
+    `jest.useFakeTimers()`/`useRealTimers()` around each test.
+  - `lib/alert.ts`: 0% → 100% lines/statements/functions, 90.47%
+    branches. `services/notifeeService.ts`: ~15%/0% → 91.78% lines /
+    89.87% statements / 70% functions / 79.48% branches (not 100% —
+    `ensureNotifeeReady`'s two `.catch(() => undefined)` no-op guards
+    and the fallback-render's own nested error path have residual
+    unreached lines, left as-is rather than forcing brittle
+    exact-branch-count assertions). Full suite: 76 suites / 707 tests
+    passing (was 74/679).
+  - Re-measured aggregate: **33.9% lines / 32.91% statements / 26.77%
+    functions** (no `branches` key tracked here, matching this config's
+    pre-existing pattern; up from 32.91%/31.97%/26.26%). Threshold
+    tightened to `lines:32, functions:25 (unchanged), statements:31`
+    (was `31/25/30`).
+  - Verified locally: `yarn jest --coverage` exits 0 against the new
+    thresholds (76/76 suites clean, no flake on this run).
+- **Fix applied (`services/backgroundMessaging.ts`'s remaining
+  coverage, driver-app, 2026-08-22, same day — user asked to "widen
+  backgroundMessaging.ts's remaining coverage too"):**
+  `backgroundMessaging.ts` had an existing test file
+  (`__tests__/services/backgroundMessaging.test.ts`), but that file
+  deliberately pins `Platform.OS='ios'` (jest-expo's default) "to keep
+  this suite on the persist + republish path" per its own header
+  comment — meaning every Android/Notifee branch was untested by
+  design, not by oversight: the rich ride-offer notification render,
+  the `location_health` GPS-recovery branch, and
+  `notifee.onBackgroundEvent`'s accept/decline/tap routing (the file's
+  own comment: this is the **only** place a lock-screen decline reaches
+  the backend while the app is killed — an undelivered decline costs
+  the driver a strike toward auto-offline, so this routing has real
+  driver-availability consequences, not just UX ones).
+  - Added a second test file,
+    `__tests__/services/backgroundMessaging.android.test.ts`, covering
+    exactly what the existing iOS-focused file skips: pure-function
+    tests for the exported `offerDisplayDataFromFcm` mapper, the
+    Android notification-render path (including the muted/unmuted
+    sound-preference branch), the `location_health` recovery branch
+    (success and failure), and all three `onBackgroundEvent` outcomes
+    (accept/decline/tap) including the decline flow's real HTTP-status
+    branches (200 delivered, 409 terminal-no-retry, 5xx/network-error/
+    no-token → stash for retry on next app open).
+  - This file reads `Platform.OS` in a **module-load-time** `if` block
+    (to decide whether to `require()` notifee/notifeeService at all),
+    unlike the other service files fixed earlier in this session that
+    read it per-call — so the fix used for those (mutate a shared
+    `Platform` object once, no `resetModules()`) doesn't apply here;
+    this file genuinely needs `resetModules()` per test (so the
+    Platform-gated require actually re-runs), so it uses the same
+    stable-mock-object pattern already proven in
+    `notifeeService.test.ts`.
+  - `backgroundMessaging.ts` itself: 48.57% lines / 58.33% functions /
+    46.95% branches → **96.19% lines / 100% functions / 93.33%
+    statements / 88.69% branches**. Full suite: 77 suites / 725 tests
+    (was 76/707), no flake on either run.
+  - Re-measured aggregate: **34.62% lines / 33.66% statements / 27.05%
+    functions** (up from 33.9%/32.91%/26.77%). Threshold tightened to
+    `lines:33, functions:26, statements:32` (was `32/25/31`).
+  - Verified locally: `yarn jest --coverage` exits 0 against the new
+    thresholds (77/77 suites clean).
+  - **This closes out the entirety of the B37 `lib/`+`services/`
+    test-authoring thread** across both apps — every file the user
+    asked to widen (rider-app's 5, driver-app's `alert.ts` +
+    `notifeeService.ts` + now `backgroundMessaging.ts`'s remaining
+    branches) is done. No further untested files remain in either
+    app's `lib/`/`services/` directories at a level worth its own pass
+    (the residual gaps that remain — e.g. `notifeeService.ts`'s two
+    `.catch(() => undefined)` no-op guards — are single defensive
+    lines, not meaningful behavior gaps).
 - **What's wrong (three distinct, compounding gaps):**
   1. **admin-dashboard's coverage threshold is configured but structurally
      dead in CI.** `admin-dashboard/vitest.config.ts` sets real thresholds
@@ -7495,6 +7651,24 @@ record of what was assumed vs. what was actually true</summary>
      than a contrived test, so treat "100%" as "100% of reachable,
      meaningfully-testable code, with every exclusion justified inline,"
      not literally 100% of every line the tool can count.
+- **Fix applied (sub-item 4 progress, `app/` screens test-authoring, in
+  progress 2026-08-22):** 76 of 88 `app/` screens across rider-app (41/48)
+  and driver-app (35/40) were at 0% line coverage even after the
+  directory widening above made them measurable. User explicitly chose to
+  go broad screen-by-screen (prioritizing coverage volume over risk-based
+  ordering) rather than a risk-prioritized subset. First two passes wrote
+  real tests for 8 screens: rider-app's `legal.tsx`, `policies.tsx`,
+  `legacy-consent-notice.tsx`, `support.tsx`, `reactivate-account.tsx`,
+  `accessibility.tsx`; driver-app's `legal.tsx`, `policies.tsx`,
+  `legacy-consent-notice.tsx`, `index.tsx` (the cold-start auth routing
+  gate), `reactivate-account.tsx`, `crc-consent.tsx` (PIPEDA background-
+  check consent). 65 new tests total, all passing; full suites remain
+  green (rider-app 633, driver-app 770). Aggregate coverage barely moved
+  (`app/` is 48+40 files; 8 screens is a small fraction) — thresholds were
+  not re-tightened this round since measured coverage stayed within the
+  existing floor. This sub-item is **not** closed — ~68 screens remain at
+  0%; continuing screen-by-screen in further sessions per the user's
+  explicit instruction.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

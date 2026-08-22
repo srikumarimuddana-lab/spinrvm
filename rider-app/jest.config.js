@@ -79,18 +79,18 @@ module.exports = {
     global: {
       // ACTION_ITEMS.md B37: tightened to a near-ceiling floor 2026-08-22
       // (user asked to "raise the thresholds toward the real ceiling").
-      // Every top-level source dir is now measured (store/, hooks/,
-      // utils/, app/, components/, lib/, services/); fresh measurement:
-      // lines 20.08%, statements 19.96%, functions 16.77%, branches
-      // 15.47%. Previously carried several points of headroom
-      // (lines:17/functions:13/branches:12); now only ~1pt below
-      // measured, so this is a tight regression tripwire, not slack.
-      // Raising further requires new tests, not just re-measuring --
-      // this is NOT the user's stated 100% target, only the honest
-      // ceiling of what's currently tested.
-      lines: 19,
-      functions: 15,
-      branches: 14,
+      // Raised again same day after adding real tests for all 5 files in
+      // lib/+services/ that previously had zero coverage (alert.ts,
+      // notifyError.ts, shareTripMessage.ts, rideLiveNotification.ts,
+      // rideVoltraLiveActivity.ts -- each now at or near 100%). Fresh
+      // measurement: lines 21.37%, statements 21.28%, functions 17.85%,
+      // branches 16.64% (up from 20.08%/19.96%/16.77%/15.47%). Raising
+      // further requires more new tests, not just re-measuring -- this is
+      // NOT the user's stated 100% target, only the honest ceiling of
+      // what's currently tested.
+      lines: 20,
+      functions: 16,
+      branches: 15,
     },
   },
 };

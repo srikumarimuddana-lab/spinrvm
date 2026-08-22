@@ -7392,6 +7392,56 @@ record of what was assumed vs. what was actually true</summary>
     *measured* number; only then does re-running this same
     tighten-to-measured-minus-one pass make sense — tightening the
     threshold alone with no new tests would just make the gate red.
+- **Fix applied (real tests for rider-app's `lib/`+`services/`,
+  2026-08-22, same day — user asked to "widen rider-app's lib/ and
+  services/ to raise coverage further"):** all 5 files in these two
+  directories had zero tests (`lib/alert.ts`, `lib/notifyError.ts`,
+  `lib/shareTripMessage.ts`, `services/rideLiveNotification.ts`,
+  `services/rideVoltraLiveActivity.ts`) — they were already inside
+  `collectCoverageFrom` (from the earlier widening pass above) but
+  contributed 0% each to the measured total. Wrote a real test file for
+  each:
+  - `lib/__tests__/alert.test.ts` — pins `showErrorAlert`'s documented
+    message-resolution order (messageKey → message → raw string →
+    `errors.unknown` fallback) and the actionHint append behavior.
+  - `lib/__tests__/notifyError.test.ts` — pins the severity→variant
+    remap this file exists for (`'error'` → `'danger'`, everything else
+    passes through), and both fallback-message paths.
+  - `lib/__tests__/shareTripMessage.test.ts` — pins the file's own
+    stated regression (never fabricate a placeholder address; the
+    message went to a rider's real emergency contacts) plus every
+    field's honest-fallback text (`'Unknown'`, `'Pending'`, etc.).
+  - `services/__tests__/rideLiveNotification.test.ts` — pins the
+    Android-only gate, the fixed notification id two call sites must
+    share, `handleFcmData`'s `end`→cancel vs. update routing, and that a
+    native-call failure is swallowed (this can run from a background FCM
+    handler with nothing to catch a throw).
+  - `services/__tests__/rideVoltraLiveActivity.test.ts` — same shape for
+    the iOS/Voltra counterpart: iOS-only gate, fixed activity name, and
+    swallowed native failures for start/end/listener-registration.
+  - One real bug caught in test-authoring, not production code: an
+    initial draft of both service tests called `jest.resetModules()`
+    before each Platform-gated case, which silently swapped in a *new*
+    mocked `Platform` object via the `jest.mock('react-native', ...)`
+    factory — decoupling the test's own `Platform.OS` mutation from the
+    module under test and producing a false pass (the "non-Android"/
+    "non-iOS" no-op assertions were actually exercising the Android/iOS
+    path). Caught because the tests failed loudly instead of silently;
+    fixed by requiring the module once and mutating the shared `Platform`
+    object directly.
+  - All 5 files now measure 100% lines/statements/functions and
+    90–100% branches (the couple of sub-100% branches are real
+    unreached edges, e.g. Voltra's optional-chaining `?.()` guard when
+    the native method itself is undefined — not gap-covered, left as
+    residual since testing it needs faking a *stub* SDK, no clean
+    conflict). Full suite: 75 suites / 603 tests passing (was 70/560).
+  - Re-measured aggregate: **21.37% lines / 21.28% statements / 17.85%
+    functions / 16.64% branches** (up from 20.08%/19.96%/16.77%/15.47%).
+    Threshold tightened again to `lines:20, functions:16, branches:15`
+    (was `19/15/14`) — same measured-minus-1 convention as every prior
+    tightening pass in this item.
+  - Verified locally: `yarn jest --coverage` exits 0 against the new
+    thresholds (75/75 suites clean).
 - **What's wrong (three distinct, compounding gaps):**
   1. **admin-dashboard's coverage threshold is configured but structurally
      dead in CI.** `admin-dashboard/vitest.config.ts` sets real thresholds

@@ -60,9 +60,9 @@ import { useRequireModule } from "@/hooks/useRequireModule";
 import { useToast } from "@/components/ui/use-toast";
 
 const STATUS_PILL_CLASSES: Record<CompanyStatus, string> = {
-    pending_verification: "bg-yellow-100 text-yellow-800 hover:bg-yellow-100 dark:bg-yellow-900/40 dark:text-yellow-300",
+    pending_verification: "bg-warning/15 text-warning hover:bg-warning/15",
     active: "bg-success/15 text-success hover:bg-success/15",
-    suspended: "bg-orange-100 text-orange-800 hover:bg-orange-100 dark:bg-orange-900/30 dark:text-orange-300",
+    suspended: "bg-destructive/15 text-destructive hover:bg-destructive/15",
     closed: "bg-muted text-muted-foreground hover:bg-muted",
 };
 
@@ -329,9 +329,9 @@ export default function CorporateAccountsPage() {
             {/* Wallet risk portfolio — flags across every company at once,
                 so a risk doesn't require opening each account individually. */}
             {!riskLoading && flaggedWallets.length > 0 && (
-                <Card className="border-amber-300/50 bg-amber-50/40 dark:bg-amber-950/10">
+                <Card className="border-warning/40 bg-warning/10">
                     <CardContent className="p-4">
-                        <div className="flex items-center gap-2 text-sm font-semibold text-amber-800 dark:text-amber-400 mb-2">
+                        <div className="flex items-center gap-2 text-sm font-semibold text-warning mb-2">
                             <AlertTriangle className="h-4 w-4" />
                             {flaggedWallets.length} of {totalWallets} wallets flagged
                         </div>
@@ -340,7 +340,7 @@ export default function CorporateAccountsPage() {
                                 <Link
                                     key={w.wallet_id}
                                     href={`/dashboard/corporate-accounts/${w.company_id}`}
-                                    className="flex items-center gap-1.5 rounded-md border border-amber-300/60 dark:border-amber-700/60 bg-background px-2.5 py-1 text-xs hover:border-amber-500 dark:hover:border-amber-400 transition"
+                                    className="flex items-center gap-1.5 rounded-md border border-warning/30 bg-background px-2.5 py-1 text-xs hover:border-warning transition"
                                     title={w.risk_flags.map((f) => RISK_FLAG_LABELS[f] || f).join(", ")}
                                 >
                                     <span className="font-medium">{w.company_name || w.company_id.slice(0, 8)}</span>

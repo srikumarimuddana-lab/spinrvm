@@ -146,7 +146,7 @@ function ActionBubble({ action, onQuickSend }: { action: AiAction; onQuickSend: 
                                         .join(" · ")}
                                 </span>
                                 {hasSavings ? (
-                                    <span className="block text-xs font-medium text-green-600">
+                                    <span className="block text-xs font-medium text-success">
                                         {q.promo_code} · save ${q.promo_savings}
                                     </span>
                                 ) : (
@@ -178,7 +178,7 @@ function ActionBubble({ action, onQuickSend }: { action: AiAction; onQuickSend: 
                                 </p>
                             ))}
                             {rec.promo_savings && (
-                                <p className="flex justify-between text-xs font-medium text-green-600">
+                                <p className="flex justify-between text-xs font-medium text-success">
                                     <span>Promo {rec.promo_code}</span>
                                     <span>-${rec.promo_savings}</span>
                                 </p>

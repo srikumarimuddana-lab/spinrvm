@@ -328,7 +328,9 @@ export default function TrackRide() {
     return (
       <Centered>
         <div className="text-center">
+          {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
           <div className="animate-spin rounded-full h-10 w-10 border-2 border-gray-200 border-t-gray-800 mx-auto mb-4" />
+          {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
           <p className="text-sm text-gray-500 font-medium">Loading trip…</p>
         </div>
       </Centered>
@@ -338,8 +340,11 @@ export default function TrackRide() {
   if (error || !ride) {
     return (
       <Centered>
+        {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
         <div className="bg-white p-8 rounded-2xl shadow-sm max-w-sm w-full text-center border border-gray-100">
+          {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
           <h1 className="text-lg font-semibold text-gray-900 mb-1">Tracking unavailable</h1>
+          {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
           <p className="text-sm text-gray-500">{error || 'This link may have expired or the ride has ended.'}</p>
         </div>
       </Centered>
@@ -347,9 +352,11 @@ export default function TrackRide() {
   }
 
   return (
+    // eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816)
     <div className="min-h-screen bg-gray-50 flex flex-col">
       {/* Map — explicit height so the canvas always has dimensions on first paint */}
       <div className="relative w-full" style={{ height: '60vh', minHeight: 320 }}>
+        {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
         <div ref={mapContainerRef} className="absolute inset-0 bg-gray-200" />
 
         {GMAPS_KEY ? (
@@ -359,6 +366,7 @@ export default function TrackRide() {
             onLoad={() => setMapsReady(true)}
           />
         ) : (
+          // eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816)
           <div className="absolute inset-0 flex items-center justify-center bg-gray-100 text-gray-500 text-sm px-4 text-center">
             Map unavailable — set <code className="mx-1">NEXT_PUBLIC_GOOGLE_MAPS_API_KEY</code> in Vercel
           </div>
@@ -367,10 +375,12 @@ export default function TrackRide() {
         {/* Status pill */}
         <div className="absolute top-4 left-4 right-4 mx-auto max-w-md flex items-center gap-2 px-3 py-2 rounded-full shadow-sm bg-white/95 backdrop-blur">
           <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: statusCfg.color }} />
+          {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
           <span className="text-xs font-semibold text-gray-700 tracking-wide">
             {statusCfg.label.toUpperCase()}
           </span>
           {isActive && ride.eta_minutes != null && (
+            // eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816)
             <span className="ml-auto text-xs font-medium text-gray-500">
               ETA {ride.eta_minutes} min
             </span>
@@ -380,42 +390,53 @@ export default function TrackRide() {
 
       {/* Bottom sheet */}
       <div className="bg-white rounded-t-3xl -mt-6 shadow-[0_-8px_30px_rgba(0,0,0,0.06)] relative">
+        {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
         <div className="mx-auto w-12 h-1.5 bg-gray-200 rounded-full mt-3" />
 
         <div className="px-5 pt-5 pb-4">
           {ride.eta_minutes != null && isActive ? (
             <div className="flex items-baseline gap-2">
+              {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
               <span className="text-3xl font-semibold text-gray-900 tracking-tight">{ride.eta_minutes}</span>
+              {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
               <span className="text-sm text-gray-500 font-medium">min away</span>
             </div>
           ) : (
+            // eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816)
             <div className="text-base font-semibold text-gray-900">{statusCfg.label}</div>
           )}
+          {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
           {ride.message && <p className="text-sm text-gray-500 mt-1">{ride.message}</p>}
         </div>
 
         {/* Driver card */}
         {ride.driver && (
+          // eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816)
           <div className="mx-5 mb-5 rounded-2xl border border-gray-100 bg-gray-50/70 p-4 flex items-center gap-4">
             <div className="relative">
               {ride.driver.photo_url ? (
                 <img src={ride.driver.photo_url} alt={driverName} className="w-12 h-12 rounded-full object-cover" />
               ) : (
+                // eslint-disable-next-line no-restricted-syntax -- decorative avatar-placeholder tint, not a status signal (#2816)
                 <div className="w-12 h-12 rounded-full bg-gray-900 text-white flex items-center justify-center font-semibold">
                   {driverInitial}
                 </div>
               )}
               {typeof ride.driver.rating === 'number' && (
+                // eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816)
                 <span className="absolute -bottom-1 -right-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-white border border-gray-200 text-gray-700">
                   ★ {ride.driver.rating.toFixed(1)}
                 </span>
               )}
             </div>
             <div className="flex-1 min-w-0">
+              {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
               <div className="text-sm font-semibold text-gray-900 truncate">{driverName}</div>
+              {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
               {vehicleLine && <div className="text-xs text-gray-500 truncate mt-0.5">{vehicleLine}</div>}
             </div>
             {ride.driver.license_plate && (
+              // eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816)
               <div className="px-2.5 py-1 rounded-md bg-white border border-gray-200 text-xs font-mono font-semibold text-gray-900 tracking-wider">
                 {ride.driver.license_plate}
               </div>
@@ -424,26 +445,35 @@ export default function TrackRide() {
         )}
 
         {/* Route */}
+        {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
         <div className="mx-5 mb-5 rounded-2xl border border-gray-100 p-4">
+          {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
           <div className="flex gap-3 relative before:absolute before:top-2 before:bottom-2 before:left-[7px] before:w-0.5 before:bg-gray-200">
             <div className="flex flex-col items-center pt-1">
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative pickup map-pin marker color (#2816) */}
               <span className="w-4 h-4 rounded-full bg-emerald-500 border-2 border-white shadow-sm z-10" />
               <span className="flex-1" />
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative dropoff map-pin marker color (#2816) */}
               <span className="w-4 h-4 rounded-sm bg-red-500 border-2 border-white shadow-sm z-10" />
             </div>
             <div className="flex-1 space-y-3">
               <div>
+                {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
                 <div className="text-[10px] font-semibold text-gray-400 tracking-wider uppercase">Pickup</div>
+                {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
                 <div className="text-sm text-gray-900 mt-0.5">{ride.pickup_address}</div>
               </div>
               <div>
+                {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
                 <div className="text-[10px] font-semibold text-gray-400 tracking-wider uppercase">Drop-off</div>
+                {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
                 <div className="text-sm text-gray-900 mt-0.5">{ride.dropoff_address}</div>
               </div>
             </div>
           </div>
         </div>
 
+        {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
         <div className="px-5 pb-4 flex items-center justify-between text-[11px] text-gray-400">
           <span>{ride.ride_code ? `Ref ${ride.ride_code}` : ''}</span>
           {isActive && lastUpdated && (
@@ -451,7 +481,9 @@ export default function TrackRide() {
           )}
         </div>
 
+        {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
         <div className="py-3 text-center text-[11px] text-gray-400 border-t border-gray-100">
+          {/* eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816) */}
           Live tracking · <span className="font-semibold text-gray-500">Spinr</span>
         </div>
       </div>
@@ -461,6 +493,7 @@ export default function TrackRide() {
 
 function Centered({ children }: { children: React.ReactNode }) {
   return (
+    // eslint-disable-next-line no-restricted-syntax -- neutral UI chrome on this fixed-light, non-theme-aware rider tracking page (#2816)
     <div className="flex items-center justify-center min-h-screen bg-gray-50 p-4">
       {children}
     </div>

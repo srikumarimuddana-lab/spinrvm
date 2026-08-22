@@ -276,7 +276,8 @@ export default function ApprovalQueuePage() {
                                     variant="outline"
                                     className={
                                         it.status === "pending"
-                                            ? "bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300 border-blue-200 dark:border-blue-800"
+                                            ? // eslint-disable-next-line no-restricted-syntax -- "pending" (new, neither good nor bad) has no semantic-token equivalent; must stay distinct from the other statuses (#2816)
+                                              "bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300 border-blue-200 dark:border-blue-800"
                                             : "bg-warning/15 text-warning border-warning/30"
                                     }
                                 >
@@ -285,6 +286,7 @@ export default function ApprovalQueuePage() {
                                 {it.has_pending_photo && tab !== "photo" && (
                                     <Badge
                                         variant="outline"
+                                        // eslint-disable-next-line no-restricted-syntax -- decorative photo-review badge accent, not a status signal (#2816)
                                         className="bg-violet-50 text-violet-700 dark:bg-violet-900/20 dark:text-violet-300 border-violet-200 dark:border-violet-800"
                                         title="Profile photo pending review"
                                     >
@@ -328,6 +330,7 @@ export default function ApprovalQueuePage() {
                                     <>
                                         <Button
                                             size="sm"
+                                            // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text button; dark-mode --success (2.02:1) fails WCAG AA against white text (#2816)
                                             className="h-8 bg-emerald-600 hover:bg-emerald-700 text-white px-2.5"
                                             disabled={photoActingId === it.driver_id}
                                             onClick={() => handlePhotoReview(it.driver_id, "approve")}

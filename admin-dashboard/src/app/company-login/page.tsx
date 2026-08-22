@@ -108,7 +108,9 @@ function CompanyLoginInner() {
         <div className="flex min-h-screen items-center justify-center bg-background p-4">
             <Card className="w-full max-w-md">
                 <CardHeader className="space-y-2 text-center">
+                    {/* eslint-disable-next-line no-restricted-syntax -- decorative brand icon badge, not a status signal (#2816) */}
                     <div className="mx-auto rounded-lg bg-emerald-50 dark:bg-emerald-900/20 p-3 w-fit">
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative brand icon badge, not a status signal (#2816) */}
                         <Building2 className="h-7 w-7 text-emerald-600 dark:text-emerald-400" />
                     </div>
                     <CardTitle className="text-xl">Spinr for Business</CardTitle>

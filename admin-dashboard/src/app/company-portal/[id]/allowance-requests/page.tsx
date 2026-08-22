@@ -33,12 +33,15 @@ import { Check, X } from "lucide-react";
 
 type Filter = AllowanceRequestRow["status"] | "all";
 
+/* eslint-disable no-restricted-syntax -- categorical allowance-request status map (4 states), not a
+   success/warning/destructive signal — too many states for the 3-token system (#2816) */
 const STATUS_COLORS: Record<AllowanceRequestRow["status"], string> = {
     pending: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300",
     approved: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
     auto_approved: "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300",
     denied: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
 };
+/* eslint-enable no-restricted-syntax */
 
 export default function AllowanceRequestsPage() {
     const { id } = useParams<{ id: string }>();

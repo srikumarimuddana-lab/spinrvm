@@ -40,12 +40,16 @@ export default function ReferralSpendSummary() {
         <Card className="border-border/50">
             <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-3">
+                    {/* eslint-disable-next-line no-restricted-syntax -- decorative header icon tint, not a status signal (#2816) */}
                     <DollarSign className="h-4 w-4 text-emerald-500" />
                     <h3 className="text-sm font-semibold">Referral spend — rider + driver combined</h3>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card accent, not a status signal (#2816) */}
                     <Big icon={DollarSign} label="Total paid out" value={formatCurrency(total)} accent="text-emerald-600 dark:text-emerald-400" />
+                    {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card accent, not a status signal (#2816) */}
                     <Big icon={UserPlus} label="Referrers earned" value={formatCurrency(referrer)} accent="text-sky-600 dark:text-sky-400" />
+                    {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card accent, not a status signal (#2816) */}
                     <Big icon={Gift} label="Referees earned" value={formatCurrency(referee)} accent="text-violet-600 dark:text-violet-400" />
                 </div>
                 <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-muted-foreground">

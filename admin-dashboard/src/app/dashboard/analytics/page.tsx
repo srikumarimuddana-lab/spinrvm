@@ -295,6 +295,7 @@ function AnalyticsPageInner() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
+            {/* eslint-disable-next-line no-restricted-syntax -- decorative header icon tint, not a status signal (#2816) */}
             <BarChart3 className="h-6 w-6 text-blue-500" />
             Operational Analytics
           </h1>
@@ -379,6 +380,7 @@ function AnalyticsPageInner() {
           <Card>
             <CardContent className="pt-4">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon tint, not a status signal (#2816) */}
                 <DollarSign className="h-4 w-4 text-amber-500" /> Revenue
               </div>
               <div className="text-2xl font-bold mt-1">${overview.total_revenue?.toLocaleString()}</div>

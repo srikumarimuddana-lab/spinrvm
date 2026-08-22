@@ -61,6 +61,7 @@ export default function LiveRideTrackingPage() {
                     <div className="flex items-center gap-2">
                         <h1 className="text-lg font-bold">Live Tracking</h1>
                         {isActive && (
+                            // eslint-disable-next-line no-restricted-syntax -- decorative "live" pulsing-dot badge convention, not a status signal (#2816)
                             <span className="flex items-center gap-1 text-xs font-semibold text-blue-600 bg-blue-100 dark:bg-blue-900/30 px-2 py-0.5 rounded-md">
                                 <Radio className="h-3 w-3 animate-pulse" /> LIVE
                             </span>
@@ -110,6 +111,7 @@ export default function LiveRideTrackingPage() {
                         <div className="bg-muted/30 rounded-xl p-3 space-y-2">
                             <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Route</p>
                             <div className="flex gap-2 items-start">
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative route-marker dot color (pickup), not a status signal (#2816) */}
                                 <div className="w-2 h-2 rounded-full bg-emerald-500 mt-1.5 shrink-0" />
                                 <p className="text-sm">{ride.pickup_address}</p>
                             </div>
@@ -124,7 +126,9 @@ export default function LiveRideTrackingPage() {
                             <div className="bg-muted/30 rounded-xl p-3 space-y-2">
                                 <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Driver</p>
                                 <div className="flex items-center gap-3">
-                                    <div className="w-9 h-9 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center shrink-0">
+                                    {/* eslint-disable-next-line no-restricted-syntax -- decorative driver-role icon badge color, not a status signal (#2816) */}
+                                <div className="w-9 h-9 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center shrink-0">
+                                        {/* eslint-disable-next-line no-restricted-syntax -- decorative driver-role icon badge color, not a status signal (#2816) */}
                                         <Car className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
                                     </div>
                                     <div>
@@ -145,7 +149,9 @@ export default function LiveRideTrackingPage() {
                             <div className="bg-muted/30 rounded-xl p-3 space-y-2">
                                 <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Rider</p>
                                 <div className="flex items-center gap-3">
-                                    <div className="w-9 h-9 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center shrink-0">
+                                    {/* eslint-disable-next-line no-restricted-syntax -- decorative rider-role icon badge color, not a status signal (#2816) */}
+                                <div className="w-9 h-9 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center shrink-0">
+                                        {/* eslint-disable-next-line no-restricted-syntax -- decorative rider-role icon badge color, not a status signal (#2816) */}
                                         <User className="h-4 w-4 text-blue-600 dark:text-blue-400" />
                                     </div>
                                     <div>

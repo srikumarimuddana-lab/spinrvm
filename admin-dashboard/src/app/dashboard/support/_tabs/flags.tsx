@@ -101,6 +101,7 @@ export default function FlagsTab() {
                 : <Table><TableHeader><TableRow><SortableHead column="target_type" sort={sort} onSort={toggle}>Target</SortableHead><SortableHead column="reason" sort={sort} onSort={toggle}>Reason</SortableHead><SortableHead column="service_area_id" sort={sort} onSort={toggle}>Area</SortableHead><SortableHead column="description" sort={sort} onSort={toggle}>Description</SortableHead><SortableHead column="is_active" sort={sort} onSort={toggle}>Status</SortableHead><SortableHead column="created_at" sort={sort} onSort={toggle}>Date</SortableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
                     <TableBody>{sorted.map((f) => (
                         <TableRow key={f.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelected(f)}>
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative rider/driver icon tint, not a status signal (#2816) */}
                             <TableCell><div className="flex items-center gap-1.5">{f.target_type === "rider" ? <Users className="h-3.5 w-3.5 text-blue-500" /> : <Car className="h-3.5 w-3.5 text-emerald-500" />}<span className="text-sm capitalize">{f.target_type}</span></div></TableCell>
                             <TableCell><Badge variant="outline" className="text-[10px]">{f.reason?.replace(/_/g, " ") || "other"}</Badge></TableCell>
                             <TableCell className="text-xs text-muted-foreground">{areaName(f.service_area_id) || "—"}</TableCell>

@@ -875,12 +875,12 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
               <p className="text-[11px] text-muted-foreground pb-2">1.0 = no surge · 1.5 = +50% · 2.0 = double · Auto cap = 2.5×</p>
             </div>
             {needsJustification && (
-              <div className="rounded-lg border border-warning/40 bg-warning/10 p-3 space-y-2 mt-3">
+              <div className="rounded-lg border border-warning/30 bg-warning/10 p-3 space-y-2 mt-3">
                 <p className="text-xs font-semibold text-warning">
                   Surge above 2.5× requires documented justification (regulatory + reputational risk).
                 </p>
                 <textarea
-                  className="w-full border border-warning/40 rounded-lg px-3 py-2 text-sm"
+                  className="w-full border border-warning/30 rounded-lg px-3 py-2 text-sm"
                   rows={2}
                   placeholder="e.g. Major event surge — approved by ops lead @name on 2026-05-21"
                   value={form.surge_justification}
@@ -1220,7 +1220,7 @@ function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => 
                 {/* Status badges */}
                 <div className="px-4 py-2.5 flex items-center gap-2 flex-wrap">
                   {r.required !== false ? (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"><ShieldCheck className="h-3 w-3" /> Required</span>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-success/15 text-success"><ShieldCheck className="h-3 w-3" /> Required</span>
                   ) : (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-muted text-muted-foreground"><ShieldAlert className="h-3 w-3" /> Optional</span>
                   )}
@@ -1922,10 +1922,10 @@ function CascadeEditor({
       </div>
 
       {vehicleTypes.length === 0 ? (
-        <div className="text-center py-10 bg-warning/10 rounded-xl border-2 border-dashed border-warning/30">
-          <Car className="h-10 w-10 text-warning/60 mx-auto mb-3" />
-          <p className="text-warning font-medium">No vehicle types configured for this area</p>
-          <p className="text-warning text-sm mt-1">
+        <div className="text-center py-10 bg-amber-50 rounded-xl border-2 border-dashed border-amber-200 dark:bg-amber-900/10 dark:border-amber-800">
+          <Car className="h-10 w-10 text-amber-300 dark:text-amber-400 mx-auto mb-3" />
+          <p className="text-amber-700 dark:text-amber-400 font-medium">No vehicle types configured for this area</p>
+          <p className="text-amber-600 dark:text-amber-400 text-sm mt-1">
             Add vehicle types under the <span className="font-semibold">Vehicle Pricing</span> tab first,
             then return here to set up cascade rules.
           </p>

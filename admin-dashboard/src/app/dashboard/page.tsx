@@ -92,7 +92,7 @@ export default function DashboardPage() {
             </div>
 
             {error && (
-                <div className="rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
+                <div className="rounded-md border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
                     Dashboard data is temporarily unavailable. Check backend health and try again.
                 </div>
             )}
@@ -129,7 +129,7 @@ export default function DashboardPage() {
                     </div>
 
                     {aggOff && (
-                        <div className="rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/10 px-4 py-2 text-xs text-amber-800 dark:text-amber-300">
+                        <div className="rounded-md border border-warning/30 bg-warning/10 px-4 py-2 text-xs text-warning">
                             Revenue figures need PostgREST aggregate functions enabled on the Supabase project (counts are unaffected).
                         </div>
                     )}
@@ -140,22 +140,22 @@ export default function DashboardPage() {
                             Ride Breakdown · {rangeLabel}
                         </h3>
                         <div className="space-y-3">
-                            <BarStat label="Completed" value={bd.completed} total={rides.total} color="bg-emerald-500" />
+                            <BarStat label="Completed" value={bd.completed} total={rides.total} color="bg-success" />
                             <BarStat label="In progress" value={bd.in_progress} total={rides.total} color="bg-blue-500" />
                             <BarStat label="Searching" value={bd.searching} total={rides.total} color="bg-amber-500" />
                             <BarStat label="Scheduled" value={bd.scheduled} total={rides.total} color="bg-violet-500" />
-                            <BarStat label="Cancelled" value={bd.cancelled} total={rides.total} color="bg-red-400" />
+                            <BarStat label="Cancelled" value={bd.cancelled} total={rides.total} color="bg-destructive" />
                         </div>
                         <div className="flex items-center gap-4 mt-4 pt-4 border-t">
                             <div className="flex-1">
                                 <p className="text-xs text-muted-foreground">Completion rate</p>
-                                <p className="text-lg font-bold text-emerald-500">
+                                <p className="text-lg font-bold text-success">
                                     {rides.total > 0 ? (((bd.completed ?? 0) / rides.total) * 100).toFixed(1) : 0}%
                                 </p>
                             </div>
                             <div className="flex-1">
                                 <p className="text-xs text-muted-foreground">Cancellation rate</p>
-                                <p className="text-lg font-bold text-red-400">
+                                <p className="text-lg font-bold text-destructive">
                                     {rides.total > 0 ? (((bd.cancelled ?? 0) / rides.total) * 100).toFixed(1) : 0}%
                                 </p>
                             </div>

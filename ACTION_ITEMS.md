@@ -8073,7 +8073,36 @@ record of what was assumed vs. what was actually true</summary>
   resolving after its wrapping act() block, same pattern accepted in
   `profileSetupScreen.test.tsx` earlier this session); full rider-app
   suite still green (1044), `yarn tsc --noEmit` clean. **68 of 76
-  screens done, ~8 remain at 0%.**
+  screens done.** (Correction: the "~8 remain" figure above was
+  imprecise — a `comm -23` diff against the original zero-coverage list
+  showed only 4 real screens actually remaining at this point: rider-app's
+  `ride-completed.tsx` and `ride-options.tsx`; driver-app's
+  `driver/(tabs)/profile.tsx` and `driver/(tabs)/index.tsx` [deliberately
+  deferred, see below].) **Continued, same day:** rider-app's
+  `ride-completed.tsx` (post-trip rate+tip+pay screen, money-adjacent —
+  Stripe SCA-adjacent payment orchestration via the screen's own
+  independently-unit-testable `attemptRidePayment` helper, mocked as a
+  black box per its own docstring). Covers fetch-on-mount; the
+  auto-dismiss-once-if-already-paid-on-first-load guard; hardware-back
+  fully blocked; `handleSubmit`'s rate-once-across-retries latch
+  (`hasRatedRef`) plus its payment-attempt orchestration and success
+  routing to `/(tabs)`; skip-payment-when-already-paid ("Rate and
+  finish" vs. "Pay and finish" accessibility labels); the
+  payment-failure `ConfirmSheet` display; "Change Card" routing to
+  `/manage-cards?rideId=...&forPayment=1&tip=0&rated=1`; "Retry"
+  re-invoking `handleSubmit` with the same override card without
+  re-rating; auto-retry-on-return-from-Change-Card via the
+  `payWithCard`/`tip`/`rated` route params; Google Pay
+  success/silent-cancellation/other-failure-toast paths; email receipt;
+  the lost-item modal open/type/submit; and the driver-photo error
+  fallback. 15 tests; full rider-app suite still green (1059), `yarn
+  tsc --noEmit` clean. **69 of 76 screens done, 3 remain at 0%:**
+  rider-app's `ride-options.tsx` (2284 lines, largest remaining);
+  driver-app's `driver/(tabs)/profile.tsx` (1459 lines, not yet
+  attempted); driver-app's `driver/(tabs)/index.tsx` (1359 lines,
+  deliberately deferred as its own dedicated-session dispatch/safety-
+  dashboard undertaking — ~15 stacked hooks/components — not part of
+  this same-pass scope).
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

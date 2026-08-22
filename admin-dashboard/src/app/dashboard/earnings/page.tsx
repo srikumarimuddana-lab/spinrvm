@@ -129,8 +129,8 @@ function DeltaChip({ pct }: { pct: number | null }) {
     const up = pct > 0;
     const Icon = up ? TrendingUp : TrendingDown;
     const color = up
-        ? "text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20"
-        : "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20";
+        ? "text-success bg-success/10"
+        : "text-destructive bg-destructive/10";
     return (
         <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold ${color}`}>
             <Icon className="h-3 w-3" />
@@ -333,9 +333,9 @@ function CeoMetricsHeader({
                 </h2>
                 <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
                     <MetricCard icon={XCircle}  label="Cancellation Rate"   metric={m?.cancellation_rate_pct} format={fmtPct}   loading={loading} />
-                    <MetricCard icon={Undo2}    label="Refunds"             metric={m?.refund_amount}        format={fmtMoney} accent="text-red-600 dark:text-red-400" loading={loading} />
-                    <MetricCard icon={Ticket}   label="Promo Spend"         metric={m?.promo_spend}          format={fmtMoney} accent="text-red-600 dark:text-red-400" loading={loading} />
-                    <MetricCard icon={Zap}      label="Surge Revenue"       metric={m?.surge_revenue}        format={fmtMoney} accent="text-amber-600 dark:text-amber-400" loading={loading} />
+                    <MetricCard icon={Undo2}    label="Refunds"             metric={m?.refund_amount}        format={fmtMoney} accent="text-destructive" loading={loading} />
+                    <MetricCard icon={Ticket}   label="Promo Spend"         metric={m?.promo_spend}          format={fmtMoney} accent="text-destructive" loading={loading} />
+                    <MetricCard icon={Zap}      label="Surge Revenue"       metric={m?.surge_revenue}        format={fmtMoney} accent="text-warning" loading={loading} />
                     <MetricCard icon={Landmark} label="GST Collected"       metric={m?.gst_collected}        format={fmtMoney} loading={loading} />
                     <MetricCard icon={Landmark} label="PST Collected"       metric={m?.pst_collected}        format={fmtMoney} loading={loading} />
                     <MetricCard icon={CreditCard} label="Cancellation Fees" metric={m?.cancellation_revenue} format={fmtMoney} loading={loading} />
@@ -360,11 +360,11 @@ function CeoMetricsHeader({
                         <MetricCard icon={Search}        label="Price Searches"        metric={fn?.price_searches}        format={fmtCount} loading={loading} />
                         <MetricCard icon={Car}           label="Rides Requested"       metric={fn?.requested}             format={fmtCount} loading={loading} />
                         <MetricCard icon={Radar}         label="Searched for Driver"   metric={fn?.reached_searching}     format={fmtCount} loading={loading} />
-                        <MetricCard icon={Flag}          label="Travelled"             metric={fn?.completed}             format={fmtCount} accent="text-emerald-600 dark:text-emerald-400" loading={loading} />
-                        <MetricCard icon={XCircle}       label="Rider Cancelled"       metric={fn?.rider_cancelled}       format={fmtCount} accent="text-amber-600 dark:text-amber-400" loading={loading} />
-                        <MetricCard icon={XCircle}       label="Driver Cancelled"      metric={fn?.driver_cancelled}      format={fmtCount} accent="text-red-600 dark:text-red-400" loading={loading} />
+                        <MetricCard icon={Flag}          label="Travelled"             metric={fn?.completed}             format={fmtCount} accent="text-success" loading={loading} />
+                        <MetricCard icon={XCircle}       label="Rider Cancelled"       metric={fn?.rider_cancelled}       format={fmtCount} accent="text-warning" loading={loading} />
+                        <MetricCard icon={XCircle}       label="Driver Cancelled"      metric={fn?.driver_cancelled}      format={fmtCount} accent="text-destructive" loading={loading} />
                         <MetricCard icon={XCircle}       label="System / No Driver"    metric={fn?.system_cancelled}      format={fmtCount} loading={loading} />
-                        <MetricCard icon={AlertTriangle} label="Cancelled After Start" metric={fn?.cancelled_after_start} format={fmtCount} accent="text-red-600 dark:text-red-400" loading={loading} />
+                        <MetricCard icon={AlertTriangle} label="Cancelled After Start" metric={fn?.cancelled_after_start} format={fmtCount} accent="text-destructive" loading={loading} />
                     </div>
                 </div>
 
@@ -384,11 +384,11 @@ function CeoMetricsHeader({
                             />
                             <div className="flex items-center gap-4 mt-2 text-[11px] text-muted-foreground">
                                 <span className="inline-flex items-center gap-1.5">
-                                    <span className="w-2 h-2 rounded-full bg-amber-500" />
+                                    <span className="w-2 h-2 rounded-full bg-warning" />
                                     Rider {cx.current.rider}
                                 </span>
                                 <span className="inline-flex items-center gap-1.5">
-                                    <span className="w-2 h-2 rounded-full bg-red-500" />
+                                    <span className="w-2 h-2 rounded-full bg-destructive" />
                                     Driver {cx.current.driver}
                                 </span>
                                 <span className="inline-flex items-center gap-1.5">
@@ -412,8 +412,8 @@ function CancellationMixBar({ rider, driver, system }: { rider: number; driver: 
     const pct = (n: number) => `${(n / total) * 100}%`;
     return (
         <div className="flex h-3 w-full rounded-md overflow-hidden bg-muted">
-            <div className="bg-amber-500" style={{ width: pct(rider) }} title={`${rider} rider-cancelled`} />
-            <div className="bg-red-500" style={{ width: pct(driver) }} title={`${driver} driver-cancelled`} />
+            <div className="bg-warning" style={{ width: pct(rider) }} title={`${rider} rider-cancelled`} />
+            <div className="bg-destructive" style={{ width: pct(driver) }} title={`${driver} driver-cancelled`} />
             <div className="bg-muted-foreground/60" style={{ width: pct(system) }} title={`${system} system / no-driver-found`} />
         </div>
     );
@@ -509,7 +509,7 @@ function PayoutsCeoHeader({
                     label="Outstanding to drivers"
                     metric={m?.outstanding_payable}
                     format={fmtMoney}
-                    accent="text-amber-600 dark:text-amber-400"
+                    accent="text-warning"
                     loading={loading}
                 />
                 <MetricCard
@@ -517,7 +517,7 @@ function PayoutsCeoHeader({
                     label="Paid out"
                     metric={m?.total_paid_out}
                     format={fmtMoney}
-                    accent="text-emerald-600 dark:text-emerald-400"
+                    accent="text-success"
                     loading={loading}
                 />
                 <MetricCard
@@ -532,7 +532,7 @@ function PayoutsCeoHeader({
                     label="Failed"
                     metric={m?.failed_amount}
                     format={fmtMoney}
-                    accent="text-red-600 dark:text-red-400"
+                    accent="text-destructive"
                     loading={loading}
                 />
                 <MetricCard
@@ -540,7 +540,7 @@ function PayoutsCeoHeader({
                     label="Success rate"
                     metric={m?.success_rate_pct}
                     format={fmtPct}
-                    accent="text-emerald-600 dark:text-emerald-400"
+                    accent="text-success"
                     loading={loading}
                 />
                 <MetricCard
@@ -647,7 +647,7 @@ function PayoutsOpsQueues({ overview }: { overview: PayoutsOverview }) {
                 counters that need intervention; rendered as alert-toned
                 cards so a non-zero value reads as a thing to address. */}
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                <Card className={`border-border/50 ${stuck_over_48h.count > 0 ? "border-amber-300 dark:border-amber-800" : ""}`}>
+                <Card className={`border-border/50 ${stuck_over_48h.count > 0 ? "border-warning/40" : ""}`}>
                     <CardContent className="p-4">
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
@@ -656,13 +656,13 @@ function PayoutsOpsQueues({ overview }: { overview: PayoutsOverview }) {
                             </div>
                             <span className="text-[10px] text-muted-foreground">manual review</span>
                         </div>
-                        <p className={`text-2xl font-bold tabular-nums mt-1.5 ${stuck_over_48h.count > 0 ? "text-amber-600 dark:text-amber-400" : ""}`}>
+                        <p className={`text-2xl font-bold tabular-nums mt-1.5 ${stuck_over_48h.count > 0 ? "text-warning" : ""}`}>
                             {stuck_over_48h.count}
                         </p>
                         <p className="text-[11px] text-muted-foreground mt-1">{fmtMoney(stuck_over_48h.amount)} held up</p>
                     </CardContent>
                 </Card>
-                <Card className={`border-border/50 ${blocked_drivers.count > 0 ? "border-red-300 dark:border-red-800" : ""}`}>
+                <Card className={`border-border/50 ${blocked_drivers.count > 0 ? "border-destructive/40" : ""}`}>
                     <CardContent className="p-4">
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
@@ -671,7 +671,7 @@ function PayoutsOpsQueues({ overview }: { overview: PayoutsOverview }) {
                             </div>
                             <span className="text-[10px] text-muted-foreground">payouts_enabled=false</span>
                         </div>
-                        <p className={`text-2xl font-bold tabular-nums mt-1.5 ${blocked_drivers.count > 0 ? "text-red-600 dark:text-red-400" : ""}`}>
+                        <p className={`text-2xl font-bold tabular-nums mt-1.5 ${blocked_drivers.count > 0 ? "text-destructive" : ""}`}>
                             {blocked_drivers.count}
                         </p>
                         <p className="text-[11px] text-muted-foreground mt-1">{fmtMoney(blocked_drivers.outstanding_balance)} undeliverable</p>
@@ -768,7 +768,7 @@ function PayoutsOpsQueues({ overview }: { overview: PayoutsOverview }) {
                                                     {d.name}
                                                 </a>
                                             </TableCell>
-                                            <TableCell className="text-xs text-right tabular-nums font-semibold text-red-600 dark:text-red-400">
+                                            <TableCell className="text-xs text-right tabular-nums font-semibold text-destructive">
                                                 {d.failure_count}
                                             </TableCell>
                                             <TableCell className="text-xs text-muted-foreground font-mono truncate max-w-[220px]" title={d.last_reason ?? ""}>
@@ -933,10 +933,10 @@ function PayoutsCompliance({ overview, onClosed }: { overview: PayoutsOverview; 
                                     <TableCell className="text-xs text-right tabular-nums">{t4a_snapshot.buckets.from_10k_to_30k}</TableCell>
                                     <TableCell className="text-[11px] text-muted-foreground">T4A required · GST elective</TableCell>
                                 </TableRow>
-                                <TableRow className="bg-amber-50/50 dark:bg-amber-900/10">
+                                <TableRow className="bg-warning/10">
                                     <TableCell className="text-xs font-mono font-semibold">≥ $30k</TableCell>
-                                    <TableCell className="text-xs text-right tabular-nums font-bold text-amber-700 dark:text-amber-300">{t4a_snapshot.buckets.over_30k}</TableCell>
-                                    <TableCell className="text-[11px] text-amber-700 dark:text-amber-300">T4A + GST/HST registration MANDATORY</TableCell>
+                                    <TableCell className="text-xs text-right tabular-nums font-bold text-warning">{t4a_snapshot.buckets.over_30k}</TableCell>
+                                    <TableCell className="text-[11px] text-warning">T4A + GST/HST registration MANDATORY</TableCell>
                                 </TableRow>
                             </TableBody>
                         </Table>
@@ -1590,9 +1590,9 @@ function SpinrPassRevenueTab() {
                                             <TableCell className="font-semibold text-emerald-500">{formatCurrency(t.price)}</TableCell>
                                             <TableCell>
                                                 <Badge variant="secondary" className={
-                                                    t.status === "active" ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" :
-                                                    t.status === "expired" ? "bg-amber-500/15 text-amber-700 dark:text-amber-400" :
-                                                    "bg-red-500/15 text-red-700 dark:text-red-400"
+                                                    t.status === "active" ? "bg-success/15 text-success" :
+                                                    t.status === "expired" ? "bg-warning/15 text-warning" :
+                                                    "bg-destructive/15 text-destructive"
                                                 }>{t.status}</Badge>
                                             </TableCell>
                                             <TableCell className="text-xs text-muted-foreground">{formatDate(t.started_at)}</TableCell>
@@ -1846,7 +1846,7 @@ function PayoutsTab() {
                                         <TableCell>
                                             <Badge className={statusBadge(p.status)}>{p.status}</Badge>
                                             {p.error_message && (
-                                                <p className="text-[10px] text-red-600 dark:text-red-400 mt-0.5 truncate max-w-[200px]" title={p.error_message}>
+                                                <p className="text-[10px] text-destructive mt-0.5 truncate max-w-[200px]" title={p.error_message}>
                                                     {p.error_message}
                                                 </p>
                                             )}

@@ -7364,6 +7364,34 @@ record of what was assumed vs. what was actually true</summary>
     `src/components/`, `src/app/**`. The directory-widening portion of
     this item is complete; what remains is the milestone-ratchet-toward-
     100% work in Recommended fix step 4 below, not further widening.
+- **Fix applied (threshold tightening, all three apps — 2026-08-22, same
+  day, user-requested):** the user explicitly asked to "raise the
+  thresholds toward the real ceiling now" — every threshold set in this
+  item's earlier fixes carried several points of headroom below the
+  measured number (deliberately, to land each widening step green
+  without risk). This pass removes most of that slack: took a fresh
+  measurement of each app (now that every directory is included) and set
+  each threshold to `floor(measured − 1)` — about one point below actual,
+  a tight regression tripwire instead of generous room to regress
+  unnoticed.
+  - rider-app: measured lines 20.08% / statements 19.96% / functions
+    16.77% / branches 15.47%. Threshold: `lines:17→19, functions:13→15,
+    branches:12→14`.
+  - driver-app: measured lines 32.91% / statements 31.97% / functions
+    26.26%. Threshold: `lines:29→31, functions:23→25, statements:28→30`.
+  - admin-dashboard: measured statements 19% / branches 12.98% /
+    functions 11.66% / lines 20.64%. Threshold:
+    `branches:10→11, functions:10→10 (unchanged, already ~1.6pt below),
+    lines:18→19, statements:15→18`.
+  - Verified locally: all three apps' coverage command exits 0 against
+    the tightened thresholds (rider-app 70/70, driver-app 74/74,
+    admin-dashboard unchanged pass/fail set).
+  - **This is not the user's stated 100% target** — it's the honest
+    ceiling of what real tests currently cover. Reaching 100% (or any
+    higher milestone) requires writing new tests, which raises the
+    *measured* number; only then does re-running this same
+    tighten-to-measured-minus-one pass make sense — tightening the
+    threshold alone with no new tests would just make the gate red.
 - **What's wrong (three distinct, compounding gaps):**
   1. **admin-dashboard's coverage threshold is configured but structurally
      dead in CI.** `admin-dashboard/vitest.config.ts` sets real thresholds

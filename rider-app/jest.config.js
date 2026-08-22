@@ -77,19 +77,20 @@ module.exports = {
   ],
   coverageThreshold: {
     global: {
-      // ACTION_ITEMS.md B37: dropped to real-measured-minus-headroom for
-      // the widened file set. app/ (the actual screens, mostly untested)
-      // dragged the aggregate down sharply from 68.09%/64.62%/56.79%
-      // (hooks+utils-only). Re-measured 2026-08-22 after adding
-      // components/, then lib/+services/ (5 more files, negligible
-      // aggregate shift): lines 20.08%, statements 19.96%, functions
-      // 16.77%, branches 15.47%. Thresholds unchanged from the
-      // components/-only step -- still comfortably below the current
-      // measured numbers. Ratchet up as app/+components/+lib/+services/
-      // get tests -- do not raise without re-measuring first.
-      lines: 17,
-      functions: 13,
-      branches: 12,
+      // ACTION_ITEMS.md B37: tightened to a near-ceiling floor 2026-08-22
+      // (user asked to "raise the thresholds toward the real ceiling").
+      // Every top-level source dir is now measured (store/, hooks/,
+      // utils/, app/, components/, lib/, services/); fresh measurement:
+      // lines 20.08%, statements 19.96%, functions 16.77%, branches
+      // 15.47%. Previously carried several points of headroom
+      // (lines:17/functions:13/branches:12); now only ~1pt below
+      // measured, so this is a tight regression tripwire, not slack.
+      // Raising further requires new tests, not just re-measuring --
+      // this is NOT the user's stated 100% target, only the honest
+      // ceiling of what's currently tested.
+      lines: 19,
+      functions: 15,
+      branches: 14,
     },
   },
 };

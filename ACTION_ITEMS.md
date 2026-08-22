@@ -7869,7 +7869,23 @@ record of what was assumed vs. what was actually true</summary>
   `jest.spyOn(BackHandler, 'addEventListener').mockReturnValue({ remove:
   jest.fn() })` before it could be asserted against as a mock. 18 tests;
   full rider-app suite still green (934), `yarn tsc --noEmit` clean.
-  **58 of 76 screens done, ~18 remain at 0%.**
+  **58 of 76 screens done, ~18 remain at 0%. Continued, same day:**
+  driver-app's `driver/subscription.tsx` (Spinr Pass subscription
+  screen) — parallel plans/current-subscription/payments load, the
+  free_mode celebration card, handleSubscribe's Subscribe-vs.-Switch-Plan
+  Alert wording, doSubscribe's in-app-browser checkout ->
+  verify-session -> active/still-processing toast (and the
+  no-checkout_url dev/test immediate-activation path), cancel's
+  Alert-confirm flow, resend-invoice success/failure, and paginated
+  "Load more" payment history. Own footgun (not a repeat of an earlier
+  one): a `jest.fn(() => 'url')` mock (zero-arg inferred) spread with
+  `(...a)` in its `jest.mock()` factory failed `tsc --noEmit` (TS2556)
+  even though `yarn jest` itself passed clean — caught only because
+  `tsc --noEmit` is now run on every screen per this session's earlier
+  CI-gate-fix precedent; fixed with an explicit `(..._a: unknown[])`
+  signature, same shape as the driver-app tsc fixes from earlier this
+  session. 12 tests; full driver-app suite still green (996), `yarn tsc
+  --noEmit` clean. **59 of 76 screens done, ~17 remain at 0%.**
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

@@ -14,7 +14,7 @@ cachecontrol==0.14.4      # via firebase-admin
 cachetools==7.1.1         # via pyiceberg
 certifi==2026.4.22        # via -r requirements.in, cloudinary, httpcore, httpx, requests, sentry-sdk
 cffi==2.0.0               # via cryptography
-charset-normalizer==3.4.7  # via -r requirements.in, requests
+charset-normalizer==3.5.1  # via -r requirements.in, requests
 click==8.3.3              # via -r requirements.in, black, pyiceberg, typer, uvicorn
 cloudinary==1.44.2        # via -r requirements.in
 coverage==7.13.5          # via pytest-cov

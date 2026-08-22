@@ -120,7 +120,7 @@ export default function DriverActivity({ driverId }: { driverId: string }) {
                                     {openRide === r.ride_id && (
                                         <div className="px-2 pb-2 space-y-1">
                                             {r.empty_before_seconds != null && (
-                                                <div className="text-[11px] text-amber-600 dark:text-amber-400">empty before: {fmtDuration(r.empty_before_seconds)}</div>
+                                                <div className="text-[11px] text-warning">empty before: {fmtDuration(r.empty_before_seconds)}</div>
                                             )}
                                             {(r.phases || []).map((p) => (
                                                 <div key={p.phase} className="flex items-center justify-between text-[11px]">

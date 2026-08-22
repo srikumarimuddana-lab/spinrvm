@@ -16,9 +16,9 @@ import { Users } from "lucide-react";
 // hand-picked palette rather than a partial token conversion. (#2816)
 /* eslint-disable no-restricted-syntax -- categorical payout-status map, no semantic token for "processing" (#2816) */
 const STATUS_COLOR: Record<string, string> = {
-    paid: "text-emerald-600 dark:text-emerald-400",
-    processing: "text-blue-600 dark:text-blue-400",
-    failed: "text-red-600 dark:text-red-400",
+    paid: "text-success",
+    processing: "text-warning",
+    failed: "text-destructive",
     expired: "text-muted-foreground",
 };
 /* eslint-enable no-restricted-syntax */

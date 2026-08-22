@@ -59,11 +59,11 @@ export function IncidentEvidencePhotos({
                         return (
                             <div
                                 key={photo.id}
-                                className="aspect-square rounded-lg border border-dashed border-amber-400/60 bg-amber-50 dark:bg-amber-900/10 flex flex-col items-center justify-center gap-1 p-2 text-center"
+                                className="aspect-square rounded-lg border border-dashed border-warning/60 bg-warning/10 flex flex-col items-center justify-center gap-1 p-2 text-center"
                                 title="This photo exists but could not be loaded. Retry, or check storage."
                             >
-                                <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                                <span className="text-[9px] leading-tight text-amber-700 dark:text-amber-400">
+                                <AlertTriangle className="h-4 w-4 text-warning" />
+                                <span className="text-[9px] leading-tight text-warning">
                                     Preview unavailable
                                 </span>
                             </div>

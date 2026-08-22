@@ -160,7 +160,7 @@ export default function ReferralAnalytics({ source }: { source: "driver" | "ride
                         <Card className="border-border/50">
                             <CardContent className="p-4">
                                 <div className="flex items-center gap-2 mb-1">
-                                    <XCircle className="h-4 w-4 text-red-500" />
+                                    <XCircle className="h-4 w-4 text-destructive" />
                                     <h3 className="text-sm font-semibold">Failed claims ({failed.length})</h3>
                                 </div>
                                 <p className="text-[11px] text-muted-foreground mb-3">

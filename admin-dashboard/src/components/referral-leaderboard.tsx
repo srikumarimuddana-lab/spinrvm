@@ -81,7 +81,7 @@ export default function ReferralLeaderboard({ limit = 20, source = "driver" }: {
                                             <td className="px-4 py-2.5 font-medium">{l.name}</td>
                                             <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">{l.driver_code}</td>
                                             <td className="px-4 py-2.5 text-right">{l.total_referrals.toLocaleString()}</td>
-                                            <td className="px-4 py-2.5 text-right text-emerald-600 dark:text-emerald-400 font-medium">{l.qualified_referrals.toLocaleString()}</td>
+                                            <td className="px-4 py-2.5 text-right text-success font-medium">{l.qualified_referrals.toLocaleString()}</td>
                                             <td className="px-4 py-2.5 text-right font-semibold">{formatCurrency(l.referral_earnings)}</td>
                                         </tr>
                                     ))}

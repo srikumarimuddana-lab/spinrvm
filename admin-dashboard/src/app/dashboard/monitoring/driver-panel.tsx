@@ -91,6 +91,7 @@ export function DriverPanel({ driver, onRideClick }: DriverPanelProps) {
                     <div className="mt-3 grid grid-cols-3 gap-2">
                         <div className="rounded-lg bg-muted p-2 text-center">
                             <div className="flex items-center justify-center gap-1 text-lg font-bold">
+                                {/* eslint-disable-next-line no-restricted-syntax -- standard star-rating amber convention, not a status signal (#2816) */}
                                 <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
                                 {driver.rating?.toFixed(1) ?? "—"}
                             </div>
@@ -136,6 +137,7 @@ export function DriverPanel({ driver, onRideClick }: DriverPanelProps) {
                             </p>
                             <button
                                 onClick={() => onRideClick(driver.active_ride_id!)}
+                                // eslint-disable-next-line no-restricted-syntax -- decorative link-card accent, not a status signal (#2816)
                                 className="mt-1 w-full rounded-lg border border-blue-500/30 bg-blue-500/5 px-3 py-2 text-left text-xs text-blue-600 dark:text-blue-400 hover:bg-blue-500/10"
                             >
                                 Ride #{driver.active_ride_id.slice(-8)} →

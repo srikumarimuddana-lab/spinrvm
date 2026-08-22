@@ -557,6 +557,7 @@ export default function HeatMapPage() {
                         <Card>
                             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                                 <CardTitle className="text-sm font-medium">Active Demand</CardTitle>
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon accent, not a status signal (#2816) */}
                                 <TrendingUp className="h-4 w-4 text-orange-500" />
                             </CardHeader>
                             <CardContent>
@@ -601,6 +602,7 @@ export default function HeatMapPage() {
                         <Card>
                             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                                 <CardTitle className="text-sm font-medium">Surge Active</CardTitle>
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon accent, not a status signal (#2816) */}
                                 <TrendingDown className="h-4 w-4 text-amber-500" />
                             </CardHeader>
                             <CardContent>
@@ -767,7 +769,8 @@ export default function HeatMapPage() {
                             <div className="flex items-end gap-2 h-32">
                                 {forecast.slice(0, 12).map((slot) => (
                                     <div key={slot.hour} className="flex flex-1 flex-col items-center gap-1">
-                                        <div
+                                            <div
+                                            // eslint-disable-next-line no-restricted-syntax -- forecast bar-chart fill, single-hue intensity accent not a success/warning/destructive signal (#2816)
                                             className={`w-full rounded-t transition-all ${slot.isPeak ? "bg-orange-600" : "bg-orange-500/70"}`}
                                             style={{ height: `${forecastBarHeightPct(slot, forecast.slice(0, 12))}%` }}
                                         />

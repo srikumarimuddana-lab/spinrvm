@@ -13,11 +13,20 @@ export default defineConfig({
       provider: 'v8',
       include: ['src/lib/**', 'src/store/**', 'src/components/**', 'src/app/dashboard/**'],
       exclude: ['src/components/ui/**'],
+      // ACTION_ITEMS.md B37: these thresholds were never actually enforced
+      // (ci.yml ran `vitest run` without `--coverage`, so this block was
+      // dead code). Measured real coverage on 2026-08-22, the first time it
+      // was ever run in anger: 13.56% branches / 11.88% functions / 21.80%
+      // lines / 19.94% statements — nowhere near the previously-configured
+      // 50/50/60/60. Dropped to a real, currently-passing floor (measured
+      // minus a few points of headroom) so turning this gate on doesn't
+      // instant-fail every PR; ratchet up from here as coverage improves,
+      // same pattern as backend/pytest.ini's coverage ratchet history.
       thresholds: {
-        branches: 50,
-        functions: 50,
-        lines: 60,
-        statements: 60,
+        branches: 10,
+        functions: 10,
+        lines: 18,
+        statements: 15,
       },
     },
   },

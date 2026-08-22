@@ -7095,11 +7095,29 @@ record of what was assumed vs. what was actually true</summary>
 
 ### B37. Frontend coverage gates measure only a fraction of each app, and admin-dashboard's threshold never actually runs in CI
 
-- [ ] **Status:** open. Found 2026-08-22 while auditing test/validation
-  coverage across all Spinr surfaces at the user's request — verified by
-  actually running each app's coverage tool locally (not a spot check of
-  config file presence), reading the real numbers, and cross-checking
-  against what CI actually invokes.
+- [ ] **Status:** open — sub-item 1 (admin-dashboard) FIXED 2026-08-22,
+  sub-items 2/3 (rider-app/driver-app `collectCoverageFrom` scope) still
+  open. Found 2026-08-22 while auditing test/validation coverage across
+  all Spinr surfaces at the user's request — verified by actually running
+  each app's coverage tool locally (not a spot check of config file
+  presence), reading the real numbers, and cross-checking against what CI
+  actually invokes.
+- **Fix applied (sub-item 1 only):** `.github/workflows/ci.yml`'s
+  admin-dashboard test step now runs `npm run test:coverage` (was `npm
+  test`, which never invoked the coverage plugin). `vitest.config.ts`'s
+  thresholds dropped from the previously-unenforced `branches: 50,
+  functions: 50, lines: 60, statements: 60` to `branches: 10, functions:
+  10, lines: 18, statements: 15` — real-measured-minus-headroom (measured:
+  13.56% / 11.88% / 21.80% / 19.94%), so the gate goes live passing, not
+  red on `main`. Verified locally: `npm run test:coverage` exits 0 against
+  the new floors. This closes the "structurally dead in CI" half of the
+  finding — the gate is now real, just starting from a low, honest
+  baseline. It does **not** widen what's measured (still
+  `src/lib/**, src/store/**, src/components/**, src/app/dashboard/**`,
+  per the existing `coverage.include`) — that's a separate, larger
+  follow-up (raising the floor as tests are added), not done here.
+  Sub-items 2 and 3 below (rider-app/driver-app's `collectCoverageFrom`
+  excluding most of each app) are **unchanged, still open**.
 - **What's wrong (three distinct, compounding gaps):**
   1. **admin-dashboard's coverage threshold is configured but structurally
      dead in CI.** `admin-dashboard/vitest.config.ts` sets real thresholds
@@ -7168,13 +7186,10 @@ record of what was assumed vs. what was actually true</summary>
   up — same pattern the backend already uses (see `pytest.ini`'s ratchet
   history comment: 6%→40%→50%→60%, target ceiling 80).
 - **Recommended fix (ratchet plan, not a single jump to 100%):**
-  1. admin-dashboard: point `ci.yml`'s admin-dashboard test step at `npm
-     run test:coverage` (or add `--coverage` to the existing `npm test`
-     invocation) so the already-configured thresholds actually run.
-     Immediately drop the thresholds to match the real current numbers
-     minus a few points (e.g. `statements: 15, branches: 10, functions:
-     10, lines: 18`) so this lands green, not as a new instant-red gate —
-     do not silently raise the bar and break `main` in the same PR.
+  1. ✅ **DONE** — admin-dashboard: point `ci.yml`'s admin-dashboard test
+     step at `npm run test:coverage` so the already-configured thresholds
+     actually run, with thresholds dropped to real-minus-headroom so it
+     lands green. See "Fix applied" above.
   2. rider-app / driver-app: widen `collectCoverageFrom` incrementally,
      directory by directory (`hooks/` and `utils/` first — smaller, more
      unit-testable — then `app/` screens, which need more test-authoring

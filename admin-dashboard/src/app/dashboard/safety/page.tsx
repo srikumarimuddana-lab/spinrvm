@@ -899,6 +899,7 @@ function IncidentDetailDrawer({
                                 size="sm"
                                 onClick={handleSave}
                                 disabled={saving}
+                                // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text button; dark-mode --success (2.02:1) fails WCAG AA against white text (#2816)
                                 className="bg-emerald-600 hover:bg-emerald-700 text-white"
                             >
                                 {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <CheckCircle className="h-3.5 w-3.5 mr-1.5" />}

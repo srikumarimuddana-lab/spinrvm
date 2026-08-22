@@ -662,7 +662,7 @@ export default function HeatMapPage() {
                                             <CardTitle className="text-sm font-medium">{area.name}</CardTitle>
                                             <div className="flex items-center gap-1.5">
                                                 {area.surge_active && (
-                                                    <Badge variant="outline" className="text-xs bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30">
+                                                    <Badge variant="outline" className="text-xs bg-warning/10 text-warning border-warning/30">
                                                         {area.multiplier.toFixed(2)}× surge
                                                     </Badge>
                                                 )}

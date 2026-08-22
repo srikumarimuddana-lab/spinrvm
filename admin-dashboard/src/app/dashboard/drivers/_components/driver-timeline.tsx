@@ -15,6 +15,9 @@ import {
 
 const TIMELINE_PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 
+/* eslint-disable no-restricted-syntax -- categorical driver-timeline event-type
+   map (19 distinct event kinds), not a success/warning/destructive signal —
+   too many states for the 3-token system, see comment above (#2816) */
 const EVENT_CONFIG: Record<string, { icon: any; color: string; bg: string; pipeColor: string }> = {
     registered:             { icon: UserPlus,     color: "text-blue-600",    bg: "bg-blue-100 dark:bg-blue-900/30",    pipeColor: "border-blue-300" },
     document_uploaded:      { icon: FileText,     color: "text-violet-600",  bg: "bg-violet-100 dark:bg-violet-900/30",pipeColor: "border-violet-300" },
@@ -39,6 +42,7 @@ const EVENT_CONFIG: Record<string, { icon: any; color: string; bg: string; pipeC
 };
 
 const DEFAULT_CONFIG = { icon: AlertTriangle, color: "text-gray-500", bg: "bg-gray-100 dark:bg-gray-800/30", pipeColor: "border-gray-300" };
+/* eslint-enable no-restricted-syntax */
 
 function fmtDateTime(d: string) {
     if (!d) return "";

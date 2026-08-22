@@ -296,7 +296,13 @@ jobs:
 
       - name: Run admin dashboard tests
         working-directory: admin-dashboard
-        run: npm test
+        # ACTION_ITEMS.md B37: was plain `npm test` (-> `vitest run`, no
+        # coverage plugin), so vitest.config.ts's coverage.thresholds block
+        # was unreachable dead code from CI's perspective. `test:coverage`
+        # (`vitest run --coverage`) actually evaluates it now that the
+        # thresholds have been dropped to match reality (see that file's
+        # comment) -- lands green today, ratchets up from here.
+        run: npm run test:coverage
 
       - name: Build admin dashboard
         working-directory: admin-dashboard

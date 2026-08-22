@@ -7095,7 +7095,28 @@ record of what was assumed vs. what was actually true</summary>
 
 ### B37. Frontend coverage gates measure only a fraction of each app, and admin-dashboard's threshold never actually runs in CI
 
-- [ ] **Status:** open. Found 2026-08-22 while auditing test/validation
+- [ ] **Status:** open — partially done (2026-08-22, same day). Recommended-fix
+  step 1 (admin-dashboard's gate wired into CI) is closed; steps 2-4
+  (rider-app/driver-app `collectCoverageFrom` widening, milestone-ratchet
+  doc, 100% ceiling) remain open — this item stays unchecked overall.
+  **Step 1 done:** re-ran `npx vitest run --coverage` locally to confirm
+  the numbers this item already recorded (19.94% statements / 13.56%
+  branches / 11.88% functions / 21.80% lines — matched exactly, no drift).
+  `.github/workflows/ci.yml`'s admin-dashboard test step now runs `npm run
+  test:coverage` (`vitest run --coverage`) instead of plain `npm test`, so
+  the coverage plugin — and its `thresholds` block — actually executes in
+  CI for the first time. `admin-dashboard/vitest.config.ts`'s thresholds
+  dropped from the old, never-enforced `branches: 50, functions: 50, lines:
+  60, statements: 60` to `branches: 10, functions: 10, lines: 18,
+  statements: 15` — a few points below the measured real numbers (ratchet
+  floor, not a target), so this lands green on `main` instead of newly red.
+  Verified locally: `npm run test:coverage` exits `0` against the new
+  thresholds. Steps 2-4 (widening scope on rider-app/driver-app, milestone
+  doc, ratchet toward the user's stated 100% target) are a materially
+  larger, separate piece of work — each app needs its own scope-widening +
+  threshold-drop pass, same pattern, not bundled into this one. Change
+  Impact Log: `docs/change-log/2026-08-22-b37-admin-coverage-gate-wired.md`.
+- **(historical) Status:** open. Found 2026-08-22 while auditing test/validation
   coverage across all Spinr surfaces at the user's request — verified by
   actually running each app's coverage tool locally (not a spot check of
   config file presence), reading the real numbers, and cross-checking

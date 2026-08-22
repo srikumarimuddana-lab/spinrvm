@@ -10,6 +10,10 @@ on:
   # GitHub's native merge queue is enabled, closing the CR #4187 cross-PR
   # migration-collision race window a per-PR check can't see.
   merge_group:
+  # Manual trigger for deploy-admin (Vercel) -- see deploy-admin's `if` below.
+  # Auto-deploy on every push to main was hitting Vercel's deployment limit;
+  # Vercel deploys now only happen when this workflow is run by hand.
+  workflow_dispatch:
 
 env:
   PYTHON_VERSION: '3.12'
@@ -588,11 +592,13 @@ jobs:
           vercel-project-id: ${{ secrets.VERCEL_FRONTEND_PROJECT_ID }}
           working-directory: frontend
 
-  # Deploy Admin Dashboard
+  # Deploy Admin Dashboard -- manual only (workflow_dispatch). Was auto-firing
+  # on every push to main and hitting Vercel's deployment limit; trigger it
+  # by hand from the Actions tab instead.
   deploy-admin:
     runs-on: ubuntu-latest
     needs: [admin-test]
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch'
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

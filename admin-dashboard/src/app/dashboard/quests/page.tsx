@@ -403,7 +403,7 @@ export default function QuestsPage() {
                                         <div className="flex items-center gap-2">
                                           <div className="w-24 h-2 bg-muted rounded-full overflow-hidden">
                                             <div
-                                              className="h-full bg-blue-500 rounded-full"
+                                              className="h-full bg-primary rounded-full"
                                               style={{ width: `${Math.min(100, p.progress_pct)}%` }}
                                             />
                                           </div>

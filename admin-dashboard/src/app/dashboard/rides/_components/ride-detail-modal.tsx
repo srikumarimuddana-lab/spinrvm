@@ -169,7 +169,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
 
                     {loadError ? (
                         <div className="flex flex-col items-center justify-center py-24">
-                            <p className="text-sm text-red-600 dark:text-red-400">{loadError}</p>
+                            <p className="text-sm text-destructive">{loadError}</p>
                         </div>
                     ) : loading || !ride ? (
                         <div className="flex flex-col items-center justify-center py-24">
@@ -339,7 +339,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     </div>
                                                 </div>
                                                 {ride.rider_flag_count > 0 && (
-                                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md shrink-0 ${ride.rider_flag_count >= 2 ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"}`}>
+                                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md shrink-0 ${ride.rider_flag_count >= 2 ? "bg-destructive/15 text-destructive" : "bg-warning/15 text-warning"}`}>
                                                         {ride.rider_flag_count} flag{ride.rider_flag_count > 1 ? "s" : ""}
                                                     </span>
                                                 )}
@@ -381,7 +381,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                         </div>
                                                         <div className="flex items-center gap-1.5 shrink-0">
                                                             {ride.driver_flag_count > 0 && (
-                                                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${ride.driver_flag_count >= 2 ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"}`}>
+                                                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${ride.driver_flag_count >= 2 ? "bg-destructive/15 text-destructive" : "bg-warning/15 text-warning"}`}>
                                                                     {ride.driver_flag_count} flag{ride.driver_flag_count > 1 ? "s" : ""}
                                                                 </span>
                                                             )}
@@ -642,8 +642,8 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
 
                                 {/* Cancellation */}
                                 {ride.status === "cancelled" && (
-                                    <Card className="border-red-200 dark:border-red-900/30">
-                                        <CardHead title="Cancellation" icon={XCircle} accent="bg-red-50 dark:bg-red-900/20 border-red-100 dark:border-red-900/30" />
+                                    <Card className="border-destructive/30">
+                                        <CardHead title="Cancellation" icon={XCircle} accent="bg-destructive/10 border-destructive/20" />
                                         <div className="p-4 space-y-1">
                                             <FR l="Cancelled by" v={ride.cancelled_by ? String(ride.cancelled_by).replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()) : "—"} t />
                                             <FR l="Type" v={ride.cancellation_type === "no_drivers_found" ? "No drivers found" : ride.cancellation_type ? String(ride.cancellation_type).replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()) : "—"} t />
@@ -954,7 +954,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                         <span className="text-xs font-semibold">{c.against_type}</span>
                                                         <span className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 px-1.5 py-0.5 rounded font-medium">{c.category}</span>
                                                         <span className="text-xs text-muted-foreground truncate flex-1">{c.description}</span>
-                                                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${c.status === "open" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"}`}>{c.status}</span>
+                                                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${c.status === "open" ? "bg-warning/15 text-warning" : "bg-success/15 text-success"}`}>{c.status}</span>
                                                     </div>
                                                 ))}
                                             </div>
@@ -965,9 +965,9 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                         )}
 
                                         {(ride.rider_flag_count >= 2 || ride.driver_flag_count >= 2) && (
-                                            <div className="flex items-center gap-2.5 bg-red-50 dark:bg-red-900/20 rounded-lg p-3">
+                                            <div className="flex items-center gap-2.5 bg-destructive/10 rounded-lg p-3">
                                                 <AlertTriangle className="h-4 w-4 text-destructive shrink-0" />
-                                                <p className="text-xs font-semibold text-red-600 dark:text-red-400">
+                                                <p className="text-xs font-semibold text-destructive">
                                                     {ride.rider_flag_count >= 2 && `Rider has ${ride.rider_flag_count} flags (1 more = ban). `}
                                                     {ride.driver_flag_count >= 2 && `Driver has ${ride.driver_flag_count} flags (1 more = ban).`}
                                                 </p>
@@ -977,23 +977,23 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                         <div className="flex gap-2 flex-wrap pt-1 border-t">
                                             {ride.rider_id && (
                                                 <button onClick={() => setFlagTarget({ type: "rider", name: ride.rider_name || "Rider" })}
-                                                    className="flex items-center gap-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900/30 transition-colors">
+                                                    className="flex items-center gap-1.5 text-xs font-semibold text-destructive hover:bg-destructive/10 px-3 py-2 rounded-lg border border-destructive/30 transition-colors">
                                                     <Flag className="h-3.5 w-3.5" /> Flag Rider
                                                 </button>
                                             )}
                                             {ride.driver_id && (
                                                 <button onClick={() => setFlagTarget({ type: "driver", name: ride.driver_name || "Driver" })}
-                                                    className="flex items-center gap-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900/30 transition-colors">
+                                                    className="flex items-center gap-1.5 text-xs font-semibold text-destructive hover:bg-destructive/10 px-3 py-2 rounded-lg border border-destructive/30 transition-colors">
                                                     <Flag className="h-3.5 w-3.5" /> Flag Driver
                                                 </button>
                                             )}
                                             <button onClick={() => setShowComplaint(true)}
-                                                className="flex items-center gap-1.5 text-xs font-semibold text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 px-3 py-2 rounded-lg border border-amber-200 dark:border-amber-900/30 transition-colors">
+                                                className="flex items-center gap-1.5 text-xs font-semibold text-warning hover:bg-warning/10 px-3 py-2 rounded-lg border border-warning/30 transition-colors">
                                                 <FileWarning className="h-3.5 w-3.5" /> Raise Complaint
                                             </button>
                                             {ride.status && !["completed", "cancelled"].includes(ride.status) && (
                                                 <button onClick={() => { setCancelReason("Cancelled by admin"); setShowCancelDialog(true); }}
-                                                    className="flex items-center gap-1.5 text-xs font-semibold text-red-700 hover:bg-red-100 dark:hover:bg-red-900/30 px-3 py-2 rounded-lg border border-red-300 dark:border-red-800 transition-colors ml-auto">
+                                                    className="flex items-center gap-1.5 text-xs font-semibold text-destructive hover:bg-destructive/15 px-3 py-2 rounded-lg border border-destructive/40 transition-colors ml-auto">
                                                     <Ban className="h-3.5 w-3.5" /> Force Cancel
                                                 </button>
                                             )}

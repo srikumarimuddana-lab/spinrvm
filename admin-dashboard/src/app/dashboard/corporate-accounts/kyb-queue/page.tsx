@@ -236,6 +236,7 @@ export default function KybQueuePage() {
                                                     size="sm"
                                                     onClick={() => approve(c.id)}
                                                     disabled={busyId === c.id}
+                                                    // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text button; dark-mode --success (2.02:1) fails WCAG AA against white text (#2816)
                                                     className="bg-emerald-600 hover:bg-emerald-700"
                                                 >
                                                     <CheckCircle2 className="mr-1 h-4 w-4" />

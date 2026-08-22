@@ -501,6 +501,18 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   independently tested (targeted + regression suites, ruff clean; real Jest
   runs for both mobile apps — rider-app 530/530, driver-app 555/555 with 1
   pre-existing unrelated flake confirmed passing in isolation).
+  **FIXED 2026-08-22** (N15's fast-follow, separate session): re-ran the
+  original grep against the now-current file — same 4 call sites,
+  unchanged in substance, shifted to lines 3050/3058/3200/3260 by
+  unrelated intervening edits. Fixed all 4 (`stuck_over_48h.amount`,
+  `blocked_drivers.outstanding_balance`, `t4a_snapshot.ytd_gross_earnings`,
+  and the `/payouts/stats` `_d()` helper) with the same
+  `float(to_decimal(...))` pattern used above. 2 new regression tests pin
+  `ROUND_HALF_UP` at a `.125`-boundary input; 136 tests across the 2
+  directly-touched files pass, plus 55 in adjacent earnings/admin-parity
+  suites; `ruff check`/`ruff format --check` clean. Same isolated,
+  display-only blast radius as the original fix — see
+  `docs/change-log/2026-08-22-payouts-decimal-round-half-up-fastfollow.md`.
   **FIXED 2026-08-19** (3 more, from the ranked blocker register, again run
   in parallel across disjoint files — 2 frontend, 1 backend): **#22** (baseline
   #16, audit N6) 4 unlabeled icon-only buttons across rider-app/driver-app now

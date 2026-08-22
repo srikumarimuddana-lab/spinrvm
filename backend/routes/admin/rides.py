@@ -3047,7 +3047,7 @@ async def admin_get_payouts_overview(
     # (manual-intervention queue). All-time signal, computed in SQL above.
     stuck_over_48h = {
         "count": int(agg.get("stuck_count") or 0),
-        "amount": round(float(_agg_dec("stuck_amount")), 2),
+        "amount": float(to_decimal(_agg_dec("stuck_amount"))),
     }
 
     # Blocked drivers — Stripe Connect KYC mirror says payouts are disabled.
@@ -3055,7 +3055,7 @@ async def admin_get_payouts_overview(
     # all-time aggregates, computed in SQL above (scoped to the selected area).
     blocked_drivers = {
         "count": int(agg.get("blocked_count") or 0),
-        "outstanding_balance": round(float(_agg_dec("blocked_outstanding")), 2),
+        "outstanding_balance": float(to_decimal(_agg_dec("blocked_outstanding"))),
     }
 
     # Top earning drivers in window — sum of completed payout amounts
@@ -3197,7 +3197,7 @@ async def admin_get_payouts_overview(
             "buckets": t4a_buckets,
             # Sum of YTD driver_earnings — the gross-side of the T4A
             # generation pipeline, not what's been paid out.
-            "ytd_gross_earnings": round(float(_agg_dec("t4a_ytd_gross")), 2),
+            "ytd_gross_earnings": float(to_decimal(_agg_dec("t4a_ytd_gross"))),
         },
         "period_locks": period_locks,
     }
@@ -3257,7 +3257,7 @@ async def admin_get_payout_stats():
         row = {}
 
     def _d(key: str) -> float:
-        return round(float(Decimal(str(row.get(key) or 0))), 2)
+        return float(to_decimal(row.get(key) or 0))
 
     return {
         "total_paid": _d("total_paid"),

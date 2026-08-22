@@ -265,13 +265,13 @@ Auto-mode tiers (demand / supply ratio → multiplier):
 |---|---|---|---|
 | 0 | App off / offline | — | Personal auto only |
 | 1 | App on, available | No assigned ride | TNC contingent liability |
-| 2 | En route to pickup | `driver_assigned` or `driver_accepted` or `driver_arrived` | TNC primary commercial |
+| 2 | En route to pickup | `driver_accepted` or `driver_arrived` | TNC primary commercial |
 | 3 | Passenger aboard | `in_progress` | TNC primary commercial (full coverage) |
 
 Rules:
 - Every period transition is logged to `driver_insurance_periods` with `{driver_id, period, started_at, ended_at, ride_id?}` for regulatory audit
 - Never delete or mutate period rows — append only
-- Period 2 starts on `driver_assigned` (not `driver_accepted`) because the driver is already obligated to the ride
+- Period 2 starts on `driver_accepted` (not `driver_assigned`) — in the batch-offer dispatch model a ride can be offered to multiple drivers at once, so a driver isn't obligated to it until they accept; `record_period_transition(..., 2, ...)` is only ever called from the accept handler (`routes/drivers/ride_flow.py`). A driver in `driver_assigned` state who hasn't yet accepted is still Period 1.
 - A driver cannot be in Period 3 without a `ride_id` linking to an `in_progress` ride
 - Document expiry (license, insurance, vehicle registration) blocks Period 1+ — checked on every `go_online` call
 

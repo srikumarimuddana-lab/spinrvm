@@ -62,8 +62,8 @@ export function MonitoringToolbar({
                     <span className="h-2 w-2 rounded-full bg-success" />
                     {counts.online} Online
                 </button>
-                <div className="flex items-center gap-1 rounded bg-amber-500/10 px-2 py-1 text-amber-600 ring-1 ring-amber-500/30">
-                    <span className="h-2 w-2 rounded-full bg-amber-500" />
+                <div className="flex items-center gap-1 rounded bg-warning/10 px-2 py-1 text-warning ring-1 ring-warning/30">
+                    <span className="h-2 w-2 rounded-full bg-warning" />
                     {counts.onRide} On Ride
                 </div>
                 <button
@@ -83,6 +83,7 @@ export function MonitoringToolbar({
                     onClick={() => onFilterChange({ showRides: !filters.showRides })}
                     className={`flex items-center gap-1 rounded px-2 py-1 transition-colors ${
                         filters.showRides
+                            // eslint-disable-next-line no-restricted-syntax -- filter-category chip, not a status signal; distinguishes this toggle from the others, no token equivalent (#2816)
                             ? "bg-blue-500/10 text-blue-600 ring-1 ring-blue-500/30"
                             : "text-muted-foreground hover:bg-muted"
                     }`}
@@ -94,6 +95,7 @@ export function MonitoringToolbar({
                     onClick={() => onFilterChange({ showDemand: !filters.showDemand })}
                     className={`flex items-center gap-1 rounded px-2 py-1 transition-colors ${
                         filters.showDemand
+                            // eslint-disable-next-line no-restricted-syntax -- filter-category chip, not a status signal; distinguishes this toggle from the others, no token equivalent (#2816)
                             ? "bg-orange-500/10 text-orange-600 ring-1 ring-orange-500/30"
                             : "text-muted-foreground hover:bg-muted"
                     }`}

@@ -380,7 +380,7 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
                                         <Button
                                             onClick={() => { setMode("reject"); setTimeout(() => reasonRef.current?.focus(), 0); }}
                                             variant={mode === "reject" ? "default" : "outline"}
-                                            className={mode === "reject" ? "flex-1 bg-red-600 hover:bg-red-700 text-white" : "flex-1"}
+                                            className={mode === "reject" ? "flex-1 bg-destructive hover:bg-destructive/90 text-destructive-foreground" : "flex-1"}
                                             disabled={busy}
                                         >
                                             <XCircle className="h-4 w-4 mr-1.5" /> Reject
@@ -429,7 +429,7 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
                                                 </span>
                                             </label>
 
-                                            <Button onClick={() => submit("rejected")} disabled={busy} className="w-full bg-red-600 hover:bg-red-700 text-white">
+                                            <Button onClick={() => submit("rejected")} disabled={busy} className="w-full bg-destructive hover:bg-destructive/90 text-destructive-foreground">
                                                 {busy ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <XCircle className="h-4 w-4 mr-1.5" />}
                                                 Confirm rejection
                                             </Button>

@@ -345,6 +345,7 @@ export default function TicketListPage() {
                         {!loading && sorted.map((t) => (
                             <TableRow key={t.id} className="cursor-pointer">
                                 <TableCell>
+                                    {/* eslint-disable-next-line no-restricted-syntax -- decorative link-accent color, not a status signal (#2816) */}
                                     <Link href={`/dashboard/support-tickets/tickets/${t.id}`} className="font-mono text-sm text-blue-600 dark:text-blue-400">
                                         {t.ticketNumber}
                                     </Link>

@@ -242,6 +242,7 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
                                 <div className="space-y-1">
                                     <p className="text-xs font-medium text-muted-foreground">Preview</p>
                                     <div
+                                        // eslint-disable-next-line no-restricted-syntax -- email signature preview mimics an email client's fixed light/dark background, not a status signal (#2816)
                                         className="rounded-md border bg-white p-3 dark:bg-zinc-950"
                                         dangerouslySetInnerHTML={{ __html: signaturePreview }}
                                     />

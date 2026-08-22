@@ -68,7 +68,9 @@ export default function CompanyPortalLandingPage() {
                         <Card className="transition-colors hover:bg-muted/40">
                             <CardContent className="flex items-center justify-between gap-4 p-4">
                                 <div className="flex items-center gap-3">
+                                    {/* eslint-disable-next-line no-restricted-syntax -- decorative company icon tint, not a status signal (#2816) */}
                                     <div className="rounded-md bg-emerald-50 dark:bg-emerald-900/20 p-2">
+                                        {/* eslint-disable-next-line no-restricted-syntax -- decorative company icon tint, not a status signal (#2816) */}
                                         <Building2 className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
                                     </div>
                                     <div>

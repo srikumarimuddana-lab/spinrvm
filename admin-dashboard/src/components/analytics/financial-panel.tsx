@@ -142,6 +142,7 @@ export function FinancialPanel({ dateRange, serviceAreaId, refreshToken = 0 }: F
                         </div>
                         <div className="rounded-lg border border-border p-3">
                             <div className="text-xs text-muted-foreground flex items-center gap-1">
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative icon tint, not a status signal (#2816) */}
                                 <Zap className="h-3 w-3 text-amber-500" /> Surge penetration
                             </div>
                             <div className="text-xl font-bold tabular-nums">{surge.pct_of_rides ?? 0}%</div>

@@ -298,6 +298,7 @@ export default function AuditLogsPage() {
             <div className="flex items-center justify-between">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative header icon tint, not a status signal (#2816) */}
                         <Shield className="h-8 w-8 text-violet-500" />
                         Audit Logs
                     </h1>
@@ -451,6 +452,7 @@ export default function AuditLogsPage() {
                 <CardContent className="p-4">
                     <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-2 text-sm font-semibold">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative section icon tint, not a status signal (#2816) */}
                             <TrendingUp className="h-4 w-4 text-violet-500" />
                             Most active actors
                         </div>

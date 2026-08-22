@@ -218,6 +218,7 @@ export default function KybQueuePage() {
                                             {c.kyb_document_url ? (
                                                 <button
                                                     type="button"
+                                                    // eslint-disable-next-line no-restricted-syntax -- decorative link-style action button, not a status signal (#2816)
                                                     className="inline-flex items-center gap-1 text-sm text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50"
                                                     onClick={() => preview(c)}
                                                     disabled={busyId === c.id}

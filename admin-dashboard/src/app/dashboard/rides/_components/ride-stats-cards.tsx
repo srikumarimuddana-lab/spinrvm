@@ -105,15 +105,19 @@ export default function RideStatsCards() {
 
             {/* Operations */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon tint, not a status signal (#2816) */}
                 <StatCard icon={Car} color="text-blue-600 dark:text-blue-400" bg="bg-blue-100 dark:bg-blue-900/30"
                     label="Rides" value={f.rides_count ?? 0}
                     tooltip={`${f.rides_count ?? 0} rides created in this period`} />
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon tint, not a status signal (#2816) */}
                 <StatCard icon={CheckCircle} color="text-emerald-600 dark:text-emerald-400" bg="bg-emerald-100 dark:bg-emerald-900/30"
                     label="Completed" value={f.completed_count ?? 0}
                     tooltip={`${f.completed_count ?? 0} rides completed in this period`} />
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon tint, not a status signal (#2816) */}
                 <StatCard icon={Banknote} color="text-emerald-600 dark:text-emerald-400" bg="bg-emerald-100 dark:bg-emerald-900/30"
                     label="Actual Sale (rider paid)" value={formatCurrency(f.rider_paid ?? 0)}
                     tooltip="What riders were actually charged (grand total, after promo)" />
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon tint, not a status signal (#2816) */}
                 <StatCard icon={DollarSign} color="text-teal-600 dark:text-teal-400" bg="bg-teal-100 dark:bg-teal-900/30"
                     label="Gross Fare" value={formatCurrency(f.gross_fare ?? 0)}
                     tooltip="Ride fare subtotal before area fees, tax and promo" />
@@ -121,6 +125,7 @@ export default function RideStatsCards() {
 
             {/* Where the money goes */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon tint, not a status signal (#2816) */}
                 <RevenueCard icon={Car} color="text-emerald-600 dark:text-emerald-400" bg="bg-emerald-100 dark:bg-emerald-900/30"
                     label="Driver Revenue (all-in)" value={formatCurrency(f.driver_take ?? 0)}
                     tooltip="Driver all-in take = ride fare + tips + incentives"
@@ -129,12 +134,15 @@ export default function RideStatsCards() {
                         { l: "Tips", v: formatCurrency(f.tips ?? 0) },
                         { l: "Incentives", v: formatCurrency(f.incentives ?? 0) },
                     ]} />
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon tint, not a status signal (#2816) */}
                 <RevenueCard icon={TrendingUp} color="text-amber-600 dark:text-amber-400" bg="bg-amber-100 dark:bg-amber-900/30"
                     label="Tips" value={formatCurrency(f.tips ?? 0)}
                     tooltip="Tips collected — 100% to drivers" />
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon tint, not a status signal (#2816) */}
                 <RevenueCard icon={Gift} color="text-pink-600 dark:text-pink-400" bg="bg-pink-100 dark:bg-pink-900/30"
                     label="Incentives" value={formatCurrency(f.incentives ?? 0)}
                     tooltip="Platform-funded driver bonuses paid in this period" />
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon tint, not a status signal (#2816) */}
                 <RevenueCard icon={Receipt} color="text-slate-600 dark:text-slate-400" bg="bg-slate-100 dark:bg-slate-800/50"
                     label="GST Collected" value={formatCurrency(f.gst_collected ?? 0)}
                     tooltip="Tax collected from riders — pass-through, remitted by drivers" />
@@ -142,12 +150,15 @@ export default function RideStatsCards() {
 
             {/* Platform books */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon tint, not a status signal (#2816) */}
                 <RevenueCard icon={Ticket} color="text-violet-600 dark:text-violet-400" bg="bg-violet-100 dark:bg-violet-900/30"
                     label="Promo Applied" value={formatCurrency(f.promo_applied ?? 0)}
                     tooltip="Total promo discount absorbed by the platform" />
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon tint, not a status signal (#2816) */}
                 <RevenueCard icon={Coins} color="text-indigo-600 dark:text-indigo-400" bg="bg-indigo-100 dark:bg-indigo-900/30"
                     label="Area Fees" value={formatCurrency(f.area_fees ?? 0)}
                     tooltip="Platform / Insurance / City / Infrastructure fees collected" />
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon tint, not a status signal (#2816) */}
                 <RevenueCard icon={Landmark} color="text-blue-600 dark:text-blue-400" bg="bg-blue-100 dark:bg-blue-900/30"
                     label="Platform Sales (pre-promo)" value={formatCurrency(f.platform_before_promo ?? 0)}
                     tooltip="Booking + airport + area fees, before incentives/promo" />

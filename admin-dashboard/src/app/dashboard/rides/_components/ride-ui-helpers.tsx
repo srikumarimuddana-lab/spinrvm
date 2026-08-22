@@ -39,7 +39,7 @@ export function TL({ l, t, d, km }: { l: string; t?: string; d?: boolean; km?: n
     return (
         <div className="flex items-center gap-2.5 py-1">
             <div className={`w-2 h-2 rounded-full shrink-0 ring-2 ring-offset-1 ring-offset-background ${
-                d ? "bg-red-400 ring-red-200 dark:ring-red-900/50" : "bg-emerald-400 ring-emerald-200 dark:ring-emerald-900/50"
+                d ? "bg-destructive ring-destructive/30" : "bg-success ring-success/30"
             }`} />
             <p className="text-sm flex-1 font-medium">{l}</p>
             {km != null && km > 0 && (

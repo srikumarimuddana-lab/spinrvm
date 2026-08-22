@@ -7579,7 +7579,36 @@ record of what was assumed vs. what was actually true</summary>
 
 ### B39. No schema-validation library on any frontend surface — money- and compliance-adjacent forms are validated ad hoc with no dedicated test coverage
 
-- [ ] **Status:** open. Found 2026-08-22 during the same audit. Checked
+- [ ] **Status:** open — step 1 of the recommended fix done (2026-08-22).
+  Per the item's own "adopt `zod` for new forms, migrate one at a time,
+  don't mass-migrate" guidance: added `zod` to `rider-app/package.json`
+  and migrated `rider-app/app/work-allowance-request.tsx` — the exact
+  form this item's own "Why this matters" text names as an example
+  (corporate `work-allowance-request.tsx` amounts). New colocated
+  `rider-app/utils/workAllowanceRequestSchema.ts` (`workAllowanceRequestSchema`
+  + `isWorkAllowanceRequestValid` helper) replaces the screen's old inline
+  `!isNaN(parseFloat(amount)) && parseFloat(amount) > 0 &&
+  reason.trim().length >= 5` check with byte-for-byte equivalent
+  accept/reject behavior — a pure extraction, not a validation-rule
+  change, per this item's own risk warning about UX changes on an
+  already-shipped screen. New
+  `rider-app/utils/__tests__/workAllowanceRequestSchema.test.ts` (15
+  accept/reject cases) closes exactly the "validation-rule coverage is
+  invisible" gap this item names for this one form. Verification: 15/15
+  new tests pass; full rider-app suite 575/575 (71 suites) pass, 0
+  regressions; `npx tsc --noEmit` clean; `npx eslint` clean on touched
+  files; **real production build** (`npm run build:web` →
+  `expo export --platform web`) completed successfully, not just
+  `tsc`/dev server, per CLAUDE.md's explicit requirement. Full Change
+  Impact Log: `docs/change-log/2026-08-22-b39-work-allowance-zod-pilot.md`.
+  **Still open — everything else this item scoped:** driver-app and
+  admin-dashboard still have no schema-validation library; every other
+  form across all three apps is unmigrated (payment-sheet input, signup
+  fields feeding KYC/compliance checks, and all admin-dashboard
+  corporate/billing forms named as next-priority in this item's own
+  ordering); no ADR/migration-order doc written yet. Checkbox stays `[ ]`
+  — this is one form on one surface, not the item's acceptance bar.
+- **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator
   — none of the three uses a schema-validation library for form input.

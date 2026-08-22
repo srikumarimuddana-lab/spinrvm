@@ -35,9 +35,9 @@ export function StatTile({
     tone?: "neutral" | "good" | "warn" | "bad";
 }) {
     const toneCls =
-        tone === "good" ? "text-emerald-600 dark:text-emerald-400"
-        : tone === "warn" ? "text-amber-600 dark:text-amber-400"
-        : tone === "bad" ? "text-red-600 dark:text-red-400"
+        tone === "good" ? "text-success"
+        : tone === "warn" ? "text-warning"
+        : tone === "bad" ? "text-destructive"
         : "text-foreground";
     return (
         <Card>
@@ -59,12 +59,12 @@ export function KpiCard({ kpi }: { kpi: KpiReading }) {
     const ok = kpi.meeting_target;
     const Icon = ok ? Check : AlertTriangle;
     return (
-        <Card className={ok ? undefined : "border-amber-400 dark:border-amber-600"}>
+        <Card className={ok ? undefined : "border-warning/40"}>
             <CardContent className="pt-4">
                 <div className="text-sm text-muted-foreground truncate">{kpi.label}</div>
                 <div
                     className={`text-2xl font-bold mt-1 tabular-nums ${
-                        ok ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"
+                        ok ? "text-success" : "text-warning"
                     }`}
                 >
                     {kpi.actual}%
@@ -102,7 +102,7 @@ export function SampleNote({ n, noun = "rides" }: { n: number; noun?: string }) 
     if (!n) return <span className="text-xs text-muted-foreground">no data in window</span>;
     return (
         <span className="text-xs text-muted-foreground inline-flex items-center gap-1">
-            {n < 30 && <Minus className="h-3 w-3 text-amber-500" aria-hidden />}
+            {n < 30 && <Minus className="h-3 w-3 text-warning" aria-hidden />}
             n = {n.toLocaleString()} {noun}
             {n < 30 && " — small sample"}
         </span>

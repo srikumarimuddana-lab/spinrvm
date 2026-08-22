@@ -138,7 +138,8 @@ function DecisionDialog({ request, approve, onConfirm, onCancel, busy }: Decisio
                     <Button
                         onClick={() => onConfirm(note)}
                         disabled={busy}
-                        className={approve ? "bg-emerald-600 hover:bg-emerald-700" : "bg-red-600 hover:bg-red-700"}
+                        // eslint-disable-next-line no-restricted-syntax -- approve branch is a solid-fill white-text button; dark-mode --success fails WCAG AA against white text (#2816)
+                        className={approve ? "bg-emerald-600 hover:bg-emerald-700" : "bg-destructive text-destructive-foreground hover:bg-destructive/90"}
                     >
                         {busy ? "Working…" : approve ? "Approve" : "Deny"}
                     </Button>
@@ -456,6 +457,7 @@ export default function CompanyMembersPage() {
                         <h2 className="font-semibold">
                             Allowance requests
                             {pendingCount > 0 && (
+                                // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text count badge; no --warning-foreground token exists in this design system, dark-mode --warning is not contrast-verified against white text (#2816)
                                 <span className="ml-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-yellow-500 text-xs font-bold text-white">
                                     {pendingCount}
                                 </span>
@@ -519,6 +521,7 @@ export default function CompanyMembersPage() {
                                                 <div className="flex items-center justify-end gap-1">
                                                     <Button
                                                         size="sm"
+                                                        // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text button; dark-mode --success fails WCAG AA against white text (#2816)
                                                         className="bg-emerald-600 hover:bg-emerald-700 h-7"
                                                         onClick={() => setDecisionTarget({ req: r, approve: true })}
                                                     >
@@ -575,7 +578,7 @@ export default function CompanyMembersPage() {
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction onClick={confirmRemove} className="bg-red-600 hover:bg-red-700">Remove</AlertDialogAction>
+                        <AlertDialogAction onClick={confirmRemove} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Remove</AlertDialogAction>
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>

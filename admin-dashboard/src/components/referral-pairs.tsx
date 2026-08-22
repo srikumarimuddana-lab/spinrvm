@@ -11,12 +11,17 @@ import { Users } from "lucide-react";
  * with the reward split + claim status. Complements the aggregate leaderboard,
  * which only shows top-referrer counts. Respects the rider/driver toggle.
  */
+// Categorical status map (4 states) — "processing" has no dedicated semantic
+// token (only success/warning/destructive exist), so this stays a
+// hand-picked palette rather than a partial token conversion. (#2816)
+/* eslint-disable no-restricted-syntax -- categorical payout-status map, no semantic token for "processing" (#2816) */
 const STATUS_COLOR: Record<string, string> = {
     paid: "text-success",
     processing: "text-warning",
     failed: "text-destructive",
     expired: "text-muted-foreground",
 };
+/* eslint-enable no-restricted-syntax */
 
 export default function ReferralPairs({ source }: { source: "driver" | "rider" }) {
     const [pairs, setPairs] = useState<ReferralPair[]>([]);

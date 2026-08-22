@@ -611,7 +611,7 @@ export default function PromotionsPage() {
                                         return (
                                             <TableRow key={p.id}>
                                                 <TableCell><span className="font-mono font-semibold text-violet-600 dark:text-violet-400 bg-violet-500/10 px-2 py-0.5 rounded">{p.code}</span>{p.description && <p className="text-xs text-muted-foreground mt-1">{p.description}</p>}</TableCell>
-                                                <TableCell className="text-sm">{p.free_ride ? <span className="text-emerald-600 dark:text-emerald-400 font-semibold">Free Ride</span> : p.discount_type === "flat" ? formatCurrency(p.discount_value) : `${p.discount_value}%`}{!p.free_ride && p.max_discount != null && <span className="text-xs text-muted-foreground ml-1">(max {formatCurrency(p.max_discount)})</span>}</TableCell>
+                                                <TableCell className="text-sm">{p.free_ride ? <span className="text-success font-semibold">Free Ride</span> : p.discount_type === "flat" ? formatCurrency(p.discount_value) : `${p.discount_value}%`}{!p.free_ride && p.max_discount != null && <span className="text-xs text-muted-foreground ml-1">(max {formatCurrency(p.max_discount)})</span>}</TableCell>
                                                 <TableCell className="text-sm">{p.uses}/{p.max_uses || "∞"}</TableCell>
                                                 {promoTab === "expired" && <TableCell><Badge variant="outline" className="text-xs">{p.promo_type === "private" ? "Private" : "Public"}</Badge></TableCell>}
                                                 {(promoTab === "private" || promoTab === "expired") && <TableCell className="text-sm">{(p.assigned_user_ids || []).length > 0 ? `${(p.assigned_user_ids || []).length} user${(p.assigned_user_ids || []).length !== 1 ? "s" : ""}` : "—"}</TableCell>}
@@ -768,7 +768,7 @@ export default function PromotionsPage() {
                                                         <span className="text-muted-foreground text-xs">—</span>
                                                     )}
                                                 </TableCell>
-                                                <TableCell className="text-sm font-medium text-emerald-600 dark:text-emerald-400">{formatCurrency(u.discount_applied)}</TableCell>
+                                                <TableCell className="text-sm font-medium text-success">{formatCurrency(u.discount_applied)}</TableCell>
                                             </TableRow>
                                         );
                                     })}
@@ -828,7 +828,7 @@ export default function PromotionsPage() {
                                             <Label>Max Discount Cap ($) <span className="text-destructive font-normal">*required</span></Label>
                                             <Input type="number" placeholder="25.00" value={form.max_discount} onChange={(e) => setForm({ ...form, max_discount: e.target.value })} className={!form.max_discount ? "border-warning focus-visible:ring-warning" : ""} />
                                             {!form.max_discount && (
-                                                <p className="text-xs text-amber-600 dark:text-amber-400">Without a cap, a 75% promo on a $100 fare gives $75 off. Set a cap to limit this.</p>
+                                                <p className="text-xs text-warning">Without a cap, a 75% promo on a $100 fare gives $75 off. Set a cap to limit this.</p>
                                             )}
                                         </div>
                                     </div>

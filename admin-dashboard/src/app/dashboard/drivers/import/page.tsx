@@ -345,7 +345,7 @@ export default function BulkImportPage() {
             </Card>
 
             {committedSummary && (
-                <Card className="border-emerald-300 dark:border-emerald-800">
+                <Card className="border-success">
                     <CardContent className="flex items-center gap-3 py-4">
                         <CheckCircle2 className="h-5 w-5 text-success" />
                         <span className="text-sm">{committedSummary}</span>

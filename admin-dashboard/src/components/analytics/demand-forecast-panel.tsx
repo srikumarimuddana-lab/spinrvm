@@ -38,9 +38,9 @@ const DATA_BASIS_LABELS: Record<string, string> = {
   default_pattern: "Estimated (no history yet)",
 };
 const DATA_BASIS_COLORS: Record<string, string> = {
-  historical_average: "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200",
-  limited_history: "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-200",
-  default_pattern: "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400",
+  historical_average: "bg-success/15 text-success",
+  limited_history: "bg-warning/15 text-warning",
+  default_pattern: "bg-muted text-muted-foreground",
 };
 
 export interface DemandForecastPanelProps {
@@ -114,7 +114,7 @@ export function DemandForecastPanel({
               <div className="text-2xl font-bold mt-1">
                 {summary.current_hour?.predicted_rides || 0} rides
               </div>
-              <Badge className={DATA_BASIS_COLORS[summary.data_basis] || "bg-gray-100 dark:bg-gray-800"}>
+              <Badge className={DATA_BASIS_COLORS[summary.data_basis] || "bg-muted"}>
                 {DATA_BASIS_LABELS[summary.data_basis] || summary.data_basis}
               </Badge>
             </CardContent>

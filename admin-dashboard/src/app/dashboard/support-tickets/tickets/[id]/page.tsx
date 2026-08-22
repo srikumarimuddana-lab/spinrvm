@@ -495,7 +495,7 @@ export default function TicketDetailPage() {
                             </CardContent>
                         </Card>
 
-                        <Card className={areaInfo?.needs_assignment ? "border-warning/40 bg-warning/5" : undefined}>
+                        <Card className={areaInfo?.needs_assignment ? "border-warning bg-warning/10" : undefined}>
                             <CardHeader>
                                 <CardTitle className="flex items-center gap-2 text-base">
                                     <MapPin className="h-4 w-4" /> Service area

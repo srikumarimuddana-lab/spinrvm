@@ -7059,6 +7059,251 @@ record of what was assumed vs. what was actually true</summary>
   359's `42501` runtime failure directly (arguing from the documented mechanism, not
   an observed failure in this environment).
 
+### B37. Frontend coverage gates measure only a fraction of each app, and admin-dashboard's threshold never actually runs in CI
+
+- [ ] **Status:** open. Found 2026-08-22 while auditing test/validation
+  coverage across all Spinr surfaces at the user's request — verified by
+  actually running each app's coverage tool locally (not a spot check of
+  config file presence), reading the real numbers, and cross-checking
+  against what CI actually invokes.
+- **What's wrong (three distinct, compounding gaps):**
+  1. **admin-dashboard's coverage threshold is configured but structurally
+     dead in CI.** `admin-dashboard/vitest.config.ts` sets real thresholds
+     (`branches: 50, functions: 50, lines: 60, statements: 60`) scoped to
+     `src/lib/**, src/store/**, src/components/**, src/app/dashboard/**`.
+     But `.github/workflows/ci.yml`'s admin-dashboard test step runs `npm
+     test` → `package.json`'s `"test": "vitest run"` — **without
+     `--coverage`**. Vitest only evaluates `coverage.thresholds` when
+     `--coverage` is passed; a plain `vitest run` never touches the
+     coverage plugin, so the threshold block is unreachable code as far as
+     CI is concerned. Ran `npx vitest run --coverage` locally against the
+     current tree to find out what it would actually report: **19.94%
+     statements, 13.56% branches, 11.88% functions, 21.80% lines** — all
+     four metrics fail their own configured floor by 25–45 percentage
+     points. If CI ran `test:coverage` instead of `test`, it would be red
+     on `main` right now.
+  2. **rider-app's coverage measurement is scoped to `store/` only.**
+     `rider-app/jest.config.js`'s `collectCoverageFrom` is `['store/**/*.ts',
+     '!store/**/__tests__/**', '!store/**/*.d.ts',
+     '!store/workProfileStore.ts']` — 6 files. The app has ~96 non-test
+     `.ts`/`.tsx` source files total (`app/` 48, `components/` 18, `hooks/`
+     8, `store/` 6, `utils/` 11, `lib/` 3, `services/` 2). The
+     `coverageThreshold` (`lines: 58, functions: 50, branches: 40`) is real
+     and does gate CI (`yarn test --ci --coverage` in `ci.yml`), and the
+     measured numbers pass it (69.31% statements / 60.76% branches / 63.77%
+     functions / 70.79% lines, from a live run) — but that gate can only
+     ever fail on a regression inside the 6 store files. A booking screen,
+     a payment-sheet component, or a new hook can ship with zero tests and
+     the coverage gate will not move, let alone fail.
+  3. **driver-app is broader but still excludes most of the app.**
+     `collectCoverageFrom` covers `store/**` + `components/**` — 29 of
+     ~116 non-test source files (`app/` 40, `components/` 23, `hooks/` 10,
+     `store/` 6, `utils/` 11, `lib/` 22, `api/` 1, `services/` 3). Measured
+     (live run): 51.35% lines / 49.41% statements / 36.53% functions /
+     40.18% branches, passing the app's own thresholds (`lines: 48,
+     functions: 34, statements: 47`) — but `app/` (the 40 route/screen
+     files, including booking and earnings flows) and `lib/` (22 files) are
+     entirely outside the measured set.
+- **Impact:** none of the three frontend surfaces has a coverage gate that
+  can actually catch "this PR shipped an untested screen/component/hook."
+  admin-dashboard's gate is currently a no-op end to end (never invoked).
+  rider-app's and driver-app's gates are real but structurally can only
+  ever police a small, already-decent-scoring slice (stores, and for
+  driver-app components) — the largest directories in each app (`app/`,
+  i.e. the actual screens users interact with) are invisible to CI
+  coverage entirely. This is a materially different and larger finding
+  than "no `coverageThreshold` configured" (an earlier same-day pass over
+  this repo mis-stated it that way from a config-presence spot check
+  without running the tools — corrected here).
+- **Root cause:** `collectCoverageFrom`/`coverage.include` were scoped
+  early (rider-app to stores only; driver-app to stores+components; both
+  presumably to keep the initial ratchet achievable) and never widened as
+  the apps grew; admin-dashboard's `test` npm script was never wired to
+  pass `--coverage`, likely because someone reasonably wanted a fast
+  default `test` command and a separate `test:coverage` for local/CI
+  coverage runs, but CI never got pointed at the coverage variant.
+- **Risk & impact on existing functionality:** none — this is a gap in
+  the safety net, not a runtime behavior change. No code path is touched
+  by fixing it; the risk is entirely in what happens *if it's fixed
+  naively*: widening `collectCoverageFrom`/`coverage.include` to the full
+  app tree without also raising the numeric thresholds would make each
+  app's percentage crater on the next CI run (e.g. admin-dashboard would
+  go from a currently-unenforced 60%/50% target to a real ~20%/12%
+  baseline) and could block unrelated PRs. Any fix here needs to land the
+  scope change and a realistic (lower) threshold together, then ratchet
+  up — same pattern the backend already uses (see `pytest.ini`'s ratchet
+  history comment: 6%→40%→50%→60%, target ceiling 80).
+- **Recommended fix (ratchet plan, not a single jump to 100%):**
+  1. admin-dashboard: point `ci.yml`'s admin-dashboard test step at `npm
+     run test:coverage` (or add `--coverage` to the existing `npm test`
+     invocation) so the already-configured thresholds actually run.
+     Immediately drop the thresholds to match the real current numbers
+     minus a few points (e.g. `statements: 15, branches: 10, functions:
+     10, lines: 18`) so this lands green, not as a new instant-red gate —
+     do not silently raise the bar and break `main` in the same PR.
+  2. rider-app / driver-app: widen `collectCoverageFrom` incrementally,
+     directory by directory (`hooks/` and `utils/` first — smaller, more
+     unit-testable — then `app/` screens, which need more test-authoring
+     work), re-measuring and re-setting the threshold at each step so the
+     gate never goes from "passing, narrow" straight to "failing, wide."
+  3. Track milestones here or in a dedicated coverage-ratchet doc (mirror
+     `pytest.ini`'s comment style) so the next session doesn't have to
+     re-discover the current baseline by re-running the tools.
+  4. Long-run target: the user has stated a 100% coverage expectation.
+     Treat that as the ceiling on this ratchet, not the first milestone —
+     100% line coverage on React Native/Next.js UI code typically still
+     leaves some genuinely-unreachable branches (platform-conditional
+     code, defensive `else` arms, error boundaries) that need explicit
+     `/* istanbul ignore */`-style annotations with a stated reason rather
+     than a contrived test, so treat "100%" as "100% of reachable,
+     meaningfully-testable code, with every exclusion justified inline,"
+     not literally 100% of every line the tool can count.
+- **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
+  `.github/workflows/ci.yml` (admin-dashboard test step),
+  `rider-app/jest.config.js`, `driver-app/jest.config.js`.
+- **What was NOT verified:** whether widening `collectCoverageFrom` on
+  rider-app/driver-app surfaces any currently-hidden near-zero-coverage
+  files beyond what the file-count math above implies (only counted files,
+  didn't run coverage against the widened set — doing so was out of scope
+  for this finding since it would require authoring the threshold-drop
+  fix first); whether `vitest run --coverage`'s per-file breakdown (not
+  reproduced in full here, only the aggregate) matches the same shape as
+  the backend's per-module pattern.
+- **Acceptance:** `ci.yml`'s admin-dashboard step runs with `--coverage`
+  and passes against a threshold matched to reality; a follow-up PR widens
+  `collectCoverageFrom`/`coverage.include` on all three apps with matching
+  threshold drops, landing green each time; a milestone ratchet plan is
+  recorded (here or in a dedicated doc) toward the user's stated 100%
+  target.
+
+### B38. admin-dashboard's visual-regression CI job has zero committed baselines — it has been a documented no-op since it was added
+
+- [ ] **Status:** open. Found 2026-08-22 during the same coverage/validation
+  audit as B37 — distinct surface from B25 (which covers Maestro
+  real-device mobile E2E for rider-app/driver-app); this is
+  admin-dashboard's own visual-regression Playwright job.
+- **What's wrong:** `.github/workflows/ci.yml`'s `e2e-test` job for
+  admin-dashboard has a "Check for committed visual baselines" step that
+  greps for `admin-dashboard/e2e/**/*-snapshots/*.png`. Confirmed directly:
+  `find admin-dashboard/e2e -type f -name '*.png' -path '*-snapshots*'`
+  returns **zero files**. Per the job's own step, when that count is 0 the
+  entire visual-regression comparison is skipped with a `::notice`
+  ("Visual regression skipped: No Playwright snapshot baselines are
+  committed... Seed them via the update-visual-baselines workflow to
+  enable this gate.") rather than failing. `admin-dashboard/e2e/visual-regression.spec.ts`
+  exists and is real Playwright test code, and a separate
+  `update-visual-baselines.yml` workflow exists to seed baselines — but
+  nobody has ever run it, so the gate has never actually compared a single
+  screenshot since it was added.
+- **Impact:** an earlier same-day audit pass in this session characterized
+  admin-dashboard as having working, CI-gated visual-regression tooling
+  (in contrast to rider-app/driver-app, which genuinely have none) — that
+  framing is technically true of the *code* but false of the *outcome*:
+  today, admin-dashboard's visual-regression coverage is identically zero
+  to rider-app's and driver-app's. CLAUDE.md's release-gate item #6 ("If
+  there's no automated visual/snapshot regression tooling for the surface
+  you're touching, say so explicitly") should currently be treated as
+  applying to **all three** frontend surfaces, admin-dashboard included,
+  until baselines are actually seeded — not just rider-app/driver-app as
+  a naive read of "the job exists" would suggest.
+- **Root cause:** same shape as B25 — real implementation, wired into CI,
+  gated behind a one-time manual setup step (`update-visual-baselines.yml`)
+  that nobody has triggered yet.
+- **Risk & impact on existing functionality:** none from filing this;
+  running `update-visual-baselines.yml` to seed baselines is itself
+  low-risk (it only commits new PNGs), but the *first* real
+  visual-regression run after seeding will likely surface a backlog of
+  pre-existing, unreviewed visual drift across every admin-dashboard page
+  the spec covers — that's expected, not a regression this item caused.
+- **Action:**
+  1. Confirm with whoever owns CI/CD access whether `update-visual-baselines.yml`
+     has ever been run (not verifiable from this session).
+  2. Run it once against `main` to seed the initial baseline set, then
+     open a follow-up PR to confirm the gate actually fails on an
+     intentional visual change (proving it works end-to-end, not just
+     that the workflow YAML parses — same verification bar B25 sets for
+     Maestro).
+  3. Update the CLAUDE.md gate-#6 caveat (or a note near it) to say
+     admin-dashboard's visual-regression tooling exists in code but has
+     no seeded baselines yet, rather than implying it's already active.
+- **Files:** `.github/workflows/ci.yml` (visual-baseline check step),
+  `admin-dashboard/e2e/visual-regression.spec.ts`,
+  `.github/workflows/update-visual-baselines.yml`.
+- **What was NOT verified:** the content/coverage quality of
+  `visual-regression.spec.ts` itself (how many admin-dashboard pages/states
+  it actually screenshots) — only that zero baselines are committed, so
+  none of it currently runs.
+- **Acceptance:** baselines seeded via the existing workflow; a follow-up
+  PR proves the gate catches a real visual diff; CLAUDE.md's gate-#6 text
+  updated to reflect the corrected (currently-inactive) state.
+
+### B39. No schema-validation library on any frontend surface — money- and compliance-adjacent forms are validated ad hoc with no dedicated test coverage
+
+- [ ] **Status:** open. Found 2026-08-22 during the same audit. Checked
+  `rider-app/package.json`, `driver-app/package.json`, and
+  `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator
+  — none of the three uses a schema-validation library for form input.
+  (`ajv` appears as a `rider-app` dependency but is a transitive JSON-Schema
+  tool, not wired into any form; grepping app/component source for
+  `zod|yup|joi` only matched substrings inside unrelated identifiers like
+  `joinRide`/`rejoin`, confirmed by inspection — zero real hits.)
+- **What's wrong:** forms across all three apps validate input via
+  hand-rolled regex/`isValid`-style inline checks (spot-checked
+  `rider-app/app/login.tsx`, `profile-setup.tsx`,
+  `work-allowance-request.tsx` — all manual). This is not itself
+  automatically wrong (a small app can reasonably skip a validation
+  library), but it means: (a) validation logic is duplicated and can drift
+  between screens that validate the same shape of data differently (e.g.
+  a phone number regex in `login.tsx` vs. a different one in a corporate
+  signup flow); (b) there is no single place to point a coverage tool at
+  to answer "is every validation rule tested" — validation-rule coverage
+  is invisible inside each screen's own test file, if that screen has one
+  at all; (c) some of these forms are money- or compliance-adjacent —
+  booking/payment-sheet input, corporate `work-allowance-request.tsx`
+  amounts, and signup fields that feed KYC/compliance checks — where a
+  validation gap (e.g. a rejected amount silently coerced instead of
+  blocked) has real financial/regulatory consequence, not just a UX bug.
+- **Risk & impact on existing functionality:** introducing a validation
+  library is itself a UX-risk change per CLAUDE.md's pre-merge release
+  gates (release gate #3, #5) — a stricter or differently-shaped
+  validation rule on an already-shipped screen could reject input that
+  used to be accepted, which is a live-tested-surface UX change, not a
+  no-op refactor. Any fix here must be additive (introduce the library
+  and migrate one form at a time behind normal review, not a mass
+  find-replace) and each migrated form needs before/after validation
+  behavior documented per the Change Impact Log template, same as any
+  other live-tested-surface change.
+- **Recommended fix:**
+  1. Adopt `zod` (already the de facto standard for TypeScript projects,
+     small bundle, works identically in React Native/Expo and Next.js —
+     no separate tool needed per surface) for new forms going forward;
+     don't mass-migrate existing ones in one PR.
+  2. Prioritize migration by risk: `admin-dashboard` corporate/billing
+     forms and `rider-app`/`driver-app` payment-sheet and allowance-request
+     forms first (money/compliance-adjacent), profile/cosmetic forms last.
+  3. Each migrated form gets a colocated `*.schema.ts` (or inline schema)
+     plus a dedicated unit test file asserting both accept and reject
+     cases — this closes the "validation-rule coverage is invisible"
+     problem directly, independent of the broader UI coverage gap in B37.
+- **Files:** no single file — this is a cross-cutting gap across
+  `rider-app/app/**`, `driver-app/app/**`, `admin-dashboard/src/app/**`
+  wherever a form exists. Named examples above are illustrative, not
+  exhaustive.
+- **What was NOT verified:** a full enumeration of every form across all
+  three apps (out of scope for a single audit pass — flagged as a
+  cross-cutting pattern, not a fully inventoried list); whether any
+  server-side (backend pydantic) re-validation already backstops these
+  specific forms enough to make client-side gaps lower-risk than they
+  look (backend route-level pydantic validation was independently
+  confirmed real and present — see the coverage audit this session — so
+  a client-side gap here is a UX/defense-in-depth issue, not necessarily
+  a security hole, unless a specific route is found to trust
+  client-validated input without server-side re-checking).
+- **Acceptance:** `zod` (or equivalent) added as a dependency; at least
+  the highest-risk money/compliance-adjacent form on each surface migrated
+  with accept/reject unit tests; a documented decision (here or in a
+  short ADR) on migration order for the rest.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly
@@ -7848,6 +8093,65 @@ record of what was assumed vs. what was actually true</summary>
   job that runs its own test suite and calls
   `scripts/check_corporate_coverage_floor.py` locally, no Codecov API call
   anywhere in it. Only "Coverage Regression" has this bug.
+- **Tooling recommendation (added 2026-08-22, in response to a direct
+  user ask: "do we really need codecov, or something better that's free
+  and doesn't store Spinr's data, or can we run this locally?"):**
+  **Drop Codecov for this gate rather than provisioning a token.** The
+  repo already proves the better pattern works:
+  `check_money_path_coverage_floor.py` and `check_corporate_coverage_floor.py`
+  compute coverage entirely inside the GitHub Actions runner (`coverage.py`'s
+  own JSON report, read locally by a small Python script) and never send
+  anything — not the report, not source, not file paths — to a third
+  party. That is already a real, working, zero-cost, zero-data-egress
+  design. "Coverage Regression" is the *one* gate in this repo that
+  doesn't follow it, because it needs the **base branch's** number, not
+  just the PR's — and reaching for an external SaaS to get "what did
+  `main` score" was the wrong tool for that specific problem.
+  1. **Replace the Codecov API call with a self-computed base-branch
+     number.** The workflow already checks out the repo; `git fetch
+     origin <base-branch>`, `git checkout <base-branch>` (or `git worktree
+     add`), run the exact same `pytest --cov` the PR branch step already
+     runs, capture the aggregate `%`, `git checkout -` back to the PR
+     head. This reproduces exactly what the Codecov call was trying to
+     fetch, with the same tool already trusted for the PR-side number, no
+     new secret, no new account, no data leaving GitHub's own runner.
+     Trade-off: doubles this job's runtime (two full test runs instead of
+     one) — acceptable for a guardrail job, not for every PR job.
+  2. **For PR-facing reporting** (the human-readable coverage table
+     Codecov would otherwise post as a PR comment), use GitHub Actions'
+     own `$GITHUB_STEP_SUMMARY` (already used elsewhere in this repo's
+     workflows) or `actions/github-script` with the built-in
+     `GITHUB_TOKEN` to post a native PR comment. Both are GitHub's own
+     infrastructure — no new third party, no new secret, free on every
+     plan this repo already has.
+  3. **For a coverage badge** (if wanted on the README), generate it
+     locally with `coverage-badge` (Python, MIT license, part of the
+     `coverage.py` ecosystem already in `requirements.txt`) or
+     `istanbul-badges-readme` for the JS side, and commit the SVG as a CI
+     artifact — no external badge service (shields.io's dynamic endpoints
+     included) needs to see this repo's numbers at all.
+  4. **If a historical trend graph is wanted later** (Codecov's other
+     main selling point beyond PR diffing), the lowest-risk self-hosted
+     option is appending one JSON line per `main`-branch run to a file
+     committed back to the repo (or a `gh-pages`/orphan branch) — still
+     zero third-party storage. Do **not** stand up a self-hosted SonarQube
+     or similar server for this alone; that trades a data-residency
+     problem for a new-infrastructure-to-operate problem, and this repo's
+     `spinr-*-reviewer` agents plus the existing floor gates already cover
+     what a coverage dashboard would mostly be used for (spotting
+     regressions on specific files/modules).
+  - **Net effect:** closes the "does Spinr's coverage data leave our
+    infrastructure" question definitively (no), removes the `CODECOV_TOKEN`
+    dependency entirely rather than provisioning one, and costs nothing —
+    every piece of this (`coverage.py`, `jest --coverage`, `vitest run
+    --coverage`, `$GITHUB_STEP_SUMMARY`, `actions/github-script`,
+    `coverage-badge`) is already free and already present or trivially
+    addable in this repo's toolchain. This supersedes the two fix options
+    listed above ("(1) add `CODECOV_TOKEN`... (2) make the assert step
+    fail loudly") — recommend implementing the self-computed-baseline
+    approach instead of (1), keeping (2)'s "don't silently treat missing
+    data as passing" principle regardless of which baseline source is
+    used.
 
 ### C13. Required `pull_request`-triggered workflows silently never fire on some PRs
 - [ ] **Status:** open — found 2026-08-10 on PR #3494. `CI/CD Pipeline`

@@ -489,7 +489,16 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   `receipt_pdf.py` nor `email_receipt.py` is in the `spinr-no-float-in-money`
   Semgrep gate's protected-path list despite being money-rendering code —
   recommended as a follow-up. See
-  `docs/change-log/2026-08-19-receipt-surge-line-item-fix.md`. **N15** two
+  `docs/change-log/2026-08-19-receipt-surge-line-item-fix.md`.
+  **FIXED 2026-08-22**: added both files to the gate's `include` list. Ran
+  the actual rule before adding, per its own documented discipline —
+  `receipt_pdf.py` had 0 findings, `email_receipt.py` had 2 (GPS
+  route-quality-percentage `float()` calls, not money), annotated with
+  inline `# nosemgrep: spinr-no-float-in-money` + reason, same pattern
+  already used once in `fare_service.py`. Re-verified 0 SR-03 findings on
+  either file after. Comment/config-only change, zero runtime behavior
+  touched; 87 receipt-related tests still pass. See
+  `docs/change-log/2026-08-22-receipt-files-semgrep-coverage.md`. **N15** two
   `round()`-on-Decimal slips (`routes/admin/support.py`,
   `routes/admin/rides.py` — actual location `:2498/2500`, a few lines past
   the audit's cited range) now use `utils/money.to_decimal()`

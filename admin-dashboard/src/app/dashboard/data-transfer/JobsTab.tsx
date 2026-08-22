@@ -8,7 +8,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { listDataTransferJobs, regenerateDataTransferJobDownload, type DataTransferJob } from "@/lib/api";
 
 function StatusIcon({ status }: { status: DataTransferJob["status"] }) {
-    if (status === "completed") return <CheckCircle2 className="h-4 w-4 text-green-600" />;
+    if (status === "completed") return <CheckCircle2 className="h-4 w-4 text-success" />;
     if (status === "failed") return <XCircle className="h-4 w-4 text-destructive" />;
     return <Clock className="h-4 w-4 text-muted-foreground" />;
 }

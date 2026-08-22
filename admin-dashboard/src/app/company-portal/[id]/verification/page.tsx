@@ -234,7 +234,7 @@ export default function VerificationPage() {
                     )}
 
                     {notice && (
-                        <p className="rounded bg-emerald-50 dark:bg-emerald-900/20 p-3 text-sm text-emerald-800 dark:text-emerald-300">{notice}</p>
+                        <p className="rounded bg-success/15 p-3 text-sm text-success">{notice}</p>
                     )}
                 </>
             )}

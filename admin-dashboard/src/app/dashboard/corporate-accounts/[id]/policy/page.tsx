@@ -201,12 +201,12 @@ export default function CompanyPolicyPage() {
                     Ride Policy
                 </h1>
                 {exists && (
-                    <Badge variant="secondary" className="bg-emerald-100 text-emerald-800">
+                    <Badge variant="secondary" className="bg-success/15 text-success">
                         Configured
                     </Badge>
                 )}
                 {!exists && (
-                    <Badge variant="secondary" className="bg-yellow-100 text-yellow-800">
+                    <Badge variant="secondary" className="bg-warning/15 text-warning">
                         Not set
                     </Badge>
                 )}
@@ -346,7 +346,7 @@ export default function CompanyPolicyPage() {
                 </Button>
 
                 {success && (
-                    <span className="text-sm text-emerald-700 dark:text-emerald-300 font-medium">
+                    <span className="text-sm text-success font-medium">
                         ✓ Policy saved
                     </span>
                 )}

@@ -300,7 +300,7 @@ export default function DocumentRequirementsPage() {
                 <Card>
                     <CardContent className="pt-4 pb-3">
                         <p className="text-xs text-muted-foreground">Required</p>
-                        <p className="text-2xl font-bold text-red-600">{requirements.filter((r) => r.is_required).length}</p>
+                        <p className="text-2xl font-bold text-destructive">{requirements.filter((r) => r.is_required).length}</p>
                     </CardContent>
                 </Card>
                 <Card>
@@ -413,7 +413,7 @@ function ReqTable({
                                     <Pencil className="h-3 w-3" />
                                 </Button>
                                 <Button size="sm" variant="outline" onClick={() => onDelete(r)}>
-                                    <Trash2 className="h-3 w-3 text-red-500" />
+                                    <Trash2 className="h-3 w-3 text-destructive" />
                                 </Button>
                             </div>
                         </TableCell>

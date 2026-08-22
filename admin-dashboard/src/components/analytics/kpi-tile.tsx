@@ -59,7 +59,7 @@ export function KpiCard({ kpi }: { kpi: KpiReading }) {
     const ok = kpi.meeting_target;
     const Icon = ok ? Check : AlertTriangle;
     return (
-        <Card className={ok ? undefined : "border-warning/40"}>
+        <Card className={ok ? undefined : "border-warning"}>
             <CardContent className="pt-4">
                 <div className="text-sm text-muted-foreground truncate">{kpi.label}</div>
                 <div

@@ -32,6 +32,10 @@ export interface DemandBand {
   multiplier: number;
 }
 
+/* eslint-disable no-restricted-syntax -- deliberate 6-tier demand/supply-ratio
+   heat gradient mirroring backend/utils/surge_engine.py's SURGE_TIERS, not a
+   success/warning/destructive signal — too many states (and too gradient-like)
+   for the 3-token system, see comment above (#2816) */
 /** Ordered high-to-low; `bandForRatio` returns the first match. */
 export const DEMAND_BANDS: DemandBand[] = [
   { min: 3.0, key: "critical", label: "Critical", color: "#ff3b30", textClass: "text-[#ff3b30]", multiplier: 2.5 },
@@ -41,6 +45,7 @@ export const DEMAND_BANDS: DemandBand[] = [
   { min: 0.5, key: "balanced", label: "Balanced", color: "#34c759", textClass: "text-green-700 dark:text-green-400", multiplier: 1.25 },
   { min: -Infinity, key: "oversupply", label: "Oversupply", color: "#7c3aed", textClass: "text-[#7c3aed] dark:text-violet-400", multiplier: 1.0 },
 ];
+/* eslint-enable no-restricted-syntax */
 
 /** Neutral treatment for an area with no data at all (see `isDormant`). */
 export const NO_DATA_COLOR = "#9ca3af";

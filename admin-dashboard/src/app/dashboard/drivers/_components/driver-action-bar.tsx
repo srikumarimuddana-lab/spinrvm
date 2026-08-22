@@ -29,6 +29,14 @@ function getDriverStatus(driver: any): DriverStatus {
     return "pending";
 }
 
+// Categorical driver-lifecycle-status map (5 states, 4 hues) — not a #2816
+// migration target. "needs_review" (amber) and "suspended" (orange) are
+// deliberately distinct shades so the two lesser-severity states never read
+// as the same tier as each other or as "banned" (red) — a 3-token semantic
+// system (success/warning/destructive) can't hold that 4-way distinction
+// (pending is informational, not a signal, so it stays blue too). Same class
+// as lib/utils.ts's statusColor() and audit-logs/page.tsx's ACTION_CONFIG.
+/* eslint-disable no-restricted-syntax -- categorical driver-lifecycle-status map, see comment above (#2816) */
 const STATUS_CONFIG: Record<DriverStatus, { label: string; color: string; bg: string; icon: any; description: string }> = {
     pending: { label: "Pending Review", color: "text-blue-700 dark:text-blue-400", bg: "bg-blue-50 dark:bg-blue-900/10 border-blue-200 dark:border-blue-800", icon: ShieldAlert, description: "New driver waiting for document review and approval. Cannot go online." },
     active: { label: "Active", color: "text-emerald-700 dark:text-emerald-400", bg: "bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800", icon: ShieldCheck, description: "Driver is approved and can go online to accept rides." },
@@ -36,6 +44,7 @@ const STATUS_CONFIG: Record<DriverStatus, { label: string; color: string; bg: st
     suspended: { label: "Suspended", color: "text-orange-700 dark:text-orange-400", bg: "bg-orange-50 dark:bg-orange-900/10 border-orange-200 dark:border-orange-800", icon: Pause, description: "Driver is temporarily suspended and cannot go online." },
     banned: { label: "Banned", color: "text-red-800 dark:text-red-400", bg: "bg-red-100 dark:bg-red-900/20 border-red-300 dark:border-red-800", icon: Ban, description: "Driver is permanently banned from the platform." },
 };
+/* eslint-enable no-restricted-syntax */
 
 const DESTRUCTIVE_ACTIONS = new Set(["ban", "suspend", "override_banned", "override_suspended"]);
 
@@ -224,7 +233,7 @@ export default function DriverActionBar({ driver, onActionComplete }: DriverActi
                             </p>
                         )}
                         {status === "banned" && driver.ban_reason && (
-                            <p className="text-xs mt-2 bg-red-200 dark:bg-red-900/40 rounded-lg px-2.5 py-1.5 text-red-800 dark:text-red-400">
+                            <p className="text-xs mt-2 bg-destructive/15 rounded-lg px-2.5 py-1.5 text-destructive">
                                 <Ban className="h-3 w-3 inline mr-1" />Reason: {driver.ban_reason}
                             </p>
                         )}

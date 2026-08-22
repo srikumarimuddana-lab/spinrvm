@@ -319,7 +319,7 @@ export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) 
     return (
         <div className="space-y-4">
             {removalQueue.length > 0 && (
-                <div className="rounded-lg border border-warning/40 bg-warning/10 p-3 space-y-2">
+                <div className="rounded-lg border border-warning bg-warning/10 p-3 space-y-2">
                     <div className="flex items-start gap-2">
                         <AlertTriangle className="h-4 w-4 text-warning mt-0.5 shrink-0" />
                         <div className="min-w-0 flex-1">
@@ -336,10 +336,10 @@ export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) 
                             <RefreshCw className={`h-3.5 w-3.5 ${queueLoading ? "animate-spin" : ""}`} />
                         </Button>
                     </div>
-                    <div className="max-h-40 overflow-y-auto rounded border border-warning/30 bg-background/60">
+                    <div className="max-h-40 overflow-y-auto rounded border border-warning/40 bg-background/60">
                         <table className="w-full text-xs">
                             <thead className="text-muted-foreground">
-                                <tr className="border-b border-warning/30">
+                                <tr className="border-b border-warning/40">
                                     <th className="text-left font-medium px-2 py-1.5">Driver</th>
                                     <th className="text-left font-medium px-2 py-1.5">Stopped</th>
                                     <th className="text-left font-medium px-2 py-1.5">Outstanding</th>
@@ -347,7 +347,7 @@ export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) 
                             </thead>
                             <tbody>
                                 {removalQueue.map((d) => (
-                                    <tr key={d.driver_id} className="border-b border-warning/20 last:border-0">
+                                    <tr key={d.driver_id} className="border-b border-warning/30 last:border-0">
                                         <td className="px-2 py-1.5">
                                             {d.name || d.driver_id}
                                             {!d.entity_id && (

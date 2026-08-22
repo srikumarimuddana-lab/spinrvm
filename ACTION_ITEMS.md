@@ -7777,9 +7777,14 @@ record of what was assumed vs. what was actually true</summary>
   confirm — 50m suggested-radius warning, debounced reverse-geocode, the
   curated venue pickup-point chooser). 38 more tests; full suites still
   green (rider-app 861, driver-app 915). **48 of 76 screens done, ~28
-  remain at 0%.** This sub-item is **still not closed** — continuing
-  screen-by-screen in further sessions per the user's explicit
-  instruction.
+  remain at 0%.** **Continued, same day:** driver-app's `otp.tsx`
+  (auth-critical OTP verification, mirroring rider-app's — client_app:
+  'driver' funnel tag, hasAttemptedVerification gating the post-verify
+  redirect effect so a stale store user can't fire it prematurely). 17
+  more tests; full suite still green (driver-app 932). **49 of 76
+  screens done, ~27 remain at 0%.** This sub-item is **still not
+  closed** — continuing screen-by-screen in further sessions per the
+  user's explicit instruction.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

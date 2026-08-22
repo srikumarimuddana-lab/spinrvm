@@ -7768,8 +7768,18 @@ record of what was assumed vs. what was actually true</summary>
   between each step); and wrapping a hand-rolled zustand-style mock in a
   fresh arrow function inside `jest.mock()`'s factory silently drops any
   static property (e.g. `.getState`) attached to the original function.
-  This sub-item is **still not closed** — continuing screen-by-screen in
-  further sessions per the user's explicit instruction.
+  **Continued, same day:** driver-app's `vehicle-info.tsx` (form
+  triggering admin re-verification on save — service-area-scoped vehicle
+  type fetch, Alert-confirmed submit, fresh-login token-race guard) and
+  rider-app's `manage-cards.tsx` (money-critical PCI-DSS card wallet —
+  Add/Set-Default/Delete flows, the pay-for-stuck-ride card-add path,
+  last-card-removal block) and `confirm-pickup.tsx` (map-drag pickup
+  confirm — 50m suggested-radius warning, debounced reverse-geocode, the
+  curated venue pickup-point chooser). 38 more tests; full suites still
+  green (rider-app 861, driver-app 915). **48 of 76 screens done, ~28
+  remain at 0%.** This sub-item is **still not closed** — continuing
+  screen-by-screen in further sessions per the user's explicit
+  instruction.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

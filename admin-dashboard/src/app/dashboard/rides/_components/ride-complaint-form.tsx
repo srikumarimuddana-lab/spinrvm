@@ -84,6 +84,7 @@ export default function RideComplaintForm({ open, onClose, rideId, onCreated }: 
                 <DialogFooter>
                     <button onClick={onClose} className="px-4 py-2 text-sm font-medium rounded-lg hover:bg-muted">Cancel</button>
                     <button onClick={handleSubmit} disabled={!category || !description || loading}
+                        // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text button; no --warning-foreground token exists in this design system (#2816)
                         className="px-4 py-2 text-sm font-semibold text-white bg-amber-600 rounded-lg hover:bg-amber-700 disabled:opacity-50">
                         {loading ? "Submitting..." : "Submit Complaint"}
                     </button>

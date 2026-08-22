@@ -6915,6 +6915,111 @@ record of what was assumed vs. what was actually true</summary>
   confirmed for Spinr's account, and a written answer to "can operating cash cover
   driver payouts if Stripe holds a reserve during the launch-week spike."
 
+### G2. 116 migration files merged to `main` had never been applied to the live database
+- [x] **Status:** CLOSED 2026-08-21 (same session) — schema-drift audit run, confirmed
+  gaps applied, tracking backfilled. Two residual follow-ups left genuinely open (not
+  fixable from this session), see below.
+- **Issue/gap:** `schema_migrations` on the live Supabase project (`spinrmobileapp`,
+  `soavhtdhefowwvforzwb`) only had 331 rows tracked against 447 migration files in
+  `backend/migrations/` on `main` — 116 files had never been run through
+  `run_migrations.py` or recorded as applied. Found while investigating why a
+  just-merged legal-docs migration wasn't showing content in the admin portal (that
+  specific gap was migrations 360/361 — fixed first, then this session audited for
+  the same pattern repo-wide).
+- **Root cause:** no single cause — spot-checking each "missing" file's actual schema
+  objects showed most (≈95 of 116) were **already applied to the live schema** via some
+  side-channel (direct SQL editor, another agent session) that just never wrote the
+  `schema_migrations` tracking row; a genuine minority (~17) had real schema objects
+  missing entirely, including safety/PII-critical ones (see below); and a further 4
+  files are actively **wrong as merged** and must never be run for real (see below).
+- **Fix:**
+  - **Genuinely-missing, confirmed-safe migrations applied** (idempotent DDL,
+    verified against the live schema before and after): 17, 34, 51, 69b, 71, 72, 79,
+    114, 345, 346, 347, 353, 355, 357, 358 — all now applied and tracked with
+    checksum-matched `schema_migrations` rows.
+  - **95 already-applied-but-untracked files** backfilled into `schema_migrations`
+    with their real file checksums (pure bookkeeping — no schema change), so future
+    `run_migrations.py` runs and drift audits stop flagging false positives. A subset
+    of these are one-time data-backfill `UPDATE` statements (e.g.
+    `102_approve_rider_profile_images.sql`, `244_vehicle_vin_plaintext_at_rest.sql`,
+    `265_drivers_regulatory_authority_backfill.sql`) whose *target row-level data
+    state* was spot-checked (2–3 samples each) but not fully verified row-by-row —
+    flagged here rather than silently assumed complete.
+  - **299 (`299_rider_email_verification_otp.sql`) is broken as merged**: declares
+    `user_id UUID REFERENCES users(id)`, but `users.id` is `TEXT` in this schema —
+    fails immediately with a `42804` type-mismatch error. Per the append-only
+    migration rule, 299 itself was not edited; **362
+    (`362_fix_rider_email_verification_otp_user_id_type.sql`)** is the fix-forward
+    migration (creates the table correctly if missing, `user_id TEXT`). Live DB
+    already has the corrected table; 362 makes a fresh replay of migration history
+    produce the same correct schema.
+- **Still open (needs a human, not fixable from this session):**
+  1. **359's `OWNER TO supabase_admin` step could not be applied** — this session's
+     DB role lacks `SET ROLE supabase_admin` privilege
+     (`must be able to SET ROLE "supabase_admin"`). 357+359's corrected
+     `encrypt_emergency_contact_pii`/`decrypt_emergency_contact_pii` function bodies
+     (the `vault.create_secret()` pattern) ARE applied and live, but without the
+     ownership transfer they may still fail at runtime with the same `42501`
+     permission error 359 exists to fix (pgsodium internals need the
+     `supabase_admin`-owned privilege set). The app fails closed on RPC error (503,
+     not silent plaintext) per 359's own impact analysis, so this is a functionality
+     gap, not a data-safety one — but **someone with Supabase project owner/
+     `supabase_admin` access needs to run just these two lines** via the Supabase
+     Dashboard SQL editor (which runs with elevated rights) or a superuser `psql`
+     connection:
+     ```sql
+     ALTER FUNCTION encrypt_emergency_contact_pii(text) OWNER TO supabase_admin;
+     ALTER FUNCTION decrypt_emergency_contact_pii(text) OWNER TO supabase_admin;
+     ```
+     `359_fix_emergency_contact_pii_vault_functions.sql` is deliberately left
+     **untracked** in `schema_migrations` (not marked applied) so a proper
+     `run_migrations.py` run by someone with sufficient privilege will still pick it
+     up and complete the fix.
+  2. **Four migration files must NEVER be run as merged — applying them would be a
+     security regression**, discovered by comparing their target state against the
+     live (better) state:
+     - `70_fix_financial_events_rls.sql` — would replace the live
+       `financial_events_select` RLS policy (which correctly re-reads `users.role`
+       from the table) with a version that trusts the JWT's `role` claim directly —
+       exactly what root `CLAUDE.md`'s JWT trust model section says never to do for
+       non-admin tokens.
+     - `78_fix_pii_function_search_path.sql` — would strip `vault` from
+       `encrypt_driver_pii`/`decrypt_driver_pii`'s `search_path`, breaking the
+       vault-based flow migration 138 already fixed it to use.
+     - `137_fix_pii_encrypt_pgsodium_perms.sql` — ambiguous: wants to add `pgsodium`
+       to the same functions' `search_path` and change their owner to
+       `supabase_admin`; live state doesn't match either the pre- or post-138 target
+       exactly. Needs a human security review before ever running, not an
+       automated apply.
+     - `26_rls_coverage_gap.sql` — RLS is already enabled on every table it targets;
+       only the two named `..._deny_all` policies' presence is unconfirmed. Low risk
+       either way; left alone pending confirmation rather than blindly re-applied.
+     These four are intentionally left **untracked** in `schema_migrations` (not
+     falsely marked "applied") so nobody mistakes them for resolved — but also so a
+     naive `run_migrations.py` pass doesn't silently execute them. Recommend either
+     deleting/superseding them with corrective migrations, or adding an explicit
+     skip-list mechanism to `run_migrations.py` (doesn't currently have one) — filed
+     here rather than done unilaterally since it's a runner-tooling decision.
+- **Files:** `backend/migrations/362_fix_rider_email_verification_otp_user_id_type.sql`
+  (new); no other repo files changed — the schema application and
+  `schema_migrations` backfill happened directly against the live Supabase project
+  via MCP, not through a migration file (migrations 360/361/362 are the only new
+  *files*; the rest of this item is a live-DB reconciliation, documented here since
+  there's no other durable record of it).
+- **Verification performed:** every applied/tracked checksum re-verified against a
+  fresh `sha256sum` of the actual file on disk after two transcription mistakes were
+  caught mid-session (both self-corrected before being left in place). Object-level
+  existence (`information_schema`/`pg_catalog`) checked before and after for every
+  migration in the "genuinely missing" bucket. `schema_migrations` row count
+  confirmed at 441 (447 repo files − 4 do-not-run − 359 partial − nothing else) after
+  the full pass.
+- **What was NOT verified:** the ~15 one-time data-backfill migrations noted above
+  were spot-checked (2–3 rows/entities each), not fully row-verified; the exact
+  current state of the two named RLS policies in `26_rls_coverage_gap.sql` wasn't
+  checked (only table-level RLS-enabled status was); no attempt was made to reproduce
+  359's `42501` runtime failure directly (arguing from the documented mechanism, not
+  an observed failure in this environment).
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly

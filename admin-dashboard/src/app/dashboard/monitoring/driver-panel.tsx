@@ -61,6 +61,7 @@ export function DriverPanel({ driver, onRideClick }: DriverPanelProps) {
                 <div className="flex flex-col items-end gap-1">
                     <Badge
                         variant={driver.is_online ? "default" : "secondary"}
+                        // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text badge; dark-mode --success (2.02:1) fails WCAG AA against white text, see #2816 Batch 1 finding
                         className={driver.is_online ? "bg-green-500 hover:bg-green-500" : ""}
                     >
                         {driver.is_online ? (driver.active_ride_id ? "On Ride" : "Online") : "Offline"}

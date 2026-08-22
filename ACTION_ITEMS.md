@@ -8053,7 +8053,27 @@ record of what was assumed vs. what was actually true</summary>
   swallowed by the screen's own outer try/catch and misread as a
   generic booking failure rather than the real bug (an unconfigured
   mock). 15 tests; full rider-app suite still green (1028), `yarn tsc
-  --noEmit` clean. **67 of 76 screens done, ~9 remain at 0%.**
+  --noEmit` clean. **67 of 76 screens done, ~9 remain at 0%. Continued,
+  same day:** rider-app's `(tabs)/index.tsx` (home/map screen — the
+  rider app's landing screen). Covers the focus-effect active-ride
+  redirect (searching/assigned/accepted -> driver-arriving, arrived ->
+  driver-arrived, in_progress -> ride-in-progress,
+  completed-and-unpaid -> ride-completed, completed-and-paid -> no
+  redirect); the notification-permission banner's visibility gate,
+  Enable/Dismiss actions, and the denied-Enable settings-open + toast;
+  the AI button's enabled/coming-soon/hidden three-way branch; the
+  promo banner's dismiss and its interval-driven message rotation;
+  quick-action/search routing; and RiderSOS receiving the current ride
+  id (or undefined) plus `ridelessSosEnabled` from
+  `RidelessSosEnabledContext`. No new footguns — reused the
+  `RidelessSosEnabledContext`/`StripeKeyContext` Provider-wrap
+  convention and the `SafeBottomSheet`-style `@gorhom/bottom-sheet`
+  mock double already established this pass. 16 tests (one benign,
+  already-tolerated act() warning from a location-fetch promise
+  resolving after its wrapping act() block, same pattern accepted in
+  `profileSetupScreen.test.tsx` earlier this session); full rider-app
+  suite still green (1044), `yarn tsc --noEmit` clean. **68 of 76
+  screens done, ~8 remain at 0%.**
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

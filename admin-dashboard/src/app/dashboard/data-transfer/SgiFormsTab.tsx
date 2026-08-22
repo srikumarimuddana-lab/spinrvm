@@ -319,14 +319,14 @@ export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) 
     return (
         <div className="space-y-4">
             {removalQueue.length > 0 && (
-                <div className="rounded-lg border border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/20 p-3 space-y-2">
+                <div className="rounded-lg border border-warning bg-warning/10 p-3 space-y-2">
                     <div className="flex items-start gap-2">
-                        <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+                        <AlertTriangle className="h-4 w-4 text-warning mt-0.5 shrink-0" />
                         <div className="min-w-0 flex-1">
-                            <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                            <p className="text-sm font-medium text-warning">
                                 {removalQueue.length} driver{removalQueue.length === 1 ? "" : "s"} left but {removalQueue.length === 1 ? "is" : "are"} still filed with the regulator
                             </p>
-                            <p className="text-xs text-amber-800/80 dark:text-amber-300/80 mt-0.5">
+                            <p className="text-xs text-warning/80 mt-0.5">
                                 They deleted their Spinr account, so Spinr no longer dispatches to them — but SGI still
                                 lists them as active passenger-for-hire drivers until the removal is filed. Each needs
                                 both D00032 (driver) and D00033 (vehicle).
@@ -336,10 +336,10 @@ export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) 
                             <RefreshCw className={`h-3.5 w-3.5 ${queueLoading ? "animate-spin" : ""}`} />
                         </Button>
                     </div>
-                    <div className="max-h-40 overflow-y-auto rounded border border-amber-200 dark:border-amber-800/60 bg-background/60">
+                    <div className="max-h-40 overflow-y-auto rounded border border-warning/40 bg-background/60">
                         <table className="w-full text-xs">
                             <thead className="text-muted-foreground">
-                                <tr className="border-b border-amber-200 dark:border-amber-800/60">
+                                <tr className="border-b border-warning/40">
                                     <th className="text-left font-medium px-2 py-1.5">Driver</th>
                                     <th className="text-left font-medium px-2 py-1.5">Stopped</th>
                                     <th className="text-left font-medium px-2 py-1.5">Outstanding</th>
@@ -347,11 +347,11 @@ export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) 
                             </thead>
                             <tbody>
                                 {removalQueue.map((d) => (
-                                    <tr key={d.driver_id} className="border-b border-amber-100 last:border-0 dark:border-amber-900/40">
+                                    <tr key={d.driver_id} className="border-b border-warning/30 last:border-0">
                                         <td className="px-2 py-1.5">
                                             {d.name || d.driver_id}
                                             {!d.entity_id && (
-                                                <span className="ml-1 text-amber-700 dark:text-amber-400">(no linked account)</span>
+                                                <span className="ml-1 text-warning">(no linked account)</span>
                                             )}
                                         </td>
                                         <td className="px-2 py-1.5 tabular-nums">{d.effective_date ?? "—"}</td>
@@ -366,7 +366,7 @@ export function SgiFormsTab({ selection }: { selection: EntitySelectionState }) 
                         </table>
                     </div>
                     {queueUnresolvable > 0 && (
-                        <p className="text-xs text-amber-800 dark:text-amber-300">
+                        <p className="text-xs text-warning">
                             {queueUnresolvable} of these {queueUnresolvable === 1 ? "has" : "have"} no linked user account and
                             cannot be generated from here — they need to be filed with SGI manually.
                         </p>

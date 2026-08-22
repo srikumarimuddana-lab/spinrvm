@@ -7723,9 +7723,20 @@ record of what was assumed vs. what was actually true</summary>
   fires within a test's finite timer advances; (2) a zustand mock
   factory's initializer closing over a `let` variable assigned later in
   the file captures that variable's value at *module-load* time
-  (`undefined`), not per-test — both fixed with stable references. This
-  sub-item is **still not closed** — continuing screen-by-screen in
-  further sessions per the user's explicit instruction.
+  (`undefined`), not per-test — both fixed with stable references.
+  **Continued, same day:** both apps' safety-critical SOS emergency-
+  contact screens — driver-app's `driver/emergency-contacts.tsx` (i18n
+  `t()` copy, `Alert.alert` confirm) and rider-app's
+  `emergency-contacts.tsx` (plain-English copy, `ConfirmSheet` confirm) —
+  same shape, both fully covered: load, empty state, 10/11-digit phone
+  formatting, add-form validation (empty name, sub-10-digit phone),
+  successful add (digit-stripping + reset + re-fetch + toast), add
+  failure, the MAX_CONTACTS(3) trigger-hiding, and the confirm-before-
+  remove flow (both success and failure). 25 more tests; full suites
+  still green (rider-app 759, driver-app 844). **34 of 76 screens done,
+  ~42 remain at 0%.** This sub-item is **still not closed** — continuing
+  screen-by-screen in further sessions per the user's explicit
+  instruction.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

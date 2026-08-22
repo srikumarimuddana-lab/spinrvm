@@ -7837,7 +7837,26 @@ record of what was assumed vs. what was actually true</summary>
   `findAllByType(TextInput)` by `.props.placeholder` instead of using
   `findAllByProps` directly. 29 more tests (14 + 15); full rider-app
   suite still green (916), `yarn tsc --noEmit` clean. **56 of 76 screens
-  done, ~20 remain at 0%.**
+  done, ~20 remain at 0%. Continued, same day:** driver-app's
+  `driver/lost-and-found-chat.tsx` (rider-reported-case chat plus a
+  driver-initiated "found something" report form) — caseId vs. rideId
+  mode, the Found/Not Found respond banner gated on
+  `reported`/`driver_notified` status, respond()'s Alert-confirm → PUT
+  → reload, optimistic send/photo-upload with rollback-on-failure, and
+  the closed-case banner. New footgun: this screen derives its 10s poll
+  interval from `activeCaseId` (`lostCase?.id`, unset at mount) rather
+  than the route's own `caseId` param (rider-app's equivalent screen
+  polls on `caseId` directly) — the same `useEffect(() => cb(), [])`
+  focus-effect mock used everywhere else in this pass never re-arms once
+  the callback's closure changes, so the poll test failed until the mock
+  was corrected to `useEffect(() => cb(), [cb])`, matching the real
+  focus-effect hook's actual re-run-on-callback-change semantics.
+  18 more tests; full driver-app suite still green (984 — one
+  standalone-passing/flaked-only-in-full-run failure in the pre-existing
+  `backgroundMessaging.android.test.ts`, confirmed unrelated via a clean
+  retry, consistent with the C37 cross-suite-timer-leak pattern already
+  tracked). `yarn tsc --noEmit` clean. **57 of 76 screens done, ~19
+  remain at 0%.**
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

@@ -265,11 +265,11 @@ export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }:
                                 </div>
                             </div>
                         ) : (
-                            <div className="flex items-center gap-3 rounded-lg border border-dashed border-amber-300 dark:border-amber-700 bg-amber-50/50 dark:bg-amber-900/10 p-3 text-amber-700 dark:text-amber-300">
+                            <div className="flex items-center gap-3 rounded-lg border border-dashed border-warning/40 bg-warning/10 p-3 text-warning">
                                 <Loader2 className="h-4 w-4 animate-spin" />
                                 <div className="text-xs">
                                     <p className="font-semibold">Searching for a driver…</p>
-                                    <p className="text-[11px] text-amber-600/80 dark:text-amber-400/80">
+                                    <p className="text-[11px] text-warning/80">
                                         No driver matched yet. Dispatch is still scanning.
                                     </p>
                                 </div>
@@ -283,7 +283,7 @@ export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }:
                     <Button
                         variant="outline"
                         size="sm"
-                        className="w-full gap-1.5 text-xs text-green-600 dark:text-green-400 border-green-600 dark:border-green-700 hover:bg-green-50 dark:hover:bg-green-900/20"
+                        className="w-full gap-1.5 text-xs text-success border-success/40 hover:bg-success/10"
                         onClick={() => onCompleteRide(ride.id)}
                     >
                         <CheckCircle className="h-3.5 w-3.5" /> Complete Ride

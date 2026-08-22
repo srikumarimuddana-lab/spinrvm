@@ -7698,6 +7698,17 @@ record of what was assumed vs. what was actually true</summary>
   driver-app's `driver/lost-and-found.tsx`, `driver/tax-documents.tsx`
   (T4A tap-to-email flow). 32 more tests; full suites still green
   (rider-app 701, driver-app 814). **25 of 76 screens done, ~51 remain at
+  0%.** **Second merge race:** PR #4465 was also merged (squash) mid-push,
+  dropping 4 more commits (`driver/lost-and-found.tsx`, `driver/tax-
+  documents.tsx`, rider-app `loyalty.tsx`, a progress note) — same
+  detect/cherry-pick/re-verify recovery, landed in PR #4467. Given two
+  consecutive occurrences on this branch, every push from here on checks
+  the PR's merge state via the GitHub API first, not just branch
+  divergence. **Continued in PR #4467, same day:** 4 more screens —
+  rider-app's `wallet.tsx` (money-critical: full Stripe top-up flow),
+  `work-allowance-request.tsx`, `work-profile.tsx`; driver-app's
+  `driver/payout-history.tsx`. 46 more tests; full suites still green
+  (rider-app 733, driver-app 824). **29 of 76 screens done, ~47 remain at
   0%.** This sub-item is **still not closed** — continuing screen-by-screen
   in further sessions per the user's explicit instruction.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,

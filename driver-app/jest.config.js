@@ -32,20 +32,21 @@ module.exports = {
   ],
   coverageThreshold: {
     global: {
-      // ACTION_ITEMS.md B37: dropped to real-measured-minus-headroom for
-      // the widened file set. app/ (the actual screens, mostly untested)
-      // dragged the aggregate down sharply -- measured 2026-08-22 after
-      // adding app/: lines 27.35%, statements 26.38%, functions 21.23%
-      // (was 47.62%/45.65%/39.68% before app/ was included). Re-measured
-      // again after adding lib/+services/ (lib/'s 22 files brought a real
-      // bump, unlike rider-app's tiny lib/+services/): lines 32.91%,
-      // statements 31.97%, functions 26.26% (no `branches` key here,
-      // matching this config's pre-existing pattern). Ratchet up as
-      // app/+lib/+services/ get tests -- do not raise without
-      // re-measuring first.
-      lines: 29,
-      functions: 23,
-      statements: 28,
+      // ACTION_ITEMS.md B37: tightened to a near-ceiling floor 2026-08-22
+      // (user asked to "raise the thresholds toward the real ceiling").
+      // Every top-level source dir is now measured (store/, components/,
+      // hooks/, utils/, app/, lib/, services/, api/); fresh measurement:
+      // lines 32.91%, statements 31.97%, functions 26.26% (no `branches`
+      // key here, matching this config's pre-existing pattern).
+      // Previously carried several points of headroom
+      // (lines:29/functions:23/statements:28); now only ~1pt below
+      // measured, so this is a tight regression tripwire, not slack.
+      // Raising further requires new tests, not just re-measuring --
+      // this is NOT the user's stated 100% target, only the honest
+      // ceiling of what's currently tested.
+      lines: 31,
+      functions: 25,
+      statements: 30,
     },
   },
   moduleNameMapper: {

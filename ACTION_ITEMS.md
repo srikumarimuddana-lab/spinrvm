@@ -150,9 +150,16 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   originally reported: 13 STILL-OPEN unchanged (no commits touching them
   since 08-15), 2 now FIXED 2026-08-18 (below), 1 REGRESSED-then-FIXED
   2026-08-19 (finding #11, below),
-  2 partially mitigated but not resolved (corporate PDF tax-line fallback now
-  logged/Sentry-alerted but still ships; emergency-contacts doc corrected to
-  be honest about plaintext storage, underlying decision still open).
+  1 partially mitigated but not resolved (corporate PDF tax-line fallback now
+  logged/Sentry-alerted but still ships — the underlying data gap, rides
+  missing `tax_breakdown`, is still unaddressed and needs a backfill-vs-
+  accept decision), 1 now fully RESOLVED 2026-08-21 (was: "emergency-
+  contacts doc corrected to be honest about plaintext storage, underlying
+  decision still open" — stale as of this correction; `emergency_contacts
+  .name`/`.phone` are now encrypted at rest via migration 357/359 +
+  `utils/vault_pii.py`, approved and shipped 2026-08-21, verified present
+  in code before writing this note — see
+  `docs/change-log/2026-08-21-emergency-contact-encryption.md`).
   **FIXED 2026-08-19**: finding #11, "Unpinned GitHub Actions in
   deploy/security gates" — pinned all 6 remaining unpinned `uses:` refs to
   their current release/branch-HEAD commit SHA, following this repo's

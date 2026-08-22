@@ -46,18 +46,33 @@ module.exports = {
     'expo/src/winter/index': '<rootDir>/__mocks__/expo-winter-stub.js',
   },
   // R-P1-22: Enforce minimum coverage thresholds before merging to main.
-  // Scoped to store/ files where unit tests exist; app screens are covered by e2e.
+  // ACTION_ITEMS.md B37 sub-item 2: was scoped to store/ only (6 of ~96
+  // source files) -- widened 2026-08-22 to also include hooks/ and utils/
+  // (smaller, more unit-testable than app/ screens, which are covered by
+  // e2e instead and are the next widening step). app/, components/,
+  // lib/, services/ remain outside collectCoverageFrom for now.
   collectCoverageFrom: [
     'store/**/*.ts',
     '!store/**/__tests__/**',
     '!store/**/*.d.ts',
     '!store/workProfileStore.ts',
+    'hooks/**/*.{ts,tsx}',
+    '!hooks/**/__tests__/**',
+    '!hooks/**/*.d.ts',
+    'utils/**/*.{ts,tsx}',
+    '!utils/**/__tests__/**',
+    '!utils/**/*.d.ts',
   ],
   coverageThreshold: {
     global: {
-      lines: 58,
-      functions: 50,
-      branches: 40,
+      // ACTION_ITEMS.md B37: dropped to real-measured-minus-headroom for
+      // the widened file set. Measured 2026-08-22 after adding hooks/ and
+      // utils/: lines 68.09%, functions 64.62%, branches 56.79%. Set a few
+      // points below so the gate lands green, not red on main. Ratchet up
+      // as tests are added -- do not raise without re-measuring first.
+      lines: 63,
+      functions: 60,
+      branches: 52,
     },
   },
 };

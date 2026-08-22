@@ -12,20 +12,31 @@ module.exports = {
   transformIgnorePatterns: [
     'node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules|sentry-expo|native-base|react-native-svg|@shared/.*)'
   ],
+  // ACTION_ITEMS.md B37 sub-item 3: was scoped to store/+components/ only
+  // (29 of ~116 source files) -- widened 2026-08-22 to also include hooks/
+  // and utils/ (smaller, more unit-testable than app/ screens, the next
+  // widening step). app/, lib/, api/, services/ remain outside
+  // collectCoverageFrom for now.
   collectCoverageFrom: [
     'store/**/*.{ts,tsx}',
     'components/**/*.{ts,tsx}',
+    'hooks/**/*.{ts,tsx}',
+    'utils/**/*.{ts,tsx}',
     '!**/*.d.ts',
     '!**/node_modules/**',
+    '!**/__tests__/**',
   ],
   coverageThreshold: {
     global: {
-      // P3-4: raised to actuals minus ~2 pp headroom (measured 2026-05-05).
-      // Actuals: lines≈50.32%, functions≈35.89%, statements≈49.1%.
-      // Next step: 2026-07 sprint → 55/40/52.
-      lines: 48,
-      functions: 34,
-      statements: 47,
+      // ACTION_ITEMS.md B37: dropped to real-measured-minus-headroom for
+      // the widened file set. Measured 2026-08-22 after adding hooks/ and
+      // utils/: lines 47.62%, statements 45.65%, functions 39.68% (no
+      // `branches` key here, matching this config's pre-existing pattern).
+      // Ratchet up as tests are added -- do not raise without re-measuring
+      // first.
+      lines: 43,
+      functions: 36,
+      statements: 42,
     },
   },
   moduleNameMapper: {

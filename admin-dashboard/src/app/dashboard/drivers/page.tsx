@@ -1932,7 +1932,7 @@ export default function DriversPage() {
                         <Button
                             onClick={confirmReview}
                             disabled={reviewingDoc?.action === "approved" && reviewingDoc?.requiresExpiry && !reviewExpiry}
-                            className={reviewingDoc?.action === "approved" ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "bg-red-600 hover:bg-red-700 text-white"}
+                            className={reviewingDoc?.action === "approved" ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "bg-destructive hover:bg-destructive/90 text-destructive-foreground"}
                         >
                             {reviewingDoc?.action === "approved" ? "Approve" : "Reject"}
                         </Button>

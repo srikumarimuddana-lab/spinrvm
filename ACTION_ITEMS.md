@@ -7739,6 +7739,17 @@ record of what was assumed vs. what was actually true</summary>
   `safety-hub.tsx` (calm, out-of-ride safety settings/resources home —
   distinct from the in-ride SOS panel). 23 more tests; full suites still
   green (rider-app 771, driver-app 855). **36 of 76 screens done, ~40
+  remain at 0%.** **Continued, same day:** rider-app's `settings.tsx`
+  (notification-prefs sync/toggle, dark mode, language picker, nav rows)
+  and driver-app's `driver/stripe-onboarding.tsx` (embedded Stripe Connect
+  WebView identity verification — token injection, no-progress watchdog,
+  onMessage stage/exit/error handling, retry), `report-safety.tsx`
+  (safety-issue report form — category/description validation, photo
+  evidence upload with a non-silent partial-failure toast, location/
+  active-ride context in the payload), and `driver/referral.tsx`
+  ("Refer & Earn" — summary/list independent-failure handling, copy/share,
+  earnings math, referred-drivers list). 49 more tests; full suites still
+  green (rider-app 785, driver-app 890). **40 of 76 screens done, ~36
   remain at 0%.** This sub-item is **still not closed** — continuing
   screen-by-screen in further sessions per the user's explicit
   instruction.

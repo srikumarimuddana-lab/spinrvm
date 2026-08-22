@@ -614,7 +614,7 @@ export default function BulkOperationsPage() {
             </Card>
 
             {committedSummary && (
-                <Card className="border-emerald-300 dark:border-emerald-800">
+                <Card className="border-success/40">
                     <CardContent className="flex items-center gap-3 py-4">
                         <CheckCircle2 className="h-5 w-5 text-success" />
                         <span className="text-sm">{committedSummary}</span>
@@ -937,9 +937,11 @@ function DuplicateTable({ items }: { items: RiderImportDuplicate[] }) {
                                 <span
                                     className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
                                         it.match_type === "protected_skip"
-                                            ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
+                                            ? "bg-warning/15 text-warning"
                                             : it.match_type === "driver"
+                                              // eslint-disable-next-line no-restricted-syntax -- categorical match-type distinction (driver vs rider), not a status signal, no token equivalent (#2816)
                                               ? "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200"
+                                              // eslint-disable-next-line no-restricted-syntax -- categorical match-type distinction (rider), not a status signal, no token equivalent (#2816)
                                               : "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
                                     }`}
                                 >
@@ -1130,7 +1132,7 @@ function RiderImportSection() {
             </Card>
 
             {committedSummary && (
-                <Card className="border-emerald-300 dark:border-emerald-800">
+                <Card className="border-success/40">
                     <CardContent className="flex items-center gap-3 py-4">
                         <CheckCircle2 className="h-5 w-5 text-success" />
                         <span className="text-sm">{committedSummary}</span>

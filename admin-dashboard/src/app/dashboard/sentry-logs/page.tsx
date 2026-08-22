@@ -72,8 +72,11 @@ const SURFACE_LABEL: Record<string, string> = {
     unknown: "Unknown",
 };
 
+// Categorical surface-identity map (4 states) — badges an app surface, not a
+// good/bad signal, so no success/warning/destructive token applies. (#2816)
 function surfaceBadgeClass(surface: string): string {
     switch (surface) {
+        /* eslint-disable no-restricted-syntax -- categorical surface-identity map, not a status signal (#2816) */
         case "backend":
             return "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300";
         case "rider-app":
@@ -82,6 +85,7 @@ function surfaceBadgeClass(surface: string): string {
             return "bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-300";
         case "admin":
             return "bg-slate-200 text-slate-800 dark:bg-slate-700/50 dark:text-slate-200";
+        /* eslint-enable no-restricted-syntax */
         default:
             return "bg-muted text-muted-foreground";
     }
@@ -349,7 +353,7 @@ export default function SentryLogsPage() {
             {issuesResp?.partial && (
                 <Card className="border-warning/50">
                     <CardContent className="flex flex-col gap-1 pt-6 text-sm">
-                        <span className="flex items-center gap-2 font-medium text-yellow-600 dark:text-yellow-400">
+                        <span className="flex items-center gap-2 font-medium text-warning">
                             <AlertTriangle className="h-5 w-5" />
                             Partial results — {issuesResp.errors.length} surface
                             {issuesResp.errors.length === 1 ? "" : "s"} failed to load
@@ -372,7 +376,7 @@ export default function SentryLogsPage() {
             {config && !config.configured && (
                 <Card className="border-warning/50">
                     <CardHeader>
-                        <CardTitle className="flex items-center gap-2 text-yellow-600 dark:text-yellow-400">
+                        <CardTitle className="flex items-center gap-2 text-warning">
                             <AlertTriangle className="h-5 w-5" />
                             Sentry API not configured
                         </CardTitle>
@@ -648,7 +652,7 @@ export default function SentryLogsPage() {
                                 {detail.event_error ? (
                                     // The issue loaded but its latest event did not — say which,
                                     // so an infrastructure failure isn't read as "no stacktrace".
-                                    <p className="flex items-center gap-2 text-sm text-yellow-600 dark:text-yellow-400">
+                                    <p className="flex items-center gap-2 text-sm text-warning">
                                         <AlertTriangle className="h-4 w-4" />
                                         Could not load the latest event: {detail.event_error}
                                     </p>

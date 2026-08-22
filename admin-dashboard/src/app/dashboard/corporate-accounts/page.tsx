@@ -362,9 +362,9 @@ export default function CorporateAccountsPage() {
                 company's status, it's a reminder for an admin to manually
                 re-run the KYB review flow. */}
             {!kybLoading && kybDue.length > 0 && (
-                <Card className="border-sky-300/50 bg-sky-50/40 dark:bg-sky-950/10">
+                <Card className="border-warning/40 bg-warning/10">
                     <CardContent className="p-4">
-                        <div className="flex items-center gap-2 text-sm font-semibold text-sky-800 dark:text-sky-400 mb-2">
+                        <div className="flex items-center gap-2 text-sm font-semibold text-warning mb-2">
                             <ShieldAlert className="h-4 w-4" />
                             {kybDue.length} compan{kybDue.length === 1 ? "y" : "ies"} due for KYB re-verification
                             <span className="font-normal text-muted-foreground">
@@ -376,7 +376,7 @@ export default function CorporateAccountsPage() {
                                 <Link
                                     key={c.id}
                                     href={`/dashboard/corporate-accounts/${c.id}`}
-                                    className="flex items-center gap-1.5 rounded-md border border-sky-300/60 dark:border-sky-700/60 bg-background px-2.5 py-1 text-xs hover:border-sky-500 dark:hover:border-sky-400 transition"
+                                    className="flex items-center gap-1.5 rounded-md border border-warning/30 bg-background px-2.5 py-1 text-xs hover:border-warning/60 transition"
                                     title={c.kyb_reviewed_at ? `Last reviewed ${c.kyb_reviewed_at.slice(0, 10)}` : ""}
                                 >
                                     <span className="font-medium">{c.legal_name || c.name || c.id.slice(0, 8)}</span>
@@ -485,7 +485,11 @@ export default function CorporateAccountsPage() {
                                         </TableCell>
                                         <TableCell>${account.credit_limit?.toLocaleString() || "0"}</TableCell>
                                         <TableCell>
-                                            <Badge variant={account.is_active ? "default" : "secondary"} className={account.is_active ? "bg-emerald-500 hover:bg-emerald-600" : ""}>
+                                            <Badge
+                                                variant={account.is_active ? "default" : "secondary"}
+                                                // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text badge; dark-mode --success (2.02:1) fails WCAG AA against white text (#2816)
+                                                className={account.is_active ? "bg-emerald-500 hover:bg-emerald-600" : ""}
+                                            >
                                                 {account.is_active ? "Active" : "Inactive"}
                                             </Badge>
                                         </TableCell>
@@ -679,7 +683,7 @@ export default function CorporateAccountsPage() {
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction onClick={handleDelete} className="bg-red-600 hover:bg-red-700">
+                        <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
                             {formLoading ? "Deleting..." : "Delete"}
                         </AlertDialogAction>
                     </AlertDialogFooter>

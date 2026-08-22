@@ -7926,7 +7926,30 @@ record of what was assumed vs. what was actually true</summary>
   happens to be the exact real-world scenario (old build, no native
   module) the dynamic import exists to defend against. 14 tests; full
   rider-app suite still green (948), `yarn tsc --noEmit` clean. **61 of
-  76 screens done, ~15 remain at 0%.**
+  76 screens done, ~15 remain at 0%. Continued, same day:** rider-app's
+  `driver-arriving.tsx` (ride-critical waiting/tracking screen —
+  searching + driver-en-route states, live map, cancel flow, share
+  trip). Covers fetch-on-mount + 5s polling; status-based navigation to
+  driver-arrived/ride-in-progress/ride-completed and the
+  clear-and-return-home cancelled path; the isSearching-vs-hasDriver UI
+  split; handleCancel's four status-specific confirm-dialog copies
+  (full fare / cancellation fee / free / cancel-search) each flowing
+  through the reason sheet to cancel+clear+navigate, with a failure
+  toast instead of navigating; the hardware-back cancel-confirm trigger;
+  handleShareTrip's "Tracking Not Configured" gate on an unset
+  `trackBaseUrl` (from the `TrackBaseUrlContext` in `app/_layout`) vs.
+  its formatted share blob; and handleCopyDetails/Message nav. Reused
+  `driver-arrived.tsx`'s test's established map/bottom-sheet/
+  ConfirmSheet/CancelReasonSheet mock doubles verbatim. New footgun
+  avoided rather than hit: an initial draft mocked the whole `react`
+  module to intercept `useContext(TrackBaseUrlContext)` per-test — risky
+  since it's the same module every hook in the tree resolves through;
+  switched to the established `manageCardsScreen.test.tsx` convention
+  instead (mock `../app/_layout`'s context as a plain
+  `React.createContext(null)`, then wrap the rendered tree in its real
+  `.Provider` with a per-test value) before ever running it. 18 tests;
+  full rider-app suite still green (966), `yarn tsc --noEmit` clean.
+  **62 of 76 screens done, ~14 remain at 0%.**
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

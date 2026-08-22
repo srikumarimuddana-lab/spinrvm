@@ -3053,7 +3053,7 @@ function DriverRidesTab({ rides, totalCount, loading, driverName, fmtDate }: {
                 silently operating on a partial set (A30 Finding 2,
                 docs/audit/2026-08-13-migrated-data-visibility-audit.md). */}
             {typeof totalCount === "number" && totalCount > rides.length && (
-                <p className="text-xs text-amber-600 dark:text-amber-500">
+                <p className="text-xs text-warning">
                     Showing the {rides.length} most recent of {totalCount} total rides. Use the date filters below to find older ones.
                 </p>
             )}
@@ -3238,7 +3238,7 @@ function DriverRidesTab({ rides, totalCount, loading, driverName, fmtDate }: {
 }
 
 function QuickStat({ icon: Icon, color, bg, label, value, sub, subTone }: { icon: any; color: string; bg: string; label: string; value: string; sub?: string; subTone?: "amber" | "muted" }) {
-    const subClass = subTone === "amber" ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground";
+    const subClass = subTone === "amber" ? "text-warning" : "text-muted-foreground";
     return (
         <div className={`${bg} rounded-xl p-3 text-center`}>
             <Icon className={`h-4 w-4 ${color} mx-auto mb-1`} />
@@ -3482,10 +3482,10 @@ function DocCard({ d, docBusy, driverName, onPreview, onReview }: { d: any; docB
                     {d.created_at && <p className="text-[11px] text-muted-foreground flex items-center gap-1"><CalendarRange className="h-3 w-3" />Uploaded: {new Date(d.created_at).toLocaleDateString("en-CA",{month:"short",day:"numeric",year:"numeric"})}</p>}
                     {exp && <p className={`text-[11px] flex items-center gap-1 ${expired?"text-destructive font-medium":"text-muted-foreground"}`}><Clock className="h-3 w-3" />Expires: {new Date(exp).toLocaleDateString("en-CA",{month:"short",day:"numeric",year:"numeric"})}{expired&&" (EXPIRED)"}</p>}
                 </div>
-                {d.rejection_reason && <p className="text-[11px] text-red-500 bg-red-50 dark:bg-red-900/20 rounded-lg px-2 py-1"><AlertTriangle className="h-3 w-3 inline mr-1" />{d.rejection_reason}</p>}
+                {d.rejection_reason && <p className="text-[11px] text-destructive bg-destructive/10 rounded-lg px-2 py-1"><AlertTriangle className="h-3 w-3 inline mr-1" />{d.rejection_reason}</p>}
                 <div className="flex items-center gap-1.5 pt-1">
-                    <Button variant="outline" size="xs" className="flex-1 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-900/20" disabled={docBusy===d.id} onClick={()=>onReview(d.id,"approved")}><CheckCircle className="h-3 w-3" /> Approve</Button>
-                    <Button variant="outline" size="xs" className="flex-1 text-red-600 dark:text-red-400 border-red-200 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20" disabled={docBusy===d.id} onClick={()=>onReview(d.id,"rejected")}><XCircle className="h-3 w-3" /> Reject</Button>
+                    <Button variant="outline" size="xs" className="flex-1 text-success border-success/30 hover:bg-success/10" disabled={docBusy===d.id} onClick={()=>onReview(d.id,"approved")}><CheckCircle className="h-3 w-3" /> Approve</Button>
+                    <Button variant="outline" size="xs" className="flex-1 text-destructive border-destructive/30 hover:bg-destructive/10" disabled={docBusy===d.id} onClick={()=>onReview(d.id,"rejected")}><XCircle className="h-3 w-3" /> Reject</Button>
                 </div>
                 {/* Saving the file to disk had no affordance at all — the card
                     could only preview, approve, or reject. Admins need the

@@ -413,11 +413,11 @@ export default function CloudMessagingPage() {
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                 {[
                     { label: "Total Messages", value: stats.total_messages, icon: Cloud, color: "text-violet-500" },
-                    { label: "Sent", value: stats.total_sent, icon: CheckCircle2, color: "text-emerald-500" },
+                    { label: "Sent", value: stats.total_sent, icon: CheckCircle2, color: "text-success" },
                     { label: "Scheduled", value: stats.total_scheduled, icon: Timer, color: "text-blue-500" },
-                    { label: "Failed", value: stats.total_failed, icon: XCircle, color: "text-red-500" },
+                    { label: "Failed", value: stats.total_failed, icon: XCircle, color: "text-destructive" },
                     { label: "Recipients Reached", value: stats.total_recipients_reached.toLocaleString(), icon: Users, color: "text-amber-500" },
-                    { label: "Success Rate", value: `${stats.success_rate}%`, icon: CheckCircle2, color: "text-emerald-500" },
+                    { label: "Success Rate", value: `${stats.success_rate}%`, icon: CheckCircle2, color: "text-success" },
                 ].map((s, i) => (
                     <Card key={i}>
                         <CardContent className="pt-4 pb-3">
@@ -898,7 +898,7 @@ export default function CloudMessagingPage() {
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel>Keep</AlertDialogCancel>
-                        <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">Cancel Message</AlertDialogAction>
+                        <AlertDialogAction onClick={confirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Cancel Message</AlertDialogAction>
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>

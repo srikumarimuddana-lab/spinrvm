@@ -150,10 +150,30 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   originally reported: 13 STILL-OPEN unchanged (no commits touching them
   since 08-15), 2 now FIXED 2026-08-18 (below), 1 REGRESSED-then-FIXED
   2026-08-19 (finding #11, below),
-  1 partially mitigated but not resolved (corporate PDF tax-line fallback now
+  both remaining "partially mitigated" items now RESOLVED as of this
+  correction (2026-08-22): the corporate PDF tax-line fallback (below) is
+  confirmed a non-issue, and emergency-contacts (below) was already fixed
+  2026-08-21. Of the original 17, everything is now either FIXED,
+  RESOLVED, or explicitly STILL-OPEN with no ambiguous middle state left.
+  **RESOLVED 2026-08-22** (was: "corporate PDF tax-line fallback now
   logged/Sentry-alerted but still ships — the underlying data gap, rides
   missing `tax_breakdown`, is still unaddressed and needs a backfill-vs-
-  accept decision), 1 now fully RESOLVED 2026-08-21 (was: "emergency-
+  accept decision"). Confirmed a non-issue, not a live bug, on two fronts:
+  (1) the repo owner confirmed the corporate module has zero real-account
+  usage to date — no legacy corporate data exists to backfill; (2) traced
+  the actual forward code path (`features.py::calculate_all_fees`, the
+  only function that writes `tax_breakdown`) and confirmed it always
+  populates `tax_breakdown` for any ride whose pickup matches an active
+  service area — which every real Saskatoon/Regina ride does — and that
+  corporate bookings share the *identical* fare-calc path
+  (`compute_fare_estimate`'s own docstring: "so server-side bookers
+  (corporate guest booking) share the exact same formula"). The only way a
+  ride ends up with a missing `tax_breakdown` is legacy-import (never ran
+  this code), which per (1) has no corporate population. `_log_combined_tax
+  _fallback` is a legitimate defensive safety net for a scenario that
+  structurally can't happen going forward, not evidence of an active gap
+  — no backfill, no code change needed.
+  **RESOLVED 2026-08-21** (was: "emergency-
   contacts doc corrected to be honest about plaintext storage, underlying
   decision still open" — stale as of this correction; `emergency_contacts
   .name`/`.phone` are now encrypted at rest via migration 357/359 +
@@ -6382,7 +6402,50 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   provisioned yet at console.mobile.dev.
 
 ### B26. Regina (main, non-airport) service area shows `pst_enabled=false` despite `pst_rate=6` already set and a prior change log claiming it was enabled
-- [ ] **Status:** open — **NOT fixed, still needs confirmation before touching**.
+- [x] **Status:** CLOSED (2026-08-22). **This item's own tracking was stale —
+  it had already been resolved once, on 2026-08-14, by a full Change Impact
+  Log this entry never got updated to cite**:
+  `docs/change-log/2026-08-14-sk-pst-revert.md`. That fix reverted the
+  2026-08-11 enablement back to `pst_enabled=false, pst_rate=0` on all 4 real
+  Saskatchewan rows (Regina included, correcting the 08-11 doc's inaccurate
+  claim that Regina was already updated), per a second, opposite user
+  determination given 2026-08-14 ("GST only, no PST"), and confirmed **zero**
+  non-legacy rides existed in the live-window between either flip (one real
+  ride total, dated 2026-08-08, predating both) — so no remediation was
+  needed even then.
+  **Today (2026-08-22), the repo owner reconfirmed the same determination a
+  third time** ("PST is not being charged as per the current city or
+  government rule in saskatchewan so pst can stay false") — now three
+  consistent verbal confirmations across two sessions, one direction only
+  (08-14 and today both say no-PST; only the original 08-11 determination
+  disagreed, and it was the one later reversed).
+  **Re-verified live before closing, not just trusting either doc**: queried
+  Supabase directly (`soavhtdhefowwvforzwb`, `ca-central-1`) — all 4 real SK
+  rows (`Regina`, `Regina Airport`, `Saskatoon`, `Saskatoon Airport`)
+  currently read `pst_enabled=false, pst_rate=0`, exactly matching the 08-14
+  fix's end state, no drift since. (A `riyadh`/`riyadh airport` pair of rows
+  also exist, unrelated to this SK question, left untouched — `riyadh`'s
+  leftover `pst_rate=6` with `pst_enabled=false` is harmless since
+  disabled.) Also re-ran the 08-14 doc's own remediation check independently
+  rather than trusting its "zero rides" finding without verification:
+  `SELECT ... FROM rides WHERE tax_breakdown ? 'PST'` returns **zero rows**
+  across the entire table, today — confirms no ride has ever carried a PST
+  charge, consistent with and reconfirming the 08-14 finding.
+  **What's still genuinely outstanding, not resolved by any of this**: the
+  08-14 doc's own explicit recommendation — *"an actual tax/legal
+  consultation before the next real Saskatchewan ride is quoted, given the
+  next flip... will be the first one with real financial consequences"* —
+  has still never been done. Three verbal confirmations (08-11, 08-14,
+  today) is a real, actionable, repo-owner-authorized operational answer,
+  good enough to close this item and stop it drifting a fourth time, but it
+  is not the same thing as a citation against the actual PST-46 bulletin
+  text or SK Ministry of Finance confirmation. Given real ride volume is
+  about to change materially per this repo's active Saskatoon-launch push,
+  that primary-source confirmation is worth getting before volume, not
+  after — flagged as a new, separate, lower-urgency item (see below) rather
+  than reopening this one.
+  `docs/compliance/2026-08-13-sk-pst-rideshare-determination-needed.md`
+  updated to reflect this resolution.
   Discovered 2026-08-12 as a side effect of the B8 "Regina Airpot" rename
   blast-radius check (unrelated task; querying `service_areas` to confirm
   it was safe to rename surfaced this by coincidence). **2026-08-13:** wrote up
@@ -10592,6 +10655,54 @@ record of what was assumed vs. what was actually true</summary>
 - **Acceptance:** a real SLA policy exists in Zoho Desk (or an equivalent explicit
   decision not to enforce one is documented) and the live `ai_escalation_creates_ticket`
   value is confirmed and recorded.
+
+### G9. SK PST-on-rideshare applicability has never been confirmed against a primary source, only three verbal determinations
+- [ ] **Status:** open — identified 2026-08-22, spun off while closing B26.
+- **Issue/gap:** Saskatchewan `service_areas` currently run GST-only
+  (`pst_enabled=false`), and that's now the operationally-settled answer
+  after three consistent repo-owner confirmations (2026-08-11 said PST
+  applies, then reversed 2026-08-14 and reconfirmed 2026-08-22 that it
+  doesn't) — see B26 (CLOSED) and
+  `docs/change-log/2026-08-14-sk-pst-revert.md` for the full history. What's
+  never happened, across any of the three determinations, is an actual
+  citation against Saskatchewan's PST-46 bulletin ("Service Enterprises",
+  which has a "Transportation Services" section covering exactly this) or a
+  direct answer from SK Ministry of Finance / a tax advisor.
+- **Why it matters:** the 08-14 revert's own doc says this explicitly —
+  "the next flip (whichever direction) will be the first one with real
+  financial consequences," since zero real Saskatchewan rides have existed
+  through any of the three determinations so far. That's changing: this
+  repo's active Saskatoon-launch push means real ride volume is coming.
+  Getting this wrong at volume means either under-collecting a tax Spinr
+  owes, or over-charging riders/corporate customers a tax that doesn't
+  apply — both are real exposure, not a documentation nit.
+- **What partial research exists:** this session's `WebSearch` (no direct
+  `WebFetch` access to `saskatchewan.ca`/`sets.saskatchewan.ca`/`canada.ca`
+  — all blocked by this environment's egress proxy) returned a specific,
+  on-point snippet: *"PST is applicable on the following transportation
+  services in Saskatchewan: Taxicab or limousine transportation services,
+  Charter or tour bus services, Sightseeing services, and Other passenger
+  transportation services."* That's suggestive evidence PST **does** apply
+  to rideshare specifically — the opposite of the current operational
+  setting — but it's a search-engine snippet, not a direct read of the
+  bulletin text, and not something to act on for a live tax-compliance
+  change per the same discipline the 08-14 doc itself insists on.
+- **Action:** get a real answer from a source that can be trusted for a live
+  tax-compliance decision — an accountant/tax professional, direct SK
+  Ministry of Finance Revenue Division contact, or a session/person with
+  working access to read the actual PST-46 bulletin text. Bring this
+  session's specific "Taxicab... Other passenger transportation services"
+  finding to whoever does that research as a starting point, not a
+  conclusion.
+- **Files:** none — this is a research/verification task. Reference:
+  `docs/change-log/2026-08-14-sk-pst-revert.md`,
+  `docs/compliance/2026-08-13-sk-pst-rideshare-determination-needed.md`,
+  `.claude/context/regulatory-sk.md`, `backend/features.py::calculate_all_fees`.
+- **Acceptance:** a primary-source-cited answer exists (bulletin text quote,
+  advisor confirmation, or Ministry response), and `service_areas.pst_enabled`
+  matches it via the audited admin path (`admin_update_service_area`,
+  written justification required per A29) before real Saskatchewan ride
+  volume makes the next determination's stakes real.
 
 ## P3 — Post-launch backlog (tracked, not gating)
 

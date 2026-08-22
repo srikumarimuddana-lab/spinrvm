@@ -1,11 +1,29 @@
 # Escalation: Does Saskatchewan PST apply to rideshare fares? (Regina data mismatch)
 
-**Status:** Open — blocked on an authoritative answer. Nothing in this doc should
-be treated as resolving the question either way.
+**Status: RESOLVED operationally, 2026-08-22 — closed as `ACTION_ITEMS.md` B26,
+follow-up research tracked separately as G9. See "Resolution" below before
+reading the rest of this doc as if it were still open — the history below is
+preserved as-is for context, not because the question is still live.**
+
+**What actually happened, in order:** this doc's "live data disagrees with
+itself" framing (below) was accurate as of 2026-08-12/13 when it was written,
+but was **already resolved once more, on 2026-08-14**
+(`docs/change-log/2026-08-14-sk-pst-revert.md`) — the repo owner gave a second,
+opposite determination (GST-only, no PST) and all 4 real Saskatchewan
+`service_areas` rows were reverted to `pst_enabled=false, pst_rate=0`,
+consistent with each other. This doc was never updated to reflect that, so it
+sat describing a discrepancy that no longer existed for over a week. On
+2026-08-22, while closing out B26, the repo owner reconfirmed the same
+determination a third time, live Supabase data was re-verified to still match
+it, and the item was closed. See B26 in `ACTION_ITEMS.md` for the full,
+current account.
+
 **Owner:** whoever picks this up with real research/legal access (see "Who should
 answer this" below) — not resolvable from an engineering session alone.
-**Tracked as:** `ACTION_ITEMS.md` B26
+**Tracked as:** `ACTION_ITEMS.md` B26 (CLOSED 2026-08-22) — primary-source
+verification follow-up now tracked as `ACTION_ITEMS.md` G9.
 **Related:** `docs/change-log/2026-08-11-sk-pst-enable.md`,
+`docs/change-log/2026-08-14-sk-pst-revert.md`,
 `docs/change-log/2026-08-12-a29-tax-config-audit-justification.md`,
 `.claude/context/regulatory-sk.md`
 
@@ -157,3 +175,40 @@ Impact Log this item requires, so it stops drifting.
   answer.
 - Do not apply any fix via a bare `UPDATE` outside the audited admin path
   now that one exists (see step 4 above).
+
+## Resolution (2026-08-22)
+
+**Closed as `ACTION_ITEMS.md` B26, operationally — not by the primary-source
+verification this doc originally called for.** Three consecutive repo-owner
+determinations now agree in one direction:
+
+1. 2026-08-11: "PST applies" (later reversed).
+2. 2026-08-14: "GST only, no PST" — `docs/change-log/2026-08-14-sk-pst-revert.md`
+   reverted all 4 real Saskatchewan `service_areas` rows to
+   `pst_enabled=false, pst_rate=0`, and confirmed zero real rides existed in
+   either flip's live window (one real ride total, dated 2026-08-08,
+   predating both) — no remediation was needed then.
+3. 2026-08-22: reconfirmed the same "no PST" determination a third time,
+   independent of the 08-14 session. Live Supabase data re-verified to still
+   match it (all 4 rows still `pst_enabled=false`), and re-ran the
+   remediation check independently — still zero rides ever carried a PST
+   charge in `tax_breakdown`.
+
+**What this resolution is, and isn't:** three consistent verbal
+confirmations from the person with actual business authority over this
+decision is a real, actionable answer — good enough to stop this item
+drifting a fourth time and to close B26. It is **not** the primary-source
+citation (PST-46 bulletin text, SK Ministry of Finance confirmation, or a
+tax advisor) this doc originally asked for, and that gap is real: this
+session's `WebSearch` (direct `WebFetch` to `saskatchewan.ca` /
+`sets.saskatchewan.ca` / `canada.ca` blocked by the environment's egress
+proxy throughout) returned one specific, on-point, but unverified snippet —
+*"PST is applicable on the following transportation services in
+Saskatchewan: Taxicab or limousine transportation services, Charter or tour
+bus services, Sightseeing services, and Other passenger transportation
+services"* — which, if accurate, points the **opposite** direction from the
+current operational setting. That tension is exactly why this doc's original
+"get a real answer from a trusted source" recommendation still stands and is
+now tracked separately as `ACTION_ITEMS.md` G9, with real urgency behind it
+given real Saskatchewan ride volume is no longer purely hypothetical the way
+it was during all three prior determinations.

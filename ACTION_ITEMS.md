@@ -10156,6 +10156,44 @@ record of what was assumed vs. what was actually true</summary>
   off returns a clean rider-facing "temporarily unavailable" response instead of a
   raw error, and it's documented in `saskatoon-launch.md` §N (rollback procedures).
 
+### G8. No code-side or Zoho-side enforcement confirmed for the P1 2-hour support-response SLA
+- [ ] **Status:** open — identified 2026-08-22, following up on the existing Zoho Desk
+  integration and AI-escalation surface.
+- **Issue/gap:** CLAUDE.md's KPI table and `saskatoon-launch.md` §K-2 both state a P1
+  support-ticket response target (≤ 2 hours), but grepping the actual support-ticket
+  code turned up nothing that tracks it: `routes/admin/support_tickets.py` has
+  `priority`/`status` fields, dashboard counts by priority, and an auto-assign-by-
+  ride-history lookup, but no deadline/due-date/SLA field. `backend/core/lifespan.py`'s
+  18 background loops have no support-SLA-breach sweep. `utils/metrics.py` has no
+  `spinr_support_*` metric (contrast with `spinr_dispatch_offer_to_accept_duration_ms`,
+  which does track its own P95 target in code). The Zoho Desk integration itself
+  (`services/zoho_desk_service.py`, `admin-dashboard/src/lib/api/zoho-desk.ts`) doesn't
+  surface Zoho's native due-date/SLA fields either — zero "due"/"SLA" references in
+  either file.
+- **Why it matters:** the 2-hour figure exists only as a stated target with nothing
+  computing actual response time against it or alerting on a breach — there's no way
+  to know today whether the KPI is being met short of manually auditing ticket
+  timestamps.
+- **Action:** the fastest real fix is almost certainly configuring an SLA policy
+  directly in Zoho Desk's own admin console (it has native SLA/due-date support as a
+  product) rather than building tracking in Spinr's code — a config change, not
+  necessarily a backend change. If Zoho's SLA/breach data should also be visible in
+  Spinr's admin dashboard (e.g. surfaced next to the existing priority/status
+  columns), that's a follow-up scoped separately once the Zoho-side policy exists.
+- **Also worth confirming while in this area:** `ai_escalation_creates_ticket`
+  defaults to `false` in code (migration 145, `schemas.py:546`,
+  `test_ai_settings.py:58` asserts the default) and is admin-togglable
+  (`admin-dashboard/.../settings/page.tsx`) — but this session has no DB access to
+  confirm the actual live `app_settings` row, so whether it's been turned on in
+  production is unverified here.
+- **Files:** none yet (verification/config task) — if Spinr-side surfacing is
+  pursued, likely `backend/services/zoho_desk_service.py`,
+  `backend/routes/admin/support_tickets.py`,
+  `admin-dashboard/src/app/dashboard/support-tickets/`.
+- **Acceptance:** a real SLA policy exists in Zoho Desk (or an equivalent explicit
+  decision not to enforce one is documented) and the live `ai_escalation_creates_ticket`
+  value is confirmed and recorded.
+
 ## P3 — Post-launch backlog (tracked, not gating)
 
 ### Notification-channel coverage backlog (2026-08-08 audit, branch `claude/email-alerts-spinr-branding-l12lg2`)

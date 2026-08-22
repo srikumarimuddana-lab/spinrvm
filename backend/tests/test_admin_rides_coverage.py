@@ -1166,3 +1166,19 @@ class TestAdminRidesReadEndpointsSmoke:
             "payout_count",
             "pending_count",
         }
+
+    def test_get_payout_stats_uses_round_half_up(self, client, as_super_admin):
+        """Regression test for ACTION_ITEMS G8/A40's N15 fast-follow: the local
+        `_d()` helper in admin_get_payout_stats used bare `round()` on a Decimal,
+        which defaults to ROUND_HALF_EVEN and can disagree with the codebase's
+        ROUND_HALF_UP convention on an exact .5-boundary value. Mirrors
+        test_dispute_stats_total_refunded_uses_round_half_up's ".125" case from
+        docs/change-log/2026-08-19-admin-decimal-round-convention-fix.md."""
+        row = [
+            {"total_paid": "10.125", "total_pending": "0", "total_failed": "0", "payout_count": 1, "pending_count": 0}
+        ]
+        with patch("routes.admin.rides.db.rpc", AsyncMock(return_value=row)):
+            resp = client.get("/api/admin/payouts/stats")
+        assert resp.status_code == 200
+        # ROUND_HALF_UP: 10.125 -> 10.13 (banker's rounding would give 10.12).
+        assert resp.json()["total_paid"] == 10.13

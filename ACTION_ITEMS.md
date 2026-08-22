@@ -7641,6 +7641,24 @@ record of what was assumed vs. what was actually true</summary>
      than a contrived test, so treat "100%" as "100% of reachable,
      meaningfully-testable code, with every exclusion justified inline,"
      not literally 100% of every line the tool can count.
+- **Fix applied (sub-item 4 progress, `app/` screens test-authoring, in
+  progress 2026-08-22):** 76 of 88 `app/` screens across rider-app (41/48)
+  and driver-app (35/40) were at 0% line coverage even after the
+  directory widening above made them measurable. User explicitly chose to
+  go broad screen-by-screen (prioritizing coverage volume over risk-based
+  ordering) rather than a risk-prioritized subset. First two passes wrote
+  real tests for 8 screens: rider-app's `legal.tsx`, `policies.tsx`,
+  `legacy-consent-notice.tsx`, `support.tsx`, `reactivate-account.tsx`,
+  `accessibility.tsx`; driver-app's `legal.tsx`, `policies.tsx`,
+  `legacy-consent-notice.tsx`, `index.tsx` (the cold-start auth routing
+  gate), `reactivate-account.tsx`, `crc-consent.tsx` (PIPEDA background-
+  check consent). 65 new tests total, all passing; full suites remain
+  green (rider-app 633, driver-app 770). Aggregate coverage barely moved
+  (`app/` is 48+40 files; 8 screens is a small fraction) — thresholds were
+  not re-tightened this round since measured coverage stayed within the
+  existing floor. This sub-item is **not** closed — ~68 screens remain at
+  0%; continuing screen-by-screen in further sessions per the user's
+  explicit instruction.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

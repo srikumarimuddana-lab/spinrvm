@@ -73,8 +73,9 @@ rules:
       - pattern-not: float(Decimal(...).quantize(...))
     paths:
       # Every path here exists and reports zero findings — verified by actually
-      # running semgrep (2026-08-14), which is why this rule is now merge-
-      # blocking (see the "Money-safety gate" step in security-gates.yml).
+      # running semgrep (2026-08-14; receipt_pdf.py/email_receipt.py added and
+      # re-verified 2026-08-22, see below), which is why this rule is now
+      # merge-blocking (see the "Money-safety gate" step in security-gates.yml).
       #
       # Worth recording how that went, because the lesson is the point: an
       # earlier pass declared this same list clean on a careful file-by-file
@@ -86,6 +87,17 @@ rules:
       # module anywhere (the feature is a Postgres RPC), and the corporate
       # wallet service is named corporate_wallet_service.py — so the allowlist
       # silently covered four files while reading as if it covered six.
+      #
+      # 2026-08-22 (ACTION_ITEMS.md A40 #26/N14 follow-up): added
+      # receipt_pdf.py/email_receipt.py — both render money (7-year-retained
+      # legal records) but were never in this list. Ran semgrep before adding:
+      # receipt_pdf.py had zero float() calls, clean immediately.
+      # email_receipt.py had 2 findings, both `round(float(coverage) * 100)` —
+      # coverage_ratio is a GPS route-quality percentage, not a money value,
+      # the same false-positive class already documented below for
+      # drivers/_shared.py's GPS coordinates. Annotated both with an inline
+      # `# nosemgrep: spinr-no-float-in-money` + reason per this rule's own
+      # message, rather than leaving them to fail the newly-blocking gate.
       include:
         - "backend/routes/fares.py"
         - "backend/routes/payments.py"
@@ -97,6 +109,8 @@ rules:
         - "backend/services/corporate_allowance_service.py"
         - "backend/services/corporate_subscription_service.py"
         - "backend/utils/stripe_charge.py"
+        - "backend/utils/receipt_pdf.py"
+        - "backend/utils/email_receipt.py"
       # Deliberately NOT covered, with reasons — so the next person does not
       # "helpfully" add them and turn the gate red:
       #

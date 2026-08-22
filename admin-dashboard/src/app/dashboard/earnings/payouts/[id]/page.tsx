@@ -52,7 +52,7 @@ const STATUS_CONFIG: Record<string, { label: string; cls: string; Icon: React.El
     completed: { label: "Completed", cls: "bg-success/15 text-success", Icon: CircleCheck },
     paid:      { label: "Paid",      cls: "bg-success/15 text-success", Icon: CircleCheck },
     pending:   { label: "Pending",   cls: "bg-warning/15 text-warning", Icon: Clock },
-    processing:{ label: "Processing",cls: "bg-blue-500/15 text-blue-700 dark:text-blue-400", Icon: Clock },
+    processing:{ label: "Processing",cls: "bg-warning/15 text-warning", Icon: Clock },
     failed:    { label: "Failed",    cls: "bg-destructive/15 text-destructive", Icon: CircleAlert },
     cancelled: { label: "Cancelled", cls: "bg-muted text-muted-foreground", Icon: Ban },
 };
@@ -135,7 +135,7 @@ function RetryModal({
                         <p><span className="text-muted-foreground">Driver: </span>{payout?.driver_name ?? "Unknown"}</p>
                         <p><span className="text-muted-foreground">Amount: </span>{formatCurrency(payout?.amount)}</p>
                         {payout?.failure_reason && (
-                            <p className="text-red-600 dark:text-red-400"><span className="text-muted-foreground">Failure: </span>{payout.failure_reason}</p>
+                            <p className="text-destructive"><span className="text-muted-foreground">Failure: </span>{payout.failure_reason}</p>
                         )}
                     </div>
                     <p className="text-muted-foreground text-xs">
@@ -256,9 +256,9 @@ export default function PayoutDetailPage() {
                         </CardContent>
                         {payout.failure_reason && (
                             <div className="px-6 pb-4">
-                                <div className="rounded-md bg-red-50 dark:bg-red-900/10 border border-red-200 dark:border-red-800 p-3">
-                                    <p className="text-xs font-semibold text-red-700 dark:text-red-300 mb-0.5">Failure Reason</p>
-                                    <p className="text-sm text-red-700 dark:text-red-300">{payout.failure_reason}</p>
+                                <div className="rounded-md bg-destructive/10 border border-destructive/30 p-3">
+                                    <p className="text-xs font-semibold text-destructive mb-0.5">Failure Reason</p>
+                                    <p className="text-sm text-destructive">{payout.failure_reason}</p>
                                 </div>
                             </div>
                         )}

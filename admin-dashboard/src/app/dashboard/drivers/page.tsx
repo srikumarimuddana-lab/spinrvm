@@ -973,26 +973,29 @@ export default function DriversPage() {
                                         <TableCell>
                                             <div className="flex flex-col gap-1.5 items-start">
                                                 {/* account_deleted wins over status: deletion cannot change
-                                                    drivers.status, so a departed driver still carries "active". */}
-                                                {/* Driver-lifecycle-status categorical map (6 states, incl. online/
-                                                    offline) — mirrors the established exclusion documented on
-                                                    driver-action-bar.tsx's STATUS_CONFIG and
-                                                    driver-stats-cards.tsx's stat-tile set; kept as one hand-picked
-                                                    palette rather than partially converted. (#2816) */}
-                                                {/* eslint-disable no-restricted-syntax -- categorical driver-lifecycle-status badges, see comment above (#2816) */}
+                                                    drivers.status, so a departed driver still carries "active".
+                                                    Categorical driver-lifecycle-status map (6 states, 5 hues) --
+                                                    same class as driver-action-bar.tsx's STATUS_CONFIG; not a
+                                                    #2816 migration target (a 3-token system can't express 6
+                                                    distinct states). */}
+                                                {/* eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816) */}
                                                 {driver.account_deleted ? <Badge variant="default" className="bg-zinc-200 text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 text-[10px] px-1.5 py-0 border-zinc-300 dark:border-zinc-700"><Trash2 className="h-3 w-3 mr-1" />Deleted</Badge>
+                                                // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
                                                 : driver.status === "active" ? <Badge variant="default" className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0 border-emerald-200 dark:border-emerald-800"><ShieldCheck className="h-3 w-3 mr-1" />Active</Badge>
+                                                // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
                                                 : driver.status === "needs_review" ? <Badge variant="default" className="bg-amber-100 text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-400 text-[10px] px-1.5 py-0 border-amber-200 dark:border-amber-800"><AlertTriangle className="h-3 w-3 mr-1" />Needs Review</Badge>
+                                                // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
                                                 : driver.status === "suspended" ? <Badge variant="default" className="bg-orange-100 text-orange-700 hover:bg-orange-100 dark:bg-orange-900/30 dark:text-orange-400 text-[10px] px-1.5 py-0 border-orange-200 dark:border-orange-800"><Pause className="h-3 w-3 mr-1" />Suspended</Badge>
+                                                // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
                                                 : driver.status === "banned" ? <Badge variant="default" className="bg-red-200 text-red-800 hover:bg-red-200 dark:bg-red-900/40 dark:text-red-400 text-[10px] px-1.5 py-0 border-red-300 dark:border-red-800"><Ban className="h-3 w-3 mr-1" />Banned</Badge>
+                                                // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
                                                 : <Badge variant="default" className="bg-blue-100 text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 text-[10px] px-1.5 py-0 border-blue-200 dark:border-blue-800"><ShieldAlert className="h-3 w-3 mr-1" />Pending</Badge>}
-                                                <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${driver.is_online && !driver.account_deleted ? "border-emerald-300 text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10" : ""}`}>{driver.is_online && !driver.account_deleted ? "Online" : "Offline"}</Badge>
-                                                {/* eslint-enable no-restricted-syntax */}
+                                                <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${driver.is_online && !driver.account_deleted ? "border-success/40 text-success bg-success/10" : ""}`}>{driver.is_online && !driver.account_deleted ? "Online" : "Offline"}</Badge>
                                             </div>
                                         </TableCell>
                                         <TableCell>
                                             <div className="flex flex-col gap-0.5 items-start">
-                                                <Badge variant={driver.is_online ? "default" : "outline"} className={driver.is_online ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0 border-emerald-200 dark:border-emerald-800" : "text-[10px] px-1.5 py-0 text-muted-foreground"}>
+                                                <Badge variant={driver.is_online ? "default" : "outline"} className={driver.is_online ? "bg-success/15 text-success text-[10px] px-1.5 py-0 border-success/30" : "text-[10px] px-1.5 py-0 text-muted-foreground"}>
                                                     <span className={`h-1.5 w-1.5 rounded-full mr-1 ${driver.is_online ? "bg-success" : "bg-muted-foreground/40"}`} />
                                                     {driver.is_online ? "Online" : "Offline"}
                                                 </Badge>
@@ -1025,7 +1028,7 @@ export default function DriversPage() {
                                             <span className="text-xs font-bold">{(driver.total_rides || 0).toLocaleString()}</span>
                                         </TableCell>
                                         <TableCell className="text-right">
-                                            <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">{formatCurrency(driver.total_earnings || 0)}</span>
+                                            <span className="text-xs font-bold text-success">{formatCurrency(driver.total_earnings || 0)}</span>
                                         </TableCell>
                                         <TableCell>
                                             <div className="flex items-center gap-1.5 text-xs text-foreground font-medium truncate max-w-[120px]"><MapPin className="h-3.5 w-3.5 text-blue-500 shrink-0" />{areaName || "Unassigned"}</div>
@@ -1112,25 +1115,33 @@ export default function DriversPage() {
                                                 )}
                                             </div>
                                             {selected.profile_image_status === "pending_review" && (
-                                                <div className="flex items-center gap-2 mt-2 p-2 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+                                                <div className="flex items-center gap-2 mt-2 p-2 rounded-lg bg-warning/10 border border-warning/30">
                                                     {(liveStats?.photo_url || selected.photo_url) && (
                                                         // eslint-disable-next-line @next/next/no-img-element
                                                         <img src={liveStats?.photo_url || selected.photo_url} alt="" className="w-9 h-9 rounded-full object-cover" />
                                                     )}
-                                                    <span className="text-xs text-amber-700 dark:text-amber-400 flex-1">Profile photo pending review</span>
+                                                    <span className="text-xs text-warning flex-1">Profile photo pending review</span>
                                                     <button disabled={photoReviewing} onClick={() => handlePhotoReview("approve")} className="text-xs font-semibold px-2 py-1 rounded bg-emerald-600 text-white disabled:opacity-50">Approve</button>
                                                     <button disabled={photoReviewing} onClick={() => handlePhotoReview("reject")} className="text-xs font-semibold px-2 py-1 rounded bg-red-600 text-white disabled:opacity-50">Reject</button>
                                                 </div>
                                             )}
                                             {selected.profile_image_status === "rejected" && (
-                                                <div className="mt-2 text-xs text-red-600 dark:text-red-400">Profile photo rejected — driver must re-upload.</div>
+                                                <div className="mt-2 text-xs text-destructive">Profile photo rejected — driver must re-upload.</div>
                                             )}
+                                            {/* Same categorical driver-lifecycle-status map as the list row above
+                                                (6 states, 5 hues) -- not a #2816 migration target. */}
                                             <div className="flex items-center gap-2 mt-2">
+                                                {/* eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816) */}
                                                 {selected.account_deleted ? <Badge className="bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"><Trash2 className="h-3 w-3" /> Deleted</Badge>
+                                                // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
                                                 : selected.status === "active" ? <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"><ShieldCheck className="h-3 w-3" /> Active</Badge>
+                                                // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
                                                 : selected.status === "needs_review" ? <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"><AlertTriangle className="h-3 w-3" /> Needs Review</Badge>
+                                                // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
                                                 : selected.status === "suspended" ? <Badge className="bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400"><Pause className="h-3 w-3" /> Suspended</Badge>
+                                                // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
                                                 : selected.status === "banned" ? <Badge className="bg-red-200 text-red-800 dark:bg-red-900/40 dark:text-red-400"><Ban className="h-3 w-3" /> Banned</Badge>
+                                                // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
                                                 : <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"><ShieldAlert className="h-3 w-3" /> Pending</Badge>}
                                                 <Badge variant="outline" className={selected.is_online && !selected.account_deleted ? "border-success/40 text-success" : ""}>
                                                     {selected.is_online && !selected.account_deleted ? "Online" : "Offline"}
@@ -1141,7 +1152,7 @@ export default function DriversPage() {
                                                     )}
                                                 </Badge>
                                                 {selected.subscription_status === "active" && <Badge className="bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400"><CreditCard className="h-3 w-3" /> Spinr Pass</Badge>}
-                                                {selected.subscription_status === "expired" && <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"><CreditCard className="h-3 w-3" /> Pass Expired</Badge>}
+                                                {selected.subscription_status === "expired" && <Badge className="bg-destructive/15 text-destructive"><CreditCard className="h-3 w-3" /> Pass Expired</Badge>}
                                             </div>
                                         </div>
                                     </div>
@@ -1667,11 +1678,11 @@ export default function DriversPage() {
                                                     <div key={reqDoc.key}>
                                                         <div className="flex items-center gap-2 mb-3 flex-wrap">
                                                             <FileText className="h-4 w-4 text-muted-foreground" /><h4 className="text-sm font-semibold">{reqDoc.label}</h4>
-                                                            {matchingDocs.length === 0 && <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 text-[10px]">Missing</Badge>}
-                                                            {counts.pending > 0 && <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-[10px]">{counts.pending} pending</Badge>}
-                                                            {counts.approved > 0 && counts.pending === 0 && !expiryMissing && <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px]">Approved</Badge>}
-                                                            {expiryMissing && counts.pending === 0 && <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-[10px]">Approved · expiry not recorded</Badge>}
-                                                            {counts.rejected > 0 && counts.pending === 0 && counts.approved === 0 && <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 text-[10px]">Re-upload needed</Badge>}
+                                                            {matchingDocs.length === 0 && <Badge className="bg-destructive/15 text-destructive text-[10px]">Missing</Badge>}
+                                                            {counts.pending > 0 && <Badge className="bg-warning/15 text-warning text-[10px]">{counts.pending} pending</Badge>}
+                                                            {counts.approved > 0 && counts.pending === 0 && !expiryMissing && <Badge className="bg-success/15 text-success text-[10px]">Approved</Badge>}
+                                                            {expiryMissing && counts.pending === 0 && <Badge className="bg-warning/15 text-warning text-[10px]">Approved · expiry not recorded</Badge>}
+                                                            {counts.rejected > 0 && counts.pending === 0 && counts.approved === 0 && <Badge className="bg-destructive/15 text-destructive text-[10px]">Re-upload needed</Badge>}
                                                         </div>
                                                         {matchingDocs.length > 0 ? <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{matchingDocs.map(d=><DocCard key={d.id} d={d} docBusy={docBusy} driverName={selected?.name || selected?.full_name || ''} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div>
                                                         : <div className="bg-muted/20 border border-dashed rounded-xl p-6 text-center text-muted-foreground"><Image className="h-8 w-8 mx-auto mb-2 opacity-20" /><p className="text-sm">No {reqDoc.label} uploaded yet</p></div>}
@@ -1932,6 +1943,12 @@ export default function DriversPage() {
     );
 }
 
+// Categorical ride-status map (7 states: completed/in_progress/cancelled/
+// driver_assigned/driver_accepted/driver_arrived/searching) — same class as
+// lib/utils.ts's statusColor() and rides/_components/ride-ui-helpers.tsx's
+// STATUS_CONFIG; not a #2816 migration target. A 3-token semantic system
+// can't express 7 distinct lifecycle states.
+/* eslint-disable no-restricted-syntax -- categorical ride-status map, see comment above (#2816) */
 const RIDE_STATUS_STYLE: Record<string, { bg: string; text: string; label: string }> = {
     completed:        { bg: "bg-emerald-100 dark:bg-emerald-900/30", text: "text-emerald-700 dark:text-emerald-300", label: "Completed" },
     in_progress:      { bg: "bg-blue-100 dark:bg-blue-900/30",   text: "text-blue-700 dark:text-blue-300",   label: "In Progress" },
@@ -1941,6 +1958,7 @@ const RIDE_STATUS_STYLE: Record<string, { bg: string; text: string; label: strin
     driver_arrived:   { bg: "bg-indigo-100 dark:bg-indigo-900/30", text: "text-indigo-700 dark:text-indigo-300", label: "Arrived" },
     searching:        { bg: "bg-amber-100 dark:bg-amber-900/30",  text: "text-amber-700 dark:text-amber-300",  label: "Searching" },
 };
+/* eslint-enable no-restricted-syntax */
 
 function VerificationSummaryCard({
     requiredDocs,
@@ -2037,18 +2055,22 @@ const DRIVER_RIDES_PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 
 type RidesSortKey = "created_at" | "rider_name" | "status" | "distance_km" | "duration_seconds" | "total_fare" | "tip_amount";
 
+// "processing" has no dedicated semantic token (only success/warning/destructive
+// exist), so this stays a hand-picked palette rather than a partial conversion. (#2816)
+/* eslint-disable no-restricted-syntax -- categorical payout-status map, no semantic token for "processing" (#2816) */
 const PAYOUT_STATUS_STYLE: Record<string, { bg: string; text: string; label: string }> = {
-    completed:  { bg: "bg-emerald-100 dark:bg-emerald-900/30", text: "text-emerald-700 dark:text-emerald-300", label: "Paid" },
-    pending:    { bg: "bg-amber-100 dark:bg-amber-900/30",     text: "text-amber-700 dark:text-amber-300",     label: "Pending" },
+    completed:  { bg: "bg-success/15", text: "text-success", label: "Paid" },
+    pending:    { bg: "bg-warning/15", text: "text-warning", label: "Pending" },
     processing: { bg: "bg-blue-100 dark:bg-blue-900/30",       text: "text-blue-700 dark:text-blue-300",       label: "Processing" },
-    failed:     { bg: "bg-red-100 dark:bg-red-900/30",         text: "text-red-700 dark:text-red-300",         label: "Failed" },
+    failed:     { bg: "bg-destructive/15", text: "text-destructive", label: "Failed" },
 };
+/* eslint-enable no-restricted-syntax */
 
 function PayoutMetric({ label, value, tone, sub }: { label: string; value: string; tone?: "emerald" | "amber" | "red" | "neutral"; sub?: string }) {
     const styles = {
-        emerald: { bg: "bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800", value: "text-emerald-700 dark:text-emerald-300" },
-        amber:   { bg: "bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800",         value: "text-amber-700 dark:text-amber-300" },
-        red:     { bg: "bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-800",                 value: "text-red-700 dark:text-red-300" },
+        emerald: { bg: "bg-success/10 border-success/30", value: "text-success" },
+        amber:   { bg: "bg-warning/10 border-warning/30", value: "text-warning" },
+        red:     { bg: "bg-destructive/10 border-destructive/30", value: "text-destructive" },
         neutral: { bg: "bg-card border-border",                                                            value: "text-foreground" },
     }[tone ?? "neutral"];
     return (
@@ -2202,11 +2224,11 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, isLegacyImporte
 
             {/* On-hold warning if any failed payouts */}
             {summary.on_hold > 0 && summary.last_failed_payout && (
-                <div className="rounded-xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/10 p-3 flex items-start gap-3">
-                    <AlertTriangle className="h-4 w-4 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+                <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 flex items-start gap-3">
+                    <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
                     <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold text-red-700 dark:text-red-300">{fmtMoney(summary.on_hold)} on hold from failed payouts</p>
-                        <p className="text-xs text-red-600/80 dark:text-red-400/80 mt-0.5">
+                        <p className="text-sm font-semibold text-destructive">{fmtMoney(summary.on_hold)} on hold from failed payouts</p>
+                        <p className="text-xs text-destructive/80 mt-0.5">
                             Most recent failure: {summary.last_failed_payout.error_message || "Unknown error"} · {fmtDateTime(summary.last_failed_payout.created_at)}
                         </p>
                     </div>
@@ -2221,9 +2243,9 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, isLegacyImporte
                         <h4 className="text-sm font-semibold">Payout method</h4>
                     </div>
                     {pm.has_bank_account ? (
-                        <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 text-[10px]">Linked</Badge>
+                        <Badge className="bg-success/15 text-success text-[10px]">Linked</Badge>
                     ) : (
-                        <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300 text-[10px]">No method linked</Badge>
+                        <Badge className="bg-destructive/15 text-destructive text-[10px]">No method linked</Badge>
                     )}
                 </div>
                 <div className="px-4 py-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -2264,7 +2286,7 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, isLegacyImporte
                             {pm.is_verified !== null && (
                                 <div>
                                     <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">Verification</p>
-                                    <p className={`text-sm font-medium mt-0.5 ${pm.is_verified ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}`}>
+                                    <p className={`text-sm font-medium mt-0.5 ${pm.is_verified ? "text-success" : "text-warning"}`}>
                                         {pm.is_verified ? "Verified" : "Unverified"}
                                     </p>
                                 </div>
@@ -2291,11 +2313,11 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, isLegacyImporte
                         <Shield className="h-4 w-4 text-muted-foreground" />
                         <h4 className="text-sm font-semibold">Tax &amp; Identity</h4>
                         {data.kyc.payouts_enabled ? (
-                            <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 text-[10px]">Verified</Badge>
+                            <Badge className="bg-success/15 text-success text-[10px]">Verified</Badge>
                         ) : data.kyc.details_submitted ? (
-                            <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 text-[10px]">Pending Stripe review</Badge>
+                            <Badge className="bg-warning/15 text-warning text-[10px]">Pending Stripe review</Badge>
                         ) : data.kyc.requirements_due.length > 0 || data.kyc.requirements_past_due.length > 0 ? (
-                            <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300 text-[10px]">Action required</Badge>
+                            <Badge className="bg-destructive/15 text-destructive text-[10px]">Action required</Badge>
                         ) : (
                             <Badge variant="outline" className="text-[10px]">Not started</Badge>
                         )}
@@ -2392,33 +2414,33 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, isLegacyImporte
                     </div>
 
                     {(data.kyc.requirements_due.length > 0 || data.kyc.requirements_past_due.length > 0) && (
-                        <div className="rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/10 p-2.5">
-                            <p className="text-[11px] font-semibold text-amber-700 dark:text-amber-300 mb-1">
+                        <div className="rounded-md border border-warning/30 bg-warning/10 p-2.5">
+                            <p className="text-[11px] font-semibold text-warning mb-1">
                                 {data.kyc.requirements_past_due.length > 0 && `${data.kyc.requirements_past_due.length} past due · `}
                                 {data.kyc.requirements_due.length} item{data.kyc.requirements_due.length === 1 ? "" : "s"} needed from driver
                             </p>
-                            <ul className="text-[11px] text-amber-700/80 dark:text-amber-300/80 space-y-0.5">
+                            <ul className="text-[11px] text-warning/80 space-y-0.5">
                                 {[...data.kyc.requirements_past_due, ...data.kyc.requirements_due].slice(0, 6).map((req) => (
                                     <li key={req} className="font-mono">{req}</li>
                                 ))}
                                 {data.kyc.requirements_due.length + data.kyc.requirements_past_due.length > 6 && (
-                                    <li className="text-amber-700/60 dark:text-amber-300/60 italic">…and {data.kyc.requirements_due.length + data.kyc.requirements_past_due.length - 6} more</li>
+                                    <li className="text-warning/60 italic">…and {data.kyc.requirements_due.length + data.kyc.requirements_past_due.length - 6} more</li>
                                 )}
                             </ul>
                         </div>
                     )}
 
                     {data.kyc.disabled_reason && (
-                        <div className="rounded-md border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/10 p-2.5">
-                            <p className="text-[11px] font-semibold text-red-700 dark:text-red-300">
+                        <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2.5">
+                            <p className="text-[11px] font-semibold text-destructive">
                                 Payouts disabled: <span className="font-mono">{data.kyc.disabled_reason}</span>
                             </p>
                         </div>
                     )}
 
                     {revealedSin && (
-                        <div className="rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/10 p-2.5">
-                            <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                        <div className="rounded-md border border-warning/30 bg-warning/10 p-2.5">
+                            <p className="text-[11px] text-warning">
                                 <AlertTriangle className="h-3 w-3 inline mr-1" />
                                 SIN revealed at {new Date(revealedSin.expiresAt - 30000).toLocaleTimeString()}.
                                 Auto-hides in {Math.max(0, Math.ceil((revealedSin.expiresAt - Date.now()) / 1000))}s.
@@ -2637,11 +2659,11 @@ function DriverReferralsTab({ data, loading, fmtDate }: {
                 </div>
                 <div className="rounded-xl border border-border/50 p-3">
                     <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium">Rewarded</p>
-                    <p className="text-xl font-bold mt-0.5 text-emerald-600 dark:text-emerald-400">{data.qualified_referrals}</p>
+                    <p className="text-xl font-bold mt-0.5 text-success">{data.qualified_referrals}</p>
                 </div>
                 <div className="rounded-xl border border-border/50 p-3">
                     <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium">Pending</p>
-                    <p className="text-xl font-bold mt-0.5 text-amber-600 dark:text-amber-400">{data.pending_referrals}</p>
+                    <p className="text-xl font-bold mt-0.5 text-warning">{data.pending_referrals}</p>
                 </div>
                 <div className="rounded-xl border border-border/50 p-3">
                     <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium">Earned</p>
@@ -2673,7 +2695,7 @@ function DriverReferralsTab({ data, loading, fmtDate }: {
                                         <span className="text-[11px] text-muted-foreground">{fmtDate(r.referred_at)}</span>
                                     </div>
                                     {r.qualified ? (
-                                        <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium mt-0.5">Reward earned</p>
+                                        <p className="text-xs text-success font-medium mt-0.5">Reward earned</p>
                                     ) : (
                                         <>
                                             <p className="text-xs text-muted-foreground mt-0.5">
@@ -2687,7 +2709,7 @@ function DriverReferralsTab({ data, loading, fmtDate }: {
                                         </>
                                     )}
                                 </div>
-                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide shrink-0 ${r.qualified ? "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300" : "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300"}`}>
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide shrink-0 ${r.qualified ? "bg-success/15 text-success" : "bg-warning/15 text-warning"}`}>
                                     {r.qualified ? "Earned" : "In progress"}
                                 </span>
                             </div>
@@ -3060,7 +3082,7 @@ function DriverRidesTab({ rides, totalCount, loading, driverName, fmtDate }: {
                 silently operating on a partial set (A30 Finding 2,
                 docs/audit/2026-08-13-migrated-data-visibility-audit.md). */}
             {typeof totalCount === "number" && totalCount > rides.length && (
-                <p className="text-xs text-amber-600 dark:text-amber-500">
+                <p className="text-xs text-warning">
                     Showing the {rides.length} most recent of {totalCount} total rides. Use the date filters below to find older ones.
                 </p>
             )}
@@ -3245,7 +3267,7 @@ function DriverRidesTab({ rides, totalCount, loading, driverName, fmtDate }: {
 }
 
 function QuickStat({ icon: Icon, color, bg, label, value, sub, subTone }: { icon: any; color: string; bg: string; label: string; value: string; sub?: string; subTone?: "amber" | "muted" }) {
-    const subClass = subTone === "amber" ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground";
+    const subClass = subTone === "amber" ? "text-warning" : "text-muted-foreground";
     return (
         <div className={`${bg} rounded-xl p-3 text-center`}>
             <Icon className={`h-4 w-4 ${color} mx-auto mb-1`} />
@@ -3480,6 +3502,7 @@ function DocCard({ d, docBusy, driverName, onPreview, onReview }: { d: any; docB
                 {isImage ? (<><img src={d.document_url} alt={d.document_type||"Document"} loading="lazy" decoding="async" className="w-full h-full object-cover" onError={e=>{(e.target as HTMLImageElement).style.display='none';}} /><button onClick={()=>onPreview(d.document_url)} className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition flex items-center justify-center opacity-0 group-hover:opacity-100"><div className="bg-white/90 rounded-full p-2"><ZoomIn className="h-5 w-5 text-gray-800" /></div></button></>)
                 : d.document_url ? <a href={d.document_url} target="_blank" rel="noreferrer" className="flex flex-col items-center gap-2 text-muted-foreground hover:text-foreground transition"><FileText className="h-12 w-12 opacity-40" /><span className="text-xs font-medium">Click to view</span></a>
                 : <div className="flex flex-col items-center gap-2 text-muted-foreground"><Image className="h-12 w-12 opacity-20" /><span className="text-xs">No file</span></div>}
+                {/* eslint-disable-next-line no-restricted-syntax -- solid-fill white-text document-status badge; token substitution risks a dark-mode contrast regression (#2816 Batch 1 finding) */}
                 <div className="absolute top-2 right-2"><Badge className={`text-[10px] shadow-sm ${sc==="emerald"?"bg-emerald-500 text-white":sc==="red"?"bg-red-500 text-white":"bg-amber-500 text-white"}`}>{expired&&d.status==="approved"?"EXPIRED":d.status?.toUpperCase()}</Badge></div>
                 {d.side && <div className="absolute top-2 left-2"><Badge variant="secondary" className="text-[10px] shadow-sm bg-black/60 text-white border-none">{d.side}</Badge></div>}
             </div>
@@ -3489,10 +3512,10 @@ function DocCard({ d, docBusy, driverName, onPreview, onReview }: { d: any; docB
                     {d.created_at && <p className="text-[11px] text-muted-foreground flex items-center gap-1"><CalendarRange className="h-3 w-3" />Uploaded: {new Date(d.created_at).toLocaleDateString("en-CA",{month:"short",day:"numeric",year:"numeric"})}</p>}
                     {exp && <p className={`text-[11px] flex items-center gap-1 ${expired?"text-destructive font-medium":"text-muted-foreground"}`}><Clock className="h-3 w-3" />Expires: {new Date(exp).toLocaleDateString("en-CA",{month:"short",day:"numeric",year:"numeric"})}{expired&&" (EXPIRED)"}</p>}
                 </div>
-                {d.rejection_reason && <p className="text-[11px] text-red-500 bg-red-50 dark:bg-red-900/20 rounded-lg px-2 py-1"><AlertTriangle className="h-3 w-3 inline mr-1" />{d.rejection_reason}</p>}
+                {d.rejection_reason && <p className="text-[11px] text-destructive bg-destructive/10 rounded-lg px-2 py-1"><AlertTriangle className="h-3 w-3 inline mr-1" />{d.rejection_reason}</p>}
                 <div className="flex items-center gap-1.5 pt-1">
-                    <Button variant="outline" size="xs" className="flex-1 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-900/20" disabled={docBusy===d.id} onClick={()=>onReview(d.id,"approved")}><CheckCircle className="h-3 w-3" /> Approve</Button>
-                    <Button variant="outline" size="xs" className="flex-1 text-red-600 dark:text-red-400 border-red-200 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20" disabled={docBusy===d.id} onClick={()=>onReview(d.id,"rejected")}><XCircle className="h-3 w-3" /> Reject</Button>
+                    <Button variant="outline" size="xs" className="flex-1 text-success border-success/30 hover:bg-success/10" disabled={docBusy===d.id} onClick={()=>onReview(d.id,"approved")}><CheckCircle className="h-3 w-3" /> Approve</Button>
+                    <Button variant="outline" size="xs" className="flex-1 text-destructive border-destructive/30 hover:bg-destructive/10" disabled={docBusy===d.id} onClick={()=>onReview(d.id,"rejected")}><XCircle className="h-3 w-3" /> Reject</Button>
                 </div>
                 {/* Saving the file to disk had no affordance at all — the card
                     could only preview, approve, or reject. Admins need the

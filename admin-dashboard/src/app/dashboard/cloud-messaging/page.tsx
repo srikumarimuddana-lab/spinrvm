@@ -870,8 +870,8 @@ export default function CloudMessagingPage() {
                                 <Label className="text-xs text-muted-foreground mb-2 block">Delivery Report</Label>
                                 <div className="grid grid-cols-3 gap-3">
                                     <div className="rounded-lg bg-muted/50 p-3 text-center"><p className="text-lg font-bold">{selectedMessage.total_recipients.toLocaleString()}</p><p className="text-xs text-muted-foreground">Recipients</p></div>
-                                    <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 p-3 text-center"><p className="text-lg font-bold text-emerald-600">{selectedMessage.successful.toLocaleString()}</p><p className="text-xs text-muted-foreground">Successful</p></div>
-                                    <div className="rounded-lg bg-red-50 dark:bg-red-900/20 p-3 text-center"><p className="text-lg font-bold text-red-500">{selectedMessage.failed_count.toLocaleString()}</p><p className="text-xs text-muted-foreground">Failed</p></div>
+                                    <div className="rounded-lg bg-success/10 p-3 text-center"><p className="text-lg font-bold text-success">{selectedMessage.successful.toLocaleString()}</p><p className="text-xs text-muted-foreground">Successful</p></div>
+                                    <div className="rounded-lg bg-destructive/10 p-3 text-center"><p className="text-lg font-bold text-destructive">{selectedMessage.failed_count.toLocaleString()}</p><p className="text-xs text-muted-foreground">Failed</p></div>
                                 </div>
                                 {selectedMessage.total_recipients > 0 && selectedMessage.status === "sent" && (
                                     <div className="mt-3">

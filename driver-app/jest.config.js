@@ -34,19 +34,20 @@ module.exports = {
     global: {
       // ACTION_ITEMS.md B37: tightened to a near-ceiling floor 2026-08-22
       // (user asked to "raise the thresholds toward the real ceiling").
-      // Every top-level source dir is now measured (store/, components/,
-      // hooks/, utils/, app/, lib/, services/, api/); fresh measurement:
-      // lines 32.91%, statements 31.97%, functions 26.26% (no `branches`
-      // key here, matching this config's pre-existing pattern).
-      // Previously carried several points of headroom
-      // (lines:29/functions:23/statements:28); now only ~1pt below
-      // measured, so this is a tight regression tripwire, not slack.
-      // Raising further requires new tests, not just re-measuring --
-      // this is NOT the user's stated 100% target, only the honest
-      // ceiling of what's currently tested.
-      lines: 31,
+      // Raised again same day after adding real tests for lib/alert.ts
+      // (0% -> 100%) and services/notifeeService.ts (~15% -> ~90%), the
+      // two previously near-untested files in lib/+services/.
+      // services/backgroundMessaging.ts (48.57%) has its own existing
+      // test file already and wasn't touched in this pass. Fresh
+      // measurement: lines 33.9%, statements 32.91%, functions 26.77%
+      // (no `branches` key here, matching this config's pre-existing
+      // pattern; up from 32.91%/31.97%/26.26%). Raising further requires
+      // more new tests, not just re-measuring -- this is NOT the user's
+      // stated 100% target, only the honest ceiling of what's currently
+      // tested.
+      lines: 32,
       functions: 25,
-      statements: 30,
+      statements: 31,
     },
   },
   moduleNameMapper: {

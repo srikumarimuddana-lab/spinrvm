@@ -7442,6 +7442,60 @@ record of what was assumed vs. what was actually true</summary>
     tightening pass in this item.
   - Verified locally: `yarn jest --coverage` exits 0 against the new
     thresholds (75/75 suites clean).
+- **Fix applied (real tests for driver-app's `lib/`+`services/`,
+  2026-08-22, same day — user asked to "widen driver-app's lib/ and
+  services/ too"):** driver-app's `lib/`/`services/` already had partial
+  coverage (unlike rider-app's, which started at zero across the board —
+  `lib/notifyError.ts`, `services/pendingRideOffer.ts`, and all of
+  `lib/androidAuto/` already had real test files). Two files were the
+  actual gap: `lib/alert.ts` (0%, identical contract to rider-app's own
+  `alert.ts`) and `services/notifeeService.ts` (~15% lines, 0% functions
+  — the ride-offer "incoming call" notification, a safety/earnings-critical
+  surface: a driver who never sees an offer never gets the ride).
+  `services/backgroundMessaging.ts` (48.57%) already has its own test
+  file and wasn't touched here.
+  - `__tests__/lib/alert.test.ts` — same coverage shape as rider-app's,
+    adjusted for driver-app's own `i18n`/`react-native` mock paths.
+  - `__tests__/services/notifeeService.test.ts` — pins
+    `ensureNotifeeReady`'s Android-vs-iOS channel/category setup and its
+    once-only idempotency (critical: Android channel sound is
+    **immutable** once created on a device per the file's own comment,
+    so a double-create bug would be a silent, permanent regression),
+    `displayRideOfferNotification`'s timeout resolution and its two-tier
+    fallback (a failed rich render must still surface a basic, actionable
+    notification — the driver missing an offer notification is a direct
+    earnings-and-availability regression, not a cosmetic one),
+    `dismissRideOfferNotification`'s cleanup, and `parseRideOfferEvent`'s
+    accept/decline/tap routing.
+  - Same `jest.resetModules()` + `Platform.OS` mutation pitfall as the
+    rider-app pass above, caught before it shipped: this file's tests
+    *do* need `resetModules()` between cases (to clear
+    `ensureNotifeeReady`'s own `channelReadyPromise` singleton so each
+    test starts from an unconfigured state) — so instead of importing
+    `Platform` directly and mutating it, the mock factory returns a
+    stable object reference (`const mockPlatform = { OS: 'android' };
+    jest.mock('react-native', () => ({ Platform: mockPlatform }))`) so
+    mutating `.OS` survives the factory being re-invoked by
+    `resetModules()`. Also caught and fixed independently: an early
+    draft left `displayRideOfferNotification`'s real 15-second dismiss
+    `setTimeout` uncleared between tests, causing a "worker process
+    failed to exit gracefully" warning — fixed with
+    `jest.useFakeTimers()`/`useRealTimers()` around each test.
+  - `lib/alert.ts`: 0% → 100% lines/statements/functions, 90.47%
+    branches. `services/notifeeService.ts`: ~15%/0% → 91.78% lines /
+    89.87% statements / 70% functions / 79.48% branches (not 100% —
+    `ensureNotifeeReady`'s two `.catch(() => undefined)` no-op guards
+    and the fallback-render's own nested error path have residual
+    unreached lines, left as-is rather than forcing brittle
+    exact-branch-count assertions). Full suite: 76 suites / 707 tests
+    passing (was 74/679).
+  - Re-measured aggregate: **33.9% lines / 32.91% statements / 26.77%
+    functions** (no `branches` key tracked here, matching this config's
+    pre-existing pattern; up from 32.91%/31.97%/26.26%). Threshold
+    tightened to `lines:32, functions:25 (unchanged), statements:31`
+    (was `31/25/30`).
+  - Verified locally: `yarn jest --coverage` exits 0 against the new
+    thresholds (76/76 suites clean, no flake on this run).
 - **What's wrong (three distinct, compounding gaps):**
   1. **admin-dashboard's coverage threshold is configured but structurally
      dead in CI.** `admin-dashboard/vitest.config.ts` sets real thresholds

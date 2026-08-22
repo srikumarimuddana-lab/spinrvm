@@ -7949,7 +7949,19 @@ record of what was assumed vs. what was actually true</summary>
   `React.createContext(null)`, then wrap the rendered tree in its real
   `.Provider` with a per-test value) before ever running it. 18 tests;
   full rider-app suite still green (966), `yarn tsc --noEmit` clean.
-  **62 of 76 screens done, ~14 remain at 0%.**
+  **62 of 76 screens done, ~14 remain at 0%. Continued, same day:**
+  rider-app's `(tabs)/activity.tsx` (ride-history + upcoming-scheduled
+  tab). Covers the focus-effect fetch of rides/stats/scheduled rides
+  throttled by its 30s TTL; the history/upcoming tab switch and
+  personal/business filter (business = has a `corporate_account_id`);
+  RECENT-vs-month-named section grouping; the fare-total rule (a
+  non-empty `fare_breakdown` means `grand_total` is already
+  tip-inclusive and used as-is; tip is only added on top for a legacy
+  ride with an empty breakdown); the load-failure and empty-result
+  states for both tabs; infinite-scroll `onEndReached` page-append; and
+  tap-through nav to `/ride-details`. No new footguns. 11 tests; full
+  rider-app suite still green (977), `yarn tsc --noEmit` clean. **63 of
+  76 screens done, ~13 remain at 0%.**
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

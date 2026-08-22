@@ -8028,7 +8028,32 @@ record of what was assumed vs. what was actually true</summary>
   without redirecting; and the Intro-step-only Logout vs.
   every-other-step Back header button. No new footguns. 16 tests; full
   driver-app suite still green (1030), `yarn tsc --noEmit` clean. **66
-  of 76 screens done, ~10 remain at 0%.**
+  of 76 screens done, ~10 remain at 0%. Continued, same day:** rider-app's
+  `payment-confirm.tsx` (booking-confirmation + payment-method screen,
+  money-adjacent — read-only test coverage, no application code
+  changed). Covers the focus-effect saved-cards load with the
+  distinct load-error state (never rendered identically to the
+  genuine-zero-cards state); the work-mode corporate-toggle sync only
+  applying its default before the rider has picked a payment method by
+  hand, never overriding an explicit choice; handleBookRide's happy
+  path (createRide -> /driver-arriving, or /(tabs) + a local reminder
+  for a scheduled ride) and its full SCA two-step (requires_action ->
+  confirmPayment -> re-createRide), with both an
+  authentication-declined and a still-requires-action-after-SCA path
+  toasting instead of proceeding; the 409 already-active-ride
+  re-route to whichever screen owns the real active ride by status; the
+  402 unpaid-ride confirm sheet routing to /ride-completed; the generic
+  booking-failure toast; totalFare's grand_total-minus-promo-discount
+  math; and the no-saved-cards "Credit Card" tap routing to
+  /manage-cards. Footgun: a `jest.fn()` mock for a hook return value
+  that the source code chains `.catch()` off of (`scheduleReminder(...)
+  .catch(() => {})`) must itself resolve a promise
+  (`mockScheduleReminder.mockResolvedValue(...)`) — a bare `jest.fn()`
+  returns `undefined`, and calling `.catch` on that throws, silently
+  swallowed by the screen's own outer try/catch and misread as a
+  generic booking failure rather than the real bug (an unconfigured
+  mock). 15 tests; full rider-app suite still green (1028), `yarn tsc
+  --noEmit` clean. **67 of 76 screens done, ~9 remain at 0%.**
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

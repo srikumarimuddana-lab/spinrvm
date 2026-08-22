@@ -4846,8 +4846,15 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   see the `PG_CONNECTION_STRING` / Session pooler note in `CLAUDE.md`'s
   Commands section). Non-blocking: an empty `city` only causes that one row
   to fall back to the pre-PR unfiltered geocode behaviour, no regression.
-  Low-priority follow-up: re-run `backend/scripts/migrate.py` against
-  production via the Session pooler connection string once convenient.
+- **2026-08-22 follow-up, resolved:** migration 263 is now applied — verified
+  directly against production (`soavhtdhefowwvforzwb`): `schema_migrations`
+  has the `263_service_areas_city_backfill.sql` row (applied at some point
+  since 2026-07-28, session/date not identified — same drift class as
+  several other items this session already documented), and
+  `SELECT name, city FROM service_areas WHERE city IS NULL OR city = ''`
+  returns zero rows — every service area, including `riyadh`, now has a
+  populated `city`. The low-priority follow-up below is done; no action
+  remains for this item.
 
 ### B8. Economy and XL quote identical fares (per-vehicle-type pricing unseeded)
 - [x] **Status:** Regina/Saskatoon/Saskatoon Airport/Regina Airpot all

@@ -7709,8 +7709,23 @@ record of what was assumed vs. what was actually true</summary>
   `work-allowance-request.tsx`, `work-profile.tsx`; driver-app's
   `driver/payout-history.tsx`. 46 more tests; full suites still green
   (rider-app 733, driver-app 824). **29 of 76 screens done, ~47 remain at
-  0%.** This sub-item is **still not closed** — continuing screen-by-screen
-  in further sessions per the user's explicit instruction.
+  0%.** **Continued, same day:** driver-app's `subscription/cancel.tsx` +
+  `subscription/success.tsx` (Stripe Checkout deep-link landing screens),
+  rider-app's `index.tsx` (cold-start routing gate, mirrors driver-app's
+  already-tested one — active-ride status routing table, fail-open on
+  both the ride fetch and the consent check). 19 more tests; full suites
+  still green (rider-app 747, driver-app 831). **32 of 76 screens done,
+  ~44 remain at 0%.** Two more test-authoring footguns caught and
+  documented inline (both in `subscriptionSuccessScreen.test.tsx` and
+  `indexScreen.test.tsx`): (1) a mocked `useRouter()` returning a fresh
+  object per call destabilizes a `useEffect([..., router])` dependency on
+  any re-render, silently rescheduling a timer-based redirect so it never
+  fires within a test's finite timer advances; (2) a zustand mock
+  factory's initializer closing over a `let` variable assigned later in
+  the file captures that variable's value at *module-load* time
+  (`undefined`), not per-test — both fixed with stable references. This
+  sub-item is **still not closed** — continuing screen-by-screen in
+  further sessions per the user's explicit instruction.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

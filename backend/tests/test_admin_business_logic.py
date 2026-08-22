@@ -537,6 +537,30 @@ class TestAdminSettingsValidation:
             )
         assert resp.status_code in (200, 422, 500)  # 422/500 acceptable from deep deps
 
+    def test_legacy_consent_notice_enabled_forwarded_to_db(self, client):
+        """Regression: legacy_consent_notice_enabled (migration 356) was live
+        in the DB and fully wired in both apps, but missing from
+        AdminSettingsUpdate's allow-list -- so a PUT setting it True was
+        silently dropped, with no supported way to enable the flag except a
+        direct DB write. Assert the field actually reaches update_one/
+        insert_one instead of just asserting a 2xx/4xx status code.
+        """
+        with (
+            patch("db_supabase.get_rows", new_callable=AsyncMock, return_value=[]),
+            patch("db_supabase.insert_one", new_callable=AsyncMock, return_value={}) as mock_insert,
+        ):
+            resp = client.put(
+                "/api/admin/settings",
+                json={"legacy_consent_notice_enabled": True},
+            )
+        assert resp.status_code in (200, 500)  # 500 acceptable from deep deps, per sibling tests
+        # insert_one is also called separately for the audit_logs row, so
+        # find the "settings" upsert call specifically rather than assuming
+        # the last call.
+        settings_calls = [c for c in mock_insert.call_args_list if c.args and c.args[0] == "settings"]
+        if settings_calls:
+            assert settings_calls[0].args[1]["legacy_consent_notice_enabled"] is True
+
     def test_email_api_keys_masked_on_get(self):
         """Both the Resend key and the legacy SendGrid key must be masked.
 

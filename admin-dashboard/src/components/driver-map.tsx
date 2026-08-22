@@ -238,7 +238,7 @@ export default function DriverMap({ drivers, serviceAreas = [], selectedArea = "
                     {withLocation.length} drivers on map
                 </span>
                 <span className="flex items-center gap-1.5">
-                    <span className="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500" />
+                    <span className="inline-block w-2.5 h-2.5 rounded-full bg-success" />
                     Online ({onlineWithLoc.length})
                 </span>
                 <span className="flex items-center gap-1.5">

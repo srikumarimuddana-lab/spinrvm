@@ -179,7 +179,7 @@ export function DriverOffersPanel({
             <div className="py-16 text-center text-sm text-muted-foreground">Loading…</div>
           ) : error ? (
             <div className="py-16 text-center space-y-3">
-              <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+              <p className="text-sm text-destructive">{error}</p>
               <button onClick={fetchData} className="text-xs font-semibold border rounded-lg px-3 py-1.5 hover:bg-muted transition-colors">Retry</button>
             </div>
           ) : sorted.length === 0 ? (

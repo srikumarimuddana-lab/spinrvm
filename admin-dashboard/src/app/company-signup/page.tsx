@@ -145,7 +145,7 @@ export default function CompanySignupPage() {
         <div className="space-y-1">
             <label className="text-xs font-medium text-muted-foreground">
                 {label}
-                {opts.required && <span className="text-red-500"> *</span>}
+                {opts.required && <span className="text-destructive"> *</span>}
             </label>
             <Input
                 value={form[key] as string}
@@ -252,7 +252,7 @@ export default function CompanySignupPage() {
                                         htmlFor="signup-province"
                                         className="text-xs font-medium text-muted-foreground"
                                     >
-                                        Province<span className="text-red-500"> *</span>
+                                        Province<span className="text-destructive"> *</span>
                                     </label>
                                     <select
                                         id="signup-province"
@@ -290,7 +290,7 @@ export default function CompanySignupPage() {
 
                     {step === "done" && (
                         <div className="space-y-4 text-center">
-                            <CheckCircle2 className="mx-auto h-10 w-10 text-emerald-600" />
+                            <CheckCircle2 className="mx-auto h-10 w-10 text-success" />
                             <p className="text-sm">
                                 <span className="font-medium">{companyName}</span> is registered and awaiting
                                 verification. We review every application and will email you at{" "}

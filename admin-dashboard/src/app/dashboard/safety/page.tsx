@@ -85,11 +85,11 @@ const ROLE_OPTIONS: Array<{ value: SafetyRole | "all"; label: string }> = [
 function statusTone(s: SafetyStatus): { bg: string; text: string; label: string } {
     switch (s) {
         case "open":
-            return { bg: "bg-red-100 dark:bg-red-900/30", text: "text-red-700 dark:text-red-300", label: "Open" };
+            return { bg: "bg-destructive/15", text: "text-destructive", label: "Open" };
         case "in_progress":
-            return { bg: "bg-amber-100 dark:bg-amber-900/30", text: "text-amber-700 dark:text-amber-300", label: "In progress" };
+            return { bg: "bg-warning/15", text: "text-warning", label: "In progress" };
         case "resolved":
-            return { bg: "bg-emerald-100 dark:bg-emerald-900/30", text: "text-emerald-700 dark:text-emerald-300", label: "Resolved" };
+            return { bg: "bg-success/15", text: "text-success", label: "Resolved" };
         case "closed":
             return { bg: "bg-muted", text: "text-muted-foreground", label: "Closed" };
         case "duplicate":
@@ -98,8 +98,9 @@ function statusTone(s: SafetyStatus): { bg: string; text: string; label: string 
 }
 
 function severityTone(s: SafetySeverity | null): { bg: string; text: string; label: string } {
-    if (s === "sev1") return { bg: "bg-red-100 dark:bg-red-900/30", text: "text-red-700 dark:text-red-300", label: "SEV 1" };
-    if (s === "sev2") return { bg: "bg-amber-100 dark:bg-amber-900/30", text: "text-amber-700 dark:text-amber-300", label: "SEV 2" };
+    if (s === "sev1") return { bg: "bg-destructive/15", text: "text-destructive", label: "SEV 1" };
+    if (s === "sev2") return { bg: "bg-warning/15", text: "text-warning", label: "SEV 2" };
+    // eslint-disable-next-line no-restricted-syntax -- "SEV 3" (lowest severity) has no semantic-token equivalent; must stay visually distinct from SEV 1/SEV 2 (#2816)
     if (s === "sev3") return { bg: "bg-blue-100 dark:bg-blue-900/30", text: "text-blue-700 dark:text-blue-300", label: "SEV 3" };
     return { bg: "bg-muted/60", text: "text-muted-foreground", label: "Unset" };
 }
@@ -257,7 +258,7 @@ export default function SafetyPage() {
             <div className="flex items-start justify-between gap-3 flex-wrap">
                 <div>
                     <h1 className="text-xl font-bold tracking-tight flex items-center gap-2">
-                        <Shield className="h-5 w-5 text-red-500" />
+                        <Shield className="h-5 w-5 text-destructive" />
                         Safety queue
                     </h1>
                     <p className="text-sm text-muted-foreground mt-0.5">
@@ -800,7 +801,7 @@ function IncidentDetailDrawer({
                             </div>
                         )}
                         {incident.resolved_at && (
-                            <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400">
+                            <div className="flex items-center gap-2 text-success">
                                 <CheckCircle className="h-3 w-3" />
                                 Resolved {fmtDateTime(incident.resolved_at)}
                                 {incident.resolved_by && <span className="text-muted-foreground"> by <span className="font-mono">{incident.resolved_by.slice(0, 8)}…</span></span>}

@@ -8756,6 +8756,25 @@ record of what was assumed vs. what was actually true</summary>
   `CI/CD Pipeline` run should appear within the workflow's normal start
   latency (observed elsewhere in this file as low-minutes) of PR
   open/synchronize/ready-for-review.
+- **2026-08-22 verification — symptom does not currently reproduce.** Not
+  the same as closing this item (the underlying settings/webhook question
+  is still unanswered, still needs a repo admin), but worth recording: this
+  session opened 8 PRs today (#4444, #4447, #4449, #4451, #4456, #4457,
+  #4459, #4461, #4463), and every single one had `CI/CD Pipeline` (and
+  every other `pull_request`-triggered workflow) fire normally within
+  low-minute latency, matching this item's own acceptance bar — confirmed
+  via `list_workflow_runs(event=pull_request)` directly against the Actions
+  API (2,923 total `pull_request`-event runs recorded for `ci.yml` alone,
+  most recent ones matching this session's own branches), not just the
+  check-runs UI. Whatever caused PR #3494's zero-runs incident on
+  2026-08-10 either was PR-specific/transient or has since been resolved
+  (by a settings change this session has no visibility into, or otherwise)
+  — it is not a standing, currently-reproducing gap as of this date. Left
+  open rather than closed since the root cause was never actually
+  identified (only ruled out as *not* this item's specific instance
+  recurring) — a future session hitting the same zero-runs symptom should
+  treat it as a fresh incident to re-diagnose, not assume this note means
+  it can't happen.
 
 ### C14. `Migration Safety Check` false positives, and a blank-template PR merged with no compliance flags ticked
 - [x] **Status:** the checker bugs are fixed (2026-08-10); the merged-PR

@@ -1660,11 +1660,11 @@ export default function DriversPage() {
                                                     <div key={reqDoc.key}>
                                                         <div className="flex items-center gap-2 mb-3 flex-wrap">
                                                             <FileText className="h-4 w-4 text-muted-foreground" /><h4 className="text-sm font-semibold">{reqDoc.label}</h4>
-                                                            {matchingDocs.length === 0 && <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 text-[10px]">Missing</Badge>}
-                                                            {counts.pending > 0 && <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-[10px]">{counts.pending} pending</Badge>}
-                                                            {counts.approved > 0 && counts.pending === 0 && !expiryMissing && <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px]">Approved</Badge>}
-                                                            {expiryMissing && counts.pending === 0 && <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-[10px]">Approved · expiry not recorded</Badge>}
-                                                            {counts.rejected > 0 && counts.pending === 0 && counts.approved === 0 && <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 text-[10px]">Re-upload needed</Badge>}
+                                                            {matchingDocs.length === 0 && <Badge className="bg-destructive/15 text-destructive text-[10px]">Missing</Badge>}
+                                                            {counts.pending > 0 && <Badge className="bg-warning/15 text-warning text-[10px]">{counts.pending} pending</Badge>}
+                                                            {counts.approved > 0 && counts.pending === 0 && !expiryMissing && <Badge className="bg-success/15 text-success text-[10px]">Approved</Badge>}
+                                                            {expiryMissing && counts.pending === 0 && <Badge className="bg-warning/15 text-warning text-[10px]">Approved · expiry not recorded</Badge>}
+                                                            {counts.rejected > 0 && counts.pending === 0 && counts.approved === 0 && <Badge className="bg-destructive/15 text-destructive text-[10px]">Re-upload needed</Badge>}
                                                         </div>
                                                         {matchingDocs.length > 0 ? <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{matchingDocs.map(d=><DocCard key={d.id} d={d} docBusy={docBusy} driverName={selected?.name || selected?.full_name || ''} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div>
                                                         : <div className="bg-muted/20 border border-dashed rounded-xl p-6 text-center text-muted-foreground"><Image className="h-8 w-8 mx-auto mb-2 opacity-20" /><p className="text-sm">No {reqDoc.label} uploaded yet</p></div>}
@@ -1914,7 +1914,7 @@ export default function DriversPage() {
                         <Button
                             onClick={confirmReview}
                             disabled={reviewingDoc?.action === "approved" && reviewingDoc?.requiresExpiry && !reviewExpiry}
-                            className={reviewingDoc?.action === "approved" ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "bg-red-600 hover:bg-red-700 text-white"}
+                            className={reviewingDoc?.action === "approved" ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "bg-destructive hover:bg-destructive/90 text-destructive-foreground"}
                         >
                             {reviewingDoc?.action === "approved" ? "Approve" : "Reject"}
                         </Button>
@@ -1925,6 +1925,12 @@ export default function DriversPage() {
     );
 }
 
+// Ride-status categorical map (7 states) — mirrors the established exclusion
+// documented on lib/utils.ts's statusColor() and ride-ui-helpers.tsx's
+// STATUS_CONFIG (this is a third copy of the same ride state machine's
+// display colors); kept as one hand-picked palette rather than partially
+// converted, for consistency with those. (#2816)
+/* eslint-disable no-restricted-syntax -- categorical ride-status map, see comment above (#2816) */
 const RIDE_STATUS_STYLE: Record<string, { bg: string; text: string; label: string }> = {
     completed:        { bg: "bg-emerald-100 dark:bg-emerald-900/30", text: "text-emerald-700 dark:text-emerald-300", label: "Completed" },
     in_progress:      { bg: "bg-blue-100 dark:bg-blue-900/30",   text: "text-blue-700 dark:text-blue-300",   label: "In Progress" },
@@ -1934,6 +1940,7 @@ const RIDE_STATUS_STYLE: Record<string, { bg: string; text: string; label: strin
     driver_arrived:   { bg: "bg-indigo-100 dark:bg-indigo-900/30", text: "text-indigo-700 dark:text-indigo-300", label: "Arrived" },
     searching:        { bg: "bg-amber-100 dark:bg-amber-900/30",  text: "text-amber-700 dark:text-amber-300",  label: "Searching" },
 };
+/* eslint-enable no-restricted-syntax */
 
 function VerificationSummaryCard({
     requiredDocs,

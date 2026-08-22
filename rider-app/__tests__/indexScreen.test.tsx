@@ -100,7 +100,7 @@ describe('Index (rider-app cold start routing)', () => {
   it('routes to /profile-setup when the profile is incomplete', async () => {
     useAuthStore.setState({
       isInitialized: true, token: 't',
-      user: { profile_complete: false, first_name: '', last_name: '', email: '' },
+      user: { profile_complete: false, first_name: '', last_name: '', email: '' } as any,
     });
     await renderScreen();
     expect(mockReplace).toHaveBeenCalledWith('/profile-setup');
@@ -110,7 +110,7 @@ describe('Index (rider-app cold start routing)', () => {
     mockFetchActiveRide.mockResolvedValue({
       active: true, ride: { id: 'ride-1', status: 'completed', payment_status: 'pending' },
     });
-    useAuthStore.setState({ isInitialized: true, token: 't', user: { profile_complete: true } });
+    useAuthStore.setState({ isInitialized: true, token: 't', user: { profile_complete: true } as any });
     await renderScreen();
     expect(mockReplace).toHaveBeenCalledWith({ pathname: '/ride-completed', params: { rideId: 'ride-1' } });
   });
@@ -119,7 +119,7 @@ describe('Index (rider-app cold start routing)', () => {
     mockFetchActiveRide.mockResolvedValue({
       active: true, ride: { id: 'ride-1', status: 'completed', payment_status: 'paid' },
     });
-    useAuthStore.setState({ isInitialized: true, token: 't', user: { profile_complete: true } });
+    useAuthStore.setState({ isInitialized: true, token: 't', user: { profile_complete: true } as any });
     await renderScreen();
     expect(mockReplace).not.toHaveBeenCalledWith(expect.objectContaining({ pathname: '/ride-completed' }));
     expect(mockReplace).toHaveBeenCalledWith('/(tabs)');
@@ -129,21 +129,21 @@ describe('Index (rider-app cold start routing)', () => {
     mockFetchActiveRide.mockResolvedValue({
       active: true, ride: { id: 'ride-1', status: 'completed', payment_status: 'waived_admin' },
     });
-    useAuthStore.setState({ isInitialized: true, token: 't', user: { profile_complete: true } });
+    useAuthStore.setState({ isInitialized: true, token: 't', user: { profile_complete: true } as any });
     await renderScreen();
     expect(mockReplace).not.toHaveBeenCalledWith(expect.objectContaining({ pathname: '/ride-completed' }));
   });
 
   it('routes to /ride-in-progress for an in_progress ride', async () => {
     mockFetchActiveRide.mockResolvedValue({ active: true, ride: { id: 'ride-1', status: 'in_progress' } });
-    useAuthStore.setState({ isInitialized: true, token: 't', user: { profile_complete: true } });
+    useAuthStore.setState({ isInitialized: true, token: 't', user: { profile_complete: true } as any });
     await renderScreen();
     expect(mockReplace).toHaveBeenCalledWith({ pathname: '/ride-in-progress', params: { rideId: 'ride-1' } });
   });
 
   it('routes to /driver-arrived for a driver_arrived ride', async () => {
     mockFetchActiveRide.mockResolvedValue({ active: true, ride: { id: 'ride-1', status: 'driver_arrived' } });
-    useAuthStore.setState({ isInitialized: true, token: 't', user: { profile_complete: true } });
+    useAuthStore.setState({ isInitialized: true, token: 't', user: { profile_complete: true } as any });
     await renderScreen();
     expect(mockReplace).toHaveBeenCalledWith({ pathname: '/driver-arrived', params: { rideId: 'ride-1' } });
   });
@@ -152,7 +152,7 @@ describe('Index (rider-app cold start routing)', () => {
     'routes to /driver-arriving for a %s ride',
     async (status) => {
       mockFetchActiveRide.mockResolvedValue({ active: true, ride: { id: 'ride-1', status } });
-      useAuthStore.setState({ isInitialized: true, token: 't', user: { profile_complete: true } });
+      useAuthStore.setState({ isInitialized: true, token: 't', user: { profile_complete: true } as any });
       await renderScreen();
       expect(mockReplace).toHaveBeenCalledWith({ pathname: '/driver-arriving', params: { rideId: 'ride-1' } });
     },
@@ -160,21 +160,21 @@ describe('Index (rider-app cold start routing)', () => {
 
   it('fails open to the consent check when fetchActiveRide throws', async () => {
     mockFetchActiveRide.mockRejectedValue(new Error('network down'));
-    useAuthStore.setState({ isInitialized: true, token: 't', user: { profile_complete: true } });
+    useAuthStore.setState({ isInitialized: true, token: 't', user: { profile_complete: true } as any });
     await renderScreen();
     expect(mockReplace).toHaveBeenCalledWith('/(tabs)');
   });
 
   it('routes to /legacy-consent-notice when the consent check reports needs_notice', async () => {
     mockApiGet.mockResolvedValue({ data: { needs_notice: true } });
-    useAuthStore.setState({ isInitialized: true, token: 't', user: { profile_complete: true } });
+    useAuthStore.setState({ isInitialized: true, token: 't', user: { profile_complete: true } as any });
     await renderScreen();
     expect(mockReplace).toHaveBeenCalledWith('/legacy-consent-notice');
   });
 
   it('fails open to /(tabs) when the consent check itself fails', async () => {
     mockApiGet.mockRejectedValue(new Error('network down'));
-    useAuthStore.setState({ isInitialized: true, token: 't', user: { profile_complete: true } });
+    useAuthStore.setState({ isInitialized: true, token: 't', user: { profile_complete: true } as any });
     await renderScreen();
     expect(mockReplace).toHaveBeenCalledWith('/(tabs)');
   });

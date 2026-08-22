@@ -83,7 +83,7 @@ function allText(r: TestRenderer.ReactTestRenderer) {
 }
 
 function findMapView(r: TestRenderer.ReactTestRenderer) {
-  return r.root.find((n) => n.type === 'MapView');
+  return r.root.find((n) => (n.type as any) === 'MapView');
 }
 
 function findButtonByText(r: TestRenderer.ReactTestRenderer, text: string) {

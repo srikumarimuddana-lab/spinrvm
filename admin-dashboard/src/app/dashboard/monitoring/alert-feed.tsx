@@ -50,7 +50,7 @@ export function AlertFeed({ events, onClear, onEventClick }: AlertFeedProps) {
                     onClick={open ? () => setOpen(false) : handleOpen}
                     className="flex items-center gap-2 text-sm font-medium text-foreground"
                 >
-                    <Zap className="h-4 w-4 text-amber-500" />
+                    <Zap className="h-4 w-4 text-warning" />
                     Live Events
                     {unread > 0 && !open && (
                         <span className="rounded-full bg-destructive px-1.5 py-0.5 text-xs font-bold text-destructive-foreground">

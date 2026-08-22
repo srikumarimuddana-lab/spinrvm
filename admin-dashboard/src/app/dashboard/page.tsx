@@ -140,22 +140,22 @@ export default function DashboardPage() {
                             Ride Breakdown · {rangeLabel}
                         </h3>
                         <div className="space-y-3">
-                            <BarStat label="Completed" value={bd.completed} total={rides.total} color="bg-emerald-500" />
+                            <BarStat label="Completed" value={bd.completed} total={rides.total} color="bg-success" />
                             <BarStat label="In progress" value={bd.in_progress} total={rides.total} color="bg-blue-500" />
                             <BarStat label="Searching" value={bd.searching} total={rides.total} color="bg-amber-500" />
                             <BarStat label="Scheduled" value={bd.scheduled} total={rides.total} color="bg-violet-500" />
-                            <BarStat label="Cancelled" value={bd.cancelled} total={rides.total} color="bg-red-400" />
+                            <BarStat label="Cancelled" value={bd.cancelled} total={rides.total} color="bg-destructive" />
                         </div>
                         <div className="flex items-center gap-4 mt-4 pt-4 border-t">
                             <div className="flex-1">
                                 <p className="text-xs text-muted-foreground">Completion rate</p>
-                                <p className="text-lg font-bold text-emerald-500">
+                                <p className="text-lg font-bold text-success">
                                     {rides.total > 0 ? (((bd.completed ?? 0) / rides.total) * 100).toFixed(1) : 0}%
                                 </p>
                             </div>
                             <div className="flex-1">
                                 <p className="text-xs text-muted-foreground">Cancellation rate</p>
-                                <p className="text-lg font-bold text-red-400">
+                                <p className="text-lg font-bold text-destructive">
                                     {rides.total > 0 ? (((bd.cancelled ?? 0) / rides.total) * 100).toFixed(1) : 0}%
                                 </p>
                             </div>

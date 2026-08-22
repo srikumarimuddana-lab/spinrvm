@@ -7856,7 +7856,20 @@ record of what was assumed vs. what was actually true</summary>
   `backgroundMessaging.android.test.ts`, confirmed unrelated via a clean
   retry, consistent with the C37 cross-suite-timer-leak pattern already
   tracked). `yarn tsc --noEmit` clean. **57 of 76 screens done, ~19
-  remain at 0%.**
+  remain at 0%. Continued, same day:** rider-app's `profile-setup.tsx`
+  (create/edit profile form) — isEditing derived from
+  `user.profile_complete || user.first_name`, field-specific validation
+  order, best-effort referral apply (blank code skipped entirely,
+  "already applied" 400 counted as success, a genuine rejection stops
+  retrying immediately), the /consent/status-gated post-submit redirect
+  (fails open to `/(tabs)` on its own failure), photo-picker
+  permission/upload paths, and the create-mode-only hardware-back
+  sign-out confirmation. `BackHandler.addEventListener` isn't
+  auto-mocked by RN's jest preset — needed an explicit
+  `jest.spyOn(BackHandler, 'addEventListener').mockReturnValue({ remove:
+  jest.fn() })` before it could be asserted against as a mock. 18 tests;
+  full rider-app suite still green (934), `yarn tsc --noEmit` clean.
+  **58 of 76 screens done, ~18 remain at 0%.**
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

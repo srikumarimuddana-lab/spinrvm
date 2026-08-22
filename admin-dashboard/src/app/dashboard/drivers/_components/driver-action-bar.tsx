@@ -228,6 +228,7 @@ export default function DriverActionBar({ driver, onActionComplete }: DriverActi
                         <h4 className={`text-sm font-bold ${config.color}`}>{config.label}</h4>
                         <p className={`text-xs mt-0.5 ${config.color} opacity-70`}>{config.description}</p>
                         {status === "suspended" && driver.suspension_reason && (
+                            // eslint-disable-next-line no-restricted-syntax -- matches the categorical suspended-status orange (distinct from warning-amber, see STATUS_CONFIG above), no dedicated token (#2816)
                             <p className="text-xs mt-2 bg-orange-100 dark:bg-orange-900/30 rounded-lg px-2.5 py-1.5 text-orange-700 dark:text-orange-400">
                                 <AlertTriangle className="h-3 w-3 inline mr-1" />Reason: {driver.suspension_reason}
                             </p>
@@ -243,59 +244,72 @@ export default function DriverActionBar({ driver, onActionComplete }: DriverActi
                 {/* Action Buttons — different per status */}
                 <div className="flex flex-wrap gap-2 mt-4">
                     {status === "pending" && (<>
+                        {/* eslint-disable-next-line no-restricted-syntax -- solid-fill white-text success button; --success fails WCAG AA against white text, can't convert (#2816) */}
                         <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                            // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text success button, contrast-risk exception (#2816)
                             onClick={() => openAction("approve", "Approve Driver", "This will activate the driver and allow them to go online and accept rides.", false, "Approve Driver", "bg-emerald-600 hover:bg-emerald-700 text-white")}>
                             <CheckCircle className="h-3.5 w-3.5 mr-1.5" />Approve
                         </Button>
+                        {/* eslint-disable-next-line no-restricted-syntax -- matches categorical suspended-status orange, no dedicated token (#2816) */}
                         <Button size="sm" variant="outline" className="text-orange-600 dark:text-orange-400 border-orange-200 dark:border-orange-800 hover:bg-orange-50 dark:hover:bg-orange-900/20"
+                            // eslint-disable-next-line no-restricted-syntax -- matches categorical suspended-status orange, no dedicated token (#2816)
                             onClick={() => openAction("suspend", "Suspend Driver", "Suspend this driver without approving. They cannot go online.", true, "Suspend", "bg-orange-600 hover:bg-orange-700 text-white")}>
                             <Pause className="h-3.5 w-3.5 mr-1.5" />Suspend
                         </Button>
-                        <Button size="sm" variant="outline" className="text-red-600 dark:text-red-400 border-red-200 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20"
-                            onClick={() => openAction("ban", "Ban Driver", "Permanently block this driver from the platform.", true, "Ban Driver", "bg-red-700 hover:bg-red-800 text-white")}>
+                        <Button size="sm" variant="outline" className="text-destructive border-destructive/30 hover:bg-destructive/10"
+                            onClick={() => openAction("ban", "Ban Driver", "Permanently block this driver from the platform.", true, "Ban Driver", "bg-destructive hover:bg-destructive/90 text-destructive-foreground")}>
                             <Ban className="h-3.5 w-3.5 mr-1.5" />Ban
                         </Button>
                     </>)}
 
                     {status === "active" && (<>
+                        {/* eslint-disable-next-line no-restricted-syntax -- matches categorical suspended-status orange, no dedicated token (#2816) */}
                         <Button size="sm" variant="outline" className="text-orange-600 dark:text-orange-400 border-orange-200 dark:border-orange-800 hover:bg-orange-50 dark:hover:bg-orange-900/20"
+                            // eslint-disable-next-line no-restricted-syntax -- matches categorical suspended-status orange, no dedicated token (#2816)
                             onClick={() => openAction("suspend", "Suspend Driver", "Temporarily suspend this driver. They will be taken offline and cannot accept rides until reactivated.", true, "Suspend Driver", "bg-orange-600 hover:bg-orange-700 text-white")}>
                             <Pause className="h-3.5 w-3.5 mr-1.5" />Suspend
                         </Button>
-                        <Button size="sm" variant="outline" className="text-red-600 dark:text-red-400 border-red-200 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20"
-                            onClick={() => openAction("ban", "Ban Driver", "Permanently block this driver from the platform.", true, "Ban Driver", "bg-red-700 hover:bg-red-800 text-white")}>
+                        <Button size="sm" variant="outline" className="text-destructive border-destructive/30 hover:bg-destructive/10"
+                            onClick={() => openAction("ban", "Ban Driver", "Permanently block this driver from the platform.", true, "Ban Driver", "bg-destructive hover:bg-destructive/90 text-destructive-foreground")}>
                             <Ban className="h-3.5 w-3.5 mr-1.5" />Ban
                         </Button>
                     </>)}
 
                     {status === "needs_review" && (<>
+                        {/* eslint-disable-next-line no-restricted-syntax -- solid-fill white-text success button, contrast-risk exception (#2816) */}
                         <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                            // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text success button, contrast-risk exception (#2816)
                             onClick={() => openAction("approve", "Re-approve Driver", "Confirm the driver's updated documents/vehicle are valid and set them back to Active.", false, "Re-approve", "bg-emerald-600 hover:bg-emerald-700 text-white")}>
                             <CheckCircle className="h-3.5 w-3.5 mr-1.5" />Re-approve
                         </Button>
+                        {/* eslint-disable-next-line no-restricted-syntax -- matches categorical suspended-status orange, no dedicated token (#2816) */}
                         <Button size="sm" variant="outline" className="text-orange-600 dark:text-orange-400 border-orange-200 dark:border-orange-800 hover:bg-orange-50 dark:hover:bg-orange-900/20"
+                            // eslint-disable-next-line no-restricted-syntax -- matches categorical suspended-status orange, no dedicated token (#2816)
                             onClick={() => openAction("suspend", "Suspend Driver", "Suspend this driver pending investigation.", true, "Suspend", "bg-orange-600 hover:bg-orange-700 text-white")}>
                             <Pause className="h-3.5 w-3.5 mr-1.5" />Suspend
                         </Button>
-                        <Button size="sm" variant="outline" className="text-red-600 dark:text-red-400 border-red-200 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20"
-                            onClick={() => openAction("ban", "Ban Driver", "Permanently block this driver.", true, "Ban Driver", "bg-red-700 hover:bg-red-800 text-white")}>
+                        <Button size="sm" variant="outline" className="text-destructive border-destructive/30 hover:bg-destructive/10"
+                            onClick={() => openAction("ban", "Ban Driver", "Permanently block this driver.", true, "Ban Driver", "bg-destructive hover:bg-destructive/90 text-destructive-foreground")}>
                             <Ban className="h-3.5 w-3.5 mr-1.5" />Ban
                         </Button>
                     </>)}
 
                     {status === "suspended" && (<>
+                        {/* eslint-disable-next-line no-restricted-syntax -- solid-fill white-text success button, contrast-risk exception (#2816) */}
                         <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                            // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text success button, contrast-risk exception (#2816)
                             onClick={() => openAction("reactivate", "Reactivate Driver", "Lift the suspension and allow the driver to go online again.", false, "Reactivate", "bg-emerald-600 hover:bg-emerald-700 text-white")}>
                             <Play className="h-3.5 w-3.5 mr-1.5" />Reactivate
                         </Button>
-                        <Button size="sm" variant="outline" className="text-red-600 dark:text-red-400 border-red-200 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20"
-                            onClick={() => openAction("ban", "Escalate to Ban", "Permanently block this driver from the platform.", true, "Ban Driver", "bg-red-700 hover:bg-red-800 text-white")}>
+                        <Button size="sm" variant="outline" className="text-destructive border-destructive/30 hover:bg-destructive/10"
+                            onClick={() => openAction("ban", "Escalate to Ban", "Permanently block this driver from the platform.", true, "Ban Driver", "bg-destructive hover:bg-destructive/90 text-destructive-foreground")}>
                             <Ban className="h-3.5 w-3.5 mr-1.5" />Escalate to Ban
                         </Button>
                     </>)}
 
                     {status === "banned" && (
-                        <Button size="sm" variant="outline" className="text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-900/20"
+                        <Button size="sm" variant="outline" className="text-success border-success/30 hover:bg-success/10"
+                            // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text success button, contrast-risk exception (#2816)
                             onClick={() => openAction("unban", "Unban Driver", "Lift the ban and restore the driver's account. Provide a reason for audit.", true, "Unban Driver", "bg-emerald-600 hover:bg-emerald-700 text-white")}>
                             <ShieldOff className="h-3.5 w-3.5 mr-1.5" />Unban
                         </Button>
@@ -326,8 +340,10 @@ export default function DriverActionBar({ driver, onActionComplete }: DriverActi
                                         `Manually override this driver's status to "${v}". This bypasses the normal workflow — only use for incident response.`,
                                         v === "suspended" || v === "banned",
                                         `Set ${v.charAt(0).toUpperCase() + v.slice(1)}`,
+                                        // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text success button, contrast-risk exception (#2816)
                                         v === "active" ? "bg-emerald-600 hover:bg-emerald-700 text-white"
-                                            : v === "banned" ? "bg-red-700 hover:bg-red-800 text-white"
+                                            : v === "banned" ? "bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+                                            // eslint-disable-next-line no-restricted-syntax -- matches categorical suspended-status orange, no dedicated token (#2816)
                                             : v === "suspended" ? "bg-orange-600 hover:bg-orange-700 text-white"
                                             : "bg-primary hover:bg-primary/90 text-white"
                                     );

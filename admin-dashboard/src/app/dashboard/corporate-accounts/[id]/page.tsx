@@ -481,6 +481,7 @@ export default function CompanyDetailPage() {
                             <div className="md:col-span-2">
                                 <button
                                     type="button"
+                                    // eslint-disable-next-line no-restricted-syntax -- decorative link-style accent, not a status signal (#2816)
                                     className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:underline"
                                     onClick={async () => {
                                         try {

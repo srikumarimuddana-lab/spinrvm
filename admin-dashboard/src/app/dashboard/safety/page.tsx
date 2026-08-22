@@ -666,6 +666,7 @@ function IncidentDetailDrawer({
     return (
         <div className="flex flex-col h-full">
             {/* Header */}
+            {/* eslint-disable-next-line no-restricted-syntax -- decorative header accent gradient, not a status signal (#2816) */}
             <div className="px-6 py-4 border-b border-border bg-gradient-to-r from-red-50 dark:from-red-900/10 to-transparent">
                 <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -751,10 +752,12 @@ function IncidentDetailDrawer({
                             </div>
                             <div className="text-xs space-y-1 pt-1">
                                 <div className="flex items-start gap-2">
+                                    {/* eslint-disable-next-line no-restricted-syntax -- pickup/dropoff marker convention, not a status signal (#2816) */}
                                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-1.5 shrink-0" />
                                     <span className="text-foreground truncate" title={ride.pickup_address || undefined}>{ride.pickup_address || "—"}</span>
                                 </div>
                                 <div className="flex items-start gap-2">
+                                    {/* eslint-disable-next-line no-restricted-syntax -- pickup/dropoff marker convention, not a status signal (#2816) */}
                                     <span className="w-1.5 h-1.5 rounded-full bg-red-500 mt-1.5 shrink-0" />
                                     <span className="text-muted-foreground truncate" title={ride.dropoff_address || undefined}>{ride.dropoff_address || "—"}</span>
                                 </div>

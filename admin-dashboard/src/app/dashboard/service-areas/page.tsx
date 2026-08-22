@@ -336,8 +336,10 @@ export default function ServiceAreasPage() {
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
                       <h4 className="font-bold text-foreground">{area.name}</h4>
+                      {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-category badge, not a health-state signal (#2816) */}
                       {area.is_airport && <span className="px-2 py-0.5 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 text-xs font-bold rounded-md">AIRPORT</span>}
                       {!area.is_active && <span className="px-2 py-0.5 bg-muted text-muted-foreground text-xs font-bold rounded-md">INACTIVE</span>}
+                      {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-zone-count badge, not a health-state signal (#2816) */}
                       {subRegions.length > 0 && <span className="px-2 py-0.5 bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400 text-xs font-bold rounded-md">{subRegions.length} airport zone{subRegions.length > 1 ? 's' : ''}</span>}
                     </div>
                     <p className="text-sm text-muted-foreground">{area.city || ''}{area.province ? `, ${area.province}` : ''} · GST {area.gst_rate || 5}% · PST {area.pst_rate || 0}%</p>
@@ -349,6 +351,7 @@ export default function ServiceAreasPage() {
                       e.stopPropagation();
                       router.push(`/dashboard/monitoring?areaId=${encodeURIComponent(area.id)}`);
                     }}
+                    // eslint-disable-next-line no-restricted-syntax -- decorative brand accent for the live-monitor link button, not a health-state signal (#2816)
                     className="flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 dark:border-violet-800 dark:bg-violet-900/20 px-3 py-1.5 text-xs font-semibold text-violet-700 dark:text-violet-400 transition-colors hover:bg-violet-100"
                     title="Open this area on the live monitor"
                   >
@@ -445,6 +448,7 @@ export default function ServiceAreasPage() {
                             </div>
                             {addAirportFor !== area.id && (
                               <button onClick={() => { setAddAirportFor(area.id); setAirportForm({ name: "", airport_fee: 2.0, polygon: [] }); setAirportMapKey(k => k + 1); }}
+                                // eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816)
                                 className="flex items-center gap-2 bg-blue-500 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-blue-600">
                                 <Plane className="h-4 w-4" /> Add Airport Zone
                               </button>
@@ -453,20 +457,26 @@ export default function ServiceAreasPage() {
 
                           {/* Add Airport Form */}
                           {addAirportFor === area.id && (
+                            /* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */
                             <div className="bg-blue-50 border border-blue-200 dark:bg-blue-900/20 dark:border-blue-800 rounded-xl p-5 mb-5">
+                              {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
                               <h5 className="font-bold text-blue-900 dark:text-blue-200 mb-3 flex items-center gap-2">
                                 <Plane className="h-4 w-4" /> New Airport Zone in {area.name}
                               </h5>
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                                 <div>
+                                  {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
                                   <label className="block text-xs font-semibold text-blue-800 dark:text-blue-300 mb-1">Airport Zone Name *</label>
+                                  {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
                                   <input className="w-full border border-blue-200 dark:border-blue-800 rounded-lg px-3 py-2 text-sm"
                                     value={airportForm.name}
                                     onChange={e => setAirportForm({ ...airportForm, name: e.target.value })}
                                     placeholder={`e.g. ${area.city || area.name} Airport`} />
                                 </div>
                                 <div>
+                                  {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
                                   <label className="block text-xs font-semibold text-blue-800 dark:text-blue-300 mb-1">Airport Fee ($)</label>
+                                  {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
                                   <input className="w-full border border-blue-200 dark:border-blue-800 rounded-lg px-3 py-2 text-sm"
                                     type="number" step="0.50" min="0"
                                     value={airportForm.airport_fee}
@@ -474,9 +484,11 @@ export default function ServiceAreasPage() {
                                 </div>
                               </div>
                               <div className="mb-4">
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
                                 <label className="block text-xs font-semibold text-blue-800 dark:text-blue-300 mb-2">
                                   Draw Airport Boundary on Map {airportForm.polygon.length === 0 && <span className="text-destructive">(required)</span>}
                                 </label>
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
                                 <div className="h-64 rounded-xl overflow-hidden border border-blue-200 dark:border-blue-800">
                                   <Suspense fallback={<div className="h-full bg-muted flex items-center justify-center text-muted-foreground">Loading map...</div>}>
                                     <GeofenceMap
@@ -491,6 +503,7 @@ export default function ServiceAreasPage() {
                                 {airportForm.polygon.length > 0 && <p className="text-xs text-success mt-1">{airportForm.polygon.length} points defined</p>}
                               </div>
                               <div className="flex gap-3">
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
                                 <button onClick={() => handleCreateAirportSubRegion(area.id)} className="bg-blue-500 text-white px-5 py-2 rounded-xl text-sm font-semibold hover:bg-blue-600">Create Airport Zone</button>
                                 <button onClick={() => setAddAirportFor(null)} className="bg-muted text-foreground px-5 py-2 rounded-xl text-sm font-semibold">Cancel</button>
                               </div>
@@ -507,11 +520,15 @@ export default function ServiceAreasPage() {
                           ) : (
                             <div className="space-y-4">
                               {subRegions.map((sub: any) => (
+                                // eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816)
                                 <div key={sub.id} className="bg-blue-50 border border-blue-100 dark:bg-blue-900/20 dark:border-blue-800 rounded-xl p-4">
                                   <div className="flex items-center justify-between mb-3">
                                     <div className="flex items-center gap-2">
+                                      {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
                                       <Plane className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                                      {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
                                       <span className="font-bold text-blue-900 dark:text-blue-200">{sub.name}</span>
+                                      {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-category badge, not a health-state signal (#2816) */}
                                       <span className="px-2 py-0.5 bg-blue-200 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300 text-xs font-bold rounded-md">AIRPORT</span>
                                       {!sub.is_active && <span className="px-2 py-0.5 bg-muted text-muted-foreground text-xs font-bold rounded-md">INACTIVE</span>}
                                     </div>
@@ -524,7 +541,9 @@ export default function ServiceAreasPage() {
                                   </div>
                                   {/* Airport zone boundary map */}
                                   <div>
+                                    {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
                                     <label className="block text-xs font-semibold text-blue-800 dark:text-blue-300 mb-2">Airport Zone Boundary</label>
+                                    {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
                                     <div className="h-56 rounded-xl overflow-hidden border border-blue-200 dark:border-blue-800">
                                       <Suspense fallback={<div className="h-full bg-muted flex items-center justify-center text-muted-foreground">Loading map...</div>}>
                                         <GeofenceMap
@@ -833,6 +852,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
                 // Mirrors the backend /surge/auto reset endpoint.
                 await onSave({ surge_source: "auto", surge_enabled: true, surge_active: true });
               }}
+              // eslint-disable-next-line no-restricted-syntax -- decorative link accent for the auto-surge reset action, not a health-state signal (#2816)
               className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline font-semibold"
             >
               Reset to auto-surge
@@ -843,6 +863,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
           Temporarily raise fares in this area during high-demand periods. When active,
           every vehicle&apos;s fare is multiplied by the surge factor.
           {area.surge_source === "auto" && (
+            // eslint-disable-next-line no-restricted-syntax -- decorative info accent for the "auto-managed" state, not a success/warning/destructive signal (#2816)
             <span className="text-blue-600 dark:text-blue-400"> Currently auto-managed by the surge engine; editing these fields will switch it to manual.</span>
           )}
           {area.surge_source === "manual" && (
@@ -953,6 +974,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
       <div className="flex items-center justify-between pt-2 border-t">
         <button onClick={onDelete} className="text-sm text-destructive hover:underline">Delete this area</button>
         <button onClick={handleSave} disabled={saving}
+          // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text success state; --success fails WCAG AA against white text in dark mode, cannot convert to bg-success (#2816)
           className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition ${saved ? 'bg-green-500 text-white' : 'bg-primary text-primary-foreground hover:bg-primary/90'} disabled:opacity-50`}>
           {saving ? 'Saving...' : saved ? 'Saved!' : 'Save General Settings'}
         </button>
@@ -1225,11 +1247,12 @@ function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => 
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-muted text-muted-foreground"><ShieldAlert className="h-3 w-3" /> Optional</span>
                   )}
                   {r.has_expiry ? (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"><Clock className="h-3 w-3" /> Has Expiry</span>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-warning/15 text-warning"><Clock className="h-3 w-3" /> Has Expiry</span>
                   ) : (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-muted text-muted-foreground">No Expiry</span>
                   )}
                   {r.requires_back_side && (
+                    // eslint-disable-next-line no-restricted-syntax -- decorative informational badge (not a health-state signal) distinguishing a document-format attribute (#2816)
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"><Image className="h-3 w-3" /> Both Sides</span>
                   )}
                 </div>
@@ -1922,10 +1945,10 @@ function CascadeEditor({
       </div>
 
       {vehicleTypes.length === 0 ? (
-        <div className="text-center py-10 bg-amber-50 rounded-xl border-2 border-dashed border-amber-200 dark:bg-amber-900/10 dark:border-amber-800">
-          <Car className="h-10 w-10 text-amber-300 dark:text-amber-400 mx-auto mb-3" />
-          <p className="text-amber-700 dark:text-amber-400 font-medium">No vehicle types configured for this area</p>
-          <p className="text-amber-600 dark:text-amber-400 text-sm mt-1">
+        <div className="text-center py-10 bg-warning/10 rounded-xl border-2 border-dashed border-warning/30">
+          <Car className="h-10 w-10 text-warning mx-auto mb-3" />
+          <p className="text-warning font-medium">No vehicle types configured for this area</p>
+          <p className="text-warning text-sm mt-1">
             Add vehicle types under the <span className="font-semibold">Vehicle Pricing</span> tab first,
             then return here to set up cascade rules.
           </p>
@@ -2014,6 +2037,7 @@ function CascadeEditor({
         <button
           onClick={handleSave}
           disabled={!dirty || saving}
+          // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text success state; --success fails WCAG AA against white text in dark mode, cannot convert to bg-success (#2816)
           className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition ${saved ? 'bg-green-500 text-white' : dirty ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'bg-muted text-muted-foreground cursor-not-allowed'} disabled:opacity-50`}
         >
           {saving ? 'Saving...' : saved ? 'Saved!' : 'Save Cascade Rules'}
@@ -2080,6 +2104,7 @@ function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; are
         </div>
         {!showForm && (
           <button onClick={() => setShowForm(true)}
+            // eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816)
             className="flex items-center gap-2 bg-amber-500 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-amber-600">
             <Gift className="h-4 w-4" /> Add Incentive
           </button>
@@ -2087,32 +2112,42 @@ function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; are
       </div>
 
       {showForm && (
+        // eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816)
         <div className="bg-amber-50 border border-amber-200 dark:bg-amber-900/20 dark:border-amber-800 rounded-xl p-5 mb-5">
+          {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
           <h5 className="font-bold text-amber-900 dark:text-amber-200 mb-3 flex items-center gap-2">
             <Gift className="h-4 w-4" /> New Incentive for {areaName}
           </h5>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <div>
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
               <label className="block text-xs font-semibold text-amber-800 dark:text-amber-300 mb-1">Name *</label>
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
               <input className="w-full border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2 text-sm"
                 value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
                 placeholder="e.g. Peak Hour Bonus" />
             </div>
             <div>
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
               <label className="block text-xs font-semibold text-amber-800 dark:text-amber-300 mb-1">Type</label>
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
               <select className="w-full border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2 text-sm"
                 value={form.incentive_type} onChange={e => setForm({ ...form, incentive_type: e.target.value })}>
                 {INCENTIVE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label} — {t.desc}</option>)}
               </select>
             </div>
             <div>
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
               <label className="block text-xs font-semibold text-amber-800 dark:text-amber-300 mb-1">Bonus Amount ($)</label>
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
               <input className="w-full border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2 text-sm"
                 type="number" step="0.50" min="0.50" max="500"
                 value={form.bonus_amount} onChange={e => setForm({ ...form, bonus_amount: parseFloat(e.target.value) || 0 })} />
             </div>
             <div>
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
               <label className="block text-xs font-semibold text-amber-800 dark:text-amber-300 mb-1">Vehicle Type (optional)</label>
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
               <select className="w-full border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2 text-sm"
                 value={form.vehicle_type_id} onChange={e => setForm({ ...form, vehicle_type_id: e.target.value })}>
                 <option value="">All vehicle types</option>
@@ -2120,13 +2155,17 @@ function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; are
               </select>
             </div>
             <div>
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
               <label className="block text-xs font-semibold text-amber-800 dark:text-amber-300 mb-1">Description</label>
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
               <input className="w-full border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2 text-sm"
                 value={form.description} onChange={e => setForm({ ...form, description: e.target.value })}
                 placeholder="Shown to drivers on ride offer" />
             </div>
             <div>
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
               <label className="block text-xs font-semibold text-amber-800 dark:text-amber-300 mb-1">Budget Cap ($ optional)</label>
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
               <input className="w-full border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2 text-sm"
                 type="number" step="100" min="0"
                 value={form.max_budget} onChange={e => setForm({ ...form, max_budget: e.target.value })}
@@ -2135,6 +2174,7 @@ function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; are
           </div>
           <div className="flex gap-3">
             <button onClick={handleCreate} disabled={saving || !form.name}
+              // eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816)
               className="bg-amber-600 text-white px-5 py-2 rounded-lg text-sm font-semibold hover:bg-amber-700 disabled:opacity-50">
               {saving ? 'Creating...' : 'Create Incentive'}
             </button>
@@ -2159,13 +2199,17 @@ function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; are
               ? vehicleTypes.find((v: any) => v.id === inc.vehicle_type_id)?.name || 'Specific vehicle'
               : 'All vehicles';
             return (
+              // eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816)
               <div key={inc.id} className={`flex items-center gap-4 p-4 rounded-xl border ${inc.is_active ? 'bg-card border-amber-200 dark:border-amber-800' : 'bg-muted border-border opacity-60'}`}>
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
                 <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${inc.is_active ? 'bg-amber-100 dark:bg-amber-900/30' : 'bg-muted'}`}>
+                  {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
                   <Gift className={`h-5 w-5 ${inc.is_active ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}`} />
                 </div>
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
                     <span className="font-bold text-foreground">{inc.name}</span>
+                    {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent for the bonus-amount badge, not a health-state signal (#2816) */}
                     <span className="px-2 py-0.5 bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-xs font-bold rounded-md">${parseFloat(inc.bonus_amount).toFixed(2)}</span>
                     <span className="px-2 py-0.5 bg-muted text-muted-foreground text-xs font-semibold rounded-md">{typeInfo?.label || inc.incentive_type}</span>
                   </div>

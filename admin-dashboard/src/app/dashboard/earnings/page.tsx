@@ -257,6 +257,7 @@ function CeoMetricsHeader({
                 <MetricCard icon={DollarSign} label="GBV"               metric={m?.gbv}             format={fmtMoney} loading={loading} />
                 <MetricCard icon={Wallet}     label="Net Revenue"       metric={m?.net_revenue}     format={fmtMoney} accent="text-success" loading={loading} />
                 <MetricCard icon={Percent}    label="Take Rate"         metric={m?.take_rate_pct}   format={fmtPct}   loading={loading} />
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card accent color, not a status signal (#2816) */}
                 <MetricCard icon={CreditCard} label="Spinr Pass MRR"    metric={m?.spinr_pass_mrr}  format={fmtMoney} accent="text-violet-600 dark:text-violet-400" loading={loading} />
                 <MetricCard icon={Car}        label="Completed Trips"   metric={m?.completed_trips} format={fmtCount} loading={loading} />
                 <MetricCard icon={Receipt}    label="Avg Fare"          metric={m?.avg_fare}        format={fmtMoney} loading={loading} />
@@ -991,6 +992,7 @@ function PayoutsCompliance({ overview, onClosed }: { overview: PayoutsOverview; 
                                 onClick={handleClose}
                                 disabled={closing}
                                 size="sm"
+                                // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text success button; --success fails WCAG AA contrast vs white text in dark mode (#2816)
                                 className="bg-emerald-600 hover:bg-emerald-700 text-white"
                             >
                                 <CheckCircle className="h-3.5 w-3.5 mr-1.5" />
@@ -1162,10 +1164,13 @@ function RideEarningsTab() {
                 <Card className="border-border/50"><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Total Fares (custom range)</CardTitle></CardHeader>
                     <CardContent><p className="text-2xl font-bold">{formatCurrency(totals.totalFare)}</p></CardContent></Card>
                 <Card className="border-border/50"><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Driver Earnings</CardTitle></CardHeader>
+                    {/* eslint-disable-next-line no-restricted-syntax -- decorative category accent (driver earnings), not a status signal (#2816) */}
                     <CardContent><p className="text-2xl font-bold text-emerald-500">{formatCurrency(totals.driverEarnings)}</p></CardContent></Card>
                 <Card className="border-border/50"><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Platform Revenue</CardTitle></CardHeader>
+                    {/* eslint-disable-next-line no-restricted-syntax -- decorative category accent (platform revenue), not a status signal (#2816) */}
                     <CardContent><p className="text-2xl font-bold text-violet-500">{formatCurrency(totals.adminEarnings)}</p></CardContent></Card>
                 <Card className="border-border/50"><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Tips</CardTitle></CardHeader>
+                    {/* eslint-disable-next-line no-restricted-syntax -- decorative category accent (tips), not a status signal (#2816) */}
                     <CardContent><p className="text-2xl font-bold text-amber-500">{formatCurrency(totals.tips)}</p></CardContent></Card>
             </div>
 
@@ -1224,8 +1229,11 @@ function RideEarningsTab() {
                                             <TableCell className="text-xs truncate max-w-[140px]" title={r.driver_name || ""}>{r.driver_name || "—"}</TableCell>
                                             <TableCell className="text-xs truncate max-w-[140px]" title={r.rider_name || ""}>{r.rider_name || "—"}</TableCell>
                                             <TableCell className="text-sm font-medium text-right tabular-nums">{formatCurrency(r.total_fare || 0)}</TableCell>
+                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative category accent (driver earnings), not a status signal (#2816) */}
                                             <TableCell className="text-sm text-right tabular-nums text-emerald-500">{formatCurrency(r.driver_earnings || 0)}</TableCell>
+                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative category accent (platform revenue), not a status signal (#2816) */}
                                             <TableCell className="text-sm text-right tabular-nums text-violet-500">{formatCurrency(r.admin_earnings || 0)}</TableCell>
+                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative category accent (tips), not a status signal (#2816) */}
                                             <TableCell className="text-sm text-right tabular-nums text-amber-500">{r.tip_amount > 0 ? formatCurrency(r.tip_amount) : <span className="text-muted-foreground">—</span>}</TableCell>
                                             <TableCell>
                                                 {r.stripe_charge_id ? (
@@ -1351,6 +1359,7 @@ function SpinrPassRevenueTab() {
                 {selectedAreas.length >= 2 && (
                     <button onClick={() => setComparing(!comparing)}
                         className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${
+                            // eslint-disable-next-line no-restricted-syntax -- decorative brand accent for the "compare" toggle active state, not a status signal (#2816)
                             comparing ? "bg-violet-500 text-white border-violet-500" : "text-muted-foreground border-border hover:bg-muted"
                         }`}>
                         <GitCompareArrows className="h-3.5 w-3.5" /> Compare
@@ -1393,14 +1402,17 @@ function SpinrPassRevenueTab() {
                         </Card>
                         <Card className="border-border/50">
                             <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground flex items-center gap-1.5"><DollarSign className="h-4 w-4" /> Total Revenue</CardTitle></CardHeader>
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card accent color, not a status signal (#2816) */}
                             <CardContent><p className="text-2xl font-bold text-emerald-500">{formatCurrency(stats.total_revenue)}</p></CardContent>
                         </Card>
                         <Card className="border-border/50">
                             <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground flex items-center gap-1.5"><TrendingUp className="h-4 w-4" /> Active MRR</CardTitle></CardHeader>
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card accent color, not a status signal (#2816) */}
                             <CardContent><p className="text-2xl font-bold text-violet-500">{formatCurrency(stats.active_mrr)}</p></CardContent>
                         </Card>
                         <Card className="border-border/50">
                             <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground flex items-center gap-1.5"><CreditCard className="h-4 w-4" /> Period Revenue</CardTitle></CardHeader>
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card accent color, not a status signal (#2816) */}
                             <CardContent><p className="text-2xl font-bold text-amber-500">{formatCurrency(stats.range_revenue)}</p>
                                 <p className="text-xs text-muted-foreground mt-1">{stats.range_transactions} transactions</p>
                             </CardContent>
@@ -1411,14 +1423,17 @@ function SpinrPassRevenueTab() {
                     {comparing && selectedAreas.length >= 2 ? (
                         compareLoading ? (
                             <div className="flex items-center justify-center py-12">
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative brand accent on the comparison-loading spinner, not a status signal (#2816) */}
                                 <div className="h-8 w-8 animate-spin rounded-full border-2 border-violet-500 border-t-transparent" />
                                 <span className="ml-3 text-sm text-muted-foreground">Loading comparison...</span>
                             </div>
                         ) : (
                             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative brand accent border for the comparison-mode card, not a status signal (#2816) */}
                                 <Card className="border-violet-200 dark:border-violet-800">
                                     <CardHeader className="pb-2">
                                         <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative brand accent icon color, not a status signal (#2816) */}
                                             <GitCompareArrows className="h-4 w-4 text-violet-500" /> Revenue Comparison
                                         </CardTitle>
                                     </CardHeader>
@@ -1438,9 +1453,11 @@ function SpinrPassRevenueTab() {
                                         </ResponsiveContainer>
                                     </CardContent>
                                 </Card>
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative brand accent border for the comparison-mode card, not a status signal (#2816) */}
                                 <Card className="border-violet-200 dark:border-violet-800">
                                     <CardHeader className="pb-2">
                                         <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative brand accent icon color, not a status signal (#2816) */}
                                             <GitCompareArrows className="h-4 w-4 text-violet-500" /> Subscribers Comparison
                                         </CardTitle>
                                     </CardHeader>
@@ -1462,6 +1479,7 @@ function SpinrPassRevenueTab() {
                                 </Card>
 
                                 {/* Comparison summary table */}
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative brand accent border for the comparison-mode card, not a status signal (#2816) */}
                                 <Card className="border-violet-200 dark:border-violet-800 lg:col-span-2">
                                     <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold">Area Comparison Summary</CardTitle></CardHeader>
                                     <CardContent className="p-0">
@@ -1486,8 +1504,10 @@ function SpinrPassRevenueTab() {
                                                                 {name}
                                                             </TableCell>
                                                             <TableCell className="text-right">{s?.total_subscribers || 0}</TableCell>
+                                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative category accent (active subscribers), not a status signal (#2816) */}
                                                             <TableCell className="text-right text-emerald-500 font-medium">{s?.active || 0}</TableCell>
                                                             <TableCell className="text-right font-semibold">{formatCurrency(s?.total_revenue || 0)}</TableCell>
+                                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative category accent (MRR), not a status signal (#2816) */}
                                                             <TableCell className="text-right text-violet-500 font-medium">{formatCurrency(s?.active_mrr || 0)}</TableCell>
                                                         </TableRow>
                                                     );
@@ -1504,6 +1524,7 @@ function SpinrPassRevenueTab() {
                             <Card className="border-border/50">
                                 <CardHeader className="pb-2">
                                     <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                                        {/* eslint-disable-next-line no-restricted-syntax -- decorative chart-card icon accent, not a status signal (#2816) */}
                                         <DollarSign className="h-4 w-4 text-emerald-500" /> Daily Subscription Revenue
                                     </CardTitle>
                                 </CardHeader>
@@ -1524,6 +1545,7 @@ function SpinrPassRevenueTab() {
                             <Card className="border-border/50">
                                 <CardHeader className="pb-2">
                                     <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                                        {/* eslint-disable-next-line no-restricted-syntax -- decorative chart-card icon accent, not a status signal (#2816) */}
                                         <UserPlus className="h-4 w-4 text-violet-500" /> New Subscribers Per Day
                                     </CardTitle>
                                 </CardHeader>
@@ -1559,6 +1581,7 @@ function SpinrPassRevenueTab() {
                                             <TableRow key={p.plan_id}>
                                                 <TableCell className="font-semibold">{p.name}</TableCell>
                                                 <TableCell className="text-right">{p.count}</TableCell>
+                                                {/* eslint-disable-next-line no-restricted-syntax -- decorative category accent (active subscribers), not a status signal (#2816) */}
                                                 <TableCell className="text-right text-emerald-500 font-medium">{p.active}</TableCell>
                                                 <TableCell className="text-right font-semibold">{formatCurrency(p.revenue)}</TableCell>
                                             </TableRow>
@@ -1587,6 +1610,7 @@ function SpinrPassRevenueTab() {
                                         <TableRow key={t.id}>
                                             <TableCell className="font-medium">{t.driver_name}</TableCell>
                                             <TableCell>{t.plan_name}</TableCell>
+                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative category accent (transaction amount), not a status signal (#2816) */}
                                             <TableCell className="font-semibold text-emerald-500">{formatCurrency(t.price)}</TableCell>
                                             <TableCell>
                                                 <Badge variant="secondary" className={

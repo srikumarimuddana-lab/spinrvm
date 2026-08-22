@@ -109,20 +109,30 @@ export default function ReferralAnalytics({ source }: { source: "driver" | "ride
                 <>
                     {/* Redemption funnel + amounts */}
                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon accent, not a status signal (#2816) */}
                         <Stat icon={Users} label="Referred (sign-ups)" accent="text-violet-600 dark:text-violet-400"
                             value={areaFiltered ? "—" : (f.total_referred ?? 0).toLocaleString()}
                             hint={areaFiltered ? "Not area-tagged until they qualify" : undefined} />
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon accent, not a status signal (#2816) */}
                         <Stat icon={Gift} label="Qualified" accent="text-sky-600 dark:text-sky-400" value={f.qualified.toLocaleString()} />
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon accent, not a status signal (#2816) */}
                         <Stat icon={CheckCircle2} label="Redeemed (paid)" accent="text-emerald-600 dark:text-emerald-400" value={f.redeemed.toLocaleString()} />
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon accent, not a status signal (#2816) */}
                         <Stat icon={Percent} label="Redemption rate" accent="text-amber-600 dark:text-amber-400" value={ratePct}
                             hint={areaFiltered ? "Needs all-areas referred count" : undefined} />
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon accent, not a status signal (#2816) */}
                         <Stat icon={Clock} label="In progress" accent="text-blue-600 dark:text-blue-400" value={f.processing.toLocaleString()} />
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon accent, not a status signal (#2816) */}
                         <Stat icon={XCircle} label="Failed" accent="text-red-600 dark:text-red-400" value={f.failed.toLocaleString()} />
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon accent, not a status signal (#2816) */}
                         <Stat icon={DollarSign} label="Total paid out" accent="text-emerald-600 dark:text-emerald-400" value={formatCurrency(Number(f.total_paid))} />
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon accent, not a status signal (#2816) */}
                         <Stat icon={DollarSign} label="Referrer paid" accent="text-emerald-600 dark:text-emerald-400" value={formatCurrency(Number(f.referrer_paid ?? 0))}
                             hint="Actual paid to referrers" />
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon accent, not a status signal (#2816) */}
                         <Stat icon={DollarSign} label="Referee paid" accent="text-emerald-600 dark:text-emerald-400" value={formatCurrency(Number(f.referee_paid ?? 0))}
                             hint="Actual paid to referees (not the configured reward)" />
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon accent, not a status signal (#2816) */}
                         <Stat icon={DollarSign} label="Avg per redemption" accent="text-emerald-600 dark:text-emerald-400" value={formatCurrency(Number(f.avg_paid))} />
                     </div>
 
@@ -130,6 +140,7 @@ export default function ReferralAnalytics({ source }: { source: "driver" | "ride
                     <Card className="border-border/50">
                         <CardContent className="p-4">
                             <div className="flex items-center gap-2 mb-3">
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative trend-icon accent, not a status signal (#2816) */}
                                 <TrendingUp className="h-4 w-4 text-emerald-500" />
                                 <h3 className="text-sm font-semibold">Redemptions over time</h3>
                             </div>

@@ -234,6 +234,7 @@ export default function QuestsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
+            {/* eslint-disable-next-line no-restricted-syntax -- decorative trophy icon tint, not a status signal (#2816) */}
             <Trophy className="h-6 w-6 text-amber-500" />
             Quests & Bonus Challenges
           </h1>
@@ -276,6 +277,7 @@ export default function QuestsPage() {
         <Card>
           <CardContent className="pt-4">
             <div className="text-sm text-muted-foreground">Rewards Paid</div>
+            {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card accent (reward amount), not a status signal (#2816) */}
             <div className="text-2xl font-bold text-amber-600">${totalRewardsPaid.toFixed(0)}</div>
           </CardContent>
         </Card>
@@ -329,6 +331,7 @@ export default function QuestsPage() {
                         {quest.target_value}
                       </TableCell>
                       <TableCell>
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative reward-amount accent, not a status signal (#2816) */}
                         <span className="font-semibold text-amber-600">${quest.reward_amount}</span>
                         <br />
                         <span className="text-xs text-muted-foreground">{quest.reward_type}</span>
@@ -442,6 +445,7 @@ export default function QuestsPage() {
         <DialogContent className="sm:max-w-[500px]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative trophy icon tint, not a status signal (#2816) */}
               <Trophy className="h-5 w-5 text-amber-500" />
               Create New Quest
             </DialogTitle>

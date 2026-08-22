@@ -42,12 +42,15 @@ export default function ReferralLeaderboard({ limit = 20, source = "driver" }: {
         <div className="space-y-5">
             {/* Fleet summary */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon accent, not a status signal (#2816) */}
                 <SummaryCard icon={Gift} label="Total Referrals" value={(data.fleet_total_referrals ?? 0).toLocaleString()} accent="text-violet-600 dark:text-violet-400" />
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon accent, not a status signal (#2816) */}
                 <SummaryCard icon={Users} label="Active Referrers" value={(data.fleet_total_referrers ?? 0).toLocaleString()} accent="text-sky-600 dark:text-sky-400" />
                 <SummaryCard
                     icon={Award}
                     label="Reward Terms"
                     value={`${formatCurrency(data.reward_amount)} / ${data.rides_required} rides`}
+                    // eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon accent, not a status signal (#2816)
                     accent="text-emerald-600 dark:text-emerald-400"
                 />
             </div>
@@ -56,6 +59,7 @@ export default function ReferralLeaderboard({ limit = 20, source = "driver" }: {
             <Card className="border-border/50">
                 <CardContent className="p-0">
                     <div className="flex items-center gap-2 px-4 py-3 border-b border-border/50">
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative trophy icon tint, not a status signal (#2816) */}
                         <Trophy className="h-4 w-4 text-amber-500" />
                         <h3 className="text-sm font-semibold">Top Referrers</h3>
                     </div>

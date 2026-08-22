@@ -294,6 +294,7 @@ export default function VenuesPage() {
                     return (
                       <div
                         key={i}
+                        // eslint-disable-next-line no-restricted-syntax -- decorative row-selection highlight, not a status signal (#2816)
                         className={`grid gap-2 sm:grid-cols-[auto_1fr_auto_auto_auto_auto] items-center rounded-lg p-1.5 transition-colors ${selected ? "bg-amber-50 dark:bg-amber-900/20 ring-1 ring-amber-400" : ""}`}
                       >
                         <button
@@ -301,6 +302,7 @@ export default function VenuesPage() {
                           onClick={() => setSelectedPoint(selected ? null : i)}
                           aria-pressed={selected}
                           aria-label={`${selected ? "Deselect" : "Select"} pickup point ${i + 1} for map placement`}
+                          // eslint-disable-next-line no-restricted-syntax -- decorative numbered-marker selection state, not a status signal; solid-fill white-text also fails the success/warning-foreground contrast check (#2816)
                           className={`h-7 w-7 rounded-full text-xs font-bold shrink-0 ${selected ? "bg-amber-500 text-white" : "bg-sky-500 text-white hover:bg-sky-600"}`}
                         >
                           {i + 1}

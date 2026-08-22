@@ -85,7 +85,7 @@ const AUDIENCE_OPTIONS = [
     { value: "particular_driver", label: "Particular Driver", icon: User },
 ];
 
-// eslint-disable-next-line no-restricted-syntax -- categorical notification-type map (5 distinct types, no natural success/warning/destructive fit) (#2816)
+/* eslint-disable no-restricted-syntax -- categorical notification-type map (5 states), not a success/warning/destructive signal — too many states for the 3-token system (#2816) */
 const NOTIFICATION_TYPES = [
     { value: "info", label: "Information", icon: Info, color: "text-blue-500" },
     { value: "alert", label: "Alert", icon: AlertCircle, color: "text-amber-500" },
@@ -93,6 +93,7 @@ const NOTIFICATION_TYPES = [
     { value: "promotion", label: "Promotion", icon: Flame, color: "text-pink-500" },
     { value: "system", label: "System", icon: Clock, color: "text-gray-500" },
 ];
+/* eslint-enable no-restricted-syntax */
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
     sent: { label: "Sent", color: "bg-success/15 text-success", icon: CheckCircle2 },
@@ -399,6 +400,7 @@ export default function CloudMessagingPage() {
             <div className="flex items-center justify-between">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative header icon tint, not a status signal (#2816) */}
                         <Cloud className="h-8 w-8 text-violet-500" />
                         Notifications
                     </h1>
@@ -412,10 +414,13 @@ export default function CloudMessagingPage() {
             {/* Stats */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                 {[
+                    // eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon accent, not a status signal (#2816)
                     { label: "Total Messages", value: stats.total_messages, icon: Cloud, color: "text-violet-500" },
                     { label: "Sent", value: stats.total_sent, icon: CheckCircle2, color: "text-success" },
+                    // eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon accent, not a status signal (#2816)
                     { label: "Scheduled", value: stats.total_scheduled, icon: Timer, color: "text-blue-500" },
                     { label: "Failed", value: stats.total_failed, icon: XCircle, color: "text-destructive" },
+                    // eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon accent, not a status signal (#2816)
                     { label: "Recipients Reached", value: stats.total_recipients_reached.toLocaleString(), icon: Users, color: "text-amber-500" },
                     { label: "Success Rate", value: `${stats.success_rate}%`, icon: CheckCircle2, color: "text-success" },
                 ].map((s, i) => (
@@ -441,6 +446,7 @@ export default function CloudMessagingPage() {
                     { key: "history", label: "Message History", icon: FileText },
                     { key: "suppressions", label: "Unsubscribe List", icon: ShieldOff },
                 ].map((tab) => (
+                    // eslint-disable-next-line no-restricted-syntax -- decorative active-tab indicator color, not a status signal (#2816)
                     <button key={tab.key} onClick={() => setActiveTab(tab.key as any)} className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${activeTab === tab.key ? "border-red-500 text-red-600 dark:text-red-400" : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"}`}>
                         <tab.icon className="h-4 w-4" /> {tab.label}
                     </button>
@@ -585,6 +591,7 @@ export default function CloudMessagingPage() {
                         {/* Marketing (CASL) */}
                         <Card>
                             <CardHeader className="pb-3">
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative section-icon tint, not a status signal (#2816) */}
                                 <CardTitle className="text-base flex items-center gap-2"><Megaphone className="h-4 w-4 text-pink-500" /> Marketing message</CardTitle>
                             </CardHeader>
                             <CardContent className="space-y-3">
@@ -666,6 +673,7 @@ export default function CloudMessagingPage() {
                 <Card>
                     <CardHeader className="pb-3">
                         <CardTitle className="flex items-center gap-2 text-lg">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative section-icon tint, not a status signal (#2816) */}
                             <Timer className="h-5 w-5 text-blue-500" /> Upcoming Scheduled Messages <Badge variant="secondary" className="ml-2">{scheduledMessages.length}</Badge>
                         </CardTitle>
                     </CardHeader>
@@ -687,6 +695,7 @@ export default function CloudMessagingPage() {
                                             <TableCell><p className="font-medium text-sm">{msg.title}</p><p className="text-xs text-muted-foreground truncate max-w-[250px]">{msg.description}</p></TableCell>
                                             <TableCell><span className="text-sm capitalize">{msg.audience.replace(/_/g, " ")}</span></TableCell>
                                             <TableCell><div className="flex gap-1">{getChannels(msg).map((c) => <Badge key={c} variant="outline" className="text-xs capitalize">{c}</Badge>)}</div></TableCell>
+                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative date icon tint, not a status signal (#2816) */}
                                             <TableCell><div className="flex items-center gap-1 text-sm"><Calendar className="h-3 w-3 text-blue-500" />{msg.scheduled_at ? formatDate(msg.scheduled_at) : "—"}</div></TableCell>
                                             <TableCell className="text-sm">{msg.total_recipients.toLocaleString()}</TableCell>
                                             <TableCell className="text-right"><div className="flex justify-end gap-1">
@@ -707,6 +716,7 @@ export default function CloudMessagingPage() {
                 <Card>
                     <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative section-icon tint, not a status signal (#2816) */}
                             <CardTitle className="flex items-center gap-2 text-lg"><FileText className="h-5 w-5 text-violet-500" /> Message History & Report</CardTitle>
                             <div className="flex gap-2">
                                 <Button variant="outline" size="sm" onClick={handleExportSummary}><Download className="mr-2 h-4 w-4" /> Summary</Button>
@@ -788,6 +798,7 @@ export default function CloudMessagingPage() {
                 <Card>
                     <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative section-icon tint, not a status signal (#2816) */}
                             <CardTitle className="flex items-center gap-2 text-lg"><ShieldOff className="h-5 w-5 text-red-500" /> Marketing Unsubscribe List</CardTitle>
                             <div className="flex items-center gap-2">
                                 <Select value={suppChannel} onValueChange={setSuppChannel}>
@@ -854,6 +865,7 @@ export default function CloudMessagingPage() {
             {/* ═══ DETAIL DIALOG ═══ */}
             <Dialog open={!!selectedMessage} onOpenChange={(open) => { if (!open) setSelectedMessage(null); }}>
                 <DialogContent className="sm:max-w-lg">
+                    {/* eslint-disable-next-line no-restricted-syntax -- decorative dialog-icon tint, not a status signal (#2816) */}
                     <DialogHeader><DialogTitle className="flex items-center gap-2"><Cloud className="h-5 w-5 text-violet-500" /> Message Details</DialogTitle></DialogHeader>
                     {selectedMessage && (
                         <div className="space-y-4">

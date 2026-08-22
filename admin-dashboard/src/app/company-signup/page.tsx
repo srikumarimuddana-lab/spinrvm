@@ -160,7 +160,9 @@ export default function CompanySignupPage() {
         <div className="flex min-h-screen items-center justify-center bg-background p-4">
             <Card className="w-full max-w-lg">
                 <CardHeader className="space-y-2 text-center">
+                    {/* eslint-disable-next-line no-restricted-syntax -- decorative header icon badge tint, not a status signal (#2816) */}
                     <div className="mx-auto rounded-lg bg-emerald-50 dark:bg-emerald-900/20 p-3 w-fit">
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative header icon tint, not a status signal (#2816) */}
                         <Building2 className="h-7 w-7 text-emerald-600 dark:text-emerald-400" />
                     </div>
                     <CardTitle className="text-xl">Register your company</CardTitle>

@@ -337,6 +337,7 @@ export default function UsersPage() {
             <div className="flex items-center justify-between">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative page-header icon tint (#2816) */}
                         <Users className="h-8 w-8 text-sky-500" />
                         Users
                     </h1>
@@ -377,6 +378,7 @@ export default function UsersPage() {
                 <Card>
                     <CardContent className="pt-4 pb-3">
                         <div className="flex items-center gap-2">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon tint (#2816) */}
                             <Users className="h-5 w-5 text-sky-500" />
                             <div>
                                 <p className="text-xs text-muted-foreground">
@@ -390,6 +392,7 @@ export default function UsersPage() {
                 <Card>
                     <CardContent className="pt-4 pb-3">
                         <div className="flex items-center gap-2">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon tint (#2816) */}
                             <Users className="h-5 w-5 text-emerald-500" />
                             <div>
                                 <p className="text-xs text-muted-foreground">Riders (page)</p>
@@ -401,6 +404,7 @@ export default function UsersPage() {
                 <Card>
                     <CardContent className="pt-4 pb-3">
                         <div className="flex items-center gap-2">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon tint (#2816) */}
                             <Car className="h-5 w-5 text-violet-500" />
                             <div>
                                 <p className="text-xs text-muted-foreground">Drivers (page)</p>
@@ -412,6 +416,7 @@ export default function UsersPage() {
                 <Card>
                     <CardContent className="pt-4 pb-3">
                         <div className="flex items-center gap-2">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon tint (#2816) */}
                             <ShieldCheck className="h-5 w-5 text-sky-500" />
                             <div>
                                 <p className="text-xs text-muted-foreground">Dual-role (page)</p>
@@ -529,9 +534,11 @@ export default function UsersPage() {
                                                 <TableCell>
                                                     <div className="flex flex-wrap items-center gap-1">
                                                         {user.is_rider && (
+                                                            // eslint-disable-next-line no-restricted-syntax -- role badge, not a status signal (#2816)
                                                             <Badge variant="secondary" className="bg-sky-500/15 text-sky-600">Rider</Badge>
                                                         )}
                                                         {user.is_driver && (
+                                                            // eslint-disable-next-line no-restricted-syntax -- role badge, not a status signal (#2816)
                                                             <Badge variant="secondary" className="bg-violet-500/15 text-violet-600">Driver</Badge>
                                                         )}
                                                         {!user.is_rider && !user.is_driver && (
@@ -585,6 +592,7 @@ export default function UsersPage() {
                 <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
                     <DialogHeader>
                         <DialogTitle className="flex items-center gap-2">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative dialog-title icon tint (#2816) */}
                             <Users className="h-5 w-5 text-sky-500" />
                             User Details
                         </DialogTitle>
@@ -592,6 +600,7 @@ export default function UsersPage() {
                     {selectedUser && (
                         <div className="space-y-4">
                             <div className="flex items-center gap-4">
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative avatar gradient, not a status signal (#2816) */}
                                 <div className="h-16 w-16 rounded-full bg-gradient-to-br from-sky-500 to-blue-600 flex items-center justify-center text-white text-xl font-bold">
                                     {selectedUser.name?.charAt(0)?.toUpperCase() || "?"}
                                 </div>
@@ -599,9 +608,11 @@ export default function UsersPage() {
                                     <p className="text-lg font-semibold">{selectedUser.name}</p>
                                     <div className="flex flex-wrap items-center gap-1 mt-0.5">
                                         {selectedUser.is_rider && (
+                                            // eslint-disable-next-line no-restricted-syntax -- role badge, not a status signal (#2816)
                                             <Badge variant="secondary" className="bg-sky-500/15 text-sky-600">Rider</Badge>
                                         )}
                                         {selectedUser.is_driver && (
+                                            // eslint-disable-next-line no-restricted-syntax -- role badge, not a status signal (#2816)
                                             <Badge variant="secondary" className="bg-violet-500/15 text-violet-600">Driver</Badge>
                                         )}
                                         {/* legacy_import_metadata is only present on the DETAIL fetch
@@ -820,6 +831,7 @@ export default function UsersPage() {
                                     </div>
                                 ) : walletData ? (
                                     <div className="space-y-3">
+                                        {/* eslint-disable-next-line no-restricted-syntax -- decorative wallet-card gradient accent, not a status signal (#2816) */}
                                         <div className="rounded-lg bg-gradient-to-br from-sky-500/10 to-blue-600/10 border border-sky-500/20 p-4">
                                             <p className="text-xs text-muted-foreground">Current Balance</p>
                                             <p className="text-3xl font-bold">

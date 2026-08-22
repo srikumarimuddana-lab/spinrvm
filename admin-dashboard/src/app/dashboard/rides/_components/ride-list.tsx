@@ -262,7 +262,9 @@ export default function RideList({
                                     </td>
                                     <td className="py-3 px-4 hidden lg:table-cell">
                                         <div className="flex items-center gap-2">
+                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative rider-avatar badge tint, not a status signal (#2816) */}
                                             <div className="w-7 h-7 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center shrink-0">
+                                                {/* eslint-disable-next-line no-restricted-syntax -- decorative rider-avatar icon tint, not a status signal (#2816) */}
                                                 <User className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
                                             </div>
                                             <div className="min-w-0">
@@ -273,7 +275,9 @@ export default function RideList({
                                     </td>
                                     <td className="py-3 px-4 hidden lg:table-cell">
                                         <div className="flex items-center gap-2">
+                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative driver-avatar badge tint, not a status signal (#2816) */}
                                             <div className="w-7 h-7 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center shrink-0">
+                                                {/* eslint-disable-next-line no-restricted-syntax -- decorative driver-avatar icon tint, not a status signal (#2816) */}
                                                 <Car className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
                                             </div>
                                             <div className="min-w-0">

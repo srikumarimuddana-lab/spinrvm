@@ -1022,6 +1022,7 @@ export default function DriversPage() {
                                             </div>
                                         </TableCell>
                                         <TableCell className="text-center">
+                                            {/* eslint-disable-next-line no-restricted-syntax -- star-rating amber is a decorative convention, not a status signal (#2816) */}
                                             <span className="text-xs font-bold flex items-center justify-center gap-1"><Star className="h-3 w-3 text-amber-500 fill-amber-500" />{driver.rating?.toFixed(1) || "\u2014"}</span>
                                         </TableCell>
                                         <TableCell className="text-center">
@@ -1031,6 +1032,7 @@ export default function DriversPage() {
                                             <span className="text-xs font-bold text-success">{formatCurrency(driver.total_earnings || 0)}</span>
                                         </TableCell>
                                         <TableCell>
+                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative map-pin marker tint, not a status signal (#2816) */}
                                             <div className="flex items-center gap-1.5 text-xs text-foreground font-medium truncate max-w-[120px]"><MapPin className="h-3.5 w-3.5 text-blue-500 shrink-0" />{areaName || "Unassigned"}</div>
                                         </TableCell>
                                         <TableCell className="pr-5">
@@ -1121,8 +1123,9 @@ export default function DriversPage() {
                                                         <img src={liveStats?.photo_url || selected.photo_url} alt="" className="w-9 h-9 rounded-full object-cover" />
                                                     )}
                                                     <span className="text-xs text-warning flex-1">Profile photo pending review</span>
+                                                    {/* eslint-disable-next-line no-restricted-syntax -- solid-fill white-text success button; --success fails WCAG AA against white text in dark mode (#2816) */}
                                                     <button disabled={photoReviewing} onClick={() => handlePhotoReview("approve")} className="text-xs font-semibold px-2 py-1 rounded bg-emerald-600 text-white disabled:opacity-50">Approve</button>
-                                                    <button disabled={photoReviewing} onClick={() => handlePhotoReview("reject")} className="text-xs font-semibold px-2 py-1 rounded bg-red-600 text-white disabled:opacity-50">Reject</button>
+                                                    <button disabled={photoReviewing} onClick={() => handlePhotoReview("reject")} className="text-xs font-semibold px-2 py-1 rounded bg-destructive text-destructive-foreground disabled:opacity-50">Reject</button>
                                                 </div>
                                             )}
                                             {selected.profile_image_status === "rejected" && (
@@ -1151,6 +1154,7 @@ export default function DriversPage() {
                                                         </span>
                                                     )}
                                                 </Badge>
+                                                {/* eslint-disable-next-line no-restricted-syntax -- Spinr Pass brand violet, not a success/warning/destructive signal (#2816) */}
                                                 {selected.subscription_status === "active" && <Badge className="bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400"><CreditCard className="h-3 w-3" /> Spinr Pass</Badge>}
                                                 {selected.subscription_status === "expired" && <Badge className="bg-destructive/15 text-destructive"><CreditCard className="h-3 w-3" /> Pass Expired</Badge>}
                                             </div>
@@ -1159,6 +1163,7 @@ export default function DriversPage() {
                                     <div className="flex items-center gap-2">
                                         {!editing ? <Button variant="outline" size="sm" onClick={startEditing}><Pencil className="h-3.5 w-3.5" /> Edit</Button> : (<>
                                             <Button variant="ghost" size="sm" onClick={() => setEditing(false)} disabled={saving}>Cancel</Button>
+                                            {/* eslint-disable-next-line no-restricted-syntax -- solid-fill white-text success button; --success fails WCAG AA against white text in dark mode (#2816) */}
                                             <Button size="sm" onClick={saveEdits} disabled={saving} className="bg-emerald-600 hover:bg-emerald-700 text-white">{saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />} Save</Button>
                                         </>)}
                                         <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={() => { setSelected(null); setEditing(false); }}><X className="h-4 w-4" /></Button>
@@ -1171,6 +1176,7 @@ export default function DriversPage() {
                                         in flight we show a "\u2026" placeholder so the user sees that
                                         the value is loading instead of a stale 0. */}
                                     <QuickStat
+                                        // eslint-disable-next-line no-restricted-syntax -- decorative KPI-card accent color, not a status signal (#2816)
                                         icon={Star} color="text-amber-500" bg="bg-amber-50 dark:bg-amber-900/20"
                                         label="Rating"
                                         value={
@@ -1184,6 +1190,7 @@ export default function DriversPage() {
                                         }
                                     />
                                     <QuickStat
+                                        // eslint-disable-next-line no-restricted-syntax -- decorative KPI-card accent color, not a status signal (#2816)
                                         icon={Car} color="text-blue-500" bg="bg-blue-50 dark:bg-blue-900/20"
                                         label="Rides"
                                         value={
@@ -1193,6 +1200,7 @@ export default function DriversPage() {
                                         }
                                     />
                                     <QuickStat
+                                        // eslint-disable-next-line no-restricted-syntax -- decorative KPI-card accent color, not a status signal (#2816)
                                         icon={DollarSign} color="text-emerald-500" bg="bg-emerald-50 dark:bg-emerald-900/20"
                                         label="Earnings"
                                         value={
@@ -1214,6 +1222,7 @@ export default function DriversPage() {
                                         }
                                     />
                                     <QuickStat
+                                        // eslint-disable-next-line no-restricted-syntax -- decorative KPI-card accent color, not a status signal (#2816)
                                         icon={CheckCircle} color="text-violet-500" bg="bg-violet-50 dark:bg-violet-900/20"
                                         label="Accept Rate"
                                         value={
@@ -1231,10 +1240,10 @@ export default function DriversPage() {
                         <Tabs value={detailTab} onValueChange={(v) => { setDetailTab(v); if (v === "rides") loadDriverRides(selected.id); if (v === "referrals") loadDriverReferrals(selected.id); if (v === "subscriptions") loadDriverSubscriptions(selected.id); if (v === "training") loadDriverTraining(selected.id); }} className="flex-1 overflow-hidden flex flex-col">
                             <TabsList className="mx-6 mt-4 w-fit">
                                 <TabsTrigger value="overview">Overview</TabsTrigger>
-                                <TabsTrigger value="documents">Documents{pendingDocsCount > 0 && <span className="ml-1.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full" title={`${pendingDocsCount} document${pendingDocsCount === 1 ? "" : "s"} awaiting review`}>{pendingDocsCount}</span>}</TabsTrigger>
+                                <TabsTrigger value="documents">Documents{pendingDocsCount > 0 && <span className="ml-1.5 bg-warning/15 text-warning text-[10px] font-bold px-1.5 py-0.5 rounded-full" title={`${pendingDocsCount} document${pendingDocsCount === 1 ? "" : "s"} awaiting review`}>{pendingDocsCount}</span>}</TabsTrigger>
                                 <TabsTrigger value="rides">Rides{selected.total_rides > 0 && <span className="ml-1.5 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">{(selected.total_rides || 0).toLocaleString()}</span>}</TabsTrigger>
                                 <TabsTrigger value="distance">Distance</TabsTrigger>
-                                <TabsTrigger value="payouts">Payouts{payoutSummary && payoutSummary.summary.pending_balance > 0 && <span className="ml-1.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full" title={`${formatCurrency(payoutSummary.summary.pending_balance)} pending payout`}>!</span>}</TabsTrigger>
+                                <TabsTrigger value="payouts">Payouts{payoutSummary && payoutSummary.summary.pending_balance > 0 && <span className="ml-1.5 bg-warning/15 text-warning text-[10px] font-bold px-1.5 py-0.5 rounded-full" title={`${formatCurrency(payoutSummary.summary.pending_balance)} pending payout`}>!</span>}</TabsTrigger>
                                 <TabsTrigger value="referrals">Referrals</TabsTrigger>
                                 <TabsTrigger value="training">Training</TabsTrigger>
                                 <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
@@ -1458,13 +1467,18 @@ export default function DriversPage() {
                                             if (ss === "active") {
                                                 return (
                                                     <div className="flex items-center gap-3">
+                                                        {/* eslint-disable-next-line no-restricted-syntax -- Spinr Pass brand violet, not a success/warning/destructive signal (#2816) */}
                                                         <div className="w-9 h-9 rounded-xl bg-violet-100 dark:bg-violet-900/30 flex items-center justify-center shrink-0">
+                                                            {/* eslint-disable-next-line no-restricted-syntax -- Spinr Pass brand violet, not a success/warning/destructive signal (#2816) */}
                                                             <CreditCard className="h-4 w-4 text-violet-600 dark:text-violet-400" />
                                                         </div>
                                                         <div className="flex-1 min-w-0">
+                                                            {/* eslint-disable-next-line no-restricted-syntax -- Spinr Pass brand violet, not a success/warning/destructive signal (#2816) */}
                                                             <p className="text-sm font-semibold text-violet-700 dark:text-violet-300">{plan || "Active Plan"}</p>
+                                                            {/* eslint-disable-next-line no-restricted-syntax -- Spinr Pass brand violet, not a success/warning/destructive signal (#2816) */}
                                                             <p className="text-xs text-violet-600/70 dark:text-violet-400/70 mt-0.5">{expLabel ? `Renews / expires ${expLabel}` : "Subscription active"}</p>
                                                         </div>
+                                                        {/* eslint-disable-next-line no-restricted-syntax -- Spinr Pass brand violet, not a success/warning/destructive signal (#2816) */}
                                                         <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 text-[10px] font-bold uppercase tracking-wide shrink-0">
                                                             Active
                                                         </span>
@@ -1889,6 +1903,7 @@ export default function DriversPage() {
                                 href={previewUrl}
                                 target="_blank"
                                 rel="noreferrer"
+                                // eslint-disable-next-line no-restricted-syntax -- decorative light overlay control on a dark image-preview backdrop, not a status signal (#2816)
                                 className="absolute bottom-4 right-4 bg-white/95 hover:bg-white text-gray-900 rounded-lg px-3 py-1.5 text-sm font-medium flex items-center gap-1.5 transition shadow"
                             >
                                 <ExternalLink className="h-4 w-4" /> Open original
@@ -1932,6 +1947,7 @@ export default function DriversPage() {
                         <Button
                             onClick={confirmReview}
                             disabled={reviewingDoc?.action === "approved" && reviewingDoc?.requiresExpiry && !reviewExpiry}
+                            // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text success button; --success fails WCAG AA against white text in dark mode (#2816)
                             className={reviewingDoc?.action === "approved" ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "bg-destructive hover:bg-destructive/90 text-destructive-foreground"}
                         >
                             {reviewingDoc?.action === "approved" ? "Approve" : "Reject"}
@@ -2168,8 +2184,11 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, isLegacyImporte
                 previous-app trips and a paid-out card full of previous-app
                 transfers, and every number invites a support escalation. */}
             {((summary.imported_rides_excluded ?? 0) > 0 || (summary.legacy_stripe_transfers ?? 0) > 0) && (
+                // eslint-disable-next-line no-restricted-syntax -- informational note, not a success/warning/destructive signal (#2816)
                 <div className="rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/10 p-3 flex items-start gap-3">
+                    {/* eslint-disable-next-line no-restricted-syntax -- informational note, not a success/warning/destructive signal (#2816) */}
                     <Clock className="h-4 w-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+                    {/* eslint-disable-next-line no-restricted-syntax -- informational note, not a success/warning/destructive signal (#2816) */}
                     <p className="text-xs text-blue-700 dark:text-blue-300">
                         <span className="font-semibold">Migrated from the previous app.</span>{" "}
                         {(summary.imported_rides_excluded ?? 0) > 0 && `${summary.imported_rides_excluded} imported ride${(summary.imported_rides_excluded ?? 0) === 1 ? "" : "s"}`}
@@ -2457,14 +2476,14 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, isLegacyImporte
 
             {/* Last payout highlight */}
             {summary.last_payout && (
-                <div className="rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-900/10 p-3 flex items-center gap-3">
-                    <CheckCircle className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <div className="rounded-xl border border-success/30 bg-success/10 p-3 flex items-center gap-3">
+                    <CheckCircle className="h-4 w-4 text-success shrink-0" />
                     <div className="flex-1 min-w-0">
-                        <p className="text-xs text-emerald-700 dark:text-emerald-300">
+                        <p className="text-xs text-success">
                             <span className="font-semibold">Last payout:</span> {fmtMoney(summary.last_payout.amount)}
                             {summary.last_payout.bank_name && ` to ${summary.last_payout.bank_name} ••••${summary.last_payout.account_last4 || ""}`}
                         </p>
-                        <p className="text-[10px] text-emerald-600/70 dark:text-emerald-400/70">{fmtDateTime(summary.last_payout.processed_at)}</p>
+                        <p className="text-[10px] text-success/70">{fmtDateTime(summary.last_payout.processed_at)}</p>
                     </div>
                 </div>
             )}
@@ -2550,7 +2569,7 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, isLegacyImporte
                                                 {style.label}
                                             </span>
                                             {p.status === "failed" && p.error_message && (
-                                                <span className="text-[10px] text-red-600 dark:text-red-400 truncate max-w-[200px]" title={p.error_message}>{p.error_message}</span>
+                                                <span className="text-[10px] text-destructive truncate max-w-[200px]" title={p.error_message}>{p.error_message}</span>
                                             )}
                                         </div>
                                     </TableCell>
@@ -2747,6 +2766,8 @@ function DriverReferralsTab({ data, loading, fmtDate }: {
     );
 }
 
+/* eslint-disable no-restricted-syntax -- categorical training-status map (5 states), not a
+   success/warning/destructive signal — too many states for the 3-token system (#2816) */
 const TRAINING_STATUS_STYLES: Record<string, string> = {
     completed: "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300",
     in_progress: "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300",
@@ -2754,6 +2775,7 @@ const TRAINING_STATUS_STYLES: Record<string, string> = {
     invited: "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300",
     not_invited: "bg-muted text-muted-foreground",
 };
+/* eslint-enable no-restricted-syntax */
 
 function DriverTrainingTab({ data, loading, error, onRefresh, fmtDate }: {
     data: DriverTraining | null;
@@ -2850,7 +2872,7 @@ function DriverTrainingTab({ data, loading, error, onRefresh, fmtDate }: {
                                         {c.expires_at ? ` · expires ${fmtDate(c.expires_at)}` : ""}
                                     </p>
                                 </div>
-                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide shrink-0 ${c.status === "active" ? "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300" : "bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-300"}`}>
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide shrink-0 ${c.status === "active" ? "bg-success/15 text-success" : "bg-destructive/15 text-destructive"}`}>
                                     {c.status}
                                 </span>
                             </div>
@@ -2903,7 +2925,7 @@ function DriverTrainingTab({ data, loading, error, onRefresh, fmtDate }: {
                                         <div key={i} className="flex items-center justify-between gap-2 rounded-lg border border-border/50 px-2.5 py-1.5">
                                             <span className="text-xs truncate">{q.quiz_title || "Quiz"} · {Math.round(Number(q.score))}%</span>
                                             <span className="flex items-center gap-1.5 shrink-0">
-                                                <span className={`text-[10px] font-bold uppercase ${q.passed ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>{q.passed ? "Pass" : "Fail"}</span>
+                                                <span className={`text-[10px] font-bold uppercase ${q.passed ? "text-success" : "text-destructive"}`}>{q.passed ? "Pass" : "Fail"}</span>
                                                 <span className="text-[10px] text-muted-foreground">{fmtDate(q.attempted_at)}</span>
                                             </span>
                                         </div>
@@ -3204,7 +3226,7 @@ function DriverRidesTab({ rides, totalCount, loading, driverName, fmtDate }: {
                                         {fmtDuration(r.duration_seconds)}
                                     </TableCell>
                                     <TableCell className="text-xs text-right tabular-nums">
-                                        {hasTip ? <span className="text-emerald-600 dark:text-emerald-400 font-medium">${Number(tip).toFixed(2)}</span> : <span className="text-muted-foreground">—</span>}
+                                        {hasTip ? <span className="text-success font-medium">${Number(tip).toFixed(2)}</span> : <span className="text-muted-foreground">—</span>}
                                     </TableCell>
                                     <TableCell className="text-sm text-right font-semibold tabular-nums">
                                         {totalFare != null ? `$${Number(totalFare).toFixed(2)}` : "—"}
@@ -3499,6 +3521,7 @@ function DocCard({ d, docBusy, driverName, onPreview, onReview }: { d: any; docB
     return (
         <div className="bg-card rounded-xl border overflow-hidden transition hover:shadow-md group">
             <div className="relative h-44 bg-muted/50 flex items-center justify-center overflow-hidden">
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative light zoom-icon chip on a dark hover overlay, not a status signal (#2816) */}
                 {isImage ? (<><img src={d.document_url} alt={d.document_type||"Document"} loading="lazy" decoding="async" className="w-full h-full object-cover" onError={e=>{(e.target as HTMLImageElement).style.display='none';}} /><button onClick={()=>onPreview(d.document_url)} className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition flex items-center justify-center opacity-0 group-hover:opacity-100"><div className="bg-white/90 rounded-full p-2"><ZoomIn className="h-5 w-5 text-gray-800" /></div></button></>)
                 : d.document_url ? <a href={d.document_url} target="_blank" rel="noreferrer" className="flex flex-col items-center gap-2 text-muted-foreground hover:text-foreground transition"><FileText className="h-12 w-12 opacity-40" /><span className="text-xs font-medium">Click to view</span></a>
                 : <div className="flex flex-col items-center gap-2 text-muted-foreground"><Image className="h-12 w-12 opacity-20" /><span className="text-xs">No file</span></div>}

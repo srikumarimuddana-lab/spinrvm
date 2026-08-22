@@ -107,6 +107,7 @@ export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }:
                     </p>
                     <div className="rounded-lg border border-border p-3 text-xs">
                         <div className="flex gap-2">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative pickup map-pin marker color (#2816) */}
                             <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-500" />
                             <p className="text-foreground">
                                 {ride.pickup_address ?? `${ride.pickup_lat?.toFixed(4)}, ${ride.pickup_lng?.toFixed(4)}`}
@@ -114,6 +115,7 @@ export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }:
                         </div>
                         <div className="my-1 ml-1.5 h-3 border-l border-dashed border-muted-foreground" />
                         <div className="flex gap-2">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative dropoff map-pin marker color (#2816) */}
                             <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-500" />
                             <p className="text-foreground">
                                 {ride.dropoff_address ?? `${ride.dropoff_lat?.toFixed(4)}, ${ride.dropoff_lng?.toFixed(4)}`}
@@ -225,10 +227,12 @@ export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }:
                             >
                                 <div className="relative shrink-0">
                                     <Avatar className="h-11 w-11 border-2 border-background shadow-sm">
+                                        {/* eslint-disable-next-line no-restricted-syntax -- decorative driver-avatar brand accent color (#2816) */}
                                         <AvatarFallback className="bg-purple-100 text-sm font-bold text-purple-700">
                                             {(ride.driver_name ?? "DR").slice(0, 2).toUpperCase()}
                                         </AvatarFallback>
                                     </Avatar>
+                                    {/* eslint-disable-next-line no-restricted-syntax -- decorative driver-icon badge accent color (#2816) */}
                                     <div className="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-purple-500 ring-2 ring-card">
                                         <Car className="h-2.5 w-2.5 text-white" />
                                     </div>
@@ -251,6 +255,7 @@ export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }:
                                         <Button
                                             size="icon"
                                             variant="outline"
+                                            // eslint-disable-next-line no-restricted-syntax -- decorative driver-accent hover color, matches avatar badge (#2816)
                                             className="h-9 w-9 rounded-full shadow-sm transition-colors hover:border-purple-200 hover:bg-purple-50 hover:text-purple-600"
                                             onClick={(e) => {
                                                 e.stopPropagation();

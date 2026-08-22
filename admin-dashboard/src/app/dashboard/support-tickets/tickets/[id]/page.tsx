@@ -378,6 +378,7 @@ export default function TicketDetailPage() {
                                     const body = isOpen && fullBody[key] ? fullBody[key] : preview;
                                     const role = isComment ? "Internal note" : isOut ? "Agent reply" : "Customer";
                                     const accent = isComment
+                                        // eslint-disable-next-line no-restricted-syntax -- message-role differentiator (internal note/agent reply/customer), not a health-state signal (#2816)
                                         ? "border-l-amber-400 bg-amber-50/60 dark:bg-amber-950/20"
                                         : isOut
                                         ? "border-l-blue-400"
@@ -404,6 +405,7 @@ export default function TicketDetailPage() {
                                             </p>
                                             <button
                                                 onClick={() => toggleMsg(m)}
+                                                // eslint-disable-next-line no-restricted-syntax -- decorative link-style accent, not a status signal (#2816)
                                                 className="mt-1 flex items-center gap-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline"
                                             >
                                                 {isOpen ? <><ChevronUp className="h-3 w-3" /> Show less</> : <><ChevronDown className="h-3 w-3" /> Show full message</>}
@@ -455,6 +457,7 @@ export default function TicketDetailPage() {
                                     <div className="rounded-md border border-dashed bg-muted/30 p-3">
                                         <p className="mb-1 text-[11px] font-medium text-muted-foreground">Signature (auto-appended)</p>
                                         <div
+                                            // eslint-disable-next-line no-restricted-syntax -- decorative link-style accent, not a status signal (#2816)
                                             className="text-sm text-muted-foreground [&_a]:text-blue-600 dark:[&_a]:text-blue-400 [&_a]:underline"
                                             dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(emailSignature) }}
                                         />

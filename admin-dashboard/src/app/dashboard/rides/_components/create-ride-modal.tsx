@@ -442,6 +442,7 @@ export function CreateRideModal({
                             )}
                         </Label>
                         <div className="relative mt-1">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative pickup map-pin color convention, not a status signal (#2816) */}
                             <MapPin className="absolute left-2.5 top-2.5 h-4 w-4 text-blue-500" />
                             <Input
                                 placeholder="Start typing address or place..."
@@ -452,6 +453,7 @@ export function CreateRideModal({
                                 }}
                                 onFocus={() => setPickupFocused(true)}
                                 onBlur={() => setTimeout(() => setPickupFocused(false), 200)}
+                                // eslint-disable-next-line no-restricted-syntax -- decorative pickup input accent matching map-pin convention, not a status signal (#2816)
                                 className="pl-9 border-blue-200 dark:border-blue-800 focus-visible:ring-blue-500"
                                 required
                             />
@@ -484,6 +486,7 @@ export function CreateRideModal({
                             )}
                         </Label>
                         <div className="relative mt-1">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative dropoff map-pin color convention, not a status signal (#2816) */}
                             <MapPin className="absolute left-2.5 top-2.5 h-4 w-4 text-red-500" />
                             <Input
                                 placeholder="Start typing address or place..."
@@ -494,6 +497,7 @@ export function CreateRideModal({
                                 }}
                                 onFocus={() => setDropoffFocused(true)}
                                 onBlur={() => setTimeout(() => setDropoffFocused(false), 200)}
+                                // eslint-disable-next-line no-restricted-syntax -- decorative dropoff input accent matching map-pin convention, not a status signal (#2816)
                                 className="pl-9 border-red-200 dark:border-red-800 focus-visible:ring-red-500"
                                 required
                             />

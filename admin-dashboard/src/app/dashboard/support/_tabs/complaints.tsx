@@ -152,6 +152,7 @@ export default function ComplaintsTab() {
                         {(selected.status === "open" || selected.status === "investigating") && (<>
                             <div className="space-y-1.5"><Label className="text-xs">Resolution Notes</Label><Textarea placeholder="Notes..." value={resolution} onChange={(e) => setResolution(e.target.value)} rows={2} /></div>
                             <div className="flex gap-2">
+                                {/* eslint-disable-next-line no-restricted-syntax -- solid-fill success button with white text; --success fails WCAG AA contrast in dark mode (#2816) */}
                                 <Button size="sm" className="flex-1 bg-emerald-600 hover:bg-emerald-700" onClick={() => handleResolve("resolved")}><CheckCircle className="h-3.5 w-3.5 mr-1.5" />Resolve</Button>
                                 <Button size="sm" variant="outline" className="flex-1" onClick={() => handleResolve("dismissed")}><XCircle className="h-3.5 w-3.5 mr-1.5" />Dismiss</Button>
                             </div>

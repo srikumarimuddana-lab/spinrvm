@@ -118,6 +118,7 @@ export function RichTextEditor({
                 data-placeholder={placeholder}
                 style={{ minHeight }}
                 suppressContentEditableWarning
+                // eslint-disable-next-line no-restricted-syntax -- decorative link color for editor content, not a status signal (#2816)
                 className="prose-sm max-w-none overflow-auto p-3 text-sm outline-none [&_a]:text-blue-600 [&_a]:underline [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5 empty:before:text-muted-foreground empty:before:content-[attr(data-placeholder)]"
             />
         </div>

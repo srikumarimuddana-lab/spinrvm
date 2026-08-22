@@ -242,6 +242,7 @@ export default function DriverMap({ drivers, serviceAreas = [], selectedArea = "
                     Online ({onlineWithLoc.length})
                 </span>
                 <span className="flex items-center gap-1.5">
+                    {/* eslint-disable-next-line no-restricted-syntax -- neutral offline-dot color, not a success/warning/destructive signal (#2816) */}
                     <span className="inline-block w-2.5 h-2.5 rounded-full bg-zinc-400" />
                     Offline ({offlineWithLoc.length})
                 </span>

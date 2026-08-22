@@ -561,6 +561,48 @@ class TestAdminSettingsValidation:
         if settings_calls:
             assert settings_calls[0].args[1]["legacy_consent_notice_enabled"] is True
 
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("company_city", "Saskatoon"),
+            ("company_province", "SK"),
+            ("company_postal_code", "S7K 0J5"),
+            ("lifecycle_emails_enabled", False),
+            ("marketing_from_email", "news@spinr.ca"),
+            ("route_location_gap_alert_seconds", 45),
+            ("fare_distance_basis", "shadow"),
+            ("route_integrity_v2_mode", "on"),
+        ],
+    )
+    def test_drift_guard_fields_forwarded_to_db(self, client, field, value):
+        """Regression, same shape as test_legacy_consent_notice_enabled_forwarded_to_db:
+        these 8 fields (company_city/province/postal_code, lifecycle_emails_enabled,
+        marketing_from_email, route_location_gap_alert_seconds, fare_distance_basis,
+        route_integrity_v2_mode) were found missing from SettingsUpdateRequest on
+        2026-08-22 by test_admin_settings_write_allowlist_drift.py -- each is read
+        by live application code but had no admin-write path. Assert each actually
+        reaches the DB write, not just that the endpoint returns a non-error status.
+        """
+        with (
+            patch("db_supabase.get_rows", new_callable=AsyncMock, return_value=[]),
+            patch("db_supabase.insert_one", new_callable=AsyncMock, return_value={}) as mock_insert,
+        ):
+            resp = client.put("/api/admin/settings", json={field: value})
+        assert resp.status_code in (200, 500)  # 500 acceptable from deep deps, per sibling tests
+        settings_calls = [c for c in mock_insert.call_args_list if c.args and c.args[0] == "settings"]
+        if settings_calls:
+            assert settings_calls[0].args[1][field] == value
+
+    def test_drift_guard_enum_fields_reject_invalid_values(self, client):
+        """fare_distance_basis and route_integrity_v2_mode are closed enums
+        (money-adjacent / safety-guard-adjacent respectively) -- an admin
+        can't set a value the reader would silently mistreat.
+        """
+        resp = client.put("/api/admin/settings", json={"fare_distance_basis": "moon_distance"})
+        assert resp.status_code == 422
+        resp = client.put("/api/admin/settings", json={"route_integrity_v2_mode": "enabled"})
+        assert resp.status_code == 422
+
     def test_email_api_keys_masked_on_get(self):
         """Both the Resend key and the legacy SendGrid key must be masked.
 

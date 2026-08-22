@@ -2,7 +2,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 try:
     from ...utils.audit_logger import log_admin_action  # noqa: F401
@@ -205,6 +205,14 @@ class SettingsUpdateRequest(BaseModel):
     # Expected SNS topic ARN for the SES bounce/complaint webhook. When set,
     # /webhooks/ses rejects SNS messages from any other topic.
     aws_ses_sns_topic_arn: Optional[str] = None
+    # Global kill switch for lifecycle emails (utils/email_notifications.py) --
+    # welcome, receipt, statement, etc. Defaults true (DB default). Found
+    # missing from this model 2026-08-22 by the settings-write drift guard.
+    lifecycle_emails_enabled: Optional[bool] = None
+    # Dedicated CASL marketing-email sender, separate from the transactional
+    # aws_ses_from_email/resend_from_email above (utils/marketing_email.py).
+    # Found missing from this model 2026-08-22 by the settings-write drift guard.
+    marketing_from_email: Optional[str] = None
     # Company info shown on rider receipts + driver T4A slips + the
     # admin dashboard footer. Edited via the Settings page → Company tab.
     company_name: Optional[str] = None
@@ -213,6 +221,17 @@ class SettingsUpdateRequest(BaseModel):
     # ACTION_ITEMS.md N17.
     company_app_name: Optional[str] = None
     company_address: Optional[str] = None
+    # City/province/postal came later (migration 192) than company_address
+    # and were never added to the Settings page or this model -- so
+    # address_lines()/postal_address() (utils/address_format.py) always saw
+    # them blank on every receipt/email footer that used them, with no
+    # admin path to set them except a direct DB write. Found 2026-08-22 by
+    # the settings-write drift guard (test_admin_settings_write_allowlist_
+    # drift.py). company_address alone can still hold a full address --
+    # these are additive, not required.
+    company_city: Optional[str] = None
+    company_province: Optional[str] = None
+    company_postal_code: Optional[str] = None
     company_phone: Optional[str] = None
     company_email: Optional[str] = None
     company_website: Optional[str] = None
@@ -229,6 +248,15 @@ class SettingsUpdateRequest(BaseModel):
     # Locks the rider's quoted fare at booking time so the receipt can't
     # drift if Maps changes the route mid-trip. Toggle on the Settings page.
     fare_lock_enabled: Optional[bool] = None
+    # Fare-pricing distance basis (routes/rides/_shared.py's
+    # select_fare_distance, read at estimate + booking time). "road" prices on
+    # the actual road route (DB default); "shadow" bills haversine but still
+    # fetches the road route to log the delta, for de-risking a rollout;
+    # "haversine" is the straight-line kill switch. Money-adjacent -- typed as
+    # a closed enum rather than free text so an admin can't set a value the
+    # reader silently treats as non-"road". Found missing from this model
+    # 2026-08-22 by the settings-write drift guard.
+    fare_distance_basis: Optional[Literal["road", "shadow", "haversine"]] = None
     driver_matching_algorithm: Optional[str] = None
     min_driver_rating: Optional[float] = Field(default=None, ge=1.0, le=5.0)
     search_radius_km: Optional[float] = Field(default=None, ge=1, le=100)
@@ -463,6 +491,17 @@ class SettingsUpdateRequest(BaseModel):
     # finalizer's late-tail revisions still need. 90 days (2160h) default per
     # the owner's retention decision, ceiling matches the blanket GPS purge.
     idle_breadcrumb_retention_hours: Optional[int] = Field(default=None, ge=24, le=2160)
+    # Route-integrity v2 rollout gate (routes/drivers/ride_complete.py's
+    # _get_route_integrity_mode) -- "off"/"shadow"/"on" only; the reader
+    # 503s on any other value rather than silently weakening the guard, so
+    # this is typed as a closed enum to match. Found missing from this model
+    # 2026-08-22 by the settings-write drift guard.
+    route_integrity_v2_mode: Optional[Literal["off", "shadow", "on"]] = None
+    # GPS location-gap alert threshold, seconds (utils/route_gap_monitor.py).
+    # Must be positive -- the reader raises on <= 0. Default 30s (DEFAULT_
+    # GAP_ALERT_SECONDS). Found missing from this model 2026-08-22 by the
+    # settings-write drift guard.
+    route_location_gap_alert_seconds: Optional[int] = Field(default=None, gt=0)
 
     @field_validator("lms_api_base_url")
     @classmethod

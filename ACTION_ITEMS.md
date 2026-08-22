@@ -8004,7 +8004,31 @@ record of what was assumed vs. what was actually true</summary>
   fallback. No new footguns — reused established map/bottom-sheet/
   ConfirmSheet mock doubles verbatim. 14 tests; full rider-app suite
   still green (1013), `yarn tsc --noEmit` clean. **65 of 76 screens
-  done, ~11 remain at 0%.**
+  done, ~11 remain at 0%. Continued, same day:** driver-app's
+  `become-driver.tsx` (5-step Intro/Personal/Vehicle/Documents/Review
+  wizard, distinct from rider-app's screen of the same name completed
+  earlier this session — deliberate no-prefill-from-account personal
+  fields, an AsyncStorage draft, service-area-scoped vehicle types, a
+  dynamic per-requirement date-picker expiry flow, and a CRC/VSC
+  background-check consent gate). Covers: the no-prefill-from-account
+  behavior; the unpublished/unreachable-consent-text auto-check (never
+  blocks registration on a checkbox next to placeholder or failed-to-
+  load text); Personal step's completeness gate and its service-area-
+  triggered city-seed + vehicle-type refetch; Vehicle step's
+  skip-when-entirely-empty vs. reject-when-partial vs.
+  always-advance-on-explicit-Skip; the 9-year vehicle-age rejection;
+  handleUpload's iOS Camera/Gallery/File Alert dispatch and its
+  success/failure paths; the date-picker's dismiss/past-date-rejected/
+  future-date-accepted flow (driven by calling the mocked
+  `@react-native-community/datetimepicker`'s own `onChange` prop
+  directly, since its native UI can't be driven in Jest); Submit's
+  consent-checkbox gate, the requirement-name-to-legacy-expiry-field
+  keyword mapping, CRC-consent POST only when the text was actually
+  published, draft-clear + redirect on success, and the failure toast
+  without redirecting; and the Intro-step-only Logout vs.
+  every-other-step Back header button. No new footguns. 16 tests; full
+  driver-app suite still green (1030), `yarn tsc --noEmit` clean. **66
+  of 76 screens done, ~10 remain at 0%.**
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

@@ -5312,7 +5312,41 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   the commit") — met; all four listed files reach ≥90% coverage — met.
 
 ### B13. 22 drivers have no `regulatory_authority`/`regulatory_region` set (blocks the SGI-forms segregation guard from covering them)
-- [ ] **Status:** partially done — see Round 2 below; migration 333 not
+- [x] **Status:** CLOSED (2026-08-22) — Round 3. Verified directly against
+  the real project (`soavhtdhefowwvforzwb`) before touching anything:
+  migration 333 was already applied (`schema_migrations` has the row) and
+  `SELECT count(*) FILTER (WHERE regulatory_authority IS NULL) FROM drivers`
+  → `0` of 212 total, all `SGI`/`SK` — this doc's "not yet applied" claim
+  below was stale (same class of drift B8 already demonstrated: ACTION_ITEMS.md
+  doesn't reflect live-DB state in real time across concurrent sessions).
+  With the backfill confirmed complete and every write path fixed (Round 2),
+  the guard-tightening this item always deferred is now safe. Tightened
+  `_out_of_scope_drivers()` (`routes/admin/sgi_forms.py`) to require an
+  explicit `regulatory_authority == "SGI"` match — a NULL/missing row is no
+  longer grandfathered in, it's blocked like any other non-SGI authority.
+  The three call sites' error-message construction (`authorities = sorted(...)`)
+  was patched defensively to render `"unspecified"` instead of `"None"` for
+  a NULL row, since `d["regulatory_authority"]` is no longer guaranteed
+  non-None once NULL rows are in scope. Updated
+  `tests/test_admin_sgi_forms_coverage.py` (2 existing unit tests flipped
+  from asserting NULL-passes to NULL-blocked, 1 new HTTP-level test for the
+  `"unspecified"` message) and `tests/test_sgi_forms_route.py` (class
+  docstring updated, `test_null_regulatory_authority_grandfathered_through`
+  replaced with `test_null_regulatory_authority_now_blocked` asserting 422;
+  both files' shared `_DRIVER_ROW` fixture given an explicit
+  `regulatory_authority: "SGI"` since 20 other, unrelated tests in both
+  files relied on the old NULL-passes default and started failing 422
+  against the tightened guard once it changed — this was the actual size of
+  the change, not just the two guard-specific tests). Full suite for both
+  files: `52 passed, 1 warning`. **Not touched, out of scope for this
+  item:** `services/data_transfer/entity_import_service.py`'s cross-environment
+  driver-import path copies whatever `regulatory_authority` the source
+  entity already had (including possibly None) — a different, tangential
+  write path from the four self-signup/admin-create paths Round 2 fixed;
+  worth its own look if that import path is ever used against a live
+  Alberta-adjacent dataset, but not part of what this item asked for.
+  Change Impact Log: `docs/change-log/2026-08-22-b13-round3-guard-tightening.md`.
+- **(historical) Status:** partially done — see Round 2 below; migration 333 not
   yet applied and the guard tightening is still pending on that. Original
   Round 1: backfill done (2026-07-28, migration
   `265_drivers_regulatory_authority_backfill.sql`) — all 22 rows verified

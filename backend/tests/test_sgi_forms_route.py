@@ -21,6 +21,10 @@ _DRIVER_ROW = {
     "user_id": "user-1",
     "name": "Jane Driver",
     "license_number": "vault:abc123",
+    # ACTION_ITEMS.md B13 round 2: the segregation guard now blocks a NULL
+    # regulatory_authority too, so fixtures representing a normal in-scope
+    # driver need it set explicitly.
+    "regulatory_authority": "SGI",
 }
 
 
@@ -113,7 +117,10 @@ def test_fill_failure_returns_502(admin_client):
 class TestRegulatorySegregationGuard:
     """Alberta-expansion safety guard: an SGI (Saskatchewan) form must never
     be generated for a driver regulated by a different authority. See
-    ACTION_ITEMS.md B13 for the NULL-passes grandfather reasoning."""
+    ACTION_ITEMS.md B13 (round 2, 2026-08-22) — the former NULL-passes
+    grandfather allowance is retired now that the backfill is confirmed
+    complete in production and every driver write path sets the field; a
+    NULL row is blocked the same as any other non-SGI authority."""
 
     def test_out_of_province_driver_rejected(self, admin_client):
         ab_driver = {**_DRIVER_ROW, "regulatory_authority": "AMVIC", "regulatory_region": "AB"}
@@ -153,25 +160,19 @@ class TestRegulatorySegregationGuard:
             )
         assert resp.status_code == 200
 
-    def test_null_regulatory_authority_grandfathered_through(self, admin_client):
-        """Deliberate allowance, not an oversight — 22 real production
-        drivers predate this field's backfill (ACTION_ITEMS.md B13)."""
+    def test_null_regulatory_authority_now_blocked(self, admin_client):
+        """The backfill grandfather allowance is retired (ACTION_ITEMS.md
+        B13 round 2) — production has 0 NULL rows left and every write path
+        sets the field, so a NULL row here means something regressed, not
+        that it's a legitimate legacy driver to wave through."""
         legacy_driver = {**_DRIVER_ROW, "regulatory_authority": None, "regulatory_region": None}
-        with (
-            patch("backend.db_supabase.get_rows", AsyncMock(return_value=[legacy_driver])),
-            patch("backend.routes.drivers._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
-            patch(
-                "backend.services.data_transfer.sgi_field_maps.driver_to_driver_details_row",
-                return_value={"field": "value"},
-            ),
-            patch("backend.services.data_transfer.sgi_form_filler.fill_driver_details_form", return_value=b"%PDF-1.4"),
-            patch("backend.routes.admin.sgi_forms.log_admin_action", AsyncMock(return_value="aud-1")),
-        ):
+        with patch("backend.db_supabase.get_rows", AsyncMock(return_value=[legacy_driver])):
             resp = admin_client.post(
                 "/api/admin/data-transfer/sgi-forms/generate",
                 json={"form_type": "driver_details", "driver_ids": ["user-1"]},
             )
-        assert resp.status_code == 200
+        assert resp.status_code == 422
+        assert "unspecified" in resp.json()["detail"]
 
 
 def test_vehicle_details_form_type(admin_client):

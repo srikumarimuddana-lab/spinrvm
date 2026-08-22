@@ -163,7 +163,7 @@ export default function FlagsTab() {
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction onClick={() => { if (deleteTarget) deleteFlag(deleteTarget).then(() => { setSelected(null); load(); }).finally(() => setDeleteTarget(null)); }} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+                        <AlertDialogAction onClick={() => { if (deleteTarget) deleteFlag(deleteTarget).then(() => { setSelected(null); load(); }).finally(() => setDeleteTarget(null)); }} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>

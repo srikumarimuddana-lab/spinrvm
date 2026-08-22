@@ -38,7 +38,9 @@ const PRIORITIES = ["low", "medium", "high", "urgent"];
 // shades darkened where needed; dark shades added to match the proven-safe
 // pattern already used by the sibling statusColor() above. "high" (amber)
 // already passed in dark mode as-is (text-amber-600, no override needed).
+/* eslint-disable no-restricted-syntax -- categorical ticket-priority map, contrast-verified per axe (see comment above); no semantic token covers low/medium priority (#2816) */
 const P_COLORS: Record<string, string> = { low: "bg-zinc-500/15 text-zinc-600 dark:text-zinc-400", medium: "bg-blue-500/15 text-blue-700 dark:text-blue-400", high: "bg-amber-500/15 text-amber-800 dark:text-amber-600", urgent: "bg-red-500/15 text-red-700 dark:text-red-400" };
+/* eslint-enable no-restricted-syntax */
 
 // Used to switch between a "tickets" and a "faqs" sub-tab here; the "faqs"
 // side was a third, undocumented FAQ implementation (no permission checks,
@@ -231,7 +233,7 @@ function TicketsList() {
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction onClick={() => { if (deleteTarget) { deleteTicket(deleteTarget).then(load); if (selected?.id === deleteTarget) setSelected(null); setDeleteTarget(null); } }} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+                        <AlertDialogAction onClick={() => { if (deleteTarget) { deleteTicket(deleteTarget).then(load); if (selected?.id === deleteTarget) setSelected(null); setDeleteTarget(null); } }} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>

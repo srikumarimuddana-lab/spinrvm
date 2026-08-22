@@ -67,13 +67,13 @@ export default function AreaStatsTable({ areaStats, loading, onAreaClick }: {
                                 <td className="py-2.5 px-3 font-medium">{area.service_area_name}</td>
                                 <td className="py-2.5 px-3 text-right font-semibold">{area.total}</td>
                                 <td className="py-2.5 px-3 text-right">
-                                    <span className="text-emerald-600 font-medium">{area.online}</span>
+                                    <span className="text-success font-medium">{area.online}</span>
                                 </td>
                                 <td className="py-2.5 px-3 text-right">
-                                    <span className="text-green-600 font-medium">{area.verified}</span>
+                                    <span className="text-success font-medium">{area.verified}</span>
                                 </td>
                                 <td className="py-2.5 px-3 text-right">
-                                    <span className="text-amber-600 font-medium">{area.unverified}</span>
+                                    <span className="text-warning font-medium">{area.unverified}</span>
                                 </td>
                                 <td className="py-2.5 px-3 text-right">{area.total_rides.toLocaleString()}</td>
                                 <td className="py-2.5 px-3 text-right text-emerald-600 font-medium">{formatCurrency(area.total_earnings)}</td>

@@ -1288,7 +1288,7 @@ function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => 
           <Plus className="h-4 w-4" /> Add document type
         </button>
         <div className="flex-1" />
-        {dirty && <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">Unsaved changes</span>}
+        {dirty && <span className="text-xs text-warning font-medium">Unsaved changes</span>}
         <button onClick={() => { onSave(rows); setDirty(false); }} className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition ${dirty ? 'bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm' : 'bg-muted text-muted-foreground'}`}>
           <span className="flex items-center gap-1.5"><CheckCircle className="h-4 w-4" /> Save Documents</span>
         </button>
@@ -1680,7 +1680,7 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
       </div>
 
       {/* Mandatory-subscription toggle */}
-      <div className={`flex items-center justify-between p-4 rounded-xl mb-5 ${required ? 'bg-amber-50 border border-amber-200 dark:bg-amber-900/20 dark:border-amber-800' : 'bg-muted border border-border'}`}>
+      <div className={`flex items-center justify-between p-4 rounded-xl mb-5 ${required ? 'bg-warning/10 border border-warning/30' : 'bg-muted border border-border'}`}>
         <div>
           <h4 className="font-bold text-foreground">Require Subscription to Drive</h4>
           <p className="text-sm text-muted-foreground">
@@ -2271,7 +2271,7 @@ function SurgeHistoryChart({ areaId, areaName }: { areaId: string; areaName: str
       </div>
 
       {truncated && (
-        <p className="mb-2 text-xs text-amber-700 dark:text-amber-400">
+        <p className="mb-2 text-xs text-warning">
           Showing the most recent 500 readings — the selected range is longer than
           the server returns in one response, so earlier readings are not charted.
         </p>
@@ -2579,6 +2579,7 @@ export function AreaHeatmapOverrides({
                   className={`mt-2 rounded-md border px-2 py-1.5 text-xs ${
                     w.severity === "warning"
                       ? "border-destructive/40 bg-destructive/5 text-destructive"
+                      // eslint-disable-next-line no-restricted-syntax -- lower-severity ("info") tier below "warning"; no dedicated semantic token exists for it (#2816)
                       : "border-amber-500/40 bg-amber-500/5 text-amber-700 dark:text-amber-400"
                   }`}
                 >
@@ -2725,8 +2726,8 @@ function HeatmapConfigTab({ onSuccess, onError }: { onSuccess: () => void; onErr
             dashboard's own Heat Map page. Both facts have to be unmissable:
             an operator who reads this as "tuning Saskatoon's display" can change
             what every driver in every region sees in one click. */}
-        <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 px-3 py-2">
-          <p className="text-sm text-amber-900 dark:text-amber-200">
+        <div className="mt-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2">
+          <p className="text-sm text-warning">
             <span className="font-semibold">Applies to all service areas and all drivers.</span>{" "}
             These settings control the demand heatmap inside the <span className="font-semibold">driver app</span>,
             not the Heat Map page in this dashboard. They are not per-area.
@@ -2827,7 +2828,7 @@ function HeatmapConfigTab({ onSuccess, onError }: { onSuccess: () => void; onErr
                 // Surfaced, not dropped: the allowlist decides who gets v2
                 // during a dark launch, so an entry that matches nothing makes
                 // the rollout look like it did nothing.
-                <p role="alert" className="text-xs text-amber-700 dark:text-amber-400 mt-1">
+                <p role="alert" className="text-xs text-warning mt-1">
                   {invalid.length} entr{invalid.length === 1 ? "y does" : "ies do"} not look like a
                   user ID and will match no driver: {invalid.slice(0, 3).join(", ")}
                   {invalid.length > 3 ? "…" : ""}

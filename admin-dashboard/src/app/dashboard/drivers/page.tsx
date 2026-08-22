@@ -1116,15 +1116,19 @@ export default function DriversPage() {
                                                 </div>
                                             )}
                                             {selected.profile_image_status === "rejected" && (
-                                                <div className="mt-2 text-xs text-red-600 dark:text-red-400">Profile photo rejected — driver must re-upload.</div>
+                                                <div className="mt-2 text-xs text-destructive">Profile photo rejected — driver must re-upload.</div>
                                             )}
                                             <div className="flex items-center gap-2 mt-2">
+                                                {/* Driver-lifecycle-status categorical map — mirrors the list-row
+                                                    badge and the established exclusion documented there. (#2816) */}
+                                                {/* eslint-disable no-restricted-syntax -- categorical driver-lifecycle-status badges, see comment on the list-row badge (#2816) */}
                                                 {selected.account_deleted ? <Badge className="bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"><Trash2 className="h-3 w-3" /> Deleted</Badge>
                                                 : selected.status === "active" ? <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"><ShieldCheck className="h-3 w-3" /> Active</Badge>
                                                 : selected.status === "needs_review" ? <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"><AlertTriangle className="h-3 w-3" /> Needs Review</Badge>
                                                 : selected.status === "suspended" ? <Badge className="bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400"><Pause className="h-3 w-3" /> Suspended</Badge>
                                                 : selected.status === "banned" ? <Badge className="bg-red-200 text-red-800 dark:bg-red-900/40 dark:text-red-400"><Ban className="h-3 w-3" /> Banned</Badge>
                                                 : <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"><ShieldAlert className="h-3 w-3" /> Pending</Badge>}
+                                                {/* eslint-enable no-restricted-syntax */}
                                                 <Badge variant="outline" className={selected.is_online && !selected.account_deleted ? "border-success/40 text-success" : ""}>
                                                     {selected.is_online && !selected.account_deleted ? "Online" : "Offline"}
                                                     {selected.last_status_changed_at && (
@@ -1134,7 +1138,7 @@ export default function DriversPage() {
                                                     )}
                                                 </Badge>
                                                 {selected.subscription_status === "active" && <Badge className="bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400"><CreditCard className="h-3 w-3" /> Spinr Pass</Badge>}
-                                                {selected.subscription_status === "expired" && <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"><CreditCard className="h-3 w-3" /> Pass Expired</Badge>}
+                                                {selected.subscription_status === "expired" && <Badge className="bg-destructive/15 text-destructive"><CreditCard className="h-3 w-3" /> Pass Expired</Badge>}
                                             </div>
                                         </div>
                                     </div>
@@ -1456,14 +1460,14 @@ export default function DriversPage() {
                                             if (ss === "expired") {
                                                 return (
                                                     <div className="flex items-center gap-3">
-                                                        <div className="w-9 h-9 rounded-xl bg-red-100 dark:bg-red-900/30 flex items-center justify-center shrink-0">
-                                                            <CreditCard className="h-4 w-4 text-red-600 dark:text-red-400" />
+                                                        <div className="w-9 h-9 rounded-xl bg-destructive/15 flex items-center justify-center shrink-0">
+                                                            <CreditCard className="h-4 w-4 text-destructive" />
                                                         </div>
                                                         <div className="flex-1 min-w-0">
-                                                            <p className="text-sm font-semibold text-red-700 dark:text-red-400">{plan || "Spinr Pass"}</p>
-                                                            <p className="text-xs text-red-600/80 dark:text-red-400/80 mt-0.5">{expLabel ? `Expired ${expLabel}` : "Subscription expired"}</p>
+                                                            <p className="text-sm font-semibold text-destructive">{plan || "Spinr Pass"}</p>
+                                                            <p className="text-xs text-destructive/80 mt-0.5">{expLabel ? `Expired ${expLabel}` : "Subscription expired"}</p>
                                                         </div>
-                                                        <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 text-[10px] font-bold uppercase tracking-wide shrink-0">
+                                                        <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-destructive/15 text-destructive text-[10px] font-bold uppercase tracking-wide shrink-0">
                                                             Expired
                                                         </span>
                                                     </div>

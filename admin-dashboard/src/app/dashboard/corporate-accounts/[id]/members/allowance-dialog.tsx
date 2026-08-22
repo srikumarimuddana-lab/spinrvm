@@ -172,7 +172,7 @@ export default function AllowanceDialog({ companyId, member, onClose, onSaved }:
                         </>
                     )}
 
-                    {err && <p className="text-sm text-red-600">{err}</p>}
+                    {err && <p className="text-sm text-destructive">{err}</p>}
                 </div>
 
                 <DialogFooter>

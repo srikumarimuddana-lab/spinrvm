@@ -125,7 +125,7 @@ export default function LiveRideTrackingPage() {
                                 <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Driver</p>
                                 <div className="flex items-center gap-3">
                                     <div className="w-9 h-9 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center shrink-0">
-                                        <Car className="h-4 w-4 text-emerald-600" />
+                                        <Car className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
                                     </div>
                                     <div>
                                         <p className="text-sm font-semibold">{ride.driver_name}</p>
@@ -146,7 +146,7 @@ export default function LiveRideTrackingPage() {
                                 <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Rider</p>
                                 <div className="flex items-center gap-3">
                                     <div className="w-9 h-9 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center shrink-0">
-                                        <User className="h-4 w-4 text-blue-600" />
+                                        <User className="h-4 w-4 text-blue-600 dark:text-blue-400" />
                                     </div>
                                     <div>
                                         <p className="text-sm font-semibold">{ride.rider_name}</p>

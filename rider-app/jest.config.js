@@ -47,9 +47,9 @@ module.exports = {
   },
   // R-P1-22: Enforce minimum coverage thresholds before merging to main.
   // ACTION_ITEMS.md B37: was scoped to store/ only (6 of ~96 source
-  // files) -- widened 2026-08-22 in two steps: first hooks/+utils/
-  // (smaller, more unit-testable), then app/ (the actual screens).
-  // components/, lib/, services/ remain outside collectCoverageFrom.
+  // files) -- widened 2026-08-22 in three steps: hooks/+utils/ (smaller,
+  // more unit-testable), then app/ (the actual screens), then
+  // components/. lib/, services/ remain outside collectCoverageFrom.
   collectCoverageFrom: [
     'store/**/*.ts',
     '!store/**/__tests__/**',
@@ -64,20 +64,24 @@ module.exports = {
     'app/**/*.{ts,tsx}',
     '!app/**/__tests__/**',
     '!app/**/*.d.ts',
+    'components/**/*.{ts,tsx}',
+    '!components/**/__tests__/**',
+    '!components/**/*.d.ts',
   ],
   coverageThreshold: {
     global: {
       // ACTION_ITEMS.md B37: dropped to real-measured-minus-headroom for
       // the widened file set. app/ (the actual screens, mostly untested)
-      // dragged the aggregate down sharply -- measured 2026-08-22 after
-      // adding app/: lines 18.6%, functions 14.43%, branches 13.57% (was
-      // 68.09%/64.62%/56.79% before app/ was included). This is the honest
-      // number, not a regression -- app/ was never measured before. Set a
-      // few points below so the gate lands green. Ratchet up as app/
-      // screens get tests -- do not raise without re-measuring first.
-      lines: 15,
-      functions: 11,
-      branches: 10,
+      // dragged the aggregate down sharply from 68.09%/64.62%/56.79%
+      // (hooks+utils-only). Re-measured 2026-08-22 after also adding
+      // components/: lines 20.23%, statements 20.13%, functions 16.85%,
+      // branches 15.48% (was 18.6%/18.18%/14.43%/13.57% with app/ alone --
+      // components/ nudged the aggregate up slightly). Set a few points
+      // below so the gate lands green. Ratchet up as app/+components/
+      // get tests -- do not raise without re-measuring first.
+      lines: 17,
+      functions: 13,
+      branches: 12,
     },
   },
 };

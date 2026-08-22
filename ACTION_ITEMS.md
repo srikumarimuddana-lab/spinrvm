@@ -7251,11 +7251,18 @@ record of what was assumed vs. what was actually true</summary>
     not). admin-dashboard: confirmed passing on the same run used to
     measure the numbers above, no re-run needed since thresholds were
     unchanged.
-  - **Still open, deliberately not done here:** rider-app's `components/`
-    (18 files) and both apps' `lib/`, `services/`, `api/` remain outside
-    `collectCoverageFrom`. This is the next incremental widening step —
-    same pattern: widen one directory, measure, set threshold to
-    measured-minus-headroom, land green, repeat.
+- **Fix applied (rider-app's `components/`, 2026-08-22, same-day
+  follow-up):** widened rider-app's `collectCoverageFrom` to add
+  `components/**/*.{ts,tsx}` (18 files — driver-app's `components/` was
+  already included from sub-item 3). Re-measured: **20.23% lines / 20.13%
+  statements / 16.85% functions / 15.48% branches** — a small bump from
+  the app/-only 18.6%/18.18%/14.43%/13.57%. Threshold reset to `lines:17,
+  functions:13, branches:12`. Verified locally: `yarn jest --coverage`
+  exits 0 against the new thresholds (70/70 suites clean).
+  - **Still open, deliberately not done here:** both apps' `lib/`,
+    `services/`, `api/` remain outside `collectCoverageFrom`. This is the
+    next incremental widening step — same pattern: widen one directory,
+    measure, set threshold to measured-minus-headroom, land green, repeat.
 - **What's wrong (three distinct, compounding gaps):**
   1. **admin-dashboard's coverage threshold is configured but structurally
      dead in CI.** `admin-dashboard/vitest.config.ts` sets real thresholds
@@ -7330,13 +7337,14 @@ record of what was assumed vs. what was actually true</summary>
      lands green. See "Fix applied" above.
   2. ✅ **DONE** — rider-app / driver-app: widened `collectCoverageFrom`
      to add `hooks/` and `utils/`, then `app/` (all three apps, including
-     admin-dashboard's non-dashboard route groups), re-measuring and
-     re-setting the threshold at each step. See both "Fix applied"
-     sections above. **Still open:** rider-app's `components/`, and both
-     rider-app's and driver-app's remaining `lib/`/`services/`/`api/`.
-     Continue the same incremental pattern: widen one directory, measure,
-     set threshold to measured-minus-headroom, land green, repeat — never
-     widen and raise the bar in the same change.
+     admin-dashboard's non-dashboard route groups), then rider-app's
+     `components/` (driver-app's was already included from sub-item 3),
+     re-measuring and re-setting the threshold at each step. See all
+     "Fix applied" sections above. **Still open:** both rider-app's and
+     driver-app's remaining `lib/`/`services/`/`api/`. Continue the same
+     incremental pattern: widen one directory, measure, set threshold to
+     measured-minus-headroom, land green, repeat — never widen and raise
+     the bar in the same change.
   3. Track milestones here or in a dedicated coverage-ratchet doc (mirror
      `pytest.ini`'s comment style) so the next session doesn't have to
      re-discover the current baseline by re-running the tools.
@@ -7363,11 +7371,12 @@ record of what was assumed vs. what was actually true</summary>
 - **Acceptance:** ✅ `ci.yml`'s admin-dashboard step runs with `--coverage`
   and passes against a threshold matched to reality. ✅ all three apps
   widened to also measure `hooks/`+`utils/`+`app/` (admin-dashboard: all
-  of `src/app/**`), passing at the new thresholds.
-  **Still open:** widen rider-app's `components/` and both rider-app's and
-  driver-app's remaining `lib/`/`services/`/`api/`, each with a matching
-  threshold drop, landing green every step; a milestone ratchet plan
-  recorded (here or in a dedicated doc) toward the user's stated 100%
+  of `src/app/**`) plus rider-app's `components/`, passing at the new
+  thresholds.
+  **Still open:** widen both rider-app's and driver-app's remaining
+  `lib/`/`services/`/`api/`, each with a matching threshold drop, landing
+  green every step; a milestone ratchet plan recorded (here or in a
+  dedicated doc) toward the user's stated 100%
   target.
 
 ### B38. admin-dashboard's visual-regression CI job has zero committed baselines — it has been a documented no-op since it was added

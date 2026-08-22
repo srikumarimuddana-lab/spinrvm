@@ -511,10 +511,30 @@ class TestDocumentRegressions:
         Previously the router in routes/websocket.py was never imported or
         included in server.py, causing all WebSocket upgrade requests to return
         403 Forbidden instead of 101 Switching Protocols.
+
+        FastAPI's fastapi-stack bump (2026-08-22, 0.136.1 -> 0.141.1) changed
+        include_router()'s internal representation: a nested router (like
+        server.py's v1_api_router, which routes/websocket.py's router is
+        included into) is no longer eagerly flattened into app.routes -- it's
+        wrapped in a lazy `_IncludedRouter` whose real routes live on
+        `.original_router.routes`. Actual HTTP/WS dispatch is unaffected
+        (verified via TestClient against both the pre- and post-bump
+        versions: identical behavior), but this test's flat app.routes scan
+        needs to recurse through that wrapper to still find the real routes.
         """
         from backend.server import app
 
-        ws_routes = [r for r in app.routes if hasattr(r, "path") and r.path.startswith("/ws/")]
+        def _flatten(routes):
+            out = []
+            for r in routes:
+                original_router = getattr(r, "original_router", None)
+                if original_router is not None:
+                    out.extend(_flatten(original_router.routes))
+                else:
+                    out.append(r)
+            return out
+
+        ws_routes = [r for r in _flatten(app.routes) if hasattr(r, "path") and r.path.startswith("/ws/")]
         assert len(ws_routes) > 0, (
             "No WebSocket routes found — did you forget to include websocket_router in server.py?"
         )

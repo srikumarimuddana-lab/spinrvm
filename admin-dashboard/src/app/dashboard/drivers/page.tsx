@@ -1474,14 +1474,14 @@ export default function DriversPage() {
                                             if (ss === "expired") {
                                                 return (
                                                     <div className="flex items-center gap-3">
-                                                        <div className="w-9 h-9 rounded-xl bg-red-100 dark:bg-red-900/30 flex items-center justify-center shrink-0">
-                                                            <CreditCard className="h-4 w-4 text-red-600 dark:text-red-400" />
+                                                        <div className="w-9 h-9 rounded-xl bg-destructive/15 flex items-center justify-center shrink-0">
+                                                            <CreditCard className="h-4 w-4 text-destructive" />
                                                         </div>
                                                         <div className="flex-1 min-w-0">
-                                                            <p className="text-sm font-semibold text-red-700 dark:text-red-400">{plan || "Spinr Pass"}</p>
-                                                            <p className="text-xs text-red-600/80 dark:text-red-400/80 mt-0.5">{expLabel ? `Expired ${expLabel}` : "Subscription expired"}</p>
+                                                            <p className="text-sm font-semibold text-destructive">{plan || "Spinr Pass"}</p>
+                                                            <p className="text-xs text-destructive/80 mt-0.5">{expLabel ? `Expired ${expLabel}` : "Subscription expired"}</p>
                                                         </div>
-                                                        <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 text-[10px] font-bold uppercase tracking-wide shrink-0">
+                                                        <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-destructive/15 text-destructive text-[10px] font-bold uppercase tracking-wide shrink-0">
                                                             Expired
                                                         </span>
                                                     </div>

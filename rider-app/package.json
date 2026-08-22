@@ -42,7 +42,7 @@
     "@tanstack/react-query-persist-client": "^5.100.1",
     "@use-voltra/ios-client": "^2.0.0",
     "ajv": "^8.20.0",
-    "axios": "^1.18.0",
+    "axios": "^1.19.0",
     "expo": "~57.0.9",
     "expo-blur": "~57.0.2",
     "expo-build-properties": "~57.0.8",

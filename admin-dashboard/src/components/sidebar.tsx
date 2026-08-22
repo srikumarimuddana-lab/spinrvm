@@ -355,7 +355,7 @@ function SidebarInner() {
                                                     className={cn(
                                                         "shrink-0",
                                                         collapsed ? "h-[18px] w-[18px]" : "h-4 w-4",
-                                                        item.emphasize && !active && "text-amber-600 dark:text-amber-500",
+                                                        item.emphasize && !active && "text-warning",
                                                     )}
                                                 />
                                                 {!collapsed && item.label}
@@ -393,7 +393,7 @@ function SidebarInner() {
                                                                     the top-right corner. Tooltip
                                                                     above carries the actual count. */}
                                                                 {childBadge != null && childBadge > 0 && (
-                                                                    <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-amber-500 ring-2 ring-sidebar" />
+                                                                    <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-warning ring-2 ring-sidebar" />
                                                                 )}
                                                             </Link>
                                                         );
@@ -422,7 +422,7 @@ function SidebarInner() {
                                                                         when > 0 so a clean queue
                                                                         doesn't visually nag. */}
                                                                     {childBadge != null && childBadge > 0 && (
-                                                                        <span className="ml-auto bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full tabular-nums">
+                                                                        <span className="ml-auto bg-warning/15 text-warning text-[10px] font-bold px-1.5 py-0.5 rounded-full tabular-nums">
                                                                             {childBadge > 99 ? "99+" : childBadge}
                                                                         </span>
                                                                     )}

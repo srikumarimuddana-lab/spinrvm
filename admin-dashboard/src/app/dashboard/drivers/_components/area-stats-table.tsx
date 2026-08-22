@@ -76,7 +76,7 @@ export default function AreaStatsTable({ areaStats, loading, onAreaClick }: {
                                     <span className="text-warning font-medium">{area.unverified}</span>
                                 </td>
                                 <td className="py-2.5 px-3 text-right">{area.total_rides.toLocaleString()}</td>
-                                <td className="py-2.5 px-3 text-right text-emerald-600 font-medium">{formatCurrency(area.total_earnings)}</td>
+                                <td className="py-2.5 px-3 text-right text-success font-medium">{formatCurrency(area.total_earnings)}</td>
                             </tr>
                         ))}
                     </tbody>

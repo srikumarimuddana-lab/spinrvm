@@ -13,10 +13,9 @@ import {
     Flag, Clock, Loader2, StickyNote,
 } from "lucide-react";
 
-// Categorical note-category map (5 states) — badges what kind of staff note
-// this is, not a live good/bad status, so a semantic token doesn't cleanly
-// apply to every state (e.g. "document"/"general" carry no sentiment). (#2816)
-/* eslint-disable no-restricted-syntax -- categorical note-category map, not a status signal (#2816) */
+/* eslint-disable no-restricted-syntax -- categorical note-type map (5 distinct
+   types), not a success/warning/destructive signal — too many states for the
+   3-token system, see comment above (#2816) */
 const CATEGORIES = [
     { value: "general", label: "General", icon: MessageSquare, color: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" },
     { value: "warning", label: "Warning", icon: AlertTriangle, color: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" },

@@ -50,7 +50,7 @@ export default function RideComplaintForm({ open, onClose, rideId, onCreated }: 
             <DialogContent className="sm:max-w-md">
                 <DialogHeader>
                     <DialogTitle className="flex items-center gap-2">
-                        <FileWarning className="h-5 w-5 text-amber-500" />
+                        <FileWarning className="h-5 w-5 text-warning" />
                         Raise Complaint
                     </DialogTitle>
                 </DialogHeader>

@@ -79,7 +79,7 @@ export default function CompanyPortalLandingPage() {
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-3">
-                                    <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
+                                    <Badge className="bg-success/15 text-success hover:bg-success/15">
                                         {p.membership.role}
                                     </Badge>
                                     <ChevronRight className="h-4 w-4 text-muted-foreground" />

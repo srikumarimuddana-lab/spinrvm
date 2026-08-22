@@ -243,8 +243,8 @@ export function LegacyBookingImport() {
                 </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-                <div className="flex gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-900 dark:bg-amber-950/40">
-                    <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                <div className="flex gap-2 rounded-md border border-warning bg-warning/10 p-3 text-sm">
+                    <Info className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
                     <div className="space-y-1">
                         <p className="font-medium">Driver payouts were already settled off-platform.</p>
                         <p className="text-muted-foreground">
@@ -380,7 +380,7 @@ export function LegacyBookingImport() {
                         ) : null}
 
                         {committed?.committed ? (
-                            <div className="flex items-center gap-2 rounded-md border border-green-300 bg-green-50 p-3 text-sm dark:border-green-900 dark:bg-green-950/40">
+                            <div className="flex items-center gap-2 rounded-md border border-success bg-success/10 p-3 text-sm">
                                 <CheckCircle2 className="h-4 w-4 text-success" />
                                 <span>
                                     Imported {committed.imported_rides} ride(s) and{" "}

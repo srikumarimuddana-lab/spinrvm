@@ -119,7 +119,7 @@ export default function CompanyPortalLayout({
                                 {profile?.company.name ?? "Loading…"}
                             </div>
                             {profile?.membership.role && (
-                                <Badge className="mt-1 text-[10px] bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
+                                <Badge className="mt-1 text-[10px] bg-success/15 text-success hover:bg-success/15">
                                     {profile.membership.role}
                                 </Badge>
                             )}

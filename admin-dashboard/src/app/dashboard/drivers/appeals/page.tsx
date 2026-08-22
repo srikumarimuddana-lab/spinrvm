@@ -236,8 +236,8 @@ export default function DriverAppealsPage() {
                   </div>
                 </>
               ) : (
-                <div className={`rounded-lg p-3 space-y-1 ${selected.status === "approved" ? "bg-green-50 dark:bg-green-950/30" : "bg-red-50 dark:bg-red-950/30"}`}>
-                  <p className={`text-sm font-medium ${selected.status === "approved" ? "text-green-700 dark:text-green-400" : "text-red-700 dark:text-red-400"}`}>
+                <div className={`rounded-lg p-3 space-y-1 ${selected.status === "approved" ? "bg-success/10" : "bg-destructive/10"}`}>
+                  <p className={`text-sm font-medium ${selected.status === "approved" ? "text-success" : "text-destructive"}`}>
                     {selected.status === "approved" ? "Approved" : "Denied"}
                   </p>
                   {selected.admin_note && <p className="text-xs text-muted-foreground">Note: {selected.admin_note}</p>}

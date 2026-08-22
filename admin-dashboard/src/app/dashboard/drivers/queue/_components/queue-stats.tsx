@@ -49,10 +49,14 @@ export function QueueStats({ stats }: QueueStatsProps) {
             {cards.map((c) => {
                 const Icon = c.icon;
                 const toneClass = {
+                    // "blue" has no semantic-token equivalent (only success/warning/destructive
+                    // exist) — kept as a hand-picked neutral-informational color for the
+                    // always-present "Pending" count, which isn't itself a good/bad signal. (#2816)
+                    // eslint-disable-next-line no-restricted-syntax -- see comment above (#2816)
                     blue: "bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300",
-                    emerald: "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300",
-                    amber: "bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300",
-                    red: "bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300",
+                    emerald: "bg-success/15 text-success",
+                    amber: "bg-warning/15 text-warning",
+                    red: "bg-destructive/15 text-destructive",
                 }[c.tone];
                 return (
                     <div key={c.label} className="rounded-xl border border-border bg-card p-4">

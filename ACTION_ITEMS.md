@@ -7259,10 +7259,44 @@ record of what was assumed vs. what was actually true</summary>
   the app/-only 18.6%/18.18%/14.43%/13.57%. Threshold reset to `lines:17,
   functions:13, branches:12`. Verified locally: `yarn jest --coverage`
   exits 0 against the new thresholds (70/70 suites clean).
-  - **Still open, deliberately not done here:** both apps' `lib/`,
-    `services/`, `api/` remain outside `collectCoverageFrom`. This is the
-    next incremental widening step — same pattern: widen one directory,
-    measure, set threshold to measured-minus-headroom, land green, repeat.
+- **Fix applied (`lib/`+`services/`, both apps — 2026-08-22, same-day
+  follow-up):** widened both apps' `collectCoverageFrom` to add `lib/`
+  and `services/`. `api/` deliberately left out (rider-app: 2 files;
+  driver-app: 1 file — small enough that a future pass can add it
+  alongside `api/` on whichever app touches it next, not worth its own
+  measure-and-threshold round here).
+  - rider-app: `lib/` (3 files) + `services/` (2 files) added. Re-measured:
+    20.08% lines / 19.96% statements / 16.77% functions / 15.47% branches
+    — a negligible shift from the `components/`-included
+    20.23%/20.13%/16.85%/15.48% (these 5 files are small). Threshold left
+    unchanged at `lines:17, functions:13, branches:12` — still
+    comfortably below the (barely moved) measured numbers.
+  - driver-app: `lib/` (22 files) + `services/` (3 files) added — a real
+    bump here, unlike rider-app's tiny addition. Re-measured: **32.91%
+    lines / 31.97% statements / 26.26% functions** (no `branches` key,
+    matching this config's pre-existing pattern) — up from the
+    `app/`-only 27.35%/26.38%/21.23%. Threshold raised to `lines:29,
+    functions:23, statements:28` to track the real improvement (this is
+    the first *raise*, not just a reset, in this ratchet — justified
+    because the new measured numbers, not just a wider file set, moved
+    up).
+  - Verified locally: both apps' `yarn jest --coverage` exit 0 against
+    the final thresholds. driver-app's `ActivityView.test.tsx` flaked
+    twice more across these final runs (5 occurrences total this
+    session) before each landed a clean 74/74 pass. This is the exact
+    failure shape (test name, 5000ms timeout message) already tracked as
+    C37 (`RideOfferPanel.test.tsx`'s leaked `Animated` timer corrupting
+    the shared Jest worker) — C37 itself flagged that a recurrence "with
+    a different preceding-file stack trace... is a separate leak to
+    root-cause the same way" and its own local verification wasn't run
+    under the worker-contention conditions that make this intermittent.
+    Not re-diagnosed here (out of scope for this coverage-widening work;
+    no console.error output was captured to confirm the same or a new
+    leak source, since these runs used `--silent`) — flagging the
+    recurrence against C37 rather than filing a duplicate new entry.
+  - **Still open, deliberately not done here:** both apps' `api/` (2
+    rider-app files, 1 driver-app file) remain outside
+    `collectCoverageFrom` — the last, smallest remaining gap.
 - **What's wrong (three distinct, compounding gaps):**
   1. **admin-dashboard's coverage threshold is configured but structurally
      dead in CI.** `admin-dashboard/vitest.config.ts` sets real thresholds
@@ -7339,12 +7373,13 @@ record of what was assumed vs. what was actually true</summary>
      to add `hooks/` and `utils/`, then `app/` (all three apps, including
      admin-dashboard's non-dashboard route groups), then rider-app's
      `components/` (driver-app's was already included from sub-item 3),
-     re-measuring and re-setting the threshold at each step. See all
-     "Fix applied" sections above. **Still open:** both rider-app's and
-     driver-app's remaining `lib/`/`services/`/`api/`. Continue the same
-     incremental pattern: widen one directory, measure, set threshold to
-     measured-minus-headroom, land green, repeat — never widen and raise
-     the bar in the same change.
+     then both apps' `lib/`+`services/`, re-measuring and re-setting the
+     threshold at each step. See all "Fix applied" sections above.
+     **Still open:** both apps' `api/` (2 rider-app files, 1 driver-app
+     file) — small enough that it's the last remaining gap, not urgent.
+     Continue the same incremental pattern if picked up: widen, measure,
+     set threshold to measured-minus-headroom, land green — never widen
+     and raise the bar in the same change.
   3. Track milestones here or in a dedicated coverage-ratchet doc (mirror
      `pytest.ini`'s comment style) so the next session doesn't have to
      re-discover the current baseline by re-running the tools.
@@ -7371,12 +7406,11 @@ record of what was assumed vs. what was actually true</summary>
 - **Acceptance:** ✅ `ci.yml`'s admin-dashboard step runs with `--coverage`
   and passes against a threshold matched to reality. ✅ all three apps
   widened to also measure `hooks/`+`utils/`+`app/` (admin-dashboard: all
-  of `src/app/**`) plus rider-app's `components/`, passing at the new
-  thresholds.
-  **Still open:** widen both rider-app's and driver-app's remaining
-  `lib/`/`services/`/`api/`, each with a matching threshold drop, landing
-  green every step; a milestone ratchet plan recorded (here or in a
-  dedicated doc) toward the user's stated 100%
+  of `src/app/**`) plus rider-app's `components/` and both apps'
+  `lib/`+`services/`, passing at the new thresholds.
+  **Still open:** widen both apps' `api/` (last remaining gap, 2-3 files
+  total), with a matching threshold check; a milestone ratchet plan
+  recorded (here or in a dedicated doc) toward the user's stated 100%
   target.
 
 ### B38. admin-dashboard's visual-regression CI job has zero committed baselines — it has been a documented no-op since it was added
@@ -12553,6 +12587,20 @@ how much they de-risk a public launch._
   CI run with a *different* preceding-file stack trace, that's a separate
   leak to root-cause the same way (read the actual job log, don't
   re-assume the same cause).
+- **Recurrence observed 2026-08-22 (B37 coverage-widening work):** the
+  exact same test/timeout ("keeps ride history visible when earnings
+  loading fails", `Exceeded timeout of 5000 ms`) recurred **5 times**
+  across repeated `yarn jest --coverage` full-suite runs in one session,
+  always clearing on an immediate retry. Not re-diagnosed (runs used
+  `--silent`, so no `console.error`/act-warning output was captured to
+  confirm whether this is the same leak surfacing again under different
+  worker-scheduling luck, or a new leak with the same symptom) — flagging
+  the recurrence rate here rather than reopening this item speculatively.
+  If it keeps showing up, the next session should re-run with
+  `--verbose`/without `--silent` to capture the actual preceding-file
+  stack trace per this item's own "read the actual job log" guidance,
+  rather than assuming the `RideOfferPanel.test.tsx` fix above is still
+  the cause.
 - **Files:** likely `driver-app/__tests__/components/ActivityView.test.tsx`
   plus whichever earlier-running test file in the same Jest worker is the
   actual source, per the same investigative pattern used for C31.

@@ -47,9 +47,10 @@ module.exports = {
   },
   // R-P1-22: Enforce minimum coverage thresholds before merging to main.
   // ACTION_ITEMS.md B37: was scoped to store/ only (6 of ~96 source
-  // files) -- widened 2026-08-22 in three steps: hooks/+utils/ (smaller,
+  // files) -- widened 2026-08-22 in four steps: hooks/+utils/ (smaller,
   // more unit-testable), then app/ (the actual screens), then
-  // components/. lib/, services/ remain outside collectCoverageFrom.
+  // components/, then lib/+services/. api/ remains outside
+  // collectCoverageFrom.
   collectCoverageFrom: [
     'store/**/*.ts',
     '!store/**/__tests__/**',
@@ -67,17 +68,24 @@ module.exports = {
     'components/**/*.{ts,tsx}',
     '!components/**/__tests__/**',
     '!components/**/*.d.ts',
+    'lib/**/*.{ts,tsx}',
+    '!lib/**/__tests__/**',
+    '!lib/**/*.d.ts',
+    'services/**/*.{ts,tsx}',
+    '!services/**/__tests__/**',
+    '!services/**/*.d.ts',
   ],
   coverageThreshold: {
     global: {
       // ACTION_ITEMS.md B37: dropped to real-measured-minus-headroom for
       // the widened file set. app/ (the actual screens, mostly untested)
       // dragged the aggregate down sharply from 68.09%/64.62%/56.79%
-      // (hooks+utils-only). Re-measured 2026-08-22 after also adding
-      // components/: lines 20.23%, statements 20.13%, functions 16.85%,
-      // branches 15.48% (was 18.6%/18.18%/14.43%/13.57% with app/ alone --
-      // components/ nudged the aggregate up slightly). Set a few points
-      // below so the gate lands green. Ratchet up as app/+components/
+      // (hooks+utils-only). Re-measured 2026-08-22 after adding
+      // components/, then lib/+services/ (5 more files, negligible
+      // aggregate shift): lines 20.08%, statements 19.96%, functions
+      // 16.77%, branches 15.47%. Thresholds unchanged from the
+      // components/-only step -- still comfortably below the current
+      // measured numbers. Ratchet up as app/+components/+lib/+services/
       // get tests -- do not raise without re-measuring first.
       lines: 17,
       functions: 13,

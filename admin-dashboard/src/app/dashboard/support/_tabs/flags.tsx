@@ -120,7 +120,7 @@ export default function FlagsTab() {
 
             {/* Detail Dialog */}
             <Dialog open={!!selected && !dialogOpen} onOpenChange={(o) => { if (!o) setSelected(null); }}>
-                <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle className="text-base flex items-center gap-2"><Flag className="h-4 w-4 text-amber-500" />Flag Details</DialogTitle></DialogHeader>
+                <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle className="text-base flex items-center gap-2"><Flag className="h-4 w-4 text-warning" />Flag Details</DialogTitle></DialogHeader>
                     {selected && (<div className="space-y-3">
                         <div className="grid grid-cols-2 gap-3 text-sm">
                             <div><Label className="text-[10px] text-muted-foreground">Target Type</Label><p className="capitalize">{selected.target_type}</p></div>

@@ -7821,7 +7821,23 @@ record of what was assumed vs. what was actually true</summary>
   typed to always resolve a bare `string`. `yarn tsc --noEmit` now
   passes clean on both apps. This sub-item is **still not closed** —
   continuing screen-by-screen in further sessions per the user's
-  explicit instruction.
+  explicit instruction. **Continued, same day:** rider-app's
+  `lost-and-found-chat.tsx` (support chat with a 10s foreground poll
+  gated on `AppState.currentState === 'active'`) and `become-driver.tsx`
+  (5-step Intro/Personal/Vehicle/Documents/Review wizard — driver-app
+  deep-link detection with app-store fallback, dynamic per-requirement
+  document upload/expiry mapped into the submit payload, 9-year vehicle-
+  age rejection). New footgun hit in `become-driver.tsx`'s test:
+  `findAllByProps({ placeholder: ... })` on a `TextInput` matches BOTH
+  the composite element and its underlying host node for the same field,
+  doubling the array (2 fields → 4 matches, not 2) — indices silently
+  landed on the same field twice while the second field's input was
+  never actually filled, first surfacing as a validation toast for a
+  field the test believed it had already set. Fixed by filtering
+  `findAllByType(TextInput)` by `.props.placeholder` instead of using
+  `findAllByProps` directly. 29 more tests (14 + 15); full rider-app
+  suite still green (916), `yarn tsc --noEmit` clean. **56 of 76 screens
+  done, ~20 remain at 0%.**
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

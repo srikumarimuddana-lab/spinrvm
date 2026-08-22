@@ -36,16 +36,16 @@ jest.mock('@shared/config/spinr.config', () => ({
 }));
 
 const mockSetBackgroundMessageHandler = jest.fn();
-const mockGetAppCheckToken = jest.fn(() => Promise.resolve(null));
-const mockInitFirebaseServices = jest.fn(() => Promise.resolve());
+const mockGetAppCheckToken = jest.fn((..._a: unknown[]) => Promise.resolve(null));
+const mockInitFirebaseServices = jest.fn((..._a: unknown[]) => Promise.resolve());
 jest.mock('@shared/services/firebase', () => ({
   setBackgroundMessageHandler: (h: unknown) => mockSetBackgroundMessageHandler(h),
   getAppCheckToken: (...a: unknown[]) => mockGetAppCheckToken(...a),
   initFirebaseServices: (...a: unknown[]) => mockInitFirebaseServices(...a),
 }));
 
-const mockSetItem = jest.fn(() => Promise.resolve());
-const mockRemoveItem = jest.fn(() => Promise.resolve());
+const mockSetItem = jest.fn((..._a: unknown[]) => Promise.resolve());
+const mockRemoveItem = jest.fn((..._a: unknown[]) => Promise.resolve());
 jest.mock('@react-native-async-storage/async-storage', () => ({
   __esModule: true,
   default: {
@@ -54,7 +54,7 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
   },
 }));
 
-const mockGetBackgroundAuthToken = jest.fn(() => Promise.resolve('driver-token'));
+const mockGetBackgroundAuthToken = jest.fn((..._a: unknown[]): Promise<string | null> => Promise.resolve('driver-token'));
 jest.mock('../../utils/backgroundLocation', () => ({
   getBackgroundAuthToken: (...a: unknown[]) => mockGetBackgroundAuthToken(...a),
   recoverTripLocation: jest.fn(() => Promise.resolve()),
@@ -67,8 +67,8 @@ jest.mock('@notifee/react-native', () => ({
 }));
 
 const mockParseRideOfferEvent = jest.fn();
-const mockDisplayRideOfferNotification = jest.fn(() => Promise.resolve());
-const mockDismissRideOfferNotification = jest.fn(() => Promise.resolve());
+const mockDisplayRideOfferNotification = jest.fn((..._a: unknown[]) => Promise.resolve());
+const mockDismissRideOfferNotification = jest.fn((..._a: unknown[]) => Promise.resolve());
 jest.mock('../../services/notifeeService', () => ({
   parseRideOfferEvent: (...a: unknown[]) => mockParseRideOfferEvent(...a),
   displayRideOfferNotification: (...a: unknown[]) => mockDisplayRideOfferNotification(...a),

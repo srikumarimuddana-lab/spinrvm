@@ -206,6 +206,7 @@ function NeedsUpdateSection({
 
     return (
         <div className="space-y-2">
+            {/* eslint-disable-next-line no-restricted-syntax -- decorative section-header accent, not a status signal (#2816) */}
             <h3 className="flex items-center gap-2 text-sm font-semibold text-sky-600">
                 <RefreshCw className="h-4 w-4" /> Already mapped — review to update ({items.length})
             </h3>

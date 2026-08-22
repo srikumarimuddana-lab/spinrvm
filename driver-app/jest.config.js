@@ -12,16 +12,16 @@ module.exports = {
   transformIgnorePatterns: [
     'node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules|sentry-expo|native-base|react-native-svg|@shared/.*)'
   ],
-  // ACTION_ITEMS.md B37 sub-item 3: was scoped to store/+components/ only
-  // (29 of ~116 source files) -- widened 2026-08-22 to also include hooks/
-  // and utils/ (smaller, more unit-testable than app/ screens, the next
-  // widening step). app/, lib/, api/, services/ remain outside
-  // collectCoverageFrom for now.
+  // ACTION_ITEMS.md B37: was scoped to store/+components/ only (29 of
+  // ~116 source files) -- widened 2026-08-22 in two steps: first
+  // hooks/+utils/ (smaller, more unit-testable), then app/ (the actual
+  // screens). lib/, api/, services/ remain outside collectCoverageFrom.
   collectCoverageFrom: [
     'store/**/*.{ts,tsx}',
     'components/**/*.{ts,tsx}',
     'hooks/**/*.{ts,tsx}',
     'utils/**/*.{ts,tsx}',
+    'app/**/*.{ts,tsx}',
     '!**/*.d.ts',
     '!**/node_modules/**',
     '!**/__tests__/**',
@@ -29,14 +29,17 @@ module.exports = {
   coverageThreshold: {
     global: {
       // ACTION_ITEMS.md B37: dropped to real-measured-minus-headroom for
-      // the widened file set. Measured 2026-08-22 after adding hooks/ and
-      // utils/: lines 47.62%, statements 45.65%, functions 39.68% (no
-      // `branches` key here, matching this config's pre-existing pattern).
-      // Ratchet up as tests are added -- do not raise without re-measuring
-      // first.
-      lines: 43,
-      functions: 36,
-      statements: 42,
+      // the widened file set. app/ (the actual screens, mostly untested)
+      // dragged the aggregate down sharply -- measured 2026-08-22 after
+      // adding app/: lines 27.35%, statements 26.38%, functions 21.23%
+      // (was 47.62%/45.65%/39.68% before app/ was included; no `branches`
+      // key here, matching this config's pre-existing pattern). This is
+      // the honest number, not a regression -- app/ was never measured
+      // before. Ratchet up as app/ screens get tests -- do not raise
+      // without re-measuring first.
+      lines: 24,
+      functions: 18,
+      statements: 23,
     },
   },
   moduleNameMapper: {

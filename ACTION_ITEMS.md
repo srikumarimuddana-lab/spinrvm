@@ -7215,6 +7215,47 @@ record of what was assumed vs. what was actually true</summary>
     immediate retry (74/74 suites passed, same coverage numbers); not
     investigated or fixed here, per CLAUDE.md's "re-run once to confirm a
     flake" guidance.
+- **Fix applied (app/ screens, all three apps — 2026-08-22, same-day
+  follow-up):** widened `collectCoverageFrom`/`coverage.include` on all
+  three apps to also measure `app/` (rider-app, driver-app) or the rest of
+  `src/app/**` beyond `dashboard/` (admin-dashboard) — the directory that
+  matters most, since it's where a shipped-untested screen would actually
+  live.
+  - rider-app: added `app/**/*.{ts,tsx}`. Re-measured: **18.6% lines /
+    18.18% statements / 14.43% functions / 13.57% branches** — a sharp
+    drop from the hooks/utils-only 68.09%/67.76%/64.62%/56.79% above, but
+    this is the honest number, not a regression: `app/`'s 48 screen files
+    were never measured before and are mostly untested. Threshold reset
+    to `lines: 15, functions: 11, branches: 10`.
+  - driver-app: added `app/**/*.{ts,tsx}`. Re-measured: **27.35% lines /
+    26.38% statements / 21.23% functions** (no `branches` key, matching
+    this config's pre-existing pattern) — down from 47.62%/45.65%/39.68%.
+    Threshold reset to `lines: 24, functions: 18, statements: 23`.
+  - admin-dashboard: `coverage.include`'s `src/app/dashboard/**` widened
+    to all of `src/app/**`, picking up `login/`, `register/`,
+    `company-login/`, `company-portal/`, `company-signup/`, `track/`,
+    `403/` — route groups the dashboard-only scope missed entirely.
+    Re-measured: 20.63% lines / 19% statements / 12.98% branches / 11.66%
+    functions — close enough to the dashboard-only numbers (21.80% /
+    19.94% / 13.56% / 11.88%) that the existing thresholds
+    (`branches:10, functions:10, lines:18, statements:15`) still hold
+    without further lowering.
+  - Verified locally: all three re-run against final thresholds, all
+    exit 0. rider-app: 70/70 suites clean. driver-app: hit the
+    `ActivityView.test.tsx` flake twice more across these widening runs
+    (3 occurrences total this session) before a clean 74/74 pass —
+    consistent enough across independent runs that it's worth flagging as
+    a real intermittent flake, not one-off bad luck, though still not
+    investigated or touched here (out of scope; the coverage numbers and
+    threshold pass/fail are identical whether this one test flakes or
+    not). admin-dashboard: confirmed passing on the same run used to
+    measure the numbers above, no re-run needed since thresholds were
+    unchanged.
+  - **Still open, deliberately not done here:** rider-app's `components/`
+    (18 files) and both apps' `lib/`, `services/`, `api/` remain outside
+    `collectCoverageFrom`. This is the next incremental widening step —
+    same pattern: widen one directory, measure, set threshold to
+    measured-minus-headroom, land green, repeat.
 - **What's wrong (three distinct, compounding gaps):**
   1. **admin-dashboard's coverage threshold is configured but structurally
      dead in CI.** `admin-dashboard/vitest.config.ts` sets real thresholds
@@ -7287,14 +7328,12 @@ record of what was assumed vs. what was actually true</summary>
      step at `npm run test:coverage` so the already-configured thresholds
      actually run, with thresholds dropped to real-minus-headroom so it
      lands green. See "Fix applied" above.
-  2. ✅ **DONE (partial)** — rider-app / driver-app: widened
-     `collectCoverageFrom` to add `hooks/` and `utils/` (the smaller,
-     more unit-testable directories), re-measured, and re-set the
-     threshold at the new level. See "Fix applied" above. **Still open:**
-     `app/` screens (the largest directory in each app, and the one that
-     matters most — this is where an untested booking/payment flow would
-     actually ship undetected) is the next widening step, plus rider-app's
-     `components/`, and both apps' remaining `lib/`/`services/`/`api/`.
+  2. ✅ **DONE** — rider-app / driver-app: widened `collectCoverageFrom`
+     to add `hooks/` and `utils/`, then `app/` (all three apps, including
+     admin-dashboard's non-dashboard route groups), re-measuring and
+     re-setting the threshold at each step. See both "Fix applied"
+     sections above. **Still open:** rider-app's `components/`, and both
+     rider-app's and driver-app's remaining `lib/`/`services/`/`api/`.
      Continue the same incremental pattern: widen one directory, measure,
      set threshold to measured-minus-headroom, land green, repeat — never
      widen and raise the bar in the same change.
@@ -7322,10 +7361,11 @@ record of what was assumed vs. what was actually true</summary>
   reproduced in full here, only the aggregate) matches the same shape as
   the backend's per-module pattern.
 - **Acceptance:** ✅ `ci.yml`'s admin-dashboard step runs with `--coverage`
-  and passes against a threshold matched to reality. ✅ rider-app/driver-app
-  widened to also measure `hooks/`+`utils/`, passing at the new thresholds.
-  **Still open:** widen `app/` (all three apps), rider-app's `components/`,
-  and both apps' remaining `lib/`/`services/`/`api/`, each with a matching
+  and passes against a threshold matched to reality. ✅ all three apps
+  widened to also measure `hooks/`+`utils/`+`app/` (admin-dashboard: all
+  of `src/app/**`), passing at the new thresholds.
+  **Still open:** widen rider-app's `components/` and both rider-app's and
+  driver-app's remaining `lib/`/`services/`/`api/`, each with a matching
   threshold drop, landing green every step; a milestone ratchet plan
   recorded (here or in a dedicated doc) toward the user's stated 100%
   target.

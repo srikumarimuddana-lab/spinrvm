@@ -46,11 +46,10 @@ module.exports = {
     'expo/src/winter/index': '<rootDir>/__mocks__/expo-winter-stub.js',
   },
   // R-P1-22: Enforce minimum coverage thresholds before merging to main.
-  // ACTION_ITEMS.md B37 sub-item 2: was scoped to store/ only (6 of ~96
-  // source files) -- widened 2026-08-22 to also include hooks/ and utils/
-  // (smaller, more unit-testable than app/ screens, which are covered by
-  // e2e instead and are the next widening step). app/, components/,
-  // lib/, services/ remain outside collectCoverageFrom for now.
+  // ACTION_ITEMS.md B37: was scoped to store/ only (6 of ~96 source
+  // files) -- widened 2026-08-22 in two steps: first hooks/+utils/
+  // (smaller, more unit-testable), then app/ (the actual screens).
+  // components/, lib/, services/ remain outside collectCoverageFrom.
   collectCoverageFrom: [
     'store/**/*.ts',
     '!store/**/__tests__/**',
@@ -62,17 +61,23 @@ module.exports = {
     'utils/**/*.{ts,tsx}',
     '!utils/**/__tests__/**',
     '!utils/**/*.d.ts',
+    'app/**/*.{ts,tsx}',
+    '!app/**/__tests__/**',
+    '!app/**/*.d.ts',
   ],
   coverageThreshold: {
     global: {
       // ACTION_ITEMS.md B37: dropped to real-measured-minus-headroom for
-      // the widened file set. Measured 2026-08-22 after adding hooks/ and
-      // utils/: lines 68.09%, functions 64.62%, branches 56.79%. Set a few
-      // points below so the gate lands green, not red on main. Ratchet up
-      // as tests are added -- do not raise without re-measuring first.
-      lines: 63,
-      functions: 60,
-      branches: 52,
+      // the widened file set. app/ (the actual screens, mostly untested)
+      // dragged the aggregate down sharply -- measured 2026-08-22 after
+      // adding app/: lines 18.6%, functions 14.43%, branches 13.57% (was
+      // 68.09%/64.62%/56.79% before app/ was included). This is the honest
+      // number, not a regression -- app/ was never measured before. Set a
+      // few points below so the gate lands green. Ratchet up as app/
+      // screens get tests -- do not raise without re-measuring first.
+      lines: 15,
+      functions: 11,
+      branches: 10,
     },
   },
 };

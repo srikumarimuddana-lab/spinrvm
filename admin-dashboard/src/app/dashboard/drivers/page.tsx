@@ -2023,9 +2023,9 @@ function VerificationSummaryCard({
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1">
                     {rows.map(({ rd, status }) => {
-                        const cfg = status === "approved" ? { icon: <CheckCircle className="h-3.5 w-3.5 text-emerald-500" />, text: "text-emerald-600 dark:text-emerald-400" }
-                            : status === "pending" ? { icon: <Clock className="h-3.5 w-3.5 text-amber-500" />, text: "text-amber-600 dark:text-amber-400" }
-                            : status === "expired" ? { icon: <AlertTriangle className="h-3.5 w-3.5 text-red-500" />, text: "text-red-600 dark:text-red-400" }
+                        const cfg = status === "approved" ? { icon: <CheckCircle className="h-3.5 w-3.5 text-success" />, text: "text-success" }
+                            : status === "pending" ? { icon: <Clock className="h-3.5 w-3.5 text-warning" />, text: "text-warning" }
+                            : status === "expired" ? { icon: <AlertTriangle className="h-3.5 w-3.5 text-destructive" />, text: "text-destructive" }
                             : { icon: <div className="w-3.5 h-3.5 rounded-full border-2 border-muted-foreground/30" />, text: "text-muted-foreground" };
                         return (
                             <div key={rd.key} className="flex items-center gap-2 text-xs">
@@ -3458,9 +3458,9 @@ function DocExpirySummaryCard({ label, summary }: { label: string; summary: DocS
 
     const styles = {
         neutral: { bg: "bg-muted/30 border-border", dot: "bg-muted-foreground/40", primary: "text-muted-foreground", secondary: "text-muted-foreground" },
-        emerald: { bg: "bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800", dot: "bg-emerald-500", primary: "text-emerald-700 dark:text-emerald-300", secondary: "text-emerald-600/70 dark:text-emerald-400/70" },
-        amber:   { bg: "bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800",       dot: "bg-amber-500",   primary: "text-amber-700 dark:text-amber-300",   secondary: "text-amber-600/80 dark:text-amber-400/80" },
-        red:     { bg: "bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-800",               dot: "bg-red-500",     primary: "text-red-700 dark:text-red-300",       secondary: "text-red-600/80 dark:text-red-400/80" },
+        emerald: { bg: "bg-success/10 border-success/30", dot: "bg-success", primary: "text-success", secondary: "text-success/70" },
+        amber:   { bg: "bg-warning/10 border-warning/30", dot: "bg-warning", primary: "text-warning", secondary: "text-warning/80" },
+        red:     { bg: "bg-destructive/10 border-destructive/30", dot: "bg-destructive", primary: "text-destructive", secondary: "text-destructive/80" },
     }[palette];
 
     return (

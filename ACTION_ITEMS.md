@@ -7546,9 +7546,18 @@ record of what was assumed vs. what was actually true</summary>
   visual-regression run after seeding will likely surface a backlog of
   pre-existing, unreviewed visual drift across every admin-dashboard page
   the spec covers — that's expected, not a regression this item caused.
+- **2026-08-22 attempt, confirmed blocked (not just untested):** tried
+  `run_workflow` (`update-visual-baselines.yml`, ref `main`) directly via
+  the GitHub Actions API from this session — got a concrete `403 Resource
+  not accessible by integration`, not a guess. This session's GitHub
+  token/app installation genuinely lacks `workflow`-dispatch permission
+  for this repo. Confirms action item #1 below (needs someone with real
+  CI/CD/Actions-dispatch access) rather than leaving it as an
+  unverified assumption.
 - **Action:**
   1. Confirm with whoever owns CI/CD access whether `update-visual-baselines.yml`
-     has ever been run (not verifiable from this session).
+     has ever been run (not verifiable from this session — and now
+     confirmed not *executable* from this session either, see above).
   2. Run it once against `main` to seed the initial baseline set, then
      open a follow-up PR to confirm the gate actually fails on an
      intentional visual change (proving it works end-to-end, not just

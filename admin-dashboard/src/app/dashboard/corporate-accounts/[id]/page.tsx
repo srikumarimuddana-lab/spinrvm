@@ -103,6 +103,10 @@ const TRANSITIONS: Record<TransitionKind, TransitionConfig> = {
         targetStatus: "suspended",
         confirmLabel: "Suspend",
         captureReason: true,
+        // No solid-fill --warning-foreground token exists in this design system
+        // (dark-mode --warning is not contrast-verified against white text); this
+        // stays a fixed shade rather than a partial/incorrect token substitution (#2816)
+        // eslint-disable-next-line no-restricted-syntax
         confirmClass: "bg-orange-600 hover:bg-orange-700",
     },
     reactivate: {
@@ -111,6 +115,7 @@ const TRANSITIONS: Record<TransitionKind, TransitionConfig> = {
         targetStatus: "active",
         confirmLabel: "Reactivate",
         captureReason: false,
+        // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text button; dark-mode --success (2.02:1) fails WCAG AA against white text (#2816)
         confirmClass: "bg-emerald-600 hover:bg-emerald-700",
     },
     close: {
@@ -120,7 +125,7 @@ const TRANSITIONS: Record<TransitionKind, TransitionConfig> = {
         targetStatus: "closed",
         confirmLabel: "Close",
         captureReason: true,
-        confirmClass: "bg-red-600 hover:bg-red-700",
+        confirmClass: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
     },
 };
 
@@ -367,6 +372,7 @@ export default function CompanyDetailPage() {
                     {company.status === "suspended" && (
                         <Button
                             onClick={() => openTransition("reactivate")}
+                            // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text button; dark-mode --success (2.02:1) fails WCAG AA against white text (#2816)
                             className="bg-emerald-600 hover:bg-emerald-700"
                         >
                             <PlayCircle className="mr-2 h-4 w-4" /> Reactivate

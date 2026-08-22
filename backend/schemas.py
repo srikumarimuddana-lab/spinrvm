@@ -376,6 +376,18 @@ class AppSettings(BaseModel):
     # incident that caused this switch to be flipped off, and blocking that
     # path would work against the person responding to the incident.
     corporate_billing_enabled: bool = True
+    # Kill switch for new ride requests generally (ACTION_ITEMS.md G5).
+    # Distinct from the four flags above — none of those stop demand-side
+    # booking; they gate scheduled dispatch, surge, promo redemption, and
+    # corporate billing specifically. This is the demand-side lever: checked
+    # at the top of POST /rides (create_ride) before any DB write. Defaults
+    # to true (current, always-on behavior). Flip to false during an
+    # incident (e.g. a dispatch bug, a payment-processing problem) to stop
+    # new bookings without forcing every driver offline
+    # (saskatoon-launch.md §N-4's existing bulk is_online=false lever is the
+    # supply-side equivalent). Does NOT affect rides already in flight —
+    # existing rides continue through their normal state machine untouched.
+    new_ride_requests_enabled: bool = True
     # Fraud guard for the referral payout loop (utils/referral_payout.py,
     # ranked blocker #6 / audit finding N2, 2026-08-19): caps how many
     # referrer_reward payouts a single referrer can earn in a rolling 24h

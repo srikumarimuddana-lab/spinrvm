@@ -10132,7 +10132,26 @@ record of what was assumed vs. what was actually true</summary>
   a funded plan exists to obtain them before the municipal licensing filing.
 
 ### G5. No "pause new ride requests" global kill-switch, distinct from the already-closed E5 feature-flag set
-- [ ] **Status:** open — identified 2026-08-21. **Not a re-proposal of E5** (CLOSED
+- [x] **Status:** CLOSED (2026-08-22) — `new_ride_requests_enabled: bool = True`
+  added to `AppSettings`, checked at the very top of `POST /rides`
+  (`create_ride`, `routes/rides/booking.py`), before `validate_ride_location`
+  or any DB write. Flipping it off returns a clean `503 "Ride requests are
+  temporarily unavailable. Please try again shortly."`. Fails open on a
+  settings-read error, same convention as `settle_corporate`'s
+  `corporate_billing_enabled` check. Added to `SettingsUpdateRequest`
+  (`routes/admin/settings.py`) so it's admin-settable via the existing
+  generic PUT handler, same shape as the four E5 flags (no super-admin gate
+  needed). `saskatoon-launch.md` §N-4 updated to document it as a third
+  kill-switch option alongside the existing bulk `is_online=false` driver
+  action. 4 new tests in `test_booking_new_ride_requests_kill_switch.py`
+  (flag-off rejects before any DB write, flag-omitted defaults to enabled,
+  settings-lookup failure fails open) plus `new_ride_requests_enabled` added
+  to `test_kill_switch_flags.py`'s shared flag list for schema-default/
+  round-trip/non-super-admin coverage. No application behavior change under
+  normal operation (default `true`). Full backend suite: `12774 passed, 8
+  skipped, 1 xfailed, 0 failed`. See
+  `docs/change-log/2026-08-22-g5-new-ride-requests-kill-switch.md`.
+- **(historical) Status:** open — identified 2026-08-21. **Not a re-proposal of E5** (CLOSED
   2026-08-11 — `scheduled_dispatch_enabled`, `surge_engine_enabled`,
   `promo_redemption_enabled`, `corporate_billing_enabled`); this is an additional flag
   E5 does not cover.

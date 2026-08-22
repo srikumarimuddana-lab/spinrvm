@@ -653,10 +653,11 @@ For a critical native bug:
 
 If a critical issue affects the entire platform, the fastest stop is:
 
-- Set every driver in Saskatoon to `is_online = false` via admin dashboard bulk action (script in `backend/scripts/`).
+- Set every driver in Saskatoon to `is_online = false` via admin dashboard bulk action (script in `backend/scripts/`) — a supply-side lever, stops drivers from taking new offers.
+- Or flip the `new_ride_requests_enabled` app_settings flag off (ACTION_ITEMS.md G5) — a demand-side lever, checked at the top of `POST /rides` before any DB write. Rejects new bookings with a clean 503 without touching driver online status. Cleaner than the bulk `is_online=false` action for an incident that's specifically about the booking/dispatch/payment path rather than driver supply (e.g. a dispatch bug, a payment-processing problem, a Stripe reserve-hold scenario) — flip it back to `true` (the default) to resume.
 - Or set the Saskatoon service area `is_active = false` (once H is implemented) — instantly stops new rides without disrupting in-flight ones.
 - Riders see "Spinr is temporarily unavailable" screen.
-- In-flight rides complete normally.
+- In-flight rides complete normally regardless of which lever is used.
 
 ---
 

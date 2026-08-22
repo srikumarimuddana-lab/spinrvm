@@ -12,9 +12,9 @@ import { Users } from "lucide-react";
  * which only shows top-referrer counts. Respects the rider/driver toggle.
  */
 const STATUS_COLOR: Record<string, string> = {
-    paid: "text-emerald-600 dark:text-emerald-400",
-    processing: "text-blue-600 dark:text-blue-400",
-    failed: "text-red-600 dark:text-red-400",
+    paid: "text-success",
+    processing: "text-warning",
+    failed: "text-destructive",
     expired: "text-muted-foreground",
 };
 

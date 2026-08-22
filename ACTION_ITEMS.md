@@ -7673,9 +7673,22 @@ record of what was assumed vs. what was actually true</summary>
   green (rider-app 633, driver-app 770). Aggregate coverage barely moved
   (`app/` is 48+40 files; 8 screens is a small fraction) — thresholds were
   not re-tightened this round since measured coverage stayed within the
-  existing floor. This sub-item is **not** closed — ~68 screens remain at
-  0%; continuing screen-by-screen in further sessions per the user's
-  explicit instruction.
+  existing floor. **Continued same-session, same day:** 6 more screens —
+  driver-app's `appeal.tsx` (deactivation appeals), `driver/help.tsx`,
+  `driver/faq.tsx` (location-gated FAQ search), `driver/destination-mode.tsx`
+  (geocode+save+clear flow); rider-app's `promotions.tsx` (money-adjacent:
+  percentage/flat-dollar promo apply), `referral.tsx`, `notifications.tsx`
+  (optimistic read/mark-all-read with rollback). 68 more tests; full
+  suites still green (rider-app 662, driver-app 799). **19 of 76 screens
+  done, ~57 remain at 0%.** One real footgun found and documented inline
+  in `destinationModeScreen.test.tsx`: a mocked zustand-style hook whose
+  factory returns a fresh object/closure per call destabilizes any
+  `useCallback` keyed on it, causing a silent infinite mount-effect loop
+  that hangs the test with a misleading "Jest environment torn down"
+  error rather than a clear stack trace — fix is a stable module-level
+  mock-state reference, not a fresh literal per call. This sub-item is
+  **still not closed** — continuing screen-by-screen in further sessions
+  per the user's explicit instruction.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

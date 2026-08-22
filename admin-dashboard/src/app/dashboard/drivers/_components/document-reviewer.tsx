@@ -372,6 +372,7 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
                                         <Button
                                             onClick={() => setMode("approve")}
                                             variant={mode === "approve" ? "default" : "outline"}
+                                            // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text button; --success fails WCAG AA contrast against white text in dark mode, no safe token conversion (#2816)
                                             className={mode === "approve" ? "flex-1 bg-emerald-600 hover:bg-emerald-700 text-white" : "flex-1"}
                                             disabled={busy}
                                         >
@@ -395,6 +396,7 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
                                                 {!needsExpiry && <span className="text-muted-foreground font-normal">(optional)</span>}
                                             </label>
                                             <Input id="reviewer-expiry" type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} className="h-9" />
+                                            {/* eslint-disable-next-line no-restricted-syntax -- solid-fill white-text button; --success fails WCAG AA contrast against white text in dark mode, no safe token conversion (#2816) */}
                                             <Button onClick={() => submit("approved")} disabled={busy || (needsExpiry && !expiry)} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white">
                                                 {busy ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <Check className="h-4 w-4 mr-1.5" />}
                                                 Confirm approval
@@ -424,6 +426,7 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
                                             <label className="flex items-start gap-2 cursor-pointer text-xs">
                                                 <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} className="mt-0.5" />
                                                 <span className="flex items-center gap-1.5">
+                                                    {/* eslint-disable-next-line no-restricted-syntax -- decorative icon tint for the notify toggle, not a status signal (#2816) */}
                                                     {notify ? <Bell className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" /> : <BellOff className="h-3.5 w-3.5 text-muted-foreground" />}
                                                     Notify driver via push so they can re-upload
                                                 </span>

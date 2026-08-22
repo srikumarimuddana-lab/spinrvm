@@ -194,7 +194,7 @@ export function MarketplaceOverviewPanel({
 
             {/* Attribution honesty note */}
             {fallback > 0 && (
-                <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+                <div className="flex items-start gap-2 rounded-md border border-warning bg-warning/10 px-3 py-2 text-xs text-warning">
                     <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                     <span>
                         {fallback.toLocaleString()} of {cancelled.toLocaleString()} cancellations predate the

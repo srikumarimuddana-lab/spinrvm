@@ -76,11 +76,9 @@ const ROLE_PRESETS: Record<string, string[]> = {
   finance: ["dashboard", "earnings", "promotions", "corporate_accounts", "audit"],
 };
 
-// Categorical staff-role map (5 roles) — not a #2816 migration target. A
-// 3-token semantic system can't distinguish super_admin from operations
-// from finance from a custom grant; these are role identities, not
-// success/warning/destructive states.
-/* eslint-disable no-restricted-syntax -- categorical staff-role map, see comment above (#2816) */
+/* eslint-disable no-restricted-syntax -- categorical admin-role map (5 distinct
+   roles), not a success/warning/destructive signal — too many states for the
+   3-token system, see comment above (#2816) */
 const ROLE_COLORS: Record<string, string> = {
   super_admin: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
   operations: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",

@@ -255,7 +255,7 @@ function CeoMetricsHeader({
 
             <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
                 <MetricCard icon={DollarSign} label="GBV"               metric={m?.gbv}             format={fmtMoney} loading={loading} />
-                <MetricCard icon={Wallet}     label="Net Revenue"       metric={m?.net_revenue}     format={fmtMoney} accent="text-emerald-600 dark:text-emerald-400" loading={loading} />
+                <MetricCard icon={Wallet}     label="Net Revenue"       metric={m?.net_revenue}     format={fmtMoney} accent="text-success" loading={loading} />
                 <MetricCard icon={Percent}    label="Take Rate"         metric={m?.take_rate_pct}   format={fmtPct}   loading={loading} />
                 <MetricCard icon={CreditCard} label="Spinr Pass MRR"    metric={m?.spinr_pass_mrr}  format={fmtMoney} accent="text-violet-600 dark:text-violet-400" loading={loading} />
                 <MetricCard icon={Car}        label="Completed Trips"   metric={m?.completed_trips} format={fmtCount} loading={loading} />
@@ -933,7 +933,7 @@ function PayoutsCompliance({ overview, onClosed }: { overview: PayoutsOverview; 
                                     <TableCell className="text-xs text-right tabular-nums">{t4a_snapshot.buckets.from_10k_to_30k}</TableCell>
                                     <TableCell className="text-[11px] text-muted-foreground">T4A required · GST elective</TableCell>
                                 </TableRow>
-                                <TableRow className="bg-warning/10">
+                                <TableRow className="bg-warning/5">
                                     <TableCell className="text-xs font-mono font-semibold">≥ $30k</TableCell>
                                     <TableCell className="text-xs text-right tabular-nums font-bold text-warning">{t4a_snapshot.buckets.over_30k}</TableCell>
                                     <TableCell className="text-[11px] text-warning">T4A + GST/HST registration MANDATORY</TableCell>
@@ -1387,7 +1387,7 @@ function SpinrPassRevenueTab() {
                             <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground flex items-center gap-1.5"><Users className="h-4 w-4" /> Total Subscribers</CardTitle></CardHeader>
                             <CardContent><p className="text-2xl font-bold">{stats.total_subscribers}</p>
                                 <p className="text-xs text-muted-foreground mt-1">
-                                    <span className="text-emerald-500 font-semibold">{stats.active} active</span> · {stats.expired} expired · {stats.cancelled} cancelled
+                                    <span className="text-success font-semibold">{stats.active} active</span> · {stats.expired} expired · {stats.cancelled} cancelled
                                 </p>
                             </CardContent>
                         </Card>

@@ -147,8 +147,8 @@ export default function PolicyPage() {
                 <Badge
                     className={
                         existing
-                            ? "bg-emerald-100 text-emerald-800"
-                            : "bg-gray-200 text-gray-700"
+                            ? "bg-success/15 text-success"
+                            : "bg-muted text-muted-foreground"
                     }
                 >
                     {existing ? "Configured" : "Not set"}
@@ -275,7 +275,7 @@ export default function PolicyPage() {
                             {saving ? "Saving…" : "Save policy"}
                         </Button>
                         {feedback && (
-                            <span className="text-xs text-emerald-700 dark:text-emerald-300">{feedback}</span>
+                            <span className="text-xs text-success">{feedback}</span>
                         )}
                         {error && <span className="text-xs text-destructive">{error}</span>}
                     </div>

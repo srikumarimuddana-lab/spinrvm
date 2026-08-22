@@ -6466,6 +6466,15 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   caveat, not confirmed missing); whether `run-maestro` has ever been
   applied to a real PR; whether a Maestro Cloud account/org is even
   provisioned yet at console.mobile.dev.
+- **2026-08-22 attempt, confirmed blocked (not just untested):** tried
+  `run_workflow` (`maestro-e2e.yml`, ref `main`) directly via the GitHub
+  Actions API from this session — got the same concrete `403 Resource not
+  accessible by integration` B38 hit trying `update-visual-baselines.yml`.
+  This session's token/app installation genuinely lacks `workflow`-dispatch
+  permission for this repo, for any workflow, not just this one. Confirms
+  action item #2 below needs a repo admin (or a session with real
+  Actions-dispatch access) rather than leaving it an unverified assumption
+  — same underlying gap as B38, not a Maestro-specific one.
 
 ### B26. Regina (main, non-airport) service area shows `pst_enabled=false` despite `pst_rate=6` already set and a prior change log claiming it was enabled
 - [x] **Status:** CLOSED (2026-08-22). **This item's own tracking was stale —

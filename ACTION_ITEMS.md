@@ -8133,7 +8133,48 @@ record of what was assumed vs. what was actually true</summary>
   (108 suites / 1053 tests), `yarn tsc --noEmit` clean. **70 of 76
   screens done, 2 remain at 0%:** rider-app's `ride-options.tsx` (2284
   lines, largest remaining); driver-app's `driver/(tabs)/index.tsx`
-  (1359 lines, deliberately deferred, see above).
+  (1359 lines, deliberately deferred, see above). **Continued, same
+  day:** rider-app's `ride-options.tsx` (vehicle-type selection +
+  booking screen, money-critical — this is where a ride is actually
+  created; the largest remaining screen in this pass at 2284 lines).
+  Covers the mount effects (parallel `fetchEstimates` +
+  `fetchNearbyDrivers` when pickup/dropoff are set, with a
+  `fetchEstimates` rejection setting the "Could not load fares" retry
+  state rather than crashing); `handleSelect`'s unavailable-vehicle
+  toast-and-no-op vs. an available selection updating the store and
+  refetching promos; `handleBookRide`'s payment guard (card-with-no-
+  selected-card opens a confirm sheet, distinct copy for zero saved
+  cards vs. an unselected one); the corporate work-policy block
+  (`checkRide`) offering "Turn off work mode"; the surge confirm gate
+  (>1.0× always requires an explicit "Book at $X" tap before
+  `proceedWithBooking` runs; exactly 1.0× books directly);
+  `proceedWithBooking`'s full branch set — happy path to
+  `/driver-arriving` (or `/(tabs)` + a scheduled local reminder for a
+  scheduled ride), `requires_action` toasting without navigating, a
+  `promo_error` toasting a warning while still navigating, a 409
+  re-routing to whichever screen owns the rider's real active ride by
+  status (both `searching` and `in_progress` cases), a 402 with
+  `unpaid_ride_id` opening the Unpaid Ride confirm sheet routing to
+  `/ride-completed`, and any other failure toasting the backend's
+  message; `handleScheduleConfirm`'s <15-minute rejection vs. a valid
+  time being stored; and `handleManualPromo`'s eligible/ineligible/
+  not-found branches plus the promo-removal tap. No new footguns —
+  reused the `react-native-maps`/`RouteLine`/`RoutePins` map-mock
+  convention, the `@gorhom/bottom-sheet` forwardRef double, and the
+  `ConfirmSheet` lightweight double verbatim; the one new pattern was
+  mocking `workProfileStore`'s selector-style calls
+  (`useWorkProfileStore(s => s.field)`, distinct from the whole-object-
+  destructure call other screens use) via a hook function carrying its
+  mutable state as properties on itself, since a `jest.mock()` factory
+  can't close over an outer-scope `let`. 22 tests; full rider-app suite
+  still green (115 suites / 1081 tests), `yarn tsc --noEmit` clean.
+  **71 of 76 screens done, 1 remains at 0%:** driver-app's
+  `driver/(tabs)/index.tsx` — deliberately deferred out of this
+  same-pass scope as its own dedicated-session dispatch/safety-
+  dashboard undertaking (1359 lines, ~15 stacked hooks/components: live
+  dispatch, demand heatmap, safety triggers, SOS). This closes out
+  every rider-app screen originally at 0% coverage; driver-app has
+  exactly this one screen left.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

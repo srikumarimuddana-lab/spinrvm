@@ -7734,7 +7734,12 @@ record of what was assumed vs. what was actually true</summary>
   failure, the MAX_CONTACTS(3) trigger-hiding, and the confirm-before-
   remove flow (both success and failure). 25 more tests; full suites
   still green (rider-app 759, driver-app 844). **34 of 76 screens done,
-  ~42 remain at 0%.** This sub-item is **still not closed** — continuing
+  ~42 remain at 0%.** **Continued, same day:** driver-app's
+  `driver/addresses.tsx` (geocode-flow saved-address book) and rider-app's
+  `safety-hub.tsx` (calm, out-of-ride safety settings/resources home —
+  distinct from the in-ride SOS panel). 23 more tests; full suites still
+  green (rider-app 771, driver-app 855). **36 of 76 screens done, ~40
+  remain at 0%.** This sub-item is **still not closed** — continuing
   screen-by-screen in further sessions per the user's explicit
   instruction.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,

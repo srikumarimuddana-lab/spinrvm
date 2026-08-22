@@ -7885,7 +7885,24 @@ record of what was assumed vs. what was actually true</summary>
   CI-gate-fix precedent; fixed with an explicit `(..._a: unknown[])`
   signature, same shape as the driver-app tsc fixes from earlier this
   session. 12 tests; full driver-app suite still green (996), `yarn tsc
-  --noEmit` clean. **59 of 76 screens done, ~17 remain at 0%.**
+  --noEmit` clean. **59 of 76 screens done, ~17 remain at 0%. Continued,
+  same day:** driver-app's `driver/payout.tsx` (payouts/setup/tax-
+  documents screen, money-adjacent — read-only test coverage, no
+  application code changed). Covers the parallel initial load; the
+  `allReady` setup-checklist gate (Stripe-ready && SIN-on-file &&
+  GST-on-file) and its SIN-unlocks-Stripe step-ordering/locking;
+  handleSaveSin/handleSaveGst's format validation and
+  `updateDriverMe.mutateAsync` payload shape; handleStripeOnboarding's
+  no-url/mock "Unavailable" short-circuit vs. the full
+  auth-browser-then-sync flow (active/still-processing/not-finished
+  toasts) and its own failure toast; the Tax Documents section's
+  earned-year gate and its T4A/CSV email actions; and the
+  canGoBack-vs-fallback-to-/driver/ back nav. No new footguns — reused
+  the existing `useDriverStore` (called directly, no `.getState` needed
+  here), `useDriverMe`/`useUpdateDriverMe`, `ErrorBoundary`, and
+  `expo-linear-gradient` mock conventions already established across
+  this pass. 18 tests; full driver-app suite still green (1014), `yarn
+  tsc --noEmit` clean. **60 of 76 screens done, ~16 remain at 0%.**
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

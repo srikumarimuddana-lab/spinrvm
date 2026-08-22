@@ -15,7 +15,7 @@ jest.mock('expo-router', () => ({
   useLocalSearchParams: () => mockParams,
 }));
 
-const mockSupportScreen = jest.fn(() => null);
+const mockSupportScreen = jest.fn((_props: any) => null);
 jest.mock('@shared/components/SupportScreen', () => (props: any) => {
   mockSupportScreen(props);
   return null;

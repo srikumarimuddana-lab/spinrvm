@@ -301,7 +301,7 @@ export default function VenueMap({
                 </p>
             )}
             {!validCenter && (
-                <p className="text-xs text-amber-600 dark:text-amber-500">
+                <p className="text-xs text-warning">
                     No centre set yet — click the map to place this venue.
                 </p>
             )}

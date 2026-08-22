@@ -101,7 +101,7 @@ const REASON_LABELS: Record<string, string> = {
 function SectionError({ onRetry }: { onRetry: () => void }) {
   return (
     <div className="py-8 text-center space-y-3">
-      <p className="text-sm text-red-600 dark:text-red-400">
+      <p className="text-sm text-destructive">
         Couldn&apos;t load this data — it isn&apos;t zero, it&apos;s unknown.
       </p>
       <Button variant="outline" size="sm" onClick={onRetry}>
@@ -340,9 +340,9 @@ function AnalyticsPageInner() {
 
       {/* Backend error banner */}
       {fetchError && !loading && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 flex flex-wrap items-center justify-between gap-2 dark:border-red-800 dark:bg-red-950 dark:text-red-200">
+        <div className="rounded-md border border-destructive bg-destructive/10 px-4 py-3 text-sm text-destructive flex flex-wrap items-center justify-between gap-2">
           <span>Analytics data unavailable — the backend returned an error. Check service health and try again.</span>
-          <Button variant="outline" size="sm" onClick={fetchAll} className="text-red-700 border-red-300 hover:bg-red-100 dark:text-red-200 dark:border-red-700 dark:hover:bg-red-900">
+          <Button variant="outline" size="sm" onClick={fetchAll} className="text-destructive border-destructive/40 hover:bg-destructive/10">
             <RefreshCw className="h-3 w-3 mr-1" /> Retry
           </Button>
         </div>
@@ -365,7 +365,7 @@ function AnalyticsPageInner() {
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <CheckCircle className="h-4 w-4 text-success" /> Completion Rate
               </div>
-              <div className="text-2xl font-bold mt-1 text-green-600 dark:text-green-400">{overview.completion_rate}%</div>
+              <div className="text-2xl font-bold mt-1 text-success">{overview.completion_rate}%</div>
             </CardContent>
           </Card>
           <Card>
@@ -373,7 +373,7 @@ function AnalyticsPageInner() {
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <XCircle className="h-4 w-4 text-destructive" /> Cancellation Rate
               </div>
-              <div className="text-2xl font-bold mt-1 text-red-600 dark:text-red-400">{overview.cancellation_rate}%</div>
+              <div className="text-2xl font-bold mt-1 text-destructive">{overview.cancellation_rate}%</div>
             </CardContent>
           </Card>
           <Card>
@@ -589,7 +589,7 @@ function AnalyticsPageInner() {
             <Card>
               <CardContent className="pt-4">
                 <div className="text-sm text-muted-foreground">Avg Completion Rate</div>
-                <div className="text-2xl font-bold text-green-600 dark:text-green-400">
+                <div className="text-2xl font-bold text-success">
                   {driverRates?.avg_completion_rate_active ?? 0}%
                 </div>
                 {/* Averaging over every registered driver (idle ones score 0)
@@ -614,7 +614,7 @@ function AnalyticsPageInner() {
                   <TrendingDown className="h-3 w-3 text-destructive" />
                   Low completion (&lt;{driverRates?.low_performer_threshold?.rate_below ?? 70}%)
                 </div>
-                <div className="text-2xl font-bold text-red-600 dark:text-red-400">
+                <div className="text-2xl font-bold text-destructive">
                   {driverRates?.low_performer_count || 0}
                 </div>
                 {/* The count is meaningless if you can't see who it refers to —
@@ -659,7 +659,7 @@ function AnalyticsPageInner() {
                   />
                 </div>
                 {lowOnly && (
-                  <Badge variant="outline" className="border-red-300 text-red-700 dark:text-red-400">
+                  <Badge variant="outline" className="border-destructive/40 text-destructive">
                     Low performers only
                     <button
                       type="button"
@@ -675,7 +675,7 @@ function AnalyticsPageInner() {
               {/* The driver list is capped server-side; say so rather than
                   presenting a partial list as the whole fleet. */}
               {driverRates?.scan_truncated && (
-                <div className="flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+                <div className="flex items-center gap-2 rounded-md border border-warning bg-warning/10 px-3 py-2 text-xs text-warning">
                   <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                   Driver list hit the server scan cap — totals below cover only the drivers scanned. Narrow by service area or search.
                 </div>
@@ -697,7 +697,7 @@ function AnalyticsPageInner() {
                 </TableHeader>
                 <TableBody>
                   {driverRows.map((d: any, i: number) => (
-                    <TableRow key={d.driver_id} className={isLowPerformer(d) ? "bg-red-50/60 dark:bg-red-950/30" : undefined}>
+                    <TableRow key={d.driver_id} className={isLowPerformer(d) ? "bg-destructive/10" : undefined}>
                       {/* Absolute position in the current server-side sort,
                           not a per-page index. */}
                       <TableCell className="text-muted-foreground tabular-nums">
@@ -727,8 +727,8 @@ function AnalyticsPageInner() {
                       </TableCell>
                       <TableCell>
                         <Badge className={d.is_online
-                          ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200"
-                          : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"}>
+                          ? "bg-success/15 text-success"
+                          : "bg-muted text-muted-foreground"}>
                           {d.is_online ? "Online" : "Offline"}
                         </Badge>
                       </TableCell>
@@ -739,7 +739,7 @@ function AnalyticsPageInner() {
                       <TableCell
                         colSpan={8}
                         className={`text-center py-8 ${
-                          driverError ? "text-red-600 dark:text-red-400" : "text-muted-foreground"
+                          driverError ? "text-destructive" : "text-muted-foreground"
                         }`}
                       >
                         {driverError

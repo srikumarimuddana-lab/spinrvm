@@ -8102,7 +8102,38 @@ record of what was assumed vs. what was actually true</summary>
   attempted); driver-app's `driver/(tabs)/index.tsx` (1359 lines,
   deliberately deferred as its own dedicated-session dispatch/safety-
   dashboard undertaking — ~15 stacked hooks/components — not part of
-  this same-pass scope).
+  this same-pass scope). **Continued, same day:** driver-app's
+  `driver/(tabs)/profile.tsx` (driver's profile tab). Covers the
+  company-info fetch on mount (silently swallowed failure, no error UI)
+  and its rendered card once populated; the focus-effect refresh
+  (`/auth/me` -> `authStore.setState`, `refetchDriverMe()`, and the two
+  independently-best-effort `/drivers/requirements`/`/drivers/documents`
+  fetches, proving a requirements failure doesn't block documents or
+  crash); the referral-code fallback chain (`driver_code` ->
+  `referral_code` -> `DRIVER<id-derived>` -> chip hidden when there's no
+  id at all) and its copy-to-clipboard action; `handlePickPhoto`'s
+  Alert-driven Take Photo/Library dispatch with permission-denied and
+  upload success/failure toasts; the edit-profile modal's pre-fill,
+  missing-field and invalid-email validation, successful save (store
+  update + modal close + toast) and backend-message failure toast; the
+  gender-picker bottom sheet; `handleLogout`/`handleLogoutAll`'s
+  Alert-confirm -> store action -> `/login` redirect (including that
+  `handleLogoutAll` has no catch around `logoutAll()`, only a `finally`
+  that still redirects, so a rejection propagates out of the handler
+  itself — pinned rather than assumed); the document-requirement badge
+  derivation (pending overrides an older approved copy, expired,
+  upload-required for an unmatched requirement); the vehicle-info
+  color/make/model join; the rejection banner; and the six Support-
+  section navigation taps. No new footguns — reused the
+  `mockUseAuthStore`/`setState` selector-pattern convention from
+  `reactivateAccountScreen.test.tsx` and the `useFocusEffect`-as-`[]`-
+  effect convention (safe here since the callback's only dependency,
+  `refetchDriverMe`, is TanStack Query's stable memoized reference, not
+  state unset at mount). 23 tests; full driver-app suite still green
+  (108 suites / 1053 tests), `yarn tsc --noEmit` clean. **70 of 76
+  screens done, 2 remain at 0%:** rider-app's `ride-options.tsx` (2284
+  lines, largest remaining); driver-app's `driver/(tabs)/index.tsx`
+  (1359 lines, deliberately deferred, see above).
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

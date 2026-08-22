@@ -100,7 +100,7 @@ export default function DriverAppealsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Gavel className="h-6 w-6 text-amber-500" />
+            <Gavel className="h-6 w-6 text-warning" />
             Driver Appeals
           </h1>
           <p className="text-muted-foreground mt-1">
@@ -189,7 +189,7 @@ export default function DriverAppealsPage() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Gavel className="h-5 w-5 text-amber-500" />
+              <Gavel className="h-5 w-5 text-warning" />
               Review Appeal
             </DialogTitle>
           </DialogHeader>

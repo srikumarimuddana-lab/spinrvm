@@ -167,7 +167,7 @@ export default function DisputesPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
-            <AlertTriangle className="h-6 w-6 text-amber-500" />
+            <AlertTriangle className="h-6 w-6 text-warning" />
             Dispute Resolution
           </h1>
           <p className="text-muted-foreground mt-1">
@@ -291,7 +291,7 @@ export default function DisputesPage() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              <AlertTriangle className="h-5 w-5 text-warning" />
               Resolve Dispute
             </DialogTitle>
           </DialogHeader>

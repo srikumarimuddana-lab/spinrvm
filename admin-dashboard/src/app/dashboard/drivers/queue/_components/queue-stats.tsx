@@ -49,10 +49,9 @@ export function QueueStats({ stats }: QueueStatsProps) {
             {cards.map((c) => {
                 const Icon = c.icon;
                 const toneClass = {
-                    // "blue" has no semantic-token equivalent (only success/warning/destructive
-                    // exist) — kept as a hand-picked neutral-informational color for the
-                    // always-present "Pending" count, which isn't itself a good/bad signal. (#2816)
-                    // eslint-disable-next-line no-restricted-syntax -- see comment above (#2816)
+                    // "Pending" is a plain count, not a signal — no semantic-token
+                    // equivalent, kept as a neutral informational accent (#2816).
+                    // eslint-disable-next-line no-restricted-syntax -- see above
                     blue: "bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300",
                     emerald: "bg-success/15 text-success",
                     amber: "bg-warning/15 text-warning",

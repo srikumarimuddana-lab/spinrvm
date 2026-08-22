@@ -13,6 +13,9 @@ import {
     Flag, Clock, Loader2, StickyNote,
 } from "lucide-react";
 
+/* eslint-disable no-restricted-syntax -- categorical note-type map (5 distinct
+   types), not a success/warning/destructive signal — too many states for the
+   3-token system, see comment above (#2816) */
 const CATEGORIES = [
     { value: "general", label: "General", icon: MessageSquare, color: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" },
     { value: "warning", label: "Warning", icon: AlertTriangle, color: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" },
@@ -20,6 +23,7 @@ const CATEGORIES = [
     { value: "status_change", label: "Status Change", icon: ShieldCheck, color: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" },
     { value: "complaint", label: "Complaint", icon: Flag, color: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" },
 ];
+/* eslint-enable no-restricted-syntax */
 
 function fmtDateTime(d: string) {
     if (!d) return "";
@@ -163,7 +167,7 @@ export default function DriverNotes({ driverId }: { driverId: string }) {
                                         <p className="text-sm text-foreground whitespace-pre-wrap">{note.note}</p>
                                     </div>
                                     <button onClick={() => handleDelete(note.id)} disabled={deleting === note.id}
-                                        className="opacity-0 group-hover:opacity-100 transition p-1 text-muted-foreground hover:text-red-500 shrink-0">
+                                        className="opacity-0 group-hover:opacity-100 transition p-1 text-muted-foreground hover:text-destructive shrink-0">
                                         {deleting === note.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
                                     </button>
                                 </div>

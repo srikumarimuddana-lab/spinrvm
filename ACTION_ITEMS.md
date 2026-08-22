@@ -7902,7 +7902,31 @@ record of what was assumed vs. what was actually true</summary>
   here), `useDriverMe`/`useUpdateDriverMe`, `ErrorBoundary`, and
   `expo-linear-gradient` mock conventions already established across
   this pass. 18 tests; full driver-app suite still green (1014), `yarn
-  tsc --noEmit` clean. **60 of 76 screens done, ~16 remain at 0%.**
+  tsc --noEmit` clean. **60 of 76 screens done, ~16 remain at 0%.
+  Continued, same day:** rider-app's `ride-details.tsx` (past-ride
+  detail/receipt screen). Covers the fetch-on-mount and "Ride not
+  found" no-crash fallback; status badge label/color mapping with a
+  raw-string fallback for unknown statuses; the cancelled-ride flat-fee
+  card (never the booking-time fare_breakdown, which would misrepresent
+  a trip never taken); the fare-breakdown consolidation of multiple
+  'fare' lines into one "Ride fare" line plus promo/tip injection when
+  the ride carries one but the breakdown doesn't; email-receipt and
+  PDF-invoice actions (completed rides only); and back/help nav. New,
+  environment-level (not code) finding: `handleDownloadInvoice`'s `await
+  import('expo-print')` — a deliberate dynamic import so an old build
+  without the native module degrades to its catch branch instead of
+  crashing — throws
+  `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG` under this repo's Jest
+  config on EVERY call, regardless of `jest.mock()`, because Jest's CJS
+  runtime has no `--experimental-vm-modules` flag; there is no way to
+  exercise the PDF-success path in this test harness at all. Rather than
+  contorting the test (or touching the flag/config, out of scope), pinned
+  the always-observed behavior directly: the PDF button always lands in
+  the graceful "PDF Unavailable" toast in this environment — which
+  happens to be the exact real-world scenario (old build, no native
+  module) the dynamic import exists to defend against. 14 tests; full
+  rider-app suite still green (948), `yarn tsc --noEmit` clean. **61 of
+  76 screens done, ~15 remain at 0%.**
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

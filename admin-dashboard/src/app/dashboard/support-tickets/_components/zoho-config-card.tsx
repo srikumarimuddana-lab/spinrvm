@@ -138,11 +138,11 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
                 <CardTitle className="flex items-center gap-2">
                     <Plug className="h-5 w-5" /> Zoho Desk Connection
                     {status?.connected ? (
-                        <Badge className="ml-2 bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
+                        <Badge className="ml-2 bg-success/15 text-success hover:bg-success/15">
                             <CheckCircle2 className="mr-1 h-3 w-3" /> Connected
                         </Badge>
                     ) : (
-                        <Badge variant="secondary" className="ml-2 bg-amber-100 text-amber-800 hover:bg-amber-100">
+                        <Badge variant="secondary" className="ml-2 bg-warning/15 text-warning hover:bg-warning/15">
                             <XCircle className="mr-1 h-3 w-3" /> Not connected
                         </Badge>
                     )}
@@ -253,15 +253,15 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
 
                 <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-1">
-                        <Label htmlFor="zoho-client-id">Client ID {status?.has_client_id && <span className="text-xs text-emerald-600 dark:text-emerald-400">(saved)</span>}</Label>
+                        <Label htmlFor="zoho-client-id">Client ID {status?.has_client_id && <span className="text-xs text-success">(saved)</span>}</Label>
                         <Input id="zoho-client-id" value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder={status?.has_client_id ? "•••••• (unchanged)" : ""} />
                     </div>
                     <div className="space-y-1">
-                        <Label htmlFor="zoho-client-secret">Client Secret {status?.has_client_secret && <span className="text-xs text-emerald-600 dark:text-emerald-400">(saved)</span>}</Label>
+                        <Label htmlFor="zoho-client-secret">Client Secret {status?.has_client_secret && <span className="text-xs text-success">(saved)</span>}</Label>
                         <Input id="zoho-client-secret" type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder={status?.has_client_secret ? "•••••• (unchanged)" : ""} />
                     </div>
                     <div className="space-y-1 sm:col-span-2">
-                        <Label htmlFor="zoho-refresh-token">Refresh Token {status?.has_refresh_token && <span className="text-xs text-emerald-600 dark:text-emerald-400">(saved)</span>}</Label>
+                        <Label htmlFor="zoho-refresh-token">Refresh Token {status?.has_refresh_token && <span className="text-xs text-success">(saved)</span>}</Label>
                         <Input id="zoho-refresh-token" type="password" value={refreshToken} onChange={(e) => setRefreshToken(e.target.value)} placeholder={status?.has_refresh_token ? "•••••• (unchanged)" : ""} />
                         <p className="text-xs text-muted-foreground">
                             Generate a self-client refresh token in the Zoho API console with the

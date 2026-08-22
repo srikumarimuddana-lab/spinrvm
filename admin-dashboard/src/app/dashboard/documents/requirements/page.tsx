@@ -413,7 +413,7 @@ function ReqTable({
                                     <Pencil className="h-3 w-3" />
                                 </Button>
                                 <Button size="sm" variant="outline" onClick={() => onDelete(r)}>
-                                    <Trash2 className="h-3 w-3 text-red-500" />
+                                    <Trash2 className="h-3 w-3 text-destructive" />
                                 </Button>
                             </div>
                         </TableCell>

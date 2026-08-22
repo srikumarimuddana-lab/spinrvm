@@ -41,7 +41,7 @@ google-generativeai==0.8.6  # via -r requirements.in
 google-resumable-media==2.8.2  # via google-cloud-storage
 googleapis-common-protos==1.74.0  # via google-api-core, grpcio-status
 grpcio==1.80.0            # via google-api-core, google-cloud-firestore, grpcio-status
-grpcio-status==1.71.2     # via google-api-core
+grpcio-status==1.83.0     # via google-api-core
 h11==0.16.0               # via httpcore, uvicorn
 h2==4.3.0                 # via httpx
 hpack==4.2.0              # via h2

@@ -7165,11 +7165,56 @@ record of what was assumed vs. what was actually true</summary>
 
 ### B37. Frontend coverage gates measure only a fraction of each app, and admin-dashboard's threshold never actually runs in CI
 
-- [ ] **Status:** open. Found 2026-08-22 while auditing test/validation
-  coverage across all Spinr surfaces at the user's request — verified by
-  actually running each app's coverage tool locally (not a spot check of
-  config file presence), reading the real numbers, and cross-checking
-  against what CI actually invokes.
+- [ ] **Status:** all three sub-items FIXED 2026-08-22 (admin-dashboard
+  same day as filing; rider-app/driver-app as a follow-up same day). Found
+  2026-08-22 while auditing test/validation coverage across all Spinr
+  surfaces at the user's request — verified by actually running each
+  app's coverage tool locally (not a spot check of config file presence),
+  reading the real numbers, and cross-checking against what CI actually
+  invokes. Left open (checkbox unchecked) because the fixes only wire up
+  and widen the gates to a low, honest baseline — they don't reach the
+  user's stated 100% target, which needs ongoing ratchet work (see
+  Recommended fix step 4) that's out of scope for one session.
+- **Fix applied (sub-item 1, admin-dashboard):** `.github/workflows/ci.yml`'s
+  admin-dashboard test step now runs `npm run test:coverage` (was `npm
+  test`, which never invoked the coverage plugin). `vitest.config.ts`'s
+  thresholds dropped from the previously-unenforced `branches: 50,
+  functions: 50, lines: 60, statements: 60` to `branches: 10, functions:
+  10, lines: 18, statements: 15` — real-measured-minus-headroom (measured:
+  13.56% / 11.88% / 21.80% / 19.94%), so the gate goes live passing, not
+  red on `main`. Verified locally: `npm run test:coverage` exits 0 against
+  the new floors. This closes the "structurally dead in CI" half of the
+  finding — the gate is now real, just starting from a low, honest
+  baseline. It does **not** widen what's measured (still
+  `src/lib/**, src/store/**, src/components/**, src/app/dashboard/**`,
+  per the existing `coverage.include`) — that's a separate, larger
+  follow-up (raising the floor as tests are added), not done here.
+- **Fix applied (sub-items 2/3, rider-app/driver-app):**
+  `collectCoverageFrom` widened on both apps to add `hooks/**` and
+  `utils/**` (smaller, more unit-testable than `app/` screens — the next
+  widening step, still not done). rider-app: was `store/` only (6 files);
+  now also `hooks/`+`utils/` (~19 more files). driver-app: was
+  `store/`+`components/` (29 files); now also `hooks/`+`utils/` (~21 more
+  files). `app/` (the actual screens — 48 rider-app / 40 driver-app
+  files), `lib/`, `services/`, `api/`, and rider-app's `components/`
+  remain outside `collectCoverageFrom` — **not** closed by this fix, only
+  narrowed.
+  - rider-app measured on the widened set: 68.09% lines / 67.76%
+    statements / 64.62% functions / 56.79% branches. Threshold set to
+    `lines: 63, functions: 60, branches: 52` (a few points of headroom,
+    same convention as sub-item 1).
+  - driver-app measured on the widened set: 47.62% lines / 45.65%
+    statements / 39.68% functions / 36.07% branches (this config has no
+    `branches` threshold key, matching its pre-existing pattern — not
+    added here). Threshold set to `lines: 43, functions: 36, statements:
+    42`.
+  - Verified locally: both apps' `yarn jest --coverage` exit 0 against the
+    new thresholds. driver-app's `__tests__/components/ActivityView.test.tsx`
+    timed out on the first widened run (`Exceeded timeout of 5000 ms`) —
+    confirmed pre-existing and unrelated to this change via a clean
+    immediate retry (74/74 suites passed, same coverage numbers); not
+    investigated or fixed here, per CLAUDE.md's "re-run once to confirm a
+    flake" guidance.
 - **What's wrong (three distinct, compounding gaps):**
   1. **admin-dashboard's coverage threshold is configured but structurally
      dead in CI.** `admin-dashboard/vitest.config.ts` sets real thresholds
@@ -7238,18 +7283,21 @@ record of what was assumed vs. what was actually true</summary>
   up — same pattern the backend already uses (see `pytest.ini`'s ratchet
   history comment: 6%→40%→50%→60%, target ceiling 80).
 - **Recommended fix (ratchet plan, not a single jump to 100%):**
-  1. admin-dashboard: point `ci.yml`'s admin-dashboard test step at `npm
-     run test:coverage` (or add `--coverage` to the existing `npm test`
-     invocation) so the already-configured thresholds actually run.
-     Immediately drop the thresholds to match the real current numbers
-     minus a few points (e.g. `statements: 15, branches: 10, functions:
-     10, lines: 18`) so this lands green, not as a new instant-red gate —
-     do not silently raise the bar and break `main` in the same PR.
-  2. rider-app / driver-app: widen `collectCoverageFrom` incrementally,
-     directory by directory (`hooks/` and `utils/` first — smaller, more
-     unit-testable — then `app/` screens, which need more test-authoring
-     work), re-measuring and re-setting the threshold at each step so the
-     gate never goes from "passing, narrow" straight to "failing, wide."
+  1. ✅ **DONE** — admin-dashboard: point `ci.yml`'s admin-dashboard test
+     step at `npm run test:coverage` so the already-configured thresholds
+     actually run, with thresholds dropped to real-minus-headroom so it
+     lands green. See "Fix applied" above.
+  2. ✅ **DONE (partial)** — rider-app / driver-app: widened
+     `collectCoverageFrom` to add `hooks/` and `utils/` (the smaller,
+     more unit-testable directories), re-measured, and re-set the
+     threshold at the new level. See "Fix applied" above. **Still open:**
+     `app/` screens (the largest directory in each app, and the one that
+     matters most — this is where an untested booking/payment flow would
+     actually ship undetected) is the next widening step, plus rider-app's
+     `components/`, and both apps' remaining `lib/`/`services/`/`api/`.
+     Continue the same incremental pattern: widen one directory, measure,
+     set threshold to measured-minus-headroom, land green, repeat — never
+     widen and raise the bar in the same change.
   3. Track milestones here or in a dedicated coverage-ratchet doc (mirror
      `pytest.ini`'s comment style) so the next session doesn't have to
      re-discover the current baseline by re-running the tools.
@@ -7273,10 +7321,12 @@ record of what was assumed vs. what was actually true</summary>
   fix first); whether `vitest run --coverage`'s per-file breakdown (not
   reproduced in full here, only the aggregate) matches the same shape as
   the backend's per-module pattern.
-- **Acceptance:** `ci.yml`'s admin-dashboard step runs with `--coverage`
-  and passes against a threshold matched to reality; a follow-up PR widens
-  `collectCoverageFrom`/`coverage.include` on all three apps with matching
-  threshold drops, landing green each time; a milestone ratchet plan is
+- **Acceptance:** ✅ `ci.yml`'s admin-dashboard step runs with `--coverage`
+  and passes against a threshold matched to reality. ✅ rider-app/driver-app
+  widened to also measure `hooks/`+`utils/`, passing at the new thresholds.
+  **Still open:** widen `app/` (all three apps), rider-app's `components/`,
+  and both apps' remaining `lib/`/`services/`/`api/`, each with a matching
+  threshold drop, landing green every step; a milestone ratchet plan
   recorded (here or in a dedicated doc) toward the user's stated 100%
   target.
 

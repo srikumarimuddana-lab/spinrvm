@@ -7166,15 +7166,18 @@ record of what was assumed vs. what was actually true</summary>
 ### B37. Frontend coverage gates measure only a fraction of each app, and admin-dashboard's threshold never actually runs in CI
 
 - [ ] **Status:** all three sub-items FIXED 2026-08-22 (admin-dashboard
-  same day as filing; rider-app/driver-app as a follow-up same day). Found
+  same day as filing; rider-app/driver-app's directory-by-directory
+  widening completed the same day across several follow-up passes —
+  every top-level source directory in every app is now measured). Found
   2026-08-22 while auditing test/validation coverage across all Spinr
   surfaces at the user's request — verified by actually running each
   app's coverage tool locally (not a spot check of config file presence),
   reading the real numbers, and cross-checking against what CI actually
-  invokes. Left open (checkbox unchecked) because the fixes only wire up
-  and widen the gates to a low, honest baseline — they don't reach the
-  user's stated 100% target, which needs ongoing ratchet work (see
-  Recommended fix step 4) that's out of scope for one session.
+  invokes. Left open (checkbox unchecked) because the fixes wire up and
+  widen the gates to a low, honest baseline — they don't reach the user's
+  stated 100% target, which needs ongoing test-authoring/ratchet work
+  (see Recommended fix step 4) that's out of scope for config changes
+  alone.
 - **Fix applied (sub-item 1, admin-dashboard):** `.github/workflows/ci.yml`'s
   admin-dashboard test step now runs `npm run test:coverage` (was `npm
   test`, which never invoked the coverage plugin). `vitest.config.ts`'s
@@ -7294,9 +7297,24 @@ record of what was assumed vs. what was actually true</summary>
     no console.error output was captured to confirm the same or a new
     leak source, since these runs used `--silent`) — flagging the
     recurrence against C37 rather than filing a duplicate new entry.
-  - **Still open, deliberately not done here:** both apps' `api/` (2
-    rider-app files, 1 driver-app file) remain outside
-    `collectCoverageFrom` — the last, smallest remaining gap.
+- **Fix applied (`api/`, driver-app only — 2026-08-22, final widening
+  step):** corrects a mislabel in the note above — checked directly and
+  **rider-app has no `api/` directory at all** (it never existed; the
+  earlier "2 rider-app files" note was wrong, likely conflated with
+  `services/`). Only driver-app has one, with a single file:
+  `api/client.ts`. Added `api/**/*.{ts,tsx}` to driver-app's
+  `collectCoverageFrom`. Re-measured: identical 32.91%/31.97%/26.26% to
+  the pre-`api/` numbers — `client.ts` has 0 measurable
+  lines/statements/functions/branches (a thin re-export or similar),
+  contributing nothing to the aggregate. Thresholds left unchanged.
+  Verified locally: `yarn jest --coverage` exits 0 (74/74 suites clean).
+  - **Every top-level source directory on both apps is now measured** —
+    `store/`, `hooks/`, `utils/`, `app/`, `components/`, `lib/`,
+    `services/`, and (driver-app only) `api/`. admin-dashboard's
+    `coverage.include` covers all of `src/lib/`, `src/store/`,
+    `src/components/`, `src/app/**`. The directory-widening portion of
+    this item is complete; what remains is the milestone-ratchet-toward-
+    100% work in Recommended fix step 4 below, not further widening.
 - **What's wrong (three distinct, compounding gaps):**
   1. **admin-dashboard's coverage threshold is configured but structurally
      dead in CI.** `admin-dashboard/vitest.config.ts` sets real thresholds
@@ -7373,13 +7391,11 @@ record of what was assumed vs. what was actually true</summary>
      to add `hooks/` and `utils/`, then `app/` (all three apps, including
      admin-dashboard's non-dashboard route groups), then rider-app's
      `components/` (driver-app's was already included from sub-item 3),
-     then both apps' `lib/`+`services/`, re-measuring and re-setting the
-     threshold at each step. See all "Fix applied" sections above.
-     **Still open:** both apps' `api/` (2 rider-app files, 1 driver-app
-     file) — small enough that it's the last remaining gap, not urgent.
-     Continue the same incremental pattern if picked up: widen, measure,
-     set threshold to measured-minus-headroom, land green — never widen
-     and raise the bar in the same change.
+     then both apps' `lib/`+`services/`, then driver-app's `api/`
+     (rider-app has no `api/` directory), re-measuring and re-setting the
+     threshold at each step. See all "Fix applied" sections above. Every
+     top-level source directory in both apps is now measured — this
+     sub-item is fully closed, not partial.
   3. Track milestones here or in a dedicated coverage-ratchet doc (mirror
      `pytest.ini`'s comment style) so the next session doesn't have to
      re-discover the current baseline by re-running the tools.
@@ -7405,13 +7421,14 @@ record of what was assumed vs. what was actually true</summary>
   the backend's per-module pattern.
 - **Acceptance:** ✅ `ci.yml`'s admin-dashboard step runs with `--coverage`
   and passes against a threshold matched to reality. ✅ all three apps
-  widened to also measure `hooks/`+`utils/`+`app/` (admin-dashboard: all
-  of `src/app/**`) plus rider-app's `components/` and both apps'
-  `lib/`+`services/`, passing at the new thresholds.
-  **Still open:** widen both apps' `api/` (last remaining gap, 2-3 files
-  total), with a matching threshold check; a milestone ratchet plan
-  recorded (here or in a dedicated doc) toward the user's stated 100%
-  target.
+  widened so every top-level source directory is measured (rider-app:
+  `store/`+`hooks/`+`utils/`+`app/`+`components/`+`lib/`+`services/`;
+  driver-app: same plus `api/`; admin-dashboard: all of `src/lib/`,
+  `src/store/`, `src/components/`, `src/app/**`), passing at the current
+  thresholds. **Still open, genuinely out of scope for directory-widening
+  work:** a milestone ratchet plan (here or in a dedicated doc) raising
+  each threshold as real test coverage improves, toward the user's stated
+  100% target — that's ongoing test-authoring work, not a config change.
 
 ### B38. admin-dashboard's visual-regression CI job has zero committed baselines — it has been a documented no-op since it was added
 

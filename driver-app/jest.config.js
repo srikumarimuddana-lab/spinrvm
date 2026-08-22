@@ -13,10 +13,10 @@ module.exports = {
     'node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules|sentry-expo|native-base|react-native-svg|@shared/.*)'
   ],
   // ACTION_ITEMS.md B37: was scoped to store/+components/ only (29 of
-  // ~116 source files) -- widened 2026-08-22 in three steps: first
+  // ~116 source files) -- widened 2026-08-22 in four steps: first
   // hooks/+utils/ (smaller, more unit-testable), then app/ (the actual
-  // screens), then lib/+services/. api/ remains outside
-  // collectCoverageFrom.
+  // screens), then lib/+services/, then api/ (its only file, client.ts).
+  // Every top-level source directory in this app is now measured.
   collectCoverageFrom: [
     'store/**/*.{ts,tsx}',
     'components/**/*.{ts,tsx}',
@@ -25,6 +25,7 @@ module.exports = {
     'app/**/*.{ts,tsx}',
     'lib/**/*.{ts,tsx}',
     'services/**/*.{ts,tsx}',
+    'api/**/*.{ts,tsx}',
     '!**/*.d.ts',
     '!**/node_modules/**',
     '!**/__tests__/**',

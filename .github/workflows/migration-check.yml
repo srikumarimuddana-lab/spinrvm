@@ -151,6 +151,19 @@ jobs:
           base_max = max(base_only_nums) if base_only_nums else 0
           new_file_nums = sorted(n for f in new_files_set for n in [seq_num(f)] if n is not None)
 
+          # Same-PR sibling collision: two of THIS PR's own new files sharing
+          # one numeric prefix. `new_file_nums.index(file_num)` below returns
+          # only the first occurrence's rank, so without this both siblings
+          # independently compute the same "expected" position and both read
+          # as OK — a same-PR duplicate never trips the rank check at all.
+          # Found 2026-08-23: commit fea60e4 landed two new files each at 328,
+          # 349, and 354 in one PR and this check passed every one of them.
+          new_files_by_num: dict[int, list[str]] = {}
+          for f in new_files_set:
+              n = seq_num(f)
+              if n is not None:
+                  new_files_by_num.setdefault(n, []).append(f)
+
           # ── Summary table header ─────────────────────────────────────────────
           rows = []   # (filename, check_name, status_icon, message)
 
@@ -181,7 +194,13 @@ jobs:
 
               # ── CHECK B: sequence gap / collision ────────────────────────────
               file_num = seq_num(filename)
-              if file_num is not None and file_num in new_file_nums:
+              siblings = new_files_by_num.get(file_num, []) if file_num is not None else []
+              if len(siblings) > 1:
+                  others = sorted(f for f in siblings if f != filename)
+                  msg = f"prefix {file_num} is also used by {', '.join(others)} in this same PR"
+                  record(short, "sequence", STATUS_FAIL, msg)
+                  errors.append(f"{short}: {msg}")
+              elif file_num is not None and file_num in new_file_nums:
                   # This file's expected position accounts for pre-existing
                   # migrations (base_max) plus its own rank among this PR's
                   # other new migrations — NOT the raw working-tree max, which

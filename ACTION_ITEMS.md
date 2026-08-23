@@ -7695,9 +7695,495 @@ record of what was assumed vs. what was actually true</summary>
   `useCallback` keyed on it, causing a silent infinite mount-effect loop
   that hangs the test with a misleading "Jest environment torn down"
   error rather than a clear stack trace — fix is a stable module-level
-  mock-state reference, not a fresh literal per call. This sub-item is
-  **still not closed** — continuing screen-by-screen in further sessions
-  per the user's explicit instruction.
+  mock-state reference, not a fresh literal per call. **Merge race:**
+  PR #4460 was merged (squash) while 3 more commits (`destination-mode.tsx`,
+  a progress-note update, `lost-and-found.tsx` rider-app) were still being
+  pushed to its branch — the merge commit captured an earlier state and
+  dropped them. Detected by diffing `origin/main` against the local branch
+  tip; recovered by cherry-picking all 3 onto a fresh branch off `main`,
+  re-verifying both apps' full suites from scratch, and opening PR #4465.
+  **Continued in PR #4465, same day:** 5 more screens — rider-app's
+  `scheduled-rides.tsx` (C29 notice-window-fee confirm branch), `loyalty.tsx`;
+  driver-app's `driver/lost-and-found.tsx`, `driver/tax-documents.tsx`
+  (T4A tap-to-email flow). 32 more tests; full suites still green
+  (rider-app 701, driver-app 814). **25 of 76 screens done, ~51 remain at
+  0%.** **Second merge race:** PR #4465 was also merged (squash) mid-push,
+  dropping 4 more commits (`driver/lost-and-found.tsx`, `driver/tax-
+  documents.tsx`, rider-app `loyalty.tsx`, a progress note) — same
+  detect/cherry-pick/re-verify recovery, landed in PR #4467. Given two
+  consecutive occurrences on this branch, every push from here on checks
+  the PR's merge state via the GitHub API first, not just branch
+  divergence. **Continued in PR #4467, same day:** 4 more screens —
+  rider-app's `wallet.tsx` (money-critical: full Stripe top-up flow),
+  `work-allowance-request.tsx`, `work-profile.tsx`; driver-app's
+  `driver/payout-history.tsx`. 46 more tests; full suites still green
+  (rider-app 733, driver-app 824). **29 of 76 screens done, ~47 remain at
+  0%.** **Continued, same day:** driver-app's `subscription/cancel.tsx` +
+  `subscription/success.tsx` (Stripe Checkout deep-link landing screens),
+  rider-app's `index.tsx` (cold-start routing gate, mirrors driver-app's
+  already-tested one — active-ride status routing table, fail-open on
+  both the ride fetch and the consent check). 19 more tests; full suites
+  still green (rider-app 747, driver-app 831). **32 of 76 screens done,
+  ~44 remain at 0%.** Two more test-authoring footguns caught and
+  documented inline (both in `subscriptionSuccessScreen.test.tsx` and
+  `indexScreen.test.tsx`): (1) a mocked `useRouter()` returning a fresh
+  object per call destabilizes a `useEffect([..., router])` dependency on
+  any re-render, silently rescheduling a timer-based redirect so it never
+  fires within a test's finite timer advances; (2) a zustand mock
+  factory's initializer closing over a `let` variable assigned later in
+  the file captures that variable's value at *module-load* time
+  (`undefined`), not per-test — both fixed with stable references.
+  **Continued, same day:** both apps' safety-critical SOS emergency-
+  contact screens — driver-app's `driver/emergency-contacts.tsx` (i18n
+  `t()` copy, `Alert.alert` confirm) and rider-app's
+  `emergency-contacts.tsx` (plain-English copy, `ConfirmSheet` confirm) —
+  same shape, both fully covered: load, empty state, 10/11-digit phone
+  formatting, add-form validation (empty name, sub-10-digit phone),
+  successful add (digit-stripping + reset + re-fetch + toast), add
+  failure, the MAX_CONTACTS(3) trigger-hiding, and the confirm-before-
+  remove flow (both success and failure). 25 more tests; full suites
+  still green (rider-app 759, driver-app 844). **34 of 76 screens done,
+  ~42 remain at 0%.** **Continued, same day:** driver-app's
+  `driver/addresses.tsx` (geocode-flow saved-address book) and rider-app's
+  `safety-hub.tsx` (calm, out-of-ride safety settings/resources home —
+  distinct from the in-ride SOS panel). 23 more tests; full suites still
+  green (rider-app 771, driver-app 855). **36 of 76 screens done, ~40
+  remain at 0%.** **Continued, same day:** rider-app's `settings.tsx`
+  (notification-prefs sync/toggle, dark mode, language picker, nav rows)
+  and driver-app's `driver/stripe-onboarding.tsx` (embedded Stripe Connect
+  WebView identity verification — token injection, no-progress watchdog,
+  onMessage stage/exit/error handling, retry), `report-safety.tsx`
+  (safety-issue report form — category/description validation, photo
+  evidence upload with a non-silent partial-failure toast, location/
+  active-ride context in the payload), and `driver/referral.tsx`
+  ("Refer & Earn" — summary/list independent-failure handling, copy/share,
+  earnings math, referred-drivers list). 49 more tests; full suites still
+  green (rider-app 785, driver-app 890). **40 of 76 screens done, ~36
+  remain at 0%.** **Continued, same day:** driver-app's `driver/chat.tsx`
+  (driver<->rider in-ride chat — AsyncStorage-then-backend history load,
+  optimistic-send, quick replies, typing indicator) and rider-app's
+  `saved-places.tsx` (address book — type-chip label seeding, geocode
+  flow, delete confirm), `otp.tsx` (auth-critical OTP verification —
+  token/userData/reactivation branches, resend rate-limit handling, the
+  post-verify consent-check routing), `pick-on-map.tsx` (map-drag
+  picker — AI-mode vs. normal-mode location bootstrap, debounced
+  reverse-geocode, the ~60m address-staleness guard), and
+  `chat-driver.tsx` (rider<->driver chat, same shape as driver-app's).
+  55 more tests; full suites still green (rider-app 834, driver-app 904).
+  **45 of 76 screens done, ~31 remain at 0%.** Two new footguns hit and
+  documented inline: React's passive-effect commit is a microtask, so a
+  single large `jest.advanceTimersByTime()` call only fires the FIRST
+  timer in a self-rearming countdown loop (step 1s at a time, flushing
+  between each step); and wrapping a hand-rolled zustand-style mock in a
+  fresh arrow function inside `jest.mock()`'s factory silently drops any
+  static property (e.g. `.getState`) attached to the original function.
+  **Continued, same day:** driver-app's `vehicle-info.tsx` (form
+  triggering admin re-verification on save — service-area-scoped vehicle
+  type fetch, Alert-confirmed submit, fresh-login token-race guard) and
+  rider-app's `manage-cards.tsx` (money-critical PCI-DSS card wallet —
+  Add/Set-Default/Delete flows, the pay-for-stuck-ride card-add path,
+  last-card-removal block) and `confirm-pickup.tsx` (map-drag pickup
+  confirm — 50m suggested-radius warning, debounced reverse-geocode, the
+  curated venue pickup-point chooser). 38 more tests; full suites still
+  green (rider-app 861, driver-app 915). **48 of 76 screens done, ~28
+  remain at 0%.** **Continued, same day:** driver-app's `otp.tsx`
+  (auth-critical OTP verification, mirroring rider-app's — client_app:
+  'driver' funnel tag, hasAttemptedVerification gating the post-verify
+  redirect effect so a stale store user can't fire it prematurely). 17
+  more tests; full suite still green (driver-app 932). **49 of 76
+  screens done, ~27 remain at 0%.** **Continued, same day:** driver-app's
+  `driver/(tabs)/activity.tsx` (Activity tab wrapper) and rider-app's
+  `ride-tracking-webview.tsx` (security-relevant public live-tracking
+  WebView — trackingUrl host-allowlist sanitization against a deep-link
+  phishing-injection vector) and `driver-arrived.tsx` (ride-critical OTP
+  handoff/cancellation-fee flow, live map). 28 more tests; full suites
+  still green (rider-app 887, driver-app 934). **52 of 76 screens done,
+  ~24 remain at 0%.** A real (pre-existing, unrelated to this pass) bug
+  was found and PINNED (not fixed — out of scope) while testing
+  `ride-tracking-webview.tsx`: `fetchTrackingUrl` never clears a prior
+  `error` state, so a successful retry after a failed fetch still shows
+  the stale error view instead of the WebView. **Continued, same day:**
+  driver-app's `documents.tsx` (upload/verification center — camera/
+  gallery/file picker paths, legacy-import documents-gap notice gated on
+  BOTH legacy metadata AND zero documents) and `profile-setup.tsx`
+  (auth-critical onboarding form — field-specific validation order,
+  best-effort non-blocking driver auto-registration, referral-apply
+  idempotency on an "already applied" 400). 32 more tests; full suite
+  still green (driver-app 966). **54 of 76 screens done, ~22 remain at
+  0%.** Also fixed a **real, CI-blocking `tsc --noEmit` failure** found
+  while investigating a batch of `rider-app-test`/`driver-app-test`
+  check-run failure notifications on this PR: pulled the actual job log
+  (rather than assuming another stale-superseded-SHA false alarm, per
+  the many genuine ones earlier in this same session from rapid
+  sequential pushes) and confirmed 3 real, pre-existing type errors
+  across 4 test files already on this branch (`indexScreen.test.tsx`,
+  `supportScreen.test.tsx`, `helpScreen.test.tsx`,
+  `backgroundMessaging.android.test.ts`) — none introduced by this
+  session, all now fixed: (1) partial `user` objects passed to a mocked
+  `useAuthStore.setState()` not satisfying the real `User` type's
+  required fields, fixed with `as any`; (2) `jest.fn(() => null)`
+  inferring a zero-arg signature then called with a prop object
+  (TS2554), fixed by typing the mock's own parameter; (3) mocks declared
+  zero-arg while their `jest.mock()` factories spread a variadic
+  `...a: unknown[]` into them (TS2556), fixed with explicit rest-param
+  signatures; plus one `.mockResolvedValueOnce(null)` against a mock
+  typed to always resolve a bare `string`. `yarn tsc --noEmit` now
+  passes clean on both apps. This sub-item is **still not closed** —
+  continuing screen-by-screen in further sessions per the user's
+  explicit instruction. **Continued, same day:** rider-app's
+  `lost-and-found-chat.tsx` (support chat with a 10s foreground poll
+  gated on `AppState.currentState === 'active'`) and `become-driver.tsx`
+  (5-step Intro/Personal/Vehicle/Documents/Review wizard — driver-app
+  deep-link detection with app-store fallback, dynamic per-requirement
+  document upload/expiry mapped into the submit payload, 9-year vehicle-
+  age rejection). New footgun hit in `become-driver.tsx`'s test:
+  `findAllByProps({ placeholder: ... })` on a `TextInput` matches BOTH
+  the composite element and its underlying host node for the same field,
+  doubling the array (2 fields → 4 matches, not 2) — indices silently
+  landed on the same field twice while the second field's input was
+  never actually filled, first surfacing as a validation toast for a
+  field the test believed it had already set. Fixed by filtering
+  `findAllByType(TextInput)` by `.props.placeholder` instead of using
+  `findAllByProps` directly. 29 more tests (14 + 15); full rider-app
+  suite still green (916), `yarn tsc --noEmit` clean. **56 of 76 screens
+  done, ~20 remain at 0%. Continued, same day:** driver-app's
+  `driver/lost-and-found-chat.tsx` (rider-reported-case chat plus a
+  driver-initiated "found something" report form) — caseId vs. rideId
+  mode, the Found/Not Found respond banner gated on
+  `reported`/`driver_notified` status, respond()'s Alert-confirm → PUT
+  → reload, optimistic send/photo-upload with rollback-on-failure, and
+  the closed-case banner. New footgun: this screen derives its 10s poll
+  interval from `activeCaseId` (`lostCase?.id`, unset at mount) rather
+  than the route's own `caseId` param (rider-app's equivalent screen
+  polls on `caseId` directly) — the same `useEffect(() => cb(), [])`
+  focus-effect mock used everywhere else in this pass never re-arms once
+  the callback's closure changes, so the poll test failed until the mock
+  was corrected to `useEffect(() => cb(), [cb])`, matching the real
+  focus-effect hook's actual re-run-on-callback-change semantics.
+  18 more tests; full driver-app suite still green (984 — one
+  standalone-passing/flaked-only-in-full-run failure in the pre-existing
+  `backgroundMessaging.android.test.ts`, confirmed unrelated via a clean
+  retry, consistent with the C37 cross-suite-timer-leak pattern already
+  tracked). `yarn tsc --noEmit` clean. **57 of 76 screens done, ~19
+  remain at 0%. Continued, same day:** rider-app's `profile-setup.tsx`
+  (create/edit profile form) — isEditing derived from
+  `user.profile_complete || user.first_name`, field-specific validation
+  order, best-effort referral apply (blank code skipped entirely,
+  "already applied" 400 counted as success, a genuine rejection stops
+  retrying immediately), the /consent/status-gated post-submit redirect
+  (fails open to `/(tabs)` on its own failure), photo-picker
+  permission/upload paths, and the create-mode-only hardware-back
+  sign-out confirmation. `BackHandler.addEventListener` isn't
+  auto-mocked by RN's jest preset — needed an explicit
+  `jest.spyOn(BackHandler, 'addEventListener').mockReturnValue({ remove:
+  jest.fn() })` before it could be asserted against as a mock. 18 tests;
+  full rider-app suite still green (934), `yarn tsc --noEmit` clean.
+  **58 of 76 screens done, ~18 remain at 0%. Continued, same day:**
+  driver-app's `driver/subscription.tsx` (Spinr Pass subscription
+  screen) — parallel plans/current-subscription/payments load, the
+  free_mode celebration card, handleSubscribe's Subscribe-vs.-Switch-Plan
+  Alert wording, doSubscribe's in-app-browser checkout ->
+  verify-session -> active/still-processing toast (and the
+  no-checkout_url dev/test immediate-activation path), cancel's
+  Alert-confirm flow, resend-invoice success/failure, and paginated
+  "Load more" payment history. Own footgun (not a repeat of an earlier
+  one): a `jest.fn(() => 'url')` mock (zero-arg inferred) spread with
+  `(...a)` in its `jest.mock()` factory failed `tsc --noEmit` (TS2556)
+  even though `yarn jest` itself passed clean — caught only because
+  `tsc --noEmit` is now run on every screen per this session's earlier
+  CI-gate-fix precedent; fixed with an explicit `(..._a: unknown[])`
+  signature, same shape as the driver-app tsc fixes from earlier this
+  session. 12 tests; full driver-app suite still green (996), `yarn tsc
+  --noEmit` clean. **59 of 76 screens done, ~17 remain at 0%. Continued,
+  same day:** driver-app's `driver/payout.tsx` (payouts/setup/tax-
+  documents screen, money-adjacent — read-only test coverage, no
+  application code changed). Covers the parallel initial load; the
+  `allReady` setup-checklist gate (Stripe-ready && SIN-on-file &&
+  GST-on-file) and its SIN-unlocks-Stripe step-ordering/locking;
+  handleSaveSin/handleSaveGst's format validation and
+  `updateDriverMe.mutateAsync` payload shape; handleStripeOnboarding's
+  no-url/mock "Unavailable" short-circuit vs. the full
+  auth-browser-then-sync flow (active/still-processing/not-finished
+  toasts) and its own failure toast; the Tax Documents section's
+  earned-year gate and its T4A/CSV email actions; and the
+  canGoBack-vs-fallback-to-/driver/ back nav. No new footguns — reused
+  the existing `useDriverStore` (called directly, no `.getState` needed
+  here), `useDriverMe`/`useUpdateDriverMe`, `ErrorBoundary`, and
+  `expo-linear-gradient` mock conventions already established across
+  this pass. 18 tests; full driver-app suite still green (1014), `yarn
+  tsc --noEmit` clean. **60 of 76 screens done, ~16 remain at 0%.
+  Continued, same day:** rider-app's `ride-details.tsx` (past-ride
+  detail/receipt screen). Covers the fetch-on-mount and "Ride not
+  found" no-crash fallback; status badge label/color mapping with a
+  raw-string fallback for unknown statuses; the cancelled-ride flat-fee
+  card (never the booking-time fare_breakdown, which would misrepresent
+  a trip never taken); the fare-breakdown consolidation of multiple
+  'fare' lines into one "Ride fare" line plus promo/tip injection when
+  the ride carries one but the breakdown doesn't; email-receipt and
+  PDF-invoice actions (completed rides only); and back/help nav. New,
+  environment-level (not code) finding: `handleDownloadInvoice`'s `await
+  import('expo-print')` — a deliberate dynamic import so an old build
+  without the native module degrades to its catch branch instead of
+  crashing — throws
+  `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG` under this repo's Jest
+  config on EVERY call, regardless of `jest.mock()`, because Jest's CJS
+  runtime has no `--experimental-vm-modules` flag; there is no way to
+  exercise the PDF-success path in this test harness at all. Rather than
+  contorting the test (or touching the flag/config, out of scope), pinned
+  the always-observed behavior directly: the PDF button always lands in
+  the graceful "PDF Unavailable" toast in this environment — which
+  happens to be the exact real-world scenario (old build, no native
+  module) the dynamic import exists to defend against. 14 tests; full
+  rider-app suite still green (948), `yarn tsc --noEmit` clean. **61 of
+  76 screens done, ~15 remain at 0%. Continued, same day:** rider-app's
+  `driver-arriving.tsx` (ride-critical waiting/tracking screen —
+  searching + driver-en-route states, live map, cancel flow, share
+  trip). Covers fetch-on-mount + 5s polling; status-based navigation to
+  driver-arrived/ride-in-progress/ride-completed and the
+  clear-and-return-home cancelled path; the isSearching-vs-hasDriver UI
+  split; handleCancel's four status-specific confirm-dialog copies
+  (full fare / cancellation fee / free / cancel-search) each flowing
+  through the reason sheet to cancel+clear+navigate, with a failure
+  toast instead of navigating; the hardware-back cancel-confirm trigger;
+  handleShareTrip's "Tracking Not Configured" gate on an unset
+  `trackBaseUrl` (from the `TrackBaseUrlContext` in `app/_layout`) vs.
+  its formatted share blob; and handleCopyDetails/Message nav. Reused
+  `driver-arrived.tsx`'s test's established map/bottom-sheet/
+  ConfirmSheet/CancelReasonSheet mock doubles verbatim. New footgun
+  avoided rather than hit: an initial draft mocked the whole `react`
+  module to intercept `useContext(TrackBaseUrlContext)` per-test — risky
+  since it's the same module every hook in the tree resolves through;
+  switched to the established `manageCardsScreen.test.tsx` convention
+  instead (mock `../app/_layout`'s context as a plain
+  `React.createContext(null)`, then wrap the rendered tree in its real
+  `.Provider` with a per-test value) before ever running it. 18 tests;
+  full rider-app suite still green (966), `yarn tsc --noEmit` clean.
+  **62 of 76 screens done, ~14 remain at 0%. Continued, same day:**
+  rider-app's `(tabs)/activity.tsx` (ride-history + upcoming-scheduled
+  tab). Covers the focus-effect fetch of rides/stats/scheduled rides
+  throttled by its 30s TTL; the history/upcoming tab switch and
+  personal/business filter (business = has a `corporate_account_id`);
+  RECENT-vs-month-named section grouping; the fare-total rule (a
+  non-empty `fare_breakdown` means `grand_total` is already
+  tip-inclusive and used as-is; tip is only added on top for a legacy
+  ride with an empty breakdown); the load-failure and empty-result
+  states for both tabs; infinite-scroll `onEndReached` page-append; and
+  tap-through nav to `/ride-details`. No new footguns. 11 tests; full
+  rider-app suite still green (977), `yarn tsc --noEmit` clean. **63 of
+  76 screens done, ~13 remain at 0%. Continued, same day:** rider-app's
+  `ai-assistant.tsx` (AI chat screen — chose this over driver-app's
+  `driver/(tabs)/index.tsx` next-smallest-remaining candidate, whose
+  ~15 stacked hooks/components for a live dispatch/safety dashboard made
+  it a dedicated-session undertaking rather than a same-pass pickup).
+  Covers config/history load on mount; welcome-state quick-prompt chips;
+  handleSend's trim/clear/no-op-on-blank; the header-back AND hardware-
+  back routing through `activeRideRouteFor` (active ride -> its owning
+  screen with rideId; no ride -> `router.back()`); every support-action
+  bubble variant (cancel_ride to the ride's own screen or the
+  `/ride-status` fallback, lost-and-found, generic); map_picker bubbles
+  (approx-coord passthrough plus the AI8 stale-card disable once a newer
+  turn starts); fare_quote/location_suggestions selections calling
+  `handleSend` with their self-contained follow-up message; every
+  `RideStatusBanner` status copy plus its Share/Track actions; and the
+  default disclaimer fallback. New footgun: `expo-speech-recognition` is
+  an installed real native-module package (not stubbed by the jest-expo
+  preset), so the screen's own guarded `require('expo-speech-recognition')`
+  — meant to degrade gracefully only when the module is genuinely absent
+  from a build — resolves to the real package under Jest, and importing
+  its real code touches expo's winter-runtime fetch polyfill at
+  module-eval time, throwing `ReferenceError: You are trying to 'import'
+  a file outside of the scope of the test code` before any test body
+  runs at all (misleadingly reported as "Test suite failed to run", not
+  a per-test failure). Root-caused by bisecting down to a bare
+  `require('../app/ai-assistant')` with no render, confirming it fails
+  at import time; fixed by mocking `expo-speech-recognition` directly.
+  22 tests; full rider-app suite still green (999), `yarn tsc --noEmit`
+  clean. **64 of 76 screens done, ~12 remain at 0%. Continued, same
+  day:** rider-app's `ride-in-progress.tsx` (ride-critical in-trip
+  screen — live map, ETA, end-ride-early flow, share trip). Covers
+  fetch-on-mount + no-rideId redirect home + 15s poll-only-when-not-
+  WS-connected; the redirect to `/ride-completed` on status flip; the
+  Tracking-Not-Configured gate on `handleShareTrip` (reused the
+  `TrackBaseUrlContext` Provider-wrap convention from
+  `driverArrivingScreen.test.tsx`) vs. its formatted share + LIVE-banner
+  activation; handleCopyTrackingLink; Live Map nav; the End Ride action
+  (footer button and the identical hardware-back dialog) quoting the
+  full agreed fare, POSTing `/complete` and refetching on confirm, with
+  a failure toast; Message Driver nav; and the driver-photo error
+  fallback. No new footguns — reused established map/bottom-sheet/
+  ConfirmSheet mock doubles verbatim. 14 tests; full rider-app suite
+  still green (1013), `yarn tsc --noEmit` clean. **65 of 76 screens
+  done, ~11 remain at 0%. Continued, same day:** driver-app's
+  `become-driver.tsx` (5-step Intro/Personal/Vehicle/Documents/Review
+  wizard, distinct from rider-app's screen of the same name completed
+  earlier this session — deliberate no-prefill-from-account personal
+  fields, an AsyncStorage draft, service-area-scoped vehicle types, a
+  dynamic per-requirement date-picker expiry flow, and a CRC/VSC
+  background-check consent gate). Covers: the no-prefill-from-account
+  behavior; the unpublished/unreachable-consent-text auto-check (never
+  blocks registration on a checkbox next to placeholder or failed-to-
+  load text); Personal step's completeness gate and its service-area-
+  triggered city-seed + vehicle-type refetch; Vehicle step's
+  skip-when-entirely-empty vs. reject-when-partial vs.
+  always-advance-on-explicit-Skip; the 9-year vehicle-age rejection;
+  handleUpload's iOS Camera/Gallery/File Alert dispatch and its
+  success/failure paths; the date-picker's dismiss/past-date-rejected/
+  future-date-accepted flow (driven by calling the mocked
+  `@react-native-community/datetimepicker`'s own `onChange` prop
+  directly, since its native UI can't be driven in Jest); Submit's
+  consent-checkbox gate, the requirement-name-to-legacy-expiry-field
+  keyword mapping, CRC-consent POST only when the text was actually
+  published, draft-clear + redirect on success, and the failure toast
+  without redirecting; and the Intro-step-only Logout vs.
+  every-other-step Back header button. No new footguns. 16 tests; full
+  driver-app suite still green (1030), `yarn tsc --noEmit` clean. **66
+  of 76 screens done, ~10 remain at 0%. Continued, same day:** rider-app's
+  `payment-confirm.tsx` (booking-confirmation + payment-method screen,
+  money-adjacent — read-only test coverage, no application code
+  changed). Covers the focus-effect saved-cards load with the
+  distinct load-error state (never rendered identically to the
+  genuine-zero-cards state); the work-mode corporate-toggle sync only
+  applying its default before the rider has picked a payment method by
+  hand, never overriding an explicit choice; handleBookRide's happy
+  path (createRide -> /driver-arriving, or /(tabs) + a local reminder
+  for a scheduled ride) and its full SCA two-step (requires_action ->
+  confirmPayment -> re-createRide), with both an
+  authentication-declined and a still-requires-action-after-SCA path
+  toasting instead of proceeding; the 409 already-active-ride
+  re-route to whichever screen owns the real active ride by status; the
+  402 unpaid-ride confirm sheet routing to /ride-completed; the generic
+  booking-failure toast; totalFare's grand_total-minus-promo-discount
+  math; and the no-saved-cards "Credit Card" tap routing to
+  /manage-cards. Footgun: a `jest.fn()` mock for a hook return value
+  that the source code chains `.catch()` off of (`scheduleReminder(...)
+  .catch(() => {})`) must itself resolve a promise
+  (`mockScheduleReminder.mockResolvedValue(...)`) — a bare `jest.fn()`
+  returns `undefined`, and calling `.catch` on that throws, silently
+  swallowed by the screen's own outer try/catch and misread as a
+  generic booking failure rather than the real bug (an unconfigured
+  mock). 15 tests; full rider-app suite still green (1028), `yarn tsc
+  --noEmit` clean. **67 of 76 screens done, ~9 remain at 0%. Continued,
+  same day:** rider-app's `(tabs)/index.tsx` (home/map screen — the
+  rider app's landing screen). Covers the focus-effect active-ride
+  redirect (searching/assigned/accepted -> driver-arriving, arrived ->
+  driver-arrived, in_progress -> ride-in-progress,
+  completed-and-unpaid -> ride-completed, completed-and-paid -> no
+  redirect); the notification-permission banner's visibility gate,
+  Enable/Dismiss actions, and the denied-Enable settings-open + toast;
+  the AI button's enabled/coming-soon/hidden three-way branch; the
+  promo banner's dismiss and its interval-driven message rotation;
+  quick-action/search routing; and RiderSOS receiving the current ride
+  id (or undefined) plus `ridelessSosEnabled` from
+  `RidelessSosEnabledContext`. No new footguns — reused the
+  `RidelessSosEnabledContext`/`StripeKeyContext` Provider-wrap
+  convention and the `SafeBottomSheet`-style `@gorhom/bottom-sheet`
+  mock double already established this pass. 16 tests (one benign,
+  already-tolerated act() warning from a location-fetch promise
+  resolving after its wrapping act() block, same pattern accepted in
+  `profileSetupScreen.test.tsx` earlier this session); full rider-app
+  suite still green (1044), `yarn tsc --noEmit` clean. **68 of 76
+  screens done.** (Correction: the "~8 remain" figure above was
+  imprecise — a `comm -23` diff against the original zero-coverage list
+  showed only 4 real screens actually remaining at this point: rider-app's
+  `ride-completed.tsx` and `ride-options.tsx`; driver-app's
+  `driver/(tabs)/profile.tsx` and `driver/(tabs)/index.tsx` [deliberately
+  deferred, see below].) **Continued, same day:** rider-app's
+  `ride-completed.tsx` (post-trip rate+tip+pay screen, money-adjacent —
+  Stripe SCA-adjacent payment orchestration via the screen's own
+  independently-unit-testable `attemptRidePayment` helper, mocked as a
+  black box per its own docstring). Covers fetch-on-mount; the
+  auto-dismiss-once-if-already-paid-on-first-load guard; hardware-back
+  fully blocked; `handleSubmit`'s rate-once-across-retries latch
+  (`hasRatedRef`) plus its payment-attempt orchestration and success
+  routing to `/(tabs)`; skip-payment-when-already-paid ("Rate and
+  finish" vs. "Pay and finish" accessibility labels); the
+  payment-failure `ConfirmSheet` display; "Change Card" routing to
+  `/manage-cards?rideId=...&forPayment=1&tip=0&rated=1`; "Retry"
+  re-invoking `handleSubmit` with the same override card without
+  re-rating; auto-retry-on-return-from-Change-Card via the
+  `payWithCard`/`tip`/`rated` route params; Google Pay
+  success/silent-cancellation/other-failure-toast paths; email receipt;
+  the lost-item modal open/type/submit; and the driver-photo error
+  fallback. 15 tests; full rider-app suite still green (1059), `yarn
+  tsc --noEmit` clean. **69 of 76 screens done, 3 remain at 0%:**
+  rider-app's `ride-options.tsx` (2284 lines, largest remaining);
+  driver-app's `driver/(tabs)/profile.tsx` (1459 lines, not yet
+  attempted); driver-app's `driver/(tabs)/index.tsx` (1359 lines,
+  deliberately deferred as its own dedicated-session dispatch/safety-
+  dashboard undertaking — ~15 stacked hooks/components — not part of
+  this same-pass scope). **Continued, same day:** driver-app's
+  `driver/(tabs)/profile.tsx` (driver's profile tab). Covers the
+  company-info fetch on mount (silently swallowed failure, no error UI)
+  and its rendered card once populated; the focus-effect refresh
+  (`/auth/me` -> `authStore.setState`, `refetchDriverMe()`, and the two
+  independently-best-effort `/drivers/requirements`/`/drivers/documents`
+  fetches, proving a requirements failure doesn't block documents or
+  crash); the referral-code fallback chain (`driver_code` ->
+  `referral_code` -> `DRIVER<id-derived>` -> chip hidden when there's no
+  id at all) and its copy-to-clipboard action; `handlePickPhoto`'s
+  Alert-driven Take Photo/Library dispatch with permission-denied and
+  upload success/failure toasts; the edit-profile modal's pre-fill,
+  missing-field and invalid-email validation, successful save (store
+  update + modal close + toast) and backend-message failure toast; the
+  gender-picker bottom sheet; `handleLogout`/`handleLogoutAll`'s
+  Alert-confirm -> store action -> `/login` redirect (including that
+  `handleLogoutAll` has no catch around `logoutAll()`, only a `finally`
+  that still redirects, so a rejection propagates out of the handler
+  itself — pinned rather than assumed); the document-requirement badge
+  derivation (pending overrides an older approved copy, expired,
+  upload-required for an unmatched requirement); the vehicle-info
+  color/make/model join; the rejection banner; and the six Support-
+  section navigation taps. No new footguns — reused the
+  `mockUseAuthStore`/`setState` selector-pattern convention from
+  `reactivateAccountScreen.test.tsx` and the `useFocusEffect`-as-`[]`-
+  effect convention (safe here since the callback's only dependency,
+  `refetchDriverMe`, is TanStack Query's stable memoized reference, not
+  state unset at mount). 23 tests; full driver-app suite still green
+  (108 suites / 1053 tests), `yarn tsc --noEmit` clean. **70 of 76
+  screens done, 2 remain at 0%:** rider-app's `ride-options.tsx` (2284
+  lines, largest remaining); driver-app's `driver/(tabs)/index.tsx`
+  (1359 lines, deliberately deferred, see above). **Continued, same
+  day:** rider-app's `ride-options.tsx` (vehicle-type selection +
+  booking screen, money-critical — this is where a ride is actually
+  created; the largest remaining screen in this pass at 2284 lines).
+  Covers the mount effects (parallel `fetchEstimates` +
+  `fetchNearbyDrivers` when pickup/dropoff are set, with a
+  `fetchEstimates` rejection setting the "Could not load fares" retry
+  state rather than crashing); `handleSelect`'s unavailable-vehicle
+  toast-and-no-op vs. an available selection updating the store and
+  refetching promos; `handleBookRide`'s payment guard (card-with-no-
+  selected-card opens a confirm sheet, distinct copy for zero saved
+  cards vs. an unselected one); the corporate work-policy block
+  (`checkRide`) offering "Turn off work mode"; the surge confirm gate
+  (>1.0× always requires an explicit "Book at $X" tap before
+  `proceedWithBooking` runs; exactly 1.0× books directly);
+  `proceedWithBooking`'s full branch set — happy path to
+  `/driver-arriving` (or `/(tabs)` + a scheduled local reminder for a
+  scheduled ride), `requires_action` toasting without navigating, a
+  `promo_error` toasting a warning while still navigating, a 409
+  re-routing to whichever screen owns the rider's real active ride by
+  status (both `searching` and `in_progress` cases), a 402 with
+  `unpaid_ride_id` opening the Unpaid Ride confirm sheet routing to
+  `/ride-completed`, and any other failure toasting the backend's
+  message; `handleScheduleConfirm`'s <15-minute rejection vs. a valid
+  time being stored; and `handleManualPromo`'s eligible/ineligible/
+  not-found branches plus the promo-removal tap. No new footguns —
+  reused the `react-native-maps`/`RouteLine`/`RoutePins` map-mock
+  convention, the `@gorhom/bottom-sheet` forwardRef double, and the
+  `ConfirmSheet` lightweight double verbatim; the one new pattern was
+  mocking `workProfileStore`'s selector-style calls
+  (`useWorkProfileStore(s => s.field)`, distinct from the whole-object-
+  destructure call other screens use) via a hook function carrying its
+  mutable state as properties on itself, since a `jest.mock()` factory
+  can't close over an outer-scope `let`. 22 tests; full rider-app suite
+  still green (115 suites / 1081 tests), `yarn tsc --noEmit` clean.
+  **71 of 76 screens done, 1 remains at 0%:** driver-app's
+  `driver/(tabs)/index.tsx` — deliberately deferred out of this
+  same-pass scope as its own dedicated-session dispatch/safety-
+  dashboard undertaking (1359 lines, ~15 stacked hooks/components: live
+  dispatch, demand heatmap, safety triggers, SOS). This closes out
+  every rider-app screen originally at 0% coverage; driver-app has
+  exactly this one screen left.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

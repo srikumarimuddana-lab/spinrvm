@@ -8183,7 +8183,43 @@ record of what was assumed vs. what was actually true</summary>
   dashboard undertaking (1359 lines, ~15 stacked hooks/components: live
   dispatch, demand heatmap, safety triggers, SOS). This closes out
   every rider-app screen originally at 0% coverage; driver-app has
-  exactly this one screen left.
+  exactly this one screen left. **Continued, dedicated session:**
+  driver-app's `driver/(tabs)/index.tsx` — the live dispatch/safety
+  dashboard, the last of the 76 originally-zero-coverage screens.
+  Every dependency (driverStore, authStore, vehicleTypeStore,
+  languageStore, useDriverDashboard, useDemandHeatmap, useAirportZones,
+  useDriverSafetyTrigger, useDriverDiscreetSosFlag, the map/dashboard/
+  panel components, SOSButton/SafetyShield/SafetyOverlay,
+  liveRouteShared) is mocked so the test isolates this file's own
+  render/handler logic — the underlying hooks each own their own
+  complexity and stay out of scope here. Covers: the location gate
+  (denied -> Retry + Open Settings, unavailable -> Retry only, still-
+  resolving -> spinner) and its Retry wiring to `refreshLocation`; the
+  store-`error` effect (toast + `clearError`); the unread-notification
+  fetch gated on `isAppCheckTokenReady` feeding `DriverTopBar`; the
+  full rideState-driven panel switch (idle -> `DriverIdlePanel`
+  wired to `toggleOnline`; `ride_offered` -> `RideOfferPanel`'s
+  accept/decline calling `acceptRide`/`declineRide` with the offer id;
+  the three active-ride states -> `ActiveRidePanel`'s verify-OTP/
+  arrive-at-pickup (with the driver's live lat/lng for the geofence
+  check)/start/cancel handlers; `trip_completed` -> `TripCompletedPanel`'s
+  Done/Rate handlers); `requestRideCompletion`'s off-route confirm-modal
+  gate (a `confirmationRequired` result opens the modal instead of
+  finishing; picking a reason re-calls `completeRide` with that
+  confirmation and closes on success; "Keep trip open" closes without
+  re-completing); and the SOS/Safety flag branch (the discreet-flag-off
+  default renders `SOSButton`, POSTing to `/rides/:id/emergency` and
+  returning the response body; flag-on renders the `SafetyShield`/
+  `SafetyOverlay` pair instead; neither renders outside an active ride).
+  No new footguns — reused the `mockedUseDriverStore`/`__state`
+  selector-carrier convention from `rideOptionsScreen.test.tsx`'s
+  `workProfileStore` mock (needed here too since `useDriverStore` is
+  called both as a whole-object destructure and via `.getState()`
+  inside an `AppState` listener effect this test doesn't exercise
+  directly). 16 tests; full driver-app suite still green (109 suites /
+  1069 tests), `yarn tsc --noEmit` clean. **76 of 76 screens done — the
+  B37 sub-item 4 app/-screens zero-coverage list is now fully closed
+  out**, across both rider-app and driver-app.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

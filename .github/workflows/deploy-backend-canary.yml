@@ -1,0 +1,135 @@
+name: Deploy Backend to Fly.io (Canary)
+
+# Canary tier of docs/adr/011-environment-topology.md §3.
+# Operating procedure, promote/abort criteria: docs/runbooks/canary-environment.md.
+#
+# ###########################################################################
+# # THIS WORKFLOW DEPLOYS CODE THAT SERVES REAL USERS AND REAL DATA.        #
+# #                                                                         #
+# # spinr-backend-canary runs against the PRODUCTION Supabase project and   #
+# # PRODUCTION Redis (ADR-011 §3). It is not a test environment. Only a     #
+# # commit already on `main` may be deployed here — the ref check below     #
+# # enforces that — and Cloudflare weighted routing decides how much real   #
+# # traffic it takes.                                                       #
+# ###########################################################################
+#
+# Deliberately manual. There is no push trigger: a canary is a decision to
+# expose a slice of live traffic to a specific commit, and it is followed by a
+# human watching Sentry and the SLA dashboards for a soak window before the
+# same commit is promoted to production. Automating that away removes the only
+# part that makes it a canary.
+#
+# ROLLBACK IS NOT THIS WORKFLOW. To abort, set the canary's Cloudflare routing
+# weight to 0 — traffic drains immediately with no redeploy and no code
+# change, the same DNS-level model as the Fly/Railway failover in ADR-007.
+# See the runbook.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type CANARY to confirm this deploys to real production traffic'
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-fly-canary
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to Fly.io (canary)
+    runs-on: ubuntu-latest
+    if: github.repository == 'srikumarimuddana-lab/spinrvm'
+    env:
+      FLY_APP: spinr-backend-canary
+      FLY_HEALTH_URL_CANARY: ${{ secrets.FLY_HEALTH_URL_CANARY }}
+    steps:
+      - name: Confirm intent
+        run: |
+          if [ "${{ inputs.confirm }}" != "CANARY" ]; then
+            echo "::error title=Not confirmed::Type CANARY in the confirm input to proceed."
+            echo "This deploy serves real production traffic and real production data."
+            exit 1
+          fi
+          echo "Confirmed."
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      # A canary exists to de-risk a commit on its way to production. Deploying
+      # a ref that is not an ancestor of main means canary and production can
+      # never converge — you would be soaking code that is not the code you
+      # intend to ship.
+      - name: Verify the ref is already on main
+        run: |
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "::error title=Not on main::${GITHUB_SHA} is not an ancestor of origin/main."
+            echo "Canary deploys a commit that is already merged, on its way to production."
+            echo "Merge to main first, then re-run this workflow against that commit."
+            exit 1
+          fi
+          echo "${GITHUB_SHA} is on main."
+
+      - name: Verify required secrets are set
+        run: |
+          if [ -z "${FLY_API_TOKEN_CANARY}" ]; then
+            echo "::error title=Missing secret::FLY_API_TOKEN_CANARY is not set."
+            echo ""
+            echo "See docs/runbooks/canary-environment.md for one-time setup:"
+            echo "  fly apps create spinr-backend-canary"
+            echo "  fly tokens create deploy -a spinr-backend-canary"
+            echo "  -> Settings > Secrets > Actions > FLY_API_TOKEN_CANARY"
+            echo ""
+            echo "Note: unlike the dev and staging workflows, this one stages NO"
+            echo "Supabase credentials. The canary uses the PRODUCTION Supabase"
+            echo "project, and those secrets are set once directly on the Fly app"
+            echo "with 'fly secrets set -a spinr-backend-canary' — deliberately"
+            echo "not passed through CI."
+            exit 1
+          fi
+          echo "FLY_API_TOKEN_CANARY is set."
+        env:
+          FLY_API_TOKEN_CANARY: ${{ secrets.FLY_API_TOKEN_CANARY }}
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master (2026-08-18)
+
+      - name: Show flyctl version
+        run: flyctl version
+
+      - name: Deploy to Fly.io (canary)
+        working-directory: backend
+        run: flyctl deploy --remote-only --config fly.canary.toml
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_CANARY }}
+
+      - name: Health check
+        if: ${{ env.FLY_HEALTH_URL_CANARY != '' }}
+        run: |
+          echo "Polling ${FLY_HEALTH_URL_CANARY}/health …"
+          for i in $(seq 1 18); do
+            STATUS=$(curl -sf --max-time 5 "${FLY_HEALTH_URL_CANARY}/health" \
+              -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
+            echo "  attempt ${i}/18 → HTTP ${STATUS}"
+            if [ "$STATUS" = "200" ]; then
+              echo "Canary is healthy."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::Canary health check timed out after 3 minutes."
+          echo "Set the Cloudflare canary weight to 0 before investigating —"
+          echo "see docs/runbooks/canary-environment.md."
+          exit 1
+
+      - name: Next steps
+        run: |
+          echo "Canary is deployed but takes traffic only per its Cloudflare weight."
+          echo ""
+          echo "  1. Raise the weight to ~5% (docs/runbooks/canary-environment.md)."
+          echo "  2. Soak. Watch Sentry environment=canary and the SLA dashboards."
+          echo "  3. Promote by deploying this same SHA via deploy-fly.yml, or"
+          echo "     abort by setting the weight back to 0 (no redeploy needed)."

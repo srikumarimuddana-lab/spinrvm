@@ -1,0 +1,105 @@
+# Fly.io backend — CANARY (Toronto/yyz). See docs/adr/011-environment-topology.md §3
+# and docs/runbooks/canary-environment.md.
+#
+# THIS FILE IS INERT UNTIL A HUMAN WITH REAL FLY.IO ACCESS RUNS:
+#   fly apps create spinr-backend-canary --org <your-org>
+#
+# ###########################################################################
+# # THIS TIER SERVES REAL PRODUCTION TRAFFIC AND REAL PRODUCTION DATA.      #
+# #                                                                         #
+# # Unlike fly.dev.toml and fly.staging.toml, this app connects to the      #
+# # PRODUCTION Supabase project, PRODUCTION Redis, and PRODUCTION           #
+# # app_settings. Riders and drivers routed here are real. Treat any change #
+# # to this file with the same care as backend/fly.toml.                    #
+# ###########################################################################
+#
+# WHY ENV = "production" AND NOT "canary"
+#
+# ENV is not a label — roughly thirty code paths branch on the exact string
+# "production", and four of them are single-gated, meaning that string is the
+# only thing standing between the safe behavior and the unsafe one:
+#
+#   backend/core/middleware.py:890  Firebase App Check enforcement  -> OFF
+#   backend/core/middleware.py:879  HSTS response header            -> NOT SENT
+#   backend/utils/cookie_manager.py:37,64  `secure` flag on cookies -> OFF
+#   backend/utils/apns_client.py:230       APNs endpoint            -> SANDBOX
+#
+# The APNs one is the sharpest: production device tokens are not valid against
+# the sandbox gateway, so an ENV=canary machine would silently fail every iOS
+# push for the ~5% of real users routed to it. Setting ENV="canary" here would
+# not make this a safer environment; it would make it a degraded production.
+#
+# Canary is therefore differentiated by things that carry NO behavioral
+# gating: SENTRY_ENVIRONMENT (Sentry's environment facet only — see
+# core/config.py's SENTRY_ENVIRONMENT field and server.py's sentry_sdk.init)
+# and SPINR_DEPLOY_TIER (purely descriptive; nothing branches on it).
+#
+# Do NOT "fix" ENV below to "canary". That is the bug this comment exists to
+# prevent.
+#
+# Secrets are NOT set here. Unlike the dev and staging tiers, this app's
+# secrets are the PRODUCTION values (same Supabase project, same Redis, same
+# Firebase, same Stripe) — set them with `fly secrets set -a
+# spinr-backend-canary`, and keep them byte-identical to production, exactly
+# as fly.toml requires of Railway. A canary running different credentials is
+# testing a configuration that will never ship.
+app = "spinr-backend-canary"
+primary_region = "yyz"
+kill_signal = "SIGINT"
+kill_timeout = "30s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # See the block comment above before changing this line.
+  ENV = "production"
+  PORT = "8000"
+  SUPABASE_REGION = "ca-central-1"
+  # 1 worker, not production's 2: this app takes a ~5% traffic slice, and a
+  # smaller footprint keeps the canary's own resource profile from masking a
+  # memory regression it is supposed to surface.
+  UVICORN_WORKERS = "1"
+  PYTHONUNBUFFERED = "1"
+  # Sentry's `environment` facet only. Decoupled from ENV so canary errors are
+  # separable from production ones despite both running ENV="production".
+  SENTRY_ENVIRONMENT = "canary"
+  # Purely descriptive, for logs and metric labels. Nothing branches on it.
+  SPINR_DEPLOY_TIER = "canary"
+
+[deploy]
+  strategy = "rolling"
+  max_unavailable = 1
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # NO scale-to-zero here, unlike dev and staging. This app serves real users;
+  # a cold start (VM + uvicorn + lifespan DB probe + 18 background loops, 5-15s
+  # per fly.toml's capacity note) would land as latency on a real rider mid-
+  # booking. Suspend-and-resume for the same sub-second-resume reason
+  # production uses — see docs/runbooks/capacity-scaling.md.
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    # Same per-machine limits as production. The traffic slice is controlled at
+    # the Cloudflare weighted-routing layer, NOT by starving this app of
+    # connection headroom — a canary that sheds load under its own limits
+    # produces errors that look like the deploy failing when it did not.
+    type = "connections"
+    soft_limit = 750
+    hard_limit = 1000
+
+  [[http_service.checks]]
+    grace_period = "30s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"

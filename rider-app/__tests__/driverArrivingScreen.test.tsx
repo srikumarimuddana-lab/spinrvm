@@ -33,16 +33,24 @@ jest.mock('@shared/components/ErrorBoundary', () => ({
   ErrorBoundary: ({ children }: any) => children,
 }));
 
+const mockFitToCoordinates = jest.fn();
 jest.mock('react-native-maps', () => {
   const ReactActual = require('react');
   const MapView = ReactActual.forwardRef((props: any, ref: any) => {
-    ReactActual.useImperativeHandle(ref, () => ({ fitToCoordinates: jest.fn() }));
+    ReactActual.useImperativeHandle(ref, () => ({ fitToCoordinates: (...a: any[]) => mockFitToCoordinates(...a) }));
     return ReactActual.createElement('MapView', props, props.children);
   });
-  const Polygon = () => null;
+  const Polygon = (props: any) => ReactActual.createElement('Polygon', props);
   return { __esModule: true, default: MapView, Polygon, PROVIDER_GOOGLE: 'google' };
 });
-jest.mock('react-native-maps-directions', () => () => null);
+// Two MapViewDirections instances render per driver-arriving map (driver->pickup,
+// pickup->dropoff) — capture both onReady callbacks by origin identity so
+// tests can invoke either independently.
+let mockDirectionsReadyCallbacks: { origin: any; onReady: (r: any) => void }[] = [];
+jest.mock('react-native-maps-directions', () => (props: any) => {
+  mockDirectionsReadyCallbacks.push({ origin: props.origin, onReady: props.onReady });
+  return null;
+});
 jest.mock('@shared/components/RouteLine', () => ({ RouteLine: () => null }));
 jest.mock('@shared/components/RoutePins', () => ({ RoutePins: () => null }));
 jest.mock('@shared/components/CarMarker', () => ({ CarMarker: () => null }));
@@ -93,7 +101,10 @@ const mockT = (key: string) => key;
 jest.mock('../i18n', () => ({ useTranslation: () => ({ t: mockT }) }));
 
 jest.mock('../components/RiderSOS', () => ({ RiderSOS: () => null }));
-jest.mock('../components/FreeCancelTimer', () => ({ FreeCancelTimer: () => null }));
+let mockFreeCancelTimerOnExpire: (() => void) | null = null;
+jest.mock('../components/FreeCancelTimer', () => ({
+  FreeCancelTimer: (props: any) => { mockFreeCancelTimerOnExpire = props.onExpire; return null; },
+}));
 
 jest.mock('../components/ConfirmSheet', () => (props: any) => {
   const { View, Text: RNText, TouchableOpacity: RNTouchableOpacity } = require('react-native');
@@ -119,6 +130,9 @@ jest.mock('../components/CancelReasonSheet', () => (props: any) => {
       <RNText>{props.message}</RNText>
       <RNTouchableOpacity onPress={() => props.onConfirm('Changed my mind')} accessibilityLabel="submit-cancel-reason">
         <RNText>Submit Reason</RNText>
+      </RNTouchableOpacity>
+      <RNTouchableOpacity onPress={props.onClose} accessibilityLabel="close-cancel-reason">
+        <RNText>Never mind</RNText>
       </RNTouchableOpacity>
     </View>
   );
@@ -192,6 +206,9 @@ beforeEach(() => {
   jest.useFakeTimers();
   mockParams = { rideId: 'ride-1' };
   mockTrackBaseUrl = 'https://spinr-track.app';
+  mockDirectionsReadyCallbacks = [];
+  mockFreeCancelTimerOnExpire = null;
+  process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY = 'test-maps-key';
   mockRideState = {
     currentRide: RIDE_SEARCHING,
     currentDriver: null,
@@ -416,5 +433,230 @@ describe('DriverArrivingScreen', () => {
     const msgBtn = findButtonByText(r, 'Message');
     act(() => { msgBtn.props.onPress(); });
     expect(mockPush).toHaveBeenCalledWith({ pathname: '/chat-driver', params: { rideId: 'ride-1' } });
+  });
+
+  it('renders service-area polygons fetched on mount', async () => {
+    mockApiGet.mockResolvedValue({
+      data: [{ polygon: [{ lat: 50.4, lng: -104.6 }, { lat: 50.5, lng: -104.6 }, { lat: 50.5, lng: -104.5 }] }],
+    });
+    mockRideState.currentRide = RIDE_WITH_DRIVER;
+    mockRideState.currentDriver = CURRENT_DRIVER;
+    const r = await renderScreen();
+    const polygons = r.root.findAllByType('Polygon' as any);
+    expect(polygons).toHaveLength(1);
+    expect(polygons[0].props.coordinates).toEqual([
+      { latitude: 50.4, longitude: -104.6 }, { latitude: 50.5, longitude: -104.6 }, { latitude: 50.5, longitude: -104.5 },
+    ]);
+  });
+
+  it('skips a service-area polygon with fewer than 3 points', async () => {
+    mockApiGet.mockResolvedValue({ data: [{ polygon: [{ lat: 50.4, lng: -104.6 }] }] });
+    mockRideState.currentRide = RIDE_WITH_DRIVER;
+    mockRideState.currentDriver = CURRENT_DRIVER;
+    const r = await renderScreen();
+    expect(r.root.findAllByType('Polygon' as any)).toHaveLength(0);
+  });
+
+  it('seeds rideRouteCoords from a saved planned_route_polyline when no live coords are cached', async () => {
+    mockRideState.currentRide = {
+      ...RIDE_WITH_DRIVER,
+      planned_route_polyline: [[50.45, -104.6], [50.47, -104.55], [50.5, -104.5]],
+    };
+    mockRideState.currentDriver = CURRENT_DRIVER;
+    const r = await renderScreen();
+    // With rideRouteCoords already seeded (length >= 2), the pickup->dropoff
+    // MapViewDirections never mounts — only the driver->pickup one does
+    // (gated separately on driverOriginSnapshot, which needs driver lat/lng).
+    expect(mockDirectionsReadyCallbacks.length).toBe(0);
+  });
+
+  it('captures the driver origin snapshot once GPS arrives, and resets it on driver reassignment', async () => {
+    mockRideState.currentRide = RIDE_WITH_DRIVER;
+    mockRideState.currentDriver = { ...CURRENT_DRIVER, lat: 50.44, lng: -104.62 };
+    const r = await renderScreen();
+    expect(mockDirectionsReadyCallbacks.length).toBeGreaterThanOrEqual(1);
+    const driverLeg = mockDirectionsReadyCallbacks.find((c) => c.origin?.latitude === 50.44);
+    expect(driverLeg).toBeTruthy();
+
+    // Reassign to a new driver — the cached route resets.
+    await act(async () => {
+      mockRideState = { ...mockRideState, currentDriver: { ...CURRENT_DRIVER, id: 'driver-2', lat: 50.43, lng: -104.63 } };
+      renderer!.update(<TrackBaseUrlContext.Provider value={mockTrackBaseUrl}><DriverArrivingScreen /></TrackBaseUrlContext.Provider>);
+      await flush();
+    });
+    expect(mockSetActiveDriverRouteCoords).toHaveBeenCalledWith(null);
+  });
+
+  it('MapViewDirections onReady for the driver leg sets the ETA and route', async () => {
+    mockRideState.currentRide = RIDE_WITH_DRIVER;
+    mockRideState.currentDriver = { ...CURRENT_DRIVER, lat: 50.44, lng: -104.62 };
+    await renderScreen();
+    const driverLeg = mockDirectionsReadyCallbacks.find((c) => c.origin?.latitude === 50.44)!;
+    await act(async () => {
+      driverLeg.onReady({ coordinates: [{ latitude: 50.44, longitude: -104.62 }, { latitude: 50.45, longitude: -104.6 }], duration: 4.2 });
+    });
+    expect(mockSetActiveDriverRouteCoords).toHaveBeenCalledWith([
+      { latitude: 50.44, longitude: -104.62 }, { latitude: 50.45, longitude: -104.6 },
+    ]);
+  });
+
+  it('MapViewDirections onReady for the ride leg sets rideRouteCoords', async () => {
+    mockRideState.currentRide = RIDE_WITH_DRIVER;
+    mockRideState.currentDriver = CURRENT_DRIVER;
+    await renderScreen();
+    const rideLeg = mockDirectionsReadyCallbacks.find((c) => c.origin?.latitude === 50.45)!;
+    await act(async () => {
+      rideLeg.onReady({ coordinates: [{ latitude: 50.45, longitude: -104.6 }, { latitude: 50.5, longitude: -104.5 }], duration: 10 });
+    });
+    expect(mockSetActiveRideRouteCoords).toHaveBeenCalledWith([
+      { latitude: 50.45, longitude: -104.6 }, { latitude: 50.5, longitude: -104.5 },
+    ]);
+  });
+
+  it('MapViewDirections onReady ignores an empty coordinates result', async () => {
+    mockRideState.currentRide = RIDE_WITH_DRIVER;
+    mockRideState.currentDriver = CURRENT_DRIVER;
+    await renderScreen();
+    const rideLeg = mockDirectionsReadyCallbacks.find((c) => c.origin?.latitude === 50.45)!;
+    await act(async () => {
+      rideLeg.onReady({ coordinates: [], duration: 10 });
+    });
+    expect(mockSetActiveRideRouteCoords).not.toHaveBeenCalled();
+  });
+
+  it('fits the map to pickup+driver once both coords are available', async () => {
+    mockRideState.currentRide = RIDE_WITH_DRIVER;
+    mockRideState.currentDriver = { ...CURRENT_DRIVER, lat: 50.44, lng: -104.62 };
+    await renderScreen();
+    expect(mockFitToCoordinates).toHaveBeenCalledWith(
+      [{ latitude: 50.45, longitude: -104.6 }, { latitude: 50.44, longitude: -104.62 }],
+      expect.objectContaining({ animated: true }),
+    );
+  });
+
+  it('the free-cancel-window-closed toast fires via FreeCancelTimer.onExpire', async () => {
+    mockRideState.currentRide = RIDE_WITH_DRIVER;
+    mockRideState.currentDriver = CURRENT_DRIVER;
+    await renderScreen();
+    expect(mockFreeCancelTimerOnExpire).toBeTruthy();
+    act(() => { mockFreeCancelTimerOnExpire!(); });
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Free cancel window closed', 'A $4.50 fee now applies if you cancel.', 'warning',
+    );
+  });
+
+  it('counts down the ETA and switches to "Arriving shortly" under 30s', async () => {
+    mockRideState.currentRide = RIDE_WITH_DRIVER;
+    mockRideState.currentDriver = CURRENT_DRIVER;
+    mockRideState.driverEtaSeconds = 32;
+    const r = await renderScreen();
+    expect(allText(r)).toContain('32s');
+    // Each tick reschedules its own setTimeout only after the state update
+    // commits, so advance+flush one second at a time rather than in one
+    // large jump (32 -> 31 -> 30).
+    for (let i = 0; i < 2; i++) {
+      await act(async () => {
+        jest.advanceTimersByTime(1000);
+        await flush();
+      });
+    }
+    expect(allText(r)).toContain('Arriving shortly');
+  });
+
+  it('shows a minutes label once the ETA is 2 minutes or more', async () => {
+    mockRideState.currentRide = RIDE_WITH_DRIVER;
+    mockRideState.currentDriver = CURRENT_DRIVER;
+    mockRideState.driverEtaSeconds = 150; // 2.5 min -> ceil = 3 min
+    const r = await renderScreen();
+    expect(allText(r)).toContain('3 min');
+  });
+
+  it('confirming "Cancel" during search cancels immediately without the reason sheet', async () => {
+    const r = await renderScreen();
+    const cancelBtn = findButtonByText(r, 'Cancel search');
+    act(() => { cancelBtn.props.onPress(); });
+    const confirmBtn = r.root.findByProps({ accessibilityLabel: 'confirm-Cancel' });
+    await act(async () => { await confirmBtn.props.onPress(); await flush(); });
+    expect(mockCancelRide).toHaveBeenCalled();
+    expect(mockClearRide).toHaveBeenCalled();
+    expect(mockReplace).toHaveBeenCalledWith('/(tabs)');
+  });
+
+  it('dismisses the confirm dialog via its cancel-style button without cancelling', async () => {
+    const r = await renderScreen();
+    const cancelBtn = findButtonByText(r, 'Cancel search');
+    act(() => { cancelBtn.props.onPress(); });
+    const keepBtn = r.root.findByProps({ accessibilityLabel: 'confirm-Keep searching' });
+    act(() => { keepBtn.props.onPress(); });
+    expect(mockCancelRide).not.toHaveBeenCalled();
+  });
+
+  it('dismisses the cancel-reason sheet without cancelling', async () => {
+    mockRideState.currentRide = RIDE_WITH_DRIVER;
+    mockRideState.currentDriver = CURRENT_DRIVER;
+    const r = await renderScreen();
+    const backBtn = r.root.findAllByType(TouchableOpacity)[0];
+    act(() => { backBtn.props.onPress(); });
+    const confirmBtn = r.root.findByProps({ accessibilityLabel: 'confirm-Cancel (Free)' });
+    act(() => { confirmBtn.props.onPress(); });
+    const closeBtn = r.root.findByProps({ accessibilityLabel: 'close-cancel-reason' });
+    act(() => { closeBtn.props.onPress(); });
+    expect(mockCancelRide).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the placeholder icon when the driver photo fails to load', async () => {
+    mockRideState.currentRide = RIDE_WITH_DRIVER;
+    mockRideState.currentDriver = { ...CURRENT_DRIVER, photo_url: 'https://example.com/x.jpg' };
+    const r = await renderScreen();
+    const { Image } = require('react-native');
+    const img = r.root.findByType(Image);
+    act(() => { img.props.onError(); });
+    expect(r.root.findAllByType(Image)).toHaveLength(0);
+  });
+
+  describe('DEV controls', () => {
+    it('the Assign button (searching) simulates a driver assignment', async () => {
+      mockRideState.simulateDriverArrival = jest.fn().mockResolvedValue(undefined);
+      const r = await renderScreen();
+      const assignBtn = findButtonByText(r, 'Assign');
+      await act(async () => { await assignBtn.props.onPress(); await flush(); });
+      expect(mockRideState.simulateDriverArrival).toHaveBeenCalled();
+      expect(mockFetchRide).toHaveBeenCalledWith('ride-1');
+    });
+
+    it('the Assign button swallows a failure without crashing', async () => {
+      mockRideState.simulateDriverArrival = jest.fn().mockRejectedValue(new Error('down'));
+      const r = await renderScreen();
+      const assignBtn = findButtonByText(r, 'Assign');
+      await act(async () => { await assignBtn.props.onPress(); await flush(); });
+      expect(mockFetchRide).toHaveBeenCalledWith('ride-1');
+    });
+
+    it('the Arrive button (driver_accepted) posts the arrive endpoint', async () => {
+      mockRideState.currentRide = RIDE_WITH_DRIVER;
+      mockRideState.currentDriver = CURRENT_DRIVER;
+      const r = await renderScreen();
+      const arriveBtn = findButtonByText(r, 'Arrive');
+      await act(async () => { await arriveBtn.props.onPress(); await flush(); });
+      expect(mockApiPost).toHaveBeenCalledWith('/drivers/rides/ride-1/arrive');
+    });
+
+    it('the Start button (driver_arrived) posts the start endpoint', async () => {
+      mockRideState.currentRide = { ...RIDE_WITH_DRIVER, status: 'driver_arrived' };
+      mockRideState.currentDriver = CURRENT_DRIVER;
+      const r = await renderScreen();
+      const startBtn = findButtonByText(r, 'Start');
+      await act(async () => { await startBtn.props.onPress(); await flush(); });
+      expect(mockApiPost).toHaveBeenCalledWith('/drivers/rides/ride-1/start');
+    });
+
+    it('the Complete button (in_progress) posts the complete endpoint', async () => {
+      mockRideState.currentRide = { ...RIDE_WITH_DRIVER, status: 'in_progress' };
+      mockRideState.currentDriver = CURRENT_DRIVER;
+      const r = await renderScreen();
+      const completeBtn = findButtonByText(r, 'Complete');
+      await act(async () => { await completeBtn.props.onPress(); await flush(); });
+      expect(mockApiPost).toHaveBeenCalledWith('/drivers/rides/ride-1/complete');
+    });
   });
 });

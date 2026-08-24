@@ -8298,11 +8298,25 @@ record of what was assumed vs. what was actually true</summary>
     `<Text>`'s children is JSON-serializable. 16 tests; full rider-app
     suite still green (117 suites / 1113 tests), `yarn tsc --noEmit`
     clean.
-  - **Next in the ranked list:** rider-app's `report-safety.tsx` (40.0%),
-    `privacy-settings.tsx` (56.1%), `(tabs)/account.tsx` (64.4%);
-    driver-app's `driver/settings.tsx` (49.6%), `driver/notifications.tsx`
-    (56.8%), `login.tsx` (62.9%). This is an open-ended coverage-
-    improvement effort, not a finish-line-shaped one like sub-item 4 —
+  - **rider-app `app/report-safety.tsx`: 40.0% → 95.0% lines.** Small
+    screen (200 lines); already had `reportSafetyBackButton.test.tsx`
+    (pins only the back button's `accessibilityLabel`). Added
+    `reportSafetyScreen.test.tsx` (5 tests) covering `handleSubmit`'s
+    full path: empty/whitespace-only description rejected with a toast
+    and no API call; a successful submit POSTs the description, toasts
+    success, and navigates back; the in-flight state (`submitting`)
+    disables the input and the button with "Submitting..." copy; a
+    failed submit logs (the safety-report path deliberately never
+    swallows an error per CLAUDE.md), toasts the backend's message, and
+    — the one bug worth specifically pinning — re-enables the form
+    afterward instead of leaving `submitting` stuck `true` forever. No
+    new footguns. 5 tests; full rider-app suite still green (118 suites
+    / 1118 tests), `yarn tsc --noEmit` clean.
+  - **Next in the ranked list:** rider-app's `privacy-settings.tsx`
+    (56.1%), `(tabs)/account.tsx` (64.4%); driver-app's
+    `driver/settings.tsx` (49.6%), `driver/notifications.tsx` (56.8%),
+    `login.tsx` (62.9%). This is an open-ended coverage-improvement
+    effort, not a finish-line-shaped one like sub-item 4 —
     pick up wherever a future session left off by re-running the per-app
     `--collectCoverageFrom` coverage command above and ranking by line %.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,

@@ -8343,6 +8343,26 @@ record of what was assumed vs. what was actually true</summary>
   corporate/billing forms named as next-priority in this item's own
   ordering); no ADR/migration-order doc written yet. Checkbox stays `[ ]`
   — this is one form on one surface, not the item's acceptance bar.
+- **2026-08-23 update — step 2 done:** migrated
+  `rider-app/app/wallet.tsx`'s "Add Funds" custom top-up amount (feeds a
+  real Stripe `PaymentSheet` top-up) — the next highest-risk form per this
+  item's own ordering after step 1's work-allowance-request. New colocated
+  `rider-app/utils/walletTopUpSchema.ts` (`walletTopUpSchema` +
+  `isWalletTopUpAmountValid` helper) replaces the screen's old inline
+  `effectiveAmount >= 1 && effectiveAmount <= 500` check (duplicated across
+  `canTopUp` and `handleTopUp`'s guard) with byte-for-byte equivalent
+  accept/reject behavior — a pure extraction, same discipline as step 1.
+  New `rider-app/utils/__tests__/walletTopUpSchema.test.ts` (17
+  accept/reject cases). Verification: 17/17 new tests pass; full rider-app
+  suite 1098/1098 (116 suites) pass, 0 regressions; `npx tsc --noEmit`
+  clean; `npx eslint` clean on touched files; **real production build**
+  (`npm run build:web` → `expo export --platform web`) completed
+  successfully. Full Change Impact Log:
+  `docs/change-log/2026-08-23-b39-wallet-topup-zod-step2.md`. **Still
+  open:** driver-app, admin-dashboard, and every other rider-app form
+  (login/signup fields feeding KYC/compliance checks, all
+  admin-dashboard corporate/billing forms) remain unmigrated; no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

@@ -9548,6 +9548,38 @@ record of what was assumed vs. what was actually true</summary>
     money-critical guards should (block before any Stripe call, surface a
     toast, never silently proceed). 15 tests; full rider-app suite still
     green (123 suites / 1413 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/promotions.tsx`: 91.30% → 95.65% stmts, 70.37% →
+    96.29% branch, 95.23% → 97.61% lines.** Already had
+    `promotionsScreen.test.tsx` (8 tests: mount fetch, the empty state,
+    Apply disabled until a code is entered, auto-uppercasing typed
+    codes, a full percentage-promo apply→toast→clear→reload round trip,
+    a flat-dollar apply's `$`-formatted toast copy, the neutral failure
+    toast on an invalid/rejected code, back nav) — extended in place (+4
+    tests, 12 total). Closed: `loadPromos`'s `(res.data as Promo[]) ||
+    []` fallback when the API response has no `data` field at all
+    (asserts the empty state renders rather than crashing); the
+    `if (!c) return;` defensive early-return in `handleApply` when
+    Apply is triggered with an empty/whitespace code (bypassing the
+    UI's own `disabled` prop, per this session's established
+    mocked-button pattern, to pin that the handler still guards the
+    code itself) — asserts the API is never called; `formatDiscount`'s
+    flat-dollar branch (`$X.XX off`, previously only the percentage
+    branch was exercised) and the percentage branch's `max_discount`
+    cap suffix (`(max $X)`), rendered together via a two-promo fixture
+    that also hits the `item.description`/`item.expiry_date` false
+    branches (a promo with neither); and the Apply button's spinner
+    (`applying ? <ActivityIndicator/> : <Text>Apply</Text>`) via a
+    controllable pending `/promo/validate` promise. Left uncovered
+    (genuinely dead, not chased): `formatExpiry`'s own `if (!date)
+    return '';` guard and its `catch` block — the function's only call
+    site (`item.expiry_date ? formatExpiry(item.expiry_date) : null`)
+    never passes a falsy `date`, and `new Date()` on a malformed-but-
+    present string doesn't throw (`toLocaleDateString` just renders
+    "Invalid Date"), so neither branch is reachable through the screen
+    itself. No bug found — money-adjacent (promo discount amounts) but
+    not money-critical (no wallet/Stripe write on this screen); no
+    auditor review sought given the surface. Full rider-app suite still
+    green (123 suites / 1451 tests), `yarn tsc --noEmit` clean.
   - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
     85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
     tests: no-account-prefill, the CRC-consent auto-check-when-

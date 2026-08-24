@@ -172,7 +172,11 @@ describe('ProfileScreen (driver)', () => {
     });
     const r = await renderScreen();
     expect(allText(r)).not.toContain('undefined');
-  });
+    // Bumped from the 5000ms default: this test has no actual hang (it
+    // passes standalone and in every local full-suite run) but was
+    // intermittently timing out in CI when the full 113-suite run under
+    // coverage instrumentation puts the runner under real CPU contention.
+  }, 15000);
 
   it('renders company info once fetched', async () => {
     mockApiGet.mockImplementation((url: string) => {

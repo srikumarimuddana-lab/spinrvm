@@ -9548,6 +9548,26 @@ record of what was assumed vs. what was actually true</summary>
     money-critical guards should (block before any Stripe call, surface a
     toast, never silently proceed). 15 tests; full rider-app suite still
     green (123 suites / 1413 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/wallet.tsx`, round 2: 84.72% → 100% branch** (closes
+    the gap the round-1 entry above deliberately left). Extended
+    `walletScreen.test.tsx` in place (+6 tests, 21 total): the
+    `TXN_ICONS`/`TXN_COLORS` fallback defaults for an unrecognised
+    transaction `type` (`'swap-horizontal'`, `colors.textDim`); the
+    `hasRideDetails` metadata block for a `ride_payment` with saved
+    `pickup_address`/`dropoff_address` (both the `meta.ride_code`
+    booking-id path and its fallback to the `reference_id` prefix when
+    `ride_code` is absent); the balance's `wallet?.balance ?? '0'`
+    fallback with `wallet: null`; the loading skeleton shown while
+    `walletLoading`/`transactionsLoading` is true and no transactions
+    are cached yet; and the Add Funds button's spinner while a top-up
+    is in flight (a controllable pending `topUp()` promise, asserting
+    the button's own text is replaced rather than checking the
+    `ActivityIndicator` directly, since `@expo/vector-icons` icons are
+    mocked to `null` but React Native's real `ActivityIndicator` isn't
+    text-searchable the same way). 100% stmts/branch/lines; funcs stay
+    at 90.47% (an unreached closure, not chased further). No bug found.
+    Full rider-app suite still green (123 suites / 1448 tests), `yarn
+    tsc --noEmit` clean.
   - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
     85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
     tests: no-account-prefill, the CRC-consent auto-check-when-
@@ -9671,6 +9691,43 @@ record of what was assumed vs. what was actually true</summary>
     unreachable under the type's own exhaustive value set. 22 tests;
     full rider-app suite still green (123 suites / 1419 tests), `yarn
     tsc --noEmit` clean.
+  - **rider-app `app/notifications.tsx`: 86.53% stmts / 89.65% lines /
+    75.75% branch → 98.07% stmts / 100% lines / 90.9% branch.** Already
+    had `notificationsScreen.test.tsx` (12 tests: mount fetch, the
+    distinct "couldn't load" vs. cheerful "all caught up" empty states
+    and Retry, optimistic mark-read + rollback on PUT failure,
+    optimistic "Mark all read" + re-fetch-on-failure, lost_and_found /
+    lost_and_found_message / chat_message / driver_accepted routing,
+    back-button nav) — extended in place (+5 tests, 17 total). Closed:
+    `getRelativeTime`'s three untested buckets (`m ago` / `h ago` /
+    `d ago`, only the `< 1 min` "just now" branch had a test) by
+    rendering three notifications backdated 5 min / 3 hr / 2 days and
+    asserting all three relative-time strings render together;
+    `ride_completed` tap-through routing (both the `rideId`-present
+    push to `/ride-completed` and the no-op when absent, mirroring the
+    existing `chat_message`/`driver_accepted` pattern); pull-to-refresh
+    (`handleRefresh`'s `setRefreshing(true)` +
+    `loadNotifications(true)`) by grabbing the real (unmocked)
+    `RefreshControl` off the tree via `findByType` and invoking
+    `.props.onRefresh()` directly, then asserting the silent re-fetch
+    landed without ever dropping back to the full-screen spinner; and
+    the `safety` notification type's icon-color branch
+    (`shield-checkmark` → `colors.danger`) by importing the real
+    `Ionicons` named export (the mock is `Ionicons: () => null`, so the
+    element still appears in the tree with real props) and asserting
+    `.props.color` on the matched icon. Lines are now 100% covered; the
+    remaining 90.9% branch gap Istanbul still attributes to lines
+    70-98, 120, 127-135 — those lines execute, but not every branch on
+    them does (e.g. the optional-chaining `?.` on `item.data?.case_id`/
+    `ride_id` short-circuits differently per notification, and the
+    `driver_arrived` arm of the `case 'driver_accepted': case
+    'driver_arrived':` list is never hit standalone since every test
+    exercises it via the `driver_accepted` sibling). Not genuinely
+    unreached logic; adding a near-duplicate test per sibling
+    case/optional-chain arm for a 90.9%→100% branch bump was judged
+    diminishing-returns per the workflow's guidance. Full rider-app
+    suite still green (123 suites / 1413 tests), `yarn tsc --noEmit`
+    clean.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

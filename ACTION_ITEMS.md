@@ -9661,6 +9661,36 @@ record of what was assumed vs. what was actually true</summary>
       so exercising these needs a per-test mock override, not attempted
       here to keep this pass test-only). Test-only change; see
       `docs/change-log/2026-08-24-driver-tabs-index-coverage.md`.
+  - **rider-app `app/(tabs)/activity.tsx`: 87.15% → 98.32% stmts, 88.41%
+    → 99.39% lines.** Already had `activityScreen.test.tsx` (11 tests:
+    focus-fetch, RECENT-section grouping, the Business filter, both
+    grand_total-vs-tip fare-total branches, the load-failure and
+    empty-result empty states, the upcoming tab's own empty state and
+    its scheduled-ride rendering, infinite-scroll load-more, and card
+    tap navigation) — extended in place (+11 tests). Closed: tapping a
+    scheduled (upcoming) ride card's own `handleRidePress` (distinct
+    node from the history-tab card already covered); switching back to
+    the history tab from upcoming; the Personal filter (the inverse of
+    the already-tested Business filter); the period-pill switch
+    (`refreshStats(period, true)` re-fetches stats only, not ride
+    history — verified via a `mockApiGet.mockClear()` + assertion that
+    `/rides/history` was NOT called again); pull-to-refresh via the
+    `FlatList`'s real `refreshControl.onRefresh` (force-refetches rides,
+    stats, and scheduled rides regardless of the 30s TTL); the
+    load-more failure's retry footer, including a full fail→retry→
+    succeed round trip; `formatDate`'s `Yesterday` branch (computed via
+    exact day-subtraction rather than a fixed offset, to avoid a
+    midnight-boundary flake); `getStatusText`'s `cancelled` case and its
+    fallback-to-`completed` for an unrecognised status; and
+    `getStatusColor`'s `cancelled`/`in_progress` cases plus its
+    `default` fallback for a status matching none of the three named
+    cases. Left uncovered (dead code, not a real gap): line 246's
+    `return true` fallback inside `filteredRides`' filter callback — the
+    three real `FilterType` values (`all`/`personal`/`business`) are all
+    already handled by the three `if` branches above it, so this line is
+    unreachable under the type's own exhaustive value set. 22 tests;
+    full rider-app suite still green (123 suites / 1419 tests), `yarn
+    tsc --noEmit` clean.
   - **rider-app `app/notifications.tsx`: 86.53% stmts / 89.65% lines /
     75.75% branch → 98.07% stmts / 100% lines / 90.9% branch.** Already
     had `notificationsScreen.test.tsx` (12 tests: mount fetch, the

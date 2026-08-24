@@ -23,6 +23,7 @@ import { showToast } from '../hooks/useToast';
 import { notifyError } from '../lib/notifyError';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { getDriverProfileSetupError, isDriverProfileSetupValid } from '../utils/driverProfileSetupSchema';
 
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -211,34 +212,14 @@ export default function ProfileSetupScreen() {
   const isEmailValid = email.length > 0 && validateEmail(email);
   const isFirstNameValid = firstName.trim().length > 1;
   const isLastNameValid = lastName.trim().length > 1;
-  const isServiceAreaValid = serviceAreaId.length > 0;
-  const isFormValid = isFirstNameValid && isLastNameValid && isEmailValid && gender && isServiceAreaValid;
+  const isFormValid = isDriverProfileSetupValid({ firstName, lastName, email, gender, serviceAreaId });
 
   const handleSubmit = async () => {
     // Field-specific validation: name the exact field and problem — a blanket
     // "complete all required fields" leaves the driver hunting for what's wrong.
-    if (!isFirstNameValid) {
-      showToast('warning', 'First Name Required', 'Please enter your first name (at least 2 letters).');
-      return;
-    }
-    if (!isLastNameValid) {
-      showToast('warning', 'Last Name Required', 'Please enter your last name (at least 2 letters).');
-      return;
-    }
-    if (!email.trim()) {
-      showToast('warning', 'Email Required', 'Please enter your email address.');
-      return;
-    }
-    if (!isEmailValid) {
-      showToast('warning', 'Invalid Email', 'That email doesn’t look right — e.g. name@example.com.');
-      return;
-    }
-    if (!gender) {
-      showToast('warning', 'Gender Required', 'Please select your gender.');
-      return;
-    }
-    if (!isServiceAreaValid) {
-      showToast('warning', 'Service Area Required', 'Please select the area where you plan to drive.');
+    const validationError = getDriverProfileSetupError({ firstName, lastName, email, gender, serviceAreaId });
+    if (validationError) {
+      showToast('warning', validationError.title, validationError.message);
       return;
     }
 

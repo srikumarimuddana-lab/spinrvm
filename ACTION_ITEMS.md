@@ -9326,6 +9326,54 @@ record of what was assumed vs. what was actually true</summary>
   corporate/billing form (subscriptions, KYB, wallet adjustments, etc.)
   remain unmigrated; no ADR/migration-order doc written yet. Checkbox
   stays `[ ]`.
+- **2026-08-24 update — step 6 done, driver-app's signup/profile-setup
+  form migrated:** migrated `driver-app/app/profile-setup.tsx`'s
+  `handleSubmit` field validation (first/last name, email, gender, service
+  area — driver identity fields that feed downstream KYC/compliance
+  checks) — the exact gap step 5's "Still open" list named
+  ("driver-app's signup/profile-setup fields"). New colocated
+  `driver-app/utils/driverProfileSetupSchema.ts`
+  (`driverProfileSetupSchema` + `getDriverProfileSetupError` +
+  `isDriverProfileSetupValid`) reproduces the screen's six sequential
+  inline checks — `!isFirstNameValid` (trim().length > 1),
+  `!isLastNameValid` (trim().length > 1), `!email.trim()`, the
+  `/^[^\s@]+@[^\s@]+\.[^\s@]+$/` email regex, `!gender`,
+  `!isServiceAreaValid` — in the same priority order (first failing check
+  wins) and with the same toast title/message pairs, byte-for-byte;
+  `zod` was already a `driver-app` dependency since step 3 and was not
+  re-added. `driver-app/app/driver/(tabs)/profile.tsx` has its own,
+  independently hand-rolled `EMAIL_REGEX` + inline check for editing an
+  existing driver's email (same regex pattern text, different variable
+  names/toast copy) — left as a known duplicate, not migrated here, since
+  it is a separate screen with its own inline check rather than a caller
+  of `profile-setup.tsx`'s validation (merging them would be a
+  validation-rule-adjacent change, not a pure extraction — the same
+  reasoning step 3 used to keep its two GST predicates separate). New
+  `driver-app/utils/__tests__/driverProfileSetupSchema.test.ts` (21
+  accept/reject cases, including boundary cases for the `length > 1`
+  name checks and priority-order cases). Verification: 21/21 new tests
+  pass; full driver-app suite 1264/1264 (116 suites) pass, 0 regressions
+  (an earlier `git stash` used to try to capture a from-scratch
+  `origin/main` baseline count did not actually strip this PR's new,
+  untracked test file — `git stash` only stashes tracked-file changes by
+  default — so that run isn't a true pre-change baseline; it's not relied
+  on here, only the post-restore full run, which is 0 failures either
+  way); `npx tsc --noEmit` clean; `npx eslint` clean on touched files
+  (`app/profile-setup.tsx`'s now-orphaned `isServiceAreaValid` local,
+  caught by `no-unused-vars` once both of its former readers moved into
+  the extracted helper, was removed); **real production build**
+  (`npm run build:web` → `expo export --platform web`) completed
+  successfully; blast-radius grep confirmed `app/profile-setup.tsx` is
+  the only reader of the extracted checks (`profile.tsx`'s duplicate
+  regex is a separate, un-migrated screen, noted above, not a caller).
+  Full Change Impact Log:
+  `docs/change-log/2026-08-24-b39-driver-profile-setup-zod-step6.md`.
+  **Still open:** `rider-app/app/login.tsx`'s inline validation and every
+  other admin-dashboard corporate/billing form (subscriptions, KYB,
+  wallet adjustments, etc.) remain unmigrated;
+  `driver-app/app/driver/(tabs)/profile.tsx`'s duplicate email-edit check
+  is also still unmigrated (noted above); no ADR/migration-order doc
+  written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

@@ -9310,6 +9310,69 @@ record of what was assumed vs. what was actually true</summary>
     swallowed-failure branch); and the note-for-driver modal's Cancel
     button and tap-the-backdrop dismiss paths. 25 tests; full rider-app
     suite still green (123 suites / 1306 tests), `yarn tsc --noEmit`
+  - **Fresh coverage sweep (2026-08-24, post-#4513/#4515) — next tier
+    identified.** See the separate entry documenting this sweep's
+    ranked list (opened as its own doc-only PR #4516): rider-app's
+    worst offender became `ride-options.tsx` (80.7% — the largest
+    screen in the app at 2284 lines).
+  - **rider-app `app/ride-options.tsx`: 79.16% → 96.07% stmts, 80.7% →
+    97.95% lines** (money-critical: this is where a ride is actually
+    created). Already had `rideOptionsScreen.test.tsx` (36 tests: mount
+    fetch, `handleSelect`, the payment/scheduled-time/work-policy/surge
+    booking guards, `proceedWithBooking`'s happy/error paths,
+    `handleScheduleConfirm`, `handleManualPromo`, WAV/quiet-mode
+    toggles, the work-mode banner, fare-breakdown collapse, payment-sheet
+    selection) — extended in place (+33 tests). At this file's scale
+    (2284 lines) the win came mostly from three previously-unmocked or
+    under-mocked areas: map rendering (imported the mocked `MapView`/
+    `Marker`/`Polygon` and `CarMarker` directly to exercise `onMapReady`,
+    `fallbackHeading`'s deterministic-hash fallback for a driver with no
+    real heading, the near-zero/NaN coordinate filter, per-stop markers,
+    and service-area polygons fetched from `/service-areas`, including
+    the <3-point malformed-entry filter); the three `@gorhom/bottom-sheet`
+    instances' open/close mechanics (`handlePaymentSheetChange` +
+    the Android-hardware-back handler that's only registered while the
+    payment sheet is open — found and fixed a real bug in the *test's
+    own* card-row lookup along the way: `findByText(r, 'Visa')` was
+    ambiguously matching the footer's own payment-summary row, "Visa
+    •••• 4242", not the sheet's row — the footer's onPress only opens
+    the sheet, so the test had never actually exercised the card-select
+    handler despite passing; fixed by matching the sheet row's exact,
+    un-suffixed "Visa" text; the promo sheet's iOS keyboard-aware
+    deferred-close (`keyboardWillShow`/`keyboardWillHide` listeners +
+    the pending-close ref, only active on iOS); both sheets' backdrop
+    `onPress`); and the promo sheet's suggested-offers list (selecting
+    an eligible offer, an ineligible offer's toast, the empty-offers
+    state, and the "Remove applied code" row nested inside the sheet —
+    distinct from the main-row "Remove promo code" chip already
+    covered). Also closed: `loadSavedCards`'s fetch-failure
+    `console.warn`; the "Add / select card" confirm-sheet button opening
+    the payment sheet; `handleBookRide`'s own scheduled-time-under-15-
+    minutes guard (distinct from `handleScheduleConfirm`'s identical
+    check on the picker itself); `proceedWithBooking`'s `isEngineError`
+    branch (client-side-crash capture via `recordNonFatal`) and its two
+    remaining 409-reroute status branches (`driver_arrived`,
+    `completed`); the Retry button's `onPress`; the `firstAvailableIndex`
+    auto-select branch (a leading unavailable estimate correctly skipped
+    in favour of the first available one); the map's `fitToCoordinates`
+    effect (needed a populated `stops` array too — an empty array's
+    `.filter()` callback never runs, which is what had kept that one
+    line flagged even though the surrounding statement executes);
+    `SchedulePicker`'s and `ConfirmSheet`'s own `onClose` (backdrop-tap
+    dismissal, not just their button presses); and the footer's Payment
+    row `onPress`. Left uncovered (a genuine test-environment limitation,
+    not a real gap): `MapViewDirections`'s `onReady`/`onError` and the
+    `onReadyDirections` handler's `fitToCoordinates` call are all gated
+    behind `GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY`
+    captured in a **module-level `const`** at import time — unlike
+    `ride-in-progress.tsx`'s equivalent (read inline per-render, so
+    `process.env...` set in `beforeEach` works there), this file's copy
+    is frozen before any test's `beforeEach` runs, and Babel/Jest hoist
+    `import` statements above any same-file `process.env` assignment
+    regardless of source order, so there is no supported way to flip it
+    per-test without a `jest.config.js`/`setupFiles`-level env change
+    (out of scope for a coverage-only pass). 69 tests; full rider-app
+    suite still green (123 suites / 1393 tests), `yarn tsc --noEmit`
     clean.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),

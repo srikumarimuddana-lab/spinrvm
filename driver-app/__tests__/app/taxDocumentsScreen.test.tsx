@@ -26,6 +26,10 @@ jest.mock('react-native-safe-area-context', () => ({
 jest.mock('expo-linear-gradient', () => ({
   LinearGradient: ({ children }: any) => children,
 }));
+jest.mock('../../components/SafeRefreshControl', () => (props: any) => {
+  const { View } = require('react-native');
+  return <View testID="refresh-control" {...props} />;
+});
 
 const mockBack = jest.fn();
 jest.mock('expo-router', () => ({
@@ -154,6 +158,18 @@ describe('TaxDocumentsScreen', () => {
       'Load Failed',
       'Could not load tax documents. Please try again.',
     );
+  });
+
+  it('pull-to-refresh re-fetches the document list', async () => {
+    mockApiGet.mockResolvedValue({ data: { years: YEARS } });
+    const r = await renderScreen();
+    mockApiGet.mockClear();
+    const refreshControl = r.root.findByProps({ testID: 'refresh-control' });
+    await act(async () => {
+      refreshControl.props.onRefresh();
+      await flush();
+    });
+    expect(mockApiGet).toHaveBeenCalledWith('/drivers/t4a/years');
   });
 
   it('navigates back when the back button is pressed', async () => {

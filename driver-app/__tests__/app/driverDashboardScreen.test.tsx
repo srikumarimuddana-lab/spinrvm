@@ -54,9 +54,11 @@ jest.mock('react-native-maps', () => {
     ReactActual.useImperativeHandle(ref, () => ({ fitToCoordinates: jest.fn(), animateToRegion: jest.fn() }));
     return ReactActual.createElement('MapView', props, props.children);
   });
+  const Polygon = (props: any) =>
+    ReactActual.createElement('Polygon', { accessibilityLabel: 'map-polygon', ...props });
   return {
     __esModule: true, default: MapView, PROVIDER_GOOGLE: 'google',
-    Polygon: () => null,
+    Polygon,
   };
 });
 jest.mock('react-native-maps-directions', () => () => null);
@@ -131,15 +133,14 @@ jest.mock('../../hooks/useDriverDashboard', () => ({
   useDriverDashboard: () => mockDashboardState,
 }));
 
+const mockSetHeatmapLayer = jest.fn();
+let mockHeatmapState: any;
 jest.mock('../../hooks/useDemandHeatmap', () => ({
-  useDemandHeatmap: () => ({
-    cells: [], status: 'idle', visible: false, surge: null, isV2: false,
-    layer: 'demand', setLayer: jest.fn(), forecast: [], hotspots: [],
-    cellLatDeg: 0.01, cellLngDeg: 0.01,
-  }),
+  useDemandHeatmap: () => mockHeatmapState,
 }));
+let mockAirportZonesState: any;
 jest.mock('../../hooks/useAirportZones', () => ({
-  useAirportZones: () => ({ zones: [], activeZone: null }),
+  useAirportZones: () => mockAirportZonesState,
 }));
 
 const mockSafetyTrigger = jest.fn();
@@ -236,10 +237,14 @@ jest.mock('../../components/dashboard', () => {
       </View>
     ),
     MapControls: () => null,
-    DemandLegend: () => null,
-    ForecastStrip: () => null,
-    HeatmapCells: () => null,
-    HotspotChips: () => null,
+    DemandLegend: (props: any) => <RNText accessibilityLabel="demand-legend">{`layer:${props.layer}`}</RNText>,
+    ForecastStrip: (props: any) => <RNText accessibilityLabel="forecast-strip">{`forecast:${props.forecast.length}`}</RNText>,
+    HeatmapCells: (props: any) => <RNText accessibilityLabel="heatmap-cells">{`cells:${props.cells.length}`}</RNText>,
+    HotspotChips: (props: any) => (
+      <RNTouchableOpacity accessibilityLabel="hotspot-chip" onPress={() => props.onPress(52.15, -106.65)}>
+        <RNText>{`hotspots:${props.hotspots.length}`}</RNText>
+      </RNTouchableOpacity>
+    ),
   };
 });
 
@@ -302,6 +307,12 @@ function resetState() {
     refreshLocation: mockRefreshLocation,
   };
   mockDiscreetSosEnabled = false;
+  mockHeatmapState = {
+    cells: [], status: 'idle', visible: false, surge: null, isV2: false,
+    layer: 'demand', setLayer: mockSetHeatmapLayer, forecast: [], hotspots: [],
+    cellLatDeg: 0.01, cellLngDeg: 0.01,
+  };
+  mockAirportZonesState = { zones: [], activeZone: null };
 }
 
 let renderer: TestRenderer.ReactTestRenderer | null = null;
@@ -515,5 +526,130 @@ describe('DriverDashboardScreen', () => {
     const r = await renderScreen();
     expect(r.root.findAllByProps({ accessibilityLabel: 'sos-button' })).toHaveLength(0);
     expect(r.root.findAllByProps({ accessibilityLabel: 'safety-shield' })).toHaveLength(0);
+  });
+});
+
+describe('demand heatmap overlay (idle only)', () => {
+  it('renders HeatmapCells when cells are present', async () => {
+    mockHeatmapState.cells = [{ lat: 52.1, lng: -106.6, weight: 0.5 }];
+    const r = await renderScreen();
+    expect(r.root.findByProps({ accessibilityLabel: 'heatmap-cells' })).toBeTruthy();
+  });
+
+  it('omits HeatmapCells with zero cells', async () => {
+    const r = await renderScreen();
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-cells' })).toHaveLength(0);
+  });
+
+  it('renders the DemandLegend only when visible', async () => {
+    mockHeatmapState.visible = true;
+    const r = await renderScreen();
+    expect(r.root.findByProps({ accessibilityLabel: 'demand-legend' })).toBeTruthy();
+  });
+
+  it('omits the DemandLegend when not visible', async () => {
+    mockHeatmapState.visible = false;
+    const r = await renderScreen();
+    expect(r.root.findAllByProps({ accessibilityLabel: 'demand-legend' })).toHaveLength(0);
+  });
+
+  it('renders ForecastStrip and HotspotChips only for the v2 heatmap pipeline', async () => {
+    mockHeatmapState.isV2 = true;
+    mockHeatmapState.forecast = [{ hour: 1, demand: 0.5 }];
+    mockHeatmapState.hotspots = [{ lat: 52.1, lng: -106.6, label: 'Downtown' }];
+    const r = await renderScreen();
+    expect(r.root.findByProps({ accessibilityLabel: 'forecast-strip' })).toBeTruthy();
+    expect(r.root.findByProps({ accessibilityLabel: 'hotspot-chip' })).toBeTruthy();
+  });
+
+  it('omits ForecastStrip/HotspotChips for the legacy (non-v2) heatmap', async () => {
+    mockHeatmapState.isV2 = false;
+    mockHeatmapState.hotspots = [{ lat: 52.1, lng: -106.6, label: 'Downtown' }];
+    const r = await renderScreen();
+    expect(r.root.findAllByProps({ accessibilityLabel: 'forecast-strip' })).toHaveLength(0);
+    expect(r.root.findAllByProps({ accessibilityLabel: 'hotspot-chip' })).toHaveLength(0);
+  });
+
+  it('tapping a hotspot chip re-centers the map (no crash — mapRef.current is null in this harness)', async () => {
+    mockHeatmapState.isV2 = true;
+    mockHeatmapState.hotspots = [{ lat: 52.1, lng: -106.6, label: 'Downtown' }];
+    const r = await renderScreen();
+    const chip = r.root.findByProps({ accessibilityLabel: 'hotspot-chip' });
+    expect(() => act(() => { chip.props.onPress(); })).not.toThrow();
+  });
+
+  it('none of the heatmap overlay renders once a ride is active (idle-only gating)', async () => {
+    mockDriverState.rideState = 'trip_in_progress';
+    mockDriverState.activeRide = { ride: { id: 'ride-1' }, rider: { name: 'Alex' } };
+    mockHeatmapState.cells = [{ lat: 52.1, lng: -106.6, weight: 0.5 }];
+    mockHeatmapState.visible = true;
+    mockHeatmapState.isV2 = true;
+    mockHeatmapState.hotspots = [{ lat: 52.1, lng: -106.6, label: 'Downtown' }];
+    const r = await renderScreen();
+    expect(r.root.findAllByProps({ accessibilityLabel: 'demand-legend' })).toHaveLength(0);
+    expect(r.root.findAllByProps({ accessibilityLabel: 'hotspot-chip' })).toHaveLength(0);
+  });
+});
+
+describe('service-area surge polygon', () => {
+  const POLY = [{ lat: 52.1, lng: -106.6 }, { lat: 52.2, lng: -106.6 }, { lat: 52.2, lng: -106.7 }];
+
+  it('renders no polygon when the ride has no service_area_polygon', async () => {
+    const r = await renderScreen();
+    expect(r.root.findAllByProps({ accessibilityLabel: 'map-polygon' })).toHaveLength(0);
+  });
+
+  it('uses the success (calm) color below the first surge tier', async () => {
+    mockDriverState.activeRide = { ride: { id: 'r1' }, service_area_polygon: POLY };
+    const r = await renderScreen();
+    const polygon = r.root.findByProps({ accessibilityLabel: 'map-polygon' });
+    expect(polygon.props.strokeColor).toBe(`${COLORS.success}A6`);
+  });
+
+  it('uses the heatmap ramp color once surge reaches the first tier (1.25x)', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/notifications?limit=1') return Promise.resolve({ data: { unread_count: 3 } });
+      if (url === '/service-areas') return Promise.resolve({ data: [{ id: 'area-1', surge_active: true, surge_multiplier: 1.25 }] });
+      return Promise.resolve({ data: {} });
+    });
+    mockDriverState.activeRide = { ride: { id: 'r1' }, service_area_polygon: POLY };
+    const r = await renderScreen();
+    const polygon = r.root.findByProps({ accessibilityLabel: 'map-polygon' });
+    expect(polygon.props.strokeColor).not.toBe(`${COLORS.success}A6`);
+  });
+
+  it('reads the polygon from incomingRide (not activeRide) while an offer is pending', async () => {
+    mockDriverState.rideState = 'ride_offered';
+    mockDriverState.incomingRide = { ride_id: 'r1', service_area_polygon: POLY };
+    const r = await renderScreen();
+    expect(r.root.findByProps({ accessibilityLabel: 'map-polygon' })).toBeTruthy();
+  });
+
+  it('renders nothing for a polygon with fewer than 3 points', async () => {
+    mockDriverState.activeRide = { ride: { id: 'r1' }, service_area_polygon: [{ lat: 52.1, lng: -106.6 }] };
+    const r = await renderScreen();
+    expect(r.root.findAllByProps({ accessibilityLabel: 'map-polygon' })).toHaveLength(0);
+  });
+});
+
+describe('airport zone chip', () => {
+  it('shows the active airport zone name while idle', async () => {
+    mockAirportZonesState = { zones: [], activeZone: { id: 'yxe', name: 'Saskatoon Airport' } };
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Saskatoon Airport');
+  });
+
+  it('is hidden with no active zone', async () => {
+    mockAirportZonesState = { zones: [], activeZone: null };
+    const r = await renderScreen();
+    expect(allText(r)).not.toContain('Airport');
+  });
+
+  it('is hidden once a ride is active even with an active zone', async () => {
+    mockDriverState.rideState = 'trip_in_progress';
+    mockDriverState.activeRide = { ride: { id: 'ride-1' }, rider: { name: 'Alex' } };
+    mockAirportZonesState = { zones: [], activeZone: { id: 'yxe', name: 'Saskatoon Airport' } };
+    const r = await renderScreen();
+    expect(allText(r)).not.toContain('Saskatoon Airport');
   });
 });

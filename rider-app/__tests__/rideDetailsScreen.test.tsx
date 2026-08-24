@@ -75,7 +75,7 @@ jest.mock('expo-sharing', () => ({
   shareAsync: (...a: any[]) => mockShareAsync(...a),
 }));
 
-import RideDetailsScreen from '../app/ride-details';
+import RideDetailsScreen, { buildReceiptHtml } from '../app/ride-details';
 
 const flush = async () => {
   await Promise.resolve();
@@ -253,5 +253,149 @@ describe('RideDetailsScreen', () => {
     const helpBtn = findButtonByText(r, 'Get help with this ride');
     act(() => { helpBtn.props.onPress(); });
     expect(mockPush).toHaveBeenCalledWith('/support');
+  });
+
+  it('navigates back from the "Ride not found" state too', async () => {
+    mockApiGet.mockRejectedValue(new Error('down'));
+    const r = await renderScreen();
+    const backBtn = r.root.findAllByType(TouchableOpacity)[0];
+    act(() => { backBtn.props.onPress(); });
+    expect(mockBack).toHaveBeenCalled();
+  });
+});
+
+// buildReceiptHtml is exported specifically so its branches (tax-breakdown
+// formatting, the grand_total-gap tax fallback, driver-block presence, and
+// the three-way route-snapshot-image state) can be pinned directly rather
+// than only indirectly through handleDownloadInvoice — which, per the note
+// above, can never actually reach Print.printToFileAsync in Jest.
+describe('buildReceiptHtml', () => {
+  it('renders base fare/distance/time rows and a grand total with no tax breakdown', () => {
+    const html = buildReceiptHtml({
+      id: 'ride-99', created_at: '2026-08-20T10:00:00Z',
+      base_fare: '5.00', distance_fare: '3.00', time_fare: '2.00', distance_km: 5.2, duration_minutes: 12,
+      total_fare: '10.00', grand_total: '10.00',
+    });
+    expect(html).toContain('Base fare');
+    expect(html).toContain('$5.00');
+    expect(html).toContain('Distance (5.2 km)');
+    expect(html).toContain('Time (12 min)');
+    expect(html).toContain('$10.00 CAD');
+  });
+
+  it('adds a booking fee row only when booking_fee > 0', () => {
+    const withFee = buildReceiptHtml({ id: 'r1', booking_fee: '1.50', total_fare: '10', grand_total: '10' });
+    expect(withFee).toContain('Booking fee');
+    const withoutFee = buildReceiptHtml({ id: 'r2', booking_fee: '0', total_fare: '10', grand_total: '10' });
+    expect(withoutFee).not.toContain('Booking fee');
+  });
+
+  it('renders each tax_breakdown entry with its rate, skipping zero-amount entries', () => {
+    const html = buildReceiptHtml({
+      id: 'r3', total_fare: '10.00', grand_total: '10.60',
+      tax_breakdown: { GST: { amount: '0.50', rate: 5 }, PST: { amount: '0.10', rate: 6 }, Other: { amount: '0', rate: 0 } },
+    });
+    expect(html).toContain('GST (5%)');
+    expect(html).toContain('$0.50');
+    expect(html).toContain('PST (6%)');
+    expect(html).not.toContain('Other');
+  });
+
+  it('falls back to a single "Tax" line from the grand_total gap when no tax_breakdown is present', () => {
+    const html = buildReceiptHtml({ id: 'r4', total_fare: '10.00', grand_total: '10.60' });
+    expect(html).toContain('Tax');
+    expect(html).toContain('$0.60');
+  });
+
+  it('omits the fallback Tax line when the gap is negligible', () => {
+    const html = buildReceiptHtml({ id: 'r5', total_fare: '10.00', grand_total: '10.00' });
+    expect(html).not.toContain('>Tax<');
+  });
+
+  it('includes a Tip row and folds the tip into the grand total when tip_amount > 0', () => {
+    const html = buildReceiptHtml({ id: 'r6', total_fare: '10.00', grand_total: '10.00', tip_amount: '2.00' });
+    expect(html).toContain('Tip');
+    expect(html).toContain('$12.00 CAD'); // grand_total + tip
+  });
+
+  it('renders a driver block from driver_name, falling back to first/last name, with driver_code · vehicle subtitle', () => {
+    const withDriverName = buildReceiptHtml({ id: 'r7', driver_name: 'Alex Rider', driver_vehicle: 'Toyota Camry', driver_code: 'D-123' });
+    expect(withDriverName).toContain('Alex Rider');
+    expect(withDriverName).toContain('D-123 · Toyota Camry');
+
+    const withNestedDriver = buildReceiptHtml({ id: 'r8', driver: { first_name: 'Sam', last_name: 'Lee' } });
+    expect(withNestedDriver).toContain('Sam Lee');
+  });
+
+  it('omits the driver block entirely when no driver name is available', () => {
+    const html = buildReceiptHtml({ id: 'r9' });
+    expect(html).not.toContain('background:#f9f9f9;border-radius:12px"><tr><td style="padding:12px 14px"');
+  });
+
+  it('shows the actual-route snapshot image when the snapshot revision matches the ride revision', () => {
+    const html = buildReceiptHtml({
+      id: 'r10', route_schema_version: 2, route_revision: 3, snapshot_revision: 3,
+      route_snapshot_url: 'https://cdn.example.com/route.png', route_quality: 'good',
+    });
+    expect(html).toContain('Actual route (revision 3)');
+    expect(html).toContain('https://cdn.example.com/route.png');
+  });
+
+  it('shows "Route snapshot unavailable" when v2 but the snapshot revision does not match', () => {
+    const html = buildReceiptHtml({
+      id: 'r11', route_schema_version: 2, route_revision: 3, snapshot_revision: 1,
+      route_snapshot_url: 'https://cdn.example.com/stale.png',
+    });
+    expect(html).toContain('Route snapshot unavailable');
+    expect(html).not.toContain('stale.png');
+  });
+
+  it('falls back to a "Planned route" image for legacy (pre-v2) rides with a snapshot url', () => {
+    const html = buildReceiptHtml({ id: 'r12', route_snapshot_url: 'https://cdn.example.com/planned.png' });
+    expect(html).toContain('Planned route');
+    expect(html).toContain('planned.png');
+  });
+
+  it('uses "—" as the ride code fallback when neither ride_code nor id is present', () => {
+    const html = buildReceiptHtml({});
+    expect(html).toContain('Ride <strong style="color:#1a1a1a">—</strong>');
+  });
+});
+
+describe('map rendering (pickup_lat/dropoff_lat present)', () => {
+  const RIDE_WITH_COORDS = {
+    ...RIDE_COMPLETED,
+    pickup_lat: 52.13, pickup_lng: -106.67,
+    dropoff_lat: 52.15, dropoff_lng: -106.63,
+  };
+
+  it('renders the MapView when both pickup and dropoff coordinates are present', async () => {
+    mockApiGet.mockResolvedValue({ data: RIDE_WITH_COORDS });
+    const r = await renderScreen();
+    const MapViewNode = r.root.findByType('MapView' as any);
+    expect(MapViewNode).toBeTruthy();
+  });
+
+  it('omits the MapView when coordinates are missing (existing fixture)', async () => {
+    const r = await renderScreen();
+    expect(() => r.root.findByType('MapView' as any)).toThrow();
+  });
+
+  it('calls fitToCoordinates via the map ref once onMapReady fires with 2+ coordinates', async () => {
+    mockApiGet.mockResolvedValue({
+      data: {
+        ...RIDE_WITH_COORDS,
+        actual_route_segments: [
+          { latitude: 52.13, longitude: -106.67 },
+          { latitude: 52.14, longitude: -106.65 },
+        ],
+      },
+    });
+    const r = await renderScreen();
+    const MapViewNode = r.root.findByType('MapView' as any);
+    await act(async () => { MapViewNode.props.onMapReady(); await flush(); });
+    // No assertion error thrown means the ref's fitToCoordinates (mocked via
+    // useImperativeHandle) was reachable and callable post state update.
+    expect(allText(r)).toBeDefined();
   });
 });

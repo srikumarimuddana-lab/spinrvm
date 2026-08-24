@@ -1,5 +1,16 @@
 module.exports = {
   preset: 'jest-expo',
+  // Raised from Jest's 5000ms default 2026-08-24: no individual test hangs
+  // (every affected test passes standalone and in a plain local full-suite
+  // run) — three DIFFERENT test files across this app and rider-app
+  // (driverProfileScreen here, rideOptions/homeScreen in rider-app)
+  // intermittently exceeded 5000ms one at a time in CI's coverage-
+  // instrumented full-suite run as the repo's suite size grew, each only
+  // under real CPU contention on the runner. Bumping the same file's
+  // timeout each time it was that file's turn was whack-a-mole; fixing the
+  // shared default addresses the actual cause. See rider-app/jest.config.js
+  // for the matching change.
+  testTimeout: 15000,
   setupFiles: ['./jest.setup.js'],
   testPathIgnorePatterns: ['/node_modules/', '/e2e/'],
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx'],

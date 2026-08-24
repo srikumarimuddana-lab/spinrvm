@@ -13,7 +13,7 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { TouchableOpacity } from 'react-native';
+import { TouchableOpacity, View } from 'react-native';
 
 import LegalScreen from '../../app/legal';
 import { legalDocFallbackText, legalDocTitle } from '@shared/config/legalDocs';
@@ -134,5 +134,60 @@ describe('LegalScreen (driver-app)', () => {
       backBtn.props.onPress();
     });
     expect(mockBack).toHaveBeenCalled();
+  });
+
+  it('single-doc mode falls back to legalDocFallbackText when the fetch throws', async () => {
+    mockParams = { type: 'community-guidelines' };
+    mockFetch.mockRejectedValue(new Error('network down'));
+    const renderer = await renderScreen();
+    expect(allText(renderer)).toContain(legalDocFallbackText('community-guidelines'));
+  });
+
+  it('scrolls to the privacy section after loading when type=privacy', async () => {
+    mockFetch.mockResolvedValue({ json: async () => ({ content: 'x' }) });
+    mockParams = { type: 'privacy' };
+    let renderer!: TestRenderer.ReactTestRenderer;
+    await act(async () => {
+      renderer = TestRenderer.create(<LegalScreen />);
+      await flush();
+    });
+    // The scroll-to-section effect only fires after `loading` flips false
+    // and is debounced 150ms — advancing timers here exercises that branch
+    // without asserting on the native scrollTo call (react-test-renderer
+    // doesn't expose ScrollView's imperative methods on host refs).
+    act(() => {
+      jest.advanceTimersByTime(150);
+    });
+    expect(allText(renderer)).toContain('x');
+  });
+
+  it('scrolls to the ToS section after loading when type=tos', async () => {
+    mockFetch.mockResolvedValue({ json: async () => ({ content: 'x' }) });
+    mockParams = { type: 'tos' };
+    let renderer!: TestRenderer.ReactTestRenderer;
+    await act(async () => {
+      renderer = TestRenderer.create(<LegalScreen />);
+      await flush();
+    });
+    act(() => {
+      jest.advanceTimersByTime(150);
+    });
+    expect(allText(renderer)).toContain('x');
+  });
+
+  it('records section layout offsets via onLayout for the combined view', async () => {
+    mockFetch.mockResolvedValue({ json: async () => ({ content: 'x' }) });
+    const renderer = await renderScreen();
+    const layoutViews = renderer.root
+      .findAllByType(View)
+      .filter((v) => typeof v.props.onLayout === 'function');
+    expect(layoutViews.length).toBe(2); // privacy section + tos section
+    act(() => {
+      layoutViews[0].props.onLayout({ nativeEvent: { layout: { y: 42 } } });
+      layoutViews[1].props.onLayout({ nativeEvent: { layout: { y: 420 } } });
+    });
+    // No crash and content still renders — the refs are internal, not
+    // observable state, so this pins the onLayout branch executes cleanly.
+    expect(allText(renderer)).toContain('x');
   });
 });

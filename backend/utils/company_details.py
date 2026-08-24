@@ -75,6 +75,12 @@ class CompanyDetails(NamedTuple):
     #: run-on at footer type sizes. Defaulted for the same reason as
     #: ``app_name``: fixtures built before it existed keep constructing.
     address_lines: Tuple[str, ...] = ()
+    #: Absolute URL for an "open/install the app" CTA button, or ``None`` when
+    #: unconfigured. Unlike every other field on this tuple, there is no
+    #: hardcoded fallback — a made-up app-store link would be worse than no
+    #: button at all, so callers (e.g. ``rider_emails.send_welcome_email``)
+    #: must render without a CTA when this is ``None``.
+    app_download_url: Optional[str] = None
 
     @property
     def name_sentence(self) -> str:
@@ -116,6 +122,25 @@ def _safe_logo_url(raw: str) -> Optional[str]:
         return None
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         logger.warning("company_logo_url is not an absolute http(s) URL — falling back to the bundled asset")
+        return None
+    return raw
+
+
+def _safe_app_download_url(raw: str) -> Optional[str]:
+    """Accept an admin-supplied app-download URL only if it is absolute http(s).
+
+    Same reasoning as ``_safe_logo_url``: this lands in an ``<a href>`` in mail
+    sent to riders, so a typo'd or pasted ``javascript:`` URL must degrade to
+    "no CTA" rather than ship a broken or unsafe link.
+    """
+    if not raw:
+        return None
+    try:
+        parsed = urlparse(raw)
+    except ValueError:
+        return None
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        logger.warning("company_app_download_url is not an absolute http(s) URL — omitting the CTA")
         return None
     return raw
 
@@ -199,4 +224,5 @@ async def load_company_details() -> CompanyDetails:
         support_email=support_email,
         logo_url=_safe_logo_url(_coalesce(settings, "company_logo_url")) or _bundled_logo_url(),
         address_lines=_address_lines(settings),
+        app_download_url=_safe_app_download_url(_coalesce(settings, "company_app_download_url")),
     )

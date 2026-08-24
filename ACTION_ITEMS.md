@@ -764,14 +764,33 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     current pending-money figure, anything post-2026-07-26, Stripe-side
     everything, and the numeric-ID crosswalk half — all need the Oct-30
     fresh export the user says is coming.
-  - **STILL OPEN, unchanged**: no
-    final-export/teardown runbook owner/dates (draft exists,
-    `docs/runbooks/full-app-audit.md` Part B §3.2); double-dispatch/
-    double-payout structural risk (needs an operational roster policy — code
-    provides no guard); 3 monitoring signals **now shipped** (PR #3954,
-    `dual_run_monitoring_enabled`, verify still live rather than treating as
-    a to-do); open $16.63 Stripe dispute needs a response; rider-referral
-    velocity/identity-cross-check gap unchanged; 22 unmarked drivers; two
+  - **VERIFIED LIVE (2026-08-24)**: the 3 monitoring signals from PR #3954
+    (`dual_run_monitoring_enabled`) confirmed still wired — `record_go_online_flip`
+    called from `backend/routes/drivers/status.py`, payout counter emitted from
+    `backend/routes/drivers/payouts.py`. Delta-only re-check per
+    `docs/runbooks/full-app-audit.md` §3.1's instruction; not a to-do, and not
+    previously actually confirmed at the code level (only asserted "shipped").
+  - **DRAFTED (2026-08-24)**, still needs owner + approval, not closed: the
+    final-export/teardown runbook now has a full draft —
+    `docs/runbooks/old-app-decommission.md` (expands the 11-step sequence
+    previously only sketched in `docs/runbooks/full-app-audit.md` §3.2, still
+    every `**USER DECISION**`/owner slot unfilled). The double-dispatch/
+    double-payout structural risk now has a proposed operational roster
+    policy — `docs/runbooks/dual-run-driver-roster-policy.md` — explaining why
+    a code guard was rejected as the primary control (no live integration
+    with the old app) in favor of a manual roster cross-check backed by the
+    §3 monitoring signals; also unowned/unapproved. Neither runbook is in
+    effect until the owner slots in each are filled and the policy/plan is
+    approved — do not treat either as closing this item.
+  - **STILL OPEN, unchanged**: open $16.63 Stripe dispute needs a response;
+    rider-referral velocity/identity-cross-check gap unchanged (checked
+    `utils/referral_payout.py` 2026-08-24 — confirmed zero legacy/signup-recency
+    awareness, same as the audit found; whether it's actively being exploited
+    needs live account data this session doesn't have); 22 unmarked drivers
+    (checked whether `driver_import_service.py` has the same
+    update-path metadata-loss bug PR #4132 fixed for riders — it doesn't; driver
+    updates only ever touch rows already carrying the provenance stamp, so
+    this is a data question needing a live query, not a code gap); two
     incompatible legacy-ID namespaces still need a crosswalk table (now
     half-closed, see above).
 - **Files:** `docs/audit/2026-08-15-dual-run-cutover/` (4 phase reports),

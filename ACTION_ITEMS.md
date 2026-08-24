@@ -8900,6 +8900,51 @@ record of what was assumed vs. what was actually true</summary>
     list wherever a future session left off, re-running the coverage
     command above to confirm current numbers before starting (they'll
     have moved since this snapshot).
+  - **rider-app `app/search-destination.tsx`: 70.5% → 95.4% lines.** See
+    the separate PR for this screen (`claude/rider-search-destination-
+    coverage`) — extended `searchDestinationScreen.test.tsx` in place
+    (+23 tests) to close the GPS-fetch-on-mount block and the
+    pickup/stop branches of `handleSelectPrediction`/`handleTextChange`/
+    `handleSelectLocation` (only their dropoff branches were tested
+    before). Full detail is in that branch's own `ACTION_ITEMS.md` entry
+    (merged separately from this one to avoid a doc conflict between the
+    two concurrent screens).
+  - **rider-app `app/ride-in-progress.tsx`: 76.9% → 100% lines.**
+    Already had `rideInProgressScreen.test.tsx` (14 tests: mount fetch/
+    poll gating, completed-status redirect, share/copy/live-map actions,
+    end-ride confirm + failure, message driver, driver-photo-error
+    fallback) — extended in place (+14 tests). The reported
+    `"595-597,637-772"` uncovered-line range in the original scan looked
+    like one giant block but wasn't: Istanbul's text reporter merges
+    scattered uncovered statement lines into a compact range whenever no
+    independently-instrumented statement sits between them (pure JSX/
+    whitespace lines don't count as separate coverable units) — the
+    actual gap was a handful of never-invoked callback bodies: the error
+    state's Retry button; `MapViewDirections`'s `onReady` callback
+    (never mounted before, since every test's fixture already had
+    `activeRideRouteCoords` set, so the component that renders it was
+    never reached — needed a fresh test with `activeRideRouteCoords:
+    null` and `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` set, plus rewriting the
+    `react-native-maps-directions` mock from `() => null` to a
+    prop-capturing double so `onReady` could be invoked directly, both
+    with and without a driver GPS fix — the with-fix path prefers
+    haversine ETA over the Directions duration); the driver-not-yet-
+    available map-center-on-pickup fallback; `fetchLiveRoute`'s success
+    branch (previously only its silent-catch path was exercised);
+    confirming (not just opening) both End Ride dialogs — the button's
+    own and the hardware-back-triggered one, including each one's own
+    failure-toast branch; dismissing the confirm sheet via "Continue
+    Ride" without ending the ride; `Share.share` itself rejecting;
+    `handleCopyTrackingLink`'s not-configured branch (reachable only by
+    sharing successfully, then swapping `trackBaseUrl` to null via a
+    context-value re-render before pressing copy, since the copy button
+    only exists after a successful share); seeding `tripRouteCoords`
+    from a saved `planned_route_polyline` when no live-coords cache
+    exists; and the `__DEV__`-only "Complete Ride" button's success and
+    swallowed-failure paths. 28 tests; full rider-app suite still green
+    (122 suites / 1255 tests — this branch predates the
+    `search-destination.tsx` PR above, so its own test count is separate
+    from that entry's), `yarn tsc --noEmit` clean.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

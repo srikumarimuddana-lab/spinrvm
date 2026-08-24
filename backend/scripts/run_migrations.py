@@ -316,6 +316,42 @@ def _apply_one_autocommit(conn, filename: str, checksum: str, statements: List[s
         conn.autocommit = False
 
 
+def _apply_pending(conn, pending: List[Path]) -> int:
+    """Apply each pending migration in order; report cleanly on a mid-batch failure.
+
+    Each file already commits independently (see `_apply_one` /
+    `_apply_one_autocommit`), so a failure partway through a batch never
+    needs a rollback of earlier files -- but letting the exception propagate
+    unhandled left the operator with a raw traceback and no summary of what
+    actually landed vs. what's still pending. Catch it here instead: report
+    the applied/failed/remaining split explicitly (never silently swallow --
+    the original exception is still printed), then exit non-zero so CI/an
+    operator can't mistake a partial batch for success.
+    """
+    applied_now: List[Path] = []
+    for path in pending:
+        try:
+            _apply_one(conn, path)
+        except Exception as exc:  # noqa: BLE001 -- deliberately broad: any DB/SQL error must be reported, not masked
+            remaining = pending[len(applied_now) + 1 :]
+            print(f"ERROR: failed to apply {path.name}: {exc}", file=sys.stderr)
+            print(
+                f"Applied {len(applied_now)} migration(s) before the failure: "
+                + (", ".join(p.name for p in applied_now) or "(none)"),
+                file=sys.stderr,
+            )
+            print(
+                f"Not applied ({1 + len(remaining)} total, including the failed file): "
+                + ", ".join([path.name] + [p.name for p in remaining]),
+                file=sys.stderr,
+            )
+            return 1
+        applied_now.append(path)
+
+    print(f"Applied {len(applied_now)} migration(s).")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true", help="Show what would be applied; don't run SQL.")
@@ -358,11 +394,7 @@ def main() -> int:
             print("No pending migrations.")
             return 0
 
-        for path in pending:
-            _apply_one(conn, path)
-
-        print(f"Applied {len(pending)} migration(s).")
-        return 0
+        return _apply_pending(conn, pending)
     finally:
         conn.close()
 

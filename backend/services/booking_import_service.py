@@ -44,6 +44,21 @@ therefore gets one offsetting ``payouts`` row (``payout_type='legacy_import'``,
 earnings. Net payable delta per driver is exactly $0. Cancelled/failed rows
 have no earnings, so they never touch this offset mechanism.
 
+Every imported ``status='completed'`` row (both the real-earnings path and
+the anomalous $0-fare path) that carries a matched driver plus
+``arrived_at``/``started_at``/``completed_at`` also gets reconstructed
+``driver_insurance_periods`` rows (Period 2: arrived→started; Period 3:
+started→completed), each marked ``is_reconstructed=true`` — mirrors
+migration 332's one-time historical backfill for the original 186 rides,
+applied per-row here so every future delta import carries its own
+regulatory audit trail instead of needing a manual SQL pass afterward. Same
+disclosed limitation as 332: Period 2 starts from ``arrived_at``, not the
+true (never-captured) driver-assignment moment. A row missing any of the
+three timestamps or the driver match simply gets no period row for the leg
+it can't support — never a fabricated boundary. Cancelled/failed rows never
+get period rows (no driver-liability reconstruction is attempted for a
+ride that was never marked completed).
+
 Follows the same validate-then-commit contract as rider_import_service and
 driver_import_service. Reports carry only row numbers + legacy booking codes —
 never names, phones, or addresses.
@@ -146,6 +161,12 @@ class ImportReportItem:
 class BookingImportPlan:
     rides_to_insert: list[dict[str, Any]] = field(default_factory=list)
     payouts_to_insert: list[dict[str, Any]] = field(default_factory=list)
+    # Reconstructed driver_insurance_periods rows for newly-imported completed
+    # rides -- see build_plan()'s insurance-period comment below for the
+    # reconstruction rule (mirrors migration 332's one-time historical
+    # backfill, applied here per-row so every future delta import gets an
+    # audit trail instead of needing a manual SQL backfill each time).
+    insurance_periods_to_insert: list[dict[str, Any]] = field(default_factory=list)
     driver_ids_to_recount: set[str] = field(default_factory=set)
     warnings: list[ImportReportItem] = field(default_factory=list)
     errors: list[ImportReportItem] = field(default_factory=list)
@@ -337,6 +358,58 @@ def _fetch_already_imported() -> set[str]:
 
 def payout_id_for(batch: str, driver_id: str) -> str:
     return f"legacy-import-{batch}-{driver_id}"
+
+
+def _plan_insurance_periods(
+    plan: "BookingImportPlan",
+    ride: dict[str, Any],
+    driver_id: str | None,
+    arrived_at: str | None,
+    started_at: str | None,
+    completed_at: str | None,
+) -> None:
+    """Reconstruct Period 2 / Period 3 driver_insurance_periods rows for a
+    newly-imported completed legacy ride.
+
+    Mirrors migration 332's one-time historical backfill exactly (same
+    columns, same `is_reconstructed = true` marker, same disclosed
+    limitation: Period 2 starts from `arrived_at`, not the true unrecorded
+    driver-assignment moment) -- applied per-row at import time instead of a
+    manual SQL pass, so every future delta import gets an audit trail
+    automatically. Only writes a period when every timestamp/driver_id it
+    needs is present; a ride missing one (e.g. no `arrived_at`) simply gets
+    no row for that period, same as migration 332 excluded rides it could
+    not support -- never a fabricated boundary.
+
+    `ride["id"]` is the client-generated UUID already set on the ride dict
+    (see the `"id": str(uuid.uuid4())` line above) -- available before the
+    ride itself is inserted, so both are queued together and committed in
+    the same `commit_plan()` call (rides first, so the FK exists).
+    """
+    if not driver_id:
+        return
+    if arrived_at and started_at:
+        plan.insurance_periods_to_insert.append(
+            {
+                "driver_id": driver_id,
+                "period": 2,
+                "ride_id": ride["id"],
+                "started_at": arrived_at,
+                "ended_at": started_at,
+                "is_reconstructed": True,
+            }
+        )
+    if started_at and completed_at:
+        plan.insurance_periods_to_insert.append(
+            {
+                "driver_id": driver_id,
+                "period": 3,
+                "ride_id": ride["id"],
+                "started_at": started_at,
+                "ended_at": completed_at,
+                "is_reconstructed": True,
+            }
+        )
 
 
 def _match_rider_driver(
@@ -566,6 +639,14 @@ def build_plan(
         payout_gst_amount = parse_money(b.get("payout_gst_amount", ""))
         discount = parse_money(b.get("coupon_discount", ""))
         tip = parse_money(b.get("tip_driver", ""))
+        # Parsed separately (not read back out of `fees` below) so
+        # rides.airport_fee -- the dedicated column admin/reporting surfaces
+        # read directly (e.g. routes/admin/rides.py's ride-detail endpoint)
+        # -- reflects the real historical charge instead of the previous
+        # hardcoded 0.0. The rider-facing total is unaffected either way:
+        # both charges are still folded into area_fees_breakdown/fees_total
+        # below via FEE_COLUMNS, same as before.
+        airport_fee = parse_money(b.get("airport_pickup_charges", "")) + parse_money(b.get("airport_drop_charges", ""))
 
         fees: list[dict[str, Any]] = []
         fees_total = ZERO
@@ -655,7 +736,12 @@ def build_plan(
             "distance_fare": 0.0,
             "time_fare": 0.0,
             "booking_fee": 0.0,  # explicit: the column defaults to 2.0
-            "airport_fee": 0.0,  # legacy airport charges ride in area_fees
+            # Real historical airport pickup/dropoff charge (see the
+            # `airport_fee` parsing comment above) -- still also folded into
+            # area_fees_breakdown/fees_total below so the receipt total is
+            # unaffected; this just stops admin/reporting surfaces that read
+            # rides.airport_fee directly from showing $0 on a real airport trip.
+            "airport_fee": float(airport_fee),
             # Verified 2026-08-15, not assumed: the old app's surge-schedule
             # config (surchargedates.csv) had every weekday's time_slots
             # empty and surchargehistories.csv was completely empty -- surge
@@ -732,6 +818,7 @@ def build_plan(
             ride["driver_arrived_at"] = arrived_at
 
         plan.rides_to_insert.append(ride)
+        _plan_insurance_periods(plan, ride, driver_id, arrived_at, started_at, completed_at)
 
         sum_rider_paid += total_amount
         sum_driver_total += driver_total
@@ -941,6 +1028,7 @@ def build_plan(
                 ride["driver_arrived_at"] = arrived_at
 
             plan.rides_to_insert.append(ride)
+            _plan_insurance_periods(plan, ride, driver_id, arrived_at, started_at, completed_at)
             cancelled_failed_zero_fare_completed += 1
             if driver_id:
                 # Real completed ride -- total_rides (a plain COUNT of
@@ -1080,6 +1168,7 @@ def build_plan(
         "cancelled_failed_unmatched_riders": cancelled_failed_unmatched_riders,
         "cancelled_failed_unmatched_drivers": cancelled_failed_unmatched_drivers,
         "total_rides_planned": len(plan.rides_to_insert),
+        "insurance_periods_planned": len(plan.insurance_periods_to_insert),
         "sum_rider_paid": float(sum_rider_paid),
         "sum_driver_total": float(sum_driver_total),
         "sum_offset_payouts": float(sum((to_decimal(p["amount"]) for p in plan.payouts_to_insert), ZERO)),
@@ -1095,6 +1184,16 @@ def commit_plan(plan: BookingImportPlan) -> None:
 
     for i in range(0, len(plan.rides_to_insert), 200):
         supabase.table("rides").insert(plan.rides_to_insert[i : i + 200]).execute()
+
+    # After rides: driver_insurance_periods.ride_id has a rides(id) FK, and
+    # this table is append-only (migration 64's immutability trigger) with
+    # no upsert path -- same partial-commit exposure the payouts insert
+    # below already has (a crash between this and the rides insert leaves a
+    # gap that build_plan()'s already-imported check would then skip on
+    # re-run, same as it would for a missed payout row). Not a new failure
+    # mode; see commit_plan's module-level re-run note.
+    for i in range(0, len(plan.insurance_periods_to_insert), 200):
+        supabase.table("driver_insurance_periods").insert(plan.insurance_periods_to_insert[i : i + 200]).execute()
 
     for i in range(0, len(plan.payouts_to_insert), 200):
         supabase.table("payouts").insert(plan.payouts_to_insert[i : i + 200]).execute()
@@ -1183,6 +1282,9 @@ def print_report(plan: BookingImportPlan, *, dry_run: bool) -> None:
     print(f"  imported completed, $0 fare : {s.get('cancelled_failed_zero_fare_completed', 0)} (looked completed)")
     print(f"  skipped (bad coordinates)   : {s.get('cancelled_failed_skipped_missing_coordinates', 0)}")
     print(f"  total rides planned (all)   : {s.get('total_rides_planned', 0)}")
+    print(
+        f"  insurance periods planned   : {s.get('insurance_periods_planned', 0)} (reconstructed, is_reconstructed=true)"
+    )
 
     if plan.warnings:
         print(f"\n  --- warnings ({len(plan.warnings)}) ---")

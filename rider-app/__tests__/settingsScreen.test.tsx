@@ -13,7 +13,7 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { TouchableOpacity, Text } from 'react-native';
+import { TouchableOpacity, Text, Modal, StyleSheet } from 'react-native';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('react-native-safe-area-context', () => ({
@@ -43,14 +43,16 @@ jest.mock('@shared/api/client', () => ({
 const mockShowToast = jest.fn();
 jest.mock('../store/toastStore', () => ({ showToast: (...args: any[]) => mockShowToast(...args) }));
 
+let mockAuthUser: any = { phone: '+15551234567' };
 jest.mock('@shared/store/authStore', () => ({
-  useAuthStore: () => ({ user: { phone: '+15551234567' } }),
+  useAuthStore: () => ({ user: mockAuthUser }),
 }));
 
 const mockSetLanguage = jest.fn();
+let mockLanguage = 'en';
 jest.mock('../i18n', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
-  useLanguageStore: () => ({ language: 'en', setLanguage: mockSetLanguage }),
+  useLanguageStore: () => ({ language: mockLanguage, setLanguage: mockSetLanguage }),
   LANGUAGES: [
     { code: 'en', name: 'English', nativeName: 'English', flag: '🇨🇦' },
     { code: 'fr', name: 'French', nativeName: 'Français', flag: '🇫🇷' },
@@ -109,6 +111,8 @@ function findToggleByTitle(r: TestRenderer.ReactTestRenderer, title: string) {
 beforeEach(() => {
   jest.clearAllMocks();
   mockNotificationPrefsData = undefined;
+  mockAuthUser = { phone: '+15551234567' };
+  mockLanguage = 'en';
   mockCheckNotificationPermission.mockResolvedValue({ granted: true });
   mockRequestNotificationPermission.mockResolvedValue(true);
 });
@@ -189,6 +193,59 @@ describe('SettingsScreen', () => {
     expect(mockSetTheme).toHaveBeenCalledWith('dark');
   });
 
+  it('toggles dark mode off via setTheme', async () => {
+    const r = await renderScreen();
+    const darkToggle = findToggleByTitle(r, 'settings.dark_mode');
+    act(() => {
+      darkToggle.props.onToggle(false);
+    });
+    expect(mockSetTheme).toHaveBeenCalledWith('light');
+  });
+
+  it('only syncs the preference fields that are present, leaving the others at their defaults', async () => {
+    mockNotificationPrefsData = { push_enabled: false }; // email_enabled/sms_enabled absent
+    const r = await renderScreen();
+    expect(findToggleByTitle(r, 'settings.push_notifications').props.value).toBe(false);
+    expect(findToggleByTitle(r, 'settings.email_notifications').props.value).toBe(true); // untouched default
+    expect(findToggleByTitle(r, 'settings.sms_notifications').props.value).toBe(false); // untouched default
+  });
+
+  it('leaves the push toggle at its default when push_enabled itself is absent from the fetched preferences', async () => {
+    mockNotificationPrefsData = { email_enabled: false }; // push_enabled absent
+    const r = await renderScreen();
+    expect(findToggleByTitle(r, 'settings.push_notifications').props.value).toBe(true); // untouched default
+  });
+
+  it('toggles email/sms notifications directly (no permission check, since only push needs it)', async () => {
+    const r = await renderScreen();
+    const emailToggle = findToggleByTitle(r, 'settings.email_notifications');
+    await act(async () => {
+      await emailToggle.props.onToggle(false);
+      await flush();
+    });
+    expect(mockCheckNotificationPermission).not.toHaveBeenCalled();
+    expect(mockMutate).toHaveBeenCalledWith(
+      { email_enabled: false },
+      expect.objectContaining({ onError: expect.any(Function) }),
+    );
+  });
+
+  it('proceeds to enable push once permission is granted after being requested', async () => {
+    mockCheckNotificationPermission.mockResolvedValue({ granted: false });
+    mockRequestNotificationPermission.mockResolvedValue(true); // granted this time
+    const r = await renderScreen();
+    const pushToggle = findToggleByTitle(r, 'settings.push_notifications');
+    await act(async () => {
+      await pushToggle.props.onToggle(true);
+      await flush();
+    });
+    expect(mockOpenNotificationSettings).not.toHaveBeenCalled();
+    expect(mockMutate).toHaveBeenCalledWith(
+      { push_enabled: true },
+      expect.objectContaining({ onError: expect.any(Function) }),
+    );
+  });
+
   it('opens the language modal and lists every language', async () => {
     const r = await renderScreen();
     const langRow = findButtonByText(r, 'settings.language');
@@ -211,6 +268,18 @@ describe('SettingsScreen', () => {
       frRow.props.onPress();
     });
     expect(mockSetLanguage).toHaveBeenCalledWith('fr');
+  });
+
+  it('falls back to "English" for the language subtitle when the current language code is not in the LANGUAGES list', async () => {
+    mockLanguage = 'de'; // not present in the mocked LANGUAGES list
+    const r = await renderScreen();
+    expect(allText(r)).toContain('[null," ","English"]');
+  });
+
+  it('shows an empty phone segment when the user has no phone on file', async () => {
+    mockAuthUser = null;
+    const r = await renderScreen();
+    expect(allText(r)).toContain('["Spinr v1.0.2 · ",""]');
   });
 
   it('navigates to /privacy-settings', async () => {
@@ -274,5 +343,27 @@ describe('SettingsScreen', () => {
       backBtn.props.onPress();
     });
     expect(mockBack).toHaveBeenCalled();
+  });
+
+  it('closes the language modal via the backdrop press and via onRequestClose', async () => {
+    const r = await renderScreen();
+    const langRow = findButtonByText(r, 'settings.language');
+    act(() => { langRow.props.onPress(); });
+    const modal = r.root.findByType(Modal);
+    expect(modal.props.visible).toBe(true);
+
+    act(() => { modal.props.onRequestClose(); });
+    expect(r.root.findByType(Modal).props.visible).toBe(false);
+
+    act(() => { langRow.props.onPress(); }); // reopen
+    expect(r.root.findByType(Modal).props.visible).toBe(true);
+    // findByType(Pressable) doesn't reliably match RN's real Pressable here,
+    // so locate the backdrop by its distinguishing props instead (the only
+    // element with both an onPress and StyleSheet.absoluteFill).
+    const [backdrop] = r.root.findAll(
+      (node) => typeof node.props.onPress === 'function' && node.props.style === StyleSheet.absoluteFill,
+    );
+    act(() => { backdrop.props.onPress(); });
+    expect(r.root.findByType(Modal).props.visible).toBe(false);
   });
 });

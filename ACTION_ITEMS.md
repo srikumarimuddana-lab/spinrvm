@@ -9692,6 +9692,43 @@ record of what was assumed vs. what was actually true</summary>
     Jest-environment behavior (the dynamic `import()` always throws
     here), not a masked bug. 57 tests; full rider-app suite still green
     (123 suites / 1484 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/settings.tsx`: 96.66% → 100% stmts, 71.42% → 100%
+    branch, 91.66% → 100% funcs, 96.15% → 100% lines.** Already had
+    `settingsScreen.test.tsx` (14 tests: preference-sync from the
+    server, the push-permission-already-granted path, the
+    permission-declined-twice path opening device settings, the
+    mutation-error toggle-revert, dark mode, the language modal listing
+    every language, every navigation row, back nav) — extended in place
+    (+8 tests, 22 total). Closed: toggling dark mode *off* (only the
+    on/`setTheme('dark')` direction had a test); a partial
+    `notificationPrefs` payload only syncing the fields actually present
+    and leaving the rest at their component defaults — both the
+    push-field-present/others-absent and the inverse
+    (push-field-absent/another-present) shapes, since each is a
+    separate `if (x != null)` guard per field; toggling email/sms
+    notifications directly (previously only push, the one with the
+    permission side-effect, was ever exercised — email/sms skip the
+    permission check entirely and go straight to `setter` +
+    `mutate`); the permission-*granted-after-being-requested* path
+    (distinct from the existing always-granted and
+    declined-twice-then-give-up cases); the language-row subtitle's
+    `?? 'English'` fallback when the stored language code isn't in the
+    `LANGUAGES` list; the version footer's empty-phone-segment fallback
+    when `user` is `null`; and closing the language modal both via its
+    own `onRequestClose` and via tapping the backdrop `Pressable`
+    (found mid-task that `r.root.findByType(Pressable)` doesn't
+    reliably match React Native's real `Pressable` component in this
+    RN/Jest version — its rendered fiber type isn't reference-equal to
+    the `Pressable` re-exported from `'react-native'` in the test file
+    despite both resolving through the same module graph; worked around
+    by matching on the element's distinguishing props instead
+    — `typeof onPress === 'function' && style === StyleSheet.absoluteFill`
+    — rather than by type; flagging this as a reusable pattern for any
+    future screen with a `Pressable` backdrop, since `Modal`/
+    `TouchableOpacity`/`Text` all matched fine by type in the same
+    file). No bug found. Not money-touching; no auditor review sought.
+    22 tests; full rider-app suite still green (123 suites / 1476
+    tests), `yarn tsc --noEmit` clean.
   - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
     85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
     tests: no-account-prefill, the CRC-consent auto-check-when-

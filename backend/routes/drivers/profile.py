@@ -852,6 +852,20 @@ async def register_driver(
                 detail="Driver registration partially failed. Please try again.",
             ) from exc
 
+    # Backgrounded: registration is a user-facing request and provider latency
+    # doesn't belong on it. Best-effort and self-swallowing — the driver row
+    # above is already committed. First lifecycle touch this account ever gets
+    # (docs/notification-channel-coverage.md, D1); current_user may not carry
+    # an email yet, which the sender's own recipient lookup handles.
+    try:
+        from ...utils.background import spawn
+        from ...utils.driver_emails import send_driver_welcome_email
+    except ImportError:
+        from utils.background import spawn  # type: ignore
+        from utils.driver_emails import send_driver_welcome_email  # type: ignore
+
+    spawn(send_driver_welcome_email(new_driver, current_user))
+
     return serialize_doc(new_driver)
 
 

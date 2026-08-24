@@ -8660,6 +8660,29 @@ record of what was assumed vs. what was actually true</summary>
     (1359 lines) — substantial uncovered surface remains (the countdown-
     timer/AppState-resync effects, the Directions-API route-fetch effect,
     various map-control button handlers) for a future pass.
+  - **driver-app `app/become-driver.tsx`: 69.3% → 80.7% lines.** Already
+    had `becomeDriverScreen.test.tsx` (16 tests covering the wizard's
+    step-validation and one document-upload happy/failure path via the
+    "File" picker source only). Added 10 tests: the two other upload
+    sources (`pickImage`'s Camera and Gallery branches) each with their
+    own permission-granted-success, permission-denied-toasts-no-launch,
+    and a shared canceled-pick / generic-picker-throws pair; the Android
+    Alert shape for the upload-source picker (2 non-cancel options +
+    `{cancelable:true}`, vs. iOS's 4-option/no-cancelable-flag shape the
+    existing tests already covered); `pickFile`'s own canceled/throws
+    pair (previously only its success and upload-failure paths were
+    tested); and — the most involved addition — a full submit exercising
+    `handleSubmit`'s keyword-based requirement→legacy-expiry-field
+    mapping and the front/back `documentsPayload` construction, both
+    entirely untested since every prior submit test skipped the Docs
+    step without uploading anything. Footgun: the stored expiry value is
+    normalized to a date-only string (`toISOString().split('T')[0]`)
+    before being re-parsed at submit time, so asserting against the raw
+    `futureDate.toISOString()` (with a time-of-day component) failed —
+    the test must build its expected value through the same
+    date-only-round-trip the source code does. 10 new tests (26 total in
+    the file); full driver-app suite still green (112 suites / 1157
+    tests), `yarn tsc --noEmit` clean.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

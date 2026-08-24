@@ -283,6 +283,120 @@ describe('BecomeDriverScreen', () => {
     expect(Alert.alert).toHaveBeenCalledWith('Success', 'Document uploaded successfully');
   });
 
+  it('uploads via Camera once camera permission is granted', async () => {
+    mockRequestCameraPermissionsAsync.mockResolvedValue({ status: 'granted' });
+    mockLaunchCameraAsync.mockResolvedValue({ canceled: false, assets: [{ uri: 'file://cam.jpg', fileName: 'cam.jpg' }] });
+    const r = await renderScreen();
+    await fillPersonalAndAdvance(r);
+    act(() => { findButtonByText(r, 'Skip for now').props.onPress(); });
+    act(() => { findButtonByText(r, 'Upload Front').props.onPress(); });
+    const alertCall = (Alert.alert as jest.Mock).mock.calls[0];
+    const cameraAction = alertCall[2].find((b: any) => b.text === 'Camera');
+    await act(async () => { await cameraAction.onPress(); await flush(); });
+    expect(mockUploadFile).toHaveBeenCalledWith('file://cam.jpg', 'cam.jpg', 'image/jpeg');
+  });
+
+  it('toasts and never launches the camera when camera permission is denied', async () => {
+    mockRequestCameraPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    const r = await renderScreen();
+    await fillPersonalAndAdvance(r);
+    act(() => { findButtonByText(r, 'Skip for now').props.onPress(); });
+    act(() => { findButtonByText(r, 'Upload Front').props.onPress(); });
+    const alertCall = (Alert.alert as jest.Mock).mock.calls[0];
+    const cameraAction = alertCall[2].find((b: any) => b.text === 'Camera');
+    await act(async () => { await cameraAction.onPress(); await flush(); });
+    expect(Alert.alert).toHaveBeenCalledWith('Permission needed', 'Camera permission is required to take photos.');
+    expect(mockLaunchCameraAsync).not.toHaveBeenCalled();
+  });
+
+  it('uploads via Gallery once media-library permission is granted', async () => {
+    mockRequestMediaLibraryPermissionsAsync.mockResolvedValue({ status: 'granted' });
+    mockLaunchImageLibraryAsync.mockResolvedValue({ canceled: false, assets: [{ uri: 'file://gal.jpg', fileName: 'gal.jpg' }] });
+    const r = await renderScreen();
+    await fillPersonalAndAdvance(r);
+    act(() => { findButtonByText(r, 'Skip for now').props.onPress(); });
+    act(() => { findButtonByText(r, 'Upload Front').props.onPress(); });
+    const alertCall = (Alert.alert as jest.Mock).mock.calls[0];
+    const galleryAction = alertCall[2].find((b: any) => b.text === 'Gallery');
+    await act(async () => { await galleryAction.onPress(); await flush(); });
+    expect(mockUploadFile).toHaveBeenCalledWith('file://gal.jpg', 'gal.jpg', 'image/jpeg');
+  });
+
+  it('toasts and never opens the gallery when media-library permission is denied', async () => {
+    mockRequestMediaLibraryPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    const r = await renderScreen();
+    await fillPersonalAndAdvance(r);
+    act(() => { findButtonByText(r, 'Skip for now').props.onPress(); });
+    act(() => { findButtonByText(r, 'Upload Front').props.onPress(); });
+    const alertCall = (Alert.alert as jest.Mock).mock.calls[0];
+    const galleryAction = alertCall[2].find((b: any) => b.text === 'Gallery');
+    await act(async () => { await galleryAction.onPress(); await flush(); });
+    expect(Alert.alert).toHaveBeenCalledWith('Permission needed', 'Gallery permission is required to upload photos.');
+    expect(mockLaunchImageLibraryAsync).not.toHaveBeenCalled();
+  });
+
+  it('does nothing (no upload) when the camera/gallery pick is canceled', async () => {
+    mockRequestCameraPermissionsAsync.mockResolvedValue({ status: 'granted' });
+    mockLaunchCameraAsync.mockResolvedValue({ canceled: true, assets: [] });
+    const r = await renderScreen();
+    await fillPersonalAndAdvance(r);
+    act(() => { findButtonByText(r, 'Skip for now').props.onPress(); });
+    act(() => { findButtonByText(r, 'Upload Front').props.onPress(); });
+    const alertCall = (Alert.alert as jest.Mock).mock.calls[0];
+    const cameraAction = alertCall[2].find((b: any) => b.text === 'Camera');
+    await act(async () => { await cameraAction.onPress(); await flush(); });
+    expect(mockUploadFile).not.toHaveBeenCalled();
+  });
+
+  it('toasts a generic pick failure when the image picker itself throws', async () => {
+    mockRequestCameraPermissionsAsync.mockRejectedValue(new Error('native error'));
+    const r = await renderScreen();
+    await fillPersonalAndAdvance(r);
+    act(() => { findButtonByText(r, 'Skip for now').props.onPress(); });
+    act(() => { findButtonByText(r, 'Upload Front').props.onPress(); });
+    const alertCall = (Alert.alert as jest.Mock).mock.calls[0];
+    const cameraAction = alertCall[2].find((b: any) => b.text === 'Camera');
+    await act(async () => { await cameraAction.onPress(); await flush(); });
+    expect(Alert.alert).toHaveBeenCalledWith('Error', 'Failed to pick image');
+  });
+
+  it('takes the Android upload-source Alert shape (2 non-cancel options, cancelable:true)', async () => {
+    Platform.OS = 'android';
+    mockGetDocumentAsync.mockResolvedValue({ canceled: false, assets: [{ uri: 'file://doc.jpg', name: 'doc.jpg', mimeType: 'image/jpeg' }] });
+    const r = await renderScreen();
+    await fillPersonalAndAdvance(r);
+    act(() => { findButtonByText(r, 'Skip for now').props.onPress(); });
+    act(() => { findButtonByText(r, 'Upload Front').props.onPress(); });
+    const alertCall = (Alert.alert as jest.Mock).mock.calls[0];
+    expect(alertCall[2]).toHaveLength(3);
+    expect(alertCall[3]).toEqual({ cancelable: true });
+    Platform.OS = 'ios';
+  });
+
+  it('toasts a generic pick failure when the document picker itself throws', async () => {
+    mockGetDocumentAsync.mockRejectedValue(new Error('native error'));
+    const r = await renderScreen();
+    await fillPersonalAndAdvance(r);
+    act(() => { findButtonByText(r, 'Skip for now').props.onPress(); });
+    act(() => { findButtonByText(r, 'Upload Front').props.onPress(); });
+    const alertCall = (Alert.alert as jest.Mock).mock.calls[0];
+    const fileAction = alertCall[2].find((b: any) => b.text === 'File');
+    await act(async () => { await fileAction.onPress(); await flush(); });
+    expect(Alert.alert).toHaveBeenCalledWith('Error', 'Failed to pick file');
+  });
+
+  it('does nothing when the document picker itself is canceled', async () => {
+    mockGetDocumentAsync.mockResolvedValue({ canceled: true });
+    const r = await renderScreen();
+    await fillPersonalAndAdvance(r);
+    act(() => { findButtonByText(r, 'Skip for now').props.onPress(); });
+    act(() => { findButtonByText(r, 'Upload Front').props.onPress(); });
+    const alertCall = (Alert.alert as jest.Mock).mock.calls[0];
+    const fileAction = alertCall[2].find((b: any) => b.text === 'File');
+    await act(async () => { await fileAction.onPress(); await flush(); });
+    expect(mockUploadFile).not.toHaveBeenCalled();
+  });
+
   it('toasts a failure when the document upload itself fails', async () => {
     mockGetDocumentAsync.mockResolvedValue({ canceled: false, assets: [{ uri: 'file://doc.jpg', name: 'doc.jpg', mimeType: 'image/jpeg' }] });
     mockUploadFile.mockRejectedValue(new Error('server error'));
@@ -376,6 +490,53 @@ describe('BecomeDriverScreen', () => {
     await act(async () => { await submitBtn.props.onPress(); await flush(); });
     expect(Alert.alert).toHaveBeenCalledWith('Registration Failed', 'Could not submit your application. Please try again.');
     expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it('submits with front+back document uploads mapped to their legacy expiry field and document_type by keyword', async () => {
+    mockGetDocumentAsync.mockResolvedValue({ canceled: false, assets: [{ uri: 'file://doc.jpg', name: 'doc.jpg', mimeType: 'image/jpeg' }] });
+    mockUploadFile.mockResolvedValueOnce('/uploads/front.jpg').mockResolvedValueOnce('/uploads/back.jpg');
+    const r = await renderScreen();
+    await fillPersonalAndAdvance(r);
+    const skipVehicleBtn = findButtonByText(r, 'Skip for now');
+    act(() => { skipVehicleBtn.props.onPress(); });
+
+    // Upload the front side.
+    let uploadBtn = findButtonByText(r, 'Upload Front');
+    act(() => { uploadBtn.props.onPress(); });
+    let alertCall = (Alert.alert as jest.Mock).mock.calls[(Alert.alert as jest.Mock).mock.calls.length - 1];
+    let fileAction = alertCall[2].find((b: any) => b.text === 'File');
+    await act(async () => { await fileAction.onPress(); await flush(); });
+
+    // Upload the back side (requires_back_side: true on this requirement).
+    uploadBtn = findButtonByText(r, 'Upload Back');
+    act(() => { uploadBtn.props.onPress(); });
+    alertCall = (Alert.alert as jest.Mock).mock.calls[(Alert.alert as jest.Mock).mock.calls.length - 1];
+    fileAction = alertCall[2].find((b: any) => b.text === 'File');
+    await act(async () => { await fileAction.onPress(); await flush(); });
+
+    // Set a future expiry date on the requirement.
+    const dateBtn = findButtonByText(r, 'Select Expiry Date');
+    act(() => { dateBtn.props.onPress(); });
+    const futureDate = new Date();
+    futureDate.setFullYear(futureDate.getFullYear() + 2);
+    const dtPicker = r.root.findByProps({ mode: 'date' });
+    act(() => { dtPicker.props.onChange({ type: 'set' }, futureDate); });
+
+    const reviewBtn = findButtonByText(r, 'Review Application');
+    act(() => { reviewBtn.props.onPress(); });
+    const consentRow = findButtonByText(r, 'I consent to a Criminal Record Check');
+    act(() => { consentRow.props.onPress(); });
+    const submitBtn = findButtonByText(r, 'Submit Application');
+    await act(async () => { await submitBtn.props.onPress(); await flush(); });
+
+    const storedExpiryDate = new Date(futureDate.toISOString().split('T')[0]).toISOString();
+    expect(mockRegisterDriver).toHaveBeenCalledWith(expect.objectContaining({
+      license_expiry_date: storedExpiryDate,
+      documents: expect.arrayContaining([
+        expect.objectContaining({ requirement_id: 'req-1', document_url: '/uploads/front.jpg', side: 'front', document_type: 'Driving License' }),
+        expect.objectContaining({ requirement_id: 'req-1', document_url: '/uploads/back.jpg', side: 'back', document_type: 'Driving License' }),
+      ]),
+    }));
   });
 
   it('shows Logout on the Intro step, and logs out on tap', async () => {

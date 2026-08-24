@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -17,6 +16,7 @@ try:
         create_ticket_for_flag,
     )
     from ...utils.audit_logger import log_admin_action
+    from ...utils.background import spawn as _spawn
     from ...utils.money import to_decimal
 except ImportError:
     import db_supabase
@@ -27,6 +27,7 @@ except ImportError:
         create_ticket_for_flag,
     )
     from utils.audit_logger import log_admin_action  # noqa: F401
+    from utils.background import spawn as _spawn  # type: ignore
     from utils.money import to_decimal  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -280,7 +281,7 @@ async def admin_create_dispute(dispute: DisputeCreateRequest, admin: dict = Depe
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.insert_one("disputes", doc)
-    asyncio.create_task(create_ticket_for_dispute(doc))
+    _spawn(create_ticket_for_dispute(doc))
     await log_admin_action(admin, "dispute_created", "disputes", doc["id"], {"ride_id": dispute.ride_id})
     return {"success": True, "dispute": doc}
 
@@ -521,7 +522,7 @@ async def admin_flag_ride_participant(ride_id: str, req: FlagRequest, admin: dic
         "is_active": True,
     }
     result = await db_supabase.create_flag(flag_data)
-    asyncio.create_task(create_ticket_for_flag(result or flag_data, ride))
+    _spawn(create_ticket_for_flag(result or flag_data, ride))
     await log_admin_action(
         admin,
         "flag_created",
@@ -604,7 +605,7 @@ async def admin_create_complaint(ride_id: str, req: ComplaintRequest, admin: dic
     }
     complaint = await db_supabase.create_complaint(complaint_data)
     # Raise a Zoho Desk ticket for support — fire-and-forget, no-op if disabled.
-    asyncio.create_task(create_ticket_for_complaint(complaint or complaint_data, ride))
+    _spawn(create_ticket_for_complaint(complaint or complaint_data, ride))
     await log_admin_action(
         admin, "complaint_created", "complaints", complaint_data["id"], {"against_type": req.against_type}
     )

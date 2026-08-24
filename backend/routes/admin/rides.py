@@ -16,6 +16,7 @@ try:
     from ...settings_loader import get_app_settings
     from ...socket_manager import manager
     from ...utils.audit_logger import log_admin_action
+    from ...utils.background import spawn as _spawn
     from ...utils.google_places_new import (
         PLACES_NEW_AUTOCOMPLETE_FIELD_MASK,
         PLACES_NEW_AUTOCOMPLETE_URL,
@@ -38,6 +39,7 @@ except ImportError:
     from settings_loader import get_app_settings
     from socket_manager import manager
     from utils.audit_logger import log_admin_action
+    from utils.background import spawn as _spawn  # type: ignore
     from utils.google_places_new import (
         PLACES_NEW_AUTOCOMPLETE_FIELD_MASK,
         PLACES_NEW_AUTOCOMPLETE_URL,
@@ -954,8 +956,6 @@ async def admin_create_ride(
             rider = await db_supabase.get_user_by_id(body.rider_id)
             rider_name = _user_display_name(rider) if rider else ""
 
-            import asyncio  # noqa: PLC0415
-
             try:
                 from ...routes.rides import _offer_timeout_handler  # type: ignore[attr-defined]
             except ImportError:
@@ -999,7 +999,7 @@ async def admin_create_ride(
                 priority="dispatch",
                 target_app="driver",
             )
-            asyncio.create_task(
+            _spawn(
                 _offer_timeout_handler(
                     ride_doc["id"],
                     driver["id"],

@@ -14686,19 +14686,38 @@ how much they de-risk a public launch._
   `docs/change-log/2026-08-24-db-deadline-rejection-alert-storm.md`; these are
   the three pieces deliberately left out of that change to keep it scoped.
 
-- [ ] **C42-A. ~25 raw `asyncio.create_task` call sites in request handlers
-  still inherit the request deadline.** `utils/background.spawn()` now clears
-  the deadline ContextVar so backgrounded work is not bounded by how long the
-  rider waited for an HTTP response, but only `spawn()` callers get that. Raw
-  `asyncio.create_task(...)` in a request handler still inherits the budget, so
-  the backgrounded DB write is rejected with `deadline_exhausted` once the
-  response is sent — silently. Known sites include `routes/payments.py:1154`,
-  `routes/wallet.py:304`, several in `routes/auth.py`, `routes/disputes.py:110`,
-  `routes/safety.py:118`, `routes/lost_and_found.py:328`, and
-  `routes/admin/support.py` (3). Migrating them to `spawn()` also gives them the
-  strong-reference guarantee they currently lack (a task nobody references can
-  be GC'd mid-flight — the original reason `spawn()` exists). Grep:
-  `grep -rn "asyncio.create_task" backend/routes/ backend/services/`.
+- [x] **C42-A. Raw `asyncio.create_task` call sites in request handlers
+  inherited the request deadline — DONE 2026-08-24.** `utils/background.spawn()`
+  clears the deadline ContextVar so backgrounded work is not bounded by how long
+  the rider waited for an HTTP response, but only `spawn()` callers got that. Raw
+  `asyncio.create_task(...)` in a request handler still inherited the budget, so
+  the backgrounded DB write was rejected with `deadline_exhausted` once the
+  response was sent — silently. Migrating them to `spawn()` also gives them the
+  strong-reference guarantee they lacked (a task nobody references can be GC'd
+  mid-flight — the original reason `spawn()` exists).
+
+  All 16 request-handler sites migrated across four commits:
+  `routes/payments.py` + `routes/wallet.py` (audit rows) → `0f564c2`;
+  `routes/auth.py` (9 sites: OTP lockout/verify, DSAR reactivation, new-device
+  notice, firebase login, logout) → `01ae337`;
+  `routes/safety.py` + `routes/disputes.py` + `routes/lost_and_found.py` (Zoho
+  tickets) → `9aa0f89`;
+  `routes/admin/support.py` (3) + `routes/admin/rides.py` +
+  `routes/admin/stripe_import.py` (2) + `routes/webhooks.py` → see the
+  admin/webhook commit. `routes/admin/rides.py`'s `_offer_timeout_handler` was
+  the worst of them — it deliberately sleeps `timeout_seconds + 15` (~35 s),
+  guaranteeing its post-sleep DB work fell outside any 15 s client budget.
+
+  **Deliberately NOT migrated**, because neither can inherit a deadline:
+  `routes/websocket.py` (3 sites) — Starlette's `BaseHTTPMiddleware` returns
+  early for any non-`http` scope, so `DeadlineMiddleware` never runs for a
+  WebSocket connection and no deadline is ever set; the heartbeat task at :676
+  also needs its handle kept for cancellation. `utils/scheduled_rides.py:587`
+  and `utils/ws_pubsub.py:153` — background loops with no request context.
+
+  Verify with:
+  `grep -rn "asyncio.create_task" backend/routes/ | grep -v websocket.py`
+  (should return nothing).
 
 - [ ] **C42-B. `shared/**/__tests__` is not wired into any CI job.** The tests
   under `shared/api/__tests__/` and `shared/utils/__tests__/` are unreachable by

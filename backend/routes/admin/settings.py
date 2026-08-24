@@ -334,6 +334,11 @@ class SettingsUpdateRequest(BaseModel):
     ai_embedding_model: Optional[str] = Field(default=None, max_length=120)
     ai_faq_semantic_min_score: Optional[float] = Field(default=None, ge=0, le=1)
     ai_escalation_creates_ticket: Optional[bool] = None
+    # Public website assistant (spinr.ca chat widget -> POST /ai/public-chat).
+    # Separate from ai_assistant_enabled so the anonymous surface can be turned
+    # off on its own without taking the rider/driver assistant down with it.
+    # Defaults OFF — the feature ships dark.
+    ai_public_chat_enabled: Optional[bool] = None
     ai_disclaimer: Optional[str] = Field(default=None, max_length=300)
     # iOS Live Activity APNs (.p8 token auth). key_id/team_id/bundle_id are
     # identifiers (visible); apns_p8_key is the secret (masked, in

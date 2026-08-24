@@ -8938,6 +8938,23 @@ record of what was assumed vs. what was actually true</summary>
     since these particular mocks take no meaningful arguments anyway. 43
     tests; full rider-app suite still green (122 suites / 1264 tests),
     `yarn tsc --noEmit` clean.
+  - **rider-app `app/work-profile.tsx`: 81.5% → 100% lines.** Already had
+    `workProfileScreen.test.tsx` (13 tests: loading/empty states, the
+    balance card's three shapes, Request More Funds gating, the
+    work/personal toggle, the company switcher, recent work rides) —
+    extended in place (+8 tests): the rides-fetch throwing (both of the
+    file's two concurrent fetch effects share the same catch shape, so
+    one test covers both); pull-to-refresh actually invoking `onRefresh`
+    (via the real `ScrollView`'s `refreshControl` prop, not a mocked
+    stand-in); `formatPeriod`'s real computation with both
+    `period_start`/`period_end` set, and its null-either-bound omitted
+    branch; the `balanceLoading` spinner state; the back button on both
+    of the screen's early-return states (profiles-loading and
+    genuinely-empty — distinct render branches from the main return's
+    own back button, already covered); and "See all" navigating to
+    `/work-rides` with the active company id. 21 tests; full rider-app
+    suite still green (122 suites / 1272 tests), `yarn tsc --noEmit`
+    clean.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

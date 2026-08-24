@@ -9443,6 +9443,76 @@ record of what was assumed vs. what was actually true</summary>
     dismissing the remove-confirmation sheet via Cancel without calling
     delete. 20 tests; full rider-app suite still green (123 suites /
     1351 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/ride-completed.tsx`: 85.14% → 97.52% stmts, 67.95% →
+    83.09% branch, 64.15% → 98.11% funcs, 89.5% → 100% lines** (money-
+    adjacent: post-trip rate + tip + pay/receipt screen). Already had
+    `rideCompletedScreen.test.tsx` (15 tests: mount fetch, the
+    already-paid auto-dismiss, hardware-back block, the full rate→pay→
+    clear→home success path, skip-payment-when-already-paid, the
+    payment-failure alert staying on screen, "Change Card" carrying
+    ride+tip+rated, "Retry" re-invoking submit on the same override
+    card without re-rating, the payWithCard auto-retry, both Google Pay
+    outcomes (success and silent-cancel) plus one failure-toasts case,
+    email receipt success, lost-item report submit success, and the
+    driver-photo-error fallback) — extended in place (+18 tests, 33
+    total). Closed: the entire v2-route rendering branch family that
+    was previously untouched — a ride with `route_schema_version: 2`,
+    `actual_route_segments` (both a `trip_in_progress` and a
+    `navigating_to_pickup` segment) and a `planned_route_polyline`
+    exercises `hasActualRoute`/`showPlannedUnderlay`/pickup-leg
+    dashed-underlay JSX, the `mapCoordinates` reduce (previously
+    uncovered at lines 127-133), and `onMapReady` → `fitToCoordinates`
+    (line 161) — the mock's `fitToCoordinates` was promoted from an
+    inline anonymous `jest.fn()` per-render to a shared module-level
+    mock so the assertion could see it. Also closed:
+    `useCompletedRouteRefresh`'s actual refresh callback (line 156,
+    previously only its dependency inputs were exercised) via
+    `jest.useFakeTimers()` + `advanceTimersByTime(3000)` on a ride with
+    `route_geometry_status: 'pending'`, confirming `fetchRide` fires a
+    second time; both email-receipt and lost-item-report failure
+    toasts (catch blocks at lines 265 and 287); the payment alert's
+    `support` button (line 332, pushes to `/support?...&topic=
+    payment_failed`) and its `cancel` button (no `onPress`, falls
+    through to `ConfirmSheet`'s own `onClose`, closing the sheet — this
+    doubles as coverage for the `onClose` prop at line 945);
+    `handleSubmit`'s outer catch (line 407) via `attemptRidePayment`
+    rejecting outright (distinct from the alert-returning failure path
+    already covered) — confirmed it toasts "Submit Failed" and does
+    NOT clear the ride; star-rating taps (line 542) and their
+    "Could be better" etc. copy; tip-preset select/deselect and a
+    custom-tip amount reflected in the "Pay $X & Done" total; the
+    "Message Driver" nav row; all three payment-badge text branches
+    (wallet, company_allowance, card-with-no-last4 falling back to
+    plain "Card"); the 0-duration "0 km/h" avg-speed guard; the
+    pre-auth-hold hint text and Google-Pay-button-hidden branch
+    (`hasHold` true); and the lost-item modal's Cancel button and
+    `onRequestClose` dismissal paths (lines 884-945 range). Left
+    uncovered (diminishing returns, all pure-catch/defensive lines
+    Istanbul folds into the same merged branch ranges, not chased
+    further): the two narrow-typed helper casts at lines 35-37
+    (`toNum`'s ternary arms — exercised indirectly by every fare/
+    duration render, just not hitting Istanbul's per-arm branch
+    counter in isolation); the `routeIsProcessing`/pending-vs-
+    processing distinction in the route-status label (lines 150-156
+    partial — `'processing'` was exercised via the v2-route test,
+    `'pending'` via the refresh test, but the exact label-text ternary
+    arms for each combination weren't individually asserted); a few
+    Animated.spring/timing internals (lines 175-213-ish, timing-only,
+    not meaningfully testable without faking the Animated clock); and
+    isolated single-line ternary arms inside the JSX tree (e.g. line
+    693's route-quality label variant, line 753's map-pin-array
+    variant) that render fine but weren't asserted on with a dedicated
+    expectation — visually/behaviorally low-value to chase given the
+    core money/state-machine paths above are now covered. Full
+    rider-app suite still green (123 suites / 1426 tests — 18 more
+    than the driver-arrived entry's count above, matching this file's
+    net new test additions across the two most recent sweeps combined
+    with baseline growth already recorded there), `yarn tsc --noEmit`
+    clean. A pre-existing "worker process failed to exit gracefully"
+    Jest warning appears on the full-suite run — present before this
+    change too (not introduced by the fake-timers test here, which
+    restores real timers in a `finally` block), not chased further per
+    the "don't chase CI checks unrelated to your diff" convention.
   - **rider-app `app/(tabs)/activity.tsx`: 87.15% → 98.32% stmts, 88.41%
     → 99.39% lines.** Already had `activityScreen.test.tsx` (11 tests:
     focus-fetch, RECENT-section grouping, the Business filter, both

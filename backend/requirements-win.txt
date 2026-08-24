@@ -125,7 +125,7 @@ typing-extensions==4.15.0  # via aiosignal, anyio, fastapi, google-generativeai,
 typing-inspection==0.4.2  # via fastapi, pydantic, pydantic-settings
 uritemplate==4.2.0        # via google-api-python-client
 urllib3==2.6.3            # via -r requirements.in, botocore, cloudinary, requests, sentry-sdk
-uvicorn==0.52.3           # via -r requirements.in
+uvicorn==0.52.4           # via -r requirements.in
 watchfiles==1.1.1         # via uvicorn
 websockets==15.0.1        # via -r requirements.in, realtime, uvicorn
 wrapt==2.1.2              # via deprecated

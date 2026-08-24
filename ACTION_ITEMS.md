@@ -8683,6 +8683,39 @@ record of what was assumed vs. what was actually true</summary>
     date-only-round-trip the source code does. 10 new tests (26 total in
     the file); full driver-app suite still green (112 suites / 1157
     tests), `yarn tsc --noEmit` clean.
+  - **driver-app `app/driver/quests.tsx`: 69.9% → 92.5% lines.** Already
+    had `screens/quests.test.tsx` (6 render-smoke tests only — every
+    state paints, no interaction ever exercised). Added
+    `screens/driverQuestsScreen.test.tsx` (14 tests): `handleJoin`'s
+    success (calls `joinQuest`, switches to the My Quests tab) and
+    failure (toasts, stays put) paths; `handleClaim`'s success (toasts
+    the response's `reward_amount`) and failure paths; pull-to-refresh
+    calling both fetch actions; `metaFor`'s fallback label-casing for an
+    unrecognized quest `type`; `timeLeft`'s expired-disables-Join and
+    urgent-(<1-day)-warning-label branches, plus the no-`end_date`
+    "No deadline" case; the hero summary's active/to-claim/earned counts
+    derived from a mixed-status `myQuests` list; and the "Joined"/
+    "Reward added" pills that replace the Join/Claim buttons once a
+    quest is already joined or claimed. **Real bug found and pinned as
+    documented actual behavior** (not fixed — out of scope for a
+    coverage-only pass, flagging here instead per CLAUDE.md's
+    surgical-changes rule): `handleClaim`'s fallback path
+    (`money(r?.reward_amount ?? reward)`) is handed `reward`, which the
+    call site already pre-formats via `money(q.reward_amount)` (e.g.
+    `"$25"`) — re-running `money()` on that *string* runs it through
+    `parseFloat("$25")`, which returns `NaN` and falls back to `0`, so a
+    claim response with no `reward_amount` field toasts **"$0 added to
+    your wallet"** instead of the real `$25` reward. Worth a follow-up
+    fix (drop the pre-formatting at the call site, or don't re-`money()`
+    the fallback) but not attempted here. One TS-only fix needed after
+    the coverage pass: `jest.fn((_e: any, fallback: string) => fallback)`
+    spread into a `(...a: any[]) =>` wrapper failed `tsc` with "spread
+    argument must have a tuple type" — TS narrows a typed `jest.fn`'s
+    call signature strictly enough that spreading an `any[]` into it
+    doesn't satisfy the 2-arg signature; loosened the mock itself to
+    `(..._a: any[]) => _a[1]` instead. 14 new tests; full driver-app
+    suite still green (113 suites / 1171 tests), `yarn tsc --noEmit`
+    clean.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

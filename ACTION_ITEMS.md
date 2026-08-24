@@ -8593,6 +8593,33 @@ record of what was assumed vs. what was actually true</summary>
     mocked present) and the `FlatList`'s `onContentSizeChange` auto-
     scroll callback (line 503, needs a real `FlatList` content-size
     event) — both low value.
+  - **rider-app `app/ride-options.tsx`: 76.3% → 80.7% lines.** Already had
+    a comprehensive `rideOptionsScreen.test.tsx` (22 tests covering the
+    booking-critical handlers) from earlier this session — extended in
+    place with UI-toggle-level coverage that was still dark despite the
+    handler coverage: the WAV toggle's enabled-with-drivers /
+    disabled-with-zero / hidden-when-`showWavOption`-false three-way gate
+    (needed a `getToggle` helper matching on `typeof props.onValueChange
+    === 'function'`, since the mocked `CustomToggle` also forwards
+    `accessibilityLabel` down to its inner `Text`, so a plain
+    `findByProps` match was ambiguous between the two); the quiet-mode
+    toggle; the work-mode "Billed to {company}" banner's shown/hidden
+    states; the fare-breakdown collapsible card (expand reveals the
+    ride-fare driver badge + tax lines + an applied-promo discount line,
+    hidden entirely with an empty `fare_breakdown`); and five payment-
+    sheet selection paths (saved card, zero-cards-navigates-to-
+    `/manage-cards`, wallet, listing + selecting a corporate account from
+    `workProfiles`, and "Add payment method"). Footgun: `allText()`'s
+    `JSON.stringify` renders a `<Text>` with mixed string/variable
+    children as a literal array (`["Billed to ","Acme Corp"]`,
+    `["Promo (","SAVE10",")"]`, `["Balance: $","10.00"]`) — match that
+    exact stringified shape, not the visually-concatenated string. 14 new
+    tests (36 total in the file); full rider-app suite still green (121
+    suites / 1224 tests), `yarn tsc --noEmit` clean. This is a very large
+    screen (2284 lines) — substantial uncovered surface remains
+    (732-791, 1330-1404, the promo-sheet's own interaction paths, map
+    rendering) for a future pass; stopped here as a reasonable increment
+    rather than chasing 100% in one sitting.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

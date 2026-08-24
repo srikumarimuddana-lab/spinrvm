@@ -506,3 +506,136 @@ describe('RideOptionsScreen', () => {
     expect(mockBack).toHaveBeenCalled();
   });
 });
+
+describe('WAV toggle', () => {
+  function getToggle(r: TestRenderer.ReactTestRenderer, label: string) {
+    return r.root.findAllByProps({ accessibilityLabel: label }).find((n: any) => typeof n.props.onValueChange === 'function')!;
+  }
+
+  it('is enabled and calls setRequiresWav when WAV drivers are available', async () => {
+    mockRideState.showWavOption = true;
+    mockRideState.estimates = [makeEstimate({ wav_available: 2 })];
+    const r = await renderScreen();
+    const toggle = getToggle(r, 'Request wheelchair-accessible vehicle');
+    act(() => { toggle.props.onValueChange(true); });
+    expect(mockSetRequiresWav).toHaveBeenCalledWith(true);
+  });
+
+  it('is disabled and never calls setRequiresWav when no WAV drivers are available', async () => {
+    mockRideState.showWavOption = true;
+    mockRideState.estimates = [makeEstimate({ wav_available: 0 })];
+    const r = await renderScreen();
+    const toggle = getToggle(r, 'Request wheelchair-accessible vehicle');
+    act(() => { toggle.props.onValueChange(true); });
+    expect(mockSetRequiresWav).not.toHaveBeenCalled();
+  });
+
+  it('is hidden entirely when showWavOption is false', async () => {
+    mockRideState.showWavOption = false;
+    const r = await renderScreen();
+    expect(getToggle(r, 'Request wheelchair-accessible vehicle')).toBeUndefined();
+  });
+});
+
+describe('quiet mode toggle', () => {
+  it('calls setQuietMode on toggle', async () => {
+    const r = await renderScreen();
+    const toggle = r.root.findAllByProps({ accessibilityLabel: 'Request quiet ride' }).find((n: any) => typeof n.props.onValueChange === 'function')!;
+    act(() => { toggle.props.onValueChange(true); });
+    expect(mockSetQuietMode).toHaveBeenCalledWith(true);
+  });
+});
+
+describe('work mode banner', () => {
+  it('shows the billed-to-employer banner when work mode is active with a company', async () => {
+    mockWorkProfileState.workModeEnabled = true;
+    mockWorkProfileState.activeCompanyId = 'co-1';
+    mockWorkProfileState.profiles = [{ company: { id: 'co-1', name: 'Acme Corp' } }];
+    const r = await renderScreen();
+    expect(allText(r)).toContain('["Billed to ","Acme Corp"]');
+  });
+
+  it('is hidden when work mode is off', async () => {
+    mockWorkProfileState.workModeEnabled = false;
+    const r = await renderScreen();
+    expect(allText(r)).not.toContain('Billed to');
+  });
+});
+
+describe('fare breakdown collapse', () => {
+  it('expands on tap, showing each line and the ride-fare driver badge', async () => {
+    mockRideState.estimates = [makeEstimate({
+      fare_breakdown: [
+        { label: 'Ride fare', amount: '15.00', type: 'ride' },
+        { label: 'GST', amount: '0.75', type: 'tax' },
+      ],
+    })];
+    const r = await renderScreen();
+    const header = r.root.findByProps({ accessibilityLabel: 'Expand fare breakdown' });
+    act(() => { header.props.onPress(); });
+    expect(allText(r)).toContain('100% goes to your driver');
+    expect(allText(r)).toContain('GST');
+    expect(r.root.findByProps({ accessibilityLabel: 'Collapse fare breakdown' })).toBeTruthy();
+  });
+
+  it('shows the applied promo discount line when open', async () => {
+    mockRideState.estimates = [makeEstimate({ fare_breakdown: [{ label: 'Ride fare', amount: '15.00', type: 'ride' }] })];
+    mockRideState.appliedPromo = { code: 'SAVE10', discount_type: 'flat', discount_value: 5 };
+    const r = await renderScreen();
+    const header = r.root.findByProps({ accessibilityLabel: 'Expand fare breakdown' });
+    act(() => { header.props.onPress(); });
+    expect(allText(r)).toContain('["Promo (","SAVE10",")"]');
+  });
+
+  it('is hidden entirely when the estimate has no fare_breakdown', async () => {
+    mockRideState.estimates = [makeEstimate({ fare_breakdown: [] })];
+    const r = await renderScreen();
+    expect(() => r.root.findByProps({ accessibilityLabel: 'Expand fare breakdown' })).toThrow();
+  });
+});
+
+describe('payment sheet selection', () => {
+  it('selecting a saved card sets it as the payment method', async () => {
+    const r = await renderScreen();
+    const cardRow = findByText(r, 'Visa')!;
+    act(() => { cardRow.props.onPress(); });
+    expect(allText(r)).toContain('•••• 4242');
+  });
+
+  it('navigates to /manage-cards when there are no saved cards', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/service-areas') return Promise.resolve({ data: [] });
+      if (url === '/payments/cards') return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: {} });
+    });
+    const r = await renderScreen();
+    const addCardRow = findByText(r, 'Tap to add a card')!;
+    act(() => { addCardRow.props.onPress(); });
+    expect(mockPush).toHaveBeenCalledWith('/manage-cards');
+  });
+
+  it('selecting Spinr Wallet sets it as the payment method', async () => {
+    const r = await renderScreen();
+    const walletRow = findByText(r, 'Spinr Wallet')!;
+    act(() => { walletRow.props.onPress(); });
+    expect(allText(r)).toContain('["Balance: $","10.00"]');
+  });
+
+  it('lists corporate accounts and selecting one sets useCorporate', async () => {
+    mockWorkProfileState.profiles = [{ company: { id: 'co-1', name: 'Acme Corp' } }];
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Acme Corp');
+    const corpRow = findByText(r, 'Company account')!;
+    act(() => { corpRow.props.onPress(); });
+    // paymentLabel switches to the corporate account's company name once
+    // useCorporate + selectedCorporateId are both set.
+    expect(allText(r)).toContain('"Acme Corp"');
+  });
+
+  it('"Add payment method" navigates to /manage-cards', async () => {
+    const r = await renderScreen();
+    const addRow = findByText(r, 'Add payment method')!;
+    act(() => { addRow.props.onPress(); });
+    expect(mockPush).toHaveBeenCalledWith('/manage-cards');
+  });
+});

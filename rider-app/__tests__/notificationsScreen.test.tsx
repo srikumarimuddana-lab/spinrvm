@@ -14,9 +14,10 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { TouchableOpacity, Text } from 'react-native';
+import { TouchableOpacity, Text, RefreshControl } from 'react-native';
 
 import NotificationsScreen from '../app/notifications';
+import { Ionicons } from '@expo/vector-icons';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('react-native-safe-area-context', () => ({
@@ -221,5 +222,74 @@ describe('NotificationsScreen', () => {
       backBtn.props.onPress();
     });
     expect(mockBack).toHaveBeenCalled();
+  });
+
+  it('routes to /ride-completed for a ride_completed notification with a ride id', async () => {
+    mockApiGet.mockResolvedValue({
+      data: { notifications: [{ ...N1, id: 'n7', title: 'Trip finished', type: 'ride_completed', data: { ride_id: 'ride-2' } }], unread_count: 1 },
+    });
+    const r = await renderScreen();
+    const card = findCardByTitle(r, 'Trip finished');
+    await act(async () => {
+      card.props.onPress();
+      await flush();
+    });
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/ride-completed', params: { rideId: 'ride-2' } });
+  });
+
+  it('does not navigate for a ride_completed notification with no ride id', async () => {
+    mockApiGet.mockResolvedValue({
+      data: { notifications: [{ ...N1, id: 'n8', title: 'Trip wrapped up', type: 'ride_completed' }], unread_count: 1 },
+    });
+    const r = await renderScreen();
+    const card = findCardByTitle(r, 'Trip wrapped up');
+    await act(async () => {
+      card.props.onPress();
+      await flush();
+    });
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it('pull-to-refresh re-fetches without showing the full-screen loading spinner', async () => {
+    const r = await renderScreen();
+    mockApiGet.mockClear();
+    mockApiGet.mockResolvedValue({ data: { notifications: [N1, N2], unread_count: 1 } });
+    const refreshControl = r.root.findByType(RefreshControl);
+    await act(async () => {
+      refreshControl.props.onRefresh();
+      await flush();
+    });
+    expect(mockApiGet).toHaveBeenCalledWith('/notifications?limit=50&offset=0');
+    // Refresh is "silent" -- the list (not the ActivityIndicator) stays mounted
+    // throughout, i.e. loadNotifications(true) never flips `loading` back to true.
+    expect(allText(r)).toContain('Ride update');
+  });
+
+  it('renders each relative-time bucket: minutes, hours, and days ago', async () => {
+    const now = Date.now();
+    mockApiGet.mockResolvedValue({
+      data: {
+        notifications: [
+          { ...N1, id: 'n-min', title: 'Five min old', created_at: new Date(now - 5 * 60 * 1000).toISOString() },
+          { ...N1, id: 'n-hr', title: 'Three hr old', created_at: new Date(now - 3 * 60 * 60 * 1000).toISOString() },
+          { ...N1, id: 'n-day', title: 'Two day old', created_at: new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString() },
+        ],
+        unread_count: 3,
+      },
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('5m ago');
+    expect(allText(r)).toContain('3h ago');
+    expect(allText(r)).toContain('2d ago');
+  });
+
+  it('colors a safety notification icon with the danger color', async () => {
+    mockApiGet.mockResolvedValue({
+      data: { notifications: [{ ...N1, id: 'n-safety', title: 'Safety alert', type: 'safety' }], unread_count: 1 },
+    });
+    const r = await renderScreen();
+    const icon = r.root.findAllByType(Ionicons).find((n) => n.props.name === 'shield-checkmark');
+    expect(icon).toBeDefined();
+    expect(icon!.props.color).toBe(COLORS.danger);
   });
 });

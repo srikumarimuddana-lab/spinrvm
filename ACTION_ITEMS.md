@@ -9607,6 +9607,40 @@ record of what was assumed vs. what was actually true</summary>
     touched test file (the 3 pre-existing findings on its untouched
     `datetimepicker` mock lines predate this change), `npm run build:web`
     (`expo export --platform web`) exits 0.
+    - **`driver/(tabs)/index.tsx` extended (2026-08-24, this session):**
+      74.5% → 88.65% lines (85.5% statements, 75.2% branches, 89.7%
+      functions), `__tests__/app/driverDashboardScreen.test.tsx` 34 → 51
+      tests (17 added). Closed: the ride-offer countdown timer (interval
+      tick-down + the foreground `AppState` resync against
+      `offer_expires_at`, both cases — still-pending and already-expired),
+      the OSRM live-route poller (success/publish, no-routable-polyline
+      fallback, fetch-throw fallback, and the not-polled-while-idle guard),
+      the saved-planned-polyline reuse branch for `ride_offered` (both the
+      `fitToCoordinates` happy path and the <2-usable-points empty-route
+      branch), airport sub-zone polygon rendering (3+ points vs. the
+      dropped <3-point case), the denied-location "Open Settings" button
+      (`Linking.openSettings`), `MapControls`' `onRecenter` wiring, the
+      `MapView` `onRegionChange` → `currentRegionRef` write, the
+      `SafetyOverlay` close callback, and the completion-confirmation
+      modal's `onRequestClose`. Also fixed a latent flaw in this test
+      file's own `react-native-maps` mock while chasing a flaky
+      assertion: `useImperativeHandle` had no deps array, so it
+      re-installed a brand-new `fitToCoordinates`/`animateToRegion` pair
+      on every re-render (discarding whatever had just been called on the
+      previous instance before an assertion could see it) — added `[]`
+      deps so the mocked ref behaves like a real native ref (stable
+      identity across renders). Remaining gaps in the file, left for a
+      future pass: `haversineMeters` (only reachable via the
+      navigating_to_pickup Directions-refresh ticker, lines 58-65/275-284),
+      the `mapKey` remount bump on return-to-idle (235), the
+      foreground-recenter effect when `pendingRecenterRef` is already true
+      (550-553 — needs a location-object change to re-fire, since its
+      effect deps don't change on an out-of-band `AppState` event alone),
+      and the live `MapViewDirections` `onReady`/`onError` callbacks
+      (737-771 — the shared mock stubs the component to `() => null`,
+      so exercising these needs a per-test mock override, not attempted
+      here to keep this pass test-only). Test-only change; see
+      `docs/change-log/2026-08-24-driver-tabs-index-coverage.md`.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

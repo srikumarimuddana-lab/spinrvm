@@ -13557,6 +13557,47 @@ how much they de-risk a public launch._
   branches bind the same names statically via AST inspection, not by
   actually exercising both import paths at runtime.
 
+### C39. `rider-app — expo export (android + ios)` CI check fails on every PR — `@supabase/supabase-js@2.112.3` requires Node ≥22, the runner is pinned to Node 20
+
+- [ ] **Status:** open — found 2026-08-24 on PR #4475's own CI run (unrelated
+  PR — that PR touches only `rider-app/app/wallet.tsx`,
+  `rider-app/utils/*`, `ACTION_ITEMS.md`, and a change-log; confirmed via
+  `git diff origin/main...HEAD -- rider-app/package.json
+  rider-app/yarn.lock` returning empty). Not fixed here — out of scope
+  for that PR's diff, per CLAUDE.md's CI-noise policy.
+- **What's wrong:** `yarn install --frozen-lockfile` fails outright in the
+  `rider-app — expo export (android + ios)` job:
+  `error @supabase/supabase-js@2.112.3: The engine "node" is incompatible
+  with this module. Expected version ">=22.0.0". Got "20.20.2"`. The job's
+  `actions/setup-node` step pins `node-version: 20`.
+- **Root cause:** dependabot bumped `@supabase/supabase-js` on `main`
+  (commit `c21bd0f7`, PR #4171, already merged) to a version whose
+  `engines.node` requires ≥22, without the CI workflow's Node version being
+  bumped alongside it — a version-vs-runner mismatch, not a code defect.
+  Confirmed pre-existing on `main` (not introduced by PR #4475): the bump
+  commit predates PR #4475's branch point by several merges.
+- **Impact:** this specific check appears to fail on every rider-app PR
+  going forward until fixed, since it fails during `yarn install` before
+  any app code runs — a systemic, repo-wide CI-noise source (same shape as
+  C25's `yarn audit` finding), not specific to any one diff.
+- **Action:** either (a) bump the CI workflow's `setup-node` `node-version`
+  to 22 for this job (verify no other rider-app job/tooling assumes Node
+  20), or (b) pin `@supabase/supabase-js` back to a pre-bump version whose
+  `engines.node` allows 20, whichever a maintainer confirms doesn't break
+  something else — this needs someone to actually run the affected
+  install/build after the fix, per CLAUDE.md's release-gate #8 ("verify a
+  newer/patched dependency version actually works... before pinning it").
+- **Files:** `.github/workflows/ci.yml` (or wherever the
+  `rider-app — expo export` job is defined), `rider-app/package.json`.
+- **What was NOT verified:** whether Node 22 is safe repo-wide for every
+  other rider-app CI job (not just this one), or whether an older
+  `@supabase/supabase-js` pin reintroduces any CVE/feature gap the bump
+  was fixing — out of scope for a same-day finding, needs the fix's own
+  verification pass.
+- **Acceptance:** `rider-app — expo export (android + ios)` passes on a
+  fresh PR that touches no rider-app dependency files, proving the gate
+  itself (not just this one PR's diff) is green again.
+
 ### A41. Legacy-migration data-quality audit (2026-08-19) — 5-agent sweep across backend/admin/driver-app/regulatory
 - [ ] **Status:** open — 3 live/near-live bugs found and fixed same session; a
   larger set of design-decision-dependent gaps documented below, not fixed.

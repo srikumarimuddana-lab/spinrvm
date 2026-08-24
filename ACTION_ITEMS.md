@@ -8557,6 +8557,42 @@ record of what was assumed vs. what was actually true</summary>
     suites / 1197 tests), `yarn tsc --noEmit` clean. Remaining uncovered:
     the phone-input-container's own focus-forwarding `TouchableOpacity`
     tap (154-175) — style/focus-only, low value.
+  - **rider-app `app/ai-assistant.tsx`: 73.9% → 98.6% lines.** Already had
+    a comprehensive `aiAssistantScreen.test.tsx` (22 tests) — extended in
+    place. Two whole branches had zero coverage: voice input (the mic
+    button/`expo-speech-recognition` flow) and the `location_suggestions`
+    card. Added 13 tests: the mic button's full permission flow
+    (request-then-start, denied-toasts-no-start, a thrown
+    `requestPermissionsAsync` toasting a generic failure, tap-while-
+    listening calling `.stop()`); the three streamed-listener callbacks
+    (`result` writes the transcript into the input, `end` clears the
+    listening indicator, `error` toasts for real failures but stays
+    silent for `aborted`/`no-speech`); the `LocationSuggestionsCard`'s
+    pickup/dropoff title variants, its stale-card disabled state, and its
+    `onSelect` sending `buildLocationChoiceMessage`'s bracketed-coords
+    follow-up (a **real**, unmocked import from
+    `@shared/utils/aiLocationMessages` — the money detail here is the
+    exact `[lat,lng]` string, deliberately testing the real formatter);
+    the Send button (previously only exercised via
+    `onSubmitEditing`/quick-prompt taps); and the trip-share fetch's
+    failure path (console.error, no `Share.share` call). Needed to
+    rewrite the file's `expo-speech-recognition` mock from a
+    fire-and-forget `addListener` stub to one that captures each
+    `(event, callback)` pair in a module-level map so tests can invoke
+    `result`/`end`/`error` directly — the previous mock had no way to
+    reach the screen's own listener closures. One iteration fix: the
+    `LocationSuggestionsCard`'s accessibility label is
+    `Use ${candidate.name || candidate.address}` (name-first) while the
+    *sent message* is built from `candidate.address || candidate.name`
+    (address-first) — a candidate fixture with both fields needed two
+    different expected strings, not one. 13 new tests (35 total in the
+    file); full rider-app suite still green (121 suites / 1210 tests),
+    `yarn tsc --noEmit` clean. Remaining uncovered: the guarded
+    `require('expo-speech-recognition')` catch branch (line 59 — the
+    real absent-native-module case, not reachable once the module is
+    mocked present) and the `FlatList`'s `onContentSizeChange` auto-
+    scroll callback (line 503, needs a real `FlatList` content-size
+    event) — both low value.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

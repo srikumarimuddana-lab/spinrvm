@@ -39,12 +39,19 @@ jest.mock('react-native-safe-area-context', () => ({
 // the scope of the test code` before any test body even runs. Mock it so
 // the screen's own require() resolves to this instead of the real native
 // module.
+const mockSpeechListeners: Record<string, (e: any) => void> = {};
+const mockRequestPermissionsAsync = jest.fn();
+const mockSpeechStart = jest.fn();
+const mockSpeechStop = jest.fn();
 jest.mock('expo-speech-recognition', () => ({
   ExpoSpeechRecognitionModule: {
-    addListener: jest.fn(() => ({ remove: jest.fn() })),
-    requestPermissionsAsync: jest.fn(),
-    start: jest.fn(),
-    stop: jest.fn(),
+    addListener: (event: string, cb: (e: any) => void) => {
+      mockSpeechListeners[event] = cb;
+      return { remove: jest.fn() };
+    },
+    requestPermissionsAsync: (...a: any[]) => mockRequestPermissionsAsync(...a),
+    start: (...a: any[]) => mockSpeechStart(...a),
+    stop: (...a: any[]) => mockSpeechStop(...a),
   },
 }));
 
@@ -152,6 +159,7 @@ beforeEach(() => {
   };
   mockApiGet.mockResolvedValue({ data: { share_url: 'https://spinr-track.app/ride-1' } });
   jest.spyOn(Share, 'share').mockResolvedValue({ action: 'sharedAction' } as any);
+  mockRequestPermissionsAsync.mockResolvedValue({ granted: true });
 });
 
 afterEach(() => {
@@ -359,5 +367,128 @@ describe('AiAssistantScreen', () => {
     const newConvoBtn = r.root.findAllByType(TouchableOpacity)[1];
     act(() => { newConvoBtn.props.onPress(); });
     expect(mockStartNewConversation).toHaveBeenCalled();
+  });
+
+  it('sends via the Send button (not just onSubmitEditing)', async () => {
+    const r = await renderScreen();
+    act(() => { r.root.findByType(TextInput).props.onChangeText('hello'); });
+    const sendBtn = r.root.findByProps({ accessibilityLabel: 'Send' });
+    act(() => { sendBtn.props.onPress(); });
+    expect(mockSendMessage).toHaveBeenCalledWith('hello');
+  });
+
+  it('logs (and does not crash) when the trip-share fetch fails', async () => {
+    mockRideState = { currentRide: { id: 'ride-1', status: 'driver_arrived' }, currentDriver: null };
+    mockApiGet.mockRejectedValue(new Error('down'));
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const r = await renderScreen();
+    const shareBtn = r.root.findByProps({ accessibilityLabel: 'Share trip' });
+    await act(async () => { await shareBtn.props.onPress(); await flush(); });
+    expect(Share.share).not.toHaveBeenCalled();
+    expect(consoleSpy).toHaveBeenCalled();
+  });
+
+  describe('location_suggestions card', () => {
+    const CANDIDATE = { name: 'Home', address: '655 Albert St, Regina', lat: 50.44079, lng: -104.61802 };
+
+    it('renders a "Choose your pickup" card for a pickup role and sends the bracketed-coords message on select', async () => {
+      mockAiChatState.messages = [
+        {
+          id: 'm1', role: 'assistant', kind: 'location_suggestions', content: '',
+          action: { type: 'location_suggestions', location_role: 'pickup', candidates: [CANDIDATE] },
+        },
+      ];
+      const r = await renderScreen();
+      expect(allText(r)).toContain('Choose your pickup');
+      const optionBtn = r.root.findByProps({ accessibilityLabel: 'Use Home' });
+      act(() => { optionBtn.props.onPress(); });
+      expect(mockSendMessage).toHaveBeenCalledWith('Use 655 Albert St, Regina [50.44079,-104.61802] as my pickup.');
+    });
+
+    it('renders a "Choose your dropoff" card for a dropoff role', async () => {
+      mockAiChatState.messages = [
+        {
+          id: 'm1', role: 'assistant', kind: 'location_suggestions', content: '',
+          action: { type: 'location_suggestions', location_role: 'dropoff', candidates: [CANDIDATE] },
+        },
+      ];
+      const r = await renderScreen();
+      expect(allText(r)).toContain('Choose your dropoff');
+    });
+
+    it('is disabled once a newer conversation turn has started (stale card)', async () => {
+      mockAiChatState.messages = [
+        {
+          id: 'm1', role: 'assistant', kind: 'location_suggestions', content: '',
+          action: { type: 'location_suggestions', location_role: 'pickup', candidates: [CANDIDATE] },
+        },
+        { id: 'm2', role: 'user', kind: 'text', content: 'never mind' },
+      ];
+      const r = await renderScreen();
+      const optionBtn = r.root.findByProps({ accessibilityLabel: 'Use Home' });
+      expect(optionBtn.props.disabled).toBe(true);
+      expect(allText(r)).toContain('The conversation has moved on');
+    });
+  });
+
+  describe('voice input (mic button)', () => {
+    it('requests permission and starts listening on tap when not yet listening', async () => {
+      const r = await renderScreen();
+      const micBtn = r.root.findByProps({ accessibilityLabel: 'Start voice input' });
+      await act(async () => { await micBtn.props.onPress(); await flush(); });
+      expect(mockRequestPermissionsAsync).toHaveBeenCalled();
+      expect(mockSpeechStart).toHaveBeenCalledWith({ lang: 'en-CA', interimResults: true, continuous: false });
+      expect(r.root.findByProps({ accessibilityLabel: 'Stop voice input' })).toBeTruthy();
+    });
+
+    it('toasts and does not start when microphone permission is denied', async () => {
+      mockRequestPermissionsAsync.mockResolvedValue({ granted: false });
+      const r = await renderScreen();
+      const micBtn = r.root.findByProps({ accessibilityLabel: 'Start voice input' });
+      await act(async () => { await micBtn.props.onPress(); await flush(); });
+      expect(mockShowToast).toHaveBeenCalledWith('Microphone needed', 'Allow microphone access in Settings to use voice input.', 'warning');
+      expect(mockSpeechStart).not.toHaveBeenCalled();
+    });
+
+    it('toasts a generic failure when requestPermissionsAsync throws', async () => {
+      mockRequestPermissionsAsync.mockRejectedValue(new Error('native error'));
+      const r = await renderScreen();
+      const micBtn = r.root.findByProps({ accessibilityLabel: 'Start voice input' });
+      await act(async () => { await micBtn.props.onPress(); await flush(); });
+      expect(mockShowToast).toHaveBeenCalledWith('Voice input failed', 'Could not start voice capture — please type instead.', 'warning');
+    });
+
+    it('tapping again while listening stops recognition', async () => {
+      const r = await renderScreen();
+      await act(async () => { await r.root.findByProps({ accessibilityLabel: 'Start voice input' }).props.onPress(); await flush(); });
+      await act(async () => { await r.root.findByProps({ accessibilityLabel: 'Stop voice input' }).props.onPress(); await flush(); });
+      expect(mockSpeechStop).toHaveBeenCalled();
+    });
+
+    it('a "result" event streams the transcript into the input field', async () => {
+      const r = await renderScreen();
+      act(() => { mockSpeechListeners.result({ results: [{ transcript: 'book me a ride' }] }); });
+      expect(r.root.findByType(TextInput).props.value).toBe('book me a ride');
+    });
+
+    it('an "end" event stops the listening indicator', async () => {
+      const r = await renderScreen();
+      await act(async () => { await r.root.findByProps({ accessibilityLabel: 'Start voice input' }).props.onPress(); await flush(); });
+      act(() => { mockSpeechListeners.end({}); });
+      expect(r.root.findByProps({ accessibilityLabel: 'Start voice input' })).toBeTruthy();
+    });
+
+    it('an "error" event for aborted/no-speech does not toast', async () => {
+      await renderScreen();
+      act(() => { mockSpeechListeners.error({ error: 'aborted' }); });
+      act(() => { mockSpeechListeners.error({ error: 'no-speech' }); });
+      expect(mockShowToast).not.toHaveBeenCalledWith('Voice input failed', expect.anything(), expect.anything());
+    });
+
+    it('any other "error" event toasts a capture failure', async () => {
+      await renderScreen();
+      act(() => { mockSpeechListeners.error({ error: 'network' }); });
+      expect(mockShowToast).toHaveBeenCalledWith('Voice input failed', 'Could not capture audio — please try again or type instead.', 'warning');
+    });
   });
 });

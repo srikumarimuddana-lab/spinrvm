@@ -8239,6 +8239,632 @@ record of what was assumed vs. what was actually true</summary>
   1069 tests), `yarn tsc --noEmit` clean. **76 of 76 screens done — the
   B37 sub-item 4 app/-screens zero-coverage list is now fully closed
   out**, across both rider-app and driver-app.
+- **Sub-item 5 (new, opened 2026-08-24): branch/edge-case coverage on
+  partially-tested `app/` screens.** Closing every zero-coverage screen
+  (sub-item 4) did not mean every screen hit high line coverage — a
+  screen with even one narrow, single-behavior test (e.g. a specific
+  incident regression) already reads as "has tests," but large chunks of
+  branches/handlers inside it can still be unexercised. A per-app
+  `--collectCoverageFrom='app/**/*.{ts,tsx}'` coverage run against `main`
+  post-sub-item-4 found the aggregate `app/` line coverage at 74.4%
+  (rider-app) / 78.2% (driver-app) — respectable, but with a long tail of
+  individual screens well below that. Ranked the worst offenders by line
+  % (excluding `_layout.tsx` route-tree files, which were never in scope)
+  and started working down the list, same per-screen workflow as
+  sub-item 4 (write/extend tests → run standalone → fix → full suite →
+  `tsc --noEmit` → commit → push), continuing on a fresh branch
+  (`claude/spinr-coverage-lowcov-screens`, since sub-item 4's branches
+  were both already merged).
+  - **rider-app `app/search-destination.tsx`: 38.7% → 70.5% lines.**
+    Already had `searchDestinationPinIntegrity.test.tsx` (pins one
+    specific incident — stale-pin-on-edited-text, place_id re-resolve on
+    a stored recent). Added `searchDestinationScreen.test.tsx` (16 tests)
+    covering the rest of the screen: prediction selection binding
+    address+coords from the DETAILS response and rotating the session
+    token; adding stops up to the 3-stop cap (hidden past it) and
+    removing one; the quick-access rows ("Use current location" — pickup
+    field only, gated on `userLocation` — "Set location on map", Home/Work
+    quick chips toasting when unset vs. selecting when set, Favourites
+    listing every other saved address); the Search Ride button's
+    disabled-until-both-points gate and its clear-estimates +
+    navigate-to-`/confirm-pickup` happy path; the field-clear (X) buttons;
+    and the map-picker-return effect for both the pickup and dropoff
+    field cases. New footgun: `fetchSavedAddresses()` fires on every
+    mount and hits `/addresses` — a test that sets `savedAddresses`
+    directly via `useRideStore.setState()` gets it silently overwritten
+    moments later by that mount-time fetch's mocked response (defaulted
+    to `[]`), so any saved-address-driven assertion needs the *mock's
+    response* set (`mockSavedAddressesResponse`), not just the store's
+    initial state. Also needed the real `expo-location` module's actual
+    return shape (`{status}`, not `{granted}`) plus a
+    `requestForegroundPermissionsAsync` mock — the existing pin-integrity
+    file's `{granted: false}` stub never actually exercised this path
+    because its `beforeEach` always seeds a truthy `userLocation`, so the
+    mount-time GPS-fetch effect's `if (!userLocation)` guard short-circuits
+    before ever calling it. 16 tests; full rider-app suite still green
+    (116 suites / 1097 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/ride-status.tsx`: 39.6% → 84.5% lines.** Already had
+    `rideStatusCloseButton.test.tsx` (pins only the header close button's
+    `accessibilityLabel`) and `rideStatusContract.test.ts` (a type-only
+    contract check, no rendering). Added `rideStatusScreen.test.tsx` (16
+    tests) covering: the loading state; each ride-status body (`searching`
+    with its timer and "taking longer" copy/Cancel-search button after
+    120s; `driver_assigned` with the offer-acceptance countdown;
+    `driver_accepted` with the "on the way" copy and no countdown;
+    `driver_arrived` with the OTP digit boxes); the driver-photo error
+    fallback; `handleBackPress`'s full status-branch (no ride → plain
+    `router.back()`; `searching` → "Cancel search?" whose Cancel button
+    calls `performCancel()` directly, no reason sheet; `driver_assigned`/
+    `driver_accepted` → free-vs-paid cancel copy gated on the free-cancel
+    window, routing through the reason sheet; `driver_arrived` → always
+    the paid-fee copy); `performCancel`'s success (clear + replace to
+    `/(tabs)`) vs. failure (toast) paths; the note-for-driver chip's
+    visibility gate (hidden once the trip passes `driver_arrived`),
+    pre-fill, save-success-closes vs. save-failure-toasts-and-stays-open;
+    and the hardware-back-button wiring. Used the same real-`rideStore`-
+    via-`setState()` convention as `searchDestinationScreen.test.tsx`
+    (overriding the store's own action functions directly, e.g.
+    `cancelRide: mockCancelRide`, rather than a whole-module mock — this
+    screen's real store import chain pulls in
+    `@react-native-async-storage/async-storage`, so that needed its own
+    mock too, on top of the theme/router/toast mocks). New footgun:
+    `allText()`'s `JSON.stringify(children)` throws
+    "Converting circular structure to JSON" on a `<Text>` whose children
+    mix a JSX element with a string (this screen's `arrivedText` renders
+    an inline `<Ionicons/>` followed by literal text) — wrap each
+    `JSON.stringify` call in its own try/catch (as several earlier
+    screens' `allText()` helpers already do) rather than assuming every
+    `<Text>`'s children is JSON-serializable. 16 tests; full rider-app
+    suite still green (117 suites / 1113 tests), `yarn tsc --noEmit`
+    clean.
+  - **rider-app `app/report-safety.tsx`: 40.0% → 95.0% lines.** Small
+    screen (200 lines); already had `reportSafetyBackButton.test.tsx`
+    (pins only the back button's `accessibilityLabel`). Added
+    `reportSafetyScreen.test.tsx` (5 tests) covering `handleSubmit`'s
+    full path: empty/whitespace-only description rejected with a toast
+    and no API call; a successful submit POSTs the description, toasts
+    success, and navigates back; the in-flight state (`submitting`)
+    disables the input and the button with "Submitting..." copy; a
+    failed submit logs (the safety-report path deliberately never
+    swallows an error per CLAUDE.md), toasts the backend's message, and
+    — the one bug worth specifically pinning — re-enables the form
+    afterward instead of leaving `submitting` stuck `true` forever. No
+    new footguns. 5 tests; full rider-app suite still green (118 suites
+    / 1118 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/privacy-settings.tsx`: 56.1% → 95.5% lines.**
+    Already had `privacySettingsToggles.test.tsx`, which covers the
+    push-notification toggle's hydrate/save/revert path and confirms the
+    two dead rows (Background Location, Share Live Trip Data) stay
+    removed — but only by turning the push toggle OFF, so it never
+    exercised the turn-ON permission-check branch at all. Added
+    `privacySettingsScreen.test.tsx` (11 tests) covering the rest:
+    turning push ON with permission already granted (saves directly);
+    with permission not yet granted, requesting it and saving if granted
+    or toasting + opening device Settings without ever calling the
+    preferences mutation if denied; the three marketing-consent toggles'
+    hydrate-from-GET and independent optimistic-save-with-revert paths;
+    `handleDownloadData`'s success/failure toasts;
+    `handleDeleteAccount`'s confirm-sheet → DELETE → logout →
+    `/login`-navigate happy path and its failure-toasts-instead-of-
+    navigating path; and the Privacy Policy/Terms of Service rows'
+    navigation to `/legal` with the right `type` param. Needed a
+    `@shared/services/firebase` mock (`checkNotificationPermission`/
+    `requestNotificationPermission`/`openNotificationSettings`) that the
+    existing file never needed, precisely because it never drove the
+    ON-toggle branch that calls them. No new footguns. 11 tests; full
+    rider-app suite still green (119 suites / 1129 tests), `yarn tsc
+    --noEmit` clean.
+  - **rider-app `app/(tabs)/account.tsx`: 64.4% → 98.3% lines.** Already
+    had `accountEmailVerification.test.tsx` (covers only the email-
+    verification pill and the focus-refresh merge-not-replace fix — see
+    its own N14 note). Added `accountScreen.test.tsx` (27 tests)
+    covering the rest: every `MenuRow`'s navigation destination
+    (parameterized via `it.each`, 13 rows) plus the Edit button; Sign
+    Out's Alert-confirm → `logout()` → `router.replace('/login')` chain;
+    the avatar photo viewer (no-op when there's no `profile_image`, opens
+    and closes via backdrop tap when there is); the Work section's
+    visibility gate (hidden with zero work profiles) and its two
+    subtitle variants (company-count vs. active-mode) plus its own
+    navigation row; `formatPhone`'s 11-digit-NANP formatting vs. raw-
+    string fallback vs. no-phone `N/A`; the company-info footer's
+    hidden-when-empty vs. rendered-once-populated states; and the
+    conditional gender row. This closes out **every rider-app screen**
+    in the original ranked worst-offenders list. No new footguns
+    (reused `accountEmailVerification.test.tsx`'s real-zustand-authStore
+    convention verbatim). 27 tests; full rider-app suite still green
+    (120 suites / 1156 tests), `yarn tsc --noEmit` clean.
+  - **driver-app `app/driver/settings.tsx`: 49.6% → 94.0% lines.** Already
+    had `screens/settingsWavToggle.test.tsx` (pins only the WAV toggle's
+    `accessibilityRole`/`accessibilityState`, one narrow axis of this
+    784-line settings screen). Added `app/driverSettingsScreen.test.tsx`
+    (31 tests, using `@testing-library/react-native`'s `render`/
+    `fireEvent`/`waitFor` rather than raw `react-test-renderer`, matching
+    the existing WAV-toggle file's convention) covering: the four
+    notification toggles' independent `mutate` calls and shared
+    revert-on-error path (`it.each`); the two marketing (CASL) toggles'
+    hydrate-from-GET and optimistic-save-with-revert; sound/vibration
+    toggles calling the alertPrefsStore setters directly with **no**
+    server round-trip (asserted `mockApiPut` not called); dark-mode toggle
+    calling `setTheme('dark'|'light')` based on current `colorScheme`; nav
+    app radio selection; the WAV mutation's error-revert path (the
+    existing file only ever renders `is_wav` from props, never fires the
+    mutation); the language modal's open/select/close; `handleExportData`
+    success/failure toasts; the full 2-step delete-account flow (Alert
+    confirm → step-2 modal → wrong-text toast-no-API-call → `DELETE`-text
+    success → logout → `/login` → failure toast instead of navigating →
+    cancel-closes-without-deleting); and every Account/Emergency section
+    row's navigation target via `it.each`, plus the emergency-call row's
+    Alert-confirm. New footgun: the marketing-preferences `GET` fires
+    unconditionally on mount and resolves after `render()` returns
+    (`@testing-library/react-native`'s `render` doesn't await pending
+    microtasks the way the manual `act(() => TestRenderer.create(...))`
+    helper used elsewhere does), so every test needed an explicit
+    `await flush()` (a `Promise.resolve()` pair inside `act`) right after
+    `render()` or React logged "not wrapped in act(...)" warnings on the
+    mount effect's `setMarketingEmails`/`setMarketingSms` calls — fixed by
+    adding the helper and awaiting it after every render call, converting
+    a few originally-synchronous `it()` bodies to `async`. 31 tests; full
+    driver-app suite still green (110 suites / 1100 tests), `yarn tsc
+    --noEmit` clean. (One unrelated pre-existing flake surfaced when
+    scoping `--collectCoverageFrom` to only this file across the *whole*
+    suite — `driverProfileScreen.test.tsx` failed under that specific
+    coverage-instrumentation combination but passes standalone and in the
+    full uninstrumented suite; not a regression from this change, not
+    investigated further as out of scope for a coverage-content pass.)
+  - **driver-app `app/driver/notifications.tsx`: 56.8% → 90.9% lines.**
+    Already had `screens/notifications.test.tsx` (pins the Android
+    `FlatList` `removeClippedSubviews`/`getItemLayout` regression and the
+    failed-fetch-vs-empty-inbox empty-state distinction — a mocked-`data`
+    fixture-driven read, no interaction coverage at all). Added
+    `app/driverNotificationsScreen.test.tsx` (18 tests) covering:
+    `handleNotificationPress`'s full `type`-driven navigation switch
+    (`document_expiry`→`/driver/documents`, `payout_processed`→
+    `/driver/activity`, `ride_offer`→`/driver/`, `quest_earned`→
+    `/driver/quests`, `lost_and_found`(+message) with/without a
+    `case_id`, and an unmapped `chat_message` type that marks read but
+    navigates nowhere) via `it.each`; that every row press marks the item
+    read first; a mark-read failure surfacing an `Alert`; "Mark all
+    read"'s visibility gate (`unreadCount > 0`), its mutation call, and
+    its own failure `Alert`; the unread-count line's singular-vs-plural
+    copy; the back button; pull-to-refresh and the error-state Retry
+    button both calling `refetch`; the `isPending` spinner state; and an
+    unmapped notification `type` falling back to the `system` icon
+    without crashing. Reused the existing file's un-mocked-real-`FlatList`
+    convention (no `FlatList` mock needed here — this screen's own list is
+    small and synchronous in tests, unlike the earlier `VirtualizedList`
+    `setTimeout` flakiness footgun). One iteration fix: the mock hook
+    factory initially hardcoded `isPending`/`isError` to `false` — had to
+    make them mutable module-level `let`s alongside `mockNotifData` so
+    the loading/error-state tests could actually drive those branches.
+    18 tests; full driver-app suite still green (111 suites / 1118
+    tests), `yarn tsc --noEmit` clean.
+  - **driver-app `app/login.tsx`: 62.9% → 88.7% lines.** Already had
+    `screens/loginConsentCheckbox.test.tsx` (pins the explicit
+    unchecked-by-default consent checkbox's checked/disabled wiring and
+    one happy-path navigate-to-`/otp` call). Added
+    `app/loginScreen.test.tsx` (13 tests) covering the rest: the
+    over-11-digit `handlePhoneChange` reject-entirely branch (state stays
+    at its last valid value, not truncated); `handleSendCode`'s three
+    response/error branches (`success:false` → generic failure toast; a
+    thrown error with a server message → "Sign-in Unavailable" with that
+    message; a thrown error with nothing extractable → generic
+    "Connection Error"); the in-flight loading state (spinner, phone input
+    `editable:false`, both reset in `finally` regardless of outcome); the
+    Terms of Service / Privacy Policy links each navigating to `/legal`
+    with their own `type` param; and the early-mount location-permission
+    effect's full branch set (already-granted persists a last-known
+    position immediately then the accurate background position;
+    not-yet-granted requests it and proceeds if granted; denied-outright
+    never touches AsyncStorage; a thrown permission-check error is
+    swallowed without crashing the screen; a failed background
+    `getCurrentPositionAsync` is swallowed while the earlier last-known
+    write still stands). Needed a screen-local `expo-location` mock
+    (the global `jest.setup.js` one has no
+    `getForegroundPermissionsAsync`/`getLastKnownPositionAsync` stubs,
+    only the background-tracking ones `driverStore.ts` needs) and a
+    local `@react-native-async-storage/async-storage` mock so `setItem`
+    calls could be asserted directly. One iteration fix: an initial
+    `await act(async () => { render(...); await flush(); })` wrapper
+    around several of the location-effect tests double-wrapped
+    `render()` (which already `act()`s internally) and threw "Can't
+    access .root on unmounted test renderer" — fixed by calling
+    `render()` directly followed by a separate `await flush()`, matching
+    the pattern the rest of the file already used. 13 tests; full
+    driver-app suite still green (112 suites / 1131 tests), `yarn tsc
+    --noEmit` clean. **This closes out every screen in the original
+    ranked worst-offenders list across both apps.**
+  - **Fresh coverage sweep (2026-08-24, post-`login.tsx`) — next tier
+    identified.** Re-ran both apps' `--collectCoverageFrom='app/**/*.{ts,tsx}'`
+    coverage and ranked by line % (layout files excluded — they're
+    near-zero by nature, not a real gap). Next tier, worst first:
+    - **rider-app:** `ride-details.tsx` (66.2%), `(tabs)/index.tsx`
+      (70.6%), `login.tsx` (72.7% — rider-app's own, distinct from the
+      driver-app `login.tsx` just closed above), `ai-assistant.tsx`
+      (73.9%), `ride-options.tsx` (76.3% — the file this session already
+      added `rideOptionsScreen.test.tsx` to during sub-item 4; still has
+      room at 2284 lines), `ride-in-progress.tsx` (76.9%),
+      `driver-arriving.tsx` (77.5%), `payment-confirm.tsx` (80.0%),
+      `work-profile.tsx` (81.5%).
+    - **driver-app:** `driver/(tabs)/index.tsx` (69.1% — the dashboard
+      screen this session already added `driverDashboardScreen.test.tsx`
+      to during sub-item 4's 76/76 close-out; still has room at 1359
+      lines), `become-driver.tsx` (69.3%), `driver/quests.tsx` (69.9%),
+      `driver/ride-detail.tsx` (74.7%), `legal.tsx` (81.2%),
+      `profile-setup.tsx` (82.5%), `driver/subscription.tsx` (84.1%),
+      `driver/tax-documents.tsx` (85.2%).
+    Sub-item 5 continues as an open-ended effort — pick up from this list
+    wherever a future session left off, re-running the coverage command
+    above to confirm current numbers before starting (they'll have moved
+    since this snapshot).
+  - **rider-app `app/ride-details.tsx`: 66.2% → 91.4% lines.** Already had
+    a comprehensive `rideDetailsScreen.test.tsx` (14 tests covering fetch,
+    status badge, cancellation-fee-vs-fare-breakdown gating, breakdown
+    consolidation/promo/tip injection, email/PDF receipt actions, nav) —
+    extended in place rather than adding a new file, since it wasn't a
+    narrow single-behavior pin. The 60-line exported `buildReceiptHtml`
+    (PDF receipt HTML builder) had **zero** direct coverage — it's only
+    reachable indirectly via `handleDownloadInvoice`, which per the file's
+    own test-file comment can never reach the dynamic-`import()` success
+    path in Jest's CJS runtime, so its branches (tax_breakdown formatting
+    with rate suffix, the grand_total-gap tax fallback, the negligible-gap
+    no-tax-line case, driver-block presence via `driver_name` vs. nested
+    `driver.first_name/last_name` vs. absent, the 3-way route-snapshot
+    image state — actual snapshot / stale-revision "unavailable" / legacy
+    planned-route image) were completely dark. Since it's exported, tested
+    it directly as a pure function (12 new tests) instead of only through
+    the screen. Also added the map-rendering branch (gated on
+    `ride.pickup_lat && ride.dropoff_lat`, entirely absent from the
+    existing fixtures): renders/omits the `MapView` correctly, and
+    `onMapReady` firing with 2+ route coordinates reaches the
+    `mapRef.current?.fitToCoordinates()` call without crashing. One nav
+    gap fixed too: the "Ride not found" state's own back button (a
+    separate `TouchableOpacity` from the main view's) was untested.
+    Footgun: `findByProps({ initialRegion: expect.anything() })` doesn't
+    match a component whose prop value is a plain object built from
+    `expect.anything()` used as a *sub*-matcher inside a larger literal —
+    switched to `findByType('MapView' as any)` (the mock's host-component
+    string type) instead. 16 new tests (30 total in the file); full
+    rider-app suite still green (120 suites / 1172 tests), `yarn tsc
+    --noEmit` clean. Remaining uncovered: the PDF-generation success path
+    (documented as unreachable in Jest), and the innermost Polyline
+    rendering for actual/pickup-leg route segments (needs synthetic
+    `actual_route_segments` shaped to match the `routeSegments` utility's
+    exact phase/coordinate format — diminishing returns for this pass).
+  - **rider-app `app/(tabs)/index.tsx`: 70.6% → 85.5% lines.** Already had
+    a comprehensive `homeScreen.test.tsx` (16 tests: active-ride redirect
+    switch, notification-permission banner, AI button, promo banner, quick
+    actions, RiderSOS wiring) — extended in place. Added 16 more tests:
+    the full location-permission flow (`refreshLocation`'s branches —
+    already-granted, request-then-granted, denied-after-request on both
+    iOS `Linking.openURL('app-settings:')` and Android
+    `Linking.openSettings()`, and a swallowed `Linking` failure not
+    crashing the screen), the cached-last-known-location seed from
+    AsyncStorage and the OS-cache persist-before-fresh-fix path, the
+    Open-Meteo weather fetch setting/not-setting `temperature`, all three
+    `getGreeting()` hour bands (parameterized via `jest.setSystemTime`),
+    the `AppState` foreground-listener re-triggering `refreshLocation`
+    only on `'active'` (not `'background'`), and the co-located-driver
+    ring-spread logic (`displayDrivers`) — asserted via the real
+    (unmocked-props) `CarMarker` import that 3 drivers at the identical
+    coordinate render 3 distinct `CarMarker`s with non-identical
+    coordinates, while a lone driver's coordinate passes through
+    unchanged. Footgun: `allText()`'s `JSON.stringify` on a `<Text>`
+    child array renders `[" · ",19,"°C"]`, not a concatenated `"19°C"`
+    string — match the literal stringified array shape, not the visual
+    text. 16 new tests (32 total in the file); full rider-app suite still
+    green (120 suites / 1188 tests), `yarn tsc --noEmit` clean. Remaining
+    uncovered: map-control zoom/recenter button handlers and the
+    promo-code entry bottom sheet (355-392, 514-533) — good next
+    increment for a future pass on this file.
+  - **rider-app `app/login.tsx`: 72.7% → 93.2% lines.** Already had
+    `loginConsentCheckbox.test.tsx` (pins only the explicit
+    unchecked-by-default consent checkbox's gating of the continue
+    button). Added `loginScreen.test.tsx` (9 tests) covering the rest:
+    the focus-effect already-authenticated redirect to `/(tabs)` (real
+    zustand `authStore`, `token` truthy) vs. staying put when signed out;
+    `handleSendCode`'s three response/error branches
+    (`success:false` → generic "Code Not Sent" toast; a thrown error
+    with a server message → "Sign-in Unavailable" with that message; a
+    thrown error with nothing extractable → generic "Connection Error");
+    the loading spinner while in flight and the button re-enabling in
+    `finally` after a failure; and the Terms of Service / Privacy Policy
+    links each navigating to `/legal` with their own `type` param. No
+    new footguns — reused the established real-zustand-`authStore`
+    convention (`create()` + `.setState()`) and the existing file's
+    render/enterPhone/toggleConsent helpers verbatim. 9 new tests (15
+    total across both files); full rider-app suite still green (121
+    suites / 1197 tests), `yarn tsc --noEmit` clean. Remaining uncovered:
+    the phone-input-container's own focus-forwarding `TouchableOpacity`
+    tap (154-175) — style/focus-only, low value.
+  - **rider-app `app/ai-assistant.tsx`: 73.9% → 98.6% lines.** Already had
+    a comprehensive `aiAssistantScreen.test.tsx` (22 tests) — extended in
+    place. Two whole branches had zero coverage: voice input (the mic
+    button/`expo-speech-recognition` flow) and the `location_suggestions`
+    card. Added 13 tests: the mic button's full permission flow
+    (request-then-start, denied-toasts-no-start, a thrown
+    `requestPermissionsAsync` toasting a generic failure, tap-while-
+    listening calling `.stop()`); the three streamed-listener callbacks
+    (`result` writes the transcript into the input, `end` clears the
+    listening indicator, `error` toasts for real failures but stays
+    silent for `aborted`/`no-speech`); the `LocationSuggestionsCard`'s
+    pickup/dropoff title variants, its stale-card disabled state, and its
+    `onSelect` sending `buildLocationChoiceMessage`'s bracketed-coords
+    follow-up (a **real**, unmocked import from
+    `@shared/utils/aiLocationMessages` — the money detail here is the
+    exact `[lat,lng]` string, deliberately testing the real formatter);
+    the Send button (previously only exercised via
+    `onSubmitEditing`/quick-prompt taps); and the trip-share fetch's
+    failure path (console.error, no `Share.share` call). Needed to
+    rewrite the file's `expo-speech-recognition` mock from a
+    fire-and-forget `addListener` stub to one that captures each
+    `(event, callback)` pair in a module-level map so tests can invoke
+    `result`/`end`/`error` directly — the previous mock had no way to
+    reach the screen's own listener closures. One iteration fix: the
+    `LocationSuggestionsCard`'s accessibility label is
+    `Use ${candidate.name || candidate.address}` (name-first) while the
+    *sent message* is built from `candidate.address || candidate.name`
+    (address-first) — a candidate fixture with both fields needed two
+    different expected strings, not one. 13 new tests (35 total in the
+    file); full rider-app suite still green (121 suites / 1210 tests),
+    `yarn tsc --noEmit` clean. Remaining uncovered: the guarded
+    `require('expo-speech-recognition')` catch branch (line 59 — the
+    real absent-native-module case, not reachable once the module is
+    mocked present) and the `FlatList`'s `onContentSizeChange` auto-
+    scroll callback (line 503, needs a real `FlatList` content-size
+    event) — both low value.
+  - **rider-app `app/ride-options.tsx`: 76.3% → 80.7% lines.** Already had
+    a comprehensive `rideOptionsScreen.test.tsx` (22 tests covering the
+    booking-critical handlers) from earlier this session — extended in
+    place with UI-toggle-level coverage that was still dark despite the
+    handler coverage: the WAV toggle's enabled-with-drivers /
+    disabled-with-zero / hidden-when-`showWavOption`-false three-way gate
+    (needed a `getToggle` helper matching on `typeof props.onValueChange
+    === 'function'`, since the mocked `CustomToggle` also forwards
+    `accessibilityLabel` down to its inner `Text`, so a plain
+    `findByProps` match was ambiguous between the two); the quiet-mode
+    toggle; the work-mode "Billed to {company}" banner's shown/hidden
+    states; the fare-breakdown collapsible card (expand reveals the
+    ride-fare driver badge + tax lines + an applied-promo discount line,
+    hidden entirely with an empty `fare_breakdown`); and five payment-
+    sheet selection paths (saved card, zero-cards-navigates-to-
+    `/manage-cards`, wallet, listing + selecting a corporate account from
+    `workProfiles`, and "Add payment method"). Footgun: `allText()`'s
+    `JSON.stringify` renders a `<Text>` with mixed string/variable
+    children as a literal array (`["Billed to ","Acme Corp"]`,
+    `["Promo (","SAVE10",")"]`, `["Balance: $","10.00"]`) — match that
+    exact stringified shape, not the visually-concatenated string. 14 new
+    tests (36 total in the file); full rider-app suite still green (121
+    suites / 1224 tests), `yarn tsc --noEmit` clean. This is a very large
+    screen (2284 lines) — substantial uncovered surface remains
+    (732-791, 1330-1404, the promo-sheet's own interaction paths, map
+    rendering) for a future pass; stopped here as a reasonable increment
+    rather than chasing 100% in one sitting.
+  - **driver-app `app/driver/(tabs)/index.tsx`: 69.1% → 74.5% lines.**
+    Already had `driverDashboardScreen.test.tsx` (16 tests, deliberately
+    scoped in sub-item 4 to the location gate / rideState panel switch /
+    ride-completion confirm modal / SOS-vs-SafetyShield — the demand
+    heatmap and service-area surge polygon were explicitly out of scope
+    then). Extended with 16 more tests covering exactly that deferred
+    surface: `useDemandHeatmap`/`useAirportZones` needed rewriting from
+    fixed-return mocks to overridable module-level state (matching this
+    file's own established `.__state`-carrier convention) since the
+    original mocks always returned empty/hidden data with no way for a
+    test to drive a populated state; `DemandLegend`/`ForecastStrip`/
+    `HeatmapCells`/`HotspotChips` needed rewriting from `() => null`
+    stubs to prop-rendering doubles for the same reason. Covers:
+    `HeatmapCells`/`DemandLegend` visible-vs-hidden by cell-count/
+    `visible` flag; `ForecastStrip`/`HotspotChips` gated on the v2
+    pipeline flag (never shown for the legacy heatmap even with hotspot
+    data present); a hotspot-chip tap re-centering the map without
+    crashing; the whole overlay disappearing once a ride goes active
+    (idle-only gating); the airport-zone chip's active-zone-name /
+    hidden-when-none / hidden-during-an-active-ride states; and the
+    service-area boundary polygon's surge-tinted color logic (calm
+    below-tier vs. the heatmap ramp at 1.25x+), read from `incomingRide`
+    while an offer is pending vs. `activeRide` otherwise, and suppressed
+    for a degenerate <3-point polygon. Also upgraded the shared
+    `react-native-maps` `Polygon` mock from `() => null` to a
+    prop-forwarding double (`accessibilityLabel="map-polygon"`) so its
+    `strokeColor`/`coordinates` become assertable — a change any future
+    addition to this test file benefits from. Footgun found: the fixture
+    for `activeRide.service_area_polygon` initially nested the field
+    under `activeRide.ride.service_area_polygon` (matching the
+    `activeRide.ride.id` shape used by every *other* existing test in
+    this file) — the real source reads `activeRide?.service_area_polygon`
+    directly off the top-level object, not through `.ride`; two
+    unrelated fields living at different nesting depths on the same
+    `activeRide` shape. 16 new tests (32 total in the file); full
+    driver-app suite still green (112 suites / 1147 tests), `yarn tsc
+    --noEmit` clean. This is the largest remaining screen in the repo
+    (1359 lines) — substantial uncovered surface remains (the countdown-
+    timer/AppState-resync effects, the Directions-API route-fetch effect,
+    various map-control button handlers) for a future pass.
+  - **driver-app `app/become-driver.tsx`: 69.3% → 80.7% lines.** Already
+    had `becomeDriverScreen.test.tsx` (16 tests covering the wizard's
+    step-validation and one document-upload happy/failure path via the
+    "File" picker source only). Added 10 tests: the two other upload
+    sources (`pickImage`'s Camera and Gallery branches) each with their
+    own permission-granted-success, permission-denied-toasts-no-launch,
+    and a shared canceled-pick / generic-picker-throws pair; the Android
+    Alert shape for the upload-source picker (2 non-cancel options +
+    `{cancelable:true}`, vs. iOS's 4-option/no-cancelable-flag shape the
+    existing tests already covered); `pickFile`'s own canceled/throws
+    pair (previously only its success and upload-failure paths were
+    tested); and — the most involved addition — a full submit exercising
+    `handleSubmit`'s keyword-based requirement→legacy-expiry-field
+    mapping and the front/back `documentsPayload` construction, both
+    entirely untested since every prior submit test skipped the Docs
+    step without uploading anything. Footgun: the stored expiry value is
+    normalized to a date-only string (`toISOString().split('T')[0]`)
+    before being re-parsed at submit time, so asserting against the raw
+    `futureDate.toISOString()` (with a time-of-day component) failed —
+    the test must build its expected value through the same
+    date-only-round-trip the source code does. 10 new tests (26 total in
+    the file); full driver-app suite still green (112 suites / 1157
+    tests), `yarn tsc --noEmit` clean.
+  - **driver-app `app/driver/quests.tsx`: 69.9% → 92.5% lines.** Already
+    had `screens/quests.test.tsx` (6 render-smoke tests only — every
+    state paints, no interaction ever exercised). Added
+    `screens/driverQuestsScreen.test.tsx` (14 tests): `handleJoin`'s
+    success (calls `joinQuest`, switches to the My Quests tab) and
+    failure (toasts, stays put) paths; `handleClaim`'s success (toasts
+    the response's `reward_amount`) and failure paths; pull-to-refresh
+    calling both fetch actions; `metaFor`'s fallback label-casing for an
+    unrecognized quest `type`; `timeLeft`'s expired-disables-Join and
+    urgent-(<1-day)-warning-label branches, plus the no-`end_date`
+    "No deadline" case; the hero summary's active/to-claim/earned counts
+    derived from a mixed-status `myQuests` list; and the "Joined"/
+    "Reward added" pills that replace the Join/Claim buttons once a
+    quest is already joined or claimed. **Real bug found and pinned as
+    documented actual behavior** (not fixed — out of scope for a
+    coverage-only pass, flagging here instead per CLAUDE.md's
+    surgical-changes rule): `handleClaim`'s fallback path
+    (`money(r?.reward_amount ?? reward)`) is handed `reward`, which the
+    call site already pre-formats via `money(q.reward_amount)` (e.g.
+    `"$25"`) — re-running `money()` on that *string* runs it through
+    `parseFloat("$25")`, which returns `NaN` and falls back to `0`, so a
+    claim response with no `reward_amount` field toasts **"$0 added to
+    your wallet"** instead of the real `$25` reward. Worth a follow-up
+    fix (drop the pre-formatting at the call site, or don't re-`money()`
+    the fallback) but not attempted here. One TS-only fix needed after
+    the coverage pass: `jest.fn((_e: any, fallback: string) => fallback)`
+    spread into a `(...a: any[]) =>` wrapper failed `tsc` with "spread
+    argument must have a tuple type" — TS narrows a typed `jest.fn`'s
+    call signature strictly enough that spreading an `any[]` into it
+    doesn't satisfy the 2-arg signature; loosened the mock itself to
+    `(..._a: any[]) => _a[1]` instead. 14 new tests; full driver-app
+    suite still green (113 suites / 1171 tests), `yarn tsc --noEmit`
+    clean.
+  - **driver-app `app/driver/ride-detail.tsx`: 74.7% → 89.47% lines.**
+    Added `screens/driverRideDetailScreen.test.tsx` (25 tests, new file —
+    the two pre-existing files, `rideDetailBackButton.test.tsx` and
+    `ride-detail-route.test.tsx`, cover only the map back button's
+    `accessibilityLabel` and a source-string contract respectively,
+    contributing no real interaction coverage). Covers: the loading
+    spinner before fetch resolves; status badge + distance/duration/
+    rating stats, including the duration-from-timestamps-over-
+    `duration_minutes` preference and the `distance_km`
+    booking-vs-actual fallback; the completed-ride earnings breakdown
+    (rider first-name-only per PIPEDA, ride-fare = base+distance+time
+    with conditional surge suffix, conditional Tip/Area
+    Boost/Tax lines, the separate Tax Info card's GST/PST breakdown,
+    `total_earned`-preferred-over-`driver_earnings` for Total Earned,
+    the "Found an item?" nav, and the whole section hidden for a
+    non-completed ride); the cancellation-fee card's no-show vs
+    rider-cancelled variants; the trip timeline's per-step
+    timestamp-present/timestamp-missing rendering and the cancelled-ride
+    extra step; map-rendering gated on both pickup and dropoff
+    coordinates; and back-button navigation.
+    **Root cause found and fixed — a fixture bug, not a source bug:**
+    every `waitFor()`-based test initially failed with `"Unable to find
+    node on an unmounted component"`, reproducing even with the same
+    query pattern that passes in `rideDetailBackButton.test.tsx`.
+    Bisected by adding the new fixture's fields back one group at a time
+    to that known-working file's ride object. Isolated to
+    `distance_km: '5.2'` (a string) — the source computes
+    `(ride.actual_distance_km ?? ride.distance_km ?? 0).toFixed(1)`,
+    and `String.prototype.toFixed` doesn't exist, so passing a string
+    threw a `TypeError` during render, unmounting the component before
+    `waitFor` ever got a chance — the "unmounted component" message was
+    a downstream symptom, not the root cause. Fixed by using a numeric
+    `distance_km` in the fixture (matches the real API contract; nothing
+    in the source was changed). Two more iteration fixes surfaced by the
+    same default fixture's coincidental values: the "ride fare" test's
+    `$15.00` matched twice (Ride Fare row + Total Earned row both total
+    $15.00 with base 5+distance 8+time 2 and this fixture's
+    `total_earned: '15.00'`) — switched the primary assertion to the
+    unambiguous surge-suffix label and used `getAllByText` for the
+    fare-amount count; the cancelled-ride timeline test's `'Cancelled'`
+    matched twice (status badge + timeline step) — switched to
+    `getAllByText(...).length).toBe(2)`. 25 tests; full driver-app suite
+    still green (114 suites / 1196 tests), `yarn tsc --noEmit` clean.
+  - **driver-app `app/legal.tsx`: 81.2% → 100% lines.** Already had
+    `legalScreen.test.tsx` (6 tests: combined vs single-doc mode,
+    fallback-on-empty and fallback-on-throw for the combined fetch,
+    single-doc fallback-on-empty, back nav) — extended in place (+4
+    tests) to close the remaining gaps: single-doc mode's own
+    fetch-throws fallback path (previously only the combined-fetch throw
+    branch was tested); the scroll-to-section effect that fires 150ms
+    after `loading` flips false when `type=privacy`/`type=tos` (asserted
+    only that it runs without crashing — react-test-renderer doesn't
+    expose `ScrollView`'s imperative `scrollTo` on a host ref, so the
+    actual scroll call isn't independently observable here); and the two
+    `onLayout` handlers that record the Privacy/ToS section Y-offsets
+    for that same scroll-to effect, invoked directly with synthetic
+    layout events. 10 tests; full driver-app suite still green (114
+    suites / 1200 tests), `yarn tsc --noEmit` clean.
+  - **driver-app `app/profile-setup.tsx`: 82.5% → 99.3% lines.** Already
+    had a comprehensive `profileSetupScreen.test.tsx` (17 tests) — only
+    the first-name validation branch was exercised of the six
+    field-specific checks, and the location-based service-area
+    auto-select, gender Female/Other buttons, referral transient-retry,
+    and consent-check-itself-rejects paths were all untested. Extended
+    in place (+10 tests): the remaining five validation-order toasts
+    (last name, blank email, invalid email, gender, service area) each
+    fired with every earlier field already valid, matching the source's
+    own in-order early-return checks; Female/Other gender selection;
+    granted-permission location auto-select (asserts the form validates
+    without ever pressing an area chip) and the
+    request-permission-then-denied branch that skips
+    `getCurrentPositionAsync` entirely; a referral apply that fails
+    once with a non-4xx (network) error and succeeds on retry (real
+    timers — the source's own 400ms backoff — waited out with a real
+    `setTimeout`, not `jest.advanceTimersByTime`, since this suite never
+    switches to fake timers); and the post-submit `/consent/status` call
+    itself rejecting, which fails open to `/driver` same as a
+    `needs_notice: false` response. 27 tests; full driver-app suite
+    still green (114 suites / 1210 tests), `yarn tsc --noEmit` clean.
+  - **driver-app `app/driver/subscription.tsx`: 84.1% → 99.2% lines.**
+    Already had a strong `subscriptionScreen.test.tsx` (12 tests) but
+    several branches were untouched. Extended in place (+12 tests): the
+    payments-fetch-throws fallback to an empty page (the outer
+    `loadData` catch only covers plans/current, payments has its own
+    inline `.catch()`); a plain-array `plans` response (the legacy shape
+    before the `free_mode` wrapper); the whole-`loadData`-rejects outer
+    catch (plans itself throws — logs and leaves the screen non-crashing
+    with no plan cards); the "Switch" alert action actually pressed (not
+    just the alert's copy, which was already pinned) to exercise
+    `doSubscribe` on the switch-plan path; `verify-session` itself
+    throwing (falls back to the same "Processing..." toast as a
+    non-active status); the cancel-request failure toast; both
+    countdown helpers' full branch sets (`formatResetCountdown`'s
+    <1h-minutes vs ≥1h-hours, `formatExpiryCountdown`'s <1h/`<24h`/
+    `≥24h`-day-rollup); the multi-day (non-1-day-pass) calendar-reset
+    quota disclaimer copy, previously only the 1-day-pass variant was
+    tested; and the infinite-scroll pagination guard's early return when
+    scrolling with no more payments left to load (asserted via a
+    direct `onMomentumScrollEnd` call rather than the hidden "Load more"
+    link, since the guard fires before that link would ever render).
+    One line (281, `formatDate`'s catch branch) stays uncovered — in
+    this Hermes/Jest runtime `new Date('not-a-date').toLocaleDateString()`
+    does not actually throw (returns `"Invalid Date"` rather than
+    raising `RangeError`, unlike some other JS engines), so the catch
+    is real defensive code but not exercisable from this test
+    environment without contriving an object whose `valueOf`/`toString`
+    throws — which would then fail to render as a `<Text>` child anyway,
+    so left as-is rather than forcing a fragile test. 24 tests; full
+    driver-app suite still green (114 suites / 1222 tests), `yarn tsc
+    --noEmit` clean.
+  - **driver-app `app/driver/tax-documents.tsx`: 85.2% → 88.9% lines.**
+    Already had a solid `taxDocumentsScreen.test.tsx` (8 tests) — added
+    one more for pull-to-refresh (`SafeRefreshControl`'s `onRefresh`
+    re-fetches `/drivers/t4a/years`), the only genuinely reachable
+    uncovered branch. The three remaining uncovered spots
+    (`formatDate`'s non-`--` branch, `getDocTypeLabel`/`getDocTypeIcon`'s
+    `default` cases) are dead code under this screen's *current* actual
+    behavior, not a real coverage gap: `fetchDocuments` hardcodes every
+    document's `type` to `'T4A'` and `generated_at` to `null` — there is
+    no live code path that ever produces a different `type` or a
+    non-null `generated_at` to exercise those branches through the
+    screen itself. They're defensive scaffolding for a second document
+    type (e.g. `earnings_summary`, which `getDocTypeLabel`/`Icon`
+    already handle) that isn't wired up yet — left uncovered rather than
+    forcing a synthetic document shape the real code never produces.
+    9 tests; full driver-app suite still green (114 suites / 1223
+    tests), `yarn tsc --noEmit` clean. **This closes out every screen in
+    the 2026-08-24 fresh-coverage-sweep ranked list across both apps** —
+    a further fresh sweep is needed to find the next tier, same as the
+    original ranked-worst-offenders list before it.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

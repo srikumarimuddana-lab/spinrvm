@@ -138,6 +138,8 @@ jest.mock('@shared/services/firebase', () => ({
   openNotificationSettings: (...a: any[]) => mockOpenNotificationSettings(...a),
 }));
 
+import { Platform, Linking } from 'react-native';
+import { CarMarker } from '@shared/components/CarMarker';
 import HomeScreen from '../app/(tabs)/index';
 import { RidelessSosEnabledContext } from '../app/_layout';
 
@@ -328,5 +330,151 @@ describe('HomeScreen', () => {
     const r = await renderScreen(false);
     const sos = r.root.findByProps({ testID: 'rider-sos' });
     expect(sos.props.children).toBe('rideId:none|ridelessSosEnabled:false');
+  });
+});
+
+describe('location permission flow', () => {
+  it('does nothing further once permission is granted on the first check', async () => {
+    mockGetForegroundPermissionsAsync.mockResolvedValue({ status: 'granted' });
+    await renderScreen();
+    expect(mockRequestForegroundPermissionsAsync).not.toHaveBeenCalled();
+    expect(mockGetCurrentPositionAsync).toHaveBeenCalled();
+  });
+
+  it('requests permission when not initially granted, and proceeds once the request succeeds', async () => {
+    mockGetForegroundPermissionsAsync.mockResolvedValue({ status: 'undetermined' });
+    mockRequestForegroundPermissionsAsync.mockResolvedValue({ status: 'granted' });
+    await renderScreen();
+    expect(mockRequestForegroundPermissionsAsync).toHaveBeenCalled();
+    expect(mockGetCurrentPositionAsync).toHaveBeenCalled();
+  });
+
+  it('toasts and opens iOS settings when permission stays denied after the request', async () => {
+    Object.defineProperty(Platform, 'OS', { get: () => 'ios' });
+    mockGetForegroundPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    mockRequestForegroundPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    const openURLSpy = jest.spyOn(Linking, 'openURL').mockResolvedValue(true as any);
+    await renderScreen();
+    expect(mockShowToast).toHaveBeenCalledWith('Location Required', 'Enable location in Settings to use Spinr.', 'warning');
+    expect(openURLSpy).toHaveBeenCalledWith('app-settings:');
+    expect(mockGetCurrentPositionAsync).not.toHaveBeenCalled();
+    Object.defineProperty(Platform, 'OS', { get: () => 'ios' });
+  });
+
+  it('opens Android settings (not app-settings: URL) when permission stays denied', async () => {
+    Object.defineProperty(Platform, 'OS', { get: () => 'android' });
+    mockGetForegroundPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    mockRequestForegroundPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    const openSettingsSpy = jest.spyOn(Linking, 'openSettings').mockResolvedValue(undefined as any);
+    await renderScreen();
+    expect(openSettingsSpy).toHaveBeenCalled();
+    Object.defineProperty(Platform, 'OS', { get: () => 'ios' });
+  });
+
+  it('swallows a Linking failure when opening settings without crashing', async () => {
+    Object.defineProperty(Platform, 'OS', { get: () => 'ios' });
+    mockGetForegroundPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    mockRequestForegroundPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    jest.spyOn(Linking, 'openURL').mockRejectedValue(new Error('no handler'));
+    await expect(renderScreen()).resolves.toBeDefined();
+    Object.defineProperty(Platform, 'OS', { get: () => 'ios' });
+  });
+
+  it('seeds the map from a cached last-known location before the fresh fetch resolves', async () => {
+    mockAsyncGetItem.mockResolvedValue(JSON.stringify({ lat: 51.0, lng: -105.0 }));
+    const r = await renderScreen();
+    expect(mockAsyncGetItem).toHaveBeenCalled();
+    expect(r).toBeDefined();
+  });
+
+  it('persists a last-known position from the OS cache before the fresh GPS fix lands', async () => {
+    mockGetLastKnownPositionAsync.mockResolvedValue(LOCATION);
+    await renderScreen();
+    expect(mockAsyncSetItem).toHaveBeenCalled();
+  });
+});
+
+describe('weather temperature', () => {
+  it('sets the temperature from the Open-Meteo response and renders it next to the greeting', async () => {
+    global.fetch = jest.fn(() =>
+      Promise.resolve({ json: () => Promise.resolve({ current_weather: { temperature: 18.6 } }) }),
+    ) as any;
+    const r = await renderScreen();
+    expect(allText(r)).toContain('[" · ",19,"°C"]'); // Math.round(18.6)
+  });
+
+  it('does not render a temperature when the weather fetch fails', async () => {
+    global.fetch = jest.fn(() => Promise.reject(new Error('network down'))) as any;
+    const r = await renderScreen();
+    expect(allText(r)).not.toContain('°C');
+  });
+});
+
+describe('greeting text', () => {
+  it.each([
+    [8, 'GOOD MORNING'],
+    [14, 'GOOD AFTERNOON'],
+    [20, 'GOOD EVENING'],
+  ])('shows the right greeting at hour %i', async (hour, expected) => {
+    jest.setSystemTime(new Date(2026, 0, 1, hour, 0, 0));
+    const r = await renderScreen();
+    expect(allText(r)).toContain(expected);
+  });
+});
+
+describe('AppState foreground refresh', () => {
+  it('re-checks location permission/position when the app returns to active', async () => {
+    await renderScreen();
+    mockGetCurrentPositionAsync.mockClear();
+    const listener = (AppState.addEventListener as jest.Mock).mock.calls.find((c) => c[0] === 'change')?.[1];
+    expect(listener).toBeDefined();
+    await act(async () => { listener?.('active'); await flush(); });
+    expect(mockGetCurrentPositionAsync).toHaveBeenCalled();
+  });
+
+  it('does nothing on a background transition', async () => {
+    await renderScreen();
+    mockGetCurrentPositionAsync.mockClear();
+    const listener = (AppState.addEventListener as jest.Mock).mock.calls.find((c) => c[0] === 'change')?.[1];
+    await act(async () => { listener?.('background'); await flush(); });
+    expect(mockGetCurrentPositionAsync).not.toHaveBeenCalled();
+  });
+});
+
+describe('nearby drivers — co-located spread', () => {
+  it('renders one CarMarker per driver even when several share (nearly) the same coordinate', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url.startsWith('/notifications')) return Promise.resolve({ data: { unread_count: 0 } });
+      if (url.startsWith('/drivers/nearby')) {
+        return Promise.resolve({
+          data: [
+            { id: 'd1', lat: 52.1, lng: -106.6 },
+            { id: 'd2', lat: 52.1, lng: -106.6 },
+            { id: 'd3', lat: 52.1, lng: -106.6 },
+          ],
+        });
+      }
+      return Promise.reject(new Error('unexpected url ' + url));
+    });
+    const r = await renderScreen();
+    const markers = r.root.findAllByType(CarMarker as any);
+    expect(markers).toHaveLength(3);
+    // Co-located drivers spread onto a ring — their coordinates must not
+    // all collapse back onto the exact same point.
+    const coords = markers.map((m: any) => `${m.props.coordinate.latitude},${m.props.coordinate.longitude}`);
+    expect(new Set(coords).size).toBeGreaterThan(1);
+  });
+
+  it('renders a single driver at its own coordinate unchanged (no ring spread for a lone marker)', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url.startsWith('/notifications')) return Promise.resolve({ data: { unread_count: 0 } });
+      if (url.startsWith('/drivers/nearby')) return Promise.resolve({ data: [{ id: 'd1', lat: 52.1, lng: -106.6, heading: 90 }] });
+      return Promise.reject(new Error('unexpected url ' + url));
+    });
+    const r = await renderScreen();
+    const markers = r.root.findAllByType(CarMarker as any);
+    expect(markers).toHaveLength(1);
+    expect(markers[0].props.coordinate).toEqual({ latitude: 52.1, longitude: -106.6 });
+    expect(markers[0].props.heading).toBe(90);
   });
 });

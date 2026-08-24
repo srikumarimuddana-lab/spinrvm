@@ -225,6 +225,64 @@ describe('ProfileSetupScreen', () => {
     expect(mockShowToast).toHaveBeenCalledWith('warning', 'First Name Required', 'Please enter your first name (at least 2 letters).');
   });
 
+  it('names the next missing field once the first name is filled: last name', async () => {
+    const r = await renderScreen();
+    const firstName = r.root.findAllByType(TextInput).find((i) => i.props.placeholder === 'John')!;
+    act(() => { firstName.props.onChangeText('Jamie'); });
+    const submitBtn = findButtonByText(r, 'Create Profile');
+    await act(async () => { await submitBtn.props.onPress(); await flush(); });
+    expect(mockShowToast).toHaveBeenCalledWith('warning', 'Last Name Required', 'Please enter your last name (at least 2 letters).');
+  });
+
+  it('names email as required when name fields are filled but email is blank', async () => {
+    const r = await renderScreen();
+    const inputs = r.root.findAllByType(TextInput);
+    act(() => { inputs.find((i) => i.props.placeholder === 'John')!.props.onChangeText('Jamie'); });
+    act(() => { inputs.find((i) => i.props.placeholder === 'Doe')!.props.onChangeText('Smith'); });
+    const submitBtn = findButtonByText(r, 'Create Profile');
+    await act(async () => { await submitBtn.props.onPress(); await flush(); });
+    expect(mockShowToast).toHaveBeenCalledWith('warning', 'Email Required', 'Please enter your email address.');
+  });
+
+  it('flags an invalid (non-empty) email', async () => {
+    const r = await renderScreen();
+    const inputs = r.root.findAllByType(TextInput);
+    act(() => { inputs.find((i) => i.props.placeholder === 'John')!.props.onChangeText('Jamie'); });
+    act(() => { inputs.find((i) => i.props.placeholder === 'Doe')!.props.onChangeText('Smith'); });
+    act(() => { inputs.find((i) => i.props.placeholder === 'john.doe@example.com')!.props.onChangeText('not-an-email'); });
+    const submitBtn = findButtonByText(r, 'Create Profile');
+    await act(async () => { await submitBtn.props.onPress(); await flush(); });
+    expect(mockShowToast).toHaveBeenCalledWith('warning', 'Invalid Email', 'That email doesn’t look right — e.g. name@example.com.');
+  });
+
+  it('requires a gender selection once name+email are valid', async () => {
+    const r = await renderScreen();
+    const inputs = r.root.findAllByType(TextInput);
+    act(() => { inputs.find((i) => i.props.placeholder === 'John')!.props.onChangeText('Jamie'); });
+    act(() => { inputs.find((i) => i.props.placeholder === 'Doe')!.props.onChangeText('Smith'); });
+    act(() => { inputs.find((i) => i.props.placeholder === 'john.doe@example.com')!.props.onChangeText('jamie@example.com'); });
+    const submitBtn = findButtonByText(r, 'Create Profile');
+    await act(async () => { await submitBtn.props.onPress(); await flush(); });
+    expect(mockShowToast).toHaveBeenCalledWith('warning', 'Gender Required', 'Please select your gender.');
+  });
+
+  it('requires a service area once every other field is valid', async () => {
+    const r = await renderScreen();
+    await fillValidFormExceptServiceArea(r);
+    const submitBtn = findButtonByText(r, 'Create Profile');
+    await act(async () => { await submitBtn.props.onPress(); await flush(); });
+    expect(mockShowToast).toHaveBeenCalledWith('warning', 'Service Area Required', 'Please select the area where you plan to drive.');
+  });
+
+  it('sets gender via the Female and Other buttons', async () => {
+    const r = await renderScreen();
+    act(() => { findButtonByText(r, 'Female').props.onPress(); });
+    act(() => { findButtonByText(r, 'Other').props.onPress(); });
+    // No crash across both handlers; final selection is exercised via a
+    // full submit below in other tests. This pins handleGenderFemale/Other.
+    expect(allText(r)).toContain('Other');
+  });
+
   it('disables Submit until the form is fully valid', async () => {
     const r = await renderScreen();
     const submitBtn = findButtonByText(r, 'Create Profile');
@@ -367,6 +425,83 @@ describe('ProfileSetupScreen', () => {
     });
     expect(mockLogout).toHaveBeenCalled();
     expect(mockReplace).toHaveBeenCalledWith('/login');
+  });
+
+  it('auto-selects a service area from the driver\'s current location when permission is granted', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/auth/me') return Promise.reject(new Error('down'));
+      if (url === '/service-areas') return Promise.resolve({ data: SERVICE_AREAS });
+      return Promise.reject(new Error('unexpected'));
+    });
+    mockGetForegroundPermissionsAsync.mockResolvedValue({ status: 'granted' });
+    mockGetCurrentPositionAsync.mockResolvedValue({ coords: { latitude: 50.45, longitude: -104.6 } });
+    mockReverseGeocodeAsync.mockResolvedValue([{ city: 'Regina', subregion: 'Regina' }]);
+    const r = await renderScreen();
+    expect(mockGetCurrentPositionAsync).toHaveBeenCalled();
+    // The area chip renders selected (its onPress toggles it off); the
+    // Create Profile button no longer requires picking one manually — fill
+    // the rest of the form and confirm submit succeeds without pressing a chip.
+    const inputs = r.root.findAllByType(TextInput);
+    act(() => { inputs.find((i) => i.props.placeholder === 'John')!.props.onChangeText('Jamie'); });
+    act(() => { inputs.find((i) => i.props.placeholder === 'Doe')!.props.onChangeText('Smith'); });
+    act(() => { inputs.find((i) => i.props.placeholder === 'john.doe@example.com')!.props.onChangeText('jamie@example.com'); });
+    act(() => { findButtonByText(r, 'Male').props.onPress(); });
+    expect(findButtonByText(r, 'Create Profile').props.disabled).toBe(false);
+  });
+
+  it('requests permission when not already granted, and skips auto-select when the driver denies it', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/auth/me') return Promise.reject(new Error('down'));
+      if (url === '/service-areas') return Promise.resolve({ data: SERVICE_AREAS });
+      return Promise.reject(new Error('unexpected'));
+    });
+    mockGetForegroundPermissionsAsync.mockResolvedValue({ status: 'undetermined' });
+    mockRequestForegroundPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    await renderScreen();
+    expect(mockRequestForegroundPermissionsAsync).toHaveBeenCalled();
+    expect(mockGetCurrentPositionAsync).not.toHaveBeenCalled();
+  });
+
+  it('retries a transient referral failure and succeeds on a later attempt', async () => {
+    let calls = 0;
+    mockApiPost.mockImplementation(() => {
+      calls += 1;
+      if (calls < 2) return Promise.reject(new Error('network blip')); // no .response -> not a 4xx, so it retries
+      return Promise.resolve({ data: {} });
+    });
+    const r = await renderScreen();
+    await fillValidFormExceptServiceArea(r);
+    act(() => { findButtonByText(r, 'Saskatoon, SK').props.onPress(); });
+    const referralInput = r.root.findByProps({ placeholder: 'e.g. DRV-7K9M2P' });
+    act(() => { referralInput.props.onChangeText('DRVOK'); });
+    const submitBtn = findButtonByText(r, 'Create Profile');
+    await act(async () => {
+      await submitBtn.props.onPress();
+      // Real timers are in effect (no jest.useFakeTimers in this suite) —
+      // the retry backs off via a real setTimeout(400ms), so wait it out.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await flush();
+    });
+    expect(mockApiPost).toHaveBeenCalledTimes(2);
+    expect(mockShowToast).toHaveBeenCalledWith('success', 'Referral applied', 'Your referral code was added.');
+  });
+
+  it('fails open to /driver when the post-submit consent check itself rejects', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/auth/me') return Promise.reject(new Error('down'));
+      if (url === '/service-areas') return Promise.resolve({ data: SERVICE_AREAS });
+      if (url === '/consent/status') return Promise.reject(new Error('consent service down'));
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    await fillValidFormExceptServiceArea(r);
+    act(() => { findButtonByText(r, 'Saskatoon, SK').props.onPress(); });
+    const submitBtn = findButtonByText(r, 'Create Profile');
+    await act(async () => {
+      await submitBtn.props.onPress();
+      await flush();
+    });
+    expect(mockReplace).toHaveBeenCalledWith('/driver');
   });
 
   it('routes the hardware back button through the same sign-out confirmation', async () => {

@@ -8392,12 +8392,38 @@ record of what was assumed vs. what was actually true</summary>
     coverage-instrumentation combination but passes standalone and in the
     full uninstrumented suite; not a regression from this change, not
     investigated further as out of scope for a coverage-content pass.)
+  - **driver-app `app/driver/notifications.tsx`: 56.8% → 90.9% lines.**
+    Already had `screens/notifications.test.tsx` (pins the Android
+    `FlatList` `removeClippedSubviews`/`getItemLayout` regression and the
+    failed-fetch-vs-empty-inbox empty-state distinction — a mocked-`data`
+    fixture-driven read, no interaction coverage at all). Added
+    `app/driverNotificationsScreen.test.tsx` (18 tests) covering:
+    `handleNotificationPress`'s full `type`-driven navigation switch
+    (`document_expiry`→`/driver/documents`, `payout_processed`→
+    `/driver/activity`, `ride_offer`→`/driver/`, `quest_earned`→
+    `/driver/quests`, `lost_and_found`(+message) with/without a
+    `case_id`, and an unmapped `chat_message` type that marks read but
+    navigates nowhere) via `it.each`; that every row press marks the item
+    read first; a mark-read failure surfacing an `Alert`; "Mark all
+    read"'s visibility gate (`unreadCount > 0`), its mutation call, and
+    its own failure `Alert`; the unread-count line's singular-vs-plural
+    copy; the back button; pull-to-refresh and the error-state Retry
+    button both calling `refetch`; the `isPending` spinner state; and an
+    unmapped notification `type` falling back to the `system` icon
+    without crashing. Reused the existing file's un-mocked-real-`FlatList`
+    convention (no `FlatList` mock needed here — this screen's own list is
+    small and synchronous in tests, unlike the earlier `VirtualizedList`
+    `setTimeout` flakiness footgun). One iteration fix: the mock hook
+    factory initially hardcoded `isPending`/`isError` to `false` — had to
+    make them mutable module-level `let`s alongside `mockNotifData` so
+    the loading/error-state tests could actually drive those branches.
+    18 tests; full driver-app suite still green (111 suites / 1118
+    tests), `yarn tsc --noEmit` clean.
   - **Next in the ranked list (driver-app only now):**
-    `driver/notifications.tsx` (56.8%), `login.tsx` (62.9%). This is an
-    open-ended coverage-improvement effort, not a finish-line-shaped one
-    like sub-item 4 — pick up wherever a future session left off by
-    re-running the per-app `--collectCoverageFrom` coverage command above
-    and ranking by line %.
+    `login.tsx` (62.9%). This is an open-ended coverage-improvement
+    effort, not a finish-line-shaped one like sub-item 4 — pick up
+    wherever a future session left off by re-running the per-app
+    `--collectCoverageFrom` coverage command above and ranking by line %.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

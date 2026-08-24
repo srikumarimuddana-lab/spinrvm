@@ -8264,14 +8264,47 @@ record of what was assumed vs. what was actually true</summary>
     mount-time GPS-fetch effect's `if (!userLocation)` guard short-circuits
     before ever calling it. 16 tests; full rider-app suite still green
     (116 suites / 1097 tests), `yarn tsc --noEmit` clean.
-  - **Next in the ranked list:** rider-app's `ride-status.tsx` (39.6%),
-    `report-safety.tsx` (40.0%), `privacy-settings.tsx` (56.1%),
-    `(tabs)/account.tsx` (64.4%); driver-app's `driver/settings.tsx`
-    (49.6%), `driver/notifications.tsx` (56.8%), `login.tsx` (62.9%).
-    This is an open-ended coverage-improvement effort, not a
-    finish-line-shaped one like sub-item 4 — pick up wherever a future
-    session left off by re-running the per-app `--collectCoverageFrom`
-    coverage command above and ranking by line %.
+  - **rider-app `app/ride-status.tsx`: 39.6% → 84.5% lines.** Already had
+    `rideStatusCloseButton.test.tsx` (pins only the header close button's
+    `accessibilityLabel`) and `rideStatusContract.test.ts` (a type-only
+    contract check, no rendering). Added `rideStatusScreen.test.tsx` (16
+    tests) covering: the loading state; each ride-status body (`searching`
+    with its timer and "taking longer" copy/Cancel-search button after
+    120s; `driver_assigned` with the offer-acceptance countdown;
+    `driver_accepted` with the "on the way" copy and no countdown;
+    `driver_arrived` with the OTP digit boxes); the driver-photo error
+    fallback; `handleBackPress`'s full status-branch (no ride → plain
+    `router.back()`; `searching` → "Cancel search?" whose Cancel button
+    calls `performCancel()` directly, no reason sheet; `driver_assigned`/
+    `driver_accepted` → free-vs-paid cancel copy gated on the free-cancel
+    window, routing through the reason sheet; `driver_arrived` → always
+    the paid-fee copy); `performCancel`'s success (clear + replace to
+    `/(tabs)`) vs. failure (toast) paths; the note-for-driver chip's
+    visibility gate (hidden once the trip passes `driver_arrived`),
+    pre-fill, save-success-closes vs. save-failure-toasts-and-stays-open;
+    and the hardware-back-button wiring. Used the same real-`rideStore`-
+    via-`setState()` convention as `searchDestinationScreen.test.tsx`
+    (overriding the store's own action functions directly, e.g.
+    `cancelRide: mockCancelRide`, rather than a whole-module mock — this
+    screen's real store import chain pulls in
+    `@react-native-async-storage/async-storage`, so that needed its own
+    mock too, on top of the theme/router/toast mocks). New footgun:
+    `allText()`'s `JSON.stringify(children)` throws
+    "Converting circular structure to JSON" on a `<Text>` whose children
+    mix a JSX element with a string (this screen's `arrivedText` renders
+    an inline `<Ionicons/>` followed by literal text) — wrap each
+    `JSON.stringify` call in its own try/catch (as several earlier
+    screens' `allText()` helpers already do) rather than assuming every
+    `<Text>`'s children is JSON-serializable. 16 tests; full rider-app
+    suite still green (117 suites / 1113 tests), `yarn tsc --noEmit`
+    clean.
+  - **Next in the ranked list:** rider-app's `report-safety.tsx` (40.0%),
+    `privacy-settings.tsx` (56.1%), `(tabs)/account.tsx` (64.4%);
+    driver-app's `driver/settings.tsx` (49.6%), `driver/notifications.tsx`
+    (56.8%), `login.tsx` (62.9%). This is an open-ended coverage-
+    improvement effort, not a finish-line-shaped one like sub-item 4 —
+    pick up wherever a future session left off by re-running the per-app
+    `--collectCoverageFrom` coverage command above and ranking by line %.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

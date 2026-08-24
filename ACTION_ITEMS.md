@@ -15560,6 +15560,77 @@ how much they de-risk a public launch._
   `claude/c40-fix-pr-checks-duplicate-append` to watch the next real PR
   edit on an affected PR before closing this out for good.
 
+### C42. Follow-ups from the DB deadline-rejection alert storm (2026-08-24)
+
+- [ ] **Status:** open — filed while fixing the recurring "*Spinr DB calls
+  rejected*" operator emails. Root cause and the shipped fix are written up in
+  `docs/change-log/2026-08-24-db-deadline-rejection-alert-storm.md`; these are
+  the three pieces deliberately left out of that change to keep it scoped.
+
+- [x] **C42-A. Raw `asyncio.create_task` call sites in request handlers
+  inherited the request deadline — DONE 2026-08-24.** `utils/background.spawn()`
+  clears the deadline ContextVar so backgrounded work is not bounded by how long
+  the rider waited for an HTTP response, but only `spawn()` callers got that. Raw
+  `asyncio.create_task(...)` in a request handler still inherited the budget, so
+  the backgrounded DB write was rejected with `deadline_exhausted` once the
+  response was sent — silently. Migrating them to `spawn()` also gives them the
+  strong-reference guarantee they lacked (a task nobody references can be GC'd
+  mid-flight — the original reason `spawn()` exists).
+
+  All 16 request-handler sites migrated across four commits:
+  `routes/payments.py` + `routes/wallet.py` (audit rows) → `0f564c2`;
+  `routes/auth.py` (9 sites: OTP lockout/verify, DSAR reactivation, new-device
+  notice, firebase login, logout) → `01ae337`;
+  `routes/safety.py` + `routes/disputes.py` + `routes/lost_and_found.py` (Zoho
+  tickets) → `9aa0f89`;
+  `routes/admin/support.py` (3) + `routes/admin/rides.py` +
+  `routes/admin/stripe_import.py` (2) + `routes/webhooks.py` → see the
+  admin/webhook commit. `routes/admin/rides.py`'s `_offer_timeout_handler` was
+  the worst of them — it deliberately sleeps `timeout_seconds + 15` (~35 s),
+  guaranteeing its post-sleep DB work fell outside any 15 s client budget.
+
+  **Deliberately NOT migrated**, because neither can inherit a deadline:
+  `routes/websocket.py` (3 sites) — Starlette's `BaseHTTPMiddleware` returns
+  early for any non-`http` scope, so `DeadlineMiddleware` never runs for a
+  WebSocket connection and no deadline is ever set; the heartbeat task at :676
+  also needs its handle kept for cancellation. `utils/scheduled_rides.py:587`
+  and `utils/ws_pubsub.py:153` — background loops with no request context.
+
+  Verify with:
+  `grep -rn "asyncio.create_task" backend/routes/ | grep -v websocket.py`
+  (should return nothing).
+
+- [ ] **C42-B. `shared/**/__tests__` is not wired into any CI job.** The tests
+  under `shared/api/__tests__/` and `shared/utils/__tests__/` are unreachable by
+  every workflow — rider-app's and driver-app's Jest `roots` default to their
+  own `rootDir`, so `shared/` is only reached through imports, never collected
+  as test files. They run today only via an explicit
+  `npx jest --roots ../shared` from `rider-app/`. Consequence: the new
+  `client.deadlineHeader.test.ts` (and the pre-existing `client.authHeader`,
+  `client.refresh`, `client.sos` suites) will not gate a regression. Note when
+  fixing: running them that way currently surfaces 2 pre-existing failures in
+  `shared/utils/__tests__/pii.test.ts` (a `redactCoords` rounding assertion),
+  which will need triage before the job can be made blocking.
+
+- [ ] **C42-C. Drop the legacy `X-Deadline-Ms` path once no deployed app build
+  sends it.** The absolute epoch header is the skew-vulnerable spelling; it is
+  retained only so app builds already in the field keep working, and is defanged
+  by the clamp in `core/middleware.py::resolve_deadline_budget_ms`. Once
+  `spinr_deadline_header_clamped_total{source="deadline"}` goes to zero in
+  production, delete the legacy branch, the `source` label, and the
+  `X-Deadline-Ms` half of `shared/api/client.ts::deadlineHeader`.
+
+- [ ] **C42-D. Confirm the dominant rejection reason in production.** The
+  clock-skew mechanism is proven from the code path but was never read off a
+  live `/metrics` scrape. If `deadline_timeout` (not `deadline_exhausted`)
+  dominates, slow queries are a bigger contributor than skew and
+  `CAPACITY_DB_REJECTED_PER_MIN_THRESHOLD` (default 30/min) should be re-tuned.
+  ```bash
+  flyctl ssh console -a spinr-backend-yyz -C \
+    "curl -s -H 'Authorization: Bearer $METRICS_AUTH_TOKEN' localhost:8000/metrics \
+     | grep -E 'spinr_db_calls_rejected|spinr_deadline_header_clamped'"
+  ```
+
 ### C41. `rider-app-test`/`driver-app-test` intermittently time out on unrelated files — two more leaked-async-update sources found and fixed (same class as C31/C37)
 
 - [x] **Status:** FIXED (2026-08-24) — found after this session repeatedly

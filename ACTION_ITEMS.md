@@ -8220,6 +8220,58 @@ record of what was assumed vs. what was actually true</summary>
   1069 tests), `yarn tsc --noEmit` clean. **76 of 76 screens done — the
   B37 sub-item 4 app/-screens zero-coverage list is now fully closed
   out**, across both rider-app and driver-app.
+- **Sub-item 5 (new, opened 2026-08-24): branch/edge-case coverage on
+  partially-tested `app/` screens.** Closing every zero-coverage screen
+  (sub-item 4) did not mean every screen hit high line coverage — a
+  screen with even one narrow, single-behavior test (e.g. a specific
+  incident regression) already reads as "has tests," but large chunks of
+  branches/handlers inside it can still be unexercised. A per-app
+  `--collectCoverageFrom='app/**/*.{ts,tsx}'` coverage run against `main`
+  post-sub-item-4 found the aggregate `app/` line coverage at 74.4%
+  (rider-app) / 78.2% (driver-app) — respectable, but with a long tail of
+  individual screens well below that. Ranked the worst offenders by line
+  % (excluding `_layout.tsx` route-tree files, which were never in scope)
+  and started working down the list, same per-screen workflow as
+  sub-item 4 (write/extend tests → run standalone → fix → full suite →
+  `tsc --noEmit` → commit → push), continuing on a fresh branch
+  (`claude/spinr-coverage-lowcov-screens`, since sub-item 4's branches
+  were both already merged).
+  - **rider-app `app/search-destination.tsx`: 38.7% → 70.5% lines.**
+    Already had `searchDestinationPinIntegrity.test.tsx` (pins one
+    specific incident — stale-pin-on-edited-text, place_id re-resolve on
+    a stored recent). Added `searchDestinationScreen.test.tsx` (16 tests)
+    covering the rest of the screen: prediction selection binding
+    address+coords from the DETAILS response and rotating the session
+    token; adding stops up to the 3-stop cap (hidden past it) and
+    removing one; the quick-access rows ("Use current location" — pickup
+    field only, gated on `userLocation` — "Set location on map", Home/Work
+    quick chips toasting when unset vs. selecting when set, Favourites
+    listing every other saved address); the Search Ride button's
+    disabled-until-both-points gate and its clear-estimates +
+    navigate-to-`/confirm-pickup` happy path; the field-clear (X) buttons;
+    and the map-picker-return effect for both the pickup and dropoff
+    field cases. New footgun: `fetchSavedAddresses()` fires on every
+    mount and hits `/addresses` — a test that sets `savedAddresses`
+    directly via `useRideStore.setState()` gets it silently overwritten
+    moments later by that mount-time fetch's mocked response (defaulted
+    to `[]`), so any saved-address-driven assertion needs the *mock's
+    response* set (`mockSavedAddressesResponse`), not just the store's
+    initial state. Also needed the real `expo-location` module's actual
+    return shape (`{status}`, not `{granted}`) plus a
+    `requestForegroundPermissionsAsync` mock — the existing pin-integrity
+    file's `{granted: false}` stub never actually exercised this path
+    because its `beforeEach` always seeds a truthy `userLocation`, so the
+    mount-time GPS-fetch effect's `if (!userLocation)` guard short-circuits
+    before ever calling it. 16 tests; full rider-app suite still green
+    (116 suites / 1097 tests), `yarn tsc --noEmit` clean.
+  - **Next in the ranked list:** rider-app's `ride-status.tsx` (39.6%),
+    `report-safety.tsx` (40.0%), `privacy-settings.tsx` (56.1%),
+    `(tabs)/account.tsx` (64.4%); driver-app's `driver/settings.tsx`
+    (49.6%), `driver/notifications.tsx` (56.8%), `login.tsx` (62.9%).
+    This is an open-ended coverage-improvement effort, not a
+    finish-line-shaped one like sub-item 4 — pick up wherever a future
+    session left off by re-running the per-app `--collectCoverageFrom`
+    coverage command above and ranking by line %.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

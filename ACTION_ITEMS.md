@@ -8354,12 +8354,50 @@ record of what was assumed vs. what was actually true</summary>
     (reused `accountEmailVerification.test.tsx`'s real-zustand-authStore
     convention verbatim). 27 tests; full rider-app suite still green
     (120 suites / 1156 tests), `yarn tsc --noEmit` clean.
+  - **driver-app `app/driver/settings.tsx`: 49.6% → 94.0% lines.** Already
+    had `screens/settingsWavToggle.test.tsx` (pins only the WAV toggle's
+    `accessibilityRole`/`accessibilityState`, one narrow axis of this
+    784-line settings screen). Added `app/driverSettingsScreen.test.tsx`
+    (31 tests, using `@testing-library/react-native`'s `render`/
+    `fireEvent`/`waitFor` rather than raw `react-test-renderer`, matching
+    the existing WAV-toggle file's convention) covering: the four
+    notification toggles' independent `mutate` calls and shared
+    revert-on-error path (`it.each`); the two marketing (CASL) toggles'
+    hydrate-from-GET and optimistic-save-with-revert; sound/vibration
+    toggles calling the alertPrefsStore setters directly with **no**
+    server round-trip (asserted `mockApiPut` not called); dark-mode toggle
+    calling `setTheme('dark'|'light')` based on current `colorScheme`; nav
+    app radio selection; the WAV mutation's error-revert path (the
+    existing file only ever renders `is_wav` from props, never fires the
+    mutation); the language modal's open/select/close; `handleExportData`
+    success/failure toasts; the full 2-step delete-account flow (Alert
+    confirm → step-2 modal → wrong-text toast-no-API-call → `DELETE`-text
+    success → logout → `/login` → failure toast instead of navigating →
+    cancel-closes-without-deleting); and every Account/Emergency section
+    row's navigation target via `it.each`, plus the emergency-call row's
+    Alert-confirm. New footgun: the marketing-preferences `GET` fires
+    unconditionally on mount and resolves after `render()` returns
+    (`@testing-library/react-native`'s `render` doesn't await pending
+    microtasks the way the manual `act(() => TestRenderer.create(...))`
+    helper used elsewhere does), so every test needed an explicit
+    `await flush()` (a `Promise.resolve()` pair inside `act`) right after
+    `render()` or React logged "not wrapped in act(...)" warnings on the
+    mount effect's `setMarketingEmails`/`setMarketingSms` calls — fixed by
+    adding the helper and awaiting it after every render call, converting
+    a few originally-synchronous `it()` bodies to `async`. 31 tests; full
+    driver-app suite still green (110 suites / 1100 tests), `yarn tsc
+    --noEmit` clean. (One unrelated pre-existing flake surfaced when
+    scoping `--collectCoverageFrom` to only this file across the *whole*
+    suite — `driverProfileScreen.test.tsx` failed under that specific
+    coverage-instrumentation combination but passes standalone and in the
+    full uninstrumented suite; not a regression from this change, not
+    investigated further as out of scope for a coverage-content pass.)
   - **Next in the ranked list (driver-app only now):**
-    `driver/settings.tsx` (49.6%), `driver/notifications.tsx` (56.8%),
-    `login.tsx` (62.9%). This is an open-ended coverage-improvement
-    effort, not a finish-line-shaped one like sub-item 4 —
-    pick up wherever a future session left off by re-running the per-app
-    `--collectCoverageFrom` coverage command above and ranking by line %.
+    `driver/notifications.tsx` (56.8%), `login.tsx` (62.9%). This is an
+    open-ended coverage-improvement effort, not a finish-line-shaped one
+    like sub-item 4 — pick up wherever a future session left off by
+    re-running the per-app `--collectCoverageFrom` coverage command above
+    and ranking by line %.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

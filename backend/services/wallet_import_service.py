@@ -19,7 +19,20 @@ equivalent fields) -- they have NOT been confirmed against a real
 ``validate_required_columns`` fails loudly (as plan errors, refusing commit)
 rather than silently defaulting if any expected column is absent, so a
 mismatch surfaces immediately on the first dry-run instead of corrupting a
-balance. Confirm the real header row before the first real run.
+balance. **The admin route (``routes/admin/wallet_import.py``) is wired up,
+but the very first real ``/validate`` call against the real CSV is still the
+first time this assumption gets tested** -- read that response's ``errors``
+carefully before ever calling ``/commit``.
+
+Admin flow, mirroring ``routes/admin/booking_import.py``:
+
+- ``POST /api/admin/wallets/import/validate`` -- parse + validate the three
+  legacy CSVs (wallets, customers, drivers) and return a dry-run report. No
+  writes.
+- ``POST /api/admin/wallets/import/commit`` -- re-parse + re-validate the
+  same CSVs and, only if there are no errors, apply every planned delta via
+  ``commit_plan()``. super_admin only (writes real money, same posture as
+  the booking importer).
 
 Money safety, mirroring corporate_wallet_apply_delta / wallet_apply_delta's
 own design (migrations 196/249): every credit/debit goes through the
@@ -47,6 +60,8 @@ raw amounts beyond what's needed to reconcile the batch total.
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -114,6 +129,23 @@ class WalletImportPlan:
     warnings: list[ImportReportItem] = field(default_factory=list)
     errors: list[ImportReportItem] = field(default_factory=list)
     stats: dict[str, Any] = field(default_factory=dict)
+
+
+def _rows_from_reader(reader: csv.DictReader) -> list[dict[str, str]]:
+    """Shared row normalization for both CSV entry points -- copied verbatim
+    from booking_import_service.py's own helper (each importer module owns
+    its copy rather than cross-importing, matching this repo's existing
+    convention)."""
+    if not reader.fieldnames:
+        raise ValueError("CSV has no header row")
+    return [{k.strip(): (v or "").strip() for k, v in row.items() if k is not None} for row in reader]
+
+
+def read_csv_text(text: str) -> list[dict[str, str]]:
+    """Parse legacy CSV *content* into name-keyed rows -- the admin upload
+    endpoint receives bytes, not a filesystem path. A leading BOM is
+    stripped here too (Windows-exported CSVs routinely carry one)."""
+    return _rows_from_reader(csv.DictReader(io.StringIO(text.lstrip("﻿"), newline="")))
 
 
 def normalize_phone(phone: str) -> str:

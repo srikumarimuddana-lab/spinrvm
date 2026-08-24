@@ -119,6 +119,7 @@ from .users import router as users_router
 from .vehicle_fleet import router as vehicle_fleet_router
 from .venues import router as venues_router
 from .wallet import router as wallet_router
+from .wallet_import import router as wallet_import_router
 
 # Router-level dependency: every request that lands on an admin_router
 # sub-route must carry a valid JWT whose payload resolves to a user
@@ -204,6 +205,10 @@ admin_router.include_router(export_approvals_router, dependencies=[Depends(requi
 # get_driver_balance reads to bound a Stripe payout Transfer. The handlers
 # re-check the role themselves so the guard survives a future re-mount.
 admin_router.include_router(booking_import_router, dependencies=[Depends(require_super_admin)])
+# Legacy wallet-balance import (previous-app prepaid rider/driver wallet
+# credit -> wallet_apply_delta). Same require_super_admin boundary as the
+# booking importer, for the same reason: it applies real money deltas.
+admin_router.include_router(wallet_import_router, dependencies=[Depends(require_super_admin)])
 # Bulk driver tax-ID import (SIN + GST BN migration for drivers who predate
 # in-app collection). Writes Vault-encrypted SINs, so it takes the reveal-sin
 # posture: require_super_admin at the mount AND re-checked in each handler.

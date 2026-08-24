@@ -431,6 +431,15 @@ data_transfer_import_commit_limit = default_limiter.limit("10/hour")
 booking_import_validate_limit = default_limiter.limit("30/hour")
 booking_import_commit_limit = default_limiter.limit("10/hour")
 
+# Admin legacy wallet-balance import — same shape and posture as
+# booking_import above: /validate is a read-only dry-run over three CSVs
+# (wallets, customers, drivers); /commit applies real money deltas via the
+# row-locked wallet_apply_delta RPC. commit gets the tighter limit. A
+# one-time operation over ~13 rows (per the 2026-08-19 Mongo-export audit),
+# so both limits are generous headroom, not a tuned production ceiling.
+wallet_import_validate_limit = default_limiter.limit("30/hour")
+wallet_import_commit_limit = default_limiter.limit("10/hour")
+
 # Admin driver-import (CSV) — /validate is a read-only dry-run (parse +
 # report, no writes); /commit creates user + driver rows. Same shape as
 # data_transfer_import/booking_import above: commit is the write path and

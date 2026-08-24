@@ -4794,9 +4794,13 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   Directions calls (verified, not a real gap).
 
 ### B6. Measure Directions latency and re-tune the fare-estimate wait
-- [ ] **Status:** in progress (2026-07-28) — the measurement half is done;
-  the re-tuning half is genuinely blocked on live traffic this dev session
-  cannot produce, not on more code work.
+- [x] **Status:** CLOSED (2026-08-24) — the measurement half shipped
+  2026-07-28; the re-tuning half was never completed via this item's own
+  p99-driven process, but the underlying question (are `DIRECTIONS_TIMEOUT_S`
+  / `_PRICING_ROUTE_WAIT_S` right?) was independently decided and closed by
+  a separate incident-driven fix + a 2026-08-21 permanent-exception decision
+  — see below. Nothing left open here; the metric stays live for regression
+  watching only.
   - **Done:** `estimates.py`'s `_route_fetch()` now times every real
     Directions call and records it to `spinr_fare_directions_duration_ms`
     (new histogram, `utils/metrics.py`'s existing `observe`/`_metric_observe`
@@ -4814,28 +4818,46 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     traffic nor Maps API access to generate a genuine distribution; a
     synthetic/mocked one would defeat the entire point of B6 (replacing
     judgement with data). `DIRECTIONS_TIMEOUT_S` / `_PRICING_ROUTE_WAIT_S`
-    are therefore **unchanged** — still 1.5 s / 2.0 s, still by judgement,
-    now with the instrumentation in place to replace that judgement once
-    `spinr_fare_directions_duration_ms` has accumulated real traffic.
-    `test_pricing_wait_stays_within_the_estimate_latency_budget` needed no
-    change since the ceiling itself didn't move.
-  - **Next step for whoever picks this back up**: let the metric collect for
-    a representative window in production, pull the p99 from
-    `/metrics` (or wherever it's scraped to), then decide per the original
-    Action text — tighten both constants if the p99 sits well under 1.5 s,
-    or move to pre-warming/caching common origin-destination pairs if
-    Directions is routinely slower than the SLA allows.
+    were **unchanged** at the time of this note — still 1.5 s / 2.0 s, still
+    by judgement, now with the instrumentation in place to replace that
+    judgement once `spinr_fare_directions_duration_ms` has accumulated real
+    traffic. `test_pricing_wait_stays_within_the_estimate_latency_budget`
+    needed no change since the ceiling itself didn't move.
+  - **Superseded (2026-07-29, later session, not via this item's own
+    process)**: the constants moved anyway — 1.5 s → 3.0 s
+    (`DIRECTIONS_TIMEOUT_S`), so `_PRICING_ROUTE_WAIT_S` is now 3.5 s —
+    triggered by a real pricing-inconsistency incident (a trip re-priced
+    between quote and confirm, 12.12 km → 16.46 km, $30.92 → $39.44), not by
+    `spinr_fare_directions_duration_ms` p99 data. **Decided 2026-08-21**
+    (Option A, `docs/audit/2026-08-19-decision-writeups.md` §8): accepted as
+    a **permanent SLA exception**, documented in `CLAUDE.md`'s Performance
+    SLAs section — not a temporary judgement call awaiting real data
+    anymore. Re-verified live 2026-08-24: `backend/routes/rides/_shared.py`'s
+    `DIRECTIONS_TIMEOUT_S = 3.0`, matching. The metric this item shipped is
+    still live and recording (`estimates.py`'s `_route_fetch()` `finally`
+    block, confirmed unchanged) but is no longer gating a future re-tuning
+    decision — that decision is closed. `test_ride_estimate_branches.py`
+    re-run clean (14/14).
+  - **Next step for whoever picks this back up**: none — B6's own
+    open question (re-tune the wait once real p99 data exists) is now moot;
+    the wait was widened for a different, since-resolved reason and the
+    result was explicitly accepted as permanent. The metric can still be
+    watched for regressions, but this item itself has nothing left to
+    decide.
 - **Files:** `backend/routes/rides/estimates.py` (instrumentation),
   `backend/tests/test_ride_estimate_branches.py` (2 new tests: metric
   recorded on success, metric recorded even when the Directions call fails).
   `backend/routes/rides/_shared.py` / `backend/utils/metrics.py` needed no
   changes — the histogram plumbing already existed and `_shared.py`'s
-  `DIRECTIONS_TIMEOUT_S` wasn't touched (no data to justify moving it yet).
-- **Acceptance:** partially met — the latency distribution is now being
-  recorded (the prerequisite the original acceptance text assumed already
-  existed); the timeout itself is not yet re-justified by real data, and
-  can't be inside a single dev session. Re-open once
-  `spinr_fare_directions_duration_ms` has real production data to act on.
+  `DIRECTIONS_TIMEOUT_S` wasn't touched at the time (no data to justify
+  moving it yet — see the 2026-07-29/2026-08-21 update above for what
+  happened next).
+- **Acceptance:** met, by a different path than originally written — the
+  latency distribution is recorded (`spinr_fare_directions_duration_ms`,
+  still live); the timeout question this item asked ("is 1.5 s / 2.0 s
+  right?") is closed, not by that metric's p99 but by CLAUDE.md's
+  2026-08-21 permanent-exception decision following the 2026-07-29 incident.
+  Re-open only if that documented exception is ever revisited.
 
 ### B7. Give service areas a real locality so the geocode can be hard-filtered
 - [x] **Status:** shipped — PR #2670 (merged 2026-07-28)

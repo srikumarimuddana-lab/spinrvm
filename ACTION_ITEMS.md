@@ -9513,6 +9513,41 @@ record of what was assumed vs. what was actually true</summary>
     change too (not introduced by the fake-timers test here, which
     restores real timers in a `finally` block), not chased further per
     the "don't chase CI checks unrelated to your diff" convention.
+  - **rider-app `app/wallet.tsx`: 89.02% → 100% stmts, 90.9% → 100% lines**
+    (money-critical: wallet balance display, Stripe top-up). Already had
+    `walletScreen.test.tsx` (10 tests: mount fetch, balance-error retry,
+    the no-Stripe-key block, the full Stripe topUp→initPaymentSheet→
+    presentPaymentSheet flow incl. init-error/cancelled/non-cancel-error
+    branches, ride-vs-non-ride transaction tappability, empty state, back
+    nav) — extended in place (+5 tests). Closed: `onCustomAmountChange`
+    clearing the selected preset when the rider types a custom amount
+    instead (previously only the preset-select path was exercised);
+    `handleTopUp`'s own in-function `isWalletTopUpAmountValid` re-check
+    (line 90-92) by typing a $600 custom amount — the Add-Funds button is
+    `disabled` in the UI for an out-of-range amount, but its `onPress` was
+    invoked directly (per this session's established mocked-button
+    pattern) to pin that the handler still guards the amount itself, not
+    just the button's `disabled` prop, and toasts "Invalid Amount" without
+    ever calling `topUp()`; the `catch` block (line 131) via a rejected
+    `topUp()` promise, asserting the generic "Could not complete your
+    top-up" fallback toast and that `initPaymentSheet` is never reached;
+    the Cards action button (line 234) navigating to `/manage-cards`; and
+    the top-up panel's Cancel button (line 289) closing the panel and
+    resetting `selectedPreset`/`customAmount` back to empty (verified by
+    re-opening and seeing "Select an Amount" again). 100% stmts/lines;
+    branch coverage is 84.72% and left there deliberately — the remaining
+    uncovered branches are `renderTransaction`'s `TXN_ICONS`/`TXN_COLORS`
+    fallback defaults (`|| 'swap-horizontal'`, `|| colors.textDim`) and
+    the `hasRideDetails` pickup/dropoff/bookingId metadata block, none of
+    which this pass's existing fixtures exercise (both test transactions
+    use `metadata: null`) — closing those would mean adding a third
+    transaction fixture whose only purpose is a metadata-shape check,
+    diminishing-returns for a coverage-only pass; documented here instead
+    of chased. No bug found in the production code itself — the $600
+    invalid-amount and `topUp()`-rejection branches both behave as the
+    money-critical guards should (block before any Stripe call, surface a
+    toast, never silently proceed). 15 tests; full rider-app suite still
+    green (123 suites / 1413 tests), `yarn tsc --noEmit` clean.
   - **rider-app `app/(tabs)/activity.tsx`: 87.15% → 98.32% stmts, 88.41%
     → 99.39% lines.** Already had `activityScreen.test.tsx` (11 tests:
     focus-fetch, RECENT-section grouping, the Business filter, both

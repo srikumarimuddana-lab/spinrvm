@@ -1196,6 +1196,21 @@ export default function SettingsPage() {
                                 </p>
                             </div>
                             <div className="space-y-2 sm:col-span-2">
+                                <Label>App download / open link</Label>
+                                <Input
+                                    value={settings.company_app_download_url || ""}
+                                    onChange={(e) => update("company_app_download_url", e.target.value)}
+                                    placeholder="Leave blank to omit the button in the welcome email"
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    Powers the &quot;Book your first ride&quot; button in the rider
+                                    welcome email. Use a smart/universal link that opens the app if
+                                    installed and falls back to the App Store / Play Store otherwise.
+                                    Leave blank and the email ships without the button rather than a
+                                    broken or placeholder link.
+                                </p>
+                            </div>
+                            <div className="space-y-2 sm:col-span-2">
                                 <Label>Email logo URL</Label>
                                 <Input
                                     value={settings.company_logo_url || ""}

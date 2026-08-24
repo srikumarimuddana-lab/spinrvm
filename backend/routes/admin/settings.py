@@ -222,6 +222,11 @@ class SettingsUpdateRequest(BaseModel):
     # falls back to the bundled asset for anything that is not an absolute
     # http(s) URL. Does NOT affect report PDF/Excel/Word headers.
     company_logo_url: Optional[str] = None
+    # "Open/install the app" CTA link for the rider welcome email. Empty =
+    # the email ships without a CTA button. Validated at render time by
+    # utils/company_details._safe_app_download_url, same rule as the logo URL
+    # above. See schemas.AppSettings.company_app_download_url.
+    company_app_download_url: Optional[str] = None
     # Renders the ride receipt and Spinr Pass invoice with the shared branded
     # shell and the company details above. Presentation only — never the fare
     # rows, GST/PST line items or totals. See migration 288.

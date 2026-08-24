@@ -5827,11 +5827,15 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     Jest/RNTL tests for every new hook and component (hold-gesture timing,
     contacts fetch, retry/backoff, flag fail-closed, shield/overlay
     render+interaction, and the invariant that a failed silent alert never
-    shows `Alert.alert`): 50/51 driver-app suites pass (the one failure,
-    `ActivityView.test.tsx`, is a pre-existing, unrelated
-    `expo-router/react-navigation` resolution gap, confirmed via
-    `git stash` to fail identically without any B16 changes present).
-    `tsc --noEmit` clean on every touched file.
+    shows `Alert.alert`): 50/51 driver-app suites passed at the time,
+    the one failure (`ActivityView.test.tsx`) confirmed via `git stash` to
+    be a pre-existing, unrelated `expo-router/react-navigation` resolution
+    gap, not caused by B16. **Resolved since** (re-run 2026-08-24): the
+    full driver-app suite is now 115/115 passing, `ActivityView.test.tsx`
+    included — the gap was apparently fixed as a side effect of B37's
+    later `jest.config.js` work (PRs #4455/#4458/#4460/#4476), not by this
+    item. `tsc --noEmit` clean on every touched file (re-confirmed
+    2026-08-24, still clean).
   - **NOT verified — explicit gap, not silently assumed covered:** no
     manual QA on a real device/simulator (gesture timing, blur/toast
     rendering, and the actual flag-off vs flag-on visual behavior aren't
@@ -6152,8 +6156,11 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   membership test (`test_ride_columns_fetch_payment_status`) mirroring the
   existing `discount_amount` one, which was added for the same reason after
   a prior promo-ride regression. 23 tests in `test_ledger_projection.py`
-  pass (18 pre-existing + 5 new), plus 122 across the payment/loop test
-  surface (`test_replay_safety_payment_loops.py`, `test_atomic_settle.py`,
+  pass (18 pre-existing + 5 new; re-run 2026-08-24, still 23/23), plus
+  (originally 122, now 128 as of 2026-08-24 — these shared files pick up
+  unrelated test additions over time, re-run rather than trust the exact
+  number) across the payment/loop test surface
+  (`test_replay_safety_payment_loops.py`, `test_atomic_settle.py`,
   `test_payment_retry.py`, `test_payment_retry_coverage.py`,
   `test_coverage_payments.py`). See git history for the commit.
 - **What:** `backend/utils/ledger_projection.py::_decompose` (default fare branch)
@@ -6184,13 +6191,24 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   listed below now use `TTL = interval * 0.85` (matching `ledger_projection.py`'s
   existing fix — 0.05 headroom under the `1 - jitter_fraction` floor), with
   the same two regression tests per loop (`test_lock_ttl_expires_before_the_earliest_next_wake`,
-  `test_..._loop_reacquires_its_own_lock_on_the_next_wake`) added to each
-  loop's own `*_coverage.py` test file, adapted for `orphaned_hold_reconciler.py`'s
-  extra unconditional startup jitter sleep. `payment_retry.py`'s misleading
-  comment corrected. 113 tests across the affected loop/reaper test files
-  pass. See git history for the 3 commits (payment_retry.py first per this
-  item's own "look at first" guidance, then the two reapers together, then
-  orphaned_hold_reconciler.py).
+  `test_..._loop_reacquires_its_own_lock_on_the_next_wake`). **Correction
+  (2026-08-24, verification sweep)**: "added to each loop's own
+  `*_coverage.py` test file" is not quite right — `payment_retry.py`'s pair
+  actually lives in `test_payment_retry.py` (not `test_payment_retry_coverage.py`),
+  and `orphaned_hold_reconciler.py`'s pair lives in a separate
+  `test_orphaned_hold_reconciler_loop_coverage.py`, distinct from
+  `test_orphaned_hold_reconciler_coverage.py` (both files exist). The
+  "113 tests ... pass" figure could not be reproduced against the 5
+  canonical `*_coverage.py` files alone (gives 103, missing the two TTL
+  tests that live elsewhere per the correction above); substituting the
+  actual files that hold every loop's TTL tests gives 111; the full
+  affected-file set together (adding `test_orphaned_hold_reconciler.py`
+  and `test_replay_safety_payment_loops.py`) gives 155 — pick whichever
+  grouping matches "113" if reconstructable, otherwise treat 111 as the
+  correct minimal figure and don't trust "113" specifically. `payment_retry.py`'s
+  misleading comment corrected. See git history for the 3 commits
+  (payment_retry.py first per this item's own "look at first" guidance,
+  then the two reapers together, then orphaned_hold_reconciler.py).
 - **What:** the shared loop-shell idiom sets the Redis throttle lock with
   `TTL = interval * 1.5` and then sleeps `interval` (± jitter). The pod that ran
   the last tick therefore wakes while its OWN key is still alive, fails `SET NX`,
@@ -6867,24 +6885,33 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   fare-snapshot builder used by booking/estimates/stops, not an offline
   import script), which raises the stakes relative to B29's legacy-importer
   scope.
-- **Status:** open, no owner assigned, not investigated beyond the grep hit
-  (`backend/routes/rides/_shared.py:424,426,436`) that found it. Needs the
-  same treatment as B28/B29: confirm the values being cast are `Decimal`
-  all the way through `_round()` (this repo's `_round`/`_d`/`_f` helpers
-  suggest yes, but verify rather than assume), then swap `float()` → `str()`
-  at the write boundary, then extend the regression-test pattern to cover
-  this file too. Given this is a live-booking-path file (not an offline
-  import), this needs the full pre-merge release gate treatment (dry run
-  against `mock_supabase_client`, before/after scenario) per CLAUDE.md's
-  "State-machine and money changes need a dry run" rule — do not treat it
-  as a copy-paste of B28/B29's diff without that.
-- **Files:** `backend/routes/rides/_shared.py`.
-- **Acceptance:** `grand_total`/`tax_amount`/`area_fees_total`/
-  `discount_amount` in `_shared.py`'s fare-snapshot builder are serialized
-  via `str(Decimal)`, not `float()`, at the write boundary; a regression
-  test (extending B28/B29's static-scan pattern, or a new one) covers it;
-  a dry-run scenario against `mock_supabase_client` is described in the
-  closing Change Impact Log, not just "tests pass."
+- **Status:** CLOSED (2026-08-20, this entry never updated to reflect
+  it — found stale 2026-08-24 by a `/loop`-style verification sweep run
+  after this session's user asked for B0-B39 to be checked one by one).
+  `_reestimate_fare_for_stops` (`backend/routes/rides/_shared.py:423-436`)
+  now writes `tax_amount` via `str(_round(tax_amount))` (line 424) and
+  `area_fees_total` via `str(_round(fees_total))` (line 426), not
+  `float()`. The scalar `grand_total` (line 423) was already correct via
+  `_money_str()` before this fix. `discount_amount` turned out to never be
+  written by this file at all (only read for display) — the original grep
+  hit over-counted by including a column this file doesn't write. The one
+  remaining `float(_round(grand_total))` (line 436) is inside the separate
+  `fare_breakdown_snapshot` JSONB blob (migration 90), correctly left as
+  `float()` per the B28/B29 jsonb carve-out precedent — it is not the
+  scalar `NUMERIC` column. Regression coverage:
+  `backend/tests/test_shared_rides_numeric_no_float_cast.py` (7 tests:
+  positive checks that `tax_amount`/`area_fees_total` use `str()`, a pin
+  that `grand_total` stays `str()`, a pin that `discount_amount` is never
+  written here, a negative-control pin that the jsonb sub-field's
+  `grand_total` stays `float()`) — re-run 2026-08-24, 7/7 pass. Full
+  Change Impact Log: `docs/change-log/2026-08-20-b30-shared-fare-float-fix.md`.
+- **Files:** `backend/routes/rides/_shared.py`,
+  `backend/tests/test_shared_rides_numeric_no_float_cast.py`.
+- **Acceptance:** met — `tax_amount`/`area_fees_total` in `_shared.py`'s
+  fare-snapshot builder are serialized via `str(Decimal)`, not `float()`,
+  at the write boundary; `grand_total` was already correct;
+  `discount_amount` is never written by this file; the regression test
+  above covers all four, plus the jsonb-carve-out negative control.
 
 ### B31. `routes/promotions.py`'s promo-eligibility ride counts don't exclude legacy-imported completed rides — pre-existing, affects 271+ rows, not net-new to A41's zero-fare-completed fix
 
@@ -6902,22 +6929,36 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   extend, not a new category of bug. Deliberately NOT bundled into the 7-row-disposition PR
   (scope-contract discipline — one logical change per PR) — filed here instead, per
   CLAUDE.md's "escalate, don't silently ship, when in doubt."
-- **Status:** open, not investigated beyond the grep hit and the reasoning above. Needs: (1)
-  confirm how many real (non-test) rider accounts are actually affected today (join
-  `legacy_import_metadata->>source = 'legacy_mongo_booking_import'` completed rides against
-  currently-matched `rider_id`s, count distinct riders with ≥1 such row) to size the real
-  exposure before deciding urgency; (2) decide whether promo eligibility SHOULD exclude
-  legacy rows entirely (a rider's actual first *Spinr* ride, not their first ride ever in the
-  old app, is arguably the more defensible "first_ride_only" semantic) — this is a product
-  decision, not purely technical; (3) if excluded, add the same
-  `legacy_import_metadata = '{}'::jsonb`-equivalent filter (or its `db_supabase`
-  query-builder equivalent, since this is a live-request-path Python filter, not a SQL
-  function) to all three call sites, plus a regression test.
-- **Files:** `backend/routes/promotions.py` (lines 225, 265, 518 as of 2026-08-20).
-- **Acceptance:** either a documented, deliberate decision that legacy-imported completed
-  rides SHOULD count toward promo eligibility (risk-accepted, dated note here), or all three
-  `routes/promotions.py` ride-count call sites exclude them, with a regression test and a
-  Change Impact Log (money-adjacent, rider-facing — same rigor as any other promotions.py fix).
+- **Status:** CLOSED (date of the fix itself not recorded anywhere found —
+  this entry was left as "open, not investigated" and only caught stale
+  2026-08-24 by a verification sweep). Decision (2) below was made in
+  favor of exclusion, and (3) is implemented: all `count_documents("rides",
+  ...)` call sites in `routes/promotions.py` now merge `EXCLUDE_LEGACY_RIDES`
+  (`backend/utils/legacy_rides.py:69`,
+  `{"legacy_import_metadata": {"$eq": {}}}`) — `first_ride_only`,
+  `inactive_days`, `min`/`max_total_rides`, and their `/promo/available`
+  twins (6 call sites as of current code, not the original 3 — the route
+  gained a second endpoint since this item was filed). Regression coverage:
+  `backend/tests/test_routes_promotions_coverage.py::TestValidatePromoForUserExcludesLegacyRides`,
+  headed with an explicit "ACTION_ITEMS.md B31" comment describing the
+  exclusion and asserting `first_ride_only` now passes for a rider with
+  only legacy rides — re-run 2026-08-24, 70/70 pass in the file (8/8 in the
+  B31-specific subset). **Gap found while closing this entry, not
+  resolved**: no `docs/change-log/` entry for this fix was found anywhere,
+  despite this being a money-adjacent, rider-facing promo-eligibility
+  change that CLAUDE.md's Change Impact Log rule covers — flag this as a
+  standing process gap (a fix shipped and tested without the mandated log)
+  rather than fabricate one after the fact; if anyone has the original
+  session's context, backfill a real Change Impact Log rather than leaving
+  this uncovered.
+- **Files:** `backend/routes/promotions.py` (6 `count_documents` call
+  sites as of current code), `backend/utils/legacy_rides.py`,
+  `backend/tests/test_routes_promotions_coverage.py`.
+- **Acceptance:** met on the code/test side — legacy-imported completed
+  rides are excluded from promo-eligibility ride counts at every call
+  site, with regression coverage. **Not fully met**: no Change Impact Log
+  exists for this fix (see gap above) — still worth closing that
+  paperwork gap even though the fix itself is live and correct.
 
 ### B33. `driver_import_service.read_csv`'s header normalization silently broke the SIN/DOB backfill's phone crosswalk — CLOSED (2026-08-20)
 
@@ -7018,26 +7059,44 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   row, plus updates to every current reader of `driver_insurance_periods` for regulatory purposes
   (`scripts/compliance_export.py`, `backend/routes/admin/driver_distance.py`'s
   `admin_driver_distance_logs`) to prefer a correction over its original when one exists.
-- **Status:** open, not designed or built. A real migration + RLS + immutability-trigger + two-consumer
-  wiring change, out of scope for the verification pass that surfaced it.
-- **Files:** new migration under `backend/migrations/` (next free number per
-  `ls backend/migrations | sort -V | tail -1` — do not assume 353 without re-checking at commit time,
-  per this repo's numbering convention); `backend/migrations/64_driver_insurance_periods.sql` and
-  `332_backfill_legacy_ride_insurance_periods.sql` (context — confirm the new table's RLS/immutability
-  pattern matches theirs, don't diverge silently); `backend/scripts/compliance_export.py` (regulator-facing
-  export — must prefer a correction over its original when one exists); `backend/routes/admin/
-  driver_distance.py`'s `admin_driver_distance_logs` (admin-facing per-span read, same requirement);
-  `backend/services/insurance_period_reconstruction_verification.py` (the tool that surfaced this gap —
-  once the corrections table exists, its `apply_verification_plan()` no-op should be revisited, since
-  writing a correction row would then have a sanctioned destination).
-- **Acceptance:** `driver_insurance_period_corrections` table exists (original-period FK, corrected
-  `started_at`/`ended_at`, `reason`, `corrected_by`, `corrected_at`, append-only/immutable once written,
-  RLS matching `driver_insurance_periods`' own service-role-only pattern); both `compliance_export.py`
-  and `admin_driver_distance_logs` read a correction in preference to its original row when one exists,
-  with a test proving the preference (not just that the table can be queried); the 156 rides this
-  session's verification pass found diverging (`docs/change-log/2026-08-20-insurance-period-
-  reconstruction-verification.md`) are the first real candidate backlog once this ships — filing the
-  table is not itself a decision to correct them, that stays a separate, explicit call.
+- **Status:** CLOSED (2026-08-20 — this entry was left as "open, not
+  designed or built" and only caught stale 2026-08-24 by a verification
+  sweep, despite a Change Impact Log already existing for the shipped fix).
+  `backend/migrations/355_driver_insurance_period_corrections.sql` creates
+  the table exactly to the shape described above: `original_period_id` FK
+  (`UNIQUE`), `corrected_started_at`/`corrected_ended_at`, `reason`,
+  `corrected_by`, `corrected_at`, RLS with a service-role-only-write SELECT
+  policy, and an unconditional `BEFORE UPDATE OR DELETE` immutability
+  trigger — modeled on migration 64's `driver_insurance_periods` pattern as
+  required. Both named consumers updated to prefer a correction:
+  `scripts/compliance_export.py` (repo-root `scripts/`, not
+  `backend/scripts/` — the Files list below was also stale on this path)
+  looks up `driver_insurance_period_corrections` and substitutes
+  `corrected_started_at`/`corrected_ended_at` plus a new `is_corrected`
+  column; `backend/routes/admin/driver_distance.py`'s
+  `admin_driver_distance_logs` does the same substitution. Regression
+  tests exist and pass, both explicitly citing "ACTION_ITEMS.md B34":
+  `backend/tests/test_admin_driver_distance.py`,
+  `backend/tests/test_compliance_export_script.py` — re-run 2026-08-24,
+  28/28 pass together. `.claude/context/domain-safety.md:99`'s
+  "Corrections go into a separate `driver_insurance_period_corrections`
+  table with justification" line — the thing this item originally flagged
+  as false/aspirational — is now actually true. Full Change Impact Log:
+  `docs/change-log/2026-08-20-b34-insurance-period-corrections-table.md`.
+- **Files:** `backend/migrations/355_driver_insurance_period_corrections.sql`,
+  `scripts/compliance_export.py` (repo-root, corrected from the stale
+  `backend/scripts/` path above), `backend/routes/admin/driver_distance.py`,
+  `backend/tests/test_admin_driver_distance.py`,
+  `backend/tests/test_compliance_export_script.py`.
+- **Acceptance:** met — `driver_insurance_period_corrections` exists with
+  the described shape, both `compliance_export.py` and
+  `admin_driver_distance_logs` prefer a correction over its original when
+  one exists, and both have a test proving the preference. The 156
+  diverging rides this item names as "the first real candidate backlog
+  once this ships" remain a separate, still-open, explicit decision — this
+  item's own scope (build the table + wire the two consumers) is done;
+  actually correcting those 156 rows is not part of what this item asked
+  for and is not implied to be resolved by this closure.
 
 ### B35. `routes/rides/booking.py` float()-casts several `rides` money fields at write time — same bug class as B28/B29/B30
 
@@ -9119,6 +9178,680 @@ record of what was assumed vs. what was actually true</summary>
     `/work-rides` with the active company id. 21 tests; full rider-app
     suite still green (122 suites / 1272 tests), `yarn tsc --noEmit`
     clean.
+  - **rider-app `app/loyalty.tsx`: 85.4% → 97.9% lines.** Already had
+    `loyaltyScreen.test.tsx` (8 tests: parallel load, tier
+    card/progress bar, highest-tier copy, history rows' +/- sign and
+    icon fallback, the empty state, a silent load failure) — extended
+    in place (+3 tests): pull-to-refresh actually invoking `onRefresh`
+    via the `FlatList`'s `refreshControl` prop; the bonus/promotion/
+    expiry history-icon-type branches (only `ride_earn`/`redeem`/an
+    unrecognized type were exercised before); and `formatDate`'s catch
+    branch, triggered with a `created_at` value whose `toString` throws
+    (unlike the plain-invalid-date-string case found on
+    `driver/subscription.tsx` earlier this session, a throwing
+    `toString` does make `new Date(...)` itself throw in this runtime,
+    so this one reliably exercises the catch). 11 tests; full rider-app
+    suite still green (123 suites / 1343 tests), `yarn tsc --noEmit`
+    clean.
+  - **rider-app `app/(tabs)/index.tsx`: 85.5% → 99.16% stmts / 100%
+    lines** (second pass on this screen — the 70.6%→85.5% entry above is
+    from an earlier sweep). Already had `homeScreen.test.tsx` (32 tests:
+    active-ride redirects, notification banner, AI button, one quick
+    action, promo banner, RiderSOS props, the full location-permission
+    flow via `refreshLocation`, weather, greeting, AppState transitions,
+    driver ring-spread) — extended in place (+10 tests). The `AppMap`
+    mock's `useImperativeHandle` previously handed back a brand-new
+    `jest.fn()` on every render (no deps array), making its
+    `animateToRegion` un-assertable across renders — fixed by hoisting a
+    single module-level `mockAnimateToRegion` and adding a `[]` deps
+    array so the same fn instance survives re-renders. Closed:
+    `handleEnableNotifications`'s granted branch (only the denied branch
+    had a test); the notification-bell button (`router.push('/notifications')`,
+    never pressed); the Work/Saved quick actions (same
+    `handleQuickAction`→`/search-destination` shape as the already-tested
+    "Go home"); the location-change re-center effect, which only fires
+    `animateToRegion` from the *second* location update onward (the
+    first just seeds `hasCenteredRef` — verified both halves: no call on
+    mount's own GPS fix, a call on a subsequent AppState-triggered
+    refresh); `handleLocationPress` (the "Go to my location" button)
+    end-to-end — its permission-denied branch on both iOS (`Linking.openURL('app-settings:')`)
+    and Android (`Linking.openSettings()`, including a swallowed
+    rejection), its `getCurrentPositionAsync`-throws fallback (reduced-delta
+    `animateToRegion` around the last known `location`, only when one
+    exists), and its success path (tight-zoom `animateToRegion` at the
+    fresh fix); both map zoom buttons (`Zoom in`/`Zoom out`), asserting
+    the halved/doubled `latitudeDelta`/`longitudeDelta` math and the
+    no-op guard when `region` hasn't been reported yet (`onRegionChangeComplete`
+    never fired). Left uncovered (defensive/timing-only, not a real
+    gap): line 91's `.catch(() => {})` on the notification-permission
+    focus-effect promise, 207-209/228/262/307's early-return guards in
+    `fetchHomeData`/polling effects that only trigger on unmount-mid-fetch
+    races, 380-407's ordering-sensitive branches inside
+    `handleLocationPress`'s success path once the reduced-delta fallback
+    test already exercises the same lines, 428-436's temperature-fetch
+    `.catch()`, 479's map's `showsMyLocationButton` prop expression, and
+    658's a header conditional already exercised by other tests but
+    reported as a branch-only miss by Istanbul's range-compression (see
+    this file's `ride-in-progress.tsx` entry above for the same
+    footgun). 42 tests; full rider-app suite still green (123 suites /
+    1350 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/verify-email.tsx`: 84.9% → 99.05% stmts / 100%
+    lines.** Already had `verifyEmailScreen.test.tsx` (10 tests: mount
+    request, `already_verified` short-circuit, `PROFILE_EMAIL_MISSING`/
+    `AUTH_OTP_INVALID`/`AUTH_OTP_EXPIRED`/rate-limited error copy on both
+    request and confirm, and a successful confirm merging
+    `email_verified` into the store) — extended in place (+7 tests).
+    Closed: the no-email-on-file guard effect (toasts and calls
+    `router.back()` immediately, and the request-code effect — a
+    separate effect keyed on `[email]` — correctly never fires since
+    `email` is falsy); `handleVerify`'s too-short-code guard (shake +
+    "Invalid Code" toast, no confirm call — reached by tapping Verify
+    with the default empty code, since the button's `disabled` prop
+    doesn't block a direct test `onPress` call); both screens' back
+    buttons (code-entry and the separate already-verified return) and
+    the already-verified screen's "Done" button; the code-boxes'
+    tap-to-focus wrapper; `resolveErrorCopy`'s no-`messageKey` fallback
+    path (a plain `Error('Request failed with status code 500')` on
+    confirm, asserting `getApiErrorMessage`'s noise-filter still swaps
+    in the friendly fallback rather than leaking the technical string);
+    and `handleResend`'s in-flight guard — ticked the post-mount 30s
+    countdown down one second at a time (matching this session's
+    established re-schedule-on-tick pattern for countdown effects) to
+    reveal the Resend button, then asserted a second tap while the first
+    resend request is still pending is a silent no-op, not a duplicate
+    request. 17 tests; full rider-app suite still green (123 suites /
+    1360 tests), `yarn tsc --noEmit` clean. **This closes out the last
+    item on the 2026-08-24 fresh-coverage-sweep ranked list** — a
+    further fresh sweep is needed to find the next tier.
+  - **Fresh coverage sweep (2026-08-24, post-#4513/#4515-merge) — next
+    tier identified.** Re-ran both apps'
+    `--collectCoverageFrom='app/**/*.{ts,tsx}'` coverage against `main`
+    at `cbfdc28` (123 rider-app suites / 1360 tests, 115 driver-app
+    suites / 1243 tests, both fully green) and ranked by line %
+    (`_layout.tsx` files excluded — near-zero by nature, not a real
+    gap). Two PRs from the prior tier were still open (not yet merged)
+    at measurement time — `ride-status.tsx` (#4507) and
+    `emergency-contacts.tsx` (#4514) — so this list reflects their
+    pre-PR numbers; both PRs already close those two gaps once merged.
+    Next tier, worst first:
+    - **rider-app:** `ride-options.tsx` (80.7% — the file this session's
+      earlier rounds already extended twice; still has room at 2284
+      lines, the largest screen in the app), `ride-status.tsx` (84.5% —
+      superseded by open PR #4507, → 97.4%), `emergency-contacts.tsx`
+      (87.5% — superseded by open PR #4514, → 100%), `driver-arrived.tsx`
+      (88.2%), `(tabs)/activity.tsx` (88.4%), `ride-completed.tsx`
+      (89.5%), `notifications.tsx` (89.7%), `scheduled-rides.tsx`
+      (90.4%), `wallet.tsx` (90.9%).
+    - **driver-app:** unchanged from the prior sweep (no driver-app PRs
+      landed this round) — `driver/(tabs)/index.tsx` (74.5%),
+      `become-driver.tsx` (80.7%), `documents.tsx` (86.8%),
+      `vehicle-info.tsx` (88.3%), `login.tsx` (88.7%), `driver/payout.tsx`
+      (88.8%), `driver/tax-documents.tsx` (88.9% — documented dead-code
+      remainder, not a real gap), `driver/payout-history.tsx` (89.4%),
+      `driver/ride-detail.tsx` (89.5%).
+    Sub-item 5 continues as an open-ended effort — pick up from this
+    list wherever a future session left off, re-running the coverage
+    command above to confirm current numbers before starting (they'll
+    have moved since this snapshot, and #4507/#4514 may have merged).
+  - **rider-app `app/ride-status.tsx`: 84.5% → 97.4% lines.** Already had
+    `rideStatusScreen.test.tsx` (17 tests: loading/header, searching's
+    "taking longer" copy, driver_assigned/driver_accepted bodies, the
+    driver-photo fallback, all four `handleBackPress` cancel-copy
+    branches, the notes-chip save/failure paths), plus
+    `rideStatusCloseButton.test.tsx` and a type-only contract test —
+    extended the screen test file in place (+8 tests): the offer
+    countdown's real `offer_expires_at`-driven computation (previously
+    only the `offer_timeout_seconds`-fallback branch was exercised) and
+    its 500ms tick-down actually firing; the driver-photo-error fallback
+    repeated for the `driver_arrived` body (a separate `<Image>` render
+    from the `driver_assigned` one already covered); all three
+    `__DEV__`-only status-simulation buttons (Assign Driver/Arrive at
+    Pickup/Go to Arriving Screen, including Assign Driver's
+    swallowed-failure branch); and the note-for-driver modal's Cancel
+    button and tap-the-backdrop dismiss paths. 25 tests; full rider-app
+    suite still green (123 suites / 1306 tests), `yarn tsc --noEmit`
+  - **Fresh coverage sweep (2026-08-24, post-#4513/#4515) — next tier
+    identified.** See the separate entry documenting this sweep's
+    ranked list (opened as its own doc-only PR #4516): rider-app's
+    worst offender became `ride-options.tsx` (80.7% — the largest
+    screen in the app at 2284 lines).
+  - **rider-app `app/ride-options.tsx`: 79.16% → 96.07% stmts, 80.7% →
+    97.95% lines** (money-critical: this is where a ride is actually
+    created). Already had `rideOptionsScreen.test.tsx` (36 tests: mount
+    fetch, `handleSelect`, the payment/scheduled-time/work-policy/surge
+    booking guards, `proceedWithBooking`'s happy/error paths,
+    `handleScheduleConfirm`, `handleManualPromo`, WAV/quiet-mode
+    toggles, the work-mode banner, fare-breakdown collapse, payment-sheet
+    selection) — extended in place (+33 tests). At this file's scale
+    (2284 lines) the win came mostly from three previously-unmocked or
+    under-mocked areas: map rendering (imported the mocked `MapView`/
+    `Marker`/`Polygon` and `CarMarker` directly to exercise `onMapReady`,
+    `fallbackHeading`'s deterministic-hash fallback for a driver with no
+    real heading, the near-zero/NaN coordinate filter, per-stop markers,
+    and service-area polygons fetched from `/service-areas`, including
+    the <3-point malformed-entry filter); the three `@gorhom/bottom-sheet`
+    instances' open/close mechanics (`handlePaymentSheetChange` +
+    the Android-hardware-back handler that's only registered while the
+    payment sheet is open — found and fixed a real bug in the *test's
+    own* card-row lookup along the way: `findByText(r, 'Visa')` was
+    ambiguously matching the footer's own payment-summary row, "Visa
+    •••• 4242", not the sheet's row — the footer's onPress only opens
+    the sheet, so the test had never actually exercised the card-select
+    handler despite passing; fixed by matching the sheet row's exact,
+    un-suffixed "Visa" text; the promo sheet's iOS keyboard-aware
+    deferred-close (`keyboardWillShow`/`keyboardWillHide` listeners +
+    the pending-close ref, only active on iOS); both sheets' backdrop
+    `onPress`); and the promo sheet's suggested-offers list (selecting
+    an eligible offer, an ineligible offer's toast, the empty-offers
+    state, and the "Remove applied code" row nested inside the sheet —
+    distinct from the main-row "Remove promo code" chip already
+    covered). Also closed: `loadSavedCards`'s fetch-failure
+    `console.warn`; the "Add / select card" confirm-sheet button opening
+    the payment sheet; `handleBookRide`'s own scheduled-time-under-15-
+    minutes guard (distinct from `handleScheduleConfirm`'s identical
+    check on the picker itself); `proceedWithBooking`'s `isEngineError`
+    branch (client-side-crash capture via `recordNonFatal`) and its two
+    remaining 409-reroute status branches (`driver_arrived`,
+    `completed`); the Retry button's `onPress`; the `firstAvailableIndex`
+    auto-select branch (a leading unavailable estimate correctly skipped
+    in favour of the first available one); the map's `fitToCoordinates`
+    effect (needed a populated `stops` array too — an empty array's
+    `.filter()` callback never runs, which is what had kept that one
+    line flagged even though the surrounding statement executes);
+    `SchedulePicker`'s and `ConfirmSheet`'s own `onClose` (backdrop-tap
+    dismissal, not just their button presses); and the footer's Payment
+    row `onPress`. Left uncovered (a genuine test-environment limitation,
+    not a real gap): `MapViewDirections`'s `onReady`/`onError` and the
+    `onReadyDirections` handler's `fitToCoordinates` call are all gated
+    behind `GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY`
+    captured in a **module-level `const`** at import time — unlike
+    `ride-in-progress.tsx`'s equivalent (read inline per-render, so
+    `process.env...` set in `beforeEach` works there), this file's copy
+    is frozen before any test's `beforeEach` runs, and Babel/Jest hoist
+    `import` statements above any same-file `process.env` assignment
+    regardless of source order, so there is no supported way to flip it
+    per-test without a `jest.config.js`/`setupFiles`-level env change
+    (out of scope for a coverage-only pass). 69 tests; full rider-app
+    suite still green (123 suites / 1393 tests), `yarn tsc --noEmit`
+    clean.
+  - **rider-app `app/driver-arrived.tsx`: 84.52% → 98.8% stmts, 88.23% →
+    100% lines** (ride-critical: OTP handoff, cancellation-fee flow,
+    live map). Already had `driverArrivedScreen.test.tsx` (13 tests:
+    mount fetch, WS-vs-poll fetching, the in-progress redirect, the
+    server-quoted-fee cancel-confirm→reason→submit flow and its failure
+    toast, the hardware-back cancel trigger, OTP copy-to-clipboard,
+    Message Driver, Share Trip incl. a swallowed rejection, the
+    driver-photo-error fallback, and the no-ride loading/retry state) —
+    extended in place (+7 tests). Unlike `ride-options.tsx` above,
+    `GOOGLE_MAPS_API_KEY` here is read inline per-render (not a
+    module-level `const`), so setting `process.env...` in a test was
+    enough to exercise the previously-unreachable `MapViewDirections`
+    route: `onReady` drawing the route and re-fitting the map (plus the
+    &lt;2-point-result no-op guard), and the map-fit effect's
+    driver-position branch (only fires once `currentDriver.lat`/`lng`
+    are present — most tests have no live driver position yet). Also
+    closed: `ConfirmSheet`'s and `CancelReasonSheet`'s own `onClose`
+    (backdrop-tap dismissal, distinct from their button presses, and
+    correctly asserted as NOT cancelling the ride); and the `__DEV__`-
+    only "Start Ride (skip OTP)" button's success and swallowed-failure
+    branches (`await api.post(.../start')`, `catch(e) { console.log(e)
+    }`, then `fetchRide` either way). 20 tests; full rider-app suite
+    still green (123 suites / 1408 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/scheduled-rides.tsx`: 89.47% → 100% stmts, 90.38% →
+    100% lines** (money-adjacent: the C29 notice-window cancellation-fee
+    preview). Already had `scheduledRidesScreen.test.tsx` (12 tests:
+    mount fetch, empty-state CTA, ride-card rendering, "Dispatching..."
+    once past scheduled time, the fee-present-vs-absent confirm message,
+    the confirm→cancel→best-effort-reminder-cancel→success-toast flow
+    and its failure-toast path, back navigation) plus the separate,
+    untouched `scheduledRidesNoticeWindowFee.test.tsx`. Extended in
+    place (+3 tests, 15 total): pull-to-refresh (`onRefresh` on
+    `FlatList`'s `refreshControl`, asserting `fetchScheduledRides` is
+    called a second time and `refreshing` settles back to `false`);
+    `getTimeUntil`'s no-hours branch (`In ${mins} min` when under an
+    hour out, vs. the already-covered `In Xh Ym` case); and the "Keep"
+    button on the cancel confirm sheet, which pins that pressing it
+    dismisses the sheet via `onClose` (line 214) without calling
+    `cancelScheduledRide` — distinct from the existing "Cancel Ride"
+    confirm/failure tests, which only exercised the destructive button.
+    Left uncovered: line 128 (`isImminent` badge-color ternary's false
+    branch merged into Istanbul's branch count — every existing ride
+    fixture is either far enough out or already past, so the ~15-min
+    "imminent" window itself is untested display-only styling, no
+    money/state logic) and line 202 (the `{s}` pluralization suffix on
+    "N upcoming rides" when count !== 1 — all fixtures use exactly one
+    ride; purely cosmetic string branch). Both are display-only and
+    diminishing-returns per this sweep's convention. Full rider-app
+    suite still green (123 suites / 1411 tests), `yarn tsc --noEmit`
+    clean.
+  - **rider-app `app/emergency-contacts.tsx`: 87.5% → 100% stmts / 100%
+    lines.** Already had `emergencyContactsScreen.test.tsx` (12 tests:
+    load, empty state, both phone-format lengths, name/phone validation,
+    add success/failure, MAX_CONTACTS(3)-hides-the-trigger, remove
+    confirm/delete/failure, back nav) — extended in place (+8 tests).
+    Closed: the fetch-failure catch (silent per its own comment — no
+    toast, just a `console.error` and the empty state stays); the
+    unrecognised-phone-length fallback in `formatPhone` (returns the raw
+    string unchanged); all four of `getRelationshipIcon`'s named cases
+    beyond `spouse` (`parent`/`sibling`/`child`/`friend`) plus its
+    `default` (unrecognised relationship) fallback; selecting a
+    relationship chip and confirming it flows into the POST body;
+    Cancel actually clearing the form fields (re-opened the form after
+    cancelling to confirm the name input came back empty, not just
+    hidden-but-stale); the saving spinner replacing "Save Contact" and
+    disabling the button while the add request is in flight; and
+    dismissing the remove-confirmation sheet via Cancel without calling
+    delete. 20 tests; full rider-app suite still green (123 suites /
+    1351 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/ride-completed.tsx`: 85.14% → 97.52% stmts, 67.95% →
+    83.09% branch, 64.15% → 98.11% funcs, 89.5% → 100% lines** (money-
+    adjacent: post-trip rate + tip + pay/receipt screen). Already had
+    `rideCompletedScreen.test.tsx` (15 tests: mount fetch, the
+    already-paid auto-dismiss, hardware-back block, the full rate→pay→
+    clear→home success path, skip-payment-when-already-paid, the
+    payment-failure alert staying on screen, "Change Card" carrying
+    ride+tip+rated, "Retry" re-invoking submit on the same override
+    card without re-rating, the payWithCard auto-retry, both Google Pay
+    outcomes (success and silent-cancel) plus one failure-toasts case,
+    email receipt success, lost-item report submit success, and the
+    driver-photo-error fallback) — extended in place (+18 tests, 33
+    total). Closed: the entire v2-route rendering branch family that
+    was previously untouched — a ride with `route_schema_version: 2`,
+    `actual_route_segments` (both a `trip_in_progress` and a
+    `navigating_to_pickup` segment) and a `planned_route_polyline`
+    exercises `hasActualRoute`/`showPlannedUnderlay`/pickup-leg
+    dashed-underlay JSX, the `mapCoordinates` reduce (previously
+    uncovered at lines 127-133), and `onMapReady` → `fitToCoordinates`
+    (line 161) — the mock's `fitToCoordinates` was promoted from an
+    inline anonymous `jest.fn()` per-render to a shared module-level
+    mock so the assertion could see it. Also closed:
+    `useCompletedRouteRefresh`'s actual refresh callback (line 156,
+    previously only its dependency inputs were exercised) via
+    `jest.useFakeTimers()` + `advanceTimersByTime(3000)` on a ride with
+    `route_geometry_status: 'pending'`, confirming `fetchRide` fires a
+    second time; both email-receipt and lost-item-report failure
+    toasts (catch blocks at lines 265 and 287); the payment alert's
+    `support` button (line 332, pushes to `/support?...&topic=
+    payment_failed`) and its `cancel` button (no `onPress`, falls
+    through to `ConfirmSheet`'s own `onClose`, closing the sheet — this
+    doubles as coverage for the `onClose` prop at line 945);
+    `handleSubmit`'s outer catch (line 407) via `attemptRidePayment`
+    rejecting outright (distinct from the alert-returning failure path
+    already covered) — confirmed it toasts "Submit Failed" and does
+    NOT clear the ride; star-rating taps (line 542) and their
+    "Could be better" etc. copy; tip-preset select/deselect and a
+    custom-tip amount reflected in the "Pay $X & Done" total; the
+    "Message Driver" nav row; all three payment-badge text branches
+    (wallet, company_allowance, card-with-no-last4 falling back to
+    plain "Card"); the 0-duration "0 km/h" avg-speed guard; the
+    pre-auth-hold hint text and Google-Pay-button-hidden branch
+    (`hasHold` true); and the lost-item modal's Cancel button and
+    `onRequestClose` dismissal paths (lines 884-945 range). Left
+    uncovered (diminishing returns, all pure-catch/defensive lines
+    Istanbul folds into the same merged branch ranges, not chased
+    further): the two narrow-typed helper casts at lines 35-37
+    (`toNum`'s ternary arms — exercised indirectly by every fare/
+    duration render, just not hitting Istanbul's per-arm branch
+    counter in isolation); the `routeIsProcessing`/pending-vs-
+    processing distinction in the route-status label (lines 150-156
+    partial — `'processing'` was exercised via the v2-route test,
+    `'pending'` via the refresh test, but the exact label-text ternary
+    arms for each combination weren't individually asserted); a few
+    Animated.spring/timing internals (lines 175-213-ish, timing-only,
+    not meaningfully testable without faking the Animated clock); and
+    isolated single-line ternary arms inside the JSX tree (e.g. line
+    693's route-quality label variant, line 753's map-pin-array
+    variant) that render fine but weren't asserted on with a dedicated
+    expectation — visually/behaviorally low-value to chase given the
+    core money/state-machine paths above are now covered. Full
+    rider-app suite still green (123 suites / 1426 tests — 18 more
+    than the driver-arrived entry's count above, matching this file's
+    net new test additions across the two most recent sweeps combined
+    with baseline growth already recorded there), `yarn tsc --noEmit`
+    clean. A pre-existing "worker process failed to exit gracefully"
+    Jest warning appears on the full-suite run — present before this
+    change too (not introduced by the fake-timers test here, which
+    restores real timers in a `finally` block), not chased further per
+    the "don't chase CI checks unrelated to your diff" convention.
+  - **rider-app `app/wallet.tsx`: 89.02% → 100% stmts, 90.9% → 100% lines**
+    (money-critical: wallet balance display, Stripe top-up). Already had
+    `walletScreen.test.tsx` (10 tests: mount fetch, balance-error retry,
+    the no-Stripe-key block, the full Stripe topUp→initPaymentSheet→
+    presentPaymentSheet flow incl. init-error/cancelled/non-cancel-error
+    branches, ride-vs-non-ride transaction tappability, empty state, back
+    nav) — extended in place (+5 tests). Closed: `onCustomAmountChange`
+    clearing the selected preset when the rider types a custom amount
+    instead (previously only the preset-select path was exercised);
+    `handleTopUp`'s own in-function `isWalletTopUpAmountValid` re-check
+    (line 90-92) by typing a $600 custom amount — the Add-Funds button is
+    `disabled` in the UI for an out-of-range amount, but its `onPress` was
+    invoked directly (per this session's established mocked-button
+    pattern) to pin that the handler still guards the amount itself, not
+    just the button's `disabled` prop, and toasts "Invalid Amount" without
+    ever calling `topUp()`; the `catch` block (line 131) via a rejected
+    `topUp()` promise, asserting the generic "Could not complete your
+    top-up" fallback toast and that `initPaymentSheet` is never reached;
+    the Cards action button (line 234) navigating to `/manage-cards`; and
+    the top-up panel's Cancel button (line 289) closing the panel and
+    resetting `selectedPreset`/`customAmount` back to empty (verified by
+    re-opening and seeing "Select an Amount" again). 100% stmts/lines;
+    branch coverage is 84.72% and left there deliberately — the remaining
+    uncovered branches are `renderTransaction`'s `TXN_ICONS`/`TXN_COLORS`
+    fallback defaults (`|| 'swap-horizontal'`, `|| colors.textDim`) and
+    the `hasRideDetails` pickup/dropoff/bookingId metadata block, none of
+    which this pass's existing fixtures exercise (both test transactions
+    use `metadata: null`) — closing those would mean adding a third
+    transaction fixture whose only purpose is a metadata-shape check,
+    diminishing-returns for a coverage-only pass; documented here instead
+    of chased. No bug found in the production code itself — the $600
+    invalid-amount and `topUp()`-rejection branches both behave as the
+    money-critical guards should (block before any Stripe call, surface a
+    toast, never silently proceed). 15 tests; full rider-app suite still
+    green (123 suites / 1413 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/wallet.tsx`, round 2: 84.72% → 100% branch** (closes
+    the gap the round-1 entry above deliberately left). Extended
+    `walletScreen.test.tsx` in place (+6 tests, 21 total): the
+    `TXN_ICONS`/`TXN_COLORS` fallback defaults for an unrecognised
+    transaction `type` (`'swap-horizontal'`, `colors.textDim`); the
+    `hasRideDetails` metadata block for a `ride_payment` with saved
+    `pickup_address`/`dropoff_address` (both the `meta.ride_code`
+    booking-id path and its fallback to the `reference_id` prefix when
+    `ride_code` is absent); the balance's `wallet?.balance ?? '0'`
+    fallback with `wallet: null`; the loading skeleton shown while
+    `walletLoading`/`transactionsLoading` is true and no transactions
+    are cached yet; and the Add Funds button's spinner while a top-up
+    is in flight (a controllable pending `topUp()` promise, asserting
+    the button's own text is replaced rather than checking the
+    `ActivityIndicator` directly, since `@expo/vector-icons` icons are
+    mocked to `null` but React Native's real `ActivityIndicator` isn't
+    text-searchable the same way). 100% stmts/branch/lines; funcs stay
+    at 90.47% (an unreached closure, not chased further). No bug found.
+    Full rider-app suite still green (123 suites / 1448 tests), `yarn
+    tsc --noEmit` clean.
+  - **rider-app `app/promotions.tsx`: 91.30% → 95.65% stmts, 70.37% →
+    96.29% branch, 95.23% → 97.61% lines.** Already had
+    `promotionsScreen.test.tsx` (8 tests: mount fetch, the empty state,
+    Apply disabled until a code is entered, auto-uppercasing typed
+    codes, a full percentage-promo apply→toast→clear→reload round trip,
+    a flat-dollar apply's `$`-formatted toast copy, the neutral failure
+    toast on an invalid/rejected code, back nav) — extended in place (+4
+    tests, 12 total). Closed: `loadPromos`'s `(res.data as Promo[]) ||
+    []` fallback when the API response has no `data` field at all
+    (asserts the empty state renders rather than crashing); the
+    `if (!c) return;` defensive early-return in `handleApply` when
+    Apply is triggered with an empty/whitespace code (bypassing the
+    UI's own `disabled` prop, per this session's established
+    mocked-button pattern, to pin that the handler still guards the
+    code itself) — asserts the API is never called; `formatDiscount`'s
+    flat-dollar branch (`$X.XX off`, previously only the percentage
+    branch was exercised) and the percentage branch's `max_discount`
+    cap suffix (`(max $X)`), rendered together via a two-promo fixture
+    that also hits the `item.description`/`item.expiry_date` false
+    branches (a promo with neither); and the Apply button's spinner
+    (`applying ? <ActivityIndicator/> : <Text>Apply</Text>`) via a
+    controllable pending `/promo/validate` promise. Left uncovered
+    (genuinely dead, not chased): `formatExpiry`'s own `if (!date)
+    return '';` guard and its `catch` block — the function's only call
+    site (`item.expiry_date ? formatExpiry(item.expiry_date) : null`)
+    never passes a falsy `date`, and `new Date()` on a malformed-but-
+    present string doesn't throw (`toLocaleDateString` just renders
+    "Invalid Date"), so neither branch is reachable through the screen
+    itself. No bug found — money-adjacent (promo discount amounts) but
+    not money-critical (no wallet/Stripe write on this screen); no
+    auditor review sought given the surface. Full rider-app suite still
+    green (123 suites / 1451 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/ride-details.tsx`: 89.24% → 96.2% stmts, 72.58% →
+    98.06% branch, 79.48% → 100% funcs, 91.36% → 95.68% lines** (money-
+    adjacent: past-ride receipt/fare-breakdown display, no wallet/Stripe
+    write). Already had `rideDetailsScreen.test.tsx` (30 tests: mount
+    fetch, not-found fallback, status-badge branches, the
+    cancelled-vs-normal fare-display split, fare-line consolidation,
+    promo/tip injection, email-receipt success/failure, the
+    PDF-export-unavailable-in-Jest catch path, back/help nav, and the
+    `buildReceiptHtml` unit-tested separately for its own tax/driver/
+    route-snapshot branches) — extended in place (+27 tests, 57 total).
+    Closed: **found and fixed a pre-existing test bug** — the existing
+    "calls fitToCoordinates via the map ref" test passed
+    `actual_route_segments` as raw `{latitude, longitude}` objects, which
+    don't match `shared/utils/routeSegments.ts`'s normalizer shape
+    (`coordinates: [[lat,lng],...]`, or `.points`) and so were silently
+    rejected — `mapCoordinates` stayed empty, the effect's own
+    `mapCoordinates.length < 2` guard short-circuited, and
+    `fitToCoordinates` was never actually called despite the test's name
+    and its (assertion-free) "no throw" check passing; fixed with a
+    correctly-shaped segment and a real `toHaveBeenCalledWith`
+    assertion (the map ref mock's `fitToCoordinates` was promoted to a
+    shared module-level `jest.fn()` for this, with a stable `[]`
+    `useImperativeHandle` deps array per this session's established
+    pattern). That fix then opened up the entire previously-dark route-
+    rendering branch family: the actual-GPS-route solid line, the
+    dashed pickup-leg underlay (`navigating_to_pickup` phase segments),
+    and the booked-route dashed underlay (v2 ride, incomplete geometry)
+    rendering together; both `routeQualityText` v2-no-actual-route
+    variants (`routeIsProcessing` true → "processing", false →
+    "unavailable") plus the legacy pre-v2 "Planned route preview"
+    fallback. Also closed: all four payment-badge combinations
+    (wallet/company_allowance/card-with-last4/card-without-last4 ×
+    paid/failed/pending) on **both** the cancellation-fee card and the
+    fare-breakdown card (previously each card had only 1-2 of the 4
+    combinations exercised, and never the same combination on both
+    cards); a cancelled ride with a $0 total fee rendering no card at
+    all; a single (non-consolidated) fare line kept as-is alongside a
+    passthrough tax-type line; a `modifier`-type line's own icon
+    styling and a line with neither an amount nor a recognized type
+    being dropped entirely; not duplicating an already-present
+    discount/tip line in `fare_breakdown` on top of the injected one;
+    the multi-fare consolidation's `distance_km`-absent branch (no "(X
+    km)" suffix) and the generic "Promo discount" label when
+    `promo_code` is absent; a fare line with a null `amount` treated as
+    $0 in the consolidation reduce; the GPS-measured "Distance (GPS)"
+    label vs. the booking-estimate fallback; both action buttons'
+    (Email receipt / Download invoice) in-flight spinners and their
+    double-tap re-entrancy guards; the registered-email-missing toast
+    fallback; the no-`rideId`-in-params no-op; and, in
+    `buildReceiptHtml` directly, the `_num` NaN-to-`$0.00` fallback
+    (never rendering the literal string "NaN"), the driver-block's
+    "Your driver" fallback when a name is present but no code/vehicle
+    is, and a tax_breakdown entry with a zero/falsy `rate` omitting the
+    "(X%)" suffix. Left uncovered (diminishing returns, not chased):
+    `handleDownloadInvoice`'s actual `Print.printToFileAsync` success
+    path (lines 149-154) — Jest's CJS runtime throws on ANY dynamic
+    `import()` regardless of `jest.mock()`, so every tap deterministically
+    lands in the catch branch, which is also the real "old build without
+    the native module" failure mode this code defends against, per the
+    pre-existing test-file comment; `formatDate`'s `catch` block
+    (line 296) — same pattern as `promotions.tsx`'s `formatExpiry`
+    finding above, a malformed-but-present date string doesn't actually
+    throw in `toLocaleDateString`, so it's unreachable through the
+    screen; the module-level `MAP_PROVIDER` Android/iOS branch — computed
+    once at import time from `Platform.OS`, not per-render-testable
+    without a pre-import mock rework; `userInterfaceStyle={isDark ?
+    "dark" : "light"}` — the `isDark` true branch, which would need a
+    mutable theme mock this file's existing fixed
+    `jest.mock('@shared/theme/ThemeContext', ...)` doesn't support,
+    judged not worth the rework for one map style prop; and `routeLabel`'s
+    `showPlannedUnderlay ? 'Booked route' : 'Actual route'` distinction —
+    genuinely inert in the current UI: `routeLabel` is only ever rendered
+    when `hasActualRoute` is true or the ride is legacy (pre-v2), neither
+    of which reach this branch (it's computed only when `hasActualRoute`
+    is false AND `isV2Route` is true, a state where the rendered
+    `routeQualityText` ternary takes a separate arm that doesn't
+    reference `routeLabel` at all) — a latent unused computation, not a
+    bug, not chased. No bug found in production code. Money-adjacent
+    (fare/payment display) but not money-critical (no wallet/Stripe
+    write); `spinr-money-auditor` reviewed the diff and returned SAFE —
+    production file confirmed untouched, and every money-relevant
+    assertion (fare consolidation/reduce math incl. the null-amount-as-0
+    case, cancellation-fee total and its zero-fee suppression, tax
+    formatting incl. the zero-rate suffix omission, the NaN-to-`$0.00`
+    fallback, all payment-badge combinations on both cards) traced
+    line-by-line against the real logic and confirmed correct; one
+    initially-ambiguous case (the download-invoice double-tap test
+    asserting a single toast) was verified via an isolated
+    instrumentation run to be pre-existing, already-documented
+    Jest-environment behavior (the dynamic `import()` always throws
+    here), not a masked bug. 57 tests; full rider-app suite still green
+    (123 suites / 1484 tests), `yarn tsc --noEmit` clean.
+  - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
+    85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
+    tests: no-account-prefill, the CRC-consent auto-check-when-
+    unpublished path, Personal-step validation, service-area selection
+    re-fetching vehicle types, Vehicle-step skip-when-empty/reject-when-
+    partial/9-year-cutoff, the full upload-source Alert dispatch
+    (Camera/Gallery/File × granted/denied/canceled/thrown), the expiry
+    date-picker's past/future rejection, Submit's consent gate, a full
+    successful submission with front+back doc mapping to legacy expiry
+    fields, and the header Logout/Back split) — extended in place (+16
+    tests). Closed: the hardcoded Saskatoon/Regina service-area fallback
+    when `/service-areas` itself fails; restoring an in-progress
+    AsyncStorage draft (step/personal/vehicle/docs) on mount, plus
+    tolerating a corrupt draft string without crashing; the vehicle-types
+    fetch's non-ok-response `Connection Error` toast; `fetchRequirements`
+    and `fetchCrcConsentText` both silently tolerating a thrown
+    (not just non-ok) fetch, including the CRC path's fetch-failure
+    consent auto-check; the camera-asset fallback filename generator
+    (`genFallbackFileName`) when `asset.fileName` is absent; the
+    Android upload-source Alert's Camera/Gallery/File-or-Cancel `onPress`
+    handlers specifically (the existing test only asserted the Alert's
+    shape, not that its buttons dispatch); a fully and validly filled
+    Vehicle step (year/make/model/plate + picking a vehicle-type chip)
+    actually advancing past Next; invoking Submit directly while consent
+    is unchecked (distinct from the existing disabled-prop assertion);
+    the Insurance/Inspection/Background/Work-Eligibility branches of
+    `getExpiryFieldForReq`'s keyword matcher (only the license branch
+    was previously exercised); tolerating a failed `POST
+    /drivers/crc-consent` without blocking the already-successful
+    registration; and both the iOS inline-picker Done button and
+    Android's auto-close-on-confirm date-picker behavior. Left
+    uncovered (not a real gap): `fetchVehicleTypes`'s own `!area` early
+    return is dead code in practice — its only call site
+    (`useEffect` at the `serviceAreaId` dependency) already guards with
+    `if (serviceAreaId)` before calling it, so the callback is never
+    actually invoked with a falsy area; `validateStep`'s `default` case
+    is likewise unreachable since `nextStep` (the only caller) is wired
+    only to the Personal/Vehicle/Documents step buttons; and
+    `saveDraft`'s `catch` requires a synchronous `AsyncStorage.setItem`
+    throw, not modeled by the existing mock. **Flagged, not fixed** (test-
+    only change; screen logic untouched per this task's scope): while
+    exercising the Work-Eligibility keyword branch, found that
+    `getExpiryFieldForReq` computes a `work_eligibility_expiry_date`
+    into the local `legacyExpiries` map exactly like the license/
+    insurance/inspection/background fields, but `handleSubmit`'s
+    destructure of that map into the `registerDriver()` payload only
+    reads out the other four — `work_eligibility_expiry_date` is
+    computed and then silently dropped, never sent to the backend. This
+    looks like a real latent gap (a Work Eligibility document's expiry
+    date is captured in the UI but never reaches the driver's
+    application), not intentional — worth a follow-up ticket to confirm
+    with the requirement's owner before fixing. 42 tests; full driver-app
+    suite still green (116 suites / 1278 tests — one unrelated pre-
+    existing flake in `subscriptionScreen.test.tsx` under coverage-
+    instrumented full-suite timing, passes standalone; not touched by
+    this change), `npx tsc --noEmit` clean, `npx eslint` clean on the
+    touched test file (the 3 pre-existing findings on its untouched
+    `datetimepicker` mock lines predate this change), `npm run build:web`
+    (`expo export --platform web`) exits 0.
+    - **`driver/(tabs)/index.tsx` extended (2026-08-24, this session):**
+      74.5% → 88.65% lines (85.5% statements, 75.2% branches, 89.7%
+      functions), `__tests__/app/driverDashboardScreen.test.tsx` 34 → 51
+      tests (17 added). Closed: the ride-offer countdown timer (interval
+      tick-down + the foreground `AppState` resync against
+      `offer_expires_at`, both cases — still-pending and already-expired),
+      the OSRM live-route poller (success/publish, no-routable-polyline
+      fallback, fetch-throw fallback, and the not-polled-while-idle guard),
+      the saved-planned-polyline reuse branch for `ride_offered` (both the
+      `fitToCoordinates` happy path and the <2-usable-points empty-route
+      branch), airport sub-zone polygon rendering (3+ points vs. the
+      dropped <3-point case), the denied-location "Open Settings" button
+      (`Linking.openSettings`), `MapControls`' `onRecenter` wiring, the
+      `MapView` `onRegionChange` → `currentRegionRef` write, the
+      `SafetyOverlay` close callback, and the completion-confirmation
+      modal's `onRequestClose`. Also fixed a latent flaw in this test
+      file's own `react-native-maps` mock while chasing a flaky
+      assertion: `useImperativeHandle` had no deps array, so it
+      re-installed a brand-new `fitToCoordinates`/`animateToRegion` pair
+      on every re-render (discarding whatever had just been called on the
+      previous instance before an assertion could see it) — added `[]`
+      deps so the mocked ref behaves like a real native ref (stable
+      identity across renders). Remaining gaps in the file, left for a
+      future pass: `haversineMeters` (only reachable via the
+      navigating_to_pickup Directions-refresh ticker, lines 58-65/275-284),
+      the `mapKey` remount bump on return-to-idle (235), the
+      foreground-recenter effect when `pendingRecenterRef` is already true
+      (550-553 — needs a location-object change to re-fire, since its
+      effect deps don't change on an out-of-band `AppState` event alone),
+      and the live `MapViewDirections` `onReady`/`onError` callbacks
+      (737-771 — the shared mock stubs the component to `() => null`,
+      so exercising these needs a per-test mock override, not attempted
+      here to keep this pass test-only). Test-only change; see
+      `docs/change-log/2026-08-24-driver-tabs-index-coverage.md`.
+  - **rider-app `app/(tabs)/activity.tsx`: 87.15% → 98.32% stmts, 88.41%
+    → 99.39% lines.** Already had `activityScreen.test.tsx` (11 tests:
+    focus-fetch, RECENT-section grouping, the Business filter, both
+    grand_total-vs-tip fare-total branches, the load-failure and
+    empty-result empty states, the upcoming tab's own empty state and
+    its scheduled-ride rendering, infinite-scroll load-more, and card
+    tap navigation) — extended in place (+11 tests). Closed: tapping a
+    scheduled (upcoming) ride card's own `handleRidePress` (distinct
+    node from the history-tab card already covered); switching back to
+    the history tab from upcoming; the Personal filter (the inverse of
+    the already-tested Business filter); the period-pill switch
+    (`refreshStats(period, true)` re-fetches stats only, not ride
+    history — verified via a `mockApiGet.mockClear()` + assertion that
+    `/rides/history` was NOT called again); pull-to-refresh via the
+    `FlatList`'s real `refreshControl.onRefresh` (force-refetches rides,
+    stats, and scheduled rides regardless of the 30s TTL); the
+    load-more failure's retry footer, including a full fail→retry→
+    succeed round trip; `formatDate`'s `Yesterday` branch (computed via
+    exact day-subtraction rather than a fixed offset, to avoid a
+    midnight-boundary flake); `getStatusText`'s `cancelled` case and its
+    fallback-to-`completed` for an unrecognised status; and
+    `getStatusColor`'s `cancelled`/`in_progress` cases plus its
+    `default` fallback for a status matching none of the three named
+    cases. Left uncovered (dead code, not a real gap): line 246's
+    `return true` fallback inside `filteredRides`' filter callback — the
+    three real `FilterType` values (`all`/`personal`/`business`) are all
+    already handled by the three `if` branches above it, so this line is
+    unreachable under the type's own exhaustive value set. 22 tests;
+    full rider-app suite still green (123 suites / 1419 tests), `yarn
+    tsc --noEmit` clean.
+  - **rider-app `app/notifications.tsx`: 86.53% stmts / 89.65% lines /
+    75.75% branch → 98.07% stmts / 100% lines / 90.9% branch.** Already
+    had `notificationsScreen.test.tsx` (12 tests: mount fetch, the
+    distinct "couldn't load" vs. cheerful "all caught up" empty states
+    and Retry, optimistic mark-read + rollback on PUT failure,
+    optimistic "Mark all read" + re-fetch-on-failure, lost_and_found /
+    lost_and_found_message / chat_message / driver_accepted routing,
+    back-button nav) — extended in place (+5 tests, 17 total). Closed:
+    `getRelativeTime`'s three untested buckets (`m ago` / `h ago` /
+    `d ago`, only the `< 1 min` "just now" branch had a test) by
+    rendering three notifications backdated 5 min / 3 hr / 2 days and
+    asserting all three relative-time strings render together;
+    `ride_completed` tap-through routing (both the `rideId`-present
+    push to `/ride-completed` and the no-op when absent, mirroring the
+    existing `chat_message`/`driver_accepted` pattern); pull-to-refresh
+    (`handleRefresh`'s `setRefreshing(true)` +
+    `loadNotifications(true)`) by grabbing the real (unmocked)
+    `RefreshControl` off the tree via `findByType` and invoking
+    `.props.onRefresh()` directly, then asserting the silent re-fetch
+    landed without ever dropping back to the full-screen spinner; and
+    the `safety` notification type's icon-color branch
+    (`shield-checkmark` → `colors.danger`) by importing the real
+    `Ionicons` named export (the mock is `Ionicons: () => null`, so the
+    element still appears in the tree with real props) and asserting
+    `.props.color` on the matched icon. Lines are now 100% covered; the
+    remaining 90.9% branch gap Istanbul still attributes to lines
+    70-98, 120, 127-135 — those lines execute, but not every branch on
+    them does (e.g. the optional-chaining `?.` on `item.data?.case_id`/
+    `ride_id` short-circuits differently per notification, and the
+    `driver_arrived` arm of the `case 'driver_accepted': case
+    'driver_arrived':` list is never hit standalone since every test
+    exercises it via the `driver_accepted` sibling). Not genuinely
+    unreached logic; adding a near-duplicate test per sibling
+    case/optional-chain arm for a 90.9%→100% branch bump was judged
+    diminishing-returns per the workflow's guidance. Full rider-app
+    suite still green (123 suites / 1413 tests), `yarn tsc --noEmit`
+    clean.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.
@@ -9311,7 +10044,10 @@ record of what was assumed vs. what was actually true</summary>
   "duplicated-logic-can-drift" case this item names, since the two call
   sites encoded the same three rules by hand in two different syntactic
   shapes. New `admin-dashboard/src/lib/__tests__/allowanceFormSchema.test.ts`
-  (12 accept/reject cases + 2 issue-priority cases). Verification: 12/12 +
+  (10 accept/reject cases + 2 issue-priority cases — corrected 2026-08-24;
+  the file has 10 `it()` blocks for accept/reject, not 12, though the
+  12/12 pass-count below is still correct since it counts all `it()`
+  blocks in the file, not just the accept/reject subset). Verification: 12/12 +
   2/2 new tests pass; full admin-dashboard suite 351/351 (36 files) pass,
   0 regressions; `npx tsc --noEmit` clean; `npx eslint` clean on touched
   files; **real production build** (`npm run build` → `next build`)
@@ -9360,6 +10096,105 @@ record of what was assumed vs. what was actually true</summary>
   corporate/billing form (subscriptions, KYB, wallet adjustments, etc.)
   remain unmigrated; no ADR/migration-order doc written yet. Checkbox
   stays `[ ]`.
+- **2026-08-24 update — step 6 done, second admin-dashboard corporate
+  form migrated:** migrated `admin-dashboard/.../corporate-accounts/[id]/
+  policy/page.tsx`'s time-window validation (per-employee ride-policy
+  booking windows — day + start/end time pairs that gate when a company's
+  employees can expense a ride). The predicate `w.end <= w.start` was
+  duplicated by hand across two call sites — the `TimeWindowRow` child
+  component's per-row `invalid` flag (drives the red border + inline
+  "End must be after start" message) and the parent's `hasInvalidWindow`
+  (gates the Save button and blocks `handleSave`) — the same
+  duplicated-logic-can-drift shape step 4 closed for `allowance-dialog.tsx`,
+  found by working down this item's own "every other admin-dashboard
+  corporate/billing form" still-open list. `zod` was already a direct
+  admin-dashboard dependency as of step 4 — no dependency change this
+  step. New colocated `admin-dashboard/src/lib/policyTimeWindowSchema.ts`
+  (`timeWindowSchema` + `isTimeWindowValid` + `hasInvalidTimeWindow`)
+  reproduces the exact predicate via a `superRefine` with the identical
+  error message; both call sites now import the shared helpers instead of
+  re-deriving the check. The `maxFare` input's `min={1}`/`max={10000}`
+  HTML attributes were deliberately left untouched — they were never
+  backed by a JS check in `handleSave`, so adding one would be a new
+  validation rule, not a pure extraction, out of scope for this pass. New
+  `admin-dashboard/src/lib/__tests__/policyTimeWindowSchema.test.ts` (16
+  accept/reject cases, covering every day literal, equal/reversed/
+  one-minute-wide boundaries, and the exact error message + issue path).
+  Verification: 16/16 new tests pass; full admin-dashboard suite 367/367
+  (37 files) pass, 0 regressions (351 baseline from step 4 + growth from
+  other admin-dashboard work landed since + these 16); `npx tsc --noEmit`
+  clean; `npx eslint` clean on touched files (one pre-existing,
+  unrelated `react-hooks/set-state-in-effect` warning on an untouched
+  line of the same file, not introduced by this change); **real
+  production build** (`npm run build` → `next build`) completed
+  successfully, exit 0; blast-radius grep confirmed
+  `policyTimeWindowSchema` is imported only by the migrated page and its
+  own test file — a same-pattern `w.end <= w.start` duplicate also exists
+  in `admin-dashboard/src/app/company-portal/[id]/policy/page.tsx` (a
+  separate self-serve company-portal surface, not this internal
+  admin-dashboard review flow) but was left untouched, out of this pass's
+  scope. Full Change Impact Log:
+  `docs/change-log/2026-08-24-b39-admin-policy-timewindow-zod-step6.md`.
+  **Still open:** `rider-app/app/login.tsx`, driver-app's signup/
+  profile-setup fields, `company-portal/[id]/policy/page.tsx`'s own copy
+  of the same time-window check, and every other admin-dashboard
+  corporate/billing form (subscriptions assignment, KYB approve/reject
+  note, wallet adjustments, etc.) remain unmigrated; no ADR/
+  migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-24 update — step 7: `rider-app/app/login.tsx` checked and
+  skipped (nothing to extract); migrated
+  `driver-app/app/profile-setup.tsx` instead, per this item's own "Still
+  open" ordering.** `login.tsx`'s only inline check is
+  `isValid = phoneNumber.length === 10` — no error message/toast, no
+  branching, no second condition it could conflict with in priority
+  order. That's not the "validation-rule coverage is invisible" gap this
+  item names (there is no rule beyond a length check already visible at
+  the call site, and `handlePhoneChange` itself hard-caps input to 10
+  digits before `isValid` ever runs) — extracting it into a schema file
+  would be a single one-line `z.string().length(10)` wrapper with no
+  behavior to pin in tests, so per this task's own fallback instruction
+  it was left alone rather than forcing a migration. Moved to the next
+  "Still open" item instead: `driver-app`'s signup/profile-setup form.
+  Migrated `driver-app/app/profile-setup.tsx`'s `handleSubmit` field
+  validation (first/last name length, email, gender, service area — the
+  driver-side identity fields that feed downstream KYC/compliance checks,
+  mirroring rider-app step 5's equivalent screen). New colocated
+  `driver-app/utils/profileSetupSchema.ts` (`profileSetupSchema` +
+  `getProfileSetupError` + `isProfileSetupFormValid`, plus individual
+  `isFirstNameValid`/`isLastNameValid`/`isEmailValid`/`isServiceAreaValid`
+  predicates — kept separate, not just an aggregate boolean, because the
+  screen reads each one independently to drive its own per-field checkmark
+  icon) reproduces the screen's six sequential inline checks
+  (`isFirstNameValid` i.e. `trim().length > 1`, `isLastNameValid` same,
+  empty-email, the `/^[^\s@]+@[^\s@]+\.[^\s@]+$/` email regex,
+  empty-gender, empty-serviceAreaId) in the same priority order (first
+  failing check wins) and with the same toast title/message pairs,
+  byte-for-byte — a pure extraction, not a validation-rule change, same
+  discipline as steps 1-5. `zod` was already a `driver-app` dependency
+  (added in step 3) — not re-added. New
+  `driver-app/utils/__tests__/profileSetupSchema.test.ts` (19
+  accept/reject cases, including boundary cases for the 2-letter name
+  length rule and priority-order cases pinning which error wins when
+  multiple fields are invalid at once). Verification: 19/19 new tests
+  pass (isolated run); full driver-app suite 1262/1262 tests, 116/116
+  suites pass, 0 regressions (single clean full run, no flakes observed);
+  `npx tsc --noEmit` clean; `npx eslint app/profile-setup.tsx
+  utils/profileSetupSchema.ts utils/__tests__/profileSetupSchema.test.ts`
+  clean; **real production build** (`npm run build:web` → `expo export
+  --platform web`) completed successfully, exit code 0 (`Exported: dist`,
+  6.8MB web bundle); blast-radius grep confirmed `app/profile-setup.tsx`
+  is the only reader of the extracted checks (`driver-app/app/driver/
+  (tabs)/profile.tsx` has its own separate, unrelated `EMAIL_REGEX` const
+  for a different edit-profile flow — not imported from or shared with
+  this screen; `reactivate-account.tsx`, `otp.tsx`, and `_layout.tsx` only
+  navigate to `profile-setup.tsx`, none read its validation). Full Change
+  Impact Log:
+  `docs/change-log/2026-08-24-b39-driver-profile-setup-zod-step6.md`.
+  **Still open:** every other admin-dashboard corporate/billing form
+  (subscriptions, KYB, wallet adjustments, etc.) remains unmigrated; no
+  ADR/migration-order doc written yet; `rider-app/app/login.tsx` is now
+  considered resolved for this item (checked, nothing worth extracting —
+  see above), not merely deferred. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator
@@ -9724,11 +10559,20 @@ record of what was assumed vs. what was actually true</summary>
   `rider-app/components/BookingProposalCard.tsx:155-159` called
   `createRide(paymentMethod, undefined, ...)` →
   `rider-app/store/rideStore.ts` sent `corporate_account_id: null,
-  work_profile: null`, so corporate policy checks
-  (`backend/routes/rides/booking.py:717-721`) never ran and the ride billed
-  the rider personally. Only **wallet**-payment proposals booked inline (card
-  proposals deep-link to `/ride-options`, where Bill-to-Business worked), so
-  the exposure was corporate riders who said "pay with wallet" in chat.
+  work_profile: null`, so corporate policy checks never ran and the ride
+  billed the rider personally (line citation corrected 2026-08-24: the
+  checks now live at `backend/routes/rides/booking.py:922-957`, the
+  pre-dispatch policy check gated on `body.corporate_account_id` and
+  `payment_method == "company_allowance"`, and again at
+  `booking.py:1087-1141`, the `work_profile`+`corporate_account_id` block
+  — the originally-cited `:717-721` has since drifted to an unrelated
+  address-verification-mismatch block; `evaluate_policy_for_ride`/
+  `require_company_bookable` in `services/corporate_policy_service.py`
+  still exist and are still called from there, so the behavior claim
+  itself is unaffected, only the line pointer was stale). Only
+  **wallet**-payment proposals booked inline (card proposals deep-link to
+  `/ride-options`, where Bill-to-Business worked), so the exposure was
+  corporate riders who said "pay with wallet" in chat.
 - **Approach chosen (user confirmed via `AskUserQuestion` — see
   `docs/change-log/2026-07-29-b-ai1-corporate-billing-chat-bypass.md` §3):**
   mirror `/ride-options.tsx`'s own default — if the rider's Work Mode toggle

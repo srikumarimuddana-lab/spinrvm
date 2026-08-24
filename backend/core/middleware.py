@@ -1,3 +1,4 @@
+import os as _os
 import uuid
 from urllib.parse import urlparse
 
@@ -214,6 +215,70 @@ _FORCED_UPGRADE_RIDE_CARVEOUT_EXACT = (
     "/api/v1/drivers/location-batch",
     "/api/v1/drivers/rides/active",
 )
+
+
+# Deadline budget bounds. Floor: a budget below this cannot complete a useful
+# request, so a value under it is read as clock skew rather than intent.
+# Ceiling: guards against a device whose clock runs *ahead*, which would
+# otherwise pin the budget hours out and disable the fail-fast path entirely.
+# Env-overridable so both can be widened/narrowed without a deploy.
+DEADLINE_MIN_MS = int(_os.environ.get("DEADLINE_MIN_MS", "1000"))
+DEADLINE_MAX_MS = int(_os.environ.get("DEADLINE_MAX_MS", "60000"))
+
+
+def resolve_deadline_budget_ms(
+    timeout_header: str | None,
+    deadline_header: str | None,
+    now_epoch_ms: int,
+) -> tuple[int | None, str | None, str | None]:
+    """Resolve a request's time budget from the client's headers.
+
+    Returns ``(budget_ms, source, clamped_direction)`` where a ``None`` budget
+    means no deadline should be enforced and ``clamped_direction`` is
+    ``"up"``/``"down"``/``None``.
+
+    Header priority — see the DeadlineMiddleware comment in init_middleware():
+
+    * ``X-Timeout-Ms`` is a RELATIVE duration and is preferred because it is
+      immune to clock skew by construction; the device's wall clock never
+      enters the calculation.
+    * ``X-Deadline-Ms`` is an ABSOLUTE epoch from the device's ``Date.now()``.
+      Deriving a budget from it means subtracting our clock from theirs, so
+      skew lands straight in the result: a handset ~15 s behind produces a
+      non-positive budget, and every DB call in that request is then rejected
+      pre-flight with a 503 for as long as the clock is wrong.
+
+    The clamp is what defangs the legacy spelling. A budget outside
+    [DEADLINE_MIN_MS, DEADLINE_MAX_MS] is not a plausible client timeout, so it
+    is clamped and counted rather than obeyed. Clamping UP (rather than
+    dropping the deadline entirely) keeps fail-fast intact for genuinely slow
+    requests while refusing to reject work the instant it arrives.
+    """
+    budget_ms: int | None = None
+    source: str | None = None
+
+    if timeout_header:
+        try:
+            budget_ms = int(timeout_header)
+            source = "timeout"
+        except (ValueError, TypeError):
+            budget_ms = None
+
+    if budget_ms is None and deadline_header:
+        try:
+            budget_ms = int(deadline_header) - now_epoch_ms
+            source = "deadline"
+        except (ValueError, TypeError):
+            # Malformed header — ignore silently. Not worth a 400.
+            budget_ms = None
+
+    if budget_ms is None:
+        return None, None, None
+    if budget_ms < DEADLINE_MIN_MS:
+        return DEADLINE_MIN_MS, source, "up"
+    if budget_ms > DEADLINE_MAX_MS:
+        return DEADLINE_MAX_MS, source, "down"
+    return budget_ms, source, None
 
 
 def _is_ride_carveout_path(path: str) -> bool:
@@ -801,6 +866,7 @@ def init_middleware(app):
             "X-CSRF-Token",
             "X-Request-ID",
             "X-Deadline-Ms",
+            "X-Timeout-Ms",
             "X-App-Version",
             "X-App-Platform",
         ],
@@ -850,7 +916,7 @@ def init_middleware(app):
                 response.headers["Access-Control-Allow-Headers"] = (
                     "Authorization, Content-Type, X-Requested-With, "
                     "Idempotency-Key, X-Forwarded-For, Accept, Accept-Language, Cache-Control, "
-                    "X-CSRF-Token, X-Request-ID, X-Deadline-Ms"
+                    "X-CSRF-Token, X-Request-ID, X-Deadline-Ms, X-Timeout-Ms"
                 )
                 response.headers["Vary"] = "Origin"
             elif wildcard:
@@ -906,39 +972,61 @@ def init_middleware(app):
 
     app.add_middleware(RelativeRedirectMiddleware)
 
-    # Deadline propagation — clients send `X-Deadline-Ms: <epoch-ms>`
-    # (derived from their local axios / fetch timeout). The backend
-    # stashes the deadline on a contextvar so any code running inside
-    # the request coroutine can consult it — most importantly
-    # db_supabase.run_sync, which checks remaining budget before each
-    # retry sleep. If the client has already given up, we skip the
-    # retry and fail fast instead of burning thread-pool workers on a
-    # doomed request.
+    # Deadline propagation — clients tell us how long they will wait, and the
+    # backend stashes it on a contextvar so any code inside the request
+    # coroutine can consult it — most importantly db_supabase.run_sync, which
+    # checks remaining budget before each retry sleep. If the client has already
+    # given up, we skip the retry and fail fast instead of burning thread-pool
+    # workers on a doomed request.
     #
-    # Absent header = no deadline enforced (current behaviour).
+    # Two header spellings are accepted, in priority order:
+    #
+    #   1. `X-Timeout-Ms: <duration-ms>`  (PREFERRED)
+    #      A *relative* duration. Immune to clock skew by construction: no
+    #      comparison between the device's clock and ours ever happens.
+    #   2. `X-Deadline-Ms: <epoch-ms>`    (LEGACY)
+    #      An *absolute* epoch stamped from the device's `Date.now()`. This
+    #      subtracts the device's wall clock from the server's, so any skew
+    #      lands directly in the computed budget. A handset ~15 s behind sends
+    #      a deadline that is already expired on arrival, and every DB call in
+    #      that request is rejected pre-flight with a 503 — the user stays
+    #      broken for as long as their clock is wrong. Kept only so in-flight
+    #      app builds keep working; the clamp below is what defangs it.
+    #
+    # Absent both = no deadline enforced.
+    #
+    # The clamp is the safety net for the legacy spelling. A computed budget
+    # outside [DEADLINE_MIN_MS, DEADLINE_MAX_MS] is not a real client timeout,
+    # it is a broken clock, so it is clamped and counted rather than obeyed.
+    # Clamping UP (rather than treating an expired deadline as "no deadline")
+    # keeps the fail-fast protection intact for genuinely slow requests while
+    # refusing to reject work the moment it arrives.
+    import time as _t
+
+    from utils import metrics as _metrics
     from utils.deadline import set_request_deadline
 
     class DeadlineMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):
-            deadline_header = request.headers.get("x-deadline-ms")
-            token = None
-            if deadline_header:
-                try:
-                    deadline_epoch_ms = int(deadline_header)
-                    import time as _t
+            budget_ms, source, clamped = resolve_deadline_budget_ms(
+                request.headers.get("x-timeout-ms"),
+                request.headers.get("x-deadline-ms"),
+                int(_t.time() * 1000),
+            )
+            if clamped is not None:
+                _metrics.inc(
+                    "spinr_deadline_header_clamped_total",
+                    {"direction": clamped, "source": source or "unknown"},
+                )
 
-                    now_epoch_ms = int(_t.time() * 1000)
-                    remaining_ms = deadline_epoch_ms - now_epoch_ms
-                    # Convert the client's epoch deadline into a
-                    # monotonic-clock one so comparisons inside the
-                    # request (which may run for many seconds) aren't
-                    # affected by system clock jumps.
-                    monotonic_deadline = _t.monotonic() + (remaining_ms / 1000.0)
-                    request.state.deadline_monotonic = monotonic_deadline
-                    token = set_request_deadline(monotonic_deadline)
-                except (ValueError, TypeError):
-                    # Malformed header — ignore silently. Not worth a 400.
-                    pass
+            token = None
+            if budget_ms is not None:
+                # Monotonic so comparisons inside a long-running request aren't
+                # affected by system clock jumps.
+                monotonic_deadline = _t.monotonic() + (budget_ms / 1000.0)
+                request.state.deadline_monotonic = monotonic_deadline
+                token = set_request_deadline(monotonic_deadline)
+
             try:
                 return await call_next(request)
             finally:

@@ -8511,6 +8511,32 @@ record of what was assumed vs. what was actually true</summary>
     rendering for actual/pickup-leg route segments (needs synthetic
     `actual_route_segments` shaped to match the `routeSegments` utility's
     exact phase/coordinate format — diminishing returns for this pass).
+  - **rider-app `app/(tabs)/index.tsx`: 70.6% → 85.5% lines.** Already had
+    a comprehensive `homeScreen.test.tsx` (16 tests: active-ride redirect
+    switch, notification-permission banner, AI button, promo banner, quick
+    actions, RiderSOS wiring) — extended in place. Added 16 more tests:
+    the full location-permission flow (`refreshLocation`'s branches —
+    already-granted, request-then-granted, denied-after-request on both
+    iOS `Linking.openURL('app-settings:')` and Android
+    `Linking.openSettings()`, and a swallowed `Linking` failure not
+    crashing the screen), the cached-last-known-location seed from
+    AsyncStorage and the OS-cache persist-before-fresh-fix path, the
+    Open-Meteo weather fetch setting/not-setting `temperature`, all three
+    `getGreeting()` hour bands (parameterized via `jest.setSystemTime`),
+    the `AppState` foreground-listener re-triggering `refreshLocation`
+    only on `'active'` (not `'background'`), and the co-located-driver
+    ring-spread logic (`displayDrivers`) — asserted via the real
+    (unmocked-props) `CarMarker` import that 3 drivers at the identical
+    coordinate render 3 distinct `CarMarker`s with non-identical
+    coordinates, while a lone driver's coordinate passes through
+    unchanged. Footgun: `allText()`'s `JSON.stringify` on a `<Text>`
+    child array renders `[" · ",19,"°C"]`, not a concatenated `"19°C"`
+    string — match the literal stringified array shape, not the visual
+    text. 16 new tests (32 total in the file); full rider-app suite still
+    green (120 suites / 1188 tests), `yarn tsc --noEmit` clean. Remaining
+    uncovered: map-control zoom/recenter button handlers and the
+    promo-code entry bottom sheet (355-392, 514-533) — good next
+    increment for a future pass on this file.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

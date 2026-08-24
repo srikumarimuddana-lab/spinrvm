@@ -556,6 +556,10 @@ class AppSettings(BaseModel):
     # When true, escalate_to_support creates a Zoho ticket. Default is a
     # deep-link handoff only — the AI triggers no server-side side effects.
     ai_escalation_creates_ticket: bool = False
+    # Public website assistant (spinr.ca chat widget -> POST /ai/public-chat,
+    # backend/ai/public_assistant.py). Separate from ai_assistant_enabled so the
+    # anonymous surface can be turned off on its own; both must be on. Ships dark.
+    ai_public_chat_enabled: bool = False
     # Shown under the chat input in both apps; also returned by /ai/config.
     ai_disclaimer: str = "AI answers can be inaccurate. For emergencies, call 911 or use the SOS button."
     # ── iOS Live Activity APNs (Phase 3, .p8 token auth) ─────────────────

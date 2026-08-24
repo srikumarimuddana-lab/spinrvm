@@ -8312,10 +8312,33 @@ record of what was assumed vs. what was actually true</summary>
     afterward instead of leaving `submitting` stuck `true` forever. No
     new footguns. 5 tests; full rider-app suite still green (118 suites
     / 1118 tests), `yarn tsc --noEmit` clean.
-  - **Next in the ranked list:** rider-app's `privacy-settings.tsx`
-    (56.1%), `(tabs)/account.tsx` (64.4%); driver-app's
-    `driver/settings.tsx` (49.6%), `driver/notifications.tsx` (56.8%),
-    `login.tsx` (62.9%). This is an open-ended coverage-improvement
+  - **rider-app `app/privacy-settings.tsx`: 56.1% → 95.5% lines.**
+    Already had `privacySettingsToggles.test.tsx`, which covers the
+    push-notification toggle's hydrate/save/revert path and confirms the
+    two dead rows (Background Location, Share Live Trip Data) stay
+    removed — but only by turning the push toggle OFF, so it never
+    exercised the turn-ON permission-check branch at all. Added
+    `privacySettingsScreen.test.tsx` (11 tests) covering the rest:
+    turning push ON with permission already granted (saves directly);
+    with permission not yet granted, requesting it and saving if granted
+    or toasting + opening device Settings without ever calling the
+    preferences mutation if denied; the three marketing-consent toggles'
+    hydrate-from-GET and independent optimistic-save-with-revert paths;
+    `handleDownloadData`'s success/failure toasts;
+    `handleDeleteAccount`'s confirm-sheet → DELETE → logout →
+    `/login`-navigate happy path and its failure-toasts-instead-of-
+    navigating path; and the Privacy Policy/Terms of Service rows'
+    navigation to `/legal` with the right `type` param. Needed a
+    `@shared/services/firebase` mock (`checkNotificationPermission`/
+    `requestNotificationPermission`/`openNotificationSettings`) that the
+    existing file never needed, precisely because it never drove the
+    ON-toggle branch that calls them. No new footguns. 11 tests; full
+    rider-app suite still green (119 suites / 1129 tests), `yarn tsc
+    --noEmit` clean.
+  - **Next in the ranked list:** rider-app's `(tabs)/account.tsx`
+    (64.4%); driver-app's `driver/settings.tsx` (49.6%),
+    `driver/notifications.tsx` (56.8%), `login.tsx` (62.9%). This is an
+    open-ended coverage-improvement
     effort, not a finish-line-shaped one like sub-item 4 —
     pick up wherever a future session left off by re-running the per-app
     `--collectCoverageFrom` coverage command above and ranking by line %.

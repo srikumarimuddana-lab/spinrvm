@@ -49,6 +49,7 @@ import {
 } from "@/lib/api";
 import { MapPin } from "lucide-react";
 import { LegacyBookingImport } from "./_components/LegacyBookingImport";
+import { LegacyWalletImport } from "./_components/LegacyWalletImport";
 import { useAuthStore } from "@/store/authStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -770,6 +771,13 @@ export default function BulkOperationsPage() {
                 and driver trip history
             </div>
             <LegacyBookingImport />
+
+            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                <Upload className="h-4 w-4" />
+                Legacy Wallet-Balance Import — apply historical rider/driver wallet
+                adjustments from the previous app
+            </div>
+            <LegacyWalletImport />
         </div>
     );
 }

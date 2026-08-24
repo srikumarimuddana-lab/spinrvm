@@ -8759,6 +8759,21 @@ record of what was assumed vs. what was actually true</summary>
     matched twice (status badge + timeline step) — switched to
     `getAllByText(...).length).toBe(2)`. 25 tests; full driver-app suite
     still green (114 suites / 1196 tests), `yarn tsc --noEmit` clean.
+  - **driver-app `app/legal.tsx`: 81.2% → 100% lines.** Already had
+    `legalScreen.test.tsx` (6 tests: combined vs single-doc mode,
+    fallback-on-empty and fallback-on-throw for the combined fetch,
+    single-doc fallback-on-empty, back nav) — extended in place (+4
+    tests) to close the remaining gaps: single-doc mode's own
+    fetch-throws fallback path (previously only the combined-fetch throw
+    branch was tested); the scroll-to-section effect that fires 150ms
+    after `loading` flips false when `type=privacy`/`type=tos` (asserted
+    only that it runs without crashing — react-test-renderer doesn't
+    expose `ScrollView`'s imperative `scrollTo` on a host ref, so the
+    actual scroll call isn't independently observable here); and the two
+    `onLayout` handlers that record the Privacy/ToS section Y-offsets
+    for that same scroll-to effect, invoked directly with synthetic
+    layout events. 10 tests; full driver-app suite still green (114
+    suites / 1200 tests), `yarn tsc --noEmit` clean.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

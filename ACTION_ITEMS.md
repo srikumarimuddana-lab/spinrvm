@@ -8774,6 +8774,27 @@ record of what was assumed vs. what was actually true</summary>
     for that same scroll-to effect, invoked directly with synthetic
     layout events. 10 tests; full driver-app suite still green (114
     suites / 1200 tests), `yarn tsc --noEmit` clean.
+  - **driver-app `app/profile-setup.tsx`: 82.5% → 99.3% lines.** Already
+    had a comprehensive `profileSetupScreen.test.tsx` (17 tests) — only
+    the first-name validation branch was exercised of the six
+    field-specific checks, and the location-based service-area
+    auto-select, gender Female/Other buttons, referral transient-retry,
+    and consent-check-itself-rejects paths were all untested. Extended
+    in place (+10 tests): the remaining five validation-order toasts
+    (last name, blank email, invalid email, gender, service area) each
+    fired with every earlier field already valid, matching the source's
+    own in-order early-return checks; Female/Other gender selection;
+    granted-permission location auto-select (asserts the form validates
+    without ever pressing an area chip) and the
+    request-permission-then-denied branch that skips
+    `getCurrentPositionAsync` entirely; a referral apply that fails
+    once with a non-4xx (network) error and succeeds on retry (real
+    timers — the source's own 400ms backoff — waited out with a real
+    `setTimeout`, not `jest.advanceTimersByTime`, since this suite never
+    switches to fake timers); and the post-submit `/consent/status` call
+    itself rejecting, which fails open to `/driver` same as a
+    `needs_notice: false` response. 27 tests; full driver-app suite
+    still green (114 suites / 1210 tests), `yarn tsc --noEmit` clean.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

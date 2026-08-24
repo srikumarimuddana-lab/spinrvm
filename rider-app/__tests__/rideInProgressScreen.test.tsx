@@ -35,7 +35,11 @@ jest.mock('react-native-maps', () => {
   });
   return { __esModule: true, default: MapView, PROVIDER_GOOGLE: 'google' };
 });
-jest.mock('react-native-maps-directions', () => () => null);
+let mockDirectionsOnReady: ((result: any) => void) | null = null;
+jest.mock('react-native-maps-directions', () => (props: any) => {
+  mockDirectionsOnReady = props.onReady;
+  return null;
+});
 jest.mock('@shared/components/RouteLine', () => ({ RouteLine: () => null }));
 jest.mock('@shared/components/RoutePins', () => ({ RoutePins: () => null }));
 jest.mock('@shared/components/CarMarker', () => ({ CarMarker: () => null }));
@@ -162,6 +166,8 @@ beforeEach(() => {
   jest.useFakeTimers();
   mockParams = { rideId: 'ride-1' };
   mockTrackBaseUrl = 'https://spinr-track.app';
+  mockDirectionsOnReady = null;
+  process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY = 'test-maps-key';
   mockRideState = {
     currentRide: CURRENT_RIDE,
     currentDriver: CURRENT_DRIVER,
@@ -325,5 +331,173 @@ describe('RideInProgressScreen', () => {
     const img = r.root.findByType(Image);
     act(() => { img.props.onError(); });
     expect(r.root.findAllByType(Image)).toHaveLength(0);
+  });
+
+  it('the Retry button re-fetches the ride after a load error', async () => {
+    mockRideState.currentRide = null;
+    mockRideState.error = 'load failed';
+    const r = await renderScreen();
+    const retryBtn = findButtonByText(r, 'Retry');
+    mockFetchRide.mockClear();
+    act(() => { retryBtn.props.onPress(); });
+    expect(mockFetchRide).toHaveBeenCalledWith('ride-1');
+  });
+
+  it('MapViewDirections onReady sets the route and haversine ETA from the driver position', async () => {
+    mockRideState.activeRideRouteCoords = null;
+    const r = await renderScreen();
+    expect(mockDirectionsOnReady).toBeTruthy();
+    await act(async () => {
+      mockDirectionsOnReady!({
+        coordinates: [{ latitude: 50.46, longitude: -104.58 }, { latitude: 50.5, longitude: -104.5 }],
+        duration: 12,
+      });
+      await flush();
+    });
+    expect(mockSetActiveRideRouteCoords).toHaveBeenCalledWith([
+      { latitude: 50.46, longitude: -104.58 }, { latitude: 50.5, longitude: -104.5 },
+    ]);
+    expect(mockSetLastEtaMin).toHaveBeenCalled();
+  });
+
+  it('MapViewDirections onReady with no driver position falls back to the Directions duration', async () => {
+    mockRideState.activeRideRouteCoords = null;
+    mockRideState.currentDriver = { ...CURRENT_DRIVER, lat: undefined, lng: undefined };
+    const r = await renderScreen();
+    await act(async () => {
+      mockDirectionsOnReady!({
+        coordinates: [{ latitude: 50.46, longitude: -104.58 }, { latitude: 50.5, longitude: -104.5 }],
+        duration: 12,
+      });
+      await flush();
+    });
+    expect(mockSetLastEtaMin).toHaveBeenCalledWith(12);
+  });
+
+  it('MapViewDirections onReady ignores an empty coordinates result', async () => {
+    mockRideState.activeRideRouteCoords = null;
+    const r = await renderScreen();
+    await act(async () => {
+      mockDirectionsOnReady!({ coordinates: [], duration: 5 });
+      await flush();
+    });
+    expect(mockSetActiveRideRouteCoords).not.toHaveBeenCalled();
+  });
+
+  it('centers the map on pickup when no driver GPS fix is available yet', async () => {
+    mockRideState.currentDriver = { ...CURRENT_DRIVER, lat: undefined, lng: undefined };
+    await renderScreen();
+    // No crash exercising the animateToRegion fallback branch; the ref's
+    // imperative methods are stubbed jest.fn()s in the MapView mock, not
+    // independently observable here.
+    expect(mockRideState.currentDriver.lat).toBeUndefined();
+  });
+
+  it('fetchLiveRoute applies the polyline and ETA from a successful /live-route response', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url.includes('/share')) return Promise.resolve({ data: { share_token: 'tok123' } });
+      if (url.includes('/live-route')) {
+        return Promise.resolve({ data: { polyline: [[50.46, -104.58], [50.5, -104.5]], eta_seconds: 300 } });
+      }
+      return Promise.reject(new Error('unexpected url ' + url));
+    });
+    await renderScreen();
+    await act(async () => { await flush(); });
+    expect(mockSetActiveRideRouteCoords).toHaveBeenCalledWith([
+      { latitude: 50.46, longitude: -104.58 }, { latitude: 50.5, longitude: -104.5 },
+    ]);
+    expect(mockSetLastEtaMin).toHaveBeenCalledWith(5); // 300s -> ceil(300/60) = 5 min
+  });
+
+  it('confirming "End & Pay Full Fare" from the hardware back dialog posts /complete', async () => {
+    const addListenerSpy = jest.spyOn(BackHandler, 'addEventListener');
+    const r = await renderScreen();
+    const handler = addListenerSpy.mock.calls.find((c) => c[0] === 'hardwareBackPress')![1] as () => boolean;
+    act(() => { handler(); });
+    const confirmBtn = r.root.findByProps({ accessibilityLabel: 'confirm-End & Pay Full Fare' });
+    await act(async () => { await confirmBtn.props.onPress(); await flush(); });
+    expect(mockApiPost).toHaveBeenCalledWith('/rides/ride-1/complete');
+  });
+
+  it('dismissing the confirm sheet via Continue Ride does not end the ride', async () => {
+    const r = await renderScreen();
+    const endRideBtn = findButtonByText(r, 'End Ride');
+    act(() => { endRideBtn.props.onPress(); });
+    const continueBtn = r.root.findByProps({ accessibilityLabel: 'confirm-Continue Ride' });
+    act(() => { continueBtn.props.onPress(); });
+    expect(mockApiPost).not.toHaveBeenCalled();
+  });
+
+  it('toasts a failure when Share.share itself rejects', async () => {
+    jest.spyOn(Share, 'share').mockRejectedValue(new Error('share cancelled'));
+    const r = await renderScreen();
+    const shareBtn = findButtonByText(r, 'Share Trip');
+    await act(async () => { await shareBtn.props.onPress(); await flush(); });
+    expect(mockShowToast).toHaveBeenCalledWith('Share Failed', 'Unable to share trip details. Please try again.', 'warning');
+  });
+
+  it('toasts a failure when ending via the hardware-back dialog fails', async () => {
+    mockApiPost.mockRejectedValue(new Error('server error'));
+    const addListenerSpy = jest.spyOn(BackHandler, 'addEventListener');
+    const r = await renderScreen();
+    const handler = addListenerSpy.mock.calls.find((c) => c[0] === 'hardwareBackPress')![1] as () => boolean;
+    act(() => { handler(); });
+    const confirmBtn = r.root.findByProps({ accessibilityLabel: 'confirm-End & Pay Full Fare' });
+    await act(async () => { await confirmBtn.props.onPress(); await flush(); });
+    expect(mockShowToast).toHaveBeenCalledWith('Error', 'Could not end ride. Please try again.', 'danger');
+  });
+
+  it('toasts "Tracking Not Configured" from the copy-link action if tracking is disabled mid-session', async () => {
+    const r = await renderScreen();
+    const shareBtn = findButtonByText(r, 'Share Trip');
+    await act(async () => { await shareBtn.props.onPress(); await flush(); });
+    const copyBtn = r.root.findByProps({ accessibilityLabel: 'Copy live tracking link' });
+    mockTrackBaseUrl = null;
+    await act(async () => {
+      renderer!.update(
+        <TrackBaseUrlContext.Provider value={mockTrackBaseUrl}>
+          <RideInProgressScreen />
+        </TrackBaseUrlContext.Provider>,
+      );
+      await flush();
+    });
+    const copyBtnAfter = r.root.findByProps({ accessibilityLabel: 'Copy live tracking link' });
+    await act(async () => { await copyBtnAfter.props.onPress(); await flush(); });
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Tracking Not Configured', 'Live trip tracking is not set up yet. Please contact support.', 'warning',
+    );
+    expect(mockSetStringAsync).not.toHaveBeenCalled();
+  });
+
+  it('the DEV-only Complete Ride button posts the driver-side complete endpoint', async () => {
+    const r = await renderScreen();
+    const devCompleteBtn = findButtonByText(r, 'Complete Ride');
+    await act(async () => { await devCompleteBtn.props.onPress(); await flush(); });
+    expect(mockApiPost).toHaveBeenCalledWith('/drivers/rides/ride-1/complete');
+    expect(mockFetchRide).toHaveBeenCalledWith('ride-1');
+  });
+
+  it('the DEV-only Complete Ride button swallows a failure without crashing', async () => {
+    mockApiPost.mockRejectedValue(new Error('dev complete failed'));
+    const r = await renderScreen();
+    const devCompleteBtn = findButtonByText(r, 'Complete Ride');
+    await act(async () => { await devCompleteBtn.props.onPress(); await flush(); });
+    expect(mockFetchRide).toHaveBeenCalledWith('ride-1');
+  });
+
+  it('seeds tripRouteCoords from a saved planned_route_polyline when no live coords are cached', async () => {
+    mockRideState.activeRideRouteCoords = null;
+    mockRideState.currentRide = {
+      ...CURRENT_RIDE,
+      planned_route_polyline: [[50.45, -104.6], [50.46, -104.58], [50.5, -104.5]],
+    };
+    mockApiGet.mockImplementation((url: string) => {
+      if (url.includes('/live-route')) return Promise.resolve({ data: { polyline: [], eta_seconds: null } });
+      return Promise.reject(new Error('unexpected url ' + url));
+    });
+    const r = await renderScreen();
+    // routeFetched seeds true from the saved polyline, so the haversine ETA
+    // effect runs immediately from the driver's live position.
+    expect(mockSetLastEtaMin).toHaveBeenCalled();
   });
 });

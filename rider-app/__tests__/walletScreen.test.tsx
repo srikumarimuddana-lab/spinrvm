@@ -387,6 +387,71 @@ describe('WalletScreen', () => {
     expect(mockInitPaymentSheet).not.toHaveBeenCalled();
   });
 
+  it('falls back to the generic icon/color for an unrecognised transaction type', async () => {
+    mockWalletState.transactions = [
+      { id: 't1', type: 'mystery_type', amount: '5.00', description: '', created_at: '2026-01-01T00:00:00Z', reference_id: null, metadata: null },
+    ];
+    const r = await renderScreen();
+    // Falls back to `colors.textDim` (#666) rather than crashing or using
+    // an undefined color for a type TXN_COLORS/TXN_ICONS don't recognise.
+    expect(r.root.findAllByProps({ name: 'swap-horizontal' }).length).toBeGreaterThan(0);
+  });
+
+  it('shows ride-metadata (pickup/dropoff/booking id) for a ride_payment with saved metadata', async () => {
+    mockWalletState.transactions = [
+      {
+        id: 't1', type: 'ride_payment', amount: '-15.00', description: '',
+        created_at: '2026-01-01T00:00:00Z', reference_id: 'ride-abcdef123',
+        metadata: { pickup_address: '100 Main St', dropoff_address: '200 Elm St', ride_code: 'RIDE001' },
+      },
+    ];
+    const r = await renderScreen();
+    expect(allText(r)).toContain('100 Main St');
+    expect(allText(r)).toContain('200 Elm St');
+    expect(allText(r)).toContain('RIDE001');
+  });
+
+  it('falls back to the reference_id prefix for the booking id when ride_code is absent', async () => {
+    mockWalletState.transactions = [
+      {
+        id: 't1', type: 'ride_payment', amount: '-15.00', description: '',
+        created_at: '2026-01-01T00:00:00Z', reference_id: 'ride-abcdef123',
+        metadata: { pickup_address: '100 Main St', dropoff_address: '200 Elm St' },
+      },
+    ];
+    const r = await renderScreen();
+    expect(allText(r)).toContain('RIDE-ABC');
+  });
+
+  it('defaults the balance to $0.00 when wallet is null', async () => {
+    mockWalletState.wallet = null;
+    const r = await renderScreen();
+    expect(allText(r)).toContain('["$","0.00"]');
+  });
+
+  it('shows the loading skeleton while wallet/transactions are still loading and none are cached', async () => {
+    mockWalletState.walletLoading = true;
+    const r = await renderScreen();
+    expect(allText(r)).not.toContain('No transactions yet');
+  });
+
+  it('shows a spinner on the Add Funds button while the top-up is in flight', async () => {
+    let resolveTopUp: (v: any) => void;
+    mockTopUp.mockReturnValue(new Promise((resolve) => { resolveTopUp = resolve; }));
+    const r = await renderScreen();
+    const topUpBtn = findButtonByText(r, 'Top Up');
+    act(() => { topUpBtn.props.onPress(); });
+    const chip25 = findButtonByText(r, '"$",25');
+    act(() => { chip25.props.onPress(); });
+    const addFundsBtn = findButtonByText(r, 'Add $25.00');
+    act(() => { addFundsBtn.props.onPress(); });
+    expect(allText(r)).not.toContain('Add $25.00');
+    await act(async () => {
+      resolveTopUp!({ paymentIntent: 'pi_secret', ephemeralKey: 'ek_1', customer: 'cus_1' });
+      await flush();
+    });
+  });
+
   it('closes the top-up panel and resets the form when Cancel is pressed', async () => {
     const r = await renderScreen();
     const topUpBtn = findButtonByText(r, 'Top Up');

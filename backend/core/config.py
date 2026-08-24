@@ -223,6 +223,20 @@ class Settings(BaseSettings):
     SENTRY_PROJECT_ADMIN: Optional[str] = None
     SENTRY_PROJECT_ALL: Optional[str] = None
 
+    # Sentry's `environment` facet, decoupled from ENV. Defaults to unset, in
+    # which case server.py falls back to ENV and behavior is unchanged.
+    #
+    # This exists for the canary tier (docs/adr/011-environment-topology.md
+    # §3), which must run ENV="production" — App Check enforcement, HSTS, the
+    # secure-cookie flag, and APNs endpoint selection are each single-gated on
+    # that exact string, so a canary serving real traffic with any other value
+    # would silently degrade security and break iOS push. Deriving Sentry's
+    # environment from ENV would then file every canary error under
+    # "production", making a canary rollout un-triageable. Setting
+    # SENTRY_ENVIRONMENT="canary" separates the two without touching any
+    # behavioral branch.
+    SENTRY_ENVIRONMENT: Optional[str] = None
+
     # Operational alerting — Slack-compatible incoming webhook URL.
     # When set, the loop watchdog posts a message here whenever a background
     # loop goes stale.  Leave unset in development; required in production.

@@ -119,7 +119,12 @@ Canary is distinguished from production by things that carry no behavioral
 gating:
 
 - `SENTRY_ENVIRONMENT=canary` — separates canary errors in Sentry without
-  touching any `ENV` branch.
+  touching any `ENV` branch. This required a small backend change: Sentry's
+  `environment` facet was derived from `settings.ENV`
+  (`backend/server.py`), which would have filed every canary error under
+  "production" and made a canary rollout un-triageable. A new optional
+  `SENTRY_ENVIRONMENT` setting now takes precedence, falling back to `ENV`
+  when unset — so behavior is unchanged on every tier that does not set it.
 - `SPINR_DEPLOY_TIER=canary` — a new, purely-descriptive variable for logs and
   metric labels. Nothing branches on it.
 - Cloudflare weighted routing on `api-spinr.spinr.ca` sends ~5% of traffic.

@@ -514,7 +514,15 @@ if sentry_dsn:
         integrations=integrations,
         traces_sample_rate=0.1,
         profiles_sample_rate=0.1,
-        environment=settings.ENV if hasattr(settings, "ENV") else "production",
+        # Prefer an explicit SENTRY_ENVIRONMENT over ENV so a tier that must
+        # run ENV="production" for behavioral reasons (the canary — see
+        # docs/adr/011-environment-topology.md §3) can still be separated in
+        # Sentry. Unset everywhere else, so this falls back to ENV and
+        # behavior is unchanged.
+        environment=(
+            getattr(settings, "SENTRY_ENVIRONMENT", None)
+            or (settings.ENV if hasattr(settings, "ENV") else "production")
+        ),
         **pipeda_sentry_options(),
     )
 

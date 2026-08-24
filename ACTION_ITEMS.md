@@ -9790,11 +9790,21 @@ record of what was assumed vs. what was actually true</summary>
     worth remembering for any other screen whose effect depends on an
     API-fetched array reference. Money-critical (PCI-DSS surface, Add
     Card / Set Default / Delete / pay-for-ride charge routing);
-    `spinr-money-auditor` review of the diff requested before PR open
-    per this session's established pattern for money-critical screens —
-    result to be folded in once it returns. 31 tests; full rider-app
-    suite still green (123 suites / 1519 tests), `yarn tsc --noEmit`
-    clean.
+    `spinr-money-auditor` reviewed the diff and returned SAFE —
+    production file confirmed untouched, and every money-relevant
+    assertion (the "Use & Pay"-on-existing-card path never calling
+    `createPaymentMethod` and routing with the real existing card id,
+    the `payRideWithCard` tip/rated-absent param construction, the
+    createPaymentMethod-not-ready guard, the default-selection and
+    selected-card-preservation fallbacks, and all three delete-confirm
+    message branches) traced against the real logic and confirmed
+    correct. One non-blocking nit noted: the selected-card-preservation
+    refetch fixture sets both cards' `is_default` to `true`
+    simultaneously (unrealistic app state) — doesn't affect what the
+    test actually verifies, since only the selected card's own
+    `is_default` value drives whether "Set Default" renders. 31 tests;
+    full rider-app suite still green (123 suites / 1519 tests), `yarn
+    tsc --noEmit` clean.
   - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
     85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
     tests: no-account-prefill, the CRC-consent auto-check-when-

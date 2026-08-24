@@ -9263,6 +9263,36 @@ record of what was assumed vs. what was actually true</summary>
     1360 tests), `yarn tsc --noEmit` clean. **This closes out the last
     item on the 2026-08-24 fresh-coverage-sweep ranked list** — a
     further fresh sweep is needed to find the next tier.
+  - **Fresh coverage sweep (2026-08-24, post-#4513/#4515-merge) — next
+    tier identified.** Re-ran both apps'
+    `--collectCoverageFrom='app/**/*.{ts,tsx}'` coverage against `main`
+    at `cbfdc28` (123 rider-app suites / 1360 tests, 115 driver-app
+    suites / 1243 tests, both fully green) and ranked by line %
+    (`_layout.tsx` files excluded — near-zero by nature, not a real
+    gap). Two PRs from the prior tier were still open (not yet merged)
+    at measurement time — `ride-status.tsx` (#4507) and
+    `emergency-contacts.tsx` (#4514) — so this list reflects their
+    pre-PR numbers; both PRs already close those two gaps once merged.
+    Next tier, worst first:
+    - **rider-app:** `ride-options.tsx` (80.7% — the file this session's
+      earlier rounds already extended twice; still has room at 2284
+      lines, the largest screen in the app), `ride-status.tsx` (84.5% —
+      superseded by open PR #4507, → 97.4%), `emergency-contacts.tsx`
+      (87.5% — superseded by open PR #4514, → 100%), `driver-arrived.tsx`
+      (88.2%), `(tabs)/activity.tsx` (88.4%), `ride-completed.tsx`
+      (89.5%), `notifications.tsx` (89.7%), `scheduled-rides.tsx`
+      (90.4%), `wallet.tsx` (90.9%).
+    - **driver-app:** unchanged from the prior sweep (no driver-app PRs
+      landed this round) — `driver/(tabs)/index.tsx` (74.5%),
+      `become-driver.tsx` (80.7%), `documents.tsx` (86.8%),
+      `vehicle-info.tsx` (88.3%), `login.tsx` (88.7%), `driver/payout.tsx`
+      (88.8%), `driver/tax-documents.tsx` (88.9% — documented dead-code
+      remainder, not a real gap), `driver/payout-history.tsx` (89.4%),
+      `driver/ride-detail.tsx` (89.5%).
+    Sub-item 5 continues as an open-ended effort — pick up from this
+    list wherever a future session left off, re-running the coverage
+    command above to confirm current numbers before starting (they'll
+    have moved since this snapshot, and #4507/#4514 may have merged).
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

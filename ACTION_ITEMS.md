@@ -8869,6 +8869,74 @@ record of what was assumed vs. what was actually true</summary>
     the 2026-08-24 fresh-coverage-sweep ranked list across both apps** —
     a further fresh sweep is needed to find the next tier, same as the
     original ranked-worst-offenders list before it.
+  - **Fresh coverage sweep (2026-08-24, post-#4476-merge) — next tier
+    identified.** Re-ran both apps' `--collectCoverageFrom='app/**/*.{ts,tsx}'`
+    coverage against `main` (122 rider-app suites / 1241 tests, 115
+    driver-app suites / 1243 tests, both fully green) and ranked by line
+    % (`_layout.tsx` files excluded — near-zero by nature, not a real
+    gap). Every screen from the two prior ranked lists has moved off the
+    worst-15 for its app, confirming this round's fixes stuck. Next
+    tier, worst first:
+    - **rider-app:** `search-destination.tsx` (70.5%, new to any prior
+      list), `ride-in-progress.tsx` (76.9%), `driver-arriving.tsx`
+      (77.5%), `payment-confirm.tsx` (80.0%), `ride-options.tsx` (80.7%
+      — the file this session's earlier round already extended twice;
+      still has room at 2284 lines), `work-profile.tsx` (81.5%),
+      `ride-status.tsx` (84.5%), `loyalty.tsx` (85.4%), `(tabs)/index.tsx`
+      (85.5% — up from 70.6% two sweeps ago, still worst-offender-tier),
+      `emergency-contacts.tsx` (87.5%), `verify-email.tsx` (87.5%).
+    - **driver-app:** `driver/(tabs)/index.tsx` (74.5% — unchanged since
+      this session's own close-out; still worst in the app at 1359
+      lines), `become-driver.tsx` (80.7% — also unchanged since its own
+      close-out), `documents.tsx` (86.8%, new), `vehicle-info.tsx`
+      (88.3%, new), `login.tsx` (88.7% — driver-app's own, closed
+      earlier this session), `driver/payout.tsx` (88.8%, new),
+      `driver/tax-documents.tsx` (88.9% — unchanged, its 3 remaining
+      uncovered lines are documented dead code, not a real gap),
+      `driver/payout-history.tsx` (89.4%, new), `driver/ride-detail.tsx`
+      (89.5% — unchanged since its own close-out).
+    Sub-item 5 continues as an open-ended effort — pick up from this
+    list wherever a future session left off, re-running the coverage
+    command above to confirm current numbers before starting (they'll
+    have moved since this snapshot).
+  - **rider-app `app/search-destination.tsx`: 70.5% → 95.4% lines.**
+    Already had `searchDestinationPinIntegrity.test.tsx` (stale-pin
+    incident regression) and `searchDestinationScreen.test.tsx` (20
+    tests: predictions/stops/quick-access/search-button/clear/map-pick
+    return) — extended the latter in place (+23 tests) to close most of
+    the remaining gap: the `locationReady` 2s no-bias fallback timer;
+    the mount GPS fetch's three real branches (permission already
+    granted, permission requested-then-granted, and a post-grant GPS
+    throw) — previously the whole GPS-fetch block was untested since the
+    file-level `expo-location` mock was a fixed always-denied stub,
+    rewritten to named `mockGetForegroundPermissionsAsync`/
+    `mockRequestForegroundPermissionsAsync`/`mockGetCurrentPositionAsync`
+    so each test can override the resolved value; the
+    `userLocation`-resolves-so-set-pickup-to-Current-Location effect;
+    `getPlaceDetails` throwing (both prediction-select and the
+    stored-entry re-resolve paths); `handleSelectPrediction`'s pickup
+    and stop branches (previously only the dropoff branch was
+    exercised); `handleTextChange`'s pickup/stop orphan-the-stale-point
+    branches (previously only dropoff); `handleFieldFocus`'s
+    seed-vs-clear search-query branches; `handleSelectLocation`'s
+    pickup/stop branches plus its place_id-re-resolve-over-stale-stored-
+    coords path; the Work chip's no-address-saved toast (Home's
+    equivalent was already pinned); Favourites and the Home/Work
+    "Saved Places" list rows; the pickup field's own clear (X) button;
+    and the three submit-editing focus-chain branches (pickup→stop,
+    stop→next-stop, dropoff→search). Two TS-only fixes needed after the
+    coverage pass, both recurring footguns from this session: the
+    `expo-location` mock functions needed an explicit `Promise<any>`
+    return-type annotation (the initial `jest.fn(() => Promise.reject(...))`
+    let TS infer `Promise<never>`, which then rejected a later
+    `.mockResolvedValue({coords: ...})` call as a type mismatch); and
+    the `(...a: any[]) => mockX(...a)` wrapper pattern used elsewhere in
+    this file failed `tsc` with the same "spread argument must have a
+    tuple type" error seen on `driver/quests.tsx` earlier this session —
+    fixed the same way, dropping the spread (`(..._a: any[]) => mockX()`)
+    since these particular mocks take no meaningful arguments anyway. 43
+    tests; full rider-app suite still green (122 suites / 1264 tests),
+    `yarn tsc --noEmit` clean.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

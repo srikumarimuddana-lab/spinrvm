@@ -9679,11 +9679,19 @@ record of what was assumed vs. what was actually true</summary>
     reference `routeLabel` at all) — a latent unused computation, not a
     bug, not chased. No bug found in production code. Money-adjacent
     (fare/payment display) but not money-critical (no wallet/Stripe
-    write); `spinr-money-auditor` review of the diff requested before PR
-    open per this session's established pattern for money-adjacent
-    screens — result to be folded in once it returns. 57 tests; full
-    rider-app suite still green (123 suites / 1484 tests), `yarn tsc
-    --noEmit` clean.
+    write); `spinr-money-auditor` reviewed the diff and returned SAFE —
+    production file confirmed untouched, and every money-relevant
+    assertion (fare consolidation/reduce math incl. the null-amount-as-0
+    case, cancellation-fee total and its zero-fee suppression, tax
+    formatting incl. the zero-rate suffix omission, the NaN-to-`$0.00`
+    fallback, all payment-badge combinations on both cards) traced
+    line-by-line against the real logic and confirmed correct; one
+    initially-ambiguous case (the download-invoice double-tap test
+    asserting a single toast) was verified via an isolated
+    instrumentation run to be pre-existing, already-documented
+    Jest-environment behavior (the dynamic `import()` always throws
+    here), not a masked bug. 57 tests; full rider-app suite still green
+    (123 suites / 1484 tests), `yarn tsc --noEmit` clean.
   - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
     85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
     tests: no-account-prefill, the CRC-consent auto-check-when-

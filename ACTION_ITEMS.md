@@ -8900,6 +8900,44 @@ record of what was assumed vs. what was actually true</summary>
     list wherever a future session left off, re-running the coverage
     command above to confirm current numbers before starting (they'll
     have moved since this snapshot).
+  - **rider-app `app/search-destination.tsx`: 70.5% → 95.4% lines.**
+    Already had `searchDestinationPinIntegrity.test.tsx` (stale-pin
+    incident regression) and `searchDestinationScreen.test.tsx` (20
+    tests: predictions/stops/quick-access/search-button/clear/map-pick
+    return) — extended the latter in place (+23 tests) to close most of
+    the remaining gap: the `locationReady` 2s no-bias fallback timer;
+    the mount GPS fetch's three real branches (permission already
+    granted, permission requested-then-granted, and a post-grant GPS
+    throw) — previously the whole GPS-fetch block was untested since the
+    file-level `expo-location` mock was a fixed always-denied stub,
+    rewritten to named `mockGetForegroundPermissionsAsync`/
+    `mockRequestForegroundPermissionsAsync`/`mockGetCurrentPositionAsync`
+    so each test can override the resolved value; the
+    `userLocation`-resolves-so-set-pickup-to-Current-Location effect;
+    `getPlaceDetails` throwing (both prediction-select and the
+    stored-entry re-resolve paths); `handleSelectPrediction`'s pickup
+    and stop branches (previously only the dropoff branch was
+    exercised); `handleTextChange`'s pickup/stop orphan-the-stale-point
+    branches (previously only dropoff); `handleFieldFocus`'s
+    seed-vs-clear search-query branches; `handleSelectLocation`'s
+    pickup/stop branches plus its place_id-re-resolve-over-stale-stored-
+    coords path; the Work chip's no-address-saved toast (Home's
+    equivalent was already pinned); Favourites and the Home/Work
+    "Saved Places" list rows; the pickup field's own clear (X) button;
+    and the three submit-editing focus-chain branches (pickup→stop,
+    stop→next-stop, dropoff→search). Two TS-only fixes needed after the
+    coverage pass, both recurring footguns from this session: the
+    `expo-location` mock functions needed an explicit `Promise<any>`
+    return-type annotation (the initial `jest.fn(() => Promise.reject(...))`
+    let TS infer `Promise<never>`, which then rejected a later
+    `.mockResolvedValue({coords: ...})` call as a type mismatch); and
+    the `(...a: any[]) => mockX(...a)` wrapper pattern used elsewhere in
+    this file failed `tsc` with the same "spread argument must have a
+    tuple type" error seen on `driver/quests.tsx` earlier this session —
+    fixed the same way, dropping the spread (`(..._a: any[]) => mockX()`)
+    since these particular mocks take no meaningful arguments anyway. 43
+    tests; full rider-app suite still green (122 suites / 1264 tests),
+    `yarn tsc --noEmit` clean.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

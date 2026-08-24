@@ -45,8 +45,8 @@ async def _capture(coro_fn, settings=None):
 _CASES = [
     (
         lambda: re_mod.send_welcome_email(_USER),
-        "Welcome to Spinr",
-        "Welcome to Northern Rides",
+        "Welcome to Spinr — drivers keep 100% of your fare",
+        "Welcome to Northern Rides — drivers keep 100% of your fare",
     ),
     (
         lambda: re_mod.send_email_changed_notice(_USER, "old@example.com"),
@@ -93,7 +93,7 @@ async def test_welcome_body_mentions_the_configured_app_name():
         lambda: re_mod.send_welcome_email(_USER),
         settings={"company_app_name": "Northern Rides"},
     )
-    assert "book a ride from the Northern Rides app" in kwargs["rendered"].text
+    assert "Open the Northern Rides app" in kwargs["rendered"].text
     assert "Northern Rides is Saskatchewan-built" in kwargs["rendered"].text
 
 
@@ -120,5 +120,5 @@ async def test_app_name_is_independent_of_the_legal_entity_name_in_the_footer():
         lambda: re_mod.send_welcome_email(_USER),
         settings={"company_app_name": "Northern Rides", "company_name": "Spinr Mobility Inc."},
     )
-    assert kwargs["subject"] == "Welcome to Northern Rides"
+    assert kwargs["subject"] == "Welcome to Northern Rides — drivers keep 100% of your fare"
     assert "Spinr Mobility Inc." in kwargs["rendered"].html

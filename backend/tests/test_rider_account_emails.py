@@ -142,6 +142,43 @@ async def test_welcome_copy_states_the_zero_commission_model_and_tax_lines():
     assert "GST" in body and "PST" in body
 
 
+async def test_welcome_has_no_cta_when_app_download_url_is_unconfigured():
+    """No app_settings row configures company_app_download_url in this test's
+    Supabase mock, so utils.company_details resolves it to None — the email
+    must render without a button rather than a broken/placeholder link."""
+    kwargs = await _capture(lambda: re_mod.send_welcome_email({"id": "u1", "first_name": "Sam"}))
+    assert "Book your first ride" not in kwargs["rendered"].html
+
+
+async def test_welcome_cta_appears_when_app_download_url_is_configured():
+    import utils.company_details as cd_mod
+
+    with patch.object(
+        cd_mod,
+        "get_app_settings",
+        AsyncMock(return_value={"company_app_download_url": "https://spinr.onelink.me/book"}),
+    ):
+        kwargs = await _capture(lambda: re_mod.send_welcome_email({"id": "u1", "first_name": "Sam"}))
+    assert "Book your first ride" in kwargs["rendered"].html
+    assert "https://spinr.onelink.me/book" in kwargs["rendered"].html
+
+
+async def test_welcome_cta_omitted_for_an_unsafe_configured_url():
+    """A non-http(s) value (typo, javascript: paste) must degrade to no CTA,
+    matching utils.company_details._safe_app_download_url's contract — never
+    render an unsafe href just because a setting is technically non-empty."""
+    import utils.company_details as cd_mod
+
+    with patch.object(
+        cd_mod,
+        "get_app_settings",
+        AsyncMock(return_value={"company_app_download_url": "javascript:alert(1)"}),
+    ):
+        kwargs = await _capture(lambda: re_mod.send_welcome_email({"id": "u1", "first_name": "Sam"}))
+    assert "Book your first ride" not in kwargs["rendered"].html
+    assert "javascript:" not in kwargs["rendered"].html
+
+
 async def test_deletion_notice_states_the_retention_carve_out():
     # PIPEDA erasure here is satisfied by a lawful-retention carve-out, so the
     # rider must be told what is kept and for how long — not just "deleted".

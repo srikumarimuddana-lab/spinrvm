@@ -432,6 +432,13 @@ class AppSettings(BaseModel):
     company_phone: str = ""
     company_email: str = ""
     company_website: str = ""
+    # Smart/universal link for "open or install the app" CTAs in transactional
+    # email (rider welcome, etc). Deliberately separate from company_website:
+    # that's the marketing site, this should resolve to the app itself (an
+    # app-store listing or a universal link that opens the installed app).
+    # Empty = no app download link is configured yet; callers must omit the
+    # CTA rather than link to a blank/placeholder URL. See utils/rider_emails.py.
+    company_app_download_url: str = ""
     # Logo rendered in transactional-email headers. Empty = use the bundled
     # asset at backend/static/branding/spinr_logo.png, served by
     # routes/branding.py — which is the correct default, not a placeholder.

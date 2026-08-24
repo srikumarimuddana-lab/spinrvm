@@ -9548,6 +9548,65 @@ record of what was assumed vs. what was actually true</summary>
     money-critical guards should (block before any Stripe call, surface a
     toast, never silently proceed). 15 tests; full rider-app suite still
     green (123 suites / 1413 tests), `yarn tsc --noEmit` clean.
+  - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
+    85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
+    tests: no-account-prefill, the CRC-consent auto-check-when-
+    unpublished path, Personal-step validation, service-area selection
+    re-fetching vehicle types, Vehicle-step skip-when-empty/reject-when-
+    partial/9-year-cutoff, the full upload-source Alert dispatch
+    (Camera/Gallery/File × granted/denied/canceled/thrown), the expiry
+    date-picker's past/future rejection, Submit's consent gate, a full
+    successful submission with front+back doc mapping to legacy expiry
+    fields, and the header Logout/Back split) — extended in place (+16
+    tests). Closed: the hardcoded Saskatoon/Regina service-area fallback
+    when `/service-areas` itself fails; restoring an in-progress
+    AsyncStorage draft (step/personal/vehicle/docs) on mount, plus
+    tolerating a corrupt draft string without crashing; the vehicle-types
+    fetch's non-ok-response `Connection Error` toast; `fetchRequirements`
+    and `fetchCrcConsentText` both silently tolerating a thrown
+    (not just non-ok) fetch, including the CRC path's fetch-failure
+    consent auto-check; the camera-asset fallback filename generator
+    (`genFallbackFileName`) when `asset.fileName` is absent; the
+    Android upload-source Alert's Camera/Gallery/File-or-Cancel `onPress`
+    handlers specifically (the existing test only asserted the Alert's
+    shape, not that its buttons dispatch); a fully and validly filled
+    Vehicle step (year/make/model/plate + picking a vehicle-type chip)
+    actually advancing past Next; invoking Submit directly while consent
+    is unchecked (distinct from the existing disabled-prop assertion);
+    the Insurance/Inspection/Background/Work-Eligibility branches of
+    `getExpiryFieldForReq`'s keyword matcher (only the license branch
+    was previously exercised); tolerating a failed `POST
+    /drivers/crc-consent` without blocking the already-successful
+    registration; and both the iOS inline-picker Done button and
+    Android's auto-close-on-confirm date-picker behavior. Left
+    uncovered (not a real gap): `fetchVehicleTypes`'s own `!area` early
+    return is dead code in practice — its only call site
+    (`useEffect` at the `serviceAreaId` dependency) already guards with
+    `if (serviceAreaId)` before calling it, so the callback is never
+    actually invoked with a falsy area; `validateStep`'s `default` case
+    is likewise unreachable since `nextStep` (the only caller) is wired
+    only to the Personal/Vehicle/Documents step buttons; and
+    `saveDraft`'s `catch` requires a synchronous `AsyncStorage.setItem`
+    throw, not modeled by the existing mock. **Flagged, not fixed** (test-
+    only change; screen logic untouched per this task's scope): while
+    exercising the Work-Eligibility keyword branch, found that
+    `getExpiryFieldForReq` computes a `work_eligibility_expiry_date`
+    into the local `legacyExpiries` map exactly like the license/
+    insurance/inspection/background fields, but `handleSubmit`'s
+    destructure of that map into the `registerDriver()` payload only
+    reads out the other four — `work_eligibility_expiry_date` is
+    computed and then silently dropped, never sent to the backend. This
+    looks like a real latent gap (a Work Eligibility document's expiry
+    date is captured in the UI but never reaches the driver's
+    application), not intentional — worth a follow-up ticket to confirm
+    with the requirement's owner before fixing. 42 tests; full driver-app
+    suite still green (116 suites / 1278 tests — one unrelated pre-
+    existing flake in `subscriptionScreen.test.tsx` under coverage-
+    instrumented full-suite timing, passes standalone; not touched by
+    this change), `npx tsc --noEmit` clean, `npx eslint` clean on the
+    touched test file (the 3 pre-existing findings on its untouched
+    `datetimepicker` mock lines predate this change), `npm run build:web`
+    (`expo export --platform web`) exits 0.
     - **`driver/(tabs)/index.tsx` extended (2026-08-24, this session):**
       74.5% → 88.65% lines (85.5% statements, 75.2% branches, 89.7%
       functions), `__tests__/app/driverDashboardScreen.test.tsx` 34 → 51

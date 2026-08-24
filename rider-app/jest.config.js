@@ -86,20 +86,19 @@ module.exports = {
   ],
   coverageThreshold: {
     global: {
-      // ACTION_ITEMS.md B37: tightened to a near-ceiling floor 2026-08-22
-      // (user asked to "raise the thresholds toward the real ceiling").
-      // Raised again same day after adding real tests for all 5 files in
-      // lib/+services/ that previously had zero coverage (alert.ts,
-      // notifyError.ts, shareTripMessage.ts, rideLiveNotification.ts,
-      // rideVoltraLiveActivity.ts -- each now at or near 100%). Fresh
-      // measurement: lines 21.37%, statements 21.28%, functions 17.85%,
-      // branches 16.64% (up from 20.08%/19.96%/16.77%/15.47%). Raising
-      // further requires more new tests, not just re-measuring -- this is
-      // NOT the user's stated 100% target, only the honest ceiling of
-      // what's currently tested.
-      lines: 20,
-      functions: 16,
-      branches: 15,
+      // ACTION_ITEMS.md B37 milestone ratchet (see
+      // docs/testing/coverage-ratchet-plan.md): the extensive app/-screen
+      // test-authoring work logged in ACTION_ITEMS.md's B37 entry moved
+      // real coverage far past the last-set threshold below without the
+      // gate ever being tightened to track it. Fresh measurement
+      // 2026-08-24 (`npx jest --coverage`, 122/122 suites, 1241/1241
+      // tests): lines 76.42%, statements 74.73%, functions 71.77%,
+      // branches 65.68%. Threshold raised to ~2-3pts below that measured
+      // ceiling -- a real regression tripwire again instead of a stale
+      // floor 50+pts under actual. Next ratchet step per the plan doc.
+      lines: 73,
+      functions: 69,
+      branches: 63,
     },
   },
 };

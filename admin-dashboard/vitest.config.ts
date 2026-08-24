@@ -17,19 +17,17 @@ export default defineConfig({
       // route groups that also matter for coverage.
       include: ['src/lib/**', 'src/store/**', 'src/components/**', 'src/app/**'],
       exclude: ['src/components/ui/**'],
-      // ACTION_ITEMS.md B37: these thresholds were never actually enforced
-      // (ci.yml ran `vitest run` without `--coverage`, so this block was
-      // dead code) until fixed 2026-08-22, and `include` was widened the
-      // same day from 'src/app/dashboard/**' to all of 'src/app/**'.
-      // Tightened to a near-ceiling floor 2026-08-22 (user asked to
-      // "raise the thresholds toward the real ceiling"). Fresh
-      // measurement against the full `include` set: 19% statements /
-      // 12.98% branches / 11.66% functions / 20.64% lines. Previously
-      // carried several points of headroom (10/10/18/15); now only ~1pt
-      // below measured, so this is a tight regression tripwire, not
-      // slack. Raising further requires new tests, not just
-      // re-measuring -- this is NOT the user's stated 100% target, only
-      // the honest ceiling of what's currently tested.
+      // ACTION_ITEMS.md B37 milestone ratchet (see
+      // docs/testing/coverage-ratchet-plan.md): re-measured 2026-08-24
+      // (`npx vitest run --coverage`, 36/36 files, 351/351 tests):
+      // 19.11% statements / 13.05% branches / 11.71% functions / 20.75%
+      // lines -- essentially unchanged from the 2026-08-22 measurement
+      // this threshold was tightened against (19%/12.98%/11.66%/20.64%).
+      // Left as-is this round: already ~1-2pts below current measured on
+      // every metric, matching the plan doc's target gap, and admin-
+      // dashboard hasn't had the same screen-by-screen test-authoring
+      // pass rider-app/driver-app got. Raising further requires new
+      // tests, not just re-measuring.
       thresholds: {
         branches: 11,
         functions: 10,

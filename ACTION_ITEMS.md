@@ -9193,6 +9193,76 @@ record of what was assumed vs. what was actually true</summary>
     so this one reliably exercises the catch). 11 tests; full rider-app
     suite still green (123 suites / 1343 tests), `yarn tsc --noEmit`
     clean.
+  - **rider-app `app/(tabs)/index.tsx`: 85.5% → 99.16% stmts / 100%
+    lines** (second pass on this screen — the 70.6%→85.5% entry above is
+    from an earlier sweep). Already had `homeScreen.test.tsx` (32 tests:
+    active-ride redirects, notification banner, AI button, one quick
+    action, promo banner, RiderSOS props, the full location-permission
+    flow via `refreshLocation`, weather, greeting, AppState transitions,
+    driver ring-spread) — extended in place (+10 tests). The `AppMap`
+    mock's `useImperativeHandle` previously handed back a brand-new
+    `jest.fn()` on every render (no deps array), making its
+    `animateToRegion` un-assertable across renders — fixed by hoisting a
+    single module-level `mockAnimateToRegion` and adding a `[]` deps
+    array so the same fn instance survives re-renders. Closed:
+    `handleEnableNotifications`'s granted branch (only the denied branch
+    had a test); the notification-bell button (`router.push('/notifications')`,
+    never pressed); the Work/Saved quick actions (same
+    `handleQuickAction`→`/search-destination` shape as the already-tested
+    "Go home"); the location-change re-center effect, which only fires
+    `animateToRegion` from the *second* location update onward (the
+    first just seeds `hasCenteredRef` — verified both halves: no call on
+    mount's own GPS fix, a call on a subsequent AppState-triggered
+    refresh); `handleLocationPress` (the "Go to my location" button)
+    end-to-end — its permission-denied branch on both iOS (`Linking.openURL('app-settings:')`)
+    and Android (`Linking.openSettings()`, including a swallowed
+    rejection), its `getCurrentPositionAsync`-throws fallback (reduced-delta
+    `animateToRegion` around the last known `location`, only when one
+    exists), and its success path (tight-zoom `animateToRegion` at the
+    fresh fix); both map zoom buttons (`Zoom in`/`Zoom out`), asserting
+    the halved/doubled `latitudeDelta`/`longitudeDelta` math and the
+    no-op guard when `region` hasn't been reported yet (`onRegionChangeComplete`
+    never fired). Left uncovered (defensive/timing-only, not a real
+    gap): line 91's `.catch(() => {})` on the notification-permission
+    focus-effect promise, 207-209/228/262/307's early-return guards in
+    `fetchHomeData`/polling effects that only trigger on unmount-mid-fetch
+    races, 380-407's ordering-sensitive branches inside
+    `handleLocationPress`'s success path once the reduced-delta fallback
+    test already exercises the same lines, 428-436's temperature-fetch
+    `.catch()`, 479's map's `showsMyLocationButton` prop expression, and
+    658's a header conditional already exercised by other tests but
+    reported as a branch-only miss by Istanbul's range-compression (see
+    this file's `ride-in-progress.tsx` entry above for the same
+    footgun). 42 tests; full rider-app suite still green (123 suites /
+    1350 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/verify-email.tsx`: 84.9% → 99.05% stmts / 100%
+    lines.** Already had `verifyEmailScreen.test.tsx` (10 tests: mount
+    request, `already_verified` short-circuit, `PROFILE_EMAIL_MISSING`/
+    `AUTH_OTP_INVALID`/`AUTH_OTP_EXPIRED`/rate-limited error copy on both
+    request and confirm, and a successful confirm merging
+    `email_verified` into the store) — extended in place (+7 tests).
+    Closed: the no-email-on-file guard effect (toasts and calls
+    `router.back()` immediately, and the request-code effect — a
+    separate effect keyed on `[email]` — correctly never fires since
+    `email` is falsy); `handleVerify`'s too-short-code guard (shake +
+    "Invalid Code" toast, no confirm call — reached by tapping Verify
+    with the default empty code, since the button's `disabled` prop
+    doesn't block a direct test `onPress` call); both screens' back
+    buttons (code-entry and the separate already-verified return) and
+    the already-verified screen's "Done" button; the code-boxes'
+    tap-to-focus wrapper; `resolveErrorCopy`'s no-`messageKey` fallback
+    path (a plain `Error('Request failed with status code 500')` on
+    confirm, asserting `getApiErrorMessage`'s noise-filter still swaps
+    in the friendly fallback rather than leaking the technical string);
+    and `handleResend`'s in-flight guard — ticked the post-mount 30s
+    countdown down one second at a time (matching this session's
+    established re-schedule-on-tick pattern for countdown effects) to
+    reveal the Resend button, then asserted a second tap while the first
+    resend request is still pending is a silent no-op, not a duplicate
+    request. 17 tests; full rider-app suite still green (123 suites /
+    1360 tests), `yarn tsc --noEmit` clean. **This closes out the last
+    item on the 2026-08-24 fresh-coverage-sweep ranked list** — a
+    further fresh sweep is needed to find the next tier.
   - **rider-app `app/emergency-contacts.tsx`: 87.5% → 100% stmts / 100%
     lines.** Already had `emergencyContactsScreen.test.tsx` (12 tests:
     load, empty state, both phone-format lengths, name/phone validation,

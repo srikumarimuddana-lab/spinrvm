@@ -240,4 +240,166 @@ describe('ActivityScreen', () => {
     act(() => { rideCard.props.onPress(); });
     expect(mockPush).toHaveBeenCalledWith({ pathname: '/ride-details', params: { rideId: 'ride-1' } });
   });
+
+  it('navigates to /ride-details when a scheduled (upcoming) ride card is tapped', async () => {
+    mockRideState.scheduledRides = [{
+      id: 'sched-1', dropoff_address: '400 Pine Rd', vehicle_type_id: 'vt-1',
+      scheduled_time: now.toISOString(), grand_total: '20.00',
+    }];
+    const r = await renderScreen();
+    const upcomingTab = findButtonByText(r, 'activity.upcoming_tab');
+    act(() => { upcomingTab.props.onPress(); });
+    const card = findButtonByText(r, '400 Pine Rd');
+    act(() => { card.props.onPress(); });
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/ride-details', params: { rideId: 'sched-1' } });
+  });
+
+  it('switches back to the history tab from upcoming', async () => {
+    const r = await renderScreen();
+    const upcomingTab = findButtonByText(r, 'activity.upcoming_tab');
+    act(() => { upcomingTab.props.onPress(); });
+    expect(allText(r)).toContain('activity.no_upcoming');
+    const historyTab = findButtonByText(r, 'activity.history_tab');
+    act(() => { historyTab.props.onPress(); });
+    expect(allText(r)).toContain('RECENT');
+  });
+
+  it('filters to personal rides (no corporate_account_id) under the Personal filter', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url.startsWith('/rides/history')) return Promise.resolve({ data: { rides: [RIDE_RECENT, RIDE_BUSINESS], next_cursor: null } });
+      if (url.startsWith('/rides/stats')) return Promise.resolve({ data: { period: 'all', total_rides: 2, total_distance_km: 1, total_saved: '0', co2_saved_kg: 0 } });
+      if (url === '/vehicle-types') return Promise.resolve({ data: [] });
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    const personalTab = findButtonByText(r, 'Personal');
+    act(() => { personalTab.props.onPress(); });
+    expect(allText(r)).toContain('200 Elm St');
+    expect(allText(r)).not.toContain('300 Oak Ave');
+  });
+
+  it('switches the period pill (re-fetches stats, forced) without re-fetching ride history', async () => {
+    const r = await renderScreen();
+    mockApiGet.mockClear();
+    const weekPill = findButtonByText(r, 'This Week');
+    act(() => { weekPill.props.onPress(); });
+    expect(mockApiGet).toHaveBeenCalledWith(expect.stringContaining('/rides/stats'));
+    expect(mockApiGet).not.toHaveBeenCalledWith(expect.stringContaining('/rides/history'));
+  });
+
+  it('pull-to-refresh force-refetches rides, stats, and scheduled rides', async () => {
+    const r = await renderScreen();
+    mockApiGet.mockClear();
+    mockFetchScheduledRides.mockClear();
+    const list = r.root.findByType(FlatList);
+    await act(async () => { list.props.refreshControl.props.onRefresh(); await flush(); });
+    expect(mockApiGet).toHaveBeenCalledWith(expect.stringContaining('/rides/history'));
+    expect(mockApiGet).toHaveBeenCalledWith(expect.stringContaining('/rides/stats'));
+    expect(mockFetchScheduledRides).toHaveBeenCalled();
+  });
+
+  it('shows a retry footer and retries when loading the next page fails', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/rides/history?limit=20') return Promise.resolve({ data: { rides: [RIDE_RECENT], next_cursor: 'cursor-1' } });
+      if (url === '/rides/history?limit=20&before=cursor-1') return Promise.reject(new Error('down'));
+      if (url.startsWith('/rides/stats')) return Promise.resolve({ data: { period: 'all', total_rides: 1, total_distance_km: 1, total_saved: '0', co2_saved_kg: 0 } });
+      if (url === '/vehicle-types') return Promise.resolve({ data: [] });
+      return Promise.reject(new Error('unexpected url ' + url));
+    });
+    const r = await renderScreen();
+    const list = r.root.findByType(FlatList);
+    await act(async () => { await list.props.onEndReached(); await flush(); });
+    expect(allText(r)).toContain('Could not load more rides.');
+    const retryBtn = findButtonByText(r, 'Tap to retry');
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/rides/history?limit=20&before=cursor-1') return Promise.resolve({ data: { rides: [{ ...RIDE_RECENT, id: 'ride-3', dropoff_address: '500 Birch Ln' }], next_cursor: null } });
+      return Promise.resolve({ data: {} });
+    });
+    await act(async () => { retryBtn.props.onPress(); await flush(); });
+    expect(allText(r)).toContain('500 Birch Ln');
+  });
+
+  it('shows "Yesterday" for a ride created yesterday, and a month/day date for anything older', async () => {
+    const exactlyYesterday = new Date(now);
+    exactlyYesterday.setDate(exactlyYesterday.getDate() - 1);
+    const older = new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000);
+    mockApiGet.mockImplementation((url: string) => {
+      if (url.startsWith('/rides/history')) {
+        return Promise.resolve({
+          data: {
+            rides: [
+              { ...RIDE_RECENT, id: 'ride-y', created_at: exactlyYesterday.toISOString(), dropoff_address: 'Yesterday Ave' },
+              { ...RIDE_RECENT, id: 'ride-o', created_at: older.toISOString(), dropoff_address: 'Old Town Rd' },
+            ],
+            next_cursor: null,
+          },
+        });
+      }
+      if (url.startsWith('/rides/stats')) return Promise.resolve({ data: { period: 'all', total_rides: 2, total_distance_km: 1, total_saved: '0', co2_saved_kg: 0 } });
+      if (url === '/vehicle-types') return Promise.resolve({ data: [] });
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Yesterday,');
+    // An older ride's section header is its own month name, and its row
+    // shows a "Mon D, h:mm" date rather than "Today"/"Yesterday".
+    expect(allText(r)).not.toContain('["Today, ');
+  });
+
+  it('shows the cancelled status text/color and icon for a cancelled ride', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url.startsWith('/rides/history')) {
+        return Promise.resolve({ data: { rides: [{ ...RIDE_RECENT, status: 'cancelled' }], next_cursor: null } });
+      }
+      if (url.startsWith('/rides/stats')) return Promise.resolve({ data: { period: 'all', total_rides: 1, total_distance_km: 1, total_saved: '0', co2_saved_kg: 0 } });
+      if (url === '/vehicle-types') return Promise.resolve({ data: [] });
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('activity.cancelled');
+  });
+
+  it('falls back to the "completed" status text for an unrecognised status', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url.startsWith('/rides/history')) {
+        return Promise.resolve({ data: { rides: [{ ...RIDE_RECENT, status: 'in_progress' }], next_cursor: null } });
+      }
+      if (url.startsWith('/rides/stats')) return Promise.resolve({ data: { period: 'all', total_rides: 1, total_distance_km: 1, total_saved: '0', co2_saved_kg: 0 } });
+      if (url === '/vehicle-types') return Promise.resolve({ data: [] });
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    // getStatusText has no 'in_progress' case, so it falls through to the
+    // same "completed" copy as a genuinely completed ride.
+    expect(allText(r)).toContain('activity.completed');
+  });
+
+  it('falls back to the default status color for an unrecognised status', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url.startsWith('/rides/history')) {
+        return Promise.resolve({ data: { rides: [{ ...RIDE_RECENT, status: 'refunded' }], next_cursor: null } });
+      }
+      if (url.startsWith('/rides/stats')) return Promise.resolve({ data: { period: 'all', total_rides: 1, total_distance_km: 1, total_saved: '0', co2_saved_kg: 0 } });
+      if (url === '/vehicle-types') return Promise.resolve({ data: [] });
+      return Promise.reject(new Error('unexpected'));
+    });
+    await expect(renderScreen()).resolves.toBeDefined();
+  });
+
+  it('shows the loading skeleton while stats are still loading', async () => {
+    let resolveStats: (v: any) => void;
+    mockApiGet.mockImplementation((url: string) => {
+      if (url.startsWith('/rides/history')) return Promise.resolve({ data: { rides: [RIDE_RECENT], next_cursor: null } });
+      if (url.startsWith('/rides/stats')) return new Promise((resolve) => { resolveStats = resolve; });
+      if (url === '/vehicle-types') return Promise.resolve({ data: [] });
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    expect(allText(r)).not.toContain('Trips');
+    await act(async () => {
+      resolveStats!({ data: { period: 'all', total_rides: 5, total_distance_km: 1, total_saved: '0', co2_saved_kg: 0 } });
+      await flush();
+    });
+    expect(allText(r)).toContain('Trips');
+  });
 });

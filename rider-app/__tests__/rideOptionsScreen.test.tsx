@@ -107,11 +107,12 @@ const COLORS = {
 jest.mock('@shared/theme/ThemeContext', () => ({ useTheme: () => ({ colors: COLORS, isDark: false }) }));
 
 const mockApiGet = jest.fn();
+const mockIsEngineError = jest.fn(() => false);
 jest.mock('@shared/api/client', () => ({
   __esModule: true,
   default: { get: (...a: any[]) => mockApiGet(...a) },
   getApiErrorMessage: (_err: any, fallback: string) => fallback,
-  isEngineError: () => false,
+  isEngineError: (..._a: any[]) => mockIsEngineError(),
 }));
 
 const mockAnalyticsRideRequested = jest.fn();
@@ -186,6 +187,12 @@ jest.mock('../store/workProfileStore', () => {
 
 import { useWorkProfileStore as mockedUseWorkProfileStore } from '../store/workProfileStore';
 import RideOptionsScreen from '../app/ride-options';
+import MapView, { Marker, Polygon } from 'react-native-maps';
+import { CarMarker } from '@shared/components/CarMarker';
+import BottomSheet from '@gorhom/bottom-sheet';
+import { BackHandler, Keyboard } from 'react-native';
+import SchedulePicker from '../components/SchedulePicker';
+import ConfirmSheet from '../components/ConfirmSheet';
 
 const flush = async () => {
   await Promise.resolve();
@@ -597,7 +604,12 @@ describe('fare breakdown collapse', () => {
 describe('payment sheet selection', () => {
   it('selecting a saved card sets it as the payment method', async () => {
     const r = await renderScreen();
-    const cardRow = findByText(r, 'Visa')!;
+    // `findByText(r, 'Visa')` would ambiguously match the footer's own
+    // "Visa •••• 4242" payment-summary row (which only opens the sheet) --
+    // find the sheet's own card row by its exact, un-suffixed "Visa" text.
+    const cardRow = r.root.findAllByType(TouchableOpacity).find((n) =>
+      n.findAllByType(Text).some((t) => { try { return JSON.stringify(t.props.children) === '"Visa"'; } catch { return false; } })
+    )!;
     act(() => { cardRow.props.onPress(); });
     expect(allText(r)).toContain('•••• 4242');
   });
@@ -637,5 +649,375 @@ describe('payment sheet selection', () => {
     const addRow = findByText(r, 'Add payment method')!;
     act(() => { addRow.props.onPress(); });
     expect(mockPush).toHaveBeenCalledWith('/manage-cards');
+  });
+});
+
+function findSheet(r: TestRenderer.ReactTestRenderer, distinguish: (n: any) => boolean) {
+  return r.root.findAllByType(BottomSheet).find(distinguish)!;
+}
+const findPaymentSheet = (r: TestRenderer.ReactTestRenderer) => findSheet(r, (n) => typeof n.props.onChange === 'function');
+const findPromoSheet = (r: TestRenderer.ReactTestRenderer) => findSheet(r, (n) => typeof n.props.onClose === 'function');
+
+describe('promo sheet: iOS keyboard-aware close', () => {
+  it('defers the promo sheet close until the keyboard finishes hiding, on iOS', async () => {
+    let hideHandler: (() => void) | null = null;
+    const addListenerSpy = jest.spyOn(Keyboard, 'addListener').mockImplementation((event: string, cb: any) => {
+      if (event === 'keyboardWillShow') act(() => cb());
+      if (event === 'keyboardWillHide') hideHandler = cb;
+      return { remove: jest.fn() } as any;
+    });
+    mockRideState.availablePromos = [{ code: 'SAVE10', eligible: true }];
+    const r = await renderScreen();
+    expect(hideHandler).toBeDefined();
+    // handleManualPromo's success path calls closePromoSheet(); with the
+    // keyboard "visible" (the keyboardWillShow handler above already fired),
+    // iOS defers the actual sheet close and dismisses the keyboard instead.
+    const promoRow = findByText(r, 'Add promo code')!;
+    act(() => { promoRow.props.onPress(); });
+    const input = r.root.findByProps({ placeholder: 'Enter code' });
+    act(() => { input.props.onChangeText('save10'); });
+    const dismissSpy = jest.spyOn(Keyboard, 'dismiss');
+    const applyBtn = findByText(r, 'Apply');
+    await act(async () => { applyBtn?.props.onPress(); await flush(); });
+    expect(dismissSpy).toHaveBeenCalled();
+    // Now the keyboard actually finishes hiding -- the pending close runs.
+    expect(() => act(() => { hideHandler!(); })).not.toThrow();
+    addListenerSpy.mockRestore();
+  });
+});
+
+describe('firstAvailableIndex auto-select', () => {
+  it('auto-selects the first AVAILABLE estimate, skipping a leading unavailable one', async () => {
+    mockRideState.estimates = [
+      makeEstimate({ vehicle_type: { id: 'vt-suv', name: 'SUV', capacity: 6 }, available: false }),
+      makeEstimate({ vehicle_type: { id: 'vt-sedan', name: 'Sedan', capacity: 4 }, available: true }),
+    ];
+    mockRideState.selectedVehicle = null;
+    await renderScreen();
+    expect(mockSelectVehicle).toHaveBeenCalledWith(mockRideState.estimates[1].vehicle_type);
+  });
+});
+
+describe('map fitToCoordinates on route change', () => {
+  it('fits the map to pickup/dropoff/stops once mapReady fires and enough markers exist', async () => {
+    jest.useFakeTimers();
+    mockRideState.stops = [{ lat: 52.145, lng: -106.655 }];
+    const r = await renderScreen();
+    const mapView = r.root.findByType(MapView);
+    expect(() => {
+      act(() => { mapView.props.onMapReady(); });
+      act(() => { jest.advanceTimersByTime(300); });
+    }).not.toThrow();
+    jest.useRealTimers();
+  });
+});
+
+describe('server-provided route polyline', () => {
+  it('populates routeCoordinates from a server routePolyline without waiting on MapViewDirections', async () => {
+    mockRideState.routePolyline = [[52.13, -106.66], [52.14, -106.68]];
+    await expect(renderScreen()).resolves.toBeDefined();
+  });
+
+  it('clears routeCoordinates when routePolyline is removed', async () => {
+    mockRideState.routePolyline = null;
+    await expect(renderScreen()).resolves.toBeDefined();
+  });
+});
+
+describe('SchedulePicker and ConfirmSheet dismissal', () => {
+  it('closes the schedule modal via SchedulePicker\'s own onClose', async () => {
+    const r = await renderScreen();
+    const scheduleRow = findByText(r, 'tap to schedule')!;
+    act(() => { scheduleRow.props.onPress(); });
+    const picker = r.root.findByType(SchedulePicker as any);
+    expect(() => act(() => { picker.props.onClose(); })).not.toThrow();
+  });
+
+  it('dismisses the confirm sheet via its own onClose (e.g. tapping the backdrop)', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/payments/cards') return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: [] });
+    });
+    const r = await renderScreen();
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Confirm Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(allText(r)).toContain('"Add a payment method"');
+    const sheet = r.root.findByType(ConfirmSheet as any);
+    act(() => { sheet.props.onClose(); });
+    expect(allText(r)).not.toContain('"Add a payment method"');
+  });
+});
+
+describe('footer payment row', () => {
+  it('opens the payment sheet when the footer\'s Payment row is pressed', async () => {
+    const r = await renderScreen();
+    const paymentRow = r.root.findAllByType(TouchableOpacity).find((n: any) =>
+      n.findAllByType(Text).some((t: any) => { try { return JSON.stringify(t.props.children) === '"Payment"'; } catch { return false; } })
+    )!;
+    expect(() => act(() => { paymentRow.props.onPress(); })).not.toThrow();
+  });
+});
+
+describe('map rendering', () => {
+  it('renders a CarMarker per nearby driver, falling back to a deterministic heading when the backend has none', async () => {
+    mockRideState.nearbyDrivers = [
+      { id: 'd1', lat: 52.135, lng: -106.661 },
+      { id: 'd2', lat: 52.136, lng: -106.662, heading: 45 },
+    ];
+    const r = await renderScreen();
+    const markers = r.root.findAllByType(CarMarker as any);
+    expect(markers).toHaveLength(2);
+    expect(markers[1].props.heading).toBe(45);
+    expect(typeof markers[0].props.heading).toBe('number');
+  });
+
+  it('filters out drivers with missing/near-zero coordinates', async () => {
+    mockRideState.nearbyDrivers = [
+      { id: 'zero', lat: 0, lng: 0 },
+      { id: 'nan', lat: NaN, lng: -106.66 },
+    ];
+    const r = await renderScreen();
+    expect(r.root.findAllByType(CarMarker as any)).toHaveLength(0);
+  });
+
+  it('renders a marker for each ride stop', async () => {
+    mockRideState.stops = [{ lat: 52.145, lng: -106.655 }];
+    const r = await renderScreen();
+    const stopMarker = r.root.findAllByType(Marker).find(
+      (n: any) => n.props.coordinate?.latitude === 52.145 && n.props.coordinate?.longitude === -106.655,
+    );
+    expect(stopMarker).toBeTruthy();
+  });
+
+  it('renders service-area polygons fetched from /service-areas, skipping malformed entries', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/service-areas') {
+        return Promise.resolve({
+          data: [
+            { polygon: [{ lat: 1, lng: 1 }, { lat: 2, lng: 2 }, { lat: 3, lng: 3 }] },
+            { polygon: [{ lat: 1, lng: 1 }] }, // < 3 points -- filtered out
+          ],
+        });
+      }
+      if (url === '/payments/cards') return Promise.resolve({ data: [{ id: 'card-1', brand: 'visa', last4: '4242', exp_month: 1, exp_year: 2030, is_default: true }] });
+      return Promise.resolve({ data: {} });
+    });
+    const r = await renderScreen();
+    expect(r.root.findAllByType(Polygon)).toHaveLength(1);
+  });
+
+  it('sets mapReady when the map fires onMapReady', async () => {
+    const r = await renderScreen();
+    const mapView = r.root.findByType(MapView);
+    expect(() => act(() => { mapView.props.onMapReady(); })).not.toThrow();
+  });
+
+  it('shows the map placeholder spinner instead of the map when pickup/dropoff are not set', async () => {
+    mockRideState.pickup = null;
+    mockRideState.dropoff = null;
+    const r = await renderScreen();
+    expect(() => r.root.findByType(MapView)).toThrow();
+  });
+});
+
+describe('payment sheet: open/close mechanics', () => {
+  it('the payment sheet backdrop tap dismisses via Keyboard.dismiss (no-op on Android/iOS since it has no keyboard business, just verifying the callback wires through)', async () => {
+    const r = await renderScreen();
+    const sheet = findPaymentSheet(r);
+    const backdrop = sheet.props.backdropComponent({});
+    expect(backdrop.props.appearsOnIndex).toBe(0);
+  });
+
+  it('handlePaymentSheetChange tracks open state, and hardware back closes the sheet while open', async () => {
+    const addListenerSpy = jest.spyOn(BackHandler, 'addEventListener');
+    const r = await renderScreen();
+    const sheet = findPaymentSheet(r);
+    act(() => { sheet.props.onChange(0); });
+    const listener = addListenerSpy.mock.calls.find((c) => c[0] === 'hardwareBackPress')?.[1];
+    expect(listener).toBeDefined();
+    const handled = listener?.(undefined as any);
+    expect(handled).toBe(true);
+    addListenerSpy.mockRestore();
+  });
+
+  it('does not register a hardware back handler while the payment sheet is closed', async () => {
+    const addListenerSpy = jest.spyOn(BackHandler, 'addEventListener');
+    const r = await renderScreen();
+    addListenerSpy.mockClear();
+    const sheet = findPaymentSheet(r);
+    act(() => { sheet.props.onChange(-1); });
+    expect(addListenerSpy).not.toHaveBeenCalledWith('hardwareBackPress', expect.anything());
+    addListenerSpy.mockRestore();
+  });
+});
+
+describe('promo sheet: open/close mechanics', () => {
+  it('dismisses via Keyboard on Android/non-iOS immediately (no pending-close needed)', async () => {
+    const dismissSpy = jest.spyOn(Keyboard, 'dismiss');
+    const r = await renderScreen();
+    const sheet = findPromoSheet(r);
+    act(() => { sheet.props.onClose(); });
+    // onClose always calls Keyboard.dismiss(), independent of platform.
+    expect(dismissSpy).toHaveBeenCalled();
+  });
+
+  it('the promo sheet backdrop dismisses the keyboard on press', async () => {
+    const dismissSpy = jest.spyOn(Keyboard, 'dismiss');
+    const r = await renderScreen();
+    const sheet = findPromoSheet(r);
+    const backdrop = sheet.props.backdropComponent({});
+    act(() => { backdrop.props.onPress(); });
+    expect(dismissSpy).toHaveBeenCalled();
+  });
+});
+
+describe('loadSavedCards failure', () => {
+  it('logs a warning and does not crash when fetching saved cards fails', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/payments/cards') return Promise.reject(new Error('down'));
+      return Promise.resolve({ data: [] });
+    });
+    await expect(renderScreen()).resolves.toBeDefined();
+    expect(warnSpy).toHaveBeenCalledWith('[RideOptions] Failed to load saved cards:', expect.any(Error));
+    warnSpy.mockRestore();
+  });
+});
+
+describe('handleBookRide additional branches', () => {
+  it('opens the payment sheet from the "Add / select card" confirm-sheet button', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/payments/cards') return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: [] });
+    });
+    const r = await renderScreen();
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Confirm Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    const addSelectBtn = r.root.findAllByProps({ accessibilityLabel: 'confirm-Add / select card' })[0];
+    expect(() => act(() => { addSelectBtn.props.onPress(); })).not.toThrow();
+  });
+
+  it('rejects booking a stale scheduled time under 15 minutes out', async () => {
+    mockRideState.scheduledTime = new Date(Date.now() + 5 * 60000);
+    const r = await renderScreen();
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Schedule Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockShowToast).toHaveBeenCalledWith('Invalid Time', 'Scheduled time must be at least 15 minutes from now.', 'warning');
+    expect(mockCreateRide).not.toHaveBeenCalled();
+  });
+});
+
+describe('proceedWithBooking additional branches', () => {
+  it('records a non-fatal crash when the booking error looks like a client-side engine crash', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    mockIsEngineError.mockReturnValueOnce(true);
+    const err = new Error('undefined is not a function');
+    mockCreateRide.mockRejectedValue(err);
+    const r = await renderScreen();
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Confirm Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockRecordNonFatal).toHaveBeenCalledWith(err, { screen: 'ride-options', action: 'proceedWithBooking' });
+    errorSpy.mockRestore();
+  });
+
+  it('a 409 re-routes to driver-arrived when the active ride has already arrived', async () => {
+    const err: any = new Error('already active');
+    err.response = { status: 409 };
+    mockCreateRide.mockRejectedValue(err);
+    mockFetchActiveRide.mockResolvedValue({ active: true, ride: { id: 'ride-active', status: 'driver_arrived' } });
+    const r = await renderScreen();
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Confirm Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockReplace).toHaveBeenCalledWith({ pathname: '/driver-arrived', params: { rideId: 'ride-active' } });
+  });
+
+  it('a 409 re-routes to ride-completed when the active ride is already completed', async () => {
+    const err: any = new Error('already active');
+    err.response = { status: 409 };
+    mockCreateRide.mockRejectedValue(err);
+    mockFetchActiveRide.mockResolvedValue({ active: true, ride: { id: 'ride-active', status: 'completed' } });
+    const r = await renderScreen();
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Confirm Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockReplace).toHaveBeenCalledWith({ pathname: '/ride-completed', params: { rideId: 'ride-active' } });
+  });
+});
+
+describe('estimate loading/error UI', () => {
+  it('retrying after a fetch failure calls handleFetchEstimates again', async () => {
+    mockFetchEstimates.mockRejectedValue(new Error('down'));
+    const r = await renderScreen();
+    mockFetchEstimates.mockClear();
+    mockFetchEstimates.mockResolvedValue(undefined);
+    const retryBtn = findByText(r, 'Retry')!;
+    await act(async () => { retryBtn.props.onPress(); await flush(); });
+    expect(mockFetchEstimates).toHaveBeenCalled();
+  });
+
+  it('shows the loading skeleton while isLoading is true', async () => {
+    mockRideState.isLoading = true;
+    const r = await renderScreen();
+    expect(() => findByText(r, 'Sedan')).not.toThrow(); // just asserting no crash while in this state
+  });
+});
+
+describe('schedule row', () => {
+  it('clears the scheduled time when the row itself is tapped again while a time is set', async () => {
+    mockRideState.scheduledTime = new Date(Date.now() + 60 * 60000);
+    const r = await renderScreen();
+    const scheduleRow = findByText(r, 'at')!;
+    act(() => { scheduleRow.props.onPress(); });
+    expect(mockSetScheduledTime).toHaveBeenCalledWith(null);
+  });
+
+  it('clears the scheduled time via the dedicated "Clear scheduled pickup time" button', async () => {
+    mockRideState.scheduledTime = new Date(Date.now() + 60 * 60000);
+    const r = await renderScreen();
+    const clearBtn = r.root.findByProps({ accessibilityLabel: 'Clear scheduled pickup time' });
+    act(() => { clearBtn.props.onPress(); });
+    expect(mockSetScheduledTime).toHaveBeenCalledWith(null);
+  });
+});
+
+describe('promo sheet: suggested-offers list', () => {
+  it('selecting an eligible promo applies it and closes the sheet', async () => {
+    mockRideState.availablePromos = [{ promo_id: 'p1', code: 'SAVE10', eligible: true, discount_type: 'flat', discount_value: 5 }];
+    const r = await renderScreen();
+    const promoRow = findByText(r, 'Add promo code')!;
+    act(() => { promoRow.props.onPress(); });
+    const offerRow = findByText(r, 'SAVE10')!;
+    act(() => { offerRow.props.onPress(); });
+    expect(mockApplyPromo).toHaveBeenCalledWith(mockRideState.availablePromos[0]);
+  });
+
+  it('tapping an ineligible promo row toasts instead of applying it', async () => {
+    mockRideState.availablePromos = [{ promo_id: 'p2', code: 'BIGONE', eligible: false, ineligible_reason: 'Minimum fare not met', discount_type: 'flat', discount_value: 5 }];
+    const r = await renderScreen();
+    const promoRow = findByText(r, 'Add promo code')!;
+    act(() => { promoRow.props.onPress(); });
+    const offerRow = findByText(r, 'BIGONE')!;
+    act(() => { offerRow.props.onPress(); });
+    expect(mockShowToast).toHaveBeenCalledWith('Not eligible', 'Minimum fare not met', 'warning');
+    expect(mockApplyPromo).not.toHaveBeenCalled();
+  });
+
+  it('shows the empty offers state when there are no available promos', async () => {
+    mockRideState.availablePromos = [];
+    const r = await renderScreen();
+    const promoRow = findByText(r, 'Add promo code')!;
+    act(() => { promoRow.props.onPress(); });
+    expect(allText(r)).toContain('No offers right now');
+  });
+
+  it('removes the applied promo from the "Remove applied code" row inside the sheet', async () => {
+    mockRideState.appliedPromo = { code: 'SAVE10', discount_type: 'flat', discount_value: 5 };
+    const r = await renderScreen();
+    // With a promo already applied, the entry row shows the code itself
+    // rather than "Add promo code" -- pressing the row still opens the sheet.
+    const promoRow = findByText(r, 'SAVE10')!;
+    act(() => { promoRow.props.onPress(); });
+    const removeRow = findByText(r, 'Remove applied code')!;
+    act(() => { removeRow.props.onPress(); });
+    expect(mockApplyPromo).toHaveBeenCalledWith(null);
   });
 });

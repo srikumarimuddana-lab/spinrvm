@@ -24,7 +24,8 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { TouchableOpacity, Text, TextInput, Image, BackHandler, Platform } from 'react-native';
+import { TouchableOpacity, Text, TextInput, Image, BackHandler, Platform, Modal } from 'react-native';
+import RNMapView from 'react-native-maps';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('react-native-safe-area-context', () => ({
@@ -35,10 +36,11 @@ jest.mock('@shared/components/ErrorBoundary', () => ({
   ErrorBoundary: ({ children }: any) => children,
 }));
 
+const mockFitToCoordinates = jest.fn();
 jest.mock('react-native-maps', () => {
   const ReactActual = require('react');
   const MapView = ReactActual.forwardRef((props: any, ref: any) => {
-    ReactActual.useImperativeHandle(ref, () => ({ fitToCoordinates: jest.fn() }));
+    ReactActual.useImperativeHandle(ref, () => ({ fitToCoordinates: (...a: any[]) => mockFitToCoordinates(...a) }));
     return ReactActual.createElement('MapView', props, props.children);
   });
   const Polyline = () => null;
@@ -349,5 +351,209 @@ describe('RideCompletedScreen', () => {
     const img = r.root.findByType(Image);
     act(() => { img.props.onError(); });
     expect(r.root.findAllByType(Image)).toHaveLength(0);
+  });
+
+  it('renders the actual v2 route (with planned underlay + pickup leg) and fits the map on ready', async () => {
+    mockRideState.currentRide = {
+      ...CURRENT_RIDE,
+      route_schema_version: 2,
+      route_geometry_status: 'processing', // incomplete -> planned underlay stays on
+      planned_route_polyline: [[50.45, -104.6], [50.5, -104.5]],
+      actual_route_segments: [
+        { id: 'trip-1', coordinates: [[50.46, -104.58], [50.49, -104.52]], geometry_kind: 'observed', phase: 'trip_in_progress' },
+        { id: 'pickup-1', coordinates: [[50.44, -104.61], [50.45, -104.6]], geometry_kind: 'observed', phase: 'navigating_to_pickup' },
+      ],
+    };
+    const r = await renderScreen();
+    // hasActualRoute -> "Actual route" label rendered.
+    expect(allText(r)).toContain('Actual route');
+    const mapView = r.root.findByType(RNMapView as any);
+    await act(async () => { mapView.props.onMapReady(); await flush(); });
+    expect(mockFitToCoordinates).toHaveBeenCalled();
+  });
+
+  it('re-fetches the ride when useCompletedRouteRefresh fires its callback', async () => {
+    jest.useFakeTimers();
+    try {
+      mockRideState.currentRide = {
+        ...CURRENT_RIDE,
+        status: 'completed',
+        route_schema_version: 2,
+        route_geometry_status: 'pending',
+      };
+      await renderScreen();
+      expect(mockFetchRide).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        jest.advanceTimersByTime(3000);
+        await flush();
+      });
+      expect(mockFetchRide).toHaveBeenCalledTimes(2);
+      expect(mockFetchRide).toHaveBeenLastCalledWith('ride-1');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('email receipt failure toasts a danger message', async () => {
+    mockApiPost.mockRejectedValue(new Error('network down'));
+    const r = await renderScreen();
+    const emailBtn = r.root.findAllByType(TouchableOpacity).find((n) =>
+      n.findAllByType(Text).some((t) => { try { return JSON.stringify(t.props.children) === '"Email Receipt"'; } catch { return false; } })
+    )!;
+    await act(async () => { await emailBtn.props.onPress(); await flush(); });
+    expect(mockShowToast).toHaveBeenCalledWith('Email Not Sent', 'Could not send receipt email. Please try again.', 'danger');
+  });
+
+  it('lost item report submission failure toasts a danger message', async () => {
+    mockApiPost.mockRejectedValue(new Error('network down'));
+    const r = await renderScreen();
+    const lostBtn = r.root.findAllByType(TouchableOpacity).find((n) =>
+      n.findAllByType(Text).some((t) => { try { return JSON.stringify(t.props.children) === '"Report Lost Item"'; } catch { return false; } })
+    )!;
+    act(() => { lostBtn.props.onPress(); });
+    const input = r.root.findAllByType(TextInput).find((n) => n.props.placeholder === 'e.g. Black backpack with laptop inside')!;
+    act(() => { input.props.onChangeText('Black backpack'); });
+    const submitReportBtn = r.root.findAllByType(TouchableOpacity).find((n) =>
+      n.findAllByType(Text).some((t) => { try { return JSON.stringify(t.props.children) === '"Submit Report"'; } catch { return false; } })
+    )!;
+    await act(async () => { await submitReportBtn.props.onPress(); await flush(); });
+    expect(mockShowToast).toHaveBeenCalledWith('Report Not Sent', 'Could not submit report. Please try again.', 'danger');
+  });
+
+  it('closes the lost-item modal via Cancel and clears the draft text', async () => {
+    const r = await renderScreen();
+    const lostBtn = r.root.findAllByType(TouchableOpacity).find((n) =>
+      n.findAllByType(Text).some((t) => { try { return JSON.stringify(t.props.children) === '"Report Lost Item"'; } catch { return false; } })
+    )!;
+    act(() => { lostBtn.props.onPress(); });
+    const input = r.root.findAllByType(TextInput).find((n) => n.props.placeholder === 'e.g. Black backpack with laptop inside')!;
+    act(() => { input.props.onChangeText('Black backpack'); });
+    const cancelBtn = r.root.findAllByType(TouchableOpacity).find((n) =>
+      n.findAllByType(Text).some((t) => { try { return JSON.stringify(t.props.children) === '"Cancel"'; } catch { return false; } })
+    )!;
+    act(() => { cancelBtn.props.onPress(); });
+    const modal = r.root.findByType(Modal);
+    expect(modal.props.visible).toBe(false);
+  });
+
+  it('dismisses the lost-item modal via onRequestClose', async () => {
+    const r = await renderScreen();
+    const lostBtn = r.root.findAllByType(TouchableOpacity).find((n) =>
+      n.findAllByType(Text).some((t) => { try { return JSON.stringify(t.props.children) === '"Report Lost Item"'; } catch { return false; } })
+    )!;
+    act(() => { lostBtn.props.onPress(); });
+    let modal = r.root.findByType(Modal);
+    expect(modal.props.visible).toBe(true);
+    act(() => { modal.props.onRequestClose(); });
+    modal = r.root.findByType(Modal);
+    expect(modal.props.visible).toBe(false);
+  });
+
+  it('"Support" (payment alert) pushes to /support with the ride + payment_failed topic', async () => {
+    mockAttemptRidePayment.mockResolvedValue({
+      ok: false,
+      alert: {
+        title: 'Payment Failed', message: 'Something went wrong.', variant: 'danger',
+        buttons: [{ text: 'Contact Support', kind: 'support' }],
+      },
+    });
+    const r = await renderScreen();
+    const submitBtn = r.root.findByProps({ accessibilityLabel: 'Pay and finish' });
+    await act(async () => { await submitBtn.props.onPress(); await flush(); });
+    const supportBtn = r.root.findByProps({ accessibilityLabel: 'confirm-Contact Support' });
+    act(() => { supportBtn.props.onPress(); });
+    expect(mockPush).toHaveBeenCalledWith('/support?rideId=ride-1&topic=payment_failed');
+  });
+
+  it('a payment alert "Cancel" button (no onPress) closes via ConfirmSheet onClose', async () => {
+    mockAttemptRidePayment.mockResolvedValue({
+      ok: false,
+      alert: {
+        title: 'Payment Declined', message: 'Your card was declined.', variant: 'danger',
+        buttons: [{ text: 'Cancel', kind: 'cancel' }],
+      },
+    });
+    const r = await renderScreen();
+    const submitBtn = r.root.findByProps({ accessibilityLabel: 'Pay and finish' });
+    await act(async () => { await submitBtn.props.onPress(); await flush(); });
+    expect(allText(r)).toContain('Payment Declined');
+    const cancelBtn = r.root.findByProps({ accessibilityLabel: 'confirm-Cancel' });
+    act(() => { cancelBtn.props.onPress(); });
+    expect(allText(r)).not.toContain('Payment Declined');
+  });
+
+  it('handleSubmit surfaces an unexpected error (e.g. attemptRidePayment throwing) as a toast, not a crash', async () => {
+    mockAttemptRidePayment.mockRejectedValue(new Error('boom'));
+    const r = await renderScreen();
+    const submitBtn = r.root.findByProps({ accessibilityLabel: 'Pay and finish' });
+    await act(async () => { await submitBtn.props.onPress(); await flush(); });
+    expect(mockShowToast).toHaveBeenCalledWith('Submit Failed', 'Failed to submit. Please try again.', 'danger');
+    expect(mockClearRide).not.toHaveBeenCalled();
+  });
+
+  it('tapping a star sets the rating and its descriptive copy', async () => {
+    const r = await renderScreen();
+    const star2 = r.root.findByProps({ accessibilityLabel: 'Rate 2 stars' });
+    act(() => { star2.props.onPress(); });
+    expect(allText(r)).toContain('Could be better');
+  });
+
+  it('tapping a tip preset selects it, and tapping again deselects it', async () => {
+    const r = await renderScreen();
+    // fare 15 -> ladder [2, 3, 4]
+    const tipBtn = r.root.findByProps({ accessibilityLabel: 'Tip $3' });
+    act(() => { tipBtn.props.onPress(); });
+    expect(r.root.findByProps({ accessibilityLabel: 'Tip $3' }).props.accessibilityState.checked).toBe(true);
+    act(() => { tipBtn.props.onPress(); });
+    expect(r.root.findByProps({ accessibilityLabel: 'Tip $3' }).props.accessibilityState.checked).toBe(false);
+  });
+
+  it('typing a custom tip clears any selected preset and is reflected in the Pay button total', async () => {
+    const r = await renderScreen();
+    const customInput = r.root.findAllByType(TextInput).find((n) => n.props.placeholder === 'Other')!;
+    act(() => { customInput.props.onChangeText('7'); });
+    const submitBtn = r.root.findByProps({ accessibilityLabel: 'Pay and finish' });
+    expect(JSON.stringify(submitBtn.findAllByType(Text)[0].props.children)).toContain('22.00');
+  });
+
+  it('pressing "Message Driver" navigates to the driver chat for this ride', async () => {
+    const r = await renderScreen();
+    const msgBtn = r.root.findAllByType(TouchableOpacity).find((n) =>
+      n.findAllByType(Text).some((t) => { try { return JSON.stringify(t.props.children) === '"Message Driver"'; } catch { return false; } })
+    )!;
+    act(() => { msgBtn.props.onPress(); });
+    expect(mockPush).toHaveBeenCalledWith('/chat-driver?rideId=ride-1');
+  });
+
+  it('shows the wallet payment badge for wallet-paid rides', async () => {
+    mockRideState.currentRide = { ...CURRENT_RIDE, payment_method: 'wallet' };
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Spinr Wallet');
+  });
+
+  it('shows the company-account payment badge for corporate-allowance rides', async () => {
+    mockRideState.currentRide = { ...CURRENT_RIDE, payment_method: 'company_allowance' };
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Company Account');
+  });
+
+  it('falls back to a plain "Card" badge when there is no card_last4', async () => {
+    mockRideState.currentRide = { ...CURRENT_RIDE, payment_method: 'card', card_last4: undefined };
+    const r = await renderScreen();
+    expect(allText(r)).toContain('"Card"');
+  });
+
+  it('shows "0 km/h" avg speed when duration is 0', async () => {
+    mockRideState.currentRide = { ...CURRENT_RIDE, duration_minutes: 0, actual_duration_minutes: undefined };
+    const r = await renderScreen();
+    expect(allText(r)).toContain('["0"," km/h"]');
+  });
+
+  it('shows the pre-auth hold hint and hides Google Pay when the ride has a hold', async () => {
+    Platform.OS = 'android';
+    mockRideState.currentRide = { ...CURRENT_RIDE, auth_status: 'authorized' };
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Charged to the card you chose at booking. Any tip is included in the same charge.');
+    expect(() => r.root.findByProps({ accessibilityLabel: 'Pay with Google Pay' })).toThrow();
   });
 });

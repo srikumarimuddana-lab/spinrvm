@@ -31,10 +31,11 @@ jest.mock('react-native-safe-area-context', () => ({
 }));
 jest.mock('@shared/hooks/useExitOnBackPress', () => ({ useExitOnBackPress: () => {} }));
 
+const mockAnimateToRegion = jest.fn();
 jest.mock('@shared/components/AppMap', () => {
   const ReactActual = require('react');
   const AppMap = ReactActual.forwardRef((props: any, ref: any) => {
-    ReactActual.useImperativeHandle(ref, () => ({ animateToRegion: jest.fn() }));
+    ReactActual.useImperativeHandle(ref, () => ({ animateToRegion: mockAnimateToRegion }), []);
     return ReactActual.createElement('AppMap', props, props.children);
   });
   return { __esModule: true, default: AppMap };
@@ -269,6 +270,37 @@ describe('HomeScreen', () => {
     expect(mockOpenNotificationSettings).toHaveBeenCalled();
   });
 
+  it('grants notification permission via Enable without toasting or opening settings', async () => {
+    mockCheckNotificationPermission.mockResolvedValue({ granted: false });
+    mockRequestNotificationPermission.mockResolvedValue(true);
+    const r = await renderScreen();
+    const enableBtn = r.root.findAllByType(TouchableOpacity).find((n) =>
+      n.findAllByType(Text).some((t) => { try { return JSON.stringify(t.props.children) === '"Enable"'; } catch { return false; } })
+    )!;
+    await act(async () => { await enableBtn.props.onPress(); await flush(); });
+    expect(mockShowToast).not.toHaveBeenCalled();
+    expect(mockOpenNotificationSettings).not.toHaveBeenCalled();
+    expect(allText(r)).not.toContain('Turn on notifications');
+  });
+
+  it('navigates to /notifications when the notification bell is pressed', async () => {
+    const r = await renderScreen();
+    const bellBtn = findButtonByLabel(r, 'Notifications');
+    act(() => { bellBtn.props.onPress(); });
+    expect(mockPush).toHaveBeenCalledWith('/notifications');
+  });
+
+  it('routes the Work and Saved quick actions to /search-destination', async () => {
+    const r = await renderScreen();
+    const workAction = findButtonByLabel(r, 'Go to work');
+    act(() => { workAction.props.onPress(); });
+    expect(mockPush).toHaveBeenCalledWith('/search-destination');
+    mockPush.mockClear();
+    const savedAction = findButtonByLabel(r, 'Saved places');
+    act(() => { savedAction.props.onPress(); });
+    expect(mockPush).toHaveBeenCalledWith('/search-destination');
+  });
+
   it('opens /ai-assistant when the AI feature is enabled', async () => {
     const r = await renderScreen();
     const aiBtn = findButtonByLabel(r, 'AI assistant');
@@ -391,6 +423,107 @@ describe('location permission flow', () => {
     mockGetLastKnownPositionAsync.mockResolvedValue(LOCATION);
     await renderScreen();
     expect(mockAsyncSetItem).toHaveBeenCalled();
+  });
+
+  it('re-centers the map only from the second location update onward (first just seeds hasCenteredRef)', async () => {
+    await renderScreen();
+    // The initial GPS fix from mount already set `location` once -- that is
+    // the first update, and the re-center effect intentionally no-ops on it.
+    expect(mockAnimateToRegion).not.toHaveBeenCalled();
+    mockGetCurrentPositionAsync.mockResolvedValue({ coords: { latitude: 52.2, longitude: -106.7, heading: 0 } });
+    const listener = (AppState.addEventListener as jest.Mock).mock.calls.find((c) => c[0] === 'change')?.[1];
+    await act(async () => { listener?.('active'); await flush(); });
+    expect(mockAnimateToRegion).toHaveBeenCalledWith(
+      expect.objectContaining({ latitude: 52.2, longitude: -106.7 }),
+      400,
+    );
+  });
+});
+
+describe('handleLocationPress (the "go to my location" button)', () => {
+  it('toasts and opens settings when permission is denied, without fetching a position', async () => {
+    Object.defineProperty(Platform, 'OS', { get: () => 'ios' });
+    const r = await renderScreen();
+    mockGetForegroundPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    mockRequestForegroundPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    const openURLSpy = jest.spyOn(Linking, 'openURL').mockResolvedValue(true as any);
+    mockGetCurrentPositionAsync.mockClear();
+    const locateBtn = findButtonByLabel(r, 'Go to my location');
+    await act(async () => { await locateBtn.props.onPress(); await flush(); });
+    expect(mockShowToast).toHaveBeenCalledWith('Location Required', 'Enable location in Settings to use Spinr.', 'warning');
+    expect(openURLSpy).toHaveBeenCalledWith('app-settings:');
+    expect(mockGetCurrentPositionAsync).not.toHaveBeenCalled();
+    Object.defineProperty(Platform, 'OS', { get: () => 'ios' });
+  });
+
+  it('opens Android settings (and swallows a Linking failure) when permission is denied', async () => {
+    Object.defineProperty(Platform, 'OS', { get: () => 'android' });
+    const r = await renderScreen();
+    mockGetForegroundPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    mockRequestForegroundPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    const openSettingsSpy = jest.spyOn(Linking, 'openSettings').mockRejectedValue(new Error('no handler'));
+    mockGetCurrentPositionAsync.mockClear();
+    const locateBtn = findButtonByLabel(r, 'Go to my location');
+    await act(async () => { await locateBtn.props.onPress(); await flush(); });
+    expect(openSettingsSpy).toHaveBeenCalled();
+    expect(mockGetCurrentPositionAsync).not.toHaveBeenCalled();
+    Object.defineProperty(Platform, 'OS', { get: () => 'ios' });
+  });
+
+  it('falls back to a reduced-delta animateToRegion around the last known location when the fresh GPS fetch throws', async () => {
+    const r = await renderScreen();
+    mockAnimateToRegion.mockClear();
+    mockGetCurrentPositionAsync.mockRejectedValueOnce(new Error('GPS timeout'));
+    const locateBtn = findButtonByLabel(r, 'Go to my location');
+    await act(async () => { await locateBtn.props.onPress(); await flush(); });
+    expect(mockAnimateToRegion).toHaveBeenCalledWith(
+      expect.objectContaining({ latitude: LOCATION.coords.latitude, longitude: LOCATION.coords.longitude, latitudeDelta: 0.01, longitudeDelta: 0.01 }),
+      1000,
+    );
+  });
+
+  it('re-centers the map at a tight zoom on a successful fresh fix', async () => {
+    const r = await renderScreen();
+    mockAnimateToRegion.mockClear();
+    mockGetCurrentPositionAsync.mockResolvedValueOnce({ coords: { latitude: 52.3, longitude: -106.8, heading: 0 } });
+    const locateBtn = findButtonByLabel(r, 'Go to my location');
+    await act(async () => { await locateBtn.props.onPress(); await flush(); });
+    expect(mockAnimateToRegion).toHaveBeenCalledWith(
+      { latitude: 52.3, longitude: -106.8, latitudeDelta: 0.01, longitudeDelta: 0.01 },
+      1000,
+    );
+  });
+});
+
+describe('map zoom controls', () => {
+  it('halves the region deltas on Zoom in, and doubles them on Zoom out', async () => {
+    const r = await renderScreen();
+    const appMap = r.root.findByProps({ showsUserLocation: true });
+    act(() => { appMap.props.onRegionChangeComplete({ latitude: 52.1, longitude: -106.6, latitudeDelta: 0.04, longitudeDelta: 0.02 }); });
+    mockAnimateToRegion.mockClear();
+
+    const zoomIn = findButtonByLabel(r, 'Zoom in');
+    act(() => { zoomIn.props.onPress(); });
+    expect(mockAnimateToRegion).toHaveBeenCalledWith(
+      expect.objectContaining({ latitudeDelta: 0.02, longitudeDelta: 0.01 }),
+      500,
+    );
+
+    mockAnimateToRegion.mockClear();
+    const zoomOut = findButtonByLabel(r, 'Zoom out');
+    act(() => { zoomOut.props.onPress(); });
+    expect(mockAnimateToRegion).toHaveBeenCalledWith(
+      expect.objectContaining({ latitudeDelta: 0.08, longitudeDelta: 0.04 }),
+      500,
+    );
+  });
+
+  it('does nothing when pressed before a region has been reported', async () => {
+    const r = await renderScreen();
+    mockAnimateToRegion.mockClear();
+    const zoomIn = findButtonByLabel(r, 'Zoom in');
+    act(() => { zoomIn.props.onPress(); });
+    expect(mockAnimateToRegion).not.toHaveBeenCalled();
   });
 });
 

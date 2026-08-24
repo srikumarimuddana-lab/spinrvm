@@ -23,9 +23,13 @@ import { showToast } from '../hooks/useToast';
 import { notifyError } from '../lib/notifyError';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-
-
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+import {
+  isFirstNameValid,
+  isLastNameValid,
+  isEmailValid,
+  isProfileSetupFormValid,
+  getProfileSetupError,
+} from '../utils/profileSetupSchema';
 
 export default function ProfileSetupScreen() {
   const router = useRouter();
@@ -204,41 +208,14 @@ export default function ProfileSetupScreen() {
     return () => sub.remove();
   }, [handleChangeNumber]);
 
-  const validateEmail = (email: string): boolean => {
-    return EMAIL_REGEX.test(email);
-  };
-
-  const isEmailValid = email.length > 0 && validateEmail(email);
-  const isFirstNameValid = firstName.trim().length > 1;
-  const isLastNameValid = lastName.trim().length > 1;
-  const isServiceAreaValid = serviceAreaId.length > 0;
-  const isFormValid = isFirstNameValid && isLastNameValid && isEmailValid && gender && isServiceAreaValid;
+  const isFormValid = isProfileSetupFormValid({ firstName, lastName, email, gender, serviceAreaId });
 
   const handleSubmit = async () => {
     // Field-specific validation: name the exact field and problem — a blanket
     // "complete all required fields" leaves the driver hunting for what's wrong.
-    if (!isFirstNameValid) {
-      showToast('warning', 'First Name Required', 'Please enter your first name (at least 2 letters).');
-      return;
-    }
-    if (!isLastNameValid) {
-      showToast('warning', 'Last Name Required', 'Please enter your last name (at least 2 letters).');
-      return;
-    }
-    if (!email.trim()) {
-      showToast('warning', 'Email Required', 'Please enter your email address.');
-      return;
-    }
-    if (!isEmailValid) {
-      showToast('warning', 'Invalid Email', 'That email doesn’t look right — e.g. name@example.com.');
-      return;
-    }
-    if (!gender) {
-      showToast('warning', 'Gender Required', 'Please select your gender.');
-      return;
-    }
-    if (!isServiceAreaValid) {
-      showToast('warning', 'Service Area Required', 'Please select the area where you plan to drive.');
+    const validationError = getProfileSetupError({ firstName, lastName, email, gender, serviceAreaId });
+    if (validationError) {
+      showToast('warning', validationError.title, validationError.message);
       return;
     }
 
@@ -371,7 +348,7 @@ export default function ProfileSetupScreen() {
                 <Text style={styles.label}>First Name</Text>
                 <View style={[
                   styles.inputContainer,
-                  firstName.length > 0 && isFirstNameValid && styles.inputContainerValid
+                  firstName.length > 0 && isFirstNameValid(firstName) && styles.inputContainerValid
                 ]}>
                   <View style={styles.inputIconContainer}>
                     <Ionicons
@@ -390,7 +367,7 @@ export default function ProfileSetupScreen() {
                     autoCorrect={false}
                   />
                   <View style={styles.checkIconWrapper}>
-                    {firstName.length > 0 && isFirstNameValid ? (
+                    {firstName.length > 0 && isFirstNameValid(firstName) ? (
                       <Ionicons name="checkmark-circle" size={20} color={colors.success} />
                     ) : null}
                   </View>
@@ -402,7 +379,7 @@ export default function ProfileSetupScreen() {
                 <Text style={styles.label}>Last Name</Text>
                 <View style={[
                   styles.inputContainer,
-                  lastName.length > 0 && isLastNameValid && styles.inputContainerValid
+                  lastName.length > 0 && isLastNameValid(lastName) && styles.inputContainerValid
                 ]}>
                   <View style={styles.inputIconContainer}>
                     <Ionicons
@@ -421,7 +398,7 @@ export default function ProfileSetupScreen() {
                     autoCorrect={false}
                   />
                   <View style={styles.checkIconWrapper}>
-                    {lastName.length > 0 && isLastNameValid ? (
+                    {lastName.length > 0 && isLastNameValid(lastName) ? (
                       <Ionicons name="checkmark-circle" size={20} color={colors.success} />
                     ) : null}
                   </View>
@@ -434,7 +411,7 @@ export default function ProfileSetupScreen() {
             <Text style={styles.label}>Email Address</Text>
             <View style={[
               styles.inputContainer,
-              email.length > 0 && isEmailValid && styles.inputContainerValid
+              email.length > 0 && isEmailValid(email) && styles.inputContainerValid
             ]}>
               <View style={styles.inputIconContainer}>
                 <Ionicons
@@ -454,7 +431,7 @@ export default function ProfileSetupScreen() {
                 autoCorrect={false}
               />
               <View style={styles.checkIconWrapper}>
-                {email.length > 0 && isEmailValid ? (
+                {email.length > 0 && isEmailValid(email) ? (
                   <Ionicons name="checkmark-circle" size={20} color={colors.success} />
                 ) : null}
               </View>

@@ -126,6 +126,9 @@ jest.mock('../store/rideStore', () => ({
 }));
 
 import DriverArrivedScreen from '../app/driver-arrived';
+import MapViewDirections from 'react-native-maps-directions';
+import ConfirmSheet from '../components/ConfirmSheet';
+import CancelReasonSheet from '../components/CancelReasonSheet';
 
 const flush = async () => {
   await Promise.resolve();
@@ -359,5 +362,92 @@ describe('DriverArrivedScreen', () => {
       retryBtn.props.onPress();
     });
     expect(mockFetchRide).toHaveBeenCalledWith('ride-1');
+  });
+
+  it('fits the map to include the driver position when the driver has coordinates', async () => {
+    mockRideState.currentDriver = { ...CURRENT_DRIVER, lat: 50.451, lng: -104.601 };
+    await renderScreen();
+    expect(mockFitToCoordinates).toHaveBeenCalledWith(
+      [
+        { latitude: CURRENT_RIDE.pickup_lat, longitude: CURRENT_RIDE.pickup_lng },
+        { latitude: 50.451, longitude: -104.601 },
+      ],
+      expect.any(Object),
+    );
+  });
+
+  it('draws the route and fits the map from MapViewDirections onReady when a Google Maps key is configured', async () => {
+    process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY = 'test-maps-key';
+    const r = await renderScreen();
+    const directions = r.root.findByType(MapViewDirections);
+    mockFitToCoordinates.mockClear();
+    act(() => {
+      directions.props.onReady({
+        coordinates: [
+          { latitude: CURRENT_RIDE.pickup_lat, longitude: CURRENT_RIDE.pickup_lng },
+          { latitude: CURRENT_RIDE.dropoff_lat, longitude: CURRENT_RIDE.dropoff_lng },
+        ],
+      });
+    });
+    expect(mockFitToCoordinates).toHaveBeenCalled();
+    delete process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+  });
+
+  it('does not re-fit the map from a single-point onReady result', async () => {
+    process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY = 'test-maps-key';
+    const r = await renderScreen();
+    const directions = r.root.findByType(MapViewDirections);
+    mockFitToCoordinates.mockClear();
+    act(() => {
+      directions.props.onReady({ coordinates: [{ latitude: CURRENT_RIDE.pickup_lat, longitude: CURRENT_RIDE.pickup_lng }] });
+    });
+    expect(mockFitToCoordinates).not.toHaveBeenCalled();
+    delete process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+  });
+
+  it('dismisses the cancel-confirm sheet via its own onClose without cancelling', async () => {
+    const r = await renderScreen();
+    const cancelLink = findButtonByText(r, 'Cancel Ride');
+    act(() => { cancelLink.props.onPress(); });
+    expect(allText(r)).toContain('Driver is waiting');
+    const sheet = r.root.findByType(ConfirmSheet);
+    act(() => { sheet.props.onClose(); });
+    expect(allText(r)).not.toContain('Driver is waiting');
+    expect(mockCancelRide).not.toHaveBeenCalled();
+  });
+
+  it('dismisses the cancel-reason sheet via its own onClose without cancelling', async () => {
+    const r = await renderScreen();
+    const cancelLink = findButtonByText(r, 'Cancel Ride');
+    act(() => { cancelLink.props.onPress(); });
+    const confirmBtn = r.root.findByProps({ accessibilityLabel: 'confirm-Cancel & Pay $4.50' });
+    act(() => { confirmBtn.props.onPress(); });
+    expect(allText(r)).toContain('Submit Reason');
+    const reasonSheet = r.root.findByType(CancelReasonSheet);
+    act(() => { reasonSheet.props.onClose(); });
+    expect(mockCancelRide).not.toHaveBeenCalled();
+  });
+
+  describe('__DEV__ "Start Ride (skip OTP)" button', () => {
+    it('calls the start endpoint and refetches the ride on success', async () => {
+      mockApiPost.mockResolvedValue({ data: {} });
+      const r = await renderScreen();
+      mockFetchRide.mockClear();
+      const startBtn = findButtonByText(r, 'Start Ride (skip OTP)');
+      await act(async () => { await startBtn.props.onPress(); await flush(); });
+      expect(mockApiPost).toHaveBeenCalledWith('/drivers/rides/ride-1/start');
+      expect(mockFetchRide).toHaveBeenCalledWith('ride-1');
+    });
+
+    it('swallows a failure from the start endpoint and still refetches', async () => {
+      const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+      mockApiPost.mockRejectedValue(new Error('down'));
+      const r = await renderScreen();
+      mockFetchRide.mockClear();
+      const startBtn = findButtonByText(r, 'Start Ride (skip OTP)');
+      await expect(act(async () => { await startBtn.props.onPress(); await flush(); })).resolves.toBeUndefined();
+      expect(mockFetchRide).toHaveBeenCalledWith('ride-1');
+      logSpy.mockRestore();
+    });
   });
 });

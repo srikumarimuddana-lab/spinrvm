@@ -8620,6 +8620,46 @@ record of what was assumed vs. what was actually true</summary>
     (732-791, 1330-1404, the promo-sheet's own interaction paths, map
     rendering) for a future pass; stopped here as a reasonable increment
     rather than chasing 100% in one sitting.
+  - **driver-app `app/driver/(tabs)/index.tsx`: 69.1% → 74.5% lines.**
+    Already had `driverDashboardScreen.test.tsx` (16 tests, deliberately
+    scoped in sub-item 4 to the location gate / rideState panel switch /
+    ride-completion confirm modal / SOS-vs-SafetyShield — the demand
+    heatmap and service-area surge polygon were explicitly out of scope
+    then). Extended with 16 more tests covering exactly that deferred
+    surface: `useDemandHeatmap`/`useAirportZones` needed rewriting from
+    fixed-return mocks to overridable module-level state (matching this
+    file's own established `.__state`-carrier convention) since the
+    original mocks always returned empty/hidden data with no way for a
+    test to drive a populated state; `DemandLegend`/`ForecastStrip`/
+    `HeatmapCells`/`HotspotChips` needed rewriting from `() => null`
+    stubs to prop-rendering doubles for the same reason. Covers:
+    `HeatmapCells`/`DemandLegend` visible-vs-hidden by cell-count/
+    `visible` flag; `ForecastStrip`/`HotspotChips` gated on the v2
+    pipeline flag (never shown for the legacy heatmap even with hotspot
+    data present); a hotspot-chip tap re-centering the map without
+    crashing; the whole overlay disappearing once a ride goes active
+    (idle-only gating); the airport-zone chip's active-zone-name /
+    hidden-when-none / hidden-during-an-active-ride states; and the
+    service-area boundary polygon's surge-tinted color logic (calm
+    below-tier vs. the heatmap ramp at 1.25x+), read from `incomingRide`
+    while an offer is pending vs. `activeRide` otherwise, and suppressed
+    for a degenerate <3-point polygon. Also upgraded the shared
+    `react-native-maps` `Polygon` mock from `() => null` to a
+    prop-forwarding double (`accessibilityLabel="map-polygon"`) so its
+    `strokeColor`/`coordinates` become assertable — a change any future
+    addition to this test file benefits from. Footgun found: the fixture
+    for `activeRide.service_area_polygon` initially nested the field
+    under `activeRide.ride.service_area_polygon` (matching the
+    `activeRide.ride.id` shape used by every *other* existing test in
+    this file) — the real source reads `activeRide?.service_area_polygon`
+    directly off the top-level object, not through `.ride`; two
+    unrelated fields living at different nesting depths on the same
+    `activeRide` shape. 16 new tests (32 total in the file); full
+    driver-app suite still green (112 suites / 1147 tests), `yarn tsc
+    --noEmit` clean. This is the largest remaining screen in the repo
+    (1359 lines) — substantial uncovered surface remains (the countdown-
+    timer/AppState-resync effects, the Directions-API route-fetch effect,
+    various map-control button handlers) for a future pass.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

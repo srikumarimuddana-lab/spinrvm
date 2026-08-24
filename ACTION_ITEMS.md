@@ -9424,6 +9424,25 @@ record of what was assumed vs. what was actually true</summary>
     diminishing-returns per this sweep's convention. Full rider-app
     suite still green (123 suites / 1411 tests), `yarn tsc --noEmit`
     clean.
+  - **rider-app `app/emergency-contacts.tsx`: 87.5% → 100% stmts / 100%
+    lines.** Already had `emergencyContactsScreen.test.tsx` (12 tests:
+    load, empty state, both phone-format lengths, name/phone validation,
+    add success/failure, MAX_CONTACTS(3)-hides-the-trigger, remove
+    confirm/delete/failure, back nav) — extended in place (+8 tests).
+    Closed: the fetch-failure catch (silent per its own comment — no
+    toast, just a `console.error` and the empty state stays); the
+    unrecognised-phone-length fallback in `formatPhone` (returns the raw
+    string unchanged); all four of `getRelationshipIcon`'s named cases
+    beyond `spouse` (`parent`/`sibling`/`child`/`friend`) plus its
+    `default` (unrecognised relationship) fallback; selecting a
+    relationship chip and confirming it flows into the POST body;
+    Cancel actually clearing the form fields (re-opened the form after
+    cancelling to confirm the name input came back empty, not just
+    hidden-but-stale); the saving spinner replacing "Save Contact" and
+    disabling the button while the add request is in flight; and
+    dismissing the remove-confirmation sheet via Cancel without calling
+    delete. 20 tests; full rider-app suite still green (123 suites /
+    1351 tests), `yarn tsc --noEmit` clean.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

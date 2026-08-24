@@ -294,6 +294,108 @@ describe('EmergencyContactsScreen (rider-app)', () => {
     expect(mockShowToast).toHaveBeenCalledWith('Remove Failed', 'Could not remove contact.', 'danger');
   });
 
+  it('does not crash and leaves the empty state showing when the fetch fails', async () => {
+    mockApiGet.mockRejectedValue(new Error('network down'));
+    const r = await renderScreen();
+    expect(allText(r)).toContain('No emergency contacts yet');
+  });
+
+  it('leaves an unrecognised phone length unformatted', async () => {
+    mockApiGet.mockResolvedValue({ data: { contacts: [{ ...CONTACT_1, phone: '12345' }] } });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('"12345"');
+  });
+
+  it('maps each relationship to its own icon, falling back to the generic icon for an unrecognised one', async () => {
+    mockApiGet.mockResolvedValue({
+      data: {
+        contacts: [
+          { id: 'c1', name: 'A', phone: '1111111111', relationship: 'Parent' },
+          { id: 'c2', name: 'B', phone: '2222222222', relationship: 'Sibling' },
+          { id: 'c3', name: 'C', phone: '3333333333', relationship: 'Child' },
+          { id: 'c4', name: 'D', phone: '4444444444', relationship: 'Friend' },
+        ],
+      },
+    });
+    const r = await renderScreen();
+    expect(r.root.findAllByProps({ name: 'people' })).toHaveLength(1);
+    expect(r.root.findAllByProps({ name: 'people-outline' })).toHaveLength(1);
+    expect(r.root.findAllByProps({ name: 'person' })).toHaveLength(1);
+    expect(r.root.findAllByProps({ name: 'person-outline' })).toHaveLength(1);
+  });
+
+  it('falls back to the generic person-circle icon for an unrecognised relationship', async () => {
+    mockApiGet.mockResolvedValue({ data: { contacts: [{ ...CONTACT_1, relationship: 'Roommate' }] } });
+    const r = await renderScreen();
+    expect(r.root.findAllByProps({ name: 'person-circle-outline' }).length).toBeGreaterThan(0);
+  });
+
+  it('selects a relationship chip and submits it with the new contact', async () => {
+    mockApiPost.mockResolvedValue({ data: {} });
+    const r = await renderScreen();
+    const addTrigger = findButtonByText(r, 'Add Emergency Contact');
+    act(() => { addTrigger.props.onPress(); });
+    const nameInput = r.root.findByProps({ placeholder: 'e.g. Sarah Johnson' });
+    act(() => { nameInput.props.onChangeText('Sarah Johnson'); });
+    const phoneInput = r.root.findByProps({ placeholder: 'e.g. (306) 555-1234' });
+    act(() => { phoneInput.props.onChangeText('3065551234'); });
+    const parentChip = findButtonByText(r, 'Parent');
+    act(() => { parentChip.props.onPress(); });
+    const saveBtn = findButtonByText(r, 'Save Contact');
+    await act(async () => { await saveBtn.props.onPress(); await flush(); });
+    expect(mockApiPost).toHaveBeenCalledWith('/users/emergency-contacts', {
+      name: 'Sarah Johnson',
+      phone: '3065551234',
+      relationship: 'Parent',
+    });
+  });
+
+  it('cancels the add form, clearing the name and phone fields', async () => {
+    const r = await renderScreen();
+    const addTrigger = findButtonByText(r, 'Add Emergency Contact');
+    act(() => { addTrigger.props.onPress(); });
+    const nameInput = r.root.findByProps({ placeholder: 'e.g. Sarah Johnson' });
+    act(() => { nameInput.props.onChangeText('Sarah Johnson'); });
+    const cancelBtn = findButtonByText(r, 'Cancel');
+    act(() => { cancelBtn.props.onPress(); });
+    expect(allText(r)).not.toContain('New Emergency Contact');
+    // Re-open and confirm the name field was actually cleared, not just hidden.
+    const addTriggerAgain = findButtonByText(r, 'Add Emergency Contact');
+    act(() => { addTriggerAgain.props.onPress(); });
+    const nameInputAgain = r.root.findByProps({ placeholder: 'e.g. Sarah Johnson' });
+    expect(nameInputAgain.props.value).toBe('');
+  });
+
+  it('shows a saving spinner (and disables Save) while the add request is in flight', async () => {
+    let resolvePost: (v: any) => void;
+    mockApiPost.mockReturnValue(new Promise((resolve) => { resolvePost = resolve; }));
+    const r = await renderScreen();
+    const addTrigger = findButtonByText(r, 'Add Emergency Contact');
+    act(() => { addTrigger.props.onPress(); });
+    const nameInput = r.root.findByProps({ placeholder: 'e.g. Sarah Johnson' });
+    act(() => { nameInput.props.onChangeText('Sarah Johnson'); });
+    const phoneInput = r.root.findByProps({ placeholder: 'e.g. (306) 555-1234' });
+    act(() => { phoneInput.props.onChangeText('3065551234'); });
+    const saveBtn = findButtonByText(r, 'Save Contact');
+    act(() => { saveBtn.props.onPress(); });
+    const saveBtnNow = r.root.findAllByType(TouchableOpacity).find((n) => n.props.disabled === true)!;
+    expect(saveBtnNow).toBeDefined();
+    await act(async () => { resolvePost!({ data: {} }); await flush(); });
+  });
+
+  it('dismisses the remove-confirmation sheet via Cancel without deleting', async () => {
+    mockApiGet.mockResolvedValue({ data: { contacts: [CONTACT_1] } });
+    const r = await renderScreen();
+    const deleteBtn = r.root
+      .findAllByType(TouchableOpacity)
+      .find((n) => n.findAllByProps({ name: 'trash-outline' }).length > 0)!;
+    act(() => { deleteBtn.props.onPress(); });
+    const cancelBtn = r.root.findByProps({ accessibilityLabel: 'confirm-Cancel' });
+    act(() => { cancelBtn.props.onPress(); });
+    expect(allText(r)).not.toContain('Remove Contact');
+    expect(mockApiDelete).not.toHaveBeenCalled();
+  });
+
   it('navigates back when the back button is pressed', async () => {
     const r = await renderScreen();
     const backBtn = r.root.findAllByType(TouchableOpacity)[0];

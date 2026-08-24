@@ -9263,6 +9263,36 @@ record of what was assumed vs. what was actually true</summary>
     1360 tests), `yarn tsc --noEmit` clean. **This closes out the last
     item on the 2026-08-24 fresh-coverage-sweep ranked list** — a
     further fresh sweep is needed to find the next tier.
+  - **Fresh coverage sweep (2026-08-24, post-#4513/#4515-merge) — next
+    tier identified.** Re-ran both apps'
+    `--collectCoverageFrom='app/**/*.{ts,tsx}'` coverage against `main`
+    at `cbfdc28` (123 rider-app suites / 1360 tests, 115 driver-app
+    suites / 1243 tests, both fully green) and ranked by line %
+    (`_layout.tsx` files excluded — near-zero by nature, not a real
+    gap). Two PRs from the prior tier were still open (not yet merged)
+    at measurement time — `ride-status.tsx` (#4507) and
+    `emergency-contacts.tsx` (#4514) — so this list reflects their
+    pre-PR numbers; both PRs already close those two gaps once merged.
+    Next tier, worst first:
+    - **rider-app:** `ride-options.tsx` (80.7% — the file this session's
+      earlier rounds already extended twice; still has room at 2284
+      lines, the largest screen in the app), `ride-status.tsx` (84.5% —
+      superseded by open PR #4507, → 97.4%), `emergency-contacts.tsx`
+      (87.5% — superseded by open PR #4514, → 100%), `driver-arrived.tsx`
+      (88.2%), `(tabs)/activity.tsx` (88.4%), `ride-completed.tsx`
+      (89.5%), `notifications.tsx` (89.7%), `scheduled-rides.tsx`
+      (90.4%), `wallet.tsx` (90.9%).
+    - **driver-app:** unchanged from the prior sweep (no driver-app PRs
+      landed this round) — `driver/(tabs)/index.tsx` (74.5%),
+      `become-driver.tsx` (80.7%), `documents.tsx` (86.8%),
+      `vehicle-info.tsx` (88.3%), `login.tsx` (88.7%), `driver/payout.tsx`
+      (88.8%), `driver/tax-documents.tsx` (88.9% — documented dead-code
+      remainder, not a real gap), `driver/payout-history.tsx` (89.4%),
+      `driver/ride-detail.tsx` (89.5%).
+    Sub-item 5 continues as an open-ended effort — pick up from this
+    list wherever a future session left off, re-running the coverage
+    command above to confirm current numbers before starting (they'll
+    have moved since this snapshot, and #4507/#4514 may have merged).
   - **rider-app `app/ride-status.tsx`: 84.5% → 97.4% lines.** Already had
     `rideStatusScreen.test.tsx` (17 tests: loading/header, searching's
     "taking longer" copy, driver_assigned/driver_accepted bodies, the
@@ -9570,6 +9600,60 @@ record of what was assumed vs. what was actually true</summary>
   corporate/billing form (subscriptions assignment, KYB approve/reject
   note, wallet adjustments, etc.) remain unmigrated; no ADR/
   migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-24 update — step 7: `rider-app/app/login.tsx` checked and
+  skipped (nothing to extract); migrated
+  `driver-app/app/profile-setup.tsx` instead, per this item's own "Still
+  open" ordering.** `login.tsx`'s only inline check is
+  `isValid = phoneNumber.length === 10` — no error message/toast, no
+  branching, no second condition it could conflict with in priority
+  order. That's not the "validation-rule coverage is invisible" gap this
+  item names (there is no rule beyond a length check already visible at
+  the call site, and `handlePhoneChange` itself hard-caps input to 10
+  digits before `isValid` ever runs) — extracting it into a schema file
+  would be a single one-line `z.string().length(10)` wrapper with no
+  behavior to pin in tests, so per this task's own fallback instruction
+  it was left alone rather than forcing a migration. Moved to the next
+  "Still open" item instead: `driver-app`'s signup/profile-setup form.
+  Migrated `driver-app/app/profile-setup.tsx`'s `handleSubmit` field
+  validation (first/last name length, email, gender, service area — the
+  driver-side identity fields that feed downstream KYC/compliance checks,
+  mirroring rider-app step 5's equivalent screen). New colocated
+  `driver-app/utils/profileSetupSchema.ts` (`profileSetupSchema` +
+  `getProfileSetupError` + `isProfileSetupFormValid`, plus individual
+  `isFirstNameValid`/`isLastNameValid`/`isEmailValid`/`isServiceAreaValid`
+  predicates — kept separate, not just an aggregate boolean, because the
+  screen reads each one independently to drive its own per-field checkmark
+  icon) reproduces the screen's six sequential inline checks
+  (`isFirstNameValid` i.e. `trim().length > 1`, `isLastNameValid` same,
+  empty-email, the `/^[^\s@]+@[^\s@]+\.[^\s@]+$/` email regex,
+  empty-gender, empty-serviceAreaId) in the same priority order (first
+  failing check wins) and with the same toast title/message pairs,
+  byte-for-byte — a pure extraction, not a validation-rule change, same
+  discipline as steps 1-5. `zod` was already a `driver-app` dependency
+  (added in step 3) — not re-added. New
+  `driver-app/utils/__tests__/profileSetupSchema.test.ts` (19
+  accept/reject cases, including boundary cases for the 2-letter name
+  length rule and priority-order cases pinning which error wins when
+  multiple fields are invalid at once). Verification: 19/19 new tests
+  pass (isolated run); full driver-app suite 1262/1262 tests, 116/116
+  suites pass, 0 regressions (single clean full run, no flakes observed);
+  `npx tsc --noEmit` clean; `npx eslint app/profile-setup.tsx
+  utils/profileSetupSchema.ts utils/__tests__/profileSetupSchema.test.ts`
+  clean; **real production build** (`npm run build:web` → `expo export
+  --platform web`) completed successfully, exit code 0 (`Exported: dist`,
+  6.8MB web bundle); blast-radius grep confirmed `app/profile-setup.tsx`
+  is the only reader of the extracted checks (`driver-app/app/driver/
+  (tabs)/profile.tsx` has its own separate, unrelated `EMAIL_REGEX` const
+  for a different edit-profile flow — not imported from or shared with
+  this screen; `reactivate-account.tsx`, `otp.tsx`, and `_layout.tsx` only
+  navigate to `profile-setup.tsx`, none read its validation). Full Change
+  Impact Log:
+  `docs/change-log/2026-08-24-b39-driver-profile-setup-zod-step6.md`.
+  **Still open:** every other admin-dashboard corporate/billing form
+  (subscriptions, KYB, wallet adjustments, etc.) remains unmigrated; no
+  ADR/migration-order doc written yet; `rider-app/app/login.tsx` is now
+  considered resolved for this item (checked, nothing worth extracting —
+  see above), not merely deferred. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

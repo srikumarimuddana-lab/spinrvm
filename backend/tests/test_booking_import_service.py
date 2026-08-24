@@ -354,6 +354,82 @@ def test_provenance_metadata_carries_no_pii(monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# Insurance-period reconstruction (mirrors migration 332's historical
+# backfill, applied per-row at import time instead of a manual SQL pass)
+# --------------------------------------------------------------------------
+
+
+def test_insurance_periods_reconstructed_for_completed_ride(monkeypatch):
+    _install_fake(monkeypatch)
+    plan = _plan([_booking()])
+    (ride,) = plan.rides_to_insert
+    periods = plan.insurance_periods_to_insert
+    assert len(periods) == 2
+
+    p2 = next(p for p in periods if p["period"] == 2)
+    assert p2["driver_id"] == "drv-1"
+    assert p2["ride_id"] == ride["id"]
+    assert p2["started_at"] == ride["driver_arrived_at"]
+    assert p2["ended_at"] == ride["ride_started_at"]
+    assert p2["is_reconstructed"] is True
+
+    p3 = next(p for p in periods if p["period"] == 3)
+    assert p3["driver_id"] == "drv-1"
+    assert p3["ride_id"] == ride["id"]
+    assert p3["started_at"] == ride["ride_started_at"]
+    assert p3["ended_at"] == ride["ride_completed_at"]
+    assert p3["is_reconstructed"] is True
+
+
+def test_no_period_2_when_arrived_at_missing(monkeypatch):
+    """No fabricated boundary: a ride missing arrived_pickup_loc_at gets a
+    Period 3 row only (started->completed is still fully supported), never a
+    guessed Period 2."""
+    _install_fake(monkeypatch)
+    plan = _plan([_booking(arrived_pickup_loc_at="")])
+    periods = plan.insurance_periods_to_insert
+    assert [p["period"] for p in periods] == [3]
+
+
+def test_no_insurance_periods_when_driver_unmatched(monkeypatch):
+    """Unmatched driver -> no driver_id to attribute a period to (matches
+    migration 332's exclusion of the 3 driver_id-IS-NULL rows)."""
+    _install_fake(monkeypatch, drivers=[{"id": "drv-1", "phone": "+13065559999"}])  # no phone match
+    plan = _plan([_booking()])
+    assert plan.rides_to_insert  # ride still imports with a NULL driver link
+    assert plan.insurance_periods_to_insert == []
+
+
+def test_airport_fee_populated_from_legacy_charges(monkeypatch):
+    """rides.airport_fee must reflect the real historical charge, not the
+    old hardcoded 0.0 -- admin/reporting surfaces read this column directly,
+    not area_fees_breakdown."""
+    _install_fake(monkeypatch)
+    plan = _plan([_booking(airport_pickup_charges="4.50", airport_drop_charges="2.25")])
+    (ride,) = plan.rides_to_insert
+    assert ride["airport_fee"] == pytest.approx(6.75)
+    # Still folded into area_fees_breakdown/fees_total too -- the rider-facing
+    # receipt total must not double- or under-count it.
+    fee_names = {f["name"] for f in ride["area_fees_breakdown"]}
+    assert "Airport pickup fee" in fee_names
+    assert "Airport dropoff fee" in fee_names
+
+
+def test_airport_fee_zero_when_no_legacy_charge(monkeypatch):
+    _install_fake(monkeypatch)
+    plan = _plan([_booking()])
+    (ride,) = plan.rides_to_insert
+    assert ride["airport_fee"] == 0.0
+
+
+def test_commit_writes_insurance_periods(monkeypatch):
+    store = _install_fake(monkeypatch, drivers=[{"id": "drv-1", "phone": "+13065552222", "total_rides": 0}])
+    plan = _plan([_booking()])
+    svc.commit_plan(plan)
+    assert len(store.get("driver_insurance_periods", [])) == 2
+
+
+# --------------------------------------------------------------------------
 # Filtering and phone matching
 # --------------------------------------------------------------------------
 

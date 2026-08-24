@@ -302,6 +302,36 @@ def test_anomalous_row_matches_completed_idempotency_on_rerun(monkeypatch):
     assert plan2.stats["cancelled_failed_skipped_already_imported"] == 1
 
 
+def test_anomalous_row_gets_period_3_only_no_arrived_at_in_export(monkeypatch):
+    """The anomalous branch's own fixture never carries
+    arrived_pickup_loc_at (not part of the 7-row anomaly's data), so only
+    Period 3 (started->completed) is reconstructible -- Period 2 is never
+    fabricated from a missing timestamp, same rule as the normal completed
+    path."""
+    _install_fake(monkeypatch)
+    plan = _plan([_anomalous_booking()])
+    (ride,) = plan.rides_to_insert
+    periods = plan.insurance_periods_to_insert
+    assert [p["period"] for p in periods] == [3]
+    (p3,) = periods
+    assert p3["driver_id"] == "drv-1"
+    assert p3["ride_id"] == ride["id"]
+    assert p3["started_at"] == ride["ride_started_at"]
+    assert p3["ended_at"] == ride["ride_completed_at"]
+    assert p3["is_reconstructed"] is True
+
+
+def test_normal_cancelled_row_never_gets_insurance_periods(monkeypatch):
+    """A genuinely cancelled/failed row (rides.status stays 'cancelled',
+    never 'completed') gets no driver-liability reconstruction attempted --
+    matches migration 332's own scope, which only ever covered completed
+    rides."""
+    _install_fake(monkeypatch)
+    plan = _plan([_cancelled_booking()])
+    assert plan.rides_to_insert  # the ride itself still imports
+    assert plan.insurance_periods_to_insert == []
+
+
 def test_row_with_only_start_timestamp_is_still_a_normal_cancellation(monkeypatch):
     """Only ONE of the two timestamps populated is not the anomaly -- still
     a legitimate pre-trip-adjacent cancellation, must import normally."""

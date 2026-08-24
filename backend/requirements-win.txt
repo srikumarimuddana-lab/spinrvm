@@ -28,7 +28,7 @@ firebase-admin==7.5.0     # via -r requirements.in
 flake8==7.3.0             # via -r requirements.in
 frozenlist==1.8.0         # via aiohttp, aiosignal
 fsspec==2026.3.0          # via pyiceberg
-google-ai-generativelanguage==0.6.15  # via google-generativeai
+google-ai-generativelanguage==0.12.0  # via google-generativeai
 google-api-core==2.30.3   # via firebase-admin, google-ai-generativelanguage, google-api-python-client, google-cloud-core, google-cloud-firestore, google-cloud-storage, google-generativeai
 google-api-python-client==2.194.0  # via -r requirements.in, google-generativeai
 google-auth==2.49.2       # via -r requirements.in, google-ai-generativelanguage, google-api-core, google-api-python-client, google-auth-httplib2, google-cloud-core, google-cloud-firestore, google-cloud-storage, google-generativeai

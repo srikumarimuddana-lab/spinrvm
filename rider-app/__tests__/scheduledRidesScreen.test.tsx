@@ -20,7 +20,7 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { TouchableOpacity, Text } from 'react-native';
+import { TouchableOpacity, Text, FlatList } from 'react-native';
 
 jest.mock('@react-native-async-storage/async-storage', () => {
   const store: Record<string, string> = {};
@@ -240,5 +240,47 @@ describe('ScheduledRidesScreen', () => {
       backBtn.props.onPress();
     });
     expect(mockBack).toHaveBeenCalled();
+  });
+
+  it('pull-to-refresh re-fetches scheduled rides via the refreshing flag', async () => {
+    useRideStore.setState({ scheduledRides: [RIDE_1] } as any);
+    const r = await renderScreen();
+    const fetchMock = useRideStore.getState().fetchScheduledRides as jest.Mock;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const list = r.root.findByType(FlatList);
+    await act(async () => {
+      await list.props.refreshControl.props.onRefresh();
+      await flush();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // refreshing flips true then back to false around the await
+    expect(list.props.refreshControl.props.refreshing).toBe(false);
+  });
+
+  it('shows "In X min" (no hours) when the ride is under an hour away', async () => {
+    useRideStore.setState({
+      scheduledRides: [{ ...RIDE_1, scheduled_time: new Date(Date.now() + 40 * 60 * 1000).toISOString() }],
+    } as any);
+    const r = await renderScreen();
+    expect(allText(r)).toMatch(/In \d+ min/);
+    expect(allText(r)).not.toMatch(/In \d+h/);
+  });
+
+  it('dismisses the confirm sheet without cancelling when "Keep" is pressed', async () => {
+    useRideStore.setState({ scheduledRides: [RIDE_1] } as any);
+    const r = await renderScreen();
+    const cancelBtn = r.root
+      .findAllByType(TouchableOpacity)
+      .find((n) => n.findAllByType(Text).some((t) => JSON.stringify(t.props.children).includes('Cancel')))!;
+    act(() => {
+      cancelBtn.props.onPress();
+    });
+    expect(allText(r)).toContain('Cancel Scheduled Ride');
+    const keepBtn = r.root.findByProps({ accessibilityLabel: 'confirm-Keep' });
+    act(() => {
+      keepBtn.props.onPress();
+    });
+    expect(allText(r)).not.toContain('Cancel Scheduled Ride');
+    expect(useRideStore.getState().cancelScheduledRide).not.toHaveBeenCalled();
   });
 });

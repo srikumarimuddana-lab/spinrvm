@@ -9397,6 +9397,33 @@ record of what was assumed vs. what was actually true</summary>
     branches (`await api.post(.../start')`, `catch(e) { console.log(e)
     }`, then `fetchRide` either way). 20 tests; full rider-app suite
     still green (123 suites / 1408 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/scheduled-rides.tsx`: 89.47% → 100% stmts, 90.38% →
+    100% lines** (money-adjacent: the C29 notice-window cancellation-fee
+    preview). Already had `scheduledRidesScreen.test.tsx` (12 tests:
+    mount fetch, empty-state CTA, ride-card rendering, "Dispatching..."
+    once past scheduled time, the fee-present-vs-absent confirm message,
+    the confirm→cancel→best-effort-reminder-cancel→success-toast flow
+    and its failure-toast path, back navigation) plus the separate,
+    untouched `scheduledRidesNoticeWindowFee.test.tsx`. Extended in
+    place (+3 tests, 15 total): pull-to-refresh (`onRefresh` on
+    `FlatList`'s `refreshControl`, asserting `fetchScheduledRides` is
+    called a second time and `refreshing` settles back to `false`);
+    `getTimeUntil`'s no-hours branch (`In ${mins} min` when under an
+    hour out, vs. the already-covered `In Xh Ym` case); and the "Keep"
+    button on the cancel confirm sheet, which pins that pressing it
+    dismisses the sheet via `onClose` (line 214) without calling
+    `cancelScheduledRide` — distinct from the existing "Cancel Ride"
+    confirm/failure tests, which only exercised the destructive button.
+    Left uncovered: line 128 (`isImminent` badge-color ternary's false
+    branch merged into Istanbul's branch count — every existing ride
+    fixture is either far enough out or already past, so the ~15-min
+    "imminent" window itself is untested display-only styling, no
+    money/state logic) and line 202 (the `{s}` pluralization suffix on
+    "N upcoming rides" when count !== 1 — all fixtures use exactly one
+    ride; purely cosmetic string branch). Both are display-only and
+    diminishing-returns per this sweep's convention. Full rider-app
+    suite still green (123 suites / 1411 tests), `yarn tsc --noEmit`
+    clean.
   - **rider-app `app/emergency-contacts.tsx`: 87.5% → 100% stmts / 100%
     lines.** Already had `emergencyContactsScreen.test.tsx` (12 tests:
     load, empty state, both phone-format lengths, name/phone validation,

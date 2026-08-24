@@ -4794,9 +4794,13 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   Directions calls (verified, not a real gap).
 
 ### B6. Measure Directions latency and re-tune the fare-estimate wait
-- [ ] **Status:** in progress (2026-07-28) — the measurement half is done;
-  the re-tuning half is genuinely blocked on live traffic this dev session
-  cannot produce, not on more code work.
+- [x] **Status:** CLOSED (2026-08-24) — the measurement half shipped
+  2026-07-28; the re-tuning half was never completed via this item's own
+  p99-driven process, but the underlying question (are `DIRECTIONS_TIMEOUT_S`
+  / `_PRICING_ROUTE_WAIT_S` right?) was independently decided and closed by
+  a separate incident-driven fix + a 2026-08-21 permanent-exception decision
+  — see below. Nothing left open here; the metric stays live for regression
+  watching only.
   - **Done:** `estimates.py`'s `_route_fetch()` now times every real
     Directions call and records it to `spinr_fare_directions_duration_ms`
     (new histogram, `utils/metrics.py`'s existing `observe`/`_metric_observe`
@@ -4814,28 +4818,46 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     traffic nor Maps API access to generate a genuine distribution; a
     synthetic/mocked one would defeat the entire point of B6 (replacing
     judgement with data). `DIRECTIONS_TIMEOUT_S` / `_PRICING_ROUTE_WAIT_S`
-    are therefore **unchanged** — still 1.5 s / 2.0 s, still by judgement,
-    now with the instrumentation in place to replace that judgement once
-    `spinr_fare_directions_duration_ms` has accumulated real traffic.
-    `test_pricing_wait_stays_within_the_estimate_latency_budget` needed no
-    change since the ceiling itself didn't move.
-  - **Next step for whoever picks this back up**: let the metric collect for
-    a representative window in production, pull the p99 from
-    `/metrics` (or wherever it's scraped to), then decide per the original
-    Action text — tighten both constants if the p99 sits well under 1.5 s,
-    or move to pre-warming/caching common origin-destination pairs if
-    Directions is routinely slower than the SLA allows.
+    were **unchanged** at the time of this note — still 1.5 s / 2.0 s, still
+    by judgement, now with the instrumentation in place to replace that
+    judgement once `spinr_fare_directions_duration_ms` has accumulated real
+    traffic. `test_pricing_wait_stays_within_the_estimate_latency_budget`
+    needed no change since the ceiling itself didn't move.
+  - **Superseded (2026-07-29, later session, not via this item's own
+    process)**: the constants moved anyway — 1.5 s → 3.0 s
+    (`DIRECTIONS_TIMEOUT_S`), so `_PRICING_ROUTE_WAIT_S` is now 3.5 s —
+    triggered by a real pricing-inconsistency incident (a trip re-priced
+    between quote and confirm, 12.12 km → 16.46 km, $30.92 → $39.44), not by
+    `spinr_fare_directions_duration_ms` p99 data. **Decided 2026-08-21**
+    (Option A, `docs/audit/2026-08-19-decision-writeups.md` §8): accepted as
+    a **permanent SLA exception**, documented in `CLAUDE.md`'s Performance
+    SLAs section — not a temporary judgement call awaiting real data
+    anymore. Re-verified live 2026-08-24: `backend/routes/rides/_shared.py`'s
+    `DIRECTIONS_TIMEOUT_S = 3.0`, matching. The metric this item shipped is
+    still live and recording (`estimates.py`'s `_route_fetch()` `finally`
+    block, confirmed unchanged) but is no longer gating a future re-tuning
+    decision — that decision is closed. `test_ride_estimate_branches.py`
+    re-run clean (14/14).
+  - **Next step for whoever picks this back up**: none — B6's own
+    open question (re-tune the wait once real p99 data exists) is now moot;
+    the wait was widened for a different, since-resolved reason and the
+    result was explicitly accepted as permanent. The metric can still be
+    watched for regressions, but this item itself has nothing left to
+    decide.
 - **Files:** `backend/routes/rides/estimates.py` (instrumentation),
   `backend/tests/test_ride_estimate_branches.py` (2 new tests: metric
   recorded on success, metric recorded even when the Directions call fails).
   `backend/routes/rides/_shared.py` / `backend/utils/metrics.py` needed no
   changes — the histogram plumbing already existed and `_shared.py`'s
-  `DIRECTIONS_TIMEOUT_S` wasn't touched (no data to justify moving it yet).
-- **Acceptance:** partially met — the latency distribution is now being
-  recorded (the prerequisite the original acceptance text assumed already
-  existed); the timeout itself is not yet re-justified by real data, and
-  can't be inside a single dev session. Re-open once
-  `spinr_fare_directions_duration_ms` has real production data to act on.
+  `DIRECTIONS_TIMEOUT_S` wasn't touched at the time (no data to justify
+  moving it yet — see the 2026-07-29/2026-08-21 update above for what
+  happened next).
+- **Acceptance:** met, by a different path than originally written — the
+  latency distribution is recorded (`spinr_fare_directions_duration_ms`,
+  still live); the timeout question this item asked ("is 1.5 s / 2.0 s
+  right?") is closed, not by that metric's p99 but by CLAUDE.md's
+  2026-08-21 permanent-exception decision following the 2026-07-29 incident.
+  Re-open only if that documented exception is ever revisited.
 
 ### B7. Give service areas a real locality so the geocode can be hard-filtered
 - [x] **Status:** shipped — PR #2670 (merged 2026-07-28)
@@ -5805,11 +5827,15 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     Jest/RNTL tests for every new hook and component (hold-gesture timing,
     contacts fetch, retry/backoff, flag fail-closed, shield/overlay
     render+interaction, and the invariant that a failed silent alert never
-    shows `Alert.alert`): 50/51 driver-app suites pass (the one failure,
-    `ActivityView.test.tsx`, is a pre-existing, unrelated
-    `expo-router/react-navigation` resolution gap, confirmed via
-    `git stash` to fail identically without any B16 changes present).
-    `tsc --noEmit` clean on every touched file.
+    shows `Alert.alert`): 50/51 driver-app suites passed at the time,
+    the one failure (`ActivityView.test.tsx`) confirmed via `git stash` to
+    be a pre-existing, unrelated `expo-router/react-navigation` resolution
+    gap, not caused by B16. **Resolved since** (re-run 2026-08-24): the
+    full driver-app suite is now 115/115 passing, `ActivityView.test.tsx`
+    included — the gap was apparently fixed as a side effect of B37's
+    later `jest.config.js` work (PRs #4455/#4458/#4460/#4476), not by this
+    item. `tsc --noEmit` clean on every touched file (re-confirmed
+    2026-08-24, still clean).
   - **NOT verified — explicit gap, not silently assumed covered:** no
     manual QA on a real device/simulator (gesture timing, blur/toast
     rendering, and the actual flag-off vs flag-on visual behavior aren't
@@ -6130,8 +6156,11 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   membership test (`test_ride_columns_fetch_payment_status`) mirroring the
   existing `discount_amount` one, which was added for the same reason after
   a prior promo-ride regression. 23 tests in `test_ledger_projection.py`
-  pass (18 pre-existing + 5 new), plus 122 across the payment/loop test
-  surface (`test_replay_safety_payment_loops.py`, `test_atomic_settle.py`,
+  pass (18 pre-existing + 5 new; re-run 2026-08-24, still 23/23), plus
+  (originally 122, now 128 as of 2026-08-24 — these shared files pick up
+  unrelated test additions over time, re-run rather than trust the exact
+  number) across the payment/loop test surface
+  (`test_replay_safety_payment_loops.py`, `test_atomic_settle.py`,
   `test_payment_retry.py`, `test_payment_retry_coverage.py`,
   `test_coverage_payments.py`). See git history for the commit.
 - **What:** `backend/utils/ledger_projection.py::_decompose` (default fare branch)
@@ -6162,13 +6191,24 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   listed below now use `TTL = interval * 0.85` (matching `ledger_projection.py`'s
   existing fix — 0.05 headroom under the `1 - jitter_fraction` floor), with
   the same two regression tests per loop (`test_lock_ttl_expires_before_the_earliest_next_wake`,
-  `test_..._loop_reacquires_its_own_lock_on_the_next_wake`) added to each
-  loop's own `*_coverage.py` test file, adapted for `orphaned_hold_reconciler.py`'s
-  extra unconditional startup jitter sleep. `payment_retry.py`'s misleading
-  comment corrected. 113 tests across the affected loop/reaper test files
-  pass. See git history for the 3 commits (payment_retry.py first per this
-  item's own "look at first" guidance, then the two reapers together, then
-  orphaned_hold_reconciler.py).
+  `test_..._loop_reacquires_its_own_lock_on_the_next_wake`). **Correction
+  (2026-08-24, verification sweep)**: "added to each loop's own
+  `*_coverage.py` test file" is not quite right — `payment_retry.py`'s pair
+  actually lives in `test_payment_retry.py` (not `test_payment_retry_coverage.py`),
+  and `orphaned_hold_reconciler.py`'s pair lives in a separate
+  `test_orphaned_hold_reconciler_loop_coverage.py`, distinct from
+  `test_orphaned_hold_reconciler_coverage.py` (both files exist). The
+  "113 tests ... pass" figure could not be reproduced against the 5
+  canonical `*_coverage.py` files alone (gives 103, missing the two TTL
+  tests that live elsewhere per the correction above); substituting the
+  actual files that hold every loop's TTL tests gives 111; the full
+  affected-file set together (adding `test_orphaned_hold_reconciler.py`
+  and `test_replay_safety_payment_loops.py`) gives 155 — pick whichever
+  grouping matches "113" if reconstructable, otherwise treat 111 as the
+  correct minimal figure and don't trust "113" specifically. `payment_retry.py`'s
+  misleading comment corrected. See git history for the 3 commits
+  (payment_retry.py first per this item's own "look at first" guidance,
+  then the two reapers together, then orphaned_hold_reconciler.py).
 - **What:** the shared loop-shell idiom sets the Redis throttle lock with
   `TTL = interval * 1.5` and then sleeps `interval` (± jitter). The pod that ran
   the last tick therefore wakes while its OWN key is still alive, fails `SET NX`,
@@ -6845,24 +6885,33 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   fare-snapshot builder used by booking/estimates/stops, not an offline
   import script), which raises the stakes relative to B29's legacy-importer
   scope.
-- **Status:** open, no owner assigned, not investigated beyond the grep hit
-  (`backend/routes/rides/_shared.py:424,426,436`) that found it. Needs the
-  same treatment as B28/B29: confirm the values being cast are `Decimal`
-  all the way through `_round()` (this repo's `_round`/`_d`/`_f` helpers
-  suggest yes, but verify rather than assume), then swap `float()` → `str()`
-  at the write boundary, then extend the regression-test pattern to cover
-  this file too. Given this is a live-booking-path file (not an offline
-  import), this needs the full pre-merge release gate treatment (dry run
-  against `mock_supabase_client`, before/after scenario) per CLAUDE.md's
-  "State-machine and money changes need a dry run" rule — do not treat it
-  as a copy-paste of B28/B29's diff without that.
-- **Files:** `backend/routes/rides/_shared.py`.
-- **Acceptance:** `grand_total`/`tax_amount`/`area_fees_total`/
-  `discount_amount` in `_shared.py`'s fare-snapshot builder are serialized
-  via `str(Decimal)`, not `float()`, at the write boundary; a regression
-  test (extending B28/B29's static-scan pattern, or a new one) covers it;
-  a dry-run scenario against `mock_supabase_client` is described in the
-  closing Change Impact Log, not just "tests pass."
+- **Status:** CLOSED (2026-08-20, this entry never updated to reflect
+  it — found stale 2026-08-24 by a `/loop`-style verification sweep run
+  after this session's user asked for B0-B39 to be checked one by one).
+  `_reestimate_fare_for_stops` (`backend/routes/rides/_shared.py:423-436`)
+  now writes `tax_amount` via `str(_round(tax_amount))` (line 424) and
+  `area_fees_total` via `str(_round(fees_total))` (line 426), not
+  `float()`. The scalar `grand_total` (line 423) was already correct via
+  `_money_str()` before this fix. `discount_amount` turned out to never be
+  written by this file at all (only read for display) — the original grep
+  hit over-counted by including a column this file doesn't write. The one
+  remaining `float(_round(grand_total))` (line 436) is inside the separate
+  `fare_breakdown_snapshot` JSONB blob (migration 90), correctly left as
+  `float()` per the B28/B29 jsonb carve-out precedent — it is not the
+  scalar `NUMERIC` column. Regression coverage:
+  `backend/tests/test_shared_rides_numeric_no_float_cast.py` (7 tests:
+  positive checks that `tax_amount`/`area_fees_total` use `str()`, a pin
+  that `grand_total` stays `str()`, a pin that `discount_amount` is never
+  written here, a negative-control pin that the jsonb sub-field's
+  `grand_total` stays `float()`) — re-run 2026-08-24, 7/7 pass. Full
+  Change Impact Log: `docs/change-log/2026-08-20-b30-shared-fare-float-fix.md`.
+- **Files:** `backend/routes/rides/_shared.py`,
+  `backend/tests/test_shared_rides_numeric_no_float_cast.py`.
+- **Acceptance:** met — `tax_amount`/`area_fees_total` in `_shared.py`'s
+  fare-snapshot builder are serialized via `str(Decimal)`, not `float()`,
+  at the write boundary; `grand_total` was already correct;
+  `discount_amount` is never written by this file; the regression test
+  above covers all four, plus the jsonb-carve-out negative control.
 
 ### B31. `routes/promotions.py`'s promo-eligibility ride counts don't exclude legacy-imported completed rides — pre-existing, affects 271+ rows, not net-new to A41's zero-fare-completed fix
 
@@ -6880,22 +6929,36 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   extend, not a new category of bug. Deliberately NOT bundled into the 7-row-disposition PR
   (scope-contract discipline — one logical change per PR) — filed here instead, per
   CLAUDE.md's "escalate, don't silently ship, when in doubt."
-- **Status:** open, not investigated beyond the grep hit and the reasoning above. Needs: (1)
-  confirm how many real (non-test) rider accounts are actually affected today (join
-  `legacy_import_metadata->>source = 'legacy_mongo_booking_import'` completed rides against
-  currently-matched `rider_id`s, count distinct riders with ≥1 such row) to size the real
-  exposure before deciding urgency; (2) decide whether promo eligibility SHOULD exclude
-  legacy rows entirely (a rider's actual first *Spinr* ride, not their first ride ever in the
-  old app, is arguably the more defensible "first_ride_only" semantic) — this is a product
-  decision, not purely technical; (3) if excluded, add the same
-  `legacy_import_metadata = '{}'::jsonb`-equivalent filter (or its `db_supabase`
-  query-builder equivalent, since this is a live-request-path Python filter, not a SQL
-  function) to all three call sites, plus a regression test.
-- **Files:** `backend/routes/promotions.py` (lines 225, 265, 518 as of 2026-08-20).
-- **Acceptance:** either a documented, deliberate decision that legacy-imported completed
-  rides SHOULD count toward promo eligibility (risk-accepted, dated note here), or all three
-  `routes/promotions.py` ride-count call sites exclude them, with a regression test and a
-  Change Impact Log (money-adjacent, rider-facing — same rigor as any other promotions.py fix).
+- **Status:** CLOSED (date of the fix itself not recorded anywhere found —
+  this entry was left as "open, not investigated" and only caught stale
+  2026-08-24 by a verification sweep). Decision (2) below was made in
+  favor of exclusion, and (3) is implemented: all `count_documents("rides",
+  ...)` call sites in `routes/promotions.py` now merge `EXCLUDE_LEGACY_RIDES`
+  (`backend/utils/legacy_rides.py:69`,
+  `{"legacy_import_metadata": {"$eq": {}}}`) — `first_ride_only`,
+  `inactive_days`, `min`/`max_total_rides`, and their `/promo/available`
+  twins (6 call sites as of current code, not the original 3 — the route
+  gained a second endpoint since this item was filed). Regression coverage:
+  `backend/tests/test_routes_promotions_coverage.py::TestValidatePromoForUserExcludesLegacyRides`,
+  headed with an explicit "ACTION_ITEMS.md B31" comment describing the
+  exclusion and asserting `first_ride_only` now passes for a rider with
+  only legacy rides — re-run 2026-08-24, 70/70 pass in the file (8/8 in the
+  B31-specific subset). **Gap found while closing this entry, not
+  resolved**: no `docs/change-log/` entry for this fix was found anywhere,
+  despite this being a money-adjacent, rider-facing promo-eligibility
+  change that CLAUDE.md's Change Impact Log rule covers — flag this as a
+  standing process gap (a fix shipped and tested without the mandated log)
+  rather than fabricate one after the fact; if anyone has the original
+  session's context, backfill a real Change Impact Log rather than leaving
+  this uncovered.
+- **Files:** `backend/routes/promotions.py` (6 `count_documents` call
+  sites as of current code), `backend/utils/legacy_rides.py`,
+  `backend/tests/test_routes_promotions_coverage.py`.
+- **Acceptance:** met on the code/test side — legacy-imported completed
+  rides are excluded from promo-eligibility ride counts at every call
+  site, with regression coverage. **Not fully met**: no Change Impact Log
+  exists for this fix (see gap above) — still worth closing that
+  paperwork gap even though the fix itself is live and correct.
 
 ### B33. `driver_import_service.read_csv`'s header normalization silently broke the SIN/DOB backfill's phone crosswalk — CLOSED (2026-08-20)
 
@@ -6996,26 +7059,44 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   row, plus updates to every current reader of `driver_insurance_periods` for regulatory purposes
   (`scripts/compliance_export.py`, `backend/routes/admin/driver_distance.py`'s
   `admin_driver_distance_logs`) to prefer a correction over its original when one exists.
-- **Status:** open, not designed or built. A real migration + RLS + immutability-trigger + two-consumer
-  wiring change, out of scope for the verification pass that surfaced it.
-- **Files:** new migration under `backend/migrations/` (next free number per
-  `ls backend/migrations | sort -V | tail -1` — do not assume 353 without re-checking at commit time,
-  per this repo's numbering convention); `backend/migrations/64_driver_insurance_periods.sql` and
-  `332_backfill_legacy_ride_insurance_periods.sql` (context — confirm the new table's RLS/immutability
-  pattern matches theirs, don't diverge silently); `backend/scripts/compliance_export.py` (regulator-facing
-  export — must prefer a correction over its original when one exists); `backend/routes/admin/
-  driver_distance.py`'s `admin_driver_distance_logs` (admin-facing per-span read, same requirement);
-  `backend/services/insurance_period_reconstruction_verification.py` (the tool that surfaced this gap —
-  once the corrections table exists, its `apply_verification_plan()` no-op should be revisited, since
-  writing a correction row would then have a sanctioned destination).
-- **Acceptance:** `driver_insurance_period_corrections` table exists (original-period FK, corrected
-  `started_at`/`ended_at`, `reason`, `corrected_by`, `corrected_at`, append-only/immutable once written,
-  RLS matching `driver_insurance_periods`' own service-role-only pattern); both `compliance_export.py`
-  and `admin_driver_distance_logs` read a correction in preference to its original row when one exists,
-  with a test proving the preference (not just that the table can be queried); the 156 rides this
-  session's verification pass found diverging (`docs/change-log/2026-08-20-insurance-period-
-  reconstruction-verification.md`) are the first real candidate backlog once this ships — filing the
-  table is not itself a decision to correct them, that stays a separate, explicit call.
+- **Status:** CLOSED (2026-08-20 — this entry was left as "open, not
+  designed or built" and only caught stale 2026-08-24 by a verification
+  sweep, despite a Change Impact Log already existing for the shipped fix).
+  `backend/migrations/355_driver_insurance_period_corrections.sql` creates
+  the table exactly to the shape described above: `original_period_id` FK
+  (`UNIQUE`), `corrected_started_at`/`corrected_ended_at`, `reason`,
+  `corrected_by`, `corrected_at`, RLS with a service-role-only-write SELECT
+  policy, and an unconditional `BEFORE UPDATE OR DELETE` immutability
+  trigger — modeled on migration 64's `driver_insurance_periods` pattern as
+  required. Both named consumers updated to prefer a correction:
+  `scripts/compliance_export.py` (repo-root `scripts/`, not
+  `backend/scripts/` — the Files list below was also stale on this path)
+  looks up `driver_insurance_period_corrections` and substitutes
+  `corrected_started_at`/`corrected_ended_at` plus a new `is_corrected`
+  column; `backend/routes/admin/driver_distance.py`'s
+  `admin_driver_distance_logs` does the same substitution. Regression
+  tests exist and pass, both explicitly citing "ACTION_ITEMS.md B34":
+  `backend/tests/test_admin_driver_distance.py`,
+  `backend/tests/test_compliance_export_script.py` — re-run 2026-08-24,
+  28/28 pass together. `.claude/context/domain-safety.md:99`'s
+  "Corrections go into a separate `driver_insurance_period_corrections`
+  table with justification" line — the thing this item originally flagged
+  as false/aspirational — is now actually true. Full Change Impact Log:
+  `docs/change-log/2026-08-20-b34-insurance-period-corrections-table.md`.
+- **Files:** `backend/migrations/355_driver_insurance_period_corrections.sql`,
+  `scripts/compliance_export.py` (repo-root, corrected from the stale
+  `backend/scripts/` path above), `backend/routes/admin/driver_distance.py`,
+  `backend/tests/test_admin_driver_distance.py`,
+  `backend/tests/test_compliance_export_script.py`.
+- **Acceptance:** met — `driver_insurance_period_corrections` exists with
+  the described shape, both `compliance_export.py` and
+  `admin_driver_distance_logs` prefer a correction over its original when
+  one exists, and both have a test proving the preference. The 156
+  diverging rides this item names as "the first real candidate backlog
+  once this ships" remain a separate, still-open, explicit decision — this
+  item's own scope (build the table + wire the two consumers) is done;
+  actually correcting those 156 rows is not part of what this item asked
+  for and is not implied to be resolved by this closure.
 
 ### B35. `routes/rides/booking.py` float()-casts several `rides` money fields at write time — same bug class as B28/B29/B30
 
@@ -8917,6 +8998,40 @@ record of what was assumed vs. what was actually true</summary>
     list wherever a future session left off, re-running the coverage
     command above to confirm current numbers before starting (they'll
     have moved since this snapshot).
+  - **rider-app `app/driver-arriving.tsx`: 77.5% → 100% lines.** Already
+    had `driverArrivingScreen.test.tsx` (18 tests: mount fetch/poll,
+    status-based navigation, searching vs. driver-assigned states,
+    all four cancel-confirm dialogs, share/copy/message actions) —
+    extended in place (+20 tests). Same lesson as `ride-in-progress.tsx`
+    above (worked concurrently on a separate branch): the reported
+    `"425-595,686-720"` uncovered range wasn't one block — mostly
+    never-invoked callback bodies. Closed: service-area polygon
+    rendering (both the ≥3-point-renders and the <3-point-skipped
+    branches) — needed the `Polygon` mock upgraded from `() => null` to
+    a prop-forwarding double; seeding `rideRouteCoords` from a saved
+    `planned_route_polyline`; the two `MapViewDirections` legs (driver→
+    pickup and pickup→dropoff) each firing `onReady`, plus the
+    empty-coordinates no-op branch — needed the same prop-capturing mock
+    upgrade as `ride-in-progress.tsx`, tracked per-leg here since this
+    screen renders two instances at once (distinguished by `origin`);
+    the driver-origin-snapshot capture and its reset-on-reassignment
+    effect; the map-fitting `fitToCoordinates` call (mock upgraded to a
+    shared `jest.fn()` so it's assertable, unlike the previous
+    per-render throwaway stub); `FreeCancelTimer`'s `onExpire` callback
+    (needed a prop-capturing mock — it was `() => null`, silently
+    dropping the prop); the ETA countdown timer actually ticking down
+    (1s at a time — a single large `advanceTimersByTime` jump didn't
+    cascade through the effect's re-schedule-on-each-tick pattern the
+    way `ride-in-progress.tsx`'s simpler haversine effect did) and its
+    two label-format boundaries (`<30s` "Arriving shortly", `<120s`
+    seconds-only); the searching-state "Cancel" button's direct
+    (no-reason-sheet) cancel path; dismissing both the `ConfirmSheet`
+    and `CancelReasonSheet` via their own cancel/close actions without
+    cancelling; the driver-photo-load-error fallback; and all four
+    `__DEV__`-only status-simulation buttons (Assign/Arrive/Start/
+    Complete), including Assign's swallowed-failure branch. 38 tests;
+    full rider-app suite still green (122 suites / 1261 tests), `yarn
+    tsc --noEmit` clean.
   - **rider-app `app/search-destination.tsx`: 70.5% → 95.4% lines.**
     Already had `searchDestinationPinIntegrity.test.tsx` (stale-pin
     incident regression) and `searchDestinationScreen.test.tsx` (20
@@ -8955,6 +9070,43 @@ record of what was assumed vs. what was actually true</summary>
     since these particular mocks take no meaningful arguments anyway. 43
     tests; full rider-app suite still green (122 suites / 1264 tests),
     `yarn tsc --noEmit` clean.
+  - **rider-app `app/ride-in-progress.tsx`: 76.9% → 100% lines.**
+    Already had `rideInProgressScreen.test.tsx` (14 tests: mount fetch/
+    poll gating, completed-status redirect, share/copy/live-map actions,
+    end-ride confirm + failure, message driver, driver-photo-error
+    fallback) — extended in place (+14 tests). The reported
+    `"595-597,637-772"` uncovered-line range in the original scan looked
+    like one giant block but wasn't: Istanbul's text reporter merges
+    scattered uncovered statement lines into a compact range whenever no
+    independently-instrumented statement sits between them (pure JSX/
+    whitespace lines don't count as separate coverable units) — the
+    actual gap was a handful of never-invoked callback bodies: the error
+    state's Retry button; `MapViewDirections`'s `onReady` callback
+    (never mounted before, since every test's fixture already had
+    `activeRideRouteCoords` set, so the component that renders it was
+    never reached — needed a fresh test with `activeRideRouteCoords:
+    null` and `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` set, plus rewriting the
+    `react-native-maps-directions` mock from `() => null` to a
+    prop-capturing double so `onReady` could be invoked directly, both
+    with and without a driver GPS fix — the with-fix path prefers
+    haversine ETA over the Directions duration); the driver-not-yet-
+    available map-center-on-pickup fallback; `fetchLiveRoute`'s success
+    branch (previously only its silent-catch path was exercised);
+    confirming (not just opening) both End Ride dialogs — the button's
+    own and the hardware-back-triggered one, including each one's own
+    failure-toast branch; dismissing the confirm sheet via "Continue
+    Ride" without ending the ride; `Share.share` itself rejecting;
+    `handleCopyTrackingLink`'s not-configured branch (reachable only by
+    sharing successfully, then swapping `trackBaseUrl` to null via a
+    context-value re-render before pressing copy, since the copy button
+    only exists after a successful share); seeding `tripRouteCoords`
+    from a saved `planned_route_polyline` when no live-coords cache
+    exists; and the `__DEV__`-only "Complete Ride" button's success and
+    swallowed-failure paths. 28 tests; full rider-app suite still green
+    (122 suites / 1255 tests — this branch predates the
+    `search-destination.tsx`/`payment-confirm.tsx` entries above/below,
+    so its own test count is separate from theirs), `yarn tsc --noEmit`
+    clean.
   - **rider-app `app/payment-confirm.tsx`: 80.0% → 99.2% lines.** Already
     had `paymentConfirmScreen.test.tsx` (14 tests covering the booking
     flow, SCA, 409/402 errors) and `payment-confirm-error-state.test.tsx`
@@ -9009,6 +9161,108 @@ record of what was assumed vs. what was actually true</summary>
     --noEmit` clean (needed the same `(...a: any[]) => mockX(...a)`
     spread `tsc` fix as this session's other recurring instances of
     that footgun).
+  - **rider-app `app/work-profile.tsx`: 81.5% → 100% lines.** Already had
+    `workProfileScreen.test.tsx` (13 tests: loading/empty states, the
+    balance card's three shapes, Request More Funds gating, the
+    work/personal toggle, the company switcher, recent work rides) —
+    extended in place (+8 tests): the rides-fetch throwing (both of the
+    file's two concurrent fetch effects share the same catch shape, so
+    one test covers both); pull-to-refresh actually invoking `onRefresh`
+    (via the real `ScrollView`'s `refreshControl` prop, not a mocked
+    stand-in); `formatPeriod`'s real computation with both
+    `period_start`/`period_end` set, and its null-either-bound omitted
+    branch; the `balanceLoading` spinner state; the back button on both
+    of the screen's early-return states (profiles-loading and
+    genuinely-empty — distinct render branches from the main return's
+    own back button, already covered); and "See all" navigating to
+    `/work-rides` with the active company id. 21 tests; full rider-app
+    suite still green (122 suites / 1272 tests), `yarn tsc --noEmit`
+    clean.
+  - **rider-app `app/loyalty.tsx`: 85.4% → 97.9% lines.** Already had
+    `loyaltyScreen.test.tsx` (8 tests: parallel load, tier
+    card/progress bar, highest-tier copy, history rows' +/- sign and
+    icon fallback, the empty state, a silent load failure) — extended
+    in place (+3 tests): pull-to-refresh actually invoking `onRefresh`
+    via the `FlatList`'s `refreshControl` prop; the bonus/promotion/
+    expiry history-icon-type branches (only `ride_earn`/`redeem`/an
+    unrecognized type were exercised before); and `formatDate`'s catch
+    branch, triggered with a `created_at` value whose `toString` throws
+    (unlike the plain-invalid-date-string case found on
+    `driver/subscription.tsx` earlier this session, a throwing
+    `toString` does make `new Date(...)` itself throw in this runtime,
+    so this one reliably exercises the catch). 11 tests; full rider-app
+    suite still green (123 suites / 1343 tests), `yarn tsc --noEmit`
+    clean.
+  - **rider-app `app/(tabs)/index.tsx`: 85.5% → 99.16% stmts / 100%
+    lines** (second pass on this screen — the 70.6%→85.5% entry above is
+    from an earlier sweep). Already had `homeScreen.test.tsx` (32 tests:
+    active-ride redirects, notification banner, AI button, one quick
+    action, promo banner, RiderSOS props, the full location-permission
+    flow via `refreshLocation`, weather, greeting, AppState transitions,
+    driver ring-spread) — extended in place (+10 tests). The `AppMap`
+    mock's `useImperativeHandle` previously handed back a brand-new
+    `jest.fn()` on every render (no deps array), making its
+    `animateToRegion` un-assertable across renders — fixed by hoisting a
+    single module-level `mockAnimateToRegion` and adding a `[]` deps
+    array so the same fn instance survives re-renders. Closed:
+    `handleEnableNotifications`'s granted branch (only the denied branch
+    had a test); the notification-bell button (`router.push('/notifications')`,
+    never pressed); the Work/Saved quick actions (same
+    `handleQuickAction`→`/search-destination` shape as the already-tested
+    "Go home"); the location-change re-center effect, which only fires
+    `animateToRegion` from the *second* location update onward (the
+    first just seeds `hasCenteredRef` — verified both halves: no call on
+    mount's own GPS fix, a call on a subsequent AppState-triggered
+    refresh); `handleLocationPress` (the "Go to my location" button)
+    end-to-end — its permission-denied branch on both iOS (`Linking.openURL('app-settings:')`)
+    and Android (`Linking.openSettings()`, including a swallowed
+    rejection), its `getCurrentPositionAsync`-throws fallback (reduced-delta
+    `animateToRegion` around the last known `location`, only when one
+    exists), and its success path (tight-zoom `animateToRegion` at the
+    fresh fix); both map zoom buttons (`Zoom in`/`Zoom out`), asserting
+    the halved/doubled `latitudeDelta`/`longitudeDelta` math and the
+    no-op guard when `region` hasn't been reported yet (`onRegionChangeComplete`
+    never fired). Left uncovered (defensive/timing-only, not a real
+    gap): line 91's `.catch(() => {})` on the notification-permission
+    focus-effect promise, 207-209/228/262/307's early-return guards in
+    `fetchHomeData`/polling effects that only trigger on unmount-mid-fetch
+    races, 380-407's ordering-sensitive branches inside
+    `handleLocationPress`'s success path once the reduced-delta fallback
+    test already exercises the same lines, 428-436's temperature-fetch
+    `.catch()`, 479's map's `showsMyLocationButton` prop expression, and
+    658's a header conditional already exercised by other tests but
+    reported as a branch-only miss by Istanbul's range-compression (see
+    this file's `ride-in-progress.tsx` entry above for the same
+    footgun). 42 tests; full rider-app suite still green (123 suites /
+    1350 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/verify-email.tsx`: 84.9% → 99.05% stmts / 100%
+    lines.** Already had `verifyEmailScreen.test.tsx` (10 tests: mount
+    request, `already_verified` short-circuit, `PROFILE_EMAIL_MISSING`/
+    `AUTH_OTP_INVALID`/`AUTH_OTP_EXPIRED`/rate-limited error copy on both
+    request and confirm, and a successful confirm merging
+    `email_verified` into the store) — extended in place (+7 tests).
+    Closed: the no-email-on-file guard effect (toasts and calls
+    `router.back()` immediately, and the request-code effect — a
+    separate effect keyed on `[email]` — correctly never fires since
+    `email` is falsy); `handleVerify`'s too-short-code guard (shake +
+    "Invalid Code" toast, no confirm call — reached by tapping Verify
+    with the default empty code, since the button's `disabled` prop
+    doesn't block a direct test `onPress` call); both screens' back
+    buttons (code-entry and the separate already-verified return) and
+    the already-verified screen's "Done" button; the code-boxes'
+    tap-to-focus wrapper; `resolveErrorCopy`'s no-`messageKey` fallback
+    path (a plain `Error('Request failed with status code 500')` on
+    confirm, asserting `getApiErrorMessage`'s noise-filter still swaps
+    in the friendly fallback rather than leaking the technical string);
+    and `handleResend`'s in-flight guard — ticked the post-mount 30s
+    countdown down one second at a time (matching this session's
+    established re-schedule-on-tick pattern for countdown effects) to
+    reveal the Resend button, then asserted a second tap while the first
+    resend request is still pending is a silent no-op, not a duplicate
+    request. 17 tests; full rider-app suite still green (123 suites /
+    1360 tests), `yarn tsc --noEmit` clean. **This closes out the last
+    item on the 2026-08-24 fresh-coverage-sweep ranked list** — a
+    further fresh sweep is needed to find the next tier.
   - **rider-app `app/ride-status.tsx`: 84.5% → 97.4% lines.** Already had
     `rideStatusScreen.test.tsx` (17 tests: loading/header, searching's
     "taking longer" copy, driver_assigned/driver_accepted bodies, the
@@ -9219,7 +9473,10 @@ record of what was assumed vs. what was actually true</summary>
   "duplicated-logic-can-drift" case this item names, since the two call
   sites encoded the same three rules by hand in two different syntactic
   shapes. New `admin-dashboard/src/lib/__tests__/allowanceFormSchema.test.ts`
-  (12 accept/reject cases + 2 issue-priority cases). Verification: 12/12 +
+  (10 accept/reject cases + 2 issue-priority cases — corrected 2026-08-24;
+  the file has 10 `it()` blocks for accept/reject, not 12, though the
+  12/12 pass-count below is still correct since it counts all `it()`
+  blocks in the file, not just the accept/reject subset). Verification: 12/12 +
   2/2 new tests pass; full admin-dashboard suite 351/351 (36 files) pass,
   0 regressions; `npx tsc --noEmit` clean; `npx eslint` clean on touched
   files; **real production build** (`npm run build` → `next build`)
@@ -9268,6 +9525,51 @@ record of what was assumed vs. what was actually true</summary>
   corporate/billing form (subscriptions, KYB, wallet adjustments, etc.)
   remain unmigrated; no ADR/migration-order doc written yet. Checkbox
   stays `[ ]`.
+- **2026-08-24 update — step 6 done, second admin-dashboard corporate
+  form migrated:** migrated `admin-dashboard/.../corporate-accounts/[id]/
+  policy/page.tsx`'s time-window validation (per-employee ride-policy
+  booking windows — day + start/end time pairs that gate when a company's
+  employees can expense a ride). The predicate `w.end <= w.start` was
+  duplicated by hand across two call sites — the `TimeWindowRow` child
+  component's per-row `invalid` flag (drives the red border + inline
+  "End must be after start" message) and the parent's `hasInvalidWindow`
+  (gates the Save button and blocks `handleSave`) — the same
+  duplicated-logic-can-drift shape step 4 closed for `allowance-dialog.tsx`,
+  found by working down this item's own "every other admin-dashboard
+  corporate/billing form" still-open list. `zod` was already a direct
+  admin-dashboard dependency as of step 4 — no dependency change this
+  step. New colocated `admin-dashboard/src/lib/policyTimeWindowSchema.ts`
+  (`timeWindowSchema` + `isTimeWindowValid` + `hasInvalidTimeWindow`)
+  reproduces the exact predicate via a `superRefine` with the identical
+  error message; both call sites now import the shared helpers instead of
+  re-deriving the check. The `maxFare` input's `min={1}`/`max={10000}`
+  HTML attributes were deliberately left untouched — they were never
+  backed by a JS check in `handleSave`, so adding one would be a new
+  validation rule, not a pure extraction, out of scope for this pass. New
+  `admin-dashboard/src/lib/__tests__/policyTimeWindowSchema.test.ts` (16
+  accept/reject cases, covering every day literal, equal/reversed/
+  one-minute-wide boundaries, and the exact error message + issue path).
+  Verification: 16/16 new tests pass; full admin-dashboard suite 367/367
+  (37 files) pass, 0 regressions (351 baseline from step 4 + growth from
+  other admin-dashboard work landed since + these 16); `npx tsc --noEmit`
+  clean; `npx eslint` clean on touched files (one pre-existing,
+  unrelated `react-hooks/set-state-in-effect` warning on an untouched
+  line of the same file, not introduced by this change); **real
+  production build** (`npm run build` → `next build`) completed
+  successfully, exit 0; blast-radius grep confirmed
+  `policyTimeWindowSchema` is imported only by the migrated page and its
+  own test file — a same-pattern `w.end <= w.start` duplicate also exists
+  in `admin-dashboard/src/app/company-portal/[id]/policy/page.tsx` (a
+  separate self-serve company-portal surface, not this internal
+  admin-dashboard review flow) but was left untouched, out of this pass's
+  scope. Full Change Impact Log:
+  `docs/change-log/2026-08-24-b39-admin-policy-timewindow-zod-step6.md`.
+  **Still open:** `rider-app/app/login.tsx`, driver-app's signup/
+  profile-setup fields, `company-portal/[id]/policy/page.tsx`'s own copy
+  of the same time-window check, and every other admin-dashboard
+  corporate/billing form (subscriptions assignment, KYB approve/reject
+  note, wallet adjustments, etc.) remain unmigrated; no ADR/
+  migration-order doc written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator
@@ -9632,11 +9934,20 @@ record of what was assumed vs. what was actually true</summary>
   `rider-app/components/BookingProposalCard.tsx:155-159` called
   `createRide(paymentMethod, undefined, ...)` →
   `rider-app/store/rideStore.ts` sent `corporate_account_id: null,
-  work_profile: null`, so corporate policy checks
-  (`backend/routes/rides/booking.py:717-721`) never ran and the ride billed
-  the rider personally. Only **wallet**-payment proposals booked inline (card
-  proposals deep-link to `/ride-options`, where Bill-to-Business worked), so
-  the exposure was corporate riders who said "pay with wallet" in chat.
+  work_profile: null`, so corporate policy checks never ran and the ride
+  billed the rider personally (line citation corrected 2026-08-24: the
+  checks now live at `backend/routes/rides/booking.py:922-957`, the
+  pre-dispatch policy check gated on `body.corporate_account_id` and
+  `payment_method == "company_allowance"`, and again at
+  `booking.py:1087-1141`, the `work_profile`+`corporate_account_id` block
+  — the originally-cited `:717-721` has since drifted to an unrelated
+  address-verification-mismatch block; `evaluate_policy_for_ride`/
+  `require_company_bookable` in `services/corporate_policy_service.py`
+  still exist and are still called from there, so the behavior claim
+  itself is unaffected, only the line pointer was stale). Only
+  **wallet**-payment proposals booked inline (card proposals deep-link to
+  `/ride-options`, where Bill-to-Business worked), so the exposure was
+  corporate riders who said "pay with wallet" in chat.
 - **Approach chosen (user confirmed via `AskUserQuestion` — see
   `docs/change-log/2026-07-29-b-ai1-corporate-billing-chat-bypass.md` §3):**
   mirror `/ride-options.tsx`'s own default — if the rider's Work Mode toggle

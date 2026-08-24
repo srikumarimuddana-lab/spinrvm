@@ -13,7 +13,7 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { TouchableOpacity, Text } from 'react-native';
+import { TouchableOpacity, Text, FlatList } from 'react-native';
 
 import LoyaltyScreen from '../app/loyalty';
 
@@ -142,6 +142,48 @@ describe('LoyaltyScreen', () => {
     mockApiGet.mockRejectedValue(new Error('network down'));
     const r = await renderScreen();
     expect(allText(r)).toContain('No points history yet');
+  });
+
+  it('pull-to-refresh reloads loyalty and history silently', async () => {
+    const r = await renderScreen();
+    mockApiGet.mockClear();
+    const list = r.root.findByType(FlatList);
+    await act(async () => {
+      await list.props.refreshControl.props.onRefresh();
+      await flush();
+    });
+    expect(mockApiGet).toHaveBeenCalledWith('/loyalty');
+    expect(mockApiGet).toHaveBeenCalledWith('/loyalty/history');
+  });
+
+  it('renders the bonus/promo/expire history icon types without crashing', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/loyalty') return Promise.resolve({ data: LOYALTY });
+      return Promise.resolve({
+        data: [
+          { id: 'h1', type: 'bonus', points: 20, description: 'Bonus points', created_at: '2026-01-01T00:00:00Z' },
+          { id: 'h2', type: 'promotion', points: 10, description: 'Promo bonus', created_at: '2026-01-02T00:00:00Z' },
+          { id: 'h3', type: 'expiry', points: -5, description: 'Points expired', created_at: '2026-01-03T00:00:00Z' },
+        ],
+      });
+    });
+    const r = await renderScreen();
+    const text = allText(r);
+    expect(text).toContain('Bonus points');
+    expect(text).toContain('Promo bonus');
+    expect(text).toContain('Points expired');
+  });
+
+  it('falls back to an empty string when formatDate is given an unparseable date', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/loyalty') return Promise.resolve({ data: LOYALTY });
+      return Promise.resolve({
+        data: [{ id: 'h1', type: 'earn', points: 5, description: 'Test entry', created_at: { toString: () => { throw new Error('bad'); } } as any }],
+      });
+    });
+    const r = await renderScreen();
+    // No crash — formatDate's catch swallows the throw and returns ''.
+    expect(allText(r)).toContain('Test entry');
   });
 
   it('navigates back when the back button is pressed', async () => {

@@ -22,7 +22,7 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { TouchableOpacity, Text } from 'react-native';
+import { TouchableOpacity, Text, ScrollView } from 'react-native';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('react-native-safe-area-context', () => ({
@@ -240,5 +240,73 @@ describe('WorkProfileScreen', () => {
       backBtn.props.onPress();
     });
     expect(mockBack).toHaveBeenCalled();
+  });
+
+  it('falls back to an empty rides list when the rides fetch throws', async () => {
+    mockApiGet.mockRejectedValue(new Error('down'));
+    const r = await renderScreen();
+    expect(allText(r)).toContain('No work rides yet');
+  });
+
+  it('pull-to-refresh reloads profiles, balance, and rides', async () => {
+    const r = await renderScreen();
+    mockFetchProfiles.mockClear();
+    mockFetchBalance.mockClear();
+    const scrollView = r.root.findByType(ScrollView);
+    await act(async () => {
+      await scrollView.props.refreshControl.props.onRefresh();
+      await flush();
+    });
+    expect(mockFetchProfiles).toHaveBeenCalled();
+    expect(mockFetchBalance).toHaveBeenCalled();
+  });
+
+  it('shows the balance period range when both period_start and period_end are set', async () => {
+    mockWorkProfileState.balance = {
+      type: 'limited', status: 'active', remaining: 10, amount: 100,
+      period_start: '2026-08-01T00:00:00Z', period_end: '2026-08-31T00:00:00Z',
+    };
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Aug 1 – Aug 31');
+  });
+
+  it('omits the period row when either period bound is missing', async () => {
+    mockWorkProfileState.balance = { type: 'limited', status: 'active', remaining: 10, amount: 100, period_start: null, period_end: null };
+    const r = await renderScreen();
+    expect(allText(r)).not.toContain('–');
+  });
+
+  it('shows the balance-loading spinner instead of the balance card while loading', async () => {
+    mockWorkProfileState.balanceLoading = true;
+    const r = await renderScreen();
+    expect(allText(r)).not.toContain('No allowance configured');
+  });
+
+  it('navigates back from the profiles-loading screen', async () => {
+    mockWorkProfileState.profiles = [];
+    mockWorkProfileState.isLoading = true;
+    const r = await renderScreen();
+    const backBtn = r.root.findAllByType(TouchableOpacity)[0];
+    act(() => { backBtn.props.onPress(); });
+    expect(mockBack).toHaveBeenCalled();
+  });
+
+  it('navigates back from the true-empty (no profiles) screen', async () => {
+    mockWorkProfileState.profiles = [];
+    mockWorkProfileState.activeCompanyId = null;
+    const r = await renderScreen();
+    const backBtn = r.root.findAllByType(TouchableOpacity)[0];
+    act(() => { backBtn.props.onPress(); });
+    expect(mockBack).toHaveBeenCalled();
+  });
+
+  it('navigates to /work-rides with the active company on "See all"', async () => {
+    mockApiGet.mockResolvedValue({
+      data: [{ id: 'r1', dropoff_address: '123 Main St', total_fare: 15.5, created_at: '2026-01-01T00:00:00Z', status: 'completed', allowance_debit_amount: 15.5, master_fallback_amount: null, source_type: 'allowance' }],
+    });
+    const r = await renderScreen();
+    const seeAllBtn = findButtonByText(r, 'See all');
+    act(() => { seeAllBtn.props.onPress(); });
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/work-rides', params: { companyId: 'c1' } });
   });
 });

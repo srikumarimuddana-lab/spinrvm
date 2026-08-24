@@ -45,7 +45,7 @@ finds zero matching rows.
 **Out of scope for this job** (handled elsewhere or follow-ups):
 - `disputes` — retain 7y by policy; separate migration
 - `saved_addresses`, `emergency_contacts` — cascaded with user soft-delete (also reachable via Step H for a DSAR-deleted account, and now via Step N's 30-day scrub for `saved_addresses` specifically)
-- `driver_insurance_periods`, `driver_period_distances`, `stripe_disputes` — each has its own `NO ACTION` FK on `rides(id)`; Step B does not (yet) account for any of the three the way it now does for `financial_events` — see ACTION_ITEMS.md B23
+- `driver_insurance_periods`, `driver_period_distances`, `stripe_disputes` — each has its own `NO ACTION` FK on `rides(id)`; Step B does not (yet) account for any of the three the way it now does for `financial_events` — see ACTION_ITEMS.md B17 (corrected 2026-08-24: this cross-reference previously pointed at B23, which is the unrelated rider-identity-hashing item; B17 is the one that actually tracks Step B's FK handling)
 
 Changing any of the windows above is a **compliance event**, not a code
 tweak. Process:

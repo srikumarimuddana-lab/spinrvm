@@ -5827,11 +5827,15 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     Jest/RNTL tests for every new hook and component (hold-gesture timing,
     contacts fetch, retry/backoff, flag fail-closed, shield/overlay
     render+interaction, and the invariant that a failed silent alert never
-    shows `Alert.alert`): 50/51 driver-app suites pass (the one failure,
-    `ActivityView.test.tsx`, is a pre-existing, unrelated
-    `expo-router/react-navigation` resolution gap, confirmed via
-    `git stash` to fail identically without any B16 changes present).
-    `tsc --noEmit` clean on every touched file.
+    shows `Alert.alert`): 50/51 driver-app suites passed at the time,
+    the one failure (`ActivityView.test.tsx`) confirmed via `git stash` to
+    be a pre-existing, unrelated `expo-router/react-navigation` resolution
+    gap, not caused by B16. **Resolved since** (re-run 2026-08-24): the
+    full driver-app suite is now 115/115 passing, `ActivityView.test.tsx`
+    included — the gap was apparently fixed as a side effect of B37's
+    later `jest.config.js` work (PRs #4455/#4458/#4460/#4476), not by this
+    item. `tsc --noEmit` clean on every touched file (re-confirmed
+    2026-08-24, still clean).
   - **NOT verified — explicit gap, not silently assumed covered:** no
     manual QA on a real device/simulator (gesture timing, blur/toast
     rendering, and the actual flag-off vs flag-on visual behavior aren't
@@ -6152,8 +6156,11 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   membership test (`test_ride_columns_fetch_payment_status`) mirroring the
   existing `discount_amount` one, which was added for the same reason after
   a prior promo-ride regression. 23 tests in `test_ledger_projection.py`
-  pass (18 pre-existing + 5 new), plus 122 across the payment/loop test
-  surface (`test_replay_safety_payment_loops.py`, `test_atomic_settle.py`,
+  pass (18 pre-existing + 5 new; re-run 2026-08-24, still 23/23), plus
+  (originally 122, now 128 as of 2026-08-24 — these shared files pick up
+  unrelated test additions over time, re-run rather than trust the exact
+  number) across the payment/loop test surface
+  (`test_replay_safety_payment_loops.py`, `test_atomic_settle.py`,
   `test_payment_retry.py`, `test_payment_retry_coverage.py`,
   `test_coverage_payments.py`). See git history for the commit.
 - **What:** `backend/utils/ledger_projection.py::_decompose` (default fare branch)
@@ -6184,13 +6191,24 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   listed below now use `TTL = interval * 0.85` (matching `ledger_projection.py`'s
   existing fix — 0.05 headroom under the `1 - jitter_fraction` floor), with
   the same two regression tests per loop (`test_lock_ttl_expires_before_the_earliest_next_wake`,
-  `test_..._loop_reacquires_its_own_lock_on_the_next_wake`) added to each
-  loop's own `*_coverage.py` test file, adapted for `orphaned_hold_reconciler.py`'s
-  extra unconditional startup jitter sleep. `payment_retry.py`'s misleading
-  comment corrected. 113 tests across the affected loop/reaper test files
-  pass. See git history for the 3 commits (payment_retry.py first per this
-  item's own "look at first" guidance, then the two reapers together, then
-  orphaned_hold_reconciler.py).
+  `test_..._loop_reacquires_its_own_lock_on_the_next_wake`). **Correction
+  (2026-08-24, verification sweep)**: "added to each loop's own
+  `*_coverage.py` test file" is not quite right — `payment_retry.py`'s pair
+  actually lives in `test_payment_retry.py` (not `test_payment_retry_coverage.py`),
+  and `orphaned_hold_reconciler.py`'s pair lives in a separate
+  `test_orphaned_hold_reconciler_loop_coverage.py`, distinct from
+  `test_orphaned_hold_reconciler_coverage.py` (both files exist). The
+  "113 tests ... pass" figure could not be reproduced against the 5
+  canonical `*_coverage.py` files alone (gives 103, missing the two TTL
+  tests that live elsewhere per the correction above); substituting the
+  actual files that hold every loop's TTL tests gives 111; the full
+  affected-file set together (adding `test_orphaned_hold_reconciler.py`
+  and `test_replay_safety_payment_loops.py`) gives 155 — pick whichever
+  grouping matches "113" if reconstructable, otherwise treat 111 as the
+  correct minimal figure and don't trust "113" specifically. `payment_retry.py`'s
+  misleading comment corrected. See git history for the 3 commits
+  (payment_retry.py first per this item's own "look at first" guidance,
+  then the two reapers together, then orphaned_hold_reconciler.py).
 - **What:** the shared loop-shell idiom sets the Redis throttle lock with
   `TTL = interval * 1.5` and then sleeps `interval` (± jitter). The pod that ran
   the last tick therefore wakes while its OWN key is still alive, fails `SET NX`,
@@ -6867,24 +6885,33 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   fare-snapshot builder used by booking/estimates/stops, not an offline
   import script), which raises the stakes relative to B29's legacy-importer
   scope.
-- **Status:** open, no owner assigned, not investigated beyond the grep hit
-  (`backend/routes/rides/_shared.py:424,426,436`) that found it. Needs the
-  same treatment as B28/B29: confirm the values being cast are `Decimal`
-  all the way through `_round()` (this repo's `_round`/`_d`/`_f` helpers
-  suggest yes, but verify rather than assume), then swap `float()` → `str()`
-  at the write boundary, then extend the regression-test pattern to cover
-  this file too. Given this is a live-booking-path file (not an offline
-  import), this needs the full pre-merge release gate treatment (dry run
-  against `mock_supabase_client`, before/after scenario) per CLAUDE.md's
-  "State-machine and money changes need a dry run" rule — do not treat it
-  as a copy-paste of B28/B29's diff without that.
-- **Files:** `backend/routes/rides/_shared.py`.
-- **Acceptance:** `grand_total`/`tax_amount`/`area_fees_total`/
-  `discount_amount` in `_shared.py`'s fare-snapshot builder are serialized
-  via `str(Decimal)`, not `float()`, at the write boundary; a regression
-  test (extending B28/B29's static-scan pattern, or a new one) covers it;
-  a dry-run scenario against `mock_supabase_client` is described in the
-  closing Change Impact Log, not just "tests pass."
+- **Status:** CLOSED (2026-08-20, this entry never updated to reflect
+  it — found stale 2026-08-24 by a `/loop`-style verification sweep run
+  after this session's user asked for B0-B39 to be checked one by one).
+  `_reestimate_fare_for_stops` (`backend/routes/rides/_shared.py:423-436`)
+  now writes `tax_amount` via `str(_round(tax_amount))` (line 424) and
+  `area_fees_total` via `str(_round(fees_total))` (line 426), not
+  `float()`. The scalar `grand_total` (line 423) was already correct via
+  `_money_str()` before this fix. `discount_amount` turned out to never be
+  written by this file at all (only read for display) — the original grep
+  hit over-counted by including a column this file doesn't write. The one
+  remaining `float(_round(grand_total))` (line 436) is inside the separate
+  `fare_breakdown_snapshot` JSONB blob (migration 90), correctly left as
+  `float()` per the B28/B29 jsonb carve-out precedent — it is not the
+  scalar `NUMERIC` column. Regression coverage:
+  `backend/tests/test_shared_rides_numeric_no_float_cast.py` (7 tests:
+  positive checks that `tax_amount`/`area_fees_total` use `str()`, a pin
+  that `grand_total` stays `str()`, a pin that `discount_amount` is never
+  written here, a negative-control pin that the jsonb sub-field's
+  `grand_total` stays `float()`) — re-run 2026-08-24, 7/7 pass. Full
+  Change Impact Log: `docs/change-log/2026-08-20-b30-shared-fare-float-fix.md`.
+- **Files:** `backend/routes/rides/_shared.py`,
+  `backend/tests/test_shared_rides_numeric_no_float_cast.py`.
+- **Acceptance:** met — `tax_amount`/`area_fees_total` in `_shared.py`'s
+  fare-snapshot builder are serialized via `str(Decimal)`, not `float()`,
+  at the write boundary; `grand_total` was already correct;
+  `discount_amount` is never written by this file; the regression test
+  above covers all four, plus the jsonb-carve-out negative control.
 
 ### B31. `routes/promotions.py`'s promo-eligibility ride counts don't exclude legacy-imported completed rides — pre-existing, affects 271+ rows, not net-new to A41's zero-fare-completed fix
 
@@ -6902,22 +6929,36 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   extend, not a new category of bug. Deliberately NOT bundled into the 7-row-disposition PR
   (scope-contract discipline — one logical change per PR) — filed here instead, per
   CLAUDE.md's "escalate, don't silently ship, when in doubt."
-- **Status:** open, not investigated beyond the grep hit and the reasoning above. Needs: (1)
-  confirm how many real (non-test) rider accounts are actually affected today (join
-  `legacy_import_metadata->>source = 'legacy_mongo_booking_import'` completed rides against
-  currently-matched `rider_id`s, count distinct riders with ≥1 such row) to size the real
-  exposure before deciding urgency; (2) decide whether promo eligibility SHOULD exclude
-  legacy rows entirely (a rider's actual first *Spinr* ride, not their first ride ever in the
-  old app, is arguably the more defensible "first_ride_only" semantic) — this is a product
-  decision, not purely technical; (3) if excluded, add the same
-  `legacy_import_metadata = '{}'::jsonb`-equivalent filter (or its `db_supabase`
-  query-builder equivalent, since this is a live-request-path Python filter, not a SQL
-  function) to all three call sites, plus a regression test.
-- **Files:** `backend/routes/promotions.py` (lines 225, 265, 518 as of 2026-08-20).
-- **Acceptance:** either a documented, deliberate decision that legacy-imported completed
-  rides SHOULD count toward promo eligibility (risk-accepted, dated note here), or all three
-  `routes/promotions.py` ride-count call sites exclude them, with a regression test and a
-  Change Impact Log (money-adjacent, rider-facing — same rigor as any other promotions.py fix).
+- **Status:** CLOSED (date of the fix itself not recorded anywhere found —
+  this entry was left as "open, not investigated" and only caught stale
+  2026-08-24 by a verification sweep). Decision (2) below was made in
+  favor of exclusion, and (3) is implemented: all `count_documents("rides",
+  ...)` call sites in `routes/promotions.py` now merge `EXCLUDE_LEGACY_RIDES`
+  (`backend/utils/legacy_rides.py:69`,
+  `{"legacy_import_metadata": {"$eq": {}}}`) — `first_ride_only`,
+  `inactive_days`, `min`/`max_total_rides`, and their `/promo/available`
+  twins (6 call sites as of current code, not the original 3 — the route
+  gained a second endpoint since this item was filed). Regression coverage:
+  `backend/tests/test_routes_promotions_coverage.py::TestValidatePromoForUserExcludesLegacyRides`,
+  headed with an explicit "ACTION_ITEMS.md B31" comment describing the
+  exclusion and asserting `first_ride_only` now passes for a rider with
+  only legacy rides — re-run 2026-08-24, 70/70 pass in the file (8/8 in the
+  B31-specific subset). **Gap found while closing this entry, not
+  resolved**: no `docs/change-log/` entry for this fix was found anywhere,
+  despite this being a money-adjacent, rider-facing promo-eligibility
+  change that CLAUDE.md's Change Impact Log rule covers — flag this as a
+  standing process gap (a fix shipped and tested without the mandated log)
+  rather than fabricate one after the fact; if anyone has the original
+  session's context, backfill a real Change Impact Log rather than leaving
+  this uncovered.
+- **Files:** `backend/routes/promotions.py` (6 `count_documents` call
+  sites as of current code), `backend/utils/legacy_rides.py`,
+  `backend/tests/test_routes_promotions_coverage.py`.
+- **Acceptance:** met on the code/test side — legacy-imported completed
+  rides are excluded from promo-eligibility ride counts at every call
+  site, with regression coverage. **Not fully met**: no Change Impact Log
+  exists for this fix (see gap above) — still worth closing that
+  paperwork gap even though the fix itself is live and correct.
 
 ### B33. `driver_import_service.read_csv`'s header normalization silently broke the SIN/DOB backfill's phone crosswalk — CLOSED (2026-08-20)
 
@@ -7018,26 +7059,44 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   row, plus updates to every current reader of `driver_insurance_periods` for regulatory purposes
   (`scripts/compliance_export.py`, `backend/routes/admin/driver_distance.py`'s
   `admin_driver_distance_logs`) to prefer a correction over its original when one exists.
-- **Status:** open, not designed or built. A real migration + RLS + immutability-trigger + two-consumer
-  wiring change, out of scope for the verification pass that surfaced it.
-- **Files:** new migration under `backend/migrations/` (next free number per
-  `ls backend/migrations | sort -V | tail -1` — do not assume 353 without re-checking at commit time,
-  per this repo's numbering convention); `backend/migrations/64_driver_insurance_periods.sql` and
-  `332_backfill_legacy_ride_insurance_periods.sql` (context — confirm the new table's RLS/immutability
-  pattern matches theirs, don't diverge silently); `backend/scripts/compliance_export.py` (regulator-facing
-  export — must prefer a correction over its original when one exists); `backend/routes/admin/
-  driver_distance.py`'s `admin_driver_distance_logs` (admin-facing per-span read, same requirement);
-  `backend/services/insurance_period_reconstruction_verification.py` (the tool that surfaced this gap —
-  once the corrections table exists, its `apply_verification_plan()` no-op should be revisited, since
-  writing a correction row would then have a sanctioned destination).
-- **Acceptance:** `driver_insurance_period_corrections` table exists (original-period FK, corrected
-  `started_at`/`ended_at`, `reason`, `corrected_by`, `corrected_at`, append-only/immutable once written,
-  RLS matching `driver_insurance_periods`' own service-role-only pattern); both `compliance_export.py`
-  and `admin_driver_distance_logs` read a correction in preference to its original row when one exists,
-  with a test proving the preference (not just that the table can be queried); the 156 rides this
-  session's verification pass found diverging (`docs/change-log/2026-08-20-insurance-period-
-  reconstruction-verification.md`) are the first real candidate backlog once this ships — filing the
-  table is not itself a decision to correct them, that stays a separate, explicit call.
+- **Status:** CLOSED (2026-08-20 — this entry was left as "open, not
+  designed or built" and only caught stale 2026-08-24 by a verification
+  sweep, despite a Change Impact Log already existing for the shipped fix).
+  `backend/migrations/355_driver_insurance_period_corrections.sql` creates
+  the table exactly to the shape described above: `original_period_id` FK
+  (`UNIQUE`), `corrected_started_at`/`corrected_ended_at`, `reason`,
+  `corrected_by`, `corrected_at`, RLS with a service-role-only-write SELECT
+  policy, and an unconditional `BEFORE UPDATE OR DELETE` immutability
+  trigger — modeled on migration 64's `driver_insurance_periods` pattern as
+  required. Both named consumers updated to prefer a correction:
+  `scripts/compliance_export.py` (repo-root `scripts/`, not
+  `backend/scripts/` — the Files list below was also stale on this path)
+  looks up `driver_insurance_period_corrections` and substitutes
+  `corrected_started_at`/`corrected_ended_at` plus a new `is_corrected`
+  column; `backend/routes/admin/driver_distance.py`'s
+  `admin_driver_distance_logs` does the same substitution. Regression
+  tests exist and pass, both explicitly citing "ACTION_ITEMS.md B34":
+  `backend/tests/test_admin_driver_distance.py`,
+  `backend/tests/test_compliance_export_script.py` — re-run 2026-08-24,
+  28/28 pass together. `.claude/context/domain-safety.md:99`'s
+  "Corrections go into a separate `driver_insurance_period_corrections`
+  table with justification" line — the thing this item originally flagged
+  as false/aspirational — is now actually true. Full Change Impact Log:
+  `docs/change-log/2026-08-20-b34-insurance-period-corrections-table.md`.
+- **Files:** `backend/migrations/355_driver_insurance_period_corrections.sql`,
+  `scripts/compliance_export.py` (repo-root, corrected from the stale
+  `backend/scripts/` path above), `backend/routes/admin/driver_distance.py`,
+  `backend/tests/test_admin_driver_distance.py`,
+  `backend/tests/test_compliance_export_script.py`.
+- **Acceptance:** met — `driver_insurance_period_corrections` exists with
+  the described shape, both `compliance_export.py` and
+  `admin_driver_distance_logs` prefer a correction over its original when
+  one exists, and both have a test proving the preference. The 156
+  diverging rides this item names as "the first real candidate backlog
+  once this ships" remain a separate, still-open, explicit decision — this
+  item's own scope (build the table + wire the two consumers) is done;
+  actually correcting those 156 rows is not part of what this item asked
+  for and is not implied to be resolved by this closure.
 
 ### B35. `routes/rides/booking.py` float()-casts several `rides` money fields at write time — same bug class as B28/B29/B30
 
@@ -9311,7 +9370,10 @@ record of what was assumed vs. what was actually true</summary>
   "duplicated-logic-can-drift" case this item names, since the two call
   sites encoded the same three rules by hand in two different syntactic
   shapes. New `admin-dashboard/src/lib/__tests__/allowanceFormSchema.test.ts`
-  (12 accept/reject cases + 2 issue-priority cases). Verification: 12/12 +
+  (10 accept/reject cases + 2 issue-priority cases — corrected 2026-08-24;
+  the file has 10 `it()` blocks for accept/reject, not 12, though the
+  12/12 pass-count below is still correct since it counts all `it()`
+  blocks in the file, not just the accept/reject subset). Verification: 12/12 +
   2/2 new tests pass; full admin-dashboard suite 351/351 (36 files) pass,
   0 regressions; `npx tsc --noEmit` clean; `npx eslint` clean on touched
   files; **real production build** (`npm run build` → `next build`)
@@ -9724,11 +9786,20 @@ record of what was assumed vs. what was actually true</summary>
   `rider-app/components/BookingProposalCard.tsx:155-159` called
   `createRide(paymentMethod, undefined, ...)` →
   `rider-app/store/rideStore.ts` sent `corporate_account_id: null,
-  work_profile: null`, so corporate policy checks
-  (`backend/routes/rides/booking.py:717-721`) never ran and the ride billed
-  the rider personally. Only **wallet**-payment proposals booked inline (card
-  proposals deep-link to `/ride-options`, where Bill-to-Business worked), so
-  the exposure was corporate riders who said "pay with wallet" in chat.
+  work_profile: null`, so corporate policy checks never ran and the ride
+  billed the rider personally (line citation corrected 2026-08-24: the
+  checks now live at `backend/routes/rides/booking.py:922-957`, the
+  pre-dispatch policy check gated on `body.corporate_account_id` and
+  `payment_method == "company_allowance"`, and again at
+  `booking.py:1087-1141`, the `work_profile`+`corporate_account_id` block
+  — the originally-cited `:717-721` has since drifted to an unrelated
+  address-verification-mismatch block; `evaluate_policy_for_ride`/
+  `require_company_bookable` in `services/corporate_policy_service.py`
+  still exist and are still called from there, so the behavior claim
+  itself is unaffected, only the line pointer was stale). Only
+  **wallet**-payment proposals booked inline (card proposals deep-link to
+  `/ride-options`, where Bill-to-Business worked), so the exposure was
+  corporate riders who said "pay with wallet" in chat.
 - **Approach chosen (user confirmed via `AskUserQuestion` — see
   `docs/change-log/2026-07-29-b-ai1-corporate-billing-chat-bypass.md` §3):**
   mirror `/ride-options.tsx`'s own default — if the rider's Work Mode toggle

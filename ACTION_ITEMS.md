@@ -9293,6 +9293,54 @@ record of what was assumed vs. what was actually true</summary>
     list wherever a future session left off, re-running the coverage
     command above to confirm current numbers before starting (they'll
     have moved since this snapshot, and #4507/#4514 may have merged).
+  - **`ride-options.tsx` extended a third time (2026-08-24).** Re-ran
+    `npx jest --coverage --collectCoverageFrom='app/ride-options.tsx'
+    __tests__/rideOptionsScreen.test.tsx __tests__/ride-options-payment-sheet.test.tsx`
+    fresh against `main` at `dea8ea5` and confirmed the 80.7%-line figure
+    above hadn't moved (79.16% stmts / 70.58% branch / 66.1% funcs / 80.7%
+    lines, 43 tests). Added 14 tests to `__tests__/rideOptionsScreen.test.tsx`
+    covering: the loading skeleton + hidden vehicle cards while `isLoading`;
+    the all-unavailable busy banner; the Retry button re-invoking
+    `handleFetchEstimates`; the schedule row's clear-on-re-tap and the
+    dedicated X-icon clear path; the `loadSavedCards` fetch-failure catch
+    (asserts the `console.warn` call and that the screen still renders,
+    rather than crashing); the auto-select effect's `firstAvailableIndex`
+    branch (selectedVehicle null, first estimate unavailable, second
+    available — previously only the "no available estimate at all" fallback
+    branch of that same effect was exercised); three more `proceedWithBooking`
+    409-reroute branches (`driver_arrived`, `completed`) alongside the
+    already-tested `searching`/`in_progress`; the `isEngineError` true branch
+    (now a `jest.fn` in the `@shared/api/client` mock instead of a hardcoded
+    `() => false`, so it can be flipped per-test) asserting `recordNonFatal`
+    fires; the `onMapReady` callback via the mocked `MapView` host element
+    (drives the route-fit effect's `if (markers.length >= 2)` branch); and a
+    new `available promos list` describe block covering the free-ride,
+    percentage-with-cap, and flat discount label branches, the ineligible-tap
+    toast-without-apply path plus its `min_ride_fare` hint text, and the
+    empty-offers state. Result: 84.55% stmts / 78.15% branch / 71.18% funcs /
+    **87.13% lines** (57 tests, all green), full rider-app suite now 123
+    suites / 1374 tests green (up from the 1360 pre-existing — the 14 tests
+    added here), `npx tsc --noEmit` clean, `npx
+    eslint __tests__/rideOptionsScreen.test.tsx` shows only pre-existing
+    findings on unedited lines (mock boilerplate `require()`-import warnings
+    and `react/display-name` on inline-mock components, all above line 188 —
+    none introduced by this round), and `npm run build:web` (`expo export
+    --platform web`) passed. Remaining gap is concentrated in the map/
+    Directions JSX (lines ~744-791: `MapViewDirections`'s conditional render
+    depends on `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY`, read into a module-level
+    `const` at import time — exercising that branch needs the env var set
+    before the module is first required, which the existing single static
+    `import RideOptionsScreen from '../app/ride-options'` at the top of the
+    test file doesn't support without a `jest.resetModules()` + dynamic
+    `require()` restructure of the whole file — left as a follow-up, not
+    attempted here) plus a handful of inline render-prop callbacks
+    (`renderPaymentBackdrop`, `handlePaymentSheetChange`'s keyboard-listener
+    effect body, `closePromoSheet`'s iOS keyboard-pending-close branch)
+    reachable only by finding an anonymous `forwardRef` mock instance deep in
+    the tree and invoking its prop function directly — lower value for the
+    added test complexity, not attempted this round either. Next tier
+    unchanged otherwise: `ride-status.tsx`, `emergency-contacts.tsx`,
+    `driver-arrived.tsx`, `(tabs)/activity.tsx`, etc., per the list above.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

@@ -107,11 +107,12 @@ const COLORS = {
 jest.mock('@shared/theme/ThemeContext', () => ({ useTheme: () => ({ colors: COLORS, isDark: false }) }));
 
 const mockApiGet = jest.fn();
+const mockIsEngineError = jest.fn((_err?: any) => false);
 jest.mock('@shared/api/client', () => ({
   __esModule: true,
   default: { get: (...a: any[]) => mockApiGet(...a) },
   getApiErrorMessage: (_err: any, fallback: string) => fallback,
-  isEngineError: () => false,
+  isEngineError: (err: any) => mockIsEngineError(err),
 }));
 
 const mockAnalyticsRideRequested = jest.fn();
@@ -255,6 +256,7 @@ function findByText(r: TestRenderer.ReactTestRenderer, text: string) {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockIsEngineError.mockReturnValue(false);
   resetRideState();
   mockWalletState = { wallet: { balance: '10.00' }, fetchWallet: mockFetchWallet };
   mockWorkProfileState = {
@@ -413,6 +415,37 @@ describe('RideOptionsScreen', () => {
     expect(mockReplace).toHaveBeenCalledWith({ pathname: '/ride-in-progress', params: { rideId: 'ride-active' } });
   });
 
+  it('a 409 re-routes to driver-arrived when the active ride is driver_arrived', async () => {
+    const err: any = new Error('already active');
+    err.response = { status: 409 };
+    mockCreateRide.mockRejectedValue(err);
+    mockFetchActiveRide.mockResolvedValue({ active: true, ride: { id: 'ride-active', status: 'driver_arrived' } });
+    const r = await renderScreen();
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Confirm Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockReplace).toHaveBeenCalledWith({ pathname: '/driver-arrived', params: { rideId: 'ride-active' } });
+  });
+
+  it('a 409 re-routes to ride-completed when the active ride is already completed', async () => {
+    const err: any = new Error('already active');
+    err.response = { status: 409 };
+    mockCreateRide.mockRejectedValue(err);
+    mockFetchActiveRide.mockResolvedValue({ active: true, ride: { id: 'ride-active', status: 'completed' } });
+    const r = await renderScreen();
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Confirm Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockReplace).toHaveBeenCalledWith({ pathname: '/ride-completed', params: { rideId: 'ride-active' } });
+  });
+
+  it('an engine-level crash during booking is recorded as a non-fatal', async () => {
+    mockIsEngineError.mockReturnValue(true);
+    mockCreateRide.mockRejectedValue(new Error('native crash'));
+    const r = await renderScreen();
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Confirm Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockRecordNonFatal).toHaveBeenCalledWith(expect.any(Error), { screen: 'ride-options', action: 'proceedWithBooking' });
+  });
+
   it('a 402 unpaid-ride error opens a confirm sheet routing to /ride-completed on Pay Now', async () => {
     const err: any = new Error('unpaid');
     err.response = { status: 402, data: { error: { details: { unpaid_ride_id: 'ride-unpaid' } } } };
@@ -504,6 +537,117 @@ describe('RideOptionsScreen', () => {
     const backBtn = r.root.findByProps({ accessibilityLabel: 'Go back' });
     act(() => { backBtn.props.onPress(); });
     expect(mockBack).toHaveBeenCalled();
+  });
+
+  it('auto-selects the first available vehicle when none is chosen and an earlier one is unavailable', async () => {
+    mockRideState.selectedVehicle = null;
+    mockRideState.estimates = [
+      makeEstimate({ available: false, vehicle_type: { id: 'vt-a', name: 'A' } }),
+      makeEstimate({ available: true, vehicle_type: { id: 'vt-b', name: 'B' } }),
+    ];
+    await renderScreen();
+    expect(mockSelectVehicle).toHaveBeenCalledWith({ id: 'vt-b', name: 'B' });
+  });
+
+  it('shows the loading skeleton and hides vehicle cards while isLoading is true', async () => {
+    mockRideState.isLoading = true;
+    const r = await renderScreen();
+    expect(findByText(r, 'Sedan')).toBeUndefined();
+  });
+
+  it('shows the busy banner when every estimate is unavailable and not loading', async () => {
+    mockRideState.estimates = [makeEstimate({ available: false })];
+    mockRideState.selectedVehicle = null;
+    const r = await renderScreen();
+    expect(allText(r)).toContain('No cars available right now. Please try again later.');
+  });
+
+  it('tapping Retry after a fetch error re-fetches estimates', async () => {
+    mockFetchEstimates.mockRejectedValueOnce(new Error('down'));
+    const r = await renderScreen();
+    mockFetchEstimates.mockClear();
+    mockFetchEstimates.mockResolvedValue(undefined);
+    const retryBtn = findByText(r, 'Retry')!;
+    await act(async () => { retryBtn.props.onPress(); await flush(); });
+    expect(mockFetchEstimates).toHaveBeenCalled();
+  });
+
+  it('tapping the schedule row when a time is already set clears it', async () => {
+    mockRideState.scheduledTime = new Date(Date.now() + 60 * 60000);
+    const r = await renderScreen();
+    const scheduleRow = findByText(r, 'Pickup time')!;
+    act(() => { scheduleRow.props.onPress(); });
+    expect(mockSetScheduledTime).toHaveBeenCalledWith(null);
+  });
+
+  it('the clear-time (X) button removes the scheduled time', async () => {
+    mockRideState.scheduledTime = new Date(Date.now() + 60 * 60000);
+    const r = await renderScreen();
+    const clearBtn = r.root.findByProps({ accessibilityLabel: 'Clear scheduled pickup time' });
+    act(() => { clearBtn.props.onPress(); });
+    expect(mockSetScheduledTime).toHaveBeenCalledWith(null);
+  });
+
+  it('a saved-cards fetch failure logs a warning without crashing the screen', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/service-areas') return Promise.resolve({ data: [] });
+      if (url === '/payments/cards') return Promise.reject(new Error('network'));
+      return Promise.resolve({ data: {} });
+    });
+    const r = await renderScreen();
+    expect(warnSpy).toHaveBeenCalledWith('[RideOptions] Failed to load saved cards:', expect.any(Error));
+    expect(allText(r)).toContain('Sedan');
+    warnSpy.mockRestore();
+  });
+
+  it('setting mapReady via onMapReady does not crash and drives the route-fit effect', async () => {
+    const r = await renderScreen();
+    const mapView = r.root.findByType('MapView' as any);
+    await act(async () => { mapView.props.onMapReady(); await flush(); });
+    expect(allText(r)).toContain('Sedan');
+  });
+});
+
+describe('available promos list', () => {
+  it('renders free-ride, percentage-with-cap, and flat discount labels; tapping an eligible row applies + closes', async () => {
+    mockRideState.availablePromos = [
+      { promo_id: 'p1', code: 'FREE1', free_ride: true, eligible: true },
+      { promo_id: 'p2', code: 'PCT10', discount_type: 'percentage', discount_value: 10, max_discount: 5, eligible: true, description: 'Ten percent off' },
+      { promo_id: 'p3', code: 'FLAT5', discount_type: 'flat', discount_value: 5, eligible: true },
+    ];
+    const r = await renderScreen();
+    const promoRow = findByText(r, 'Add promo code')!;
+    act(() => { promoRow.props.onPress(); });
+    expect(allText(r)).toContain('Free ride');
+    expect(allText(r)).toContain('10% off · max $5');
+    expect(allText(r)).toContain('$5.00 off');
+    expect(allText(r)).toContain('Ten percent off');
+    const flatRow = findByText(r, 'FLAT5')!;
+    await act(async () => { flatRow.props.onPress(); await flush(); });
+    expect(mockApplyPromo).toHaveBeenCalledWith(expect.objectContaining({ code: 'FLAT5' }));
+  });
+
+  it('tapping an ineligible promo row toasts and does not apply it', async () => {
+    mockRideState.availablePromos = [
+      { promo_id: 'p4', code: 'BIG20', discount_type: 'flat', discount_value: 20, eligible: false, ineligible_reason: 'Fare too low', min_ride_fare: 25 },
+    ];
+    const r = await renderScreen();
+    const promoRow = findByText(r, 'Add promo code')!;
+    act(() => { promoRow.props.onPress(); });
+    expect(allText(r)).toContain('["Min. fare $","25.00"]');
+    const bigRow = findByText(r, 'BIG20')!;
+    act(() => { bigRow.props.onPress(); });
+    expect(mockShowToast).toHaveBeenCalledWith('Not eligible', 'Fare too low', 'warning');
+    expect(mockApplyPromo).not.toHaveBeenCalled();
+  });
+
+  it('shows the empty-offers state when availablePromos is empty', async () => {
+    mockRideState.availablePromos = [];
+    const r = await renderScreen();
+    const promoRow = findByText(r, 'Add promo code')!;
+    act(() => { promoRow.props.onPress(); });
+    expect(allText(r)).toContain('No offers right now');
   });
 });
 

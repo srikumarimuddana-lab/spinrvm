@@ -13,7 +13,7 @@
  * at all when visible is false.
  */
 import React from 'react';
-import { fireEvent, render } from '@testing-library/react-native';
+import { act, fireEvent, render } from '@testing-library/react-native';
 import { SafetySheet } from '@shared/components/SafetySheet';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
@@ -35,41 +35,59 @@ const props = {
 
 beforeEach(() => jest.clearAllMocks());
 
+// SafetySheet's useSafetyPanelConfig hook kicks off an async
+// Promise.allSettled fetch on mount. Without flushing it here, its `.then`
+// continuation can resolve after RTL's implicit afterEach unmount, calling
+// setState on an already-unmounted tree outside act() -- a leaked update
+// that intermittently corrupted a later test file in the same Jest worker
+// (observed: rideOptionsScreen.test.tsx timing out under CI's leaner
+// scheduling). Flushing the pending microtask queue inside act() while the
+// component is still mounted discharges it here instead.
+async function flushPendingEffects() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
 describe('SafetySheet dismissal', () => {
-  it('renders nothing at all when not visible', () => {
+  it('renders nothing at all when not visible', async () => {
     const { toJSON } = render(
       <SafetySheet visible={false} onClose={jest.fn()} {...props} />,
     );
+    await flushPendingEffects();
     // A Modal left a mounted-but-hidden tree behind; this must be truly gone,
     // otherwise it keeps occupying layout on the next screen.
     expect(toJSON()).toBeNull();
   });
 
-  it('closes from the X', () => {
+  it('closes from the X', async () => {
     const onClose = jest.fn();
     const { getAllByLabelText } = render(
       <SafetySheet visible onClose={onClose} {...props} />,
     );
+    await flushPendingEffects();
     // Backdrop and X share the label; the X is the last one rendered.
     const targets = getAllByLabelText('Close safety options');
     fireEvent.press(targets[targets.length - 1]);
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("closes from \"I'm safe — close\"", () => {
+  it("closes from \"I'm safe — close\"", async () => {
     const onClose = jest.fn();
     const { getByLabelText } = render(
       <SafetySheet visible onClose={onClose} {...props} />,
     );
+    await flushPendingEffects();
     fireEvent.press(getByLabelText("I'm safe, close"));
     expect(onClose).toHaveBeenCalled();
   });
 
-  it('closes when the dimmed backdrop is tapped', () => {
+  it('closes when the dimmed backdrop is tapped', async () => {
     const onClose = jest.fn();
     const { getAllByLabelText } = render(
       <SafetySheet visible onClose={onClose} {...props} />,
     );
+    await flushPendingEffects();
     // First match is the full-screen backdrop pressable behind the sheet.
     fireEvent.press(getAllByLabelText('Close safety options')[0]);
     expect(onClose).toHaveBeenCalled();

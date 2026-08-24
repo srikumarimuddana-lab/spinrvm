@@ -13703,6 +13703,82 @@ how much they de-risk a public launch._
   section (via `update_pull_request` or the GitHub UI) no longer appends
   a second blank copy.
 
+### C41. `rider-app-test`/`driver-app-test` intermittently time out on unrelated files — two more leaked-async-update sources found and fixed (same class as C31/C37)
+
+- [x] **Status:** FIXED (2026-08-24) — found after this session repeatedly
+  hit `rideOptionsScreen.test.tsx` (rider-app) and
+  `driverProfileScreen.test.tsx` (driver-app) failing with `Exceeded
+  timeout of 5000 ms` on PRs that touched neither file, across three
+  separate CI runs (PRs #4475, #4481, #4482). Root-caused the same way as
+  C37 — pulled the raw CI job log (not just the summary) and searched for
+  `not wrapped in act(...)` warnings, rather than re-assuming "pre-existing
+  flakiness" without checking.
+- **Root cause (rider-app):** `rider-app/__tests__/safetySheetDismiss.test.tsx`
+  renders `<SafetySheet>` (whose `useSafetyPanelConfig` hook kicks off an
+  async `Promise.allSettled` fetch on mount) but never awaits or flushes
+  that pending promise before the test function returns. On some runs the
+  mocked fetch's `.then` continuation resolves *after* RTL's implicit
+  `afterEach(cleanup)` has already unmounted the tree, calling
+  `setAreas`/`setSettings` on an unmounted component outside `act()` — the
+  exact `An update to SafetySheet inside a test was not wrapped in
+  act(...)` warning found in the raw log, timestamped right before the
+  worker's "failed to exit gracefully" message. `useSafetyPanelConfig`
+  itself (`shared/hooks/useSafetyPanelConfig.ts`) already has a correct
+  `cancelled` guard in its effect cleanup — the bug is purely in the test
+  not giving that cleanup a chance to run before the promise settles, a
+  timing race, not a hook defect.
+- **Root cause (driver-app):** same shape, different file —
+  `driver-app/__tests__/screens/settingsWavToggle.test.tsx` renders
+  `SettingsScreen` (`app/driver/settings.tsx`, which fetches notification
+  preferences via the mocked `@shared/api/client` on mount) without
+  flushing that pending promise either — raw log showed `An update to
+  SettingsScreen inside a test was not wrapped in act(...)`.
+- **Fix:** added a `flushPendingEffects()` helper to each file
+  (`await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });`)
+  and called it right after `render()` in every test, so the pending
+  microtask (and its state update) discharges synchronously while the
+  component is still mounted, inside `act()` — same resolution shape as
+  C37's fix, applied to two newly-found leak sources rather than the one
+  C37 already fixed.
+- **Why this matters beyond these two files:** this is the third
+  confirmed instance of this exact failure class (C31, C37, now this) —
+  a test that renders a component with an unflushed async effect leaks a
+  post-unmount state update into whichever test file Jest's shared worker
+  picks up next, manifesting as an unrelated file's test timing out. Any
+  test that renders a component using `useSafetyPanelConfig`,
+  `useDriverMe`/`useNotificationPreferences`-style data hooks, or any
+  other mount-time async fetch without awaiting/flushing it is a candidate
+  for the same bug — this fix addresses the two instances found this
+  session, not a systemic sweep of every such test file in the repo.
+- **Verification:** both fixed files pass in isolation (4/4 rider-app,
+  2/2 driver-app); full suites re-run 3x each — rider-app 1098/1098 (116
+  suites) clean every time, driver-app 1089/1089 (110 suites) clean every
+  time, **and the specific `not wrapped in act(...)` warnings for
+  SafetySheet/SettingsScreen no longer appear** in any of the 6 runs (a
+  separate, generic "worker failed to exit gracefully" notice still
+  appears in rider-app's output even after this fix — pre-existing,
+  present before this fix too, from an unrelated open handle elsewhere in
+  the suite; not chased further here since it doesn't fail tests and is
+  out of scope for this specific fix). `npx tsc --noEmit` and `npx eslint`
+  clean on both touched files.
+- **Files:** `rider-app/__tests__/safetySheetDismiss.test.tsx`,
+  `driver-app/__tests__/screens/settingsWavToggle.test.tsx`. No
+  application code touched — both fixes are test-only.
+- **What was NOT verified:** whether this specific pair of leaks is what
+  actually caused the CI timeouts observed on #4475/#4481/#4482
+  specifically (CI's Jest worker-to-file assignment isn't deterministic or
+  independently reproducible from this session — the fix is based on
+  confirming these two files genuinely leak an unguarded post-unmount
+  update, which is sufficient justification to fix regardless of whether
+  they were the exact cause of those three specific incidents); whether
+  other test files in either app have the same unflushed-effect pattern
+  (not swept for systemically — flagged as a candidate class above).
+- **Acceptance:** met for the two files fixed — no `not wrapped in act`
+  warning for SafetySheet/SettingsScreen across 3 repeated full-suite runs
+  each. A full repo-wide sweep for the same pattern is a separate,
+  larger follow-up if this failure class recurs on a different pair of
+  files.
+
 ### A41. Legacy-migration data-quality audit (2026-08-19) — 5-agent sweep across backend/admin/driver-app/regulatory
 - [ ] **Status:** open — 3 live/near-live bugs found and fixed same session; a
   larger set of design-decision-dependent gaps documented below, not fixed.

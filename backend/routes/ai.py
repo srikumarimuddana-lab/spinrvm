@@ -1,6 +1,7 @@
 """AI assistant endpoints.
 
 POST /ai/chat                       — SSE stream (default) or single JSON reply
+POST /ai/public-chat                — ANONYMOUS, for the public spinr.ca site
 GET  /ai/config                     — feature flag + disclaimer (gates UI entry points)
 GET  /ai/conversations              — owner-scoped list
 GET  /ai/conversations/{id}/messages
@@ -23,15 +24,17 @@ from pydantic import BaseModel, Field
 try:
     from ai import conversations
     from ai.orchestrator import run_chat_turn
+    from ai.public_assistant import PublicAssistantError, run_public_turn
     from dependencies import get_current_user
     from settings_loader import get_app_settings
-    from utils.rate_limiter import ai_chat_limit
+    from utils.rate_limiter import ai_chat_limit, ai_public_chat_limit
 except ImportError:
     from ..ai import conversations  # type: ignore
     from ..ai.orchestrator import run_chat_turn  # type: ignore
+    from ..ai.public_assistant import PublicAssistantError, run_public_turn  # type: ignore
     from ..dependencies import get_current_user  # type: ignore
     from ..settings_loader import get_app_settings  # type: ignore
-    from ..utils.rate_limiter import ai_chat_limit  # type: ignore
+    from ..utils.rate_limiter import ai_chat_limit, ai_public_chat_limit  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +81,28 @@ class AiChatRequest(BaseModel):
     # older installed app is never told a button is visible that its build
     # cannot draw. Absent list = no optional capabilities (old clients).
     capabilities: Optional[list[str]] = Field(None, max_length=20)
+
+
+class PublicChatMessage(BaseModel):
+    """One prior turn, replayed by the browser. Only plain user/assistant text
+    is accepted — public_assistant._clean_history drops anything else, so a
+    caller cannot inject a fabricated tool result the model would trust."""
+
+    role: str = Field(..., pattern="^(user|assistant)$")
+    content: str = Field(..., min_length=1, max_length=2000)
+
+
+class PublicChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=1000)
+    # The website is stateless from the backend's point of view: nothing is
+    # persisted for an anonymous visitor (PIPEDA data minimization), so the
+    # browser replays the transcript. Bounded here AND again in
+    # public_assistant.MAX_HISTORY_MESSAGES.
+    history: Optional[list[PublicChatMessage]] = Field(None, max_length=8)
+    # Which FAQ rows to search — the site knows whether the visitor is reading
+    # rider or driver pages. It selects content only; it grants nothing, and it
+    # is NOT the tool audience (that is always "web").
+    visitor_type: Optional[str] = Field(None, pattern="^(rider|driver)$")
 
 
 def _audience_for(user: dict) -> str:
@@ -170,6 +195,41 @@ async def ai_chat(
         "reply": "".join(reply_parts),
         "actions": actions,
     }
+
+
+@api_router.post("/public-chat")
+@ai_public_chat_limit
+async def ai_public_chat(body: PublicChatRequest, request: Request):
+    """Anonymous assistant for the public spinr.ca website.
+
+    NO AUTHENTICATION BY DESIGN — the caller is a website visitor, not an
+    account. What keeps that safe is not this handler but the tool registry:
+    the turn runs at audience "web", which resolves to exactly two read-only
+    tools (search_faqs, get_company_info). Every account, ride and booking
+    tool is rider/driver-only and execute_tool re-checks the audience before
+    dispatching, so there is no user data in reach — and no user to scope it
+    to, since the synthetic caller carries no id.
+
+    Non-streaming: the website widget renders whole answers, so this returns
+    one JSON body rather than the SSE frames the app clients consume.
+
+    Gated by BOTH ai_assistant_enabled and ai_public_chat_enabled, and rate
+    limited per IP (ai_public_chat_limit).
+    """
+    try:
+        result = await run_public_turn(
+            message=body.message,
+            history=[m.model_dump() for m in body.history] if body.history else None,
+            visitor_type=body.visitor_type or "rider",
+        )
+    except PublicAssistantError as exc:
+        raise HTTPException(
+            status_code=_ERROR_STATUS.get(exc.code, 502),
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    # provider/model are echoed for the website's own logging; usage lets it
+    # track spend. No conversation id — nothing was persisted to refer back to.
+    return result
 
 
 @api_router.get("/conversations")

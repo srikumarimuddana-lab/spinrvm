@@ -8419,11 +8419,44 @@ record of what was assumed vs. what was actually true</summary>
     the loading/error-state tests could actually drive those branches.
     18 tests; full driver-app suite still green (111 suites / 1118
     tests), `yarn tsc --noEmit` clean.
-  - **Next in the ranked list (driver-app only now):**
-    `login.tsx` (62.9%). This is an open-ended coverage-improvement
-    effort, not a finish-line-shaped one like sub-item 4 — pick up
-    wherever a future session left off by re-running the per-app
-    `--collectCoverageFrom` coverage command above and ranking by line %.
+  - **driver-app `app/login.tsx`: 62.9% → 88.7% lines.** Already had
+    `screens/loginConsentCheckbox.test.tsx` (pins the explicit
+    unchecked-by-default consent checkbox's checked/disabled wiring and
+    one happy-path navigate-to-`/otp` call). Added
+    `app/loginScreen.test.tsx` (13 tests) covering the rest: the
+    over-11-digit `handlePhoneChange` reject-entirely branch (state stays
+    at its last valid value, not truncated); `handleSendCode`'s three
+    response/error branches (`success:false` → generic failure toast; a
+    thrown error with a server message → "Sign-in Unavailable" with that
+    message; a thrown error with nothing extractable → generic
+    "Connection Error"); the in-flight loading state (spinner, phone input
+    `editable:false`, both reset in `finally` regardless of outcome); the
+    Terms of Service / Privacy Policy links each navigating to `/legal`
+    with their own `type` param; and the early-mount location-permission
+    effect's full branch set (already-granted persists a last-known
+    position immediately then the accurate background position;
+    not-yet-granted requests it and proceeds if granted; denied-outright
+    never touches AsyncStorage; a thrown permission-check error is
+    swallowed without crashing the screen; a failed background
+    `getCurrentPositionAsync` is swallowed while the earlier last-known
+    write still stands). Needed a screen-local `expo-location` mock
+    (the global `jest.setup.js` one has no
+    `getForegroundPermissionsAsync`/`getLastKnownPositionAsync` stubs,
+    only the background-tracking ones `driverStore.ts` needs) and a
+    local `@react-native-async-storage/async-storage` mock so `setItem`
+    calls could be asserted directly. One iteration fix: an initial
+    `await act(async () => { render(...); await flush(); })` wrapper
+    around several of the location-effect tests double-wrapped
+    `render()` (which already `act()`s internally) and threw "Can't
+    access .root on unmounted test renderer" — fixed by calling
+    `render()` directly followed by a separate `await flush()`, matching
+    the pattern the rest of the file already used. 13 tests; full
+    driver-app suite still green (112 suites / 1131 tests), `yarn tsc
+    --noEmit` clean. **This closes out every screen in the original
+    ranked worst-offenders list across both apps** — sub-item 5 continues
+    as an open-ended effort, but has no standing "next" pointer until a
+    fresh coverage run identifies the next tier of worst-covered
+    screens.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

@@ -1,10 +1,27 @@
 """Fare/ETA estimates shown to the rider before booking.
 
-Split from ``backend/routes/rides.py`` (god-file refactor). Pure code
-motion — no behaviour changes. See docs/refactors/god-file-split.md.
+Split from ``backend/routes/rides.py`` (god-file refactor); that split was pure
+code motion — see docs/refactors/god-file-split.md.
+
+Two surfaces, one engine. ``compute_ride_estimates`` is the single fare path
+for every quoting surface (rider app, AI assistant, and the public website),
+so surge, area fees and tax can never diverge between them:
+
+  POST /estimate         — authenticated rider app quote; issues surge-lock
+                           tokens and counts toward the price-search funnel.
+  POST /public-estimate  — anonymous website quote, flag-gated and cached;
+                           no tokens, no funnel, no live driver counts.
 """
 
+import json as _json
 import time as _time
+
+try:
+    from ...utils.redis_client import redis_get as _redis_get
+    from ...utils.redis_client import redis_set as _redis_set
+except ImportError:  # pragma: no cover — top-level run
+    from utils.redis_client import redis_get as _redis_get  # type: ignore
+    from utils.redis_client import redis_set as _redis_set  # type: ignore
 
 from . import _deps
 from ._deps import (  # noqa: F401
@@ -26,6 +43,7 @@ from ._deps import (  # noqa: F401
     get_current_user,
     logger,
     multi_leg_distance,
+    public_estimate_limit,
 )
 from ._shared import (  # noqa: F401
     DIRECTIONS_TIMEOUT_S,
@@ -158,6 +176,7 @@ async def compute_ride_estimates(
     *,
     include_polyline: bool = True,
     track_search: bool = False,
+    issue_tokens: bool = True,
 ) -> dict:
     """Shared estimate engine behind POST /rides/estimate.
 
@@ -167,6 +186,13 @@ async def compute_ride_estimates(
     Raises HTTPException(400 OUTSIDE_SERVICE_AREA) exactly like the route.
     ``include_polyline=False`` skips the Directions fetch for callers that
     don't render a map (saves a Maps API call and its latency).
+
+    ``issue_tokens=False`` skips the per-vehicle surge-lock estimate token.
+    That token exists so POST /rides can honour the surge the rider was shown,
+    and it is signed against ``rider_id`` — meaningless for the anonymous
+    public estimate on the website, which cannot book. Minting one bound to a
+    placeholder id would be a signed credential with no owner, so the public
+    caller asks for none. Defaults True: every existing caller is unchanged.
     """
     _deps.validate_ride_location(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
     # Straight-line haversine through any stops — the FALLBACK and sanity
@@ -567,20 +593,23 @@ async def compute_ride_estimates(
         # P0-4 surge-lock: sign a token per vehicle_type so POST /rides can
         # reuse the surge_multiplier shown here instead of re-reading the
         # service area (which may have changed between estimate + confirm).
-        estimate_token = _deps.sign_estimate_token(
-            rider_id=rider_id,
-            vehicle_type_id=vt_id,
-            pickup_lat=body.pickup_lat,
-            pickup_lng=body.pickup_lng,
-            dropoff_lat=body.dropoff_lat,
-            dropoff_lng=body.dropoff_lng,
-            surge_multiplier=round(float(surge), 2),
-            total_fare=_f(fb.total_fare),
-            # Carry the quoted road distance + basis to /rides so booking charges
-            # exactly what the rider was shown, not a re-derived haversine.
-            distance_km=round(distance_km, 3),
-            distance_basis=distance_basis,
-        )
+        # Anonymous callers get none — see issue_tokens in the docstring.
+        estimate_token = None
+        if issue_tokens:
+            estimate_token = _deps.sign_estimate_token(
+                rider_id=rider_id,
+                vehicle_type_id=vt_id,
+                pickup_lat=body.pickup_lat,
+                pickup_lng=body.pickup_lng,
+                dropoff_lat=body.dropoff_lat,
+                dropoff_lng=body.dropoff_lng,
+                surge_multiplier=round(float(surge), 2),
+                total_fare=_f(fb.total_fare),
+                # Carry the quoted road distance + basis to /rides so booking charges
+                # exactly what the rider was shown, not a re-derived haversine.
+                distance_km=round(distance_km, 3),
+                distance_basis=distance_basis,
+            )
 
         fare_breakdown_lines = build_fare_breakdown_lines(
             fb,
@@ -661,3 +690,128 @@ async def estimate_ride(
     current_user: dict = Depends(get_current_user),
 ):
     return await compute_ride_estimates(body, current_user["id"], track_search=True)
+
+
+# ── Public (anonymous) fare estimate ────────────────────────────────────────
+#
+# Serves the fare quote on the public spinr.ca website. Same engine as the
+# rider app — compute_ride_estimates is the single fare path for every quoting
+# surface, and duplicating the maths on the website would guarantee the two
+# drift apart on surge, fees or tax.
+#
+# Anonymous, so three things differ from /estimate above:
+#   1. No surge-lock estimate token. It is signed against a rider id and only
+#      means anything to POST /rides, which a website visitor cannot call.
+#   2. No price-search funnel tracking. That table counts *rider* searches and
+#      is keyed on a user id; anonymous traffic would either corrupt it or
+#      need a fake id.
+#   3. Live driver supply is stripped from the response. Availability and an
+#      ETA are useful to a prospective rider and are what every competitor
+#      shows; an exact driver count and closest-driver distance are internal
+#      operational data and do not belong on a public endpoint.
+#
+# COST: this is the first unauthenticated surface with a per-request paid-API
+# charge. Pricing needs the ROAD distance (crow-flies undercharges — see
+# _PRICING_ROUTE_WAIT_S above), so a Google Directions call happens on every
+# cache miss regardless of the polyline. Hence the flag, the tight per-IP
+# limit, and the short coordinate-rounded cache below.
+
+_PUBLIC_ESTIMATE_CACHE_TTL_S = 180
+# 3 decimal places ≈ a 110 m grid. Coarse enough that a refresh, a back
+# button, or two people quoting the same trip share one Directions call;
+# fine enough that the quote still matches the trip they typed.
+_PUBLIC_ESTIMATE_PRECISION = 3
+
+# Whitelist, not a blocklist: vehicle_type is the whole DB row, so listing what
+# may go out means a new internal column cannot leak by simply existing.
+_PUBLIC_VEHICLE_FIELDS = ("id", "name", "description", "capacity", "image_url")
+
+# Fields dropped from each public estimate. estimate_token is already None for
+# this caller; the other two are live operational data.
+_PUBLIC_STRIPPED_FIELDS = ("driver_count", "closest_driver_km", "estimate_token")
+
+
+class PublicEstimateRequest(BaseModel):
+    """Deliberately narrower than RideEstimateRequest.
+
+    No stops, no corporate/work-profile context and no payment method: those
+    change the quote in ways that only mean something for a signed-in rider,
+    and accepting them from an anonymous caller would let someone probe
+    corporate pricing from a marketing page.
+    """
+
+    pickup_lat: float = Field(..., ge=-90, le=90)
+    pickup_lng: float = Field(..., ge=-180, le=180)
+    dropoff_lat: float = Field(..., ge=-90, le=90)
+    dropoff_lng: float = Field(..., ge=-180, le=180)
+    requires_wav: bool = False
+
+
+def _public_estimate_cache_key(body: PublicEstimateRequest) -> str:
+    def _r(v: float) -> str:
+        return f"{round(v, _PUBLIC_ESTIMATE_PRECISION):.3f}"
+
+    return (
+        "public_estimate:"
+        f"{_r(body.pickup_lat)},{_r(body.pickup_lng)}:"
+        f"{_r(body.dropoff_lat)},{_r(body.dropoff_lng)}:"
+        f"wav={int(body.requires_wav)}"
+    )
+
+
+def _public_estimate_view(result: dict) -> dict:
+    """Project the internal estimate onto what a public caller may see."""
+    public_estimates = []
+    for est in result.get("estimates") or []:
+        out = {k: v for k, v in est.items() if k not in _PUBLIC_STRIPPED_FIELDS}
+        vt = est.get("vehicle_type") or {}
+        out["vehicle_type"] = {k: vt.get(k) for k in _PUBLIC_VEHICLE_FIELDS if vt.get(k) is not None}
+        public_estimates.append(out)
+    return {"estimates": public_estimates, "route_polyline": result.get("route_polyline")}
+
+
+@router.post("/public-estimate")
+@public_estimate_limit
+@_metric_timed("spinr_fare_calc_duration_ms")
+async def public_estimate_ride(body: PublicEstimateRequest, request: Request = None):
+    """Anonymous fare quote for the public website. No authentication."""
+    settings = await _deps.get_app_settings()
+    if not settings.get("public_fare_estimate_enabled"):
+        raise HTTPException(status_code=503, detail="Fare estimates are currently unavailable.")
+
+    cache_key = _public_estimate_cache_key(body)
+    try:
+        cached = await _redis_get(cache_key)
+        if cached:
+            _deps._metric_inc("spinr_public_estimate_total", {"outcome": "cache_hit"})
+            return _json.loads(cached)
+    except Exception:
+        # A cache read failure must not cost the visitor their quote — fall
+        # through and price it live. Logged, not swallowed silently.
+        logger.warning("[public-estimate] cache read failed", exc_info=True)
+
+    internal = RideEstimateRequest(
+        pickup_lat=body.pickup_lat,
+        pickup_lng=body.pickup_lng,
+        dropoff_lat=body.dropoff_lat,
+        dropoff_lng=body.dropoff_lng,
+        requires_wav=body.requires_wav,
+    )
+    # rider_id is unused on this path: track_search=False skips the funnel
+    # insert and issue_tokens=False skips the only other consumer.
+    result = await compute_ride_estimates(
+        internal,
+        rider_id="",
+        include_polyline=True,
+        track_search=False,
+        issue_tokens=False,
+    )
+    public = _public_estimate_view(result)
+
+    try:
+        await _redis_set(cache_key, _json.dumps(public), ttl=_PUBLIC_ESTIMATE_CACHE_TTL_S)
+    except Exception:
+        logger.warning("[public-estimate] cache write failed", exc_info=True)
+
+    _deps._metric_inc("spinr_public_estimate_total", {"outcome": "priced"})
+    return public

@@ -493,6 +493,15 @@ ai_chat_limit = default_limiter.limit("10/minute", key_func=get_ai_chat_key)
 # limit (6 vs 10/minute) precisely because it is unauthenticated.
 ai_public_chat_limit = default_limiter.limit("6/minute")
 
+# Public website fare estimate (POST /rides/public-estimate). Same anonymous
+# per-IP caveat as ai_public_chat_limit above, but the cost profile is worse:
+# every uncached estimate is a paid Google Directions call, because pricing
+# needs the road distance. Tight on purpose, and backed by a short
+# coordinate-rounded response cache so a page refresh or a second look at the
+# same trip does not re-bill. The kill switch (public_fare_estimate_enabled)
+# remains the real control.
+public_estimate_limit = default_limiter.limit("10/minute")
+
 # In-ride messaging — generous but bounded to prevent SMS relay abuse
 ride_message_limit = default_limiter.limit("30/minute", key_func=get_user_or_ip_key)
 

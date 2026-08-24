@@ -339,6 +339,9 @@ class SettingsUpdateRequest(BaseModel):
     # off on its own without taking the rider/driver assistant down with it.
     # Defaults OFF — the feature ships dark.
     ai_public_chat_enabled: Optional[bool] = None
+    # Anonymous website fare estimate. Separate kill switch from the AI flag
+    # above because this one has a per-request paid-API cost (migration 364).
+    public_fare_estimate_enabled: Optional[bool] = None
     ai_disclaimer: Optional[str] = Field(default=None, max_length=300)
     # iOS Live Activity APNs (.p8 token auth). key_id/team_id/bundle_id are
     # identifiers (visible); apns_p8_key is the secret (masked, in

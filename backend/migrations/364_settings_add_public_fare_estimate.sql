@@ -1,0 +1,38 @@
+-- 364_settings_add_public_fare_estimate.sql
+--
+-- Adds the settings column gating the anonymous fare estimate used by the
+-- public spinr.ca website (POST /api/v1/rides/public-estimate), the
+-- counterpart to the field added in schemas.py AppSettings and the admin
+-- settings PATCH model (routes/admin/settings.py).
+--
+-- Without this column, admin_update_settings writes the PATCH payload straight
+-- through, so the first Settings save that includes the field 503s with
+--   PGRST204: Could not find the 'public_fare_estimate_enabled' column of 'settings'
+-- and the feature could never be enabled from the admin UI (the same failure
+-- mode migrations 145, 208, 211 and 363 describe for their own columns).
+--
+--   • public_fare_estimate_enabled  BOOLEAN — master on/off for the anonymous
+--                                             website fare quote (default false)
+--
+-- Why this one has its own flag rather than riding on another: every public
+-- estimate costs a Google Directions call. compute_ride_estimates needs the
+-- ROAD distance to price a trip (pricing on crow-flies undercharges — see the
+-- _PRICING_ROUTE_WAIT_S comment in routes/rides/estimates.py), so the
+-- Directions fetch happens whether or not a map polyline is requested. That
+-- makes this the first unauthenticated surface with a per-request paid-API
+-- cost, and it needs a kill switch that does not also turn off the AI
+-- assistant or anything else.
+--
+-- Defaults false so the feature ships dark: merging this enables nothing until
+-- an admin flips it, and flipping it back off is the rollback.
+--
+-- Forward-compatible: pure additive ADD COLUMN IF NOT EXISTS with a default;
+-- metadata-only, no rewrite, safe against in-flight traffic. settings is the
+-- single-row service-role config table (no per-user data), so no RLS block —
+-- consistent with migrations 145, 208, 211 and 363.
+--
+-- Rollback: (manual, not expected — turning the flag off is the real rollback)
+--   ALTER TABLE settings DROP COLUMN IF EXISTS public_fare_estimate_enabled;
+
+ALTER TABLE settings
+    ADD COLUMN IF NOT EXISTS public_fare_estimate_enabled BOOLEAN DEFAULT false;

@@ -127,6 +127,7 @@ KNOWN_SETTINGS_COLUMNS = frozenset(
         "platform_fee_percent",
         "privacy_policy_text",
         "promo_redemption_enabled",
+        "public_fare_estimate_enabled",
         "referral_payout_velocity_cap_per_day",
         "referral_reward_amount",
         "referral_rides_required",

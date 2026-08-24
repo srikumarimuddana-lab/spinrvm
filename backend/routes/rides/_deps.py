@@ -65,6 +65,7 @@ try:
     from ...utils.rate_limiter import (
         api_rate_limit,
         cancel_ride_limit,
+        public_estimate_limit,
         payment_action_limit,
         ride_action_limit,
         ride_message_limit,
@@ -112,6 +113,7 @@ except ImportError:
     from utils.rate_limiter import (
         api_rate_limit,
         cancel_ride_limit,
+        public_estimate_limit,
         payment_action_limit,
         ride_action_limit,
         ride_message_limit,

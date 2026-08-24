@@ -8363,6 +8363,33 @@ record of what was assumed vs. what was actually true</summary>
   (login/signup fields feeding KYC/compliance checks, all
   admin-dashboard corporate/billing forms) remain unmigrated; no
   ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-24 update — step 3 done, driver-app's first zod adoption:**
+  migrated `driver-app/app/driver/payout.tsx`'s GST/BN and SIN validation
+  (CRA tax-compliance-adjacent, gates payout eligibility) — the
+  highest-risk unmigrated form on driver-app, per this item's own
+  ordering, after both rider-app forms were done. Added `zod` to
+  `driver-app/package.json` (first zod dependency on this surface). New
+  colocated `driver-app/utils/payoutFormsSchema.ts` extracts three
+  predicates from three separate inline regex/length checks
+  (`handleSaveGst`'s save-guard, the `gstOnFile` checklist-display flag,
+  `handleSaveSin`'s length check) — `isGstBnValid`, `isGstBnOnFile`,
+  `isSinValid` — each a byte-for-byte match for the check it replaces.
+  The two GST predicates were deliberately kept separate (not merged into
+  one "more correct" shared function) since they have genuinely different
+  normalization today (one uppercases + strips whitespace, the other
+  doesn't) — merging them would be a validation-rule change, not a pure
+  extraction. New `driver-app/utils/__tests__/payoutFormsSchema.test.ts`
+  (20 accept/reject cases). Verification: 20/20 new tests pass; full
+  driver-app suite 1089/1089 (110 suites) pass, 0 regressions; `npx tsc
+  --noEmit` clean; `npx eslint` clean on touched files; **real production
+  build** (`npm run build:web` → `expo export --platform web`) completed
+  successfully; blast-radius grep confirmed `payout.tsx` is the only
+  caller of all three extracted checks. Full Change Impact Log:
+  `docs/change-log/2026-08-24-b39-driver-payout-zod-step3.md`. **Still
+  open:** admin-dashboard has no schema-validation library yet; every
+  other driver-app/rider-app form (login/signup fields feeding KYC/
+  compliance checks, all admin-dashboard corporate/billing forms) remains
+  unmigrated; no ADR/migration-order doc written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

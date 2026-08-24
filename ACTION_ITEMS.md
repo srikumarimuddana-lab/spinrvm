@@ -9293,6 +9293,24 @@ record of what was assumed vs. what was actually true</summary>
     list wherever a future session left off, re-running the coverage
     command above to confirm current numbers before starting (they'll
     have moved since this snapshot, and #4507/#4514 may have merged).
+  - **rider-app `app/ride-status.tsx`: 84.5% → 97.4% lines.** Already had
+    `rideStatusScreen.test.tsx` (17 tests: loading/header, searching's
+    "taking longer" copy, driver_assigned/driver_accepted bodies, the
+    driver-photo fallback, all four `handleBackPress` cancel-copy
+    branches, the notes-chip save/failure paths), plus
+    `rideStatusCloseButton.test.tsx` and a type-only contract test —
+    extended the screen test file in place (+8 tests): the offer
+    countdown's real `offer_expires_at`-driven computation (previously
+    only the `offer_timeout_seconds`-fallback branch was exercised) and
+    its 500ms tick-down actually firing; the driver-photo-error fallback
+    repeated for the `driver_arrived` body (a separate `<Image>` render
+    from the `driver_assigned` one already covered); all three
+    `__DEV__`-only status-simulation buttons (Assign Driver/Arrive at
+    Pickup/Go to Arriving Screen, including Assign Driver's
+    swallowed-failure branch); and the note-for-driver modal's Cancel
+    button and tap-the-backdrop dismiss paths. 25 tests; full rider-app
+    suite still green (123 suites / 1306 tests), `yarn tsc --noEmit`
+    clean.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

@@ -429,9 +429,35 @@ jobs:
             }
 
             // ---- Section templates (each with idempotency marker) ------
+            // C40: the marker comment alone isn't a reliable "already
+            // appended" signal — an author filling in a section by hand
+            // (via the GitHub UI or update_pull_request) commonly drops the
+            // invisible HTML comment while typing over the template text,
+            // which used to make this step treat a fully-filled section as
+            // absent and re-append a second, blank copy on the next edit
+            // event. Guard on the heading + real content too: a heading
+            // that's already present in the body with anything beyond the
+            // blank `[ ]` / "or N/A" placeholder text is left alone.
+            const sectionHasContent = (heading) => {
+              const idx = body.indexOf('## ' + heading);
+              if (idx === -1) return false;
+              const rest = body.slice(idx);
+              const nextHeading = rest.slice(3).search(/\n## /);
+              const block = nextHeading === -1 ? rest : rest.slice(0, nextHeading + 3);
+              const stripped = block
+                .replace(/^## .*/, '')
+                .replace(/`\[ \]`/g, '')
+                .replace(/\bor N\/A\b/gi, '')
+                .replace(/^- \*\*[^*]+\*\*[^:]*:/gm, '')
+                .replace(/^[-\s]*$/gm, '')
+                .trim();
+              return stripped.length > 0;
+            };
+
             const sections = [];
             const add = (marker, heading, bullets) => {
               if (body.includes(marker)) return; // already appended
+              if (sectionHasContent(heading)) return; // filled in by hand, marker lost
               sections.push([
                 marker,
                 '## ' + heading,

@@ -14338,10 +14338,28 @@ how much they de-risk a public launch._
 
 ### C40. `pr-checks.yml`'s "Expand conditional template sections" step unconditionally re-appends a blank Tier 5 (UI change details) block on every PR body edit, even when a filled one already exists
 
-- [ ] **Status:** open — found 2026-08-22/2026-08-24 across three separate
-  PRs (#4469, #4470, #4481) in this session. Not fixed here — the fix is
-  in `.github/workflows/pr-checks.yml`, outside the scope of the
-  content-only PRs where this was observed.
+- [x] **Status:** FIXED (2026-08-24) — found 2026-08-22/2026-08-24 across
+  three separate PRs (#4469, #4470, #4481) in this session; fixed in a
+  dedicated PR (`claude/c40-fix-pr-checks-duplicate-append`) touching only
+  the "Expand conditional template sections" step of
+  `.github/workflows/pr-checks.yml`. The root cause was confirmed on
+  reading the step's source (previously only inferred): `add()` gated
+  purely on `body.includes(marker)` where `marker` is an HTML comment
+  (`<!-- spinr-expanded:ui -->` etc.) placed as the first line of the
+  appended block — so an author who fills in Tier 5/6 by hand and, in the
+  process, drops the invisible marker comment (easy to do editing in the
+  GitHub UI, since the comment renders as nothing) makes the step treat a
+  fully-filled section as absent on the next `pull_request.edited` run,
+  re-appending a second blank copy. Fix: added a `sectionHasContent(heading)`
+  helper that locates the `## <heading>` block in the current PR body and
+  checks whether it contains anything beyond the blank `` `[ ]` `` / "or
+  N/A" placeholder text; `add()` now skips appending when either the
+  marker is present (existing behavior) *or* the heading already has real
+  content (new). Applies uniformly to all seven templated headings (Tier
+  5 money/UI/auth/background-job/RLS/safety, Tier 6 bug-fix, Tier 7
+  high-risk) since they all route through the same `add()` helper — so
+  this also covers the Tier 6 case flagged as unconfirmed in the original
+  finding below.
 - **What's wrong:** when a PR is UI-labeled or `type: fix`, the
   "Expand conditional template sections" step (part of `pr-checks.yml`)
   appends a blank Tier 5 (`## Tier 5 · UI change details`) and/or Tier 6
@@ -14373,15 +14391,34 @@ how much they de-risk a public launch._
   or when the section is genuinely still blank.
 - **Files:** `.github/workflows/pr-checks.yml` (the "Expand conditional
   template sections" step).
-- **What was NOT verified:** the actual step's source/script logic (not
-  read directly in this pass — root cause is inferred from observed
-  behavior across three PRs, not confirmed by reading the workflow YAML);
-  whether this also affects Tier 6 (bug-fix notes) the same way, or only
-  Tier 5 — only Tier 5 was directly observed this time (Tier 6 was the
-  one observed duplicating in the earlier #4469/#4470 session note).
+- **What was NOT verified:** this cannot be exercised by a live GitHub
+  Actions run in this sandbox (no `pull_request` webhook trigger
+  available here) — `actions/github-script` was not executed against a
+  real PR. Verified instead by (a) reading the modified step's logic
+  directly and (b) tracing `sectionHasContent()`/`add()` against four
+  hand-built PR-body fixtures in a standalone Node script (not committed
+  — scratch only): a Tier 5 section filled in with real content and no
+  marker (correctly skipped), no Tier 5 section at all (correctly
+  appended), a marker present with the still-blank template (correctly
+  skipped, unchanged from prior behavior), and a known residual gap — a
+  heading present, still blank, with no marker (e.g. an author
+  copy-pasted just the heading + template by hand without filling it in)
+  still gets a duplicate appended underneath it, same as before this fix;
+  this was not the reported bug (which was specifically about *filled*
+  sections) and matches the acceptance criteria's own wording ("already
+  appends once... or when the section is genuinely still blank"). Not
+  tested against GitHub's actual PATCH-body diffing/rendering, and no
+  regression test exists for `.github/workflows/*.yml` scripts in this
+  repo's test suite (there is no test harness for `github-script` steps
+  here) — see the Change Impact Log for this fix
+  (`docs/change-log/2026-08-24-c40-pr-checks-fix.md`) for the full
+  verification trace.
 - **Acceptance:** editing a PR body that already has a filled Tier 5/6
   section (via `update_pull_request` or the GitHub UI) no longer appends
-  a second blank copy.
+  a second blank copy. Met per the traced fixtures above; not yet
+  confirmed against a live PR edit event — flag for the reviewer of
+  `claude/c40-fix-pr-checks-duplicate-append` to watch the next real PR
+  edit on an affected PR before closing this out for good.
 
 ### C41. `rider-app-test`/`driver-app-test` intermittently time out on unrelated files — two more leaked-async-update sources found and fixed (same class as C31/C37)
 

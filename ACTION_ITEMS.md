@@ -4620,9 +4620,13 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   running the real splitter against every migration file's text and by unit
   tests with a mocked connection, not by applying the full migration set to
   a live throwaway schema.
-- **Files:** `backend/scripts/migrate.py:195` (`_apply_migration_autocommit`),
-  frozen list in `backend/tests/test_migration_concurrently_splitting.py`
-  (`_KNOWN_UNSPLITTABLE`)
+- **Files:** `backend/scripts/run_migrations.py` (`_split_sql_statements`,
+  `_apply_one`'s autocommit routing — `migrate.py` no longer exists, see the
+  2026-08-17 update note above; this line was stale until 2026-08-24), frozen
+  list in `backend/tests/test_migration_concurrently_splitting.py`
+  (`_KNOWN_UNSPLITTABLE`, still empty as of 2026-08-24 — 66 tests pass across
+  both referenced test files, up from the 51 recorded when this item was
+  first closed)
 - **Problem:** `apply_migration` routes a file to the autocommit path when the
   string `CONCURRENTLY` appears **anywhere in the text, including a comment**.
   That path cannot use a transaction, so it does `sql.split(";")` and executes

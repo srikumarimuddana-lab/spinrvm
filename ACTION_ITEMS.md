@@ -9374,6 +9374,29 @@ record of what was assumed vs. what was actually true</summary>
     (out of scope for a coverage-only pass). 69 tests; full rider-app
     suite still green (123 suites / 1393 tests), `yarn tsc --noEmit`
     clean.
+  - **rider-app `app/driver-arrived.tsx`: 84.52% → 98.8% stmts, 88.23% →
+    100% lines** (ride-critical: OTP handoff, cancellation-fee flow,
+    live map). Already had `driverArrivedScreen.test.tsx` (13 tests:
+    mount fetch, WS-vs-poll fetching, the in-progress redirect, the
+    server-quoted-fee cancel-confirm→reason→submit flow and its failure
+    toast, the hardware-back cancel trigger, OTP copy-to-clipboard,
+    Message Driver, Share Trip incl. a swallowed rejection, the
+    driver-photo-error fallback, and the no-ride loading/retry state) —
+    extended in place (+7 tests). Unlike `ride-options.tsx` above,
+    `GOOGLE_MAPS_API_KEY` here is read inline per-render (not a
+    module-level `const`), so setting `process.env...` in a test was
+    enough to exercise the previously-unreachable `MapViewDirections`
+    route: `onReady` drawing the route and re-fitting the map (plus the
+    &lt;2-point-result no-op guard), and the map-fit effect's
+    driver-position branch (only fires once `currentDriver.lat`/`lng`
+    are present — most tests have no live driver position yet). Also
+    closed: `ConfirmSheet`'s and `CancelReasonSheet`'s own `onClose`
+    (backdrop-tap dismissal, distinct from their button presses, and
+    correctly asserted as NOT cancelling the ride); and the `__DEV__`-
+    only "Start Ride (skip OTP)" button's success and swallowed-failure
+    branches (`await api.post(.../start')`, `catch(e) { console.log(e)
+    }`, then `fetchRide` either way). 20 tests; full rider-app suite
+    still green (123 suites / 1408 tests), `yarn tsc --noEmit` clean.
   - **rider-app `app/emergency-contacts.tsx`: 87.5% → 100% stmts / 100%
     lines.** Already had `emergencyContactsScreen.test.tsx` (12 tests:
     load, empty state, both phone-format lengths, name/phone validation,

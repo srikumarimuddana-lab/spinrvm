@@ -8453,10 +8453,30 @@ record of what was assumed vs. what was actually true</summary>
     the pattern the rest of the file already used. 13 tests; full
     driver-app suite still green (112 suites / 1131 tests), `yarn tsc
     --noEmit` clean. **This closes out every screen in the original
-    ranked worst-offenders list across both apps** — sub-item 5 continues
-    as an open-ended effort, but has no standing "next" pointer until a
-    fresh coverage run identifies the next tier of worst-covered
-    screens.
+    ranked worst-offenders list across both apps.**
+  - **Fresh coverage sweep (2026-08-24, post-`login.tsx`) — next tier
+    identified.** Re-ran both apps' `--collectCoverageFrom='app/**/*.{ts,tsx}'`
+    coverage and ranked by line % (layout files excluded — they're
+    near-zero by nature, not a real gap). Next tier, worst first:
+    - **rider-app:** `ride-details.tsx` (66.2%), `(tabs)/index.tsx`
+      (70.6%), `login.tsx` (72.7% — rider-app's own, distinct from the
+      driver-app `login.tsx` just closed above), `ai-assistant.tsx`
+      (73.9%), `ride-options.tsx` (76.3% — the file this session already
+      added `rideOptionsScreen.test.tsx` to during sub-item 4; still has
+      room at 2284 lines), `ride-in-progress.tsx` (76.9%),
+      `driver-arriving.tsx` (77.5%), `payment-confirm.tsx` (80.0%),
+      `work-profile.tsx` (81.5%).
+    - **driver-app:** `driver/(tabs)/index.tsx` (69.1% — the dashboard
+      screen this session already added `driverDashboardScreen.test.tsx`
+      to during sub-item 4's 76/76 close-out; still has room at 1359
+      lines), `become-driver.tsx` (69.3%), `driver/quests.tsx` (69.9%),
+      `driver/ride-detail.tsx` (74.7%), `legal.tsx` (81.2%),
+      `profile-setup.tsx` (82.5%), `driver/subscription.tsx` (84.1%),
+      `driver/tax-documents.tsx` (85.2%).
+    Sub-item 5 continues as an open-ended effort — pick up from this list
+    wherever a future session left off, re-running the coverage command
+    above to confirm current numbers before starting (they'll have moved
+    since this snapshot).
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

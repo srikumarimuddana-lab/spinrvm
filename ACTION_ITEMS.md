@@ -8869,6 +8869,37 @@ record of what was assumed vs. what was actually true</summary>
     the 2026-08-24 fresh-coverage-sweep ranked list across both apps** —
     a further fresh sweep is needed to find the next tier, same as the
     original ranked-worst-offenders list before it.
+  - **Fresh coverage sweep (2026-08-24, post-#4476-merge) — next tier
+    identified.** Re-ran both apps' `--collectCoverageFrom='app/**/*.{ts,tsx}'`
+    coverage against `main` at `77118c8` (122 rider-app suites / 1241
+    tests, 115 driver-app suites / 1243 tests, both fully green) and
+    ranked by line % (`_layout.tsx` files excluded — near-zero by
+    nature, not a real gap). Every screen from the two prior ranked
+    lists (the original worst-offenders pass and the 2026-08-24 tier
+    above) has moved off the worst-15 for its app, confirming this
+    round's fixes stuck. Next tier, worst first:
+    - **rider-app:** `search-destination.tsx` (70.5%, new to any prior
+      list), `ride-in-progress.tsx` (76.9%), `driver-arriving.tsx`
+      (77.5%), `payment-confirm.tsx` (80.0%), `ride-options.tsx` (80.7%
+      — the file this session's earlier round already extended twice;
+      still has room at 2284 lines), `work-profile.tsx` (81.5%),
+      `ride-status.tsx` (84.5%), `loyalty.tsx` (85.4%), `(tabs)/index.tsx`
+      (85.5% — up from 70.6% two sweeps ago, still worst-offender-tier),
+      `emergency-contacts.tsx` (87.5%), `verify-email.tsx` (87.5%).
+    - **driver-app:** `driver/(tabs)/index.tsx` (74.5% — unchanged since
+      this session's own close-out; still worst in the app at 1359
+      lines), `become-driver.tsx` (80.7% — also unchanged since its own
+      close-out), `documents.tsx` (86.8%, new), `vehicle-info.tsx`
+      (88.3%, new), `login.tsx` (88.7% — driver-app's own, closed
+      earlier this session), `driver/payout.tsx` (88.8%, new),
+      `driver/tax-documents.tsx` (88.9% — unchanged, its 3 remaining
+      uncovered lines are documented dead code, not a real gap),
+      `driver/payout-history.tsx` (89.4%, new), `driver/ride-detail.tsx`
+      (89.5% — unchanged since its own close-out).
+    Sub-item 5 continues as an open-ended effort — pick up from this
+    list wherever a future session left off, re-running the coverage
+    command above to confirm current numbers before starting (they'll
+    have moved since this snapshot).
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

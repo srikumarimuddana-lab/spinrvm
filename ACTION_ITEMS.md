@@ -8871,12 +8871,13 @@ record of what was assumed vs. what was actually true</summary>
     original ranked-worst-offenders list before it.
   - **Fresh coverage sweep (2026-08-24, post-#4476-merge) — next tier
     identified.** Re-ran both apps' `--collectCoverageFrom='app/**/*.{ts,tsx}'`
-    coverage against `main` (122 rider-app suites / 1241 tests, 115
-    driver-app suites / 1243 tests, both fully green) and ranked by line
-    % (`_layout.tsx` files excluded — near-zero by nature, not a real
-    gap). Every screen from the two prior ranked lists has moved off the
-    worst-15 for its app, confirming this round's fixes stuck. Next
-    tier, worst first:
+    coverage against `main` at `77118c8` (122 rider-app suites / 1241
+    tests, 115 driver-app suites / 1243 tests, both fully green) and
+    ranked by line % (`_layout.tsx` files excluded — near-zero by
+    nature, not a real gap). Every screen from the two prior ranked
+    lists (the original worst-offenders pass and the 2026-08-24 tier
+    above) has moved off the worst-15 for its app, confirming this
+    round's fixes stuck. Next tier, worst first:
     - **rider-app:** `search-destination.tsx` (70.5%, new to any prior
       list), `ride-in-progress.tsx` (76.9%), `driver-arriving.tsx`
       (77.5%), `payment-confirm.tsx` (80.0%), `ride-options.tsx` (80.7%

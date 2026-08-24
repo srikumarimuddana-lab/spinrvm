@@ -14,6 +14,7 @@ try:
     )
     from ..features import send_push_notification
     from ..settings_loader import get_app_settings
+    from ..utils.background import spawn as _spawn
     from ..utils.money import cents_to_dollars, dollars_to_cents
     from ..utils.rate_limiter import default_limiter
     from ..utils.rider_emails import send_refund_email, send_wallet_topup_email
@@ -29,6 +30,7 @@ except ImportError:
     )
     from features import send_push_notification
     from settings_loader import get_app_settings
+    from utils.background import spawn as _spawn  # type: ignore
     from utils.money import cents_to_dollars, dollars_to_cents
     from utils.rate_limiter import default_limiter
     from utils.rider_emails import send_refund_email, send_wallet_topup_email
@@ -1650,9 +1652,7 @@ async def stripe_webhook(request: Request):
                 # One-off plans email from _activate_subscription instead.
                 # Fire-and-forget so we don't hold Stripe's webhook response open.
                 if _inv_amount and Decimal(str(_inv_amount)) > 0:
-                    import asyncio as _asyncio
-
-                    _asyncio.create_task(
+                    _spawn(
                         _drv_subs._send_subscription_invoice_email(
                             driver_id=row.get("driver_id"),
                             plan_name=row.get("plan_name") or "Spinr Pass",

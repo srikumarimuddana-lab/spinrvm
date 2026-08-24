@@ -44,11 +44,13 @@ try:
     from ...services import stripe_mapping_import_service as import_svc
     from ...settings_loader import get_app_settings
     from ...utils.audit_logger import log_admin_action
+    from ...utils.background import spawn as _spawn
 except ImportError:
     from dependencies import get_admin_user  # noqa: F401
     from services import stripe_mapping_import_service as import_svc  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
     from utils.audit_logger import log_admin_action  # noqa: F401
+    from utils.background import spawn as _spawn  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +179,7 @@ async def commit_stripe_import(
     if kind == import_svc.KIND_DRIVERS and driver_ids:
         # Never inline: up to MAX_ROWS Stripe retrieves + DB writes. The
         # status endpoint reports convergence per batch.
-        asyncio.create_task(import_svc.sync_kyc_after_commit(driver_ids, batch))
+        _spawn(import_svc.sync_kyc_after_commit(driver_ids, batch))
         kyc_sync = "started"
 
     # Audit trail carries counts + batch only — never CSV contents or PII.
@@ -304,7 +306,7 @@ async def update_driver_stripe_account(
         )
 
     # Converge KYC mirror columns from the new account, same as bulk commit.
-    asyncio.create_task(
+    _spawn(
         import_svc.sync_kyc_after_commit(
             [body.driver_id],
             batch,

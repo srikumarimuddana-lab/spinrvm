@@ -16,6 +16,14 @@ from utils import capacity_watchdog as cw
 
 WEBHOOK = "https://hooks.example.test/spinr"
 
+# Delivery recorder for the fleet-dedup tests (reset by _reset_watchdog_state).
+_DELIVERED: list = []
+
+
+async def _always_delivers(signal, body, webhook_url):
+    _DELIVERED.append({"signal": signal, "body": body})
+    return True
+
 
 @pytest.fixture(autouse=True)
 def _reset_watchdog_state():
@@ -23,6 +31,7 @@ def _reset_watchdog_state():
     cw._consecutive.clear()
     cw._last_alerted.clear()
     cw._last_counters.clear()
+    _DELIVERED.clear()
     yield
     cw._consecutive.clear()
     cw._last_alerted.clear()
@@ -158,14 +167,76 @@ async def test_first_tick_does_not_alert_on_accumulated_history(monkeypatch, ale
 
 
 @pytest.mark.asyncio
-async def test_deadline_rejections_alert_less_urgently_than_circuit_open(monkeypatch, alerts):
+async def test_deadline_rejection_trickle_below_threshold_never_alerts(monkeypatch, alerts):
+    """Regression for the 2026-08-24 alert storm: one skewed handset produces a
+    steady ~1 rejection/min with the breaker closed and the queue empty. That
+    is a log line and a metric, not a page — indefinitely."""
+    _patch_stats(monkeypatch, queue_depth=0, breaker_state="closed")
+    total = 0.0
+    _patch_metrics(monkeypatch, rejected={"deadline_exhausted": total})
+    await cw._tick(WEBHOOK)  # baseline
+
+    for _ in range(cw.SUSTAIN_TICKS + 10):
+        total += 1  # the storm's observed rate: "1 rejected since last tick"
+        _patch_metrics(monkeypatch, rejected={"deadline_exhausted": total})
+        await cw._tick(WEBHOOK)
+    assert alerts.signals == []
+
+
+@pytest.mark.asyncio
+async def test_deadline_rejections_alert_when_sustained_above_threshold(monkeypatch, alerts):
+    """Volume + persistence is the page-worthy shape, and the body must carry
+    the per-reason breakdown so the reader can tell skew from slow queries."""
+    _patch_stats(monkeypatch)
+    per_tick = (cw.DB_REJECTED_PER_MIN_THRESHOLD + 40) * (cw.INTERVAL_SECONDS / 60.0)
+    exhausted = timed_out = 0.0
+    _patch_metrics(monkeypatch, rejected={"deadline_exhausted": 0.0, "deadline_timeout": 0.0})
+    await cw._tick(WEBHOOK)  # baseline
+
+    for _ in range(cw.SUSTAIN_TICKS):
+        exhausted += per_tick * 0.75
+        timed_out += per_tick * 0.25
+        _patch_metrics(
+            monkeypatch,
+            rejected={"deadline_exhausted": exhausted, "deadline_timeout": timed_out},
+        )
+        await cw._tick(WEBHOOK)
+
+    assert alerts.signals == ["db_calls_rejected"]
+    body = alerts.posted[0]["text"]
+    assert "deadline_exhausted" in body and "deadline_timeout" in body
+    assert "clock skew" in body, "alert must steer the reader away from scaling reflexes"
+
+
+@pytest.mark.asyncio
+async def test_rejected_threshold_zero_restores_legacy_any_increase(monkeypatch, alerts):
+    """CAPACITY_DB_REJECTED_PER_MIN_THRESHOLD=0 is the documented rollback
+    switch to the pre-2026-08-24 immediate behaviour."""
+    monkeypatch.setattr(cw, "DB_REJECTED_PER_MIN_THRESHOLD", 0)
     _patch_stats(monkeypatch)
     _patch_metrics(monkeypatch, rejected={"deadline_timeout": 0})
     await cw._tick(WEBHOOK)
 
-    _patch_metrics(monkeypatch, rejected={"deadline_timeout": 5})
+    _patch_metrics(monkeypatch, rejected={"deadline_timeout": 1})
     await cw._tick(WEBHOOK)
     assert alerts.signals == ["db_calls_rejected"]
+
+
+@pytest.mark.asyncio
+async def test_circuit_open_rejections_do_not_feed_the_deadline_signal(monkeypatch, alerts):
+    """A circuit-open burst is signal 2a's page; it must not also trip 2b."""
+    _patch_stats(monkeypatch, breaker_state="open")
+    total = 0.0
+    _patch_metrics(monkeypatch, rejected={"circuit_open": total})
+    await cw._tick(WEBHOOK)  # baseline
+
+    for _ in range(cw.SUSTAIN_TICKS + 1):
+        total += cw.DB_REJECTED_PER_MIN_THRESHOLD + 100
+        _patch_metrics(monkeypatch, rejected={"circuit_open": total})
+        await cw._tick(WEBHOOK)
+
+    assert "db_calls_rejected" not in alerts.signals
+    assert alerts.signals[0] == "db_circuit_open"
 
 
 @pytest.mark.asyncio
@@ -620,3 +691,151 @@ def test_get_db_pool_stats_refreshes_the_queue_depth_gauge():
     get_db_pool_stats()
     gauges = snapshot()["gauges"]
     assert "spinr_db_thread_pool_queue_depth" in gauges
+
+
+# --------------------------------------------------------------------------
+# Fleet-wide dedup — one alert per fleet for fleet-scoped signals
+# --------------------------------------------------------------------------
+
+
+class _FakeRedis:
+    """Minimal SET NX EX / GET / DEL, shared across simulated replicas."""
+
+    def __init__(self, *, fail=False):
+        self.store = {}
+        self.fail = fail
+        self.set_nx_calls = 0
+
+    async def set_nx(self, key, value, ttl):
+        self.set_nx_calls += 1
+        if self.fail:
+            raise RuntimeError("Redis configured but unavailable")
+        if key in self.store:
+            return False
+        self.store[key] = value
+        return True
+
+    async def get(self, key):
+        if self.fail:
+            raise RuntimeError("Redis configured but unavailable")
+        return self.store.get(key)
+
+    async def delete(self, key):
+        if self.fail:
+            raise RuntimeError("Redis configured but unavailable")
+        self.store.pop(key, None)
+
+
+@pytest.fixture
+def fake_redis(monkeypatch):
+    """Patch the redis_client seam capacity_watchdog imports from."""
+    fake = _FakeRedis()
+    import utils.redis_client as rc
+
+    monkeypatch.setattr(rc, "redis_set_nx", fake.set_nx)
+    monkeypatch.setattr(rc, "redis_get", fake.get)
+    monkeypatch.setattr(rc, "redis_delete", fake.delete)
+    return fake
+
+
+@pytest.mark.asyncio
+async def test_fleet_scoped_signal_is_claimed_once_across_replicas(monkeypatch, fake_redis):
+    """The storm's multiplier: 8 machines x 2 uvicorn workers all observing the
+    same fleet-wide condition. Only the first one to claim may report it."""
+    monkeypatch.setattr(cw, "_send_webhook", _always_delivers)
+    monkeypatch.setattr(cw, "_alert_recipients", lambda: [])
+
+    claimed = []
+    for replica in range(16):
+        monkeypatch.setattr(cw, "_machine_id", lambda r=replica: f"machine-{r}")
+        cw._last_alerted.clear()  # a distinct process has its own cooldown state
+        await cw._post_alert("db_calls_rejected", "burst", WEBHOOK)
+        claimed.append(replica)
+
+    assert fake_redis.set_nx_calls == 16, "every replica must attempt the claim"
+    assert len(_DELIVERED) == 1, f"fleet dedup failed: {len(_DELIVERED)} alerts sent"
+
+
+@pytest.mark.asyncio
+async def test_per_replica_signals_are_not_deduped(monkeypatch, fake_redis):
+    """Pool saturation is a per-process condition. Deduping it would let one
+    elected replica report its healthy pool while others stay saturated and
+    silent — the exact failure the module docstring warns about."""
+    monkeypatch.setattr(cw, "_send_webhook", _always_delivers)
+    monkeypatch.setattr(cw, "_alert_recipients", lambda: [])
+
+    for replica in range(3):
+        monkeypatch.setattr(cw, "_machine_id", lambda r=replica: f"machine-{r}")
+        cw._last_alerted.clear()
+        await cw._post_alert("db_pool_saturation", "saturated", WEBHOOK)
+
+    assert len(_DELIVERED) == 3, "per-replica signal was wrongly deduped"
+    assert fake_redis.set_nx_calls == 0, "per-replica signal must not touch Redis"
+
+
+@pytest.mark.asyncio
+async def test_dedup_fails_open_when_redis_is_down(monkeypatch):
+    """A watchdog that cannot alert is worse than no watchdog. If the deduper
+    is unavailable the alert still goes out on per-process cooldown alone."""
+    fake = _FakeRedis(fail=True)
+    import utils.redis_client as rc
+
+    monkeypatch.setattr(rc, "redis_set_nx", fake.set_nx)
+    monkeypatch.setattr(cw, "_send_webhook", _always_delivers)
+    monkeypatch.setattr(cw, "_alert_recipients", lambda: [])
+
+    await cw._post_alert("db_calls_rejected", "burst", WEBHOOK)
+    assert len(_DELIVERED) == 1, "a Redis outage silenced a capacity alert"
+
+
+@pytest.mark.asyncio
+async def test_claim_is_released_when_the_alert_reaches_no_channel(monkeypatch, fake_redis):
+    """A claim burned on a failed delivery would silence the fleet for the whole
+    cooldown window. Release it so another replica retries next tick."""
+
+    async def _never_delivers(signal, body, webhook_url):
+        return False
+
+    monkeypatch.setattr(cw, "_send_webhook", _never_delivers)
+    monkeypatch.setattr(cw, "_alert_recipients", lambda: [])
+
+    await cw._post_alert("db_calls_rejected", "burst", WEBHOOK)
+    assert fake_redis.store == {}, "failed delivery kept the fleet claim"
+
+    # A second replica can now take it and succeed.
+    monkeypatch.setattr(cw, "_send_webhook", _always_delivers)
+    cw._last_alerted.clear()
+    await cw._post_alert("db_calls_rejected", "burst", WEBHOOK)
+    assert len(_DELIVERED) == 1
+
+
+@pytest.mark.asyncio
+async def test_losing_the_claim_stamps_the_local_cooldown(monkeypatch, fake_redis):
+    """A replica that loses the claim must stop re-attempting every tick, or it
+    hammers Redis once per minute for the whole window."""
+    monkeypatch.setattr(cw, "_send_webhook", _always_delivers)
+    monkeypatch.setattr(cw, "_alert_recipients", lambda: [])
+
+    await cw._post_alert("db_calls_rejected", "burst", WEBHOOK)  # replica A claims
+    cw._last_alerted.clear()
+    await cw._post_alert("db_calls_rejected", "burst", WEBHOOK)  # replica B loses
+    calls_after_loss = fake_redis.set_nx_calls
+
+    await cw._post_alert("db_calls_rejected", "burst", WEBHOOK)  # B, next tick
+    assert fake_redis.set_nx_calls == calls_after_loss, "lost claim was re-attempted"
+
+
+@pytest.mark.asyncio
+async def test_dedup_kill_switch_restores_per_replica_alerting(monkeypatch, fake_redis):
+    """CAPACITY_FLEET_DEDUP=off is the documented rollback."""
+    monkeypatch.setattr(cw, "FLEET_DEDUP_ENABLED", False)
+    monkeypatch.setattr(cw, "_send_webhook", _always_delivers)
+    monkeypatch.setattr(cw, "_alert_recipients", lambda: [])
+
+    for replica in range(3):
+        monkeypatch.setattr(cw, "_machine_id", lambda r=replica: f"machine-{r}")
+        cw._last_alerted.clear()
+        await cw._post_alert("db_calls_rejected", "burst", WEBHOOK)
+
+    assert len(_DELIVERED) == 3
+    assert fake_redis.set_nx_calls == 0

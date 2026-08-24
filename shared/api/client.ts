@@ -20,12 +20,29 @@ if (!API_URL || API_URL.includes('localhost') || API_URL.includes('10.0.2.2')) {
 // Request timeout in milliseconds
 const REQUEST_TIMEOUT = 15000;
 
-// Propagate the client's timeout to the backend as an absolute epoch-ms
-// deadline. The backend's DeadlineMiddleware reads this and uses it to
-// skip DB retries once the client has already given up — frees backend
-// thread-pool workers for requests that aren't already doomed.
+// Propagate the client's timeout to the backend so it can skip DB retries once
+// we've already given up — that frees backend thread-pool workers for requests
+// that aren't already doomed.
+//
+// Two headers are sent during the migration window:
+//
+//   X-Timeout-Ms  (preferred) — a RELATIVE duration. The backend adds it to its
+//     own monotonic clock, so this device's wall clock never enters the
+//     calculation and clock skew cannot affect the budget.
+//   X-Deadline-Ms (legacy) — an ABSOLUTE epoch from Date.now(). The backend
+//     derives the budget by subtracting its own clock from ours, so a device
+//     whose clock runs behind sends an already-expired deadline and every DB
+//     call in the request is rejected with a 503. That misconfiguration on a
+//     single handset was the cause of the 2026-08-24 alert storm.
+//
+// Both are sent so a backend that predates X-Timeout-Ms support keeps working;
+// the backend prefers X-Timeout-Ms when present and clamps the legacy value.
+// Drop X-Deadline-Ms once no deployed backend needs it.
 function deadlineHeader(timeoutMs: number = REQUEST_TIMEOUT): Record<string, string> {
-  return { 'X-Deadline-Ms': String(Date.now() + timeoutMs) };
+  return {
+    'X-Timeout-Ms': String(timeoutMs),
+    'X-Deadline-Ms': String(Date.now() + timeoutMs),
+  };
 }
 
 // Generate a UUID v4 that works in React Native (no crypto.randomUUID on RN).

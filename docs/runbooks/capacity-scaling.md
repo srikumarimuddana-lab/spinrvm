@@ -235,9 +235,24 @@ on the primary today. Not provisioned yet.
 ## 6. Alert thresholds
 
 The `capacity_watchdog` loop (`backend/utils/capacity_watchdog.py`, 60 s tick)
-alerts when any signal trips. Alerts are per-machine by design — saturation is a
-per-process condition — and each signal has a 30-minute cooldown so a sustained
+alerts when any signal trips. Each signal has a 30-minute cooldown so a sustained
 burst does not spam the channel.
+
+**Alert scope differs per signal**, because the underlying conditions differ:
+
+- `db_pool_saturation` and `db_circuit_open` are **per-machine by design** —
+  saturation is a per-process condition, and a leader lock would mean one
+  elected replica reporting its own healthy pool while others stay saturated
+  and silent.
+- `db_calls_rejected` and `rate_limit_pressure` count *user requests*, so every
+  replica sees its own slice of one fleet-wide condition. These claim a shared
+  Redis key (`spinr:capacity_alert:<signal>`) so the **fleet reports once** per
+  cooldown window. Without it, `UVICORN_WORKERS=2` across an 8-machine pool
+  produced up to 16 near-identical messages — two per `FLY_MACHINE_ID`, since
+  workers share a machine id and were not even distinguishable.
+
+The Redis claim **fails open**: if Redis is unavailable the alert is sent anyway
+on per-process cooldown alone. Set `CAPACITY_FLEET_DEDUP=off` to disable dedup.
 
 ### Turning alerts on (required — they are silent by default)
 
@@ -272,7 +287,8 @@ Notes that matter:
 | Signal | Metric | Threshold | Means |
 |---|---|---|---|
 | DB pool saturation | `spinr_db_thread_pool_queue_depth` | > 50 for 3 consecutive ticks | Requests are queueing for DB threads — layer 3 or 4 is the bottleneck |
-| DB call rejection | `spinr_db_calls_rejected_total` delta | any increase; immediate when `reason=circuit_open` | Requests are being refused outright — circuit open means the DB is already failing |
+| DB circuit open | `spinr_db_calls_rejected_total{reason=circuit_open}` delta | any increase, immediate | The breaker only opens after real failures — the DB is already failing |
+| DB deadline rejection | `spinr_db_calls_rejected_total` delta, excluding `circuit_open` | > 30/min (`CAPACITY_DB_REJECTED_PER_MIN_THRESHOLD`) for 3 consecutive ticks | Client time budgets are expiring. Usually **not** a DB problem — see §7 |
 | Rate-limit pressure | `spinr_rate_limit_violation_total` delta | > 120/min for 3 ticks | Users are being 429'd in volume — either a real burst or a limit set too low |
 
 The queue-depth threshold of 50 comes from the recorded breaking point in
@@ -306,6 +322,7 @@ curl -H "Authorization: Bearer $METRICS_AUTH_TOKEN" https://<machine>/metrics \
 | All 8 machines awake, connections near `soft_limit`, DB queue normal | Layer 2 (Fly) | `flyctl scale count 12 --region yyz` — live, takes effect immediately |
 | DB queue depth high, `spinr_db_circuit_state` closed, all machines awake | Layer 4 (Supabase) | Upgrade the tier (§5). Consider `DB_THREAD_POOL_SIZE=32` after |
 | `spinr_db_calls_rejected_total{reason=circuit_open}` climbing | Layer 4, already failing | Upgrade tier **now**; check Supabase status page for an incident |
+| `spinr_db_calls_rejected_total{reason=deadline_*}` climbing, breaker `closed`, queue depth 0 | **Not capacity** — client time budgets | Do **not** scale. See "Deadline rejections" below |
 | `spinr_rate_limit_violation_total` high, DB and connections healthy | Layer 1 | Identify the path from the metric label. A legitimately-too-low limit is a code change; do **not** reach for `RATE_LIMIT_USER_KEYING=off` — that makes CGNAT collisions worse, not better |
 | Queue depth high on **one** machine only | Not capacity | Likely a stuck loop or a slow query on that machine. Check its logs; `flyctl machine restart <id>` |
 
@@ -315,6 +332,39 @@ e.g. every request collapsing into one bucket. It is not a capacity lever.
 **4. After the incident:** record what bound first and at what load in
 `loadtest/README.md`'s breaking-point table. That table is the only empirical
 capacity data this project has.
+
+### Deadline rejections — the alert that looks like a DB problem and isn't
+
+A `db_calls_rejected` alert naming `deadline_exhausted` or `deadline_timeout`,
+with the breaker `closed` and queue depth 0, is **not** a capacity event.
+Scaling the tier will not change it.
+
+These count client *time budgets* running out. `run_sync()` refuses to start (or
+to keep waiting on) a DB call once the caller's budget is spent — see
+`backend/repositories/_base.py` and `backend/utils/deadline.py`.
+
+Split the reason first:
+
+```bash
+flyctl ssh console -a spinr-backend-yyz -C \
+  "curl -s -H 'Authorization: Bearer $METRICS_AUTH_TOKEN' localhost:8000/metrics \
+   | grep -E 'spinr_db_calls_rejected|spinr_deadline_header_clamped'"
+```
+
+| Dominant reason | Means | Action |
+|---|---|---|
+| `deadline_exhausted` with `spinr_deadline_header_clamped_total{direction=up}` climbing | Device clock skew. Handsets are sending budgets that are already expired on arrival | Nothing to do — the clamp is absorbing it. A large clamp rate means many users are on old app builds still sending `X-Deadline-Ms` |
+| `deadline_exhausted` without clamping | Budget spent *inside* the request before the DB call | Find the slow pre-DB step. `routes/rides/estimates.py` waits up to 3.5 s on Google Directions by design (see `CLAUDE.md` → Performance SLAs) |
+| `deadline_timeout` | A DB call outlived the remaining budget | A genuinely slow query. Check Supabase slow-query logs; this is the one reason that *can* indicate real DB trouble |
+
+Grep the backend logs for the structured context — every rejection now logs
+`reason`, `stage`, `retry_policy`, and how far past the deadline it was:
+
+```bash
+flyctl logs -a spinr-backend-yyz | grep -E 'Rejected before submission|Rejected mid-retry|Executor wait exceeded'
+```
+
+Background: `docs/change-log/2026-08-24-db-deadline-rejection-alert-storm.md`.
 
 ---
 

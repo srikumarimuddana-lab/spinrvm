@@ -7263,18 +7263,35 @@ record of what was assumed vs. what was actually true</summary>
 
 ### B37. Frontend coverage gates measure only a fraction of each app, and admin-dashboard's threshold never actually runs in CI
 
-- [ ] **Status:** all three sub-items FIXED 2026-08-22 (admin-dashboard
-  same day as filing; rider-app/driver-app's directory-by-directory
-  widening completed the same day across several follow-up passes —
-  every top-level source directory in every app is now measured). Found
-  2026-08-22 while auditing test/validation coverage across all Spinr
-  surfaces at the user's request — verified by actually running each
-  app's coverage tool locally (not a spot check of config file presence),
-  reading the real numbers, and cross-checking against what CI actually
-  invokes. Left open (checkbox unchecked) because the fixes wire up and
-  widen the gates to a low, honest baseline — they don't reach the user's
-  stated 100% target, which needs ongoing test-authoring/ratchet work
-  (see Recommended fix step 4) that's out of scope for config changes
+- [x] **Status: CLOSED 2026-08-24.** All three sub-items FIXED 2026-08-22
+  (admin-dashboard same day as filing; rider-app/driver-app's
+  directory-by-directory widening completed the same day across several
+  follow-up passes — every top-level source directory in every app is now
+  measured). The one piece left open after that pass — a milestone ratchet
+  plan raising each threshold as real coverage improves, toward the
+  user's stated 100% target — is now done too: see
+  `docs/testing/coverage-ratchet-plan.md` for the full plan, mechanism,
+  and honesty note on why literal 100% is aspirational. First ratchet
+  step applied same day: re-measured all three frontend surfaces fresh
+  (`npx jest --coverage` / `npx vitest run --coverage`) and found
+  rider-app's and driver-app's gates had drifted 30-50 points below
+  actual (extensive B37 screen-test-authoring work had raised real
+  coverage without the numeric threshold ever being re-tightened to
+  match) — tightened both to ~2-3pts below today's measured ceiling:
+  rider-app `lines:20→73, functions:16→69, branches:15→63`; driver-app
+  `lines:33→65, functions:26→60, statements:32→63`. admin-dashboard's
+  gate hadn't drifted (19.11%/13.05%/11.71%/20.75% measured vs.
+  19/11/19/18 threshold, within ~1-2pts already) so left unchanged this
+  round. All three surfaces verified green against the new thresholds
+  (rider-app 122/122 suites, driver-app 115/115 suites, admin-dashboard
+  36/36 files). Found 2026-08-22 while auditing test/validation coverage
+  across all Spinr surfaces at the user's request — verified by actually
+  running each app's coverage tool locally (not a spot check of config
+  file presence), reading the real numbers, and cross-checking against
+  what CI actually invokes. Previously left open (checkbox unchecked)
+  because the fixes wire up and widen the gates to a low, honest
+  baseline — they didn't yet reach the user's stated 100% target, which
+  needs ongoing test-authoring/ratchet work (see Recommended fix step 4)
   alone.
 - **Fix applied (sub-item 1, admin-dashboard):** `.github/workflows/ci.yml`'s
   admin-dashboard test step now runs `npm run test:coverage` (was `npm
@@ -8938,6 +8955,60 @@ record of what was assumed vs. what was actually true</summary>
     since these particular mocks take no meaningful arguments anyway. 43
     tests; full rider-app suite still green (122 suites / 1264 tests),
     `yarn tsc --noEmit` clean.
+  - **rider-app `app/payment-confirm.tsx`: 80.0% → 99.2% lines.** Already
+    had `paymentConfirmScreen.test.tsx` (14 tests covering the booking
+    flow, SCA, 409/402 errors) and `payment-confirm-error-state.test.tsx`
+    (a source-string contract test for the cards-load-error distinction,
+    contributing no runtime coverage) — extended the former in place
+    (+17 tests): selecting a different saved card, selecting wallet,
+    "Add Payment Method" navigation, the corporate account picker (2+
+    accounts), the work-mode-default effect actually applying
+    (`workModeEnabled: true` + no rider choice yet), the fare-breakdown
+    expand/collapse plus its promo-discount line, the scheduled-ride
+    badge, the `promo_error` toast, the SCA branch where
+    `confirmPayment` succeeds but the resulting `paymentIntent.status`
+    is neither `requires_capture` nor `succeeded`, all three remaining
+    409-active-ride status branches (searching/driver_assigned/
+    driver_accepted, in_progress, completed — only `driver_arrived` was
+    tested before), the `isEngineError` → `recordNonFatal`
+    client-side-crash-reporting branch, and dismissing the Unpaid Ride
+    confirm sheet via Cancel.
+    **Real money-routing bug found and pinned as documented actual
+    behavior, NOT fixed** (out of scope for a coverage-only pass on a
+    payments-critical file — flagging here per CLAUDE.md's
+    surgical-changes rule and escalating since this is a live billing
+    correctness issue, not a cosmetic one): a rider who is **not** in
+    work mode, has exactly one corporate account, and manually taps the
+    "Bill to Business" toggle ends up with `useCorporate = true` but
+    `selectedCorporateId` still `null` — the toggle's `onValueChange`
+    only calls `setUseCorporate(v)`, it never sets
+    `selectedCorporateId`. That field is only ever auto-filled by the
+    work-mode-default effect (`shouldApplyWorkModeDefault`), which
+    requires `workModeEnabled === true`. The account-picker UI that
+    would let the rider select manually only renders when
+    `corporateAccounts.length > 1`, so a single-account, non-work-mode
+    rider has **no way to complete the selection at all** — the toggle
+    visually shows ON, the subtitle keeps reading "Use a corporate
+    account" instead of the company name, and `handleBookRide`'s
+    `corpId = useCorporate && selectedCorporateId ? selectedCorporateId : null`
+    silently evaluates to `null`. The ride books to the rider's personal
+    card while they believe they billed their employer — a wrong-charge
+    bug, the same class as the incident this file's own
+    `riderChosePaymentRef` effect comment describes, just via a
+    different code path (manual toggle rather than a stale
+    profile-fetch race). Likely fix shape (not applied here): render the
+    picker (or an equivalent single-account confirmation state)
+    whenever `corporateAccounts.length >= 1` while `useCorporate` is
+    true, not just `> 1`, or have the toggle's `onValueChange` itself
+    seed `selectedCorporateId` from `firstCorporateAccountId` when
+    there's exactly one account. Test pins the actual (buggy) behavior
+    with a full explanatory comment; worth a dedicated follow-up fix +
+    its own Change Impact Log entry given this touches money/corporate
+    billing per CLAUDE.md's pre-merge release gates. 31 tests; full
+    rider-app suite still green (122 suites / 1280 tests), `yarn tsc
+    --noEmit` clean (needed the same `(...a: any[]) => mockX(...a)`
+    spread `tsc` fix as this session's other recurring instances of
+    that footgun).
   - **rider-app `app/work-profile.tsx`: 81.5% → 100% lines.** Already had
     `workProfileScreen.test.tsx` (13 tests: loading/empty states, the
     balance card's three shapes, Request More Funds gating, the
@@ -8972,10 +9043,14 @@ record of what was assumed vs. what was actually true</summary>
   `store/`+`hooks/`+`utils/`+`app/`+`components/`+`lib/`+`services/`;
   driver-app: same plus `api/`; admin-dashboard: all of `src/lib/`,
   `src/store/`, `src/components/`, `src/app/**`), passing at the current
-  thresholds. **Still open, genuinely out of scope for directory-widening
-  work:** a milestone ratchet plan (here or in a dedicated doc) raising
-  each threshold as real test coverage improves, toward the user's stated
-  100% target — that's ongoing test-authoring work, not a config change.
+  thresholds. ✅ **Closed 2026-08-24:** milestone ratchet plan written at
+  `docs/testing/coverage-ratchet-plan.md`, and its first step applied —
+  rider-app/driver-app thresholds re-tightened to ~2-3pts below freshly
+  re-measured actual coverage (both had drifted 30-50pts stale since
+  2026-08-22); admin-dashboard's gate hadn't drifted and was left as-is.
+  See the Status note above for the exact before/after numbers. Further
+  raises are ongoing test-authoring work per the plan doc's cadence, not
+  a one-time config change.
 
 ### B38. admin-dashboard's visual-regression CI job has zero committed baselines — it has been a documented no-op since it was added
 
@@ -9156,6 +9231,42 @@ record of what was assumed vs. what was actually true</summary>
   rider-app/driver-app, every other admin-dashboard corporate/billing
   form — subscriptions, KYB, wallet adjustments, etc.); no
   ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-24 update — step 5 done, rider-app's first login/signup-
+  adjacent form migrated:** migrated `rider-app/app/profile-setup.tsx`'s
+  `handleSubmit` field validation (first/last name, email, gender — the
+  identity fields that feed KYC/compliance checks downstream, exactly the
+  category this item's own ordering names as next-priority after the
+  admin-dashboard corporate/billing forms were exhausted for step 4). New
+  colocated `rider-app/utils/profileSetupSchema.ts` (`profileSetupSchema`
+  + `getProfileSetupError` + `isProfileSetupValid`) reproduces the
+  screen's five sequential inline checks — empty-firstName,
+  empty-lastName, empty-email, the `/^[^\s@]+@[^\s@]+\.[^\s@]+$/` email
+  regex, empty-gender — in the same priority order (first failing check
+  wins) and with the same toast title/message pairs, byte-for-byte; the
+  TOS/isEditing portion of the screen's old `isFormValid` boolean stays
+  in the screen itself since it isn't part of this form's field
+  validation. New
+  `rider-app/utils/__tests__/profileSetupSchema.test.ts` (18 accept/reject
+  cases, including two cases pinning that a whitespace-only email hits
+  "Email Required" not "Invalid Email", matching the original untrimmed
+  regex test). Verification: 18/18 new tests pass; full rider-app suite
+  1259/1259 (123 suites) pass, 0 regressions (two suites flaked with
+  `Exceeded timeout` under full-suite parallel load in one run — confirmed
+  pre-existing and unrelated to this change: both pass at 68/68 in
+  isolation against `origin/main`'s baseline pre-change and against this
+  branch, and a full clean rerun passed 1259/1259 with no flakes);
+  `npx tsc --noEmit` clean; `npx eslint` clean on touched files; **real
+  production build** (`npm run build:web` → `expo export --platform web`)
+  completed successfully; blast-radius grep confirmed
+  `app/profile-setup.tsx` is the only reader of the extracted checks (the
+  screen name/email/gender regex appears nowhere else in `rider-app/app`
+  or `rider-app/utils`). Full Change Impact Log:
+  `docs/change-log/2026-08-24-b39-profile-setup-zod-step5.md`. **Still
+  open:** `rider-app/app/login.tsx`'s inline validation, driver-app's
+  signup/profile-setup fields, and every other admin-dashboard
+  corporate/billing form (subscriptions, KYB, wallet adjustments, etc.)
+  remain unmigrated; no ADR/migration-order doc written yet. Checkbox
+  stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

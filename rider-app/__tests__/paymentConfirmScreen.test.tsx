@@ -57,11 +57,12 @@ jest.mock('@shared/theme/ThemeContext', () => ({ useTheme: () => ({ colors: COLO
 jest.mock('@shared/utils/responsive', () => ({ useResponsive: () => ({ sf: (n: number) => n }) }));
 
 const mockApiGet = jest.fn();
+const mockIsEngineError = jest.fn(() => false);
 jest.mock('@shared/api/client', () => ({
   __esModule: true,
   default: { get: (...a: any[]) => mockApiGet(...a) },
   getApiErrorMessage: (_err: any, fallback: string) => fallback,
-  isEngineError: () => false,
+  isEngineError: (..._a: any[]) => mockIsEngineError(),
 }));
 
 const mockConfirmPayment = jest.fn();
@@ -167,6 +168,7 @@ beforeEach(() => {
   mockWalletState = { wallet: { balance: '10.00' }, fetchWallet: mockFetchWallet };
   mockWorkProfileState = { profiles: [], workModeEnabled: false, fetchProfiles: mockFetchWorkProfiles, activeCompanyId: null };
   mockApiGet.mockResolvedValue({ data: [CARD_VISA] });
+  mockIsEngineError.mockReset().mockReturnValue(false);
   mockCreateRide.mockResolvedValue({ id: 'ride-1', status: 'searching' });
   mockConfirmPayment.mockResolvedValue({ paymentIntent: { status: 'succeeded' } });
   mockScheduleReminder.mockResolvedValue(undefined);
@@ -303,6 +305,187 @@ describe('PaymentConfirmScreen', () => {
     };
     const r = await renderScreen();
     expect(allText(r)).toContain('Bill to Business');
+  });
+
+  it('selects a different saved card', async () => {
+    const CARD_MC = { id: 'card-2', brand: 'mastercard', last4: '9999', exp_month: 1, exp_year: 2030, is_default: false };
+    mockApiGet.mockResolvedValue({ data: [CARD_VISA, CARD_MC] });
+    const r = await renderScreen();
+    const mcRow = r.root.findByProps({ accessibilityLabel: 'Mastercard card ending in 9999, expires 1/30' });
+    act(() => { mcRow.props.onPress(); });
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Book Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockCreateRide).toHaveBeenCalledWith('card', null, 'card-2');
+  });
+
+  it('selects wallet as the payment method', async () => {
+    const r = await renderScreen();
+    const walletRow = r.root.findByProps({ accessibilityLabel: 'Spinr Wallet' });
+    act(() => { walletRow.props.onPress(); });
+    expect(allText(r)).toContain('["Balance: $","10.00"]');
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Book Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockCreateRide).toHaveBeenCalledWith('wallet', null, undefined);
+  });
+
+  it('navigates to /manage-cards from "Add Payment Method"', async () => {
+    const r = await renderScreen();
+    const addBtn = r.root.findByProps({ accessibilityLabel: 'Add payment method' });
+    act(() => { addBtn.props.onPress(); });
+    expect(mockPush).toHaveBeenCalledWith('/manage-cards');
+  });
+
+  it('BUG (found, not fixed — see ACTION_ITEMS.md): manually toggling "Bill to Business" on with a single corporate account never sets selectedCorporateId, so the ride silently books to the personal card', async () => {
+    // The toggle's onValueChange only calls setUseCorporate(v) — it never
+    // sets selectedCorporateId. That only gets auto-filled by the
+    // work-mode-default effect (shouldApplyWorkModeDefault), which requires
+    // workModeEnabled === true. A rider who is NOT in work mode but has one
+    // corporate account, and manually flips the toggle on, ends up with
+    // useCorporate=true but selectedCorporateId=null — corpId then
+    // evaluates to null in handleBookRide, and the subtitle keeps showing
+    // "Use a corporate account" instead of the company name (the toggle
+    // *looks* on but nothing is actually selected). The rider is billed
+    // personally while believing they billed their employer. The picker
+    // that would let them pick manually only renders when there are 2+
+    // accounts, so a single-account rider has no way to complete the
+    // selection at all outside of work mode.
+    mockWorkProfileState = {
+      profiles: [{ company: { id: 'corp-1', name: 'Acme Inc' } }],
+      workModeEnabled: false, fetchProfiles: mockFetchWorkProfiles, activeCompanyId: null,
+    };
+    const r = await renderScreen();
+    const toggle = r.root.findAllByProps({ accessibilityLabel: 'Bill to business' }).find((n) => typeof n.props.onPress === 'function')!;
+    act(() => { toggle.props.onPress(); });
+    expect(allText(r)).toContain('Use a corporate account'); // never switches to "Acme Inc"
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Book Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockCreateRide).toHaveBeenCalledWith('card', null, 'card-1'); // bills personally, not corp-1
+  });
+
+  it('shows a picker with 2+ corporate accounts and selects one', async () => {
+    mockWorkProfileState = {
+      profiles: [{ company: { id: 'corp-1', name: 'Acme Inc' } }, { company: { id: 'corp-2', name: 'Beta LLC' } }],
+      workModeEnabled: false, fetchProfiles: mockFetchWorkProfiles, activeCompanyId: null,
+    };
+    const r = await renderScreen();
+    const toggle = r.root.findAllByProps({ accessibilityLabel: 'Bill to business' }).find((n) => typeof n.props.onPress === 'function')!;
+    act(() => { toggle.props.onPress(); });
+    const betaOption = r.root.findByProps({ accessibilityLabel: 'Beta LLC' });
+    act(() => { betaOption.props.onPress(); });
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Book Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockCreateRide).toHaveBeenCalledWith('card', 'corp-2', 'card-1');
+  });
+
+  it('defaults corporate billing on for a work-mode rider who has not chosen a payment method yet', async () => {
+    mockWorkProfileState = {
+      profiles: [{ company: { id: 'corp-1', name: 'Acme Inc' } }],
+      workModeEnabled: true, fetchProfiles: mockFetchWorkProfiles, activeCompanyId: 'corp-1',
+    };
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Acme Inc');
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Book Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockCreateRide).toHaveBeenCalledWith('card', 'corp-1', 'card-1');
+  });
+
+  it('expands the fare breakdown, showing line items and the promo discount line', async () => {
+    mockRideState.appliedPromo = { code: 'SAVE5', discount_amount: 5 };
+    const r = await renderScreen();
+    const fareHeader = findButtonByText(r, 'View fare details');
+    act(() => { fareHeader.props.onPress(); });
+    expect(allText(r)).toContain('Hide details');
+    expect(allText(r)).toContain('Base fare');
+    expect(allText(r)).toContain('["Promo (","SAVE5",")"]');
+  });
+
+  it('collapses the fare breakdown on a second tap', async () => {
+    const r = await renderScreen();
+    const fareHeader = findButtonByText(r, 'View fare details');
+    act(() => { fareHeader.props.onPress(); });
+    act(() => { findButtonByText(r, 'Hide details').props.onPress(); });
+    expect(allText(r)).toContain('View fare details');
+  });
+
+  it('shows the scheduled-ride badge with a formatted date/time', async () => {
+    mockRideState.scheduledTime = new Date('2026-09-01T15:00:00Z');
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Scheduled:');
+  });
+
+  it('toasts "Promo not applied" when the booked ride carries a promo_error', async () => {
+    mockCreateRide.mockResolvedValue({ id: 'ride-1', status: 'searching', promo_error: 'Promo code expired' });
+    const r = await renderScreen();
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Book Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockShowToast).toHaveBeenCalledWith('Promo not applied', 'Promo code expired', 'warning');
+  });
+
+  it('toasts when SCA confirms but the payment intent status is neither requires_capture nor succeeded', async () => {
+    mockCreateRide.mockResolvedValueOnce({ requires_action: true, payment_authorization: { client_secret: 'secret_1', payment_intent_id: 'pi_1' } });
+    mockConfirmPayment.mockResolvedValue({ paymentIntent: { status: 'requires_payment_method' } });
+    const r = await renderScreen();
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Book Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockShowToast).toHaveBeenCalledWith('Authentication needed', 'Card authentication was not completed. Please try again.', 'danger');
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it('re-routes to /driver-arriving on a 409 for a searching/driver_assigned/driver_accepted active ride', async () => {
+    const err: any = new Error('already active');
+    err.response = { status: 409 };
+    mockCreateRide.mockRejectedValue(err);
+    mockFetchActiveRide.mockResolvedValue({ active: true, ride: { id: 'ride-active', status: 'searching' } });
+    const r = await renderScreen();
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Book Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockReplace).toHaveBeenCalledWith({ pathname: '/driver-arriving', params: { rideId: 'ride-active' } });
+  });
+
+  it('re-routes to /ride-in-progress on a 409 for an in-progress active ride', async () => {
+    const err: any = new Error('already active');
+    err.response = { status: 409 };
+    mockCreateRide.mockRejectedValue(err);
+    mockFetchActiveRide.mockResolvedValue({ active: true, ride: { id: 'ride-active', status: 'in_progress' } });
+    const r = await renderScreen();
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Book Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockReplace).toHaveBeenCalledWith({ pathname: '/ride-in-progress', params: { rideId: 'ride-active' } });
+  });
+
+  it('re-routes to /ride-completed on a 409 for a completed active ride', async () => {
+    const err: any = new Error('already active');
+    err.response = { status: 409 };
+    mockCreateRide.mockRejectedValue(err);
+    mockFetchActiveRide.mockResolvedValue({ active: true, ride: { id: 'ride-active', status: 'completed' } });
+    const r = await renderScreen();
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Book Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockReplace).toHaveBeenCalledWith({ pathname: '/ride-completed', params: { rideId: 'ride-active' } });
+  });
+
+  it('reports a client-side crash to crashlytics when isEngineError classifies the booking failure', async () => {
+    mockIsEngineError.mockReturnValueOnce(true);
+    mockCreateRide.mockRejectedValue(new TypeError('confirmPayment is not a function'));
+    const r = await renderScreen();
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Book Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockRecordNonFatal).toHaveBeenCalledWith(
+      expect.any(TypeError), { screen: 'payment-confirm', action: 'handleBookRide' },
+    );
+  });
+
+  it('dismisses the Unpaid Ride confirm sheet via Cancel without navigating', async () => {
+    const err: any = new Error('unpaid');
+    err.response = { status: 402, data: { error: { details: { unpaid_ride_id: 'ride-old' } } } };
+    mockCreateRide.mockRejectedValue(err);
+    const r = await renderScreen();
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Book Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    const cancelBtn = r.root.findByProps({ accessibilityLabel: 'confirm-Cancel' });
+    act(() => { cancelBtn.props.onPress(); });
+    expect(allText(r)).not.toContain('Unpaid Ride');
+    expect(mockPush).not.toHaveBeenCalled();
   });
 
   it('navigates back on the header back button', async () => {

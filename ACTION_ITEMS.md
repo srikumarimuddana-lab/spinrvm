@@ -8938,6 +8938,60 @@ record of what was assumed vs. what was actually true</summary>
     since these particular mocks take no meaningful arguments anyway. 43
     tests; full rider-app suite still green (122 suites / 1264 tests),
     `yarn tsc --noEmit` clean.
+  - **rider-app `app/payment-confirm.tsx`: 80.0% → 99.2% lines.** Already
+    had `paymentConfirmScreen.test.tsx` (14 tests covering the booking
+    flow, SCA, 409/402 errors) and `payment-confirm-error-state.test.tsx`
+    (a source-string contract test for the cards-load-error distinction,
+    contributing no runtime coverage) — extended the former in place
+    (+17 tests): selecting a different saved card, selecting wallet,
+    "Add Payment Method" navigation, the corporate account picker (2+
+    accounts), the work-mode-default effect actually applying
+    (`workModeEnabled: true` + no rider choice yet), the fare-breakdown
+    expand/collapse plus its promo-discount line, the scheduled-ride
+    badge, the `promo_error` toast, the SCA branch where
+    `confirmPayment` succeeds but the resulting `paymentIntent.status`
+    is neither `requires_capture` nor `succeeded`, all three remaining
+    409-active-ride status branches (searching/driver_assigned/
+    driver_accepted, in_progress, completed — only `driver_arrived` was
+    tested before), the `isEngineError` → `recordNonFatal`
+    client-side-crash-reporting branch, and dismissing the Unpaid Ride
+    confirm sheet via Cancel.
+    **Real money-routing bug found and pinned as documented actual
+    behavior, NOT fixed** (out of scope for a coverage-only pass on a
+    payments-critical file — flagging here per CLAUDE.md's
+    surgical-changes rule and escalating since this is a live billing
+    correctness issue, not a cosmetic one): a rider who is **not** in
+    work mode, has exactly one corporate account, and manually taps the
+    "Bill to Business" toggle ends up with `useCorporate = true` but
+    `selectedCorporateId` still `null` — the toggle's `onValueChange`
+    only calls `setUseCorporate(v)`, it never sets
+    `selectedCorporateId`. That field is only ever auto-filled by the
+    work-mode-default effect (`shouldApplyWorkModeDefault`), which
+    requires `workModeEnabled === true`. The account-picker UI that
+    would let the rider select manually only renders when
+    `corporateAccounts.length > 1`, so a single-account, non-work-mode
+    rider has **no way to complete the selection at all** — the toggle
+    visually shows ON, the subtitle keeps reading "Use a corporate
+    account" instead of the company name, and `handleBookRide`'s
+    `corpId = useCorporate && selectedCorporateId ? selectedCorporateId : null`
+    silently evaluates to `null`. The ride books to the rider's personal
+    card while they believe they billed their employer — a wrong-charge
+    bug, the same class as the incident this file's own
+    `riderChosePaymentRef` effect comment describes, just via a
+    different code path (manual toggle rather than a stale
+    profile-fetch race). Likely fix shape (not applied here): render the
+    picker (or an equivalent single-account confirmation state)
+    whenever `corporateAccounts.length >= 1` while `useCorporate` is
+    true, not just `> 1`, or have the toggle's `onValueChange` itself
+    seed `selectedCorporateId` from `firstCorporateAccountId` when
+    there's exactly one account. Test pins the actual (buggy) behavior
+    with a full explanatory comment; worth a dedicated follow-up fix +
+    its own Change Impact Log entry given this touches money/corporate
+    billing per CLAUDE.md's pre-merge release gates. 31 tests; full
+    rider-app suite still green (122 suites / 1280 tests), `yarn tsc
+    --noEmit` clean (needed the same `(...a: any[]) => mockX(...a)`
+    spread `tsc` fix as this session's other recurring instances of
+    that footgun).
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

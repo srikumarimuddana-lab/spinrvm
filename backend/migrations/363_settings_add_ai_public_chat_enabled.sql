@@ -1,0 +1,35 @@
+-- 363_settings_add_ai_public_chat_enabled.sql
+--
+-- Adds the settings column gating the public website assistant
+-- (backend/ai/public_assistant.py, served by POST /api/v1/ai/public-chat),
+-- the counterpart to the field added in schemas.py AppSettings and the admin
+-- settings PATCH model (routes/admin/settings.py).
+--
+-- Without this column, admin_update_settings writes the PATCH payload straight
+-- through, so the first Settings save that includes the field 503s with
+--   PGRST204: Could not find the 'ai_public_chat_enabled' column of 'settings'
+-- and the feature could never be enabled from the admin UI (the same failure
+-- mode migrations 145, 208 and 211 describe for their own columns).
+--
+--   • ai_public_chat_enabled  BOOLEAN — master on/off for the anonymous
+--                                       spinr.ca chat surface (default false)
+--
+-- Deliberately separate from ai_assistant_enabled rather than reusing it. That
+-- flag is the global AI kill switch shared with the rider and driver apps;
+-- this one gates ONLY the unauthenticated website surface, so the website can
+-- be turned off on its own (abuse, cost, a bad answer) without taking the
+-- in-app assistant down with it. Both must be on for a public turn to run.
+--
+-- Defaults false so the feature ships dark: merging this migration enables
+-- nothing until an admin flips it in the dashboard.
+--
+-- Forward-compatible: pure additive ADD COLUMN IF NOT EXISTS with a default;
+-- metadata-only, no rewrite, safe against in-flight traffic. settings is the
+-- single-row service-role config table (no per-user data), so no RLS block —
+-- consistent with migrations 145, 208 and 211.
+--
+-- Rollback: (manual, not expected — turning the flag off is the real rollback)
+--   ALTER TABLE settings DROP COLUMN IF EXISTS ai_public_chat_enabled;
+
+ALTER TABLE settings
+    ADD COLUMN IF NOT EXISTS ai_public_chat_enabled BOOLEAN DEFAULT false;

@@ -33,7 +33,19 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { Text, TouchableOpacity } from 'react-native';
+import { Text, TouchableOpacity, Linking } from 'react-native';
+
+const appStateListeners: Array<(state: string) => void> = [];
+jest.mock('react-native/Libraries/AppState/AppState', () => ({
+  __esModule: true,
+  default: {
+    addEventListener: (event: string, cb: (state: string) => void) => {
+      if (event === 'change') appStateListeners.push(cb);
+      return { remove: jest.fn() };
+    },
+    currentState: 'active',
+  },
+}));
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('react-native-safe-area-context', () => ({
@@ -51,7 +63,13 @@ jest.mock('@shared/hooks/useExitOnBackPress', () => ({ useExitOnBackPress: () =>
 jest.mock('react-native-maps', () => {
   const ReactActual = require('react');
   const MapView = ReactActual.forwardRef((props: any, ref: any) => {
-    ReactActual.useImperativeHandle(ref, () => ({ fitToCoordinates: jest.fn(), animateToRegion: jest.fn() }));
+    // Empty deps: a real native ref's imperative handle is a stable object
+    // across renders. Without deps here, every re-render (e.g. state
+    // updates the polyline effect itself makes) installed a brand-new
+    // fitToCoordinates/animateToRegion pair, silently discarding whatever
+    // had just been called on the previous instance before a test could
+    // assert on it.
+    ReactActual.useImperativeHandle(ref, () => ({ fitToCoordinates: jest.fn(), animateToRegion: jest.fn() }), []);
     return ReactActual.createElement('MapView', props, props.children);
   });
   const Polygon = (props: any) =>
@@ -174,8 +192,12 @@ jest.mock('@shared/components/SafetyShield', () => ({
 }));
 jest.mock('@shared/components/SafetyOverlay', () => ({
   SafetyOverlay: (props: any) => {
-    const { Text: RNText } = require('react-native');
-    return props.visible ? <RNText>SafetyOverlayOpen</RNText> : null;
+    const { Text: RNText, TouchableOpacity: RNTouchableOpacity } = require('react-native');
+    return props.visible ? (
+      <RNTouchableOpacity accessibilityLabel="safety-overlay-close" onPress={props.onClose}>
+        <RNText>SafetyOverlayOpen</RNText>
+      </RNTouchableOpacity>
+    ) : null;
   },
 }));
 
@@ -249,6 +271,9 @@ jest.mock('../../components/dashboard', () => {
 });
 
 import { useDriverStore as mockedUseDriverStore } from '../../store/driverStore';
+import { RideOfferPanel as MockRideOfferPanel } from '../../components/panels/RideOfferPanel';
+import { MapControls as MockMapControls } from '../../components/dashboard';
+import { clearLiveRoute as mockClearLiveRoute, publishLiveRoute as mockPublishLiveRoute } from '../../hooks/liveRouteShared';
 import DriverDashboardScreen from '../../app/driver/(tabs)/index';
 
 const flush = async () => {
@@ -330,6 +355,7 @@ function allText(r: TestRenderer.ReactTestRenderer) {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  appStateListeners.length = 0;
   resetState();
   mockApiGet.mockImplementation((url: string) => {
     if (url === '/notifications?limit=1') return Promise.resolve({ data: { unread_count: 3 } });
@@ -651,5 +677,247 @@ describe('airport zone chip', () => {
     mockAirportZonesState = { zones: [], activeZone: { id: 'yxe', name: 'Saskatoon Airport' } };
     const r = await renderScreen();
     expect(allText(r)).not.toContain('Saskatoon Airport');
+  });
+
+  it('renders airport sub-zone polygons while idle', async () => {
+    mockAirportZonesState = {
+      zones: [{ id: 'yxe', polygon: [{ lat: 52.1, lng: -106.6 }, { lat: 52.2, lng: -106.6 }, { lat: 52.2, lng: -106.7 }] }],
+      activeZone: null,
+    };
+    const r = await renderScreen();
+    const polygons = r.root.findAllByProps({ accessibilityLabel: 'map-polygon' });
+    expect(polygons.some((p) => p.props.strokeColor === '#0ea5e9')).toBe(true);
+  });
+
+  it('omits airport sub-zone polygons with fewer than 3 points', async () => {
+    mockAirportZonesState = {
+      zones: [{ id: 'yxe', polygon: [{ lat: 52.1, lng: -106.6 }] }],
+      activeZone: null,
+    };
+    const r = await renderScreen();
+    const polygons = r.root.findAllByProps({ accessibilityLabel: 'map-polygon' });
+    expect(polygons.some((p) => p.props.strokeColor === '#0ea5e9')).toBe(false);
+  });
+});
+
+describe('denied-location Open Settings button', () => {
+  it('calls Linking.openSettings when tapped', async () => {
+    const openSettingsSpy = jest.spyOn(Linking, 'openSettings').mockImplementation(() => Promise.resolve());
+    mockDashboardState.location = null;
+    mockDashboardState.locationStatus = 'denied';
+    const r = await renderScreen();
+    const openSettingsBtn = r.root.findAllByType(TouchableOpacity).find((n) =>
+      n.findAllByType(Text).some((t) => JSON.stringify(t.props.children) === '"home.openSettings"')
+    )!;
+    act(() => { openSettingsBtn.props.onPress(); });
+    expect(openSettingsSpy).toHaveBeenCalled();
+    openSettingsSpy.mockRestore();
+  });
+});
+
+describe('ride-offer countdown timer', () => {
+  beforeEach(() => { jest.useFakeTimers(); });
+  afterEach(() => { jest.useRealTimers(); });
+
+  it('re-seeds from countdownSeconds and ticks down every second, pushing 0 back to the store at zero', async () => {
+    mockDriverState.rideState = 'ride_offered';
+    mockDriverState.countdownSeconds = 2;
+    mockDriverState.configuredCountdownSeconds = 2;
+    mockDriverState.incomingRide = {
+      ride_id: 'ride-1', pickup_lat: 52.1, pickup_lng: -106.6, dropoff_lat: 52.2, dropoff_lng: -106.7,
+    };
+    const r = await renderScreen();
+    expect(r.root.findByType(MockRideOfferPanel).props.countdownSeconds).toBe(2);
+
+    await act(async () => { jest.advanceTimersByTime(1000); });
+    expect(r.root.findByType(MockRideOfferPanel).props.countdownSeconds).toBe(1);
+
+    await act(async () => { jest.advanceTimersByTime(1000); });
+    expect(r.root.findByType(MockRideOfferPanel).props.countdownSeconds).toBe(0);
+    expect(mockSetCountdown).toHaveBeenCalledWith(0);
+  });
+
+  it('resyncs the displayed countdown from offer_expires_at when the app returns to the foreground', async () => {
+    mockDriverState.rideState = 'ride_offered';
+    mockDriverState.countdownSeconds = 15;
+    mockDriverState.configuredCountdownSeconds = 15;
+    mockDriverState.incomingRide = {
+      ride_id: 'ride-1', pickup_lat: 52.1, pickup_lng: -106.6, dropoff_lat: 52.2, dropoff_lng: -106.7,
+      offer_expires_at: new Date(Date.now() + 5000).toISOString(),
+    };
+    const r = await renderScreen();
+    await act(async () => {
+      appStateListeners.forEach((cb) => cb('active'));
+    });
+    const panel = r.root.findByType(MockRideOfferPanel);
+    expect(panel.props.countdownSeconds).toBeGreaterThanOrEqual(4);
+    expect(panel.props.countdownSeconds).toBeLessThanOrEqual(5);
+  });
+
+  it('pushes 0 to the store on a foreground resync once the offer has already expired', async () => {
+    mockDriverState.rideState = 'ride_offered';
+    mockDriverState.countdownSeconds = 15;
+    mockDriverState.configuredCountdownSeconds = 15;
+    mockDriverState.incomingRide = {
+      ride_id: 'ride-1', pickup_lat: 52.1, pickup_lng: -106.6, dropoff_lat: 52.2, dropoff_lng: -106.7,
+      offer_expires_at: new Date(Date.now() - 5000).toISOString(),
+    };
+    await renderScreen();
+    await act(async () => {
+      appStateListeners.forEach((cb) => cb('active'));
+    });
+    expect(mockSetCountdown).toHaveBeenCalledWith(0);
+  });
+
+  it('ignores a foreground resync outside of ride_offered (no incomingRide)', async () => {
+    mockDriverState.rideState = 'idle';
+    await renderScreen();
+    await act(async () => {
+      appStateListeners.forEach((cb) => cb('active'));
+    });
+    expect(mockSetCountdown).not.toHaveBeenCalled();
+  });
+});
+
+describe('OSRM live route polling', () => {
+  it('draws the OSRM polyline and publishes it to the shared live-route store on success', async () => {
+    mockDriverState.rideState = 'navigating_to_pickup';
+    mockDriverState.activeRide = { ride: { id: 'ride-1' }, rider: { name: 'Alex' } };
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/notifications?limit=1') return Promise.resolve({ data: { unread_count: 0 } });
+      if (url === '/service-areas') return Promise.resolve({ data: [] });
+      if (url === '/rides/ride-1/live-route') {
+        return Promise.resolve({
+          data: {
+            polyline: [[52.1, -106.6], [52.15, -106.62], [52.2, -106.65]],
+            eta_seconds: 300,
+            distance_km: 4.2,
+          },
+        });
+      }
+      return Promise.resolve({ data: {} });
+    });
+    await renderScreen();
+    expect(mockPublishLiveRoute).toHaveBeenCalledWith(expect.objectContaining({
+      destination: 'pickup',
+      rideId: 'ride-1',
+      etaMinutes: 5,
+      distanceKm: 4.2,
+    }));
+  });
+
+  it('falls back to Google Directions (clears the shared route) when OSRM has no routable polyline', async () => {
+    mockDriverState.rideState = 'navigating_to_pickup';
+    mockDriverState.activeRide = { ride: { id: 'ride-1' }, rider: { name: 'Alex' } };
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/notifications?limit=1') return Promise.resolve({ data: { unread_count: 0 } });
+      if (url === '/service-areas') return Promise.resolve({ data: [] });
+      if (url === '/rides/ride-1/live-route') {
+        return Promise.resolve({ data: { polyline: [], eta_seconds: null, distance_km: null } });
+      }
+      return Promise.resolve({ data: {} });
+    });
+    await renderScreen();
+    expect(mockClearLiveRoute).toHaveBeenCalled();
+  });
+
+  it('falls back to Google Directions when the live-route fetch throws', async () => {
+    mockDriverState.rideState = 'navigating_to_pickup';
+    mockDriverState.activeRide = { ride: { id: 'ride-1' }, rider: { name: 'Alex' } };
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/notifications?limit=1') return Promise.resolve({ data: { unread_count: 0 } });
+      if (url === '/service-areas') return Promise.resolve({ data: [] });
+      if (url === '/rides/ride-1/live-route') return Promise.reject(new Error('OSRM down'));
+      return Promise.resolve({ data: {} });
+    });
+    await expect(renderScreen()).resolves.toBeTruthy();
+    expect(mockClearLiveRoute).toHaveBeenCalled();
+  });
+
+  it('does not poll OSRM outside an active-ride rideState', async () => {
+    mockDriverState.rideState = 'idle';
+    await renderScreen();
+    expect(mockApiGet).not.toHaveBeenCalledWith('/rides/ride-1/live-route');
+  });
+});
+
+describe('saved planned-route polyline reuse', () => {
+  it('fits the map to the saved polyline for a ride_offered offer instead of calling Directions', async () => {
+    // MapView is mocked with useImperativeHandle, which installs a fresh
+    // { fitToCoordinates, animateToRegion } onto mapRef.current on every
+    // render (like the real ref callback would) — so the effect's own
+    // fitToCoordinates call is asserted via that installed mock, not one
+    // pre-seeded here (a pre-seeded object would just get overwritten).
+    mockDriverState.rideState = 'ride_offered';
+    mockDriverState.incomingRide = {
+      ride_id: 'ride-1', pickup_lat: 52.1, pickup_lng: -106.6, dropoff_lat: 52.2, dropoff_lng: -106.7,
+      planned_route_polyline: [[52.1, -106.6], [52.15, -106.63], [52.2, -106.7]],
+    };
+    await renderScreen();
+    expect(mockDashboardState.mapRef.current.fitToCoordinates).toHaveBeenCalledWith(
+      [
+        { latitude: 52.1, longitude: -106.6 },
+        { latitude: 52.15, longitude: -106.63 },
+        { latitude: 52.2, longitude: -106.7 },
+      ],
+      expect.objectContaining({ animated: true }),
+    );
+  });
+
+  it('drops the route when the saved polyline has fewer than 2 usable points', async () => {
+    mockDriverState.rideState = 'ride_offered';
+    mockDriverState.incomingRide = {
+      ride_id: 'ride-1', pickup_lat: 52.1, pickup_lng: -106.6, dropoff_lat: 52.2, dropoff_lng: -106.7,
+      planned_route_polyline: [[52.1, -106.6], 'not-a-point'],
+    };
+    await expect(renderScreen()).resolves.toBeTruthy();
+    expect(mockDashboardState.mapRef.current.fitToCoordinates).not.toHaveBeenCalled();
+  });
+});
+
+describe('SafetyOverlay close', () => {
+  it('closes the overlay via its onClose callback', async () => {
+    mockDiscreetSosEnabled = true;
+    mockDriverState.rideState = 'trip_in_progress';
+    mockDriverState.activeRide = { ride: { id: 'ride-1' }, rider: { name: 'Alex' } };
+    const r = await renderScreen();
+    act(() => { r.root.findByProps({ accessibilityLabel: 'safety-shield' }).props.onPress(); });
+    expect(allText(r)).toContain('"SafetyOverlayOpen"');
+    act(() => { r.root.findByProps({ accessibilityLabel: 'safety-overlay-close' }).props.onPress(); });
+    expect(allText(r)).not.toContain('"SafetyOverlayOpen"');
+  });
+});
+
+describe('trip-completion confirm modal onRequestClose', () => {
+  it('closes the modal on the platform back gesture (onRequestClose)', async () => {
+    mockDriverState.rideState = 'trip_in_progress';
+    mockDriverState.activeRide = { ride: { id: 'ride-1' }, rider: { name: 'Alex' } };
+    mockCompleteRide.mockResolvedValueOnce({ confirmationRequired: true });
+    const r = await renderScreen();
+    await act(async () => {
+      r.root.findByProps({ accessibilityLabel: 'complete-ride' }).props.onPress();
+      await flush();
+    });
+    expect(allText(r)).toContain('"Confirm trip completion"');
+    const modal = r.root.findByProps({ transparent: true, animationType: 'fade' });
+    act(() => { modal.props.onRequestClose(); });
+    expect(allText(r)).not.toContain('"Confirm trip completion"');
+  });
+});
+
+describe('map recenter control', () => {
+  it('MapControls onRecenter calls refreshLocation(false)', async () => {
+    const r = await renderScreen();
+    act(() => { r.root.findByType(MockMapControls).props.onRecenter(); });
+    expect(mockRefreshLocation).toHaveBeenCalledWith(false);
+  });
+
+  it('updates currentRegionRef on MapView onRegionChange', async () => {
+    const r = await renderScreen();
+    const mapView = r.root.findByType('MapView' as any);
+    act(() => {
+      mapView.props.onRegionChange({ latitudeDelta: 0.02, longitudeDelta: 0.03 });
+    });
+    expect(mockDashboardState.currentRegionRef.current).toEqual({ latitudeDelta: 0.02, longitudeDelta: 0.03 });
   });
 });

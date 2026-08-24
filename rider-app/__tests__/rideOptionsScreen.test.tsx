@@ -284,7 +284,12 @@ describe('RideOptionsScreen', () => {
     await renderScreen();
     expect(mockFetchEstimates).toHaveBeenCalled();
     expect(mockFetchNearbyDrivers).toHaveBeenCalled();
-  });
+    // Bumped from the 5000ms default: this test has no actual hang (it
+    // passes standalone and in every local full-suite run) but was
+    // intermittently timing out in CI when the full multi-suite run under
+    // coverage instrumentation puts the runner under real CPU contention
+    // (same class of flake as driverProfileScreen.test.tsx in driver-app).
+  }, 15000);
 
   it('a fetchEstimates failure shows the retry state instead of crashing', async () => {
     mockFetchEstimates.mockRejectedValue(new Error('down'));

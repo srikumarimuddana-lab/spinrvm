@@ -8826,6 +8826,26 @@ record of what was assumed vs. what was actually true</summary>
     so left as-is rather than forcing a fragile test. 24 tests; full
     driver-app suite still green (114 suites / 1222 tests), `yarn tsc
     --noEmit` clean.
+  - **driver-app `app/driver/tax-documents.tsx`: 85.2% → 88.9% lines.**
+    Already had a solid `taxDocumentsScreen.test.tsx` (8 tests) — added
+    one more for pull-to-refresh (`SafeRefreshControl`'s `onRefresh`
+    re-fetches `/drivers/t4a/years`), the only genuinely reachable
+    uncovered branch. The three remaining uncovered spots
+    (`formatDate`'s non-`--` branch, `getDocTypeLabel`/`getDocTypeIcon`'s
+    `default` cases) are dead code under this screen's *current* actual
+    behavior, not a real coverage gap: `fetchDocuments` hardcodes every
+    document's `type` to `'T4A'` and `generated_at` to `null` — there is
+    no live code path that ever produces a different `type` or a
+    non-null `generated_at` to exercise those branches through the
+    screen itself. They're defensive scaffolding for a second document
+    type (e.g. `earnings_summary`, which `getDocTypeLabel`/`Icon`
+    already handle) that isn't wired up yet — left uncovered rather than
+    forcing a synthetic document shape the real code never produces.
+    9 tests; full driver-app suite still green (114 suites / 1223
+    tests), `yarn tsc --noEmit` clean. **This closes out every screen in
+    the 2026-08-24 fresh-coverage-sweep ranked list across both apps** —
+    a further fresh sweep is needed to find the next tier, same as the
+    original ranked-worst-offenders list before it.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

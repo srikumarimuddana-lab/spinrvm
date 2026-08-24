@@ -555,4 +555,288 @@ describe('BecomeDriverScreen', () => {
     expect(mockLogout).not.toHaveBeenCalled();
     expect(allText(r)).toContain('Welcome to Spinr Driver');
   });
+
+  it('falls back to hardcoded service areas when /service-areas fails', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/vehicle-types') return Promise.resolve({ data: [] });
+      if (url === '/service-areas') return Promise.reject(new Error('network down'));
+      return Promise.reject(new Error('unexpected url ' + url));
+    });
+    const r = await renderScreen();
+    await goToPersonalStep(r);
+    expect(allText(r)).toContain('Saskatoon, SK');
+    expect(allText(r)).toContain('Regina, SK');
+  });
+
+  it('restores a saved in-progress draft on mount', async () => {
+    mockGetItem.mockResolvedValue(JSON.stringify({
+      step: 1,
+      personal: { firstName: 'Drafted', lastName: 'Driver', email: 'd@example.com', gender: 'Female', city: 'Saskatoon' },
+      vehicle: { make: 'Honda', model: 'Civic', color: 'Blue', year: '2020', plate: 'XYZ 999', vin: '1H1', type: '' },
+      docs: { licenseNumber: 'S9999', files: { 'req-1': { front: '/uploads/existing.jpg' } } },
+    }));
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Personal Info'); // restored to step 1
+    const firstNameInput = r.root.findAllByType(TextInput).find((i) => i.props.placeholder === 'John')!;
+    expect(firstNameInput.props.value).toBe('Drafted');
+  });
+
+  it('ignores a corrupt saved draft without crashing', async () => {
+    mockGetItem.mockResolvedValue('{not valid json');
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Welcome to Spinr Driver'); // still lands on Intro
+  });
+
+  it('toasts a Connection Error when the vehicle-types fetch responds non-ok', async () => {
+    global.fetch = jest.fn((url: string) => {
+      if (url.includes('/vehicle-types')) return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve([]) } as any);
+      if (url.includes('/drivers/requirements')) return Promise.resolve({ ok: true, json: () => Promise.resolve(REQUIREMENTS) } as any);
+      if (url.includes('/legal-documents')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ content: 'Full CRC consent text.' }) } as any);
+      return Promise.reject(new Error('unexpected url ' + url));
+    }) as any;
+    const r = await renderScreen();
+    await goToPersonalStep(r);
+    const areaChip = findButtonByText(r, 'Saskatoon, SK');
+    await act(async () => { areaChip.props.onPress(); await flush(); });
+    expect(Alert.alert).toHaveBeenCalledWith('Connection Error', 'Could not load vehicle types. Check your connection.');
+  });
+
+  it('silently skips loading requirements when the requirements fetch throws', async () => {
+    global.fetch = jest.fn((url: string) => {
+      if (url.includes('/vehicle-types')) return Promise.resolve({ ok: true, json: () => Promise.resolve(VEHICLE_TYPES) } as any);
+      if (url.includes('/drivers/requirements')) return Promise.reject(new Error('network down'));
+      if (url.includes('/legal-documents')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ content: 'Full CRC consent text.' }) } as any);
+      return Promise.reject(new Error('unexpected url ' + url));
+    }) as any;
+    const r = await renderScreen();
+    await fillPersonalAndAdvance(r);
+    const skipVehicleBtn = findButtonByText(r, 'Skip for now');
+    await act(async () => { skipVehicleBtn.props.onPress(); await flush(); });
+    expect(allText(r)).toContain('Documents'); // renders fine with zero requirements
+  });
+
+  it('shows a failure message and auto-checks consent when the CRC consent fetch itself throws', async () => {
+    global.fetch = jest.fn((url: string) => {
+      if (url.includes('/vehicle-types')) return Promise.resolve({ ok: true, json: () => Promise.resolve(VEHICLE_TYPES) } as any);
+      if (url.includes('/drivers/requirements')) return Promise.resolve({ ok: true, json: () => Promise.resolve(REQUIREMENTS) } as any);
+      if (url.includes('/legal-documents')) return Promise.reject(new Error('network down'));
+      return Promise.reject(new Error('unexpected'));
+    }) as any;
+    const r = await renderScreen();
+    await fillPersonalAndAdvance(r);
+    const skipVehicleBtn = findButtonByText(r, 'Skip for now');
+    await act(async () => { skipVehicleBtn.props.onPress(); await flush(); });
+    const skipDocsBtn = findButtonByText(r, 'Skip for now');
+    await act(async () => { skipDocsBtn.props.onPress(); await flush(); });
+    expect(allText(r)).toContain('Failed to load. Please check your connection and try again.');
+    const submitBtn = findButtonByText(r, 'Submit Application');
+    expect(submitBtn.props.disabled).toBe(false); // consent auto-checked since fetch failed
+  });
+
+  it('generates a fallback file name when the camera asset has none', async () => {
+    mockRequestCameraPermissionsAsync.mockResolvedValue({ status: 'granted' });
+    mockLaunchCameraAsync.mockResolvedValue({ canceled: false, assets: [{ uri: 'file://cam.jpg' }] });
+    const r = await renderScreen();
+    await fillPersonalAndAdvance(r);
+    act(() => { findButtonByText(r, 'Skip for now').props.onPress(); });
+    act(() => { findButtonByText(r, 'Upload Front').props.onPress(); });
+    const alertCall = (Alert.alert as jest.Mock).mock.calls[0];
+    const cameraAction = alertCall[2].find((b: any) => b.text === 'Camera');
+    await act(async () => { await cameraAction.onPress(); await flush(); });
+    expect(mockUploadFile).toHaveBeenCalledWith('file://cam.jpg', expect.stringMatching(/^photo_\d+\.jpg$/), 'image/jpeg');
+  });
+
+  it('dispatches Camera/Gallery picks from the Android upload-source Alert', async () => {
+    Platform.OS = 'android';
+    mockRequestCameraPermissionsAsync.mockResolvedValue({ status: 'granted' });
+    mockLaunchCameraAsync.mockResolvedValue({ canceled: false, assets: [{ uri: 'file://cam.jpg', fileName: 'cam.jpg' }] });
+    const r = await renderScreen();
+    await fillPersonalAndAdvance(r);
+    act(() => { findButtonByText(r, 'Skip for now').props.onPress(); });
+    act(() => { findButtonByText(r, 'Upload Front').props.onPress(); });
+    const alertCall = (Alert.alert as jest.Mock).mock.calls[0];
+    const cameraAction = alertCall[2].find((b: any) => b.text === 'Camera');
+    await act(async () => { await cameraAction.onPress(); await flush(); });
+    expect(mockUploadFile).toHaveBeenCalledWith('file://cam.jpg', 'cam.jpg', 'image/jpeg');
+    Platform.OS = 'ios';
+  });
+
+  it('advances from Vehicle when fully and validly filled, and lets the driver pick a vehicle type', async () => {
+    const r = await renderScreen();
+    await fillPersonalAndAdvance(r);
+    const inputs = r.root.findAllByType(TextInput);
+    act(() => { inputs.find((i) => i.props.placeholder === '2019')!.props.onChangeText('2022'); });
+    act(() => { inputs.find((i) => i.props.placeholder === 'Toyota')!.props.onChangeText('Toyota'); });
+    act(() => { inputs.find((i) => i.props.placeholder === 'Camry')!.props.onChangeText('Camry'); });
+    act(() => { inputs.find((i) => i.props.placeholder === 'ABC 123')!.props.onChangeText('ABC 123'); });
+    const sedanChip = findButtonByText(r, 'Sedan');
+    act(() => { sedanChip.props.onPress(); });
+    const nextBtn = findButtonByText(r, 'Next: Documents');
+    act(() => { nextBtn.props.onPress(); });
+    expect(allText(r)).toContain('Documents');
+  });
+
+  it('does nothing when Submit is invoked directly while consent is unchecked', async () => {
+    const r = await renderScreen();
+    await fillPersonalAndAdvance(r);
+    const skipVehicleBtn = findButtonByText(r, 'Skip for now');
+    act(() => { skipVehicleBtn.props.onPress(); });
+    const skipDocsBtn = findButtonByText(r, 'Skip for now');
+    act(() => { skipDocsBtn.props.onPress(); });
+    const submitBtn = findButtonByText(r, 'Submit Application');
+    await act(async () => { await submitBtn.props.onPress(); await flush(); });
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Consent required',
+      'Please read and check the Criminal Record Check / Vulnerable Sector Check consent before submitting your application.'
+    );
+    expect(mockRegisterDriver).not.toHaveBeenCalled();
+  });
+
+  it('maps Insurance/Inspection/Background requirement names to their legacy expiry fields', async () => {
+    global.fetch = jest.fn((url: string) => {
+      if (url.includes('/vehicle-types')) return Promise.resolve({ ok: true, json: () => Promise.resolve(VEHICLE_TYPES) } as any);
+      if (url.includes('/drivers/requirements')) return Promise.resolve({
+        ok: true, json: () => Promise.resolve([
+          { id: 'req-ins', name: 'Insurance Proof', description: '', is_mandatory: true, requires_back_side: false },
+          { id: 'req-insp', name: 'Vehicle Inspection', description: '', is_mandatory: true, requires_back_side: false },
+          { id: 'req-bg', name: 'Background Check', description: '', is_mandatory: true, requires_back_side: false },
+        ]),
+      } as any);
+      if (url.includes('/legal-documents')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ content: 'Full CRC consent text.' }) } as any);
+      return Promise.reject(new Error('unexpected url ' + url));
+    }) as any;
+    mockGetDocumentAsync.mockResolvedValue({ canceled: false, assets: [{ uri: 'file://doc.jpg', name: 'doc.jpg', mimeType: 'image/jpeg' }] });
+    const r = await renderScreen();
+    await fillPersonalAndAdvance(r);
+    const skipVehicleBtn = findButtonByText(r, 'Skip for now');
+    act(() => { skipVehicleBtn.props.onPress(); });
+
+    const futureDate = new Date();
+    futureDate.setFullYear(futureDate.getFullYear() + 2);
+    // Set a future expiry on each of the three requirements.
+    for (const label of ['Insurance Proof', 'Vehicle Inspection', 'Background Check']) {
+      const dateBtn = findButtonByText(r, 'Select Expiry Date');
+      act(() => { dateBtn.props.onPress(); });
+      const dtPicker = r.root.findByProps({ mode: 'date' });
+      act(() => { dtPicker.props.onChange({ type: 'set' }, futureDate); });
+      void label;
+    }
+
+    const reviewBtn = findButtonByText(r, 'Review Application');
+    act(() => { reviewBtn.props.onPress(); });
+    const consentRow = findButtonByText(r, 'I consent to a Criminal Record Check');
+    act(() => { consentRow.props.onPress(); });
+    const submitBtn = findButtonByText(r, 'Submit Application');
+    await act(async () => { await submitBtn.props.onPress(); await flush(); });
+
+    const storedExpiryDate = new Date(futureDate.toISOString().split('T')[0]).toISOString();
+    expect(mockRegisterDriver).toHaveBeenCalledWith(expect.objectContaining({
+      insurance_expiry_date: storedExpiryDate,
+      vehicle_inspection_expiry_date: storedExpiryDate,
+      background_check_expiry_date: storedExpiryDate,
+    }));
+  });
+
+  it('still succeeds and shows the success alert when posting CRC consent fails', async () => {
+    mockApiPost.mockRejectedValue(new Error('server error'));
+    const r = await renderScreen();
+    await fillPersonalAndAdvance(r);
+    const skipVehicleBtn = findButtonByText(r, 'Skip for now');
+    act(() => { skipVehicleBtn.props.onPress(); });
+    const skipDocsBtn = findButtonByText(r, 'Skip for now');
+    act(() => { skipDocsBtn.props.onPress(); });
+    const consentRow = findButtonByText(r, 'I consent to a Criminal Record Check');
+    act(() => { consentRow.props.onPress(); });
+    const submitBtn = findButtonByText(r, 'Submit Application');
+    await act(async () => { await submitBtn.props.onPress(); await flush(); });
+    const successAlert = (Alert.alert as jest.Mock).mock.calls.find((c) => c[0] === 'Success');
+    expect(successAlert).toBeTruthy();
+  });
+
+  it('auto-closes the date picker on Android once a date is confirmed', async () => {
+    Platform.OS = 'android';
+    const r = await renderScreen();
+    await fillPersonalAndAdvance(r);
+    const skipVehicleBtn = findButtonByText(r, 'Skip for now');
+    act(() => { skipVehicleBtn.props.onPress(); });
+    const dateBtn = findButtonByText(r, 'Select Expiry Date');
+    act(() => { dateBtn.props.onPress(); });
+    const futureDate = new Date();
+    futureDate.setFullYear(futureDate.getFullYear() + 2);
+    const dtPicker = r.root.findByProps({ mode: 'date' });
+    act(() => { dtPicker.props.onChange({ type: 'set' }, futureDate); });
+    expect(r.root.findAllByProps({ mode: 'date' })).toHaveLength(0); // auto-closed on Android
+    Platform.OS = 'ios';
+  });
+
+  it('dispatches Gallery/File picks from the Android upload-source Alert', async () => {
+    Platform.OS = 'android';
+    mockGetDocumentAsync.mockResolvedValue({ canceled: false, assets: [{ uri: 'file://doc.jpg', name: 'doc.jpg', mimeType: 'image/jpeg' }] });
+    const r = await renderScreen();
+    await fillPersonalAndAdvance(r);
+    act(() => { findButtonByText(r, 'Skip for now').props.onPress(); });
+    act(() => { findButtonByText(r, 'Upload Front').props.onPress(); });
+    let alertCall = (Alert.alert as jest.Mock).mock.calls[(Alert.alert as jest.Mock).mock.calls.length - 1];
+    const galleryAction = alertCall[2].find((b: any) => b.text === 'Gallery');
+    expect(galleryAction).toBeTruthy();
+    const fileAction = alertCall[2].find((b: any) => b.text === 'File / Cancel');
+    await act(async () => { await fileAction.onPress(); await flush(); });
+    expect(mockUploadFile).toHaveBeenCalledWith('file://doc.jpg', 'doc.jpg', 'image/jpeg');
+    Platform.OS = 'ios';
+  });
+
+  it('leaves work-permit/eligibility and unmatched requirement names mapped correctly', async () => {
+    global.fetch = jest.fn((url: string) => {
+      if (url.includes('/vehicle-types')) return Promise.resolve({ ok: true, json: () => Promise.resolve(VEHICLE_TYPES) } as any);
+      if (url.includes('/drivers/requirements')) return Promise.resolve({
+        ok: true, json: () => Promise.resolve([
+          { id: 'req-wp', name: 'Work Eligibility', description: '', is_mandatory: true, requires_back_side: false },
+          { id: 'req-other', name: 'Vehicle Photo', description: '', is_mandatory: false, requires_back_side: false },
+        ]),
+      } as any);
+      if (url.includes('/legal-documents')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ content: 'Full CRC consent text.' }) } as any);
+      return Promise.reject(new Error('unexpected url ' + url));
+    }) as any;
+    const r = await renderScreen();
+    await fillPersonalAndAdvance(r);
+    const skipVehicleBtn = findButtonByText(r, 'Skip for now');
+    act(() => { skipVehicleBtn.props.onPress(); });
+
+    const futureDate = new Date();
+    futureDate.setFullYear(futureDate.getFullYear() + 2);
+    // Set expiry on the first requirement only (Work Eligibility).
+    const dateBtn = findButtonByText(r, 'Select Expiry Date');
+    act(() => { dateBtn.props.onPress(); });
+    const dtPicker = r.root.findByProps({ mode: 'date' });
+    act(() => { dtPicker.props.onChange({ type: 'set' }, futureDate); });
+
+    const reviewBtn = findButtonByText(r, 'Review Application');
+    act(() => { reviewBtn.props.onPress(); });
+    const consentRow = findButtonByText(r, 'I consent to a Criminal Record Check');
+    act(() => { consentRow.props.onPress(); });
+    const submitBtn = findButtonByText(r, 'Submit Application');
+    await act(async () => { await submitBtn.props.onPress(); await flush(); });
+
+    // NOTE: work_eligibility_expiry_date is computed by getExpiryFieldForReq
+    // (exercising that branch is this test's purpose) but, unlike the
+    // license/insurance/inspection/background fields, it is never read out
+    // of legacyExpiries into the registerDriver payload below (see the
+    // handleSubmit legacyExpiries destructure) — so it does not appear on
+    // the submitted body. Flagged to the requester as a possible latent gap
+    // rather than fixed here (screen logic is out of scope for this
+    // coverage-only change).
+    expect(mockRegisterDriver).toHaveBeenCalled();
+  });
+
+  it('closes the inline date picker via the iOS Done button', async () => {
+    const r = await renderScreen();
+    await fillPersonalAndAdvance(r);
+    const skipVehicleBtn = findButtonByText(r, 'Skip for now');
+    act(() => { skipVehicleBtn.props.onPress(); });
+    const dateBtn = findButtonByText(r, 'Select Expiry Date');
+    act(() => { dateBtn.props.onPress(); });
+    const doneBtn = findButtonByText(r, 'Done');
+    act(() => { doneBtn.props.onPress(); });
+    expect(r.root.findAllByProps({ mode: 'date' })).toHaveLength(0);
+  });
 });

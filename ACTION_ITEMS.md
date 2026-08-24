@@ -9178,6 +9178,21 @@ record of what was assumed vs. what was actually true</summary>
     `/work-rides` with the active company id. 21 tests; full rider-app
     suite still green (122 suites / 1272 tests), `yarn tsc --noEmit`
     clean.
+  - **rider-app `app/loyalty.tsx`: 85.4% → 97.9% lines.** Already had
+    `loyaltyScreen.test.tsx` (8 tests: parallel load, tier
+    card/progress bar, highest-tier copy, history rows' +/- sign and
+    icon fallback, the empty state, a silent load failure) — extended
+    in place (+3 tests): pull-to-refresh actually invoking `onRefresh`
+    via the `FlatList`'s `refreshControl` prop; the bonus/promotion/
+    expiry history-icon-type branches (only `ride_earn`/`redeem`/an
+    unrecognized type were exercised before); and `formatDate`'s catch
+    branch, triggered with a `created_at` value whose `toString` throws
+    (unlike the plain-invalid-date-string case found on
+    `driver/subscription.tsx` earlier this session, a throwing
+    `toString` does make `new Date(...)` itself throw in this runtime,
+    so this one reliably exercises the catch). 11 tests; full rider-app
+    suite still green (123 suites / 1343 tests), `yarn tsc --noEmit`
+    clean.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

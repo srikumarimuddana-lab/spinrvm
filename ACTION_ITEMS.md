@@ -9070,6 +9070,42 @@ record of what was assumed vs. what was actually true</summary>
   rider-app/driver-app, every other admin-dashboard corporate/billing
   form — subscriptions, KYB, wallet adjustments, etc.); no
   ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-24 update — step 5 done, rider-app's first login/signup-
+  adjacent form migrated:** migrated `rider-app/app/profile-setup.tsx`'s
+  `handleSubmit` field validation (first/last name, email, gender — the
+  identity fields that feed KYC/compliance checks downstream, exactly the
+  category this item's own ordering names as next-priority after the
+  admin-dashboard corporate/billing forms were exhausted for step 4). New
+  colocated `rider-app/utils/profileSetupSchema.ts` (`profileSetupSchema`
+  + `getProfileSetupError` + `isProfileSetupValid`) reproduces the
+  screen's five sequential inline checks — empty-firstName,
+  empty-lastName, empty-email, the `/^[^\s@]+@[^\s@]+\.[^\s@]+$/` email
+  regex, empty-gender — in the same priority order (first failing check
+  wins) and with the same toast title/message pairs, byte-for-byte; the
+  TOS/isEditing portion of the screen's old `isFormValid` boolean stays
+  in the screen itself since it isn't part of this form's field
+  validation. New
+  `rider-app/utils/__tests__/profileSetupSchema.test.ts` (18 accept/reject
+  cases, including two cases pinning that a whitespace-only email hits
+  "Email Required" not "Invalid Email", matching the original untrimmed
+  regex test). Verification: 18/18 new tests pass; full rider-app suite
+  1259/1259 (123 suites) pass, 0 regressions (two suites flaked with
+  `Exceeded timeout` under full-suite parallel load in one run — confirmed
+  pre-existing and unrelated to this change: both pass at 68/68 in
+  isolation against `origin/main`'s baseline pre-change and against this
+  branch, and a full clean rerun passed 1259/1259 with no flakes);
+  `npx tsc --noEmit` clean; `npx eslint` clean on touched files; **real
+  production build** (`npm run build:web` → `expo export --platform web`)
+  completed successfully; blast-radius grep confirmed
+  `app/profile-setup.tsx` is the only reader of the extracted checks (the
+  screen name/email/gender regex appears nowhere else in `rider-app/app`
+  or `rider-app/utils`). Full Change Impact Log:
+  `docs/change-log/2026-08-24-b39-profile-setup-zod-step5.md`. **Still
+  open:** `rider-app/app/login.tsx`'s inline validation, driver-app's
+  signup/profile-setup fields, and every other admin-dashboard
+  corporate/billing form (subscriptions, KYB, wallet adjustments, etc.)
+  remain unmigrated; no ADR/migration-order doc written yet. Checkbox
+  stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

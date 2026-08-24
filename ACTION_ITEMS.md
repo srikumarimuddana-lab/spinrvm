@@ -9397,6 +9397,36 @@ record of what was assumed vs. what was actually true</summary>
     branches (`await api.post(.../start')`, `catch(e) { console.log(e)
     }`, then `fetchRide` either way). 20 tests; full rider-app suite
     still green (123 suites / 1408 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/(tabs)/activity.tsx`: 87.15% → 98.32% stmts, 88.41%
+    → 99.39% lines.** Already had `activityScreen.test.tsx` (11 tests:
+    focus-fetch, RECENT-section grouping, the Business filter, both
+    grand_total-vs-tip fare-total branches, the load-failure and
+    empty-result empty states, the upcoming tab's own empty state and
+    its scheduled-ride rendering, infinite-scroll load-more, and card
+    tap navigation) — extended in place (+11 tests). Closed: tapping a
+    scheduled (upcoming) ride card's own `handleRidePress` (distinct
+    node from the history-tab card already covered); switching back to
+    the history tab from upcoming; the Personal filter (the inverse of
+    the already-tested Business filter); the period-pill switch
+    (`refreshStats(period, true)` re-fetches stats only, not ride
+    history — verified via a `mockApiGet.mockClear()` + assertion that
+    `/rides/history` was NOT called again); pull-to-refresh via the
+    `FlatList`'s real `refreshControl.onRefresh` (force-refetches rides,
+    stats, and scheduled rides regardless of the 30s TTL); the
+    load-more failure's retry footer, including a full fail→retry→
+    succeed round trip; `formatDate`'s `Yesterday` branch (computed via
+    exact day-subtraction rather than a fixed offset, to avoid a
+    midnight-boundary flake); `getStatusText`'s `cancelled` case and its
+    fallback-to-`completed` for an unrecognised status; and
+    `getStatusColor`'s `cancelled`/`in_progress` cases plus its
+    `default` fallback for a status matching none of the three named
+    cases. Left uncovered (dead code, not a real gap): line 246's
+    `return true` fallback inside `filteredRides`' filter callback — the
+    three real `FilterType` values (`all`/`personal`/`business`) are all
+    already handled by the three `if` branches above it, so this line is
+    unreachable under the type's own exhaustive value set. 22 tests;
+    full rider-app suite still green (123 suites / 1419 tests), `yarn
+    tsc --noEmit` clean.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

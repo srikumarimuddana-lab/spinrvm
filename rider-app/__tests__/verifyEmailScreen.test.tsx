@@ -192,6 +192,13 @@ function allText(renderer: TestRenderer.ReactTestRenderer): string {
   return JSON.stringify(renderer.toJSON());
 }
 
+function findBackButton(renderer: TestRenderer.ReactTestRenderer) {
+  const { TouchableOpacity } = require('react-native');
+  return renderer.root
+    .findAllByType(TouchableOpacity)
+    .find((n: any) => n.findAllByProps({ name: 'arrow-back' }).length > 0)!;
+}
+
 function enterCode(renderer: TestRenderer.ReactTestRenderer, code: string) {
   const input = renderer.root.findByProps({ accessibilityLabel: 'Verification code' });
   act(() => {
@@ -225,6 +232,21 @@ beforeEach(() => {
       return Promise.resolve({ data: { success: true, message: 'Verification code sent' } });
     }
     return Promise.resolve({ data: { success: true } });
+  });
+});
+
+describe('VerifyEmailScreen — no email on file', () => {
+  it('toasts and navigates back immediately when there is no email on the account', async () => {
+    useAuthStore.setState({ user: { ...mockDefaultUser, email: undefined as any } });
+    await renderScreen();
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'No Email on File',
+      'Add an email to your profile before verifying it.',
+      'warning',
+    );
+    expect(mockBack).toHaveBeenCalled();
+    // No email means requestCode's own effect (deps: [email]) never fires.
+    expect(mockApiPost).not.toHaveBeenCalledWith('/users/verify-email/request');
   });
 });
 
@@ -318,6 +340,18 @@ describe('VerifyEmailScreen — request on entry', () => {
 });
 
 describe('VerifyEmailScreen — confirm', () => {
+  it('blocks verifying and shakes when the code is too short, without calling confirm', async () => {
+    const renderer = await renderScreen();
+    mockApiPost.mockClear();
+    await tapVerify(renderer); // code is still '' at this point
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Invalid Code',
+      'Please enter the code sent to your email.',
+      'warning',
+    );
+    expect(mockApiPost).not.toHaveBeenCalledWith('/users/verify-email/confirm', expect.anything());
+  });
+
   it('fires POST /users/verify-email/confirm with the entered code', async () => {
     const renderer = await renderScreen();
     enterCode(renderer, '1234');
@@ -385,5 +419,80 @@ describe('VerifyEmailScreen — confirm', () => {
     const call = mockShowToast.mock.calls.find((c) => c[0] === 'Too Many Attempts');
     expect(call?.[1]).toContain('Too many failed attempts');
     expect(mockBack).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the noise-filtered generic message for a plain error with no messageKey', async () => {
+    mockApiPost.mockImplementation((url: string) => {
+      if (url === '/users/verify-email/request') return Promise.resolve({ data: { success: true } });
+      if (url === '/users/verify-email/confirm') return Promise.reject(new Error('Request failed with status code 500'));
+      return Promise.resolve({ data: {} });
+    });
+    const renderer = await renderScreen();
+    enterCode(renderer, '1234');
+    await tapVerify(renderer);
+    const call = mockShowToast.mock.calls.find((c) => c[0] === 'Verification Failed');
+    // resolveErrorCopy's no-messageKey path defers to getApiErrorMessage,
+    // which strips the technical "Request failed..." string rather than
+    // showing it verbatim.
+    expect(call?.[1]).toBe('That code did not work. Please try again.');
+  });
+});
+
+describe('VerifyEmailScreen — navigation and code-box interactions', () => {
+  it("navigates back when the code-entry screen's back button is pressed", async () => {
+    const renderer = await renderScreen();
+    const backBtn = findBackButton(renderer);
+    act(() => { backBtn.props.onPress(); });
+    expect(mockBack).toHaveBeenCalled();
+  });
+
+  it('focuses the hidden code input when the visible code boxes are tapped', async () => {
+    const renderer = await renderScreen();
+    const codeBoxes = renderer.root.findByProps({ activeOpacity: 1 });
+    expect(() => act(() => { codeBoxes.props.onPress(); })).not.toThrow();
+  });
+
+  it('navigates back from both buttons on the already-verified screen', async () => {
+    mockApiPost.mockImplementation((url: string) => {
+      if (url === '/users/verify-email/request') {
+        return Promise.resolve({ data: { success: true, already_verified: true, message: 'Your email is already verified' } });
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+    const renderer = await renderScreen();
+    const doneBtn = renderer.root.findByProps({ accessibilityLabel: 'Done, already verified' });
+    act(() => { doneBtn.props.onPress(); });
+    expect(mockBack).toHaveBeenCalledTimes(1);
+    const backBtn = findBackButton(renderer);
+    act(() => { backBtn.props.onPress(); });
+    expect(mockBack).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores a second Resend tap while a resend request is already in flight', async () => {
+    let resendCalls = 0;
+    let resolveResend: (v: any) => void;
+    mockApiPost.mockImplementation((url: string) => {
+      if (url === '/users/verify-email/request') {
+        resendCalls += 1;
+        if (resendCalls === 1) return Promise.resolve({ data: { success: true } });
+        return new Promise((resolve) => { resolveResend = resolve; });
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+    const renderer = await renderScreen();
+    // Countdown starts at 30 after the initial request -- tick it down to 0
+    // one second at a time so the Resend button actually mounts (each tick's
+    // setTimeout only re-schedules after React commits the prior update).
+    for (let i = 0; i < 30; i++) {
+      await act(async () => { jest.advanceTimersByTime(1000); await flush(); });
+    }
+    const resendBtn = renderer.root.findByProps({ accessibilityLabel: 'Resend code' });
+    act(() => { resendBtn.props.onPress(); }); // starts the (hanging) resend request -> sending=true
+    expect(resendCalls).toBe(2);
+    // A second tap while `sending` is true must be a no-op (guarded at the
+    // top of handleResend), not a second in-flight request.
+    act(() => { resendBtn.props.onPress(); });
+    expect(resendCalls).toBe(2);
+    await act(async () => { resolveResend!({ data: { success: true } }); await flush(); });
   });
 });

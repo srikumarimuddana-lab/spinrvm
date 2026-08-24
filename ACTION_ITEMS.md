@@ -9235,6 +9235,34 @@ record of what was assumed vs. what was actually true</summary>
     this file's `ride-in-progress.tsx` entry above for the same
     footgun). 42 tests; full rider-app suite still green (123 suites /
     1350 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/verify-email.tsx`: 84.9% → 99.05% stmts / 100%
+    lines.** Already had `verifyEmailScreen.test.tsx` (10 tests: mount
+    request, `already_verified` short-circuit, `PROFILE_EMAIL_MISSING`/
+    `AUTH_OTP_INVALID`/`AUTH_OTP_EXPIRED`/rate-limited error copy on both
+    request and confirm, and a successful confirm merging
+    `email_verified` into the store) — extended in place (+7 tests).
+    Closed: the no-email-on-file guard effect (toasts and calls
+    `router.back()` immediately, and the request-code effect — a
+    separate effect keyed on `[email]` — correctly never fires since
+    `email` is falsy); `handleVerify`'s too-short-code guard (shake +
+    "Invalid Code" toast, no confirm call — reached by tapping Verify
+    with the default empty code, since the button's `disabled` prop
+    doesn't block a direct test `onPress` call); both screens' back
+    buttons (code-entry and the separate already-verified return) and
+    the already-verified screen's "Done" button; the code-boxes'
+    tap-to-focus wrapper; `resolveErrorCopy`'s no-`messageKey` fallback
+    path (a plain `Error('Request failed with status code 500')` on
+    confirm, asserting `getApiErrorMessage`'s noise-filter still swaps
+    in the friendly fallback rather than leaking the technical string);
+    and `handleResend`'s in-flight guard — ticked the post-mount 30s
+    countdown down one second at a time (matching this session's
+    established re-schedule-on-tick pattern for countdown effects) to
+    reveal the Resend button, then asserted a second tap while the first
+    resend request is still pending is a silent no-op, not a duplicate
+    request. 17 tests; full rider-app suite still green (123 suites /
+    1360 tests), `yarn tsc --noEmit` clean. **This closes out the last
+    item on the 2026-08-24 fresh-coverage-sweep ranked list** — a
+    further fresh sweep is needed to find the next tier.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

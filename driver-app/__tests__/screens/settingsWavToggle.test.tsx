@@ -7,7 +7,7 @@
  * Mirrors screens/notifications.test.tsx's mocking convention.
  */
 import React from 'react';
-import { render } from '@testing-library/react-native';
+import { act, render } from '@testing-library/react-native';
 import SettingsScreen from '../../app/driver/settings';
 
 const mockUpdateDriverMeMutate = jest.fn();
@@ -91,15 +91,31 @@ jest.mock('react-native-safe-area-context', () => ({
 }));
 jest.mock('../../components/ScreenHeader', () => ({ ScreenHeader: () => null }));
 
+// SettingsScreen fetches notification preferences via the mocked
+// @shared/api/client on mount. Without flushing that pending promise here,
+// its `.then` continuation can resolve after RTL's implicit afterEach
+// unmount, calling setState on an already-unmounted tree outside act() -- a
+// leaked update that intermittently corrupted a later test file in the
+// same Jest worker (observed: driverProfileScreen.test.tsx timing out
+// under CI's leaner scheduling). Flushing the pending microtask queue
+// inside act() while the component is still mounted discharges it here
+// instead.
+async function flushPendingEffects() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
 describe('Driver settings — WAV accessibility toggle', () => {
   beforeEach(() => {
     mockUpdateDriverMeMutate.mockReset();
     mockDriverMeData = { is_wav: false };
   });
 
-  it('announces as a switch and reports checked:false when WAV is off', () => {
+  it('announces as a switch and reports checked:false when WAV is off', async () => {
     mockDriverMeData = { is_wav: false };
     const screen = render(<SettingsScreen />);
+    await flushPendingEffects();
 
     const toggle = screen.getByLabelText('settings.wavTitle');
     expect(toggle.props.accessibilityRole).toBe('switch');
@@ -108,9 +124,10 @@ describe('Driver settings — WAV accessibility toggle', () => {
     );
   });
 
-  it('announces as a switch and reports checked:true when WAV is on', () => {
+  it('announces as a switch and reports checked:true when WAV is on', async () => {
     mockDriverMeData = { is_wav: true };
     const screen = render(<SettingsScreen />);
+    await flushPendingEffects();
 
     const toggle = screen.getByLabelText('settings.wavTitle');
     expect(toggle.props.accessibilityRole).toBe('switch');

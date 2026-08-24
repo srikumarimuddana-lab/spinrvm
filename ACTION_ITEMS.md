@@ -9600,6 +9600,98 @@ record of what was assumed vs. what was actually true</summary>
     not money-critical (no wallet/Stripe write on this screen); no
     auditor review sought given the surface. Full rider-app suite still
     green (123 suites / 1451 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/ride-details.tsx`: 89.24% → 96.2% stmts, 72.58% →
+    98.06% branch, 79.48% → 100% funcs, 91.36% → 95.68% lines** (money-
+    adjacent: past-ride receipt/fare-breakdown display, no wallet/Stripe
+    write). Already had `rideDetailsScreen.test.tsx` (30 tests: mount
+    fetch, not-found fallback, status-badge branches, the
+    cancelled-vs-normal fare-display split, fare-line consolidation,
+    promo/tip injection, email-receipt success/failure, the
+    PDF-export-unavailable-in-Jest catch path, back/help nav, and the
+    `buildReceiptHtml` unit-tested separately for its own tax/driver/
+    route-snapshot branches) — extended in place (+27 tests, 57 total).
+    Closed: **found and fixed a pre-existing test bug** — the existing
+    "calls fitToCoordinates via the map ref" test passed
+    `actual_route_segments` as raw `{latitude, longitude}` objects, which
+    don't match `shared/utils/routeSegments.ts`'s normalizer shape
+    (`coordinates: [[lat,lng],...]`, or `.points`) and so were silently
+    rejected — `mapCoordinates` stayed empty, the effect's own
+    `mapCoordinates.length < 2` guard short-circuited, and
+    `fitToCoordinates` was never actually called despite the test's name
+    and its (assertion-free) "no throw" check passing; fixed with a
+    correctly-shaped segment and a real `toHaveBeenCalledWith`
+    assertion (the map ref mock's `fitToCoordinates` was promoted to a
+    shared module-level `jest.fn()` for this, with a stable `[]`
+    `useImperativeHandle` deps array per this session's established
+    pattern). That fix then opened up the entire previously-dark route-
+    rendering branch family: the actual-GPS-route solid line, the
+    dashed pickup-leg underlay (`navigating_to_pickup` phase segments),
+    and the booked-route dashed underlay (v2 ride, incomplete geometry)
+    rendering together; both `routeQualityText` v2-no-actual-route
+    variants (`routeIsProcessing` true → "processing", false →
+    "unavailable") plus the legacy pre-v2 "Planned route preview"
+    fallback. Also closed: all four payment-badge combinations
+    (wallet/company_allowance/card-with-last4/card-without-last4 ×
+    paid/failed/pending) on **both** the cancellation-fee card and the
+    fare-breakdown card (previously each card had only 1-2 of the 4
+    combinations exercised, and never the same combination on both
+    cards); a cancelled ride with a $0 total fee rendering no card at
+    all; a single (non-consolidated) fare line kept as-is alongside a
+    passthrough tax-type line; a `modifier`-type line's own icon
+    styling and a line with neither an amount nor a recognized type
+    being dropped entirely; not duplicating an already-present
+    discount/tip line in `fare_breakdown` on top of the injected one;
+    the multi-fare consolidation's `distance_km`-absent branch (no "(X
+    km)" suffix) and the generic "Promo discount" label when
+    `promo_code` is absent; a fare line with a null `amount` treated as
+    $0 in the consolidation reduce; the GPS-measured "Distance (GPS)"
+    label vs. the booking-estimate fallback; both action buttons'
+    (Email receipt / Download invoice) in-flight spinners and their
+    double-tap re-entrancy guards; the registered-email-missing toast
+    fallback; the no-`rideId`-in-params no-op; and, in
+    `buildReceiptHtml` directly, the `_num` NaN-to-`$0.00` fallback
+    (never rendering the literal string "NaN"), the driver-block's
+    "Your driver" fallback when a name is present but no code/vehicle
+    is, and a tax_breakdown entry with a zero/falsy `rate` omitting the
+    "(X%)" suffix. Left uncovered (diminishing returns, not chased):
+    `handleDownloadInvoice`'s actual `Print.printToFileAsync` success
+    path (lines 149-154) — Jest's CJS runtime throws on ANY dynamic
+    `import()` regardless of `jest.mock()`, so every tap deterministically
+    lands in the catch branch, which is also the real "old build without
+    the native module" failure mode this code defends against, per the
+    pre-existing test-file comment; `formatDate`'s `catch` block
+    (line 296) — same pattern as `promotions.tsx`'s `formatExpiry`
+    finding above, a malformed-but-present date string doesn't actually
+    throw in `toLocaleDateString`, so it's unreachable through the
+    screen; the module-level `MAP_PROVIDER` Android/iOS branch — computed
+    once at import time from `Platform.OS`, not per-render-testable
+    without a pre-import mock rework; `userInterfaceStyle={isDark ?
+    "dark" : "light"}` — the `isDark` true branch, which would need a
+    mutable theme mock this file's existing fixed
+    `jest.mock('@shared/theme/ThemeContext', ...)` doesn't support,
+    judged not worth the rework for one map style prop; and `routeLabel`'s
+    `showPlannedUnderlay ? 'Booked route' : 'Actual route'` distinction —
+    genuinely inert in the current UI: `routeLabel` is only ever rendered
+    when `hasActualRoute` is true or the ride is legacy (pre-v2), neither
+    of which reach this branch (it's computed only when `hasActualRoute`
+    is false AND `isV2Route` is true, a state where the rendered
+    `routeQualityText` ternary takes a separate arm that doesn't
+    reference `routeLabel` at all) — a latent unused computation, not a
+    bug, not chased. No bug found in production code. Money-adjacent
+    (fare/payment display) but not money-critical (no wallet/Stripe
+    write); `spinr-money-auditor` reviewed the diff and returned SAFE —
+    production file confirmed untouched, and every money-relevant
+    assertion (fare consolidation/reduce math incl. the null-amount-as-0
+    case, cancellation-fee total and its zero-fee suppression, tax
+    formatting incl. the zero-rate suffix omission, the NaN-to-`$0.00`
+    fallback, all payment-badge combinations on both cards) traced
+    line-by-line against the real logic and confirmed correct; one
+    initially-ambiguous case (the download-invoice double-tap test
+    asserting a single toast) was verified via an isolated
+    instrumentation run to be pre-existing, already-documented
+    Jest-environment behavior (the dynamic `import()` always throws
+    here), not a masked bug. 57 tests; full rider-app suite still green
+    (123 suites / 1484 tests), `yarn tsc --noEmit` clean.
   - **rider-app `app/settings.tsx`: 96.66% → 100% stmts, 71.42% → 100%
     branch, 91.66% → 100% funcs, 96.15% → 100% lines.** Already had
     `settingsScreen.test.tsx` (14 tests: preference-sync from the

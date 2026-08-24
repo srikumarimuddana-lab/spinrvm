@@ -27,13 +27,14 @@ jest.mock('react-native-safe-area-context', () => ({
   SafeAreaView: ({ children }: any) => children,
 }));
 
+const mockFitToCoordinates = jest.fn();
 jest.mock('react-native-maps', () => {
   const ReactActual = require('react');
   const MapView = ReactActual.forwardRef((props: any, ref: any) => {
-    ReactActual.useImperativeHandle(ref, () => ({ fitToCoordinates: jest.fn() }));
+    ReactActual.useImperativeHandle(ref, () => ({ fitToCoordinates: (...a: any[]) => mockFitToCoordinates(...a) }), []);
     return ReactActual.createElement('MapView', props, props.children);
   });
-  const Polyline = () => null;
+  const Polyline = (props: any) => ReactActual.createElement('Polyline', props);
   return { __esModule: true, default: MapView, Polyline, PROVIDER_GOOGLE: 'google' };
 });
 jest.mock('@shared/components/RouteLine', () => ({ RouteLine: () => null }));
@@ -131,6 +132,7 @@ beforeEach(() => {
   mockPrintToFileAsync.mockResolvedValue({ uri: 'file://receipt.pdf' });
   mockIsAvailableAsync.mockResolvedValue(true);
   mockShareAsync.mockResolvedValue(undefined);
+  mockFitToCoordinates.mockClear();
 });
 
 afterEach(() => {
@@ -181,6 +183,21 @@ describe('RideDetailsScreen', () => {
     expect(allText(r)).toContain('Fare breakdown');
     expect(allText(r)).toContain('100% goes to your driver · ride local, support local');
     expect(allText(r)).toContain('$13.00'); // 5.00 + 8.00 consolidated
+  });
+
+  it('treats a fare line with no amount as $0 when consolidating multiple fare lines', async () => {
+    mockApiGet.mockResolvedValue({
+      data: {
+        ...RIDE_COMPLETED,
+        fare_breakdown: [
+          { label: 'Base fare', amount: '5.00', type: 'fare' },
+          { label: 'Distance', amount: '8.00', type: 'fare' },
+          { label: 'Promo adjustment', amount: null, type: 'fare' },
+        ],
+      },
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('$13.00'); // 5.00 + 8.00 + 0 (null treated as 0)
   });
 
   it('injects a promo discount line when the ride has one but the breakdown does not', async () => {
@@ -234,6 +251,28 @@ describe('RideDetailsScreen', () => {
     expect(mockPrintToFileAsync).not.toHaveBeenCalled();
   });
 
+  it('labels the distance tile "Distance (GPS)" when actual_distance_km is present', async () => {
+    mockApiGet.mockResolvedValue({ data: { ...RIDE_COMPLETED, actual_distance_km: 5.4 } });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Distance (GPS)');
+  });
+
+  it('shows a spinner and "Sending…" on the email-receipt row while the request is in flight', async () => {
+    const r = await renderScreen();
+    const emailBtn = findButtonByText(r, 'Email receipt');
+    act(() => { emailBtn.props.onPress(); });
+    expect(allText(r)).toContain('Sending…');
+    await act(async () => { await flush(); });
+  });
+
+  it('shows a spinner and "Preparing…" on the download-invoice row while the export is in flight', async () => {
+    const r = await renderScreen();
+    const downloadBtn = findButtonByText(r, 'Download invoice (PDF)');
+    act(() => { downloadBtn.props.onPress(); });
+    expect(allText(r)).toContain('Preparing…');
+    await act(async () => { await flush(); });
+  });
+
   it('hides the receipt actions for a non-completed ride', async () => {
     mockApiGet.mockResolvedValue({ data: RIDE_CANCELLED });
     const r = await renderScreen();
@@ -261,6 +300,38 @@ describe('RideDetailsScreen', () => {
     const backBtn = r.root.findAllByType(TouchableOpacity)[0];
     act(() => { backBtn.props.onPress(); });
     expect(mockBack).toHaveBeenCalled();
+  });
+
+  it('ignores a second Email receipt tap while the first request is still in flight', async () => {
+    const r = await renderScreen();
+    const emailBtn = findButtonByText(r, 'Email receipt');
+    act(() => { emailBtn.props.onPress(); }); // 1st tap, sets emailSending
+    act(() => { emailBtn.props.onPress(); }); // 2nd tap, guarded by `if (emailSending) return;`
+    await act(async () => { await flush(); });
+    expect(mockApiPost).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a second Download invoice tap while the first export is still in flight', async () => {
+    const r = await renderScreen();
+    const downloadBtn = findButtonByText(r, 'Download invoice (PDF)');
+    act(() => { downloadBtn.props.onPress(); }); // 1st tap, sets pdfBusy
+    act(() => { downloadBtn.props.onPress(); }); // 2nd tap, guarded by `if (pdfBusy) return;`
+    await act(async () => { await flush(); });
+    expect(mockShowToast).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to "your registered email" when the signed-in user has no email on file', async () => {
+    mockGetState.mockReturnValue({ user: { email: undefined as any } });
+    const r = await renderScreen();
+    const emailBtn = findButtonByText(r, 'Email receipt');
+    await act(async () => { await emailBtn.props.onPress(); await flush(); });
+    expect(mockShowToast).toHaveBeenCalledWith('Receipt Sent', 'Receipt emailed to your registered email.', 'success');
+  });
+
+  it('does nothing (no fetch) when no rideId is present in the route params', async () => {
+    mockParams = {};
+    await renderScreen();
+    expect(mockApiGet).not.toHaveBeenCalled();
   });
 });
 
@@ -299,6 +370,15 @@ describe('buildReceiptHtml', () => {
     expect(html).toContain('$0.50');
     expect(html).toContain('PST (6%)');
     expect(html).not.toContain('Other');
+  });
+
+  it('omits the "(X%)" rate suffix for a tax_breakdown entry with a zero/falsy rate', () => {
+    const html = buildReceiptHtml({
+      id: 'r3b', total_fare: '10.00', grand_total: '10.30',
+      tax_breakdown: { Levy: { amount: '0.30', rate: 0 } },
+    });
+    expect(html).toContain('Levy');
+    expect(html).not.toContain('Levy (0%)');
   });
 
   it('falls back to a single "Tax" line from the grand_total gap when no tax_breakdown is present', () => {
@@ -360,6 +440,17 @@ describe('buildReceiptHtml', () => {
     const html = buildReceiptHtml({});
     expect(html).toContain('Ride <strong style="color:#1a1a1a">—</strong>');
   });
+
+  it('treats a non-numeric fare field as $0.00 (the _num NaN fallback) instead of rendering "NaN"', () => {
+    const html = buildReceiptHtml({ id: 'r13', base_fare: 'not-a-number', total_fare: '10.00', grand_total: '10.00' });
+    expect(html).toContain('$0.00');
+    expect(html).not.toContain('NaN');
+  });
+
+  it('falls back to "Your driver" when a driver name is present but no code or vehicle is', () => {
+    const html = buildReceiptHtml({ id: 'r14', driver_name: 'Alex Rider' });
+    expect(html).toContain('Your driver');
+  });
 });
 
 describe('map rendering (pickup_lat/dropoff_lat present)', () => {
@@ -382,20 +473,216 @@ describe('map rendering (pickup_lat/dropoff_lat present)', () => {
   });
 
   it('calls fitToCoordinates via the map ref once onMapReady fires with 2+ coordinates', async () => {
+    // Segments must match the shared normalizer's shape (`coordinates: [[lat,
+    // lng], ...]`, not raw `{latitude, longitude}` objects) or they're
+    // silently rejected — see the routeSegments describe block below.
     mockApiGet.mockResolvedValue({
       data: {
         ...RIDE_WITH_COORDS,
         actual_route_segments: [
-          { latitude: 52.13, longitude: -106.67 },
-          { latitude: 52.14, longitude: -106.65 },
+          { phase: 'trip_in_progress', coordinates: [[52.13, -106.67], [52.14, -106.65]] },
         ],
       },
     });
     const r = await renderScreen();
     const MapViewNode = r.root.findByType('MapView' as any);
     await act(async () => { MapViewNode.props.onMapReady(); await flush(); });
-    // No assertion error thrown means the ref's fitToCoordinates (mocked via
-    // useImperativeHandle) was reachable and callable post state update.
-    expect(allText(r)).toBeDefined();
+    expect(mockFitToCoordinates).toHaveBeenCalledWith(
+      [{ latitude: 52.13, longitude: -106.67 }, { latitude: 52.14, longitude: -106.65 }],
+      expect.objectContaining({ animated: false }),
+    );
+  });
+
+  it('renders the actual GPS route as a solid line, a dashed pickup-leg underlay, and the booked-route dashed underlay when the actual route is incomplete', async () => {
+    mockApiGet.mockResolvedValue({
+      data: {
+        ...RIDE_WITH_COORDS,
+        route_schema_version: 2,
+        route_geometry_status: 'processing', // not 'complete' -> booked underlay stays on
+        planned_route_polyline: { coordinates: [[52.11, -106.69], [52.12, -106.68]] },
+        actual_route_segments: [
+          { phase: 'trip_in_progress', coordinates: [[52.13, -106.67], [52.14, -106.65]] },
+          { phase: 'navigating_to_pickup', coordinates: [[52.10, -106.70], [52.101, -106.699]] },
+        ],
+      },
+    });
+    const r = await renderScreen();
+    const MapViewNode = r.root.findByType('MapView' as any);
+    const polylines = MapViewNode.findAllByType('Polyline' as any);
+    // 1 booked-underlay + 1 pickup-leg dashed underlay = 2 Polyline elements
+    // (the actual trip line itself renders via the mocked RouteLine, not Polyline).
+    expect(polylines.length).toBe(2);
+    await act(async () => { MapViewNode.props.onMapReady(); await flush(); });
+    expect(mockFitToCoordinates).toHaveBeenCalled();
+    // hasActualRoute is true here (a real trip_in_progress segment exists),
+    // so the quality text takes the "Actual route · <quality>" branch, not
+    // the isV2Route/routeIsProcessing one — that's covered separately below.
+    expect(allText(r)).toContain('Actual route ·');
+  });
+
+  it('shows "Actual route unavailable" for a v2 ride whose geometry finished processing with no usable actual route', async () => {
+    mockApiGet.mockResolvedValue({
+      data: { ...RIDE_WITH_COORDS, route_schema_version: 2, route_geometry_status: 'complete' },
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Actual route unavailable');
+  });
+
+  it('shows the legacy "Planned route preview" label for a pre-v2 ride with no actual route', async () => {
+    const r = await renderScreen(); // RIDE_COMPLETED default: no route_schema_version, no actual_route_segments
+    expect(allText(r)).toContain('Planned route · Planned route preview');
+  });
+
+  it('shows "Actual route processing" for a v2 ride with no actual route yet while geometry is still processing', async () => {
+    mockApiGet.mockResolvedValue({
+      data: { ...RIDE_WITH_COORDS, route_schema_version: 2, route_geometry_status: 'processing' },
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Actual route processing');
+  });
+});
+
+describe('payment badge variants', () => {
+  it('shows Company Account / Failed for a cancelled ride paid by company allowance that failed', async () => {
+    mockApiGet.mockResolvedValue({
+      data: { ...RIDE_CANCELLED, payment_method: 'company_allowance', payment_status: 'failed' },
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Company Account');
+    expect(allText(r)).toContain('Failed');
+  });
+
+  it('falls back to plain "Card" / "Pending" for a cancelled ride paid by a card with no last4', async () => {
+    mockApiGet.mockResolvedValue({
+      data: { ...RIDE_CANCELLED, payment_method: 'card', card_last4: undefined, payment_status: 'pending' },
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('"Card"');
+    expect(allText(r)).toContain('Pending');
+  });
+
+  it('shows Company Account / Failed on the fare-breakdown card for a completed ride paid by company allowance that failed', async () => {
+    mockApiGet.mockResolvedValue({
+      data: { ...RIDE_COMPLETED, payment_method: 'company_allowance', payment_status: 'failed' },
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Company Account');
+    expect(allText(r)).toContain('Failed');
+  });
+
+  it('falls back to plain "Card" / "Pending" on the fare-breakdown card for a completed ride paid by a card with no last4', async () => {
+    mockApiGet.mockResolvedValue({
+      data: { ...RIDE_COMPLETED, payment_method: 'card', card_last4: undefined, payment_status: 'pending' },
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('"Card"');
+    expect(allText(r)).toContain('Pending');
+  });
+
+  it('renders no cancellation-fee card at all for a cancelled ride with a zero total fee', async () => {
+    mockApiGet.mockResolvedValue({
+      data: { ...RIDE_CANCELLED, cancellation_fee_admin: '0', cancellation_fee_driver: '0' },
+    });
+    const r = await renderScreen();
+    expect(allText(r)).not.toContain('Cancellation fee');
+  });
+
+  it('shows the card-with-last4 badge on the cancellation-fee card too', async () => {
+    mockApiGet.mockResolvedValue({
+      data: { ...RIDE_CANCELLED, payment_method: 'card', card_last4: '9999' },
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Card •••• 9999');
+  });
+
+  it('shows the Spinr Wallet badge on the fare-breakdown card (only the cancellation card was exercised before)', async () => {
+    mockApiGet.mockResolvedValue({
+      data: { ...RIDE_COMPLETED, payment_method: 'wallet' },
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Spinr Wallet');
+  });
+});
+
+describe('fare-breakdown line-type branches', () => {
+  it('keeps a single fare line as-is (no consolidation) and passes a tax-type line through unchanged', async () => {
+    mockApiGet.mockResolvedValue({
+      data: {
+        ...RIDE_COMPLETED,
+        fare_breakdown: [
+          { label: 'Base fare', amount: '10.00', type: 'fare' },
+          { label: 'GST', amount: '0.50', type: 'tax' },
+        ],
+      },
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('"Base fare"');
+    expect(allText(r)).toContain('100% goes to your driver · ride local, support local');
+    expect(allText(r)).toContain('"GST"');
+  });
+
+  it('renders a modifier line with its own icon styling and drops a line with neither an amount nor a modifier type', async () => {
+    mockApiGet.mockResolvedValue({
+      data: {
+        ...RIDE_COMPLETED,
+        fare_breakdown: [
+          { label: 'Base fare', amount: '5.00', type: 'fare' },
+          { label: 'Peak pricing', type: 'modifier', amount: null },
+          { label: 'Unrecognized note', type: 'note', amount: null },
+        ],
+      },
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Peak pricing');
+    expect(allText(r)).not.toContain('Unrecognized note');
+  });
+
+  it('consolidates multiple fare lines into a plain "Ride fare" (no km suffix) when distance_km is absent, and injects a generic "Promo discount" label when there is no promo_code', async () => {
+    mockApiGet.mockResolvedValue({
+      data: {
+        ...RIDE_COMPLETED,
+        distance_km: undefined,
+        discount_amount: '1.00', promo_code: undefined,
+        fare_breakdown: [
+          { label: 'Base fare', amount: '5.00', type: 'fare' },
+          { label: 'Distance', amount: '8.00', type: 'fare' },
+        ],
+      },
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('"Ride fare"');
+    expect(allText(r)).toContain('Promo discount');
+  });
+
+  it('renders a line with a present amount but an unrecognized type using the plain (uncolored) default label', async () => {
+    mockApiGet.mockResolvedValue({
+      data: {
+        ...RIDE_COMPLETED,
+        fare_breakdown: [
+          { label: 'Base fare', amount: '5.00', type: 'fare' },
+          { label: 'Airport surcharge', amount: '2.00', type: 'fee' },
+        ],
+      },
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Airport surcharge');
+  });
+
+  it('does not duplicate the promo/tip line when the breakdown already contains one', async () => {
+    mockApiGet.mockResolvedValue({
+      data: {
+        ...RIDE_COMPLETED,
+        discount_amount: '2.50', promo_code: 'SAVE10', tip_amount: '3.00',
+        fare_breakdown: [
+          { label: 'Base fare', amount: '10.00', type: 'fare' },
+          { label: 'Promo (SAVE10)', amount: '-2.50', type: 'discount' },
+          { label: 'Tip', amount: '3.00', type: 'tip' },
+        ],
+      },
+    });
+    const r = await renderScreen();
+    const text = allText(r);
+    expect((text.match(/Promo \(SAVE10\)/g) || []).length).toBe(1);
+    expect((text.match(/"Tip"/g) || []).length).toBe(1);
   });
 });

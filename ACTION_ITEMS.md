@@ -9263,6 +9263,117 @@ record of what was assumed vs. what was actually true</summary>
     1360 tests), `yarn tsc --noEmit` clean. **This closes out the last
     item on the 2026-08-24 fresh-coverage-sweep ranked list** — a
     further fresh sweep is needed to find the next tier.
+  - **Fresh coverage sweep (2026-08-24, post-#4513/#4515-merge) — next
+    tier identified.** Re-ran both apps'
+    `--collectCoverageFrom='app/**/*.{ts,tsx}'` coverage against `main`
+    at `cbfdc28` (123 rider-app suites / 1360 tests, 115 driver-app
+    suites / 1243 tests, both fully green) and ranked by line %
+    (`_layout.tsx` files excluded — near-zero by nature, not a real
+    gap). Two PRs from the prior tier were still open (not yet merged)
+    at measurement time — `ride-status.tsx` (#4507) and
+    `emergency-contacts.tsx` (#4514) — so this list reflects their
+    pre-PR numbers; both PRs already close those two gaps once merged.
+    Next tier, worst first:
+    - **rider-app:** `ride-options.tsx` (80.7% — the file this session's
+      earlier rounds already extended twice; still has room at 2284
+      lines, the largest screen in the app), `ride-status.tsx` (84.5% —
+      superseded by open PR #4507, → 97.4%), `emergency-contacts.tsx`
+      (87.5% — superseded by open PR #4514, → 100%), `driver-arrived.tsx`
+      (88.2%), `(tabs)/activity.tsx` (88.4%), `ride-completed.tsx`
+      (89.5%), `notifications.tsx` (89.7%), `scheduled-rides.tsx`
+      (90.4%), `wallet.tsx` (90.9%).
+    - **driver-app:** unchanged from the prior sweep (no driver-app PRs
+      landed this round) — `driver/(tabs)/index.tsx` (74.5%),
+      `become-driver.tsx` (80.7%), `documents.tsx` (86.8%),
+      `vehicle-info.tsx` (88.3%), `login.tsx` (88.7%), `driver/payout.tsx`
+      (88.8%), `driver/tax-documents.tsx` (88.9% — documented dead-code
+      remainder, not a real gap), `driver/payout-history.tsx` (89.4%),
+      `driver/ride-detail.tsx` (89.5%).
+    Sub-item 5 continues as an open-ended effort — pick up from this
+    list wherever a future session left off, re-running the coverage
+    command above to confirm current numbers before starting (they'll
+    have moved since this snapshot, and #4507/#4514 may have merged).
+  - **rider-app `app/ride-status.tsx`: 84.5% → 97.4% lines.** Already had
+    `rideStatusScreen.test.tsx` (17 tests: loading/header, searching's
+    "taking longer" copy, driver_assigned/driver_accepted bodies, the
+    driver-photo fallback, all four `handleBackPress` cancel-copy
+    branches, the notes-chip save/failure paths), plus
+    `rideStatusCloseButton.test.tsx` and a type-only contract test —
+    extended the screen test file in place (+8 tests): the offer
+    countdown's real `offer_expires_at`-driven computation (previously
+    only the `offer_timeout_seconds`-fallback branch was exercised) and
+    its 500ms tick-down actually firing; the driver-photo-error fallback
+    repeated for the `driver_arrived` body (a separate `<Image>` render
+    from the `driver_assigned` one already covered); all three
+    `__DEV__`-only status-simulation buttons (Assign Driver/Arrive at
+    Pickup/Go to Arriving Screen, including Assign Driver's
+    swallowed-failure branch); and the note-for-driver modal's Cancel
+    button and tap-the-backdrop dismiss paths. 25 tests; full rider-app
+    suite still green (123 suites / 1306 tests), `yarn tsc --noEmit`
+  - **Fresh coverage sweep (2026-08-24, post-#4513/#4515) — next tier
+    identified.** See the separate entry documenting this sweep's
+    ranked list (opened as its own doc-only PR #4516): rider-app's
+    worst offender became `ride-options.tsx` (80.7% — the largest
+    screen in the app at 2284 lines).
+  - **rider-app `app/ride-options.tsx`: 79.16% → 96.07% stmts, 80.7% →
+    97.95% lines** (money-critical: this is where a ride is actually
+    created). Already had `rideOptionsScreen.test.tsx` (36 tests: mount
+    fetch, `handleSelect`, the payment/scheduled-time/work-policy/surge
+    booking guards, `proceedWithBooking`'s happy/error paths,
+    `handleScheduleConfirm`, `handleManualPromo`, WAV/quiet-mode
+    toggles, the work-mode banner, fare-breakdown collapse, payment-sheet
+    selection) — extended in place (+33 tests). At this file's scale
+    (2284 lines) the win came mostly from three previously-unmocked or
+    under-mocked areas: map rendering (imported the mocked `MapView`/
+    `Marker`/`Polygon` and `CarMarker` directly to exercise `onMapReady`,
+    `fallbackHeading`'s deterministic-hash fallback for a driver with no
+    real heading, the near-zero/NaN coordinate filter, per-stop markers,
+    and service-area polygons fetched from `/service-areas`, including
+    the <3-point malformed-entry filter); the three `@gorhom/bottom-sheet`
+    instances' open/close mechanics (`handlePaymentSheetChange` +
+    the Android-hardware-back handler that's only registered while the
+    payment sheet is open — found and fixed a real bug in the *test's
+    own* card-row lookup along the way: `findByText(r, 'Visa')` was
+    ambiguously matching the footer's own payment-summary row, "Visa
+    •••• 4242", not the sheet's row — the footer's onPress only opens
+    the sheet, so the test had never actually exercised the card-select
+    handler despite passing; fixed by matching the sheet row's exact,
+    un-suffixed "Visa" text; the promo sheet's iOS keyboard-aware
+    deferred-close (`keyboardWillShow`/`keyboardWillHide` listeners +
+    the pending-close ref, only active on iOS); both sheets' backdrop
+    `onPress`); and the promo sheet's suggested-offers list (selecting
+    an eligible offer, an ineligible offer's toast, the empty-offers
+    state, and the "Remove applied code" row nested inside the sheet —
+    distinct from the main-row "Remove promo code" chip already
+    covered). Also closed: `loadSavedCards`'s fetch-failure
+    `console.warn`; the "Add / select card" confirm-sheet button opening
+    the payment sheet; `handleBookRide`'s own scheduled-time-under-15-
+    minutes guard (distinct from `handleScheduleConfirm`'s identical
+    check on the picker itself); `proceedWithBooking`'s `isEngineError`
+    branch (client-side-crash capture via `recordNonFatal`) and its two
+    remaining 409-reroute status branches (`driver_arrived`,
+    `completed`); the Retry button's `onPress`; the `firstAvailableIndex`
+    auto-select branch (a leading unavailable estimate correctly skipped
+    in favour of the first available one); the map's `fitToCoordinates`
+    effect (needed a populated `stops` array too — an empty array's
+    `.filter()` callback never runs, which is what had kept that one
+    line flagged even though the surrounding statement executes);
+    `SchedulePicker`'s and `ConfirmSheet`'s own `onClose` (backdrop-tap
+    dismissal, not just their button presses); and the footer's Payment
+    row `onPress`. Left uncovered (a genuine test-environment limitation,
+    not a real gap): `MapViewDirections`'s `onReady`/`onError` and the
+    `onReadyDirections` handler's `fitToCoordinates` call are all gated
+    behind `GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY`
+    captured in a **module-level `const`** at import time — unlike
+    `ride-in-progress.tsx`'s equivalent (read inline per-render, so
+    `process.env...` set in `beforeEach` works there), this file's copy
+    is frozen before any test's `beforeEach` runs, and Babel/Jest hoist
+    `import` statements above any same-file `process.env` assignment
+    regardless of source order, so there is no supported way to flip it
+    per-test without a `jest.config.js`/`setupFiles`-level env change
+    (out of scope for a coverage-only pass). 69 tests; full rider-app
+    suite still green (123 suites / 1393 tests), `yarn tsc --noEmit`
+    clean.
   - **rider-app `app/emergency-contacts.tsx`: 87.5% → 100% stmts / 100%
     lines.** Already had `emergencyContactsScreen.test.tsx` (12 tests:
     load, empty state, both phone-format lengths, name/phone validation,
@@ -9571,6 +9682,60 @@ record of what was assumed vs. what was actually true</summary>
   corporate/billing form (subscriptions assignment, KYB approve/reject
   note, wallet adjustments, etc.) remain unmigrated; no ADR/
   migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-24 update — step 7: `rider-app/app/login.tsx` checked and
+  skipped (nothing to extract); migrated
+  `driver-app/app/profile-setup.tsx` instead, per this item's own "Still
+  open" ordering.** `login.tsx`'s only inline check is
+  `isValid = phoneNumber.length === 10` — no error message/toast, no
+  branching, no second condition it could conflict with in priority
+  order. That's not the "validation-rule coverage is invisible" gap this
+  item names (there is no rule beyond a length check already visible at
+  the call site, and `handlePhoneChange` itself hard-caps input to 10
+  digits before `isValid` ever runs) — extracting it into a schema file
+  would be a single one-line `z.string().length(10)` wrapper with no
+  behavior to pin in tests, so per this task's own fallback instruction
+  it was left alone rather than forcing a migration. Moved to the next
+  "Still open" item instead: `driver-app`'s signup/profile-setup form.
+  Migrated `driver-app/app/profile-setup.tsx`'s `handleSubmit` field
+  validation (first/last name length, email, gender, service area — the
+  driver-side identity fields that feed downstream KYC/compliance checks,
+  mirroring rider-app step 5's equivalent screen). New colocated
+  `driver-app/utils/profileSetupSchema.ts` (`profileSetupSchema` +
+  `getProfileSetupError` + `isProfileSetupFormValid`, plus individual
+  `isFirstNameValid`/`isLastNameValid`/`isEmailValid`/`isServiceAreaValid`
+  predicates — kept separate, not just an aggregate boolean, because the
+  screen reads each one independently to drive its own per-field checkmark
+  icon) reproduces the screen's six sequential inline checks
+  (`isFirstNameValid` i.e. `trim().length > 1`, `isLastNameValid` same,
+  empty-email, the `/^[^\s@]+@[^\s@]+\.[^\s@]+$/` email regex,
+  empty-gender, empty-serviceAreaId) in the same priority order (first
+  failing check wins) and with the same toast title/message pairs,
+  byte-for-byte — a pure extraction, not a validation-rule change, same
+  discipline as steps 1-5. `zod` was already a `driver-app` dependency
+  (added in step 3) — not re-added. New
+  `driver-app/utils/__tests__/profileSetupSchema.test.ts` (19
+  accept/reject cases, including boundary cases for the 2-letter name
+  length rule and priority-order cases pinning which error wins when
+  multiple fields are invalid at once). Verification: 19/19 new tests
+  pass (isolated run); full driver-app suite 1262/1262 tests, 116/116
+  suites pass, 0 regressions (single clean full run, no flakes observed);
+  `npx tsc --noEmit` clean; `npx eslint app/profile-setup.tsx
+  utils/profileSetupSchema.ts utils/__tests__/profileSetupSchema.test.ts`
+  clean; **real production build** (`npm run build:web` → `expo export
+  --platform web`) completed successfully, exit code 0 (`Exported: dist`,
+  6.8MB web bundle); blast-radius grep confirmed `app/profile-setup.tsx`
+  is the only reader of the extracted checks (`driver-app/app/driver/
+  (tabs)/profile.tsx` has its own separate, unrelated `EMAIL_REGEX` const
+  for a different edit-profile flow — not imported from or shared with
+  this screen; `reactivate-account.tsx`, `otp.tsx`, and `_layout.tsx` only
+  navigate to `profile-setup.tsx`, none read its validation). Full Change
+  Impact Log:
+  `docs/change-log/2026-08-24-b39-driver-profile-setup-zod-step6.md`.
+  **Still open:** every other admin-dashboard corporate/billing form
+  (subscriptions, KYB, wallet adjustments, etc.) remains unmigrated; no
+  ADR/migration-order doc written yet; `rider-app/app/login.tsx` is now
+  considered resolved for this item (checked, nothing worth extracting —
+  see above), not merely deferred. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

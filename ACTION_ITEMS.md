@@ -8795,6 +8795,37 @@ record of what was assumed vs. what was actually true</summary>
     itself rejecting, which fails open to `/driver` same as a
     `needs_notice: false` response. 27 tests; full driver-app suite
     still green (114 suites / 1210 tests), `yarn tsc --noEmit` clean.
+  - **driver-app `app/driver/subscription.tsx`: 84.1% → 99.2% lines.**
+    Already had a strong `subscriptionScreen.test.tsx` (12 tests) but
+    several branches were untouched. Extended in place (+12 tests): the
+    payments-fetch-throws fallback to an empty page (the outer
+    `loadData` catch only covers plans/current, payments has its own
+    inline `.catch()`); a plain-array `plans` response (the legacy shape
+    before the `free_mode` wrapper); the whole-`loadData`-rejects outer
+    catch (plans itself throws — logs and leaves the screen non-crashing
+    with no plan cards); the "Switch" alert action actually pressed (not
+    just the alert's copy, which was already pinned) to exercise
+    `doSubscribe` on the switch-plan path; `verify-session` itself
+    throwing (falls back to the same "Processing..." toast as a
+    non-active status); the cancel-request failure toast; both
+    countdown helpers' full branch sets (`formatResetCountdown`'s
+    <1h-minutes vs ≥1h-hours, `formatExpiryCountdown`'s <1h/`<24h`/
+    `≥24h`-day-rollup); the multi-day (non-1-day-pass) calendar-reset
+    quota disclaimer copy, previously only the 1-day-pass variant was
+    tested; and the infinite-scroll pagination guard's early return when
+    scrolling with no more payments left to load (asserted via a
+    direct `onMomentumScrollEnd` call rather than the hidden "Load more"
+    link, since the guard fires before that link would ever render).
+    One line (281, `formatDate`'s catch branch) stays uncovered — in
+    this Hermes/Jest runtime `new Date('not-a-date').toLocaleDateString()`
+    does not actually throw (returns `"Invalid Date"` rather than
+    raising `RangeError`, unlike some other JS engines), so the catch
+    is real defensive code but not exercisable from this test
+    environment without contriving an object whose `valueOf`/`toString`
+    throws — which would then fail to render as a `<Text>` child anyway,
+    so left as-is rather than forcing a fragile test. 24 tests; full
+    driver-app suite still green (114 suites / 1222 tests), `yarn tsc
+    --noEmit` clean.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

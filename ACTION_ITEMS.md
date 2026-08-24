@@ -7263,18 +7263,35 @@ record of what was assumed vs. what was actually true</summary>
 
 ### B37. Frontend coverage gates measure only a fraction of each app, and admin-dashboard's threshold never actually runs in CI
 
-- [ ] **Status:** all three sub-items FIXED 2026-08-22 (admin-dashboard
-  same day as filing; rider-app/driver-app's directory-by-directory
-  widening completed the same day across several follow-up passes —
-  every top-level source directory in every app is now measured). Found
-  2026-08-22 while auditing test/validation coverage across all Spinr
-  surfaces at the user's request — verified by actually running each
-  app's coverage tool locally (not a spot check of config file presence),
-  reading the real numbers, and cross-checking against what CI actually
-  invokes. Left open (checkbox unchecked) because the fixes wire up and
-  widen the gates to a low, honest baseline — they don't reach the user's
-  stated 100% target, which needs ongoing test-authoring/ratchet work
-  (see Recommended fix step 4) that's out of scope for config changes
+- [x] **Status: CLOSED 2026-08-24.** All three sub-items FIXED 2026-08-22
+  (admin-dashboard same day as filing; rider-app/driver-app's
+  directory-by-directory widening completed the same day across several
+  follow-up passes — every top-level source directory in every app is now
+  measured). The one piece left open after that pass — a milestone ratchet
+  plan raising each threshold as real coverage improves, toward the
+  user's stated 100% target — is now done too: see
+  `docs/testing/coverage-ratchet-plan.md` for the full plan, mechanism,
+  and honesty note on why literal 100% is aspirational. First ratchet
+  step applied same day: re-measured all three frontend surfaces fresh
+  (`npx jest --coverage` / `npx vitest run --coverage`) and found
+  rider-app's and driver-app's gates had drifted 30-50 points below
+  actual (extensive B37 screen-test-authoring work had raised real
+  coverage without the numeric threshold ever being re-tightened to
+  match) — tightened both to ~2-3pts below today's measured ceiling:
+  rider-app `lines:20→73, functions:16→69, branches:15→63`; driver-app
+  `lines:33→65, functions:26→60, statements:32→63`. admin-dashboard's
+  gate hadn't drifted (19.11%/13.05%/11.71%/20.75% measured vs.
+  19/11/19/18 threshold, within ~1-2pts already) so left unchanged this
+  round. All three surfaces verified green against the new thresholds
+  (rider-app 122/122 suites, driver-app 115/115 suites, admin-dashboard
+  36/36 files). Found 2026-08-22 while auditing test/validation coverage
+  across all Spinr surfaces at the user's request — verified by actually
+  running each app's coverage tool locally (not a spot check of config
+  file presence), reading the real numbers, and cross-checking against
+  what CI actually invokes. Previously left open (checkbox unchecked)
+  because the fixes wire up and widen the gates to a low, honest
+  baseline — they didn't yet reach the user's stated 100% target, which
+  needs ongoing test-authoring/ratchet work (see Recommended fix step 4)
   alone.
 - **Fix applied (sub-item 1, admin-dashboard):** `.github/workflows/ci.yml`'s
   admin-dashboard test step now runs `npm run test:coverage` (was `npm
@@ -9009,10 +9026,14 @@ record of what was assumed vs. what was actually true</summary>
   `store/`+`hooks/`+`utils/`+`app/`+`components/`+`lib/`+`services/`;
   driver-app: same plus `api/`; admin-dashboard: all of `src/lib/`,
   `src/store/`, `src/components/`, `src/app/**`), passing at the current
-  thresholds. **Still open, genuinely out of scope for directory-widening
-  work:** a milestone ratchet plan (here or in a dedicated doc) raising
-  each threshold as real test coverage improves, toward the user's stated
-  100% target — that's ongoing test-authoring work, not a config change.
+  thresholds. ✅ **Closed 2026-08-24:** milestone ratchet plan written at
+  `docs/testing/coverage-ratchet-plan.md`, and its first step applied —
+  rider-app/driver-app thresholds re-tightened to ~2-3pts below freshly
+  re-measured actual coverage (both had drifted 30-50pts stale since
+  2026-08-22); admin-dashboard's gate hadn't drifted and was left as-is.
+  See the Status note above for the exact before/after numbers. Further
+  raises are ongoing test-authoring work per the plan doc's cadence, not
+  a one-time config change.
 
 ### B38. admin-dashboard's visual-regression CI job has zero committed baselines — it has been a documented no-op since it was added
 

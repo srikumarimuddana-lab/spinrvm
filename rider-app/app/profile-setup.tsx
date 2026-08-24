@@ -25,6 +25,7 @@ import { notifyError } from '../lib/notifyError';
 import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { getProfileSetupError, isProfileSetupValid } from '../utils/profileSetupSchema';
 
 export default function ProfileSetupScreen() {
   const router = useRouter();
@@ -83,20 +84,9 @@ export default function ProfileSetupScreen() {
   const handleSubmit = async () => {
     // Field-specific validation: name the exact field and problem — a blanket
     // "fill in all fields" leaves the user hunting for what's wrong.
-    if (!form.firstName.trim()) {
-      return showToast('First Name Required', 'Please enter your first name.', 'warning');
-    }
-    if (!form.lastName.trim()) {
-      return showToast('Last Name Required', 'Please enter your last name.', 'warning');
-    }
-    if (!form.email.trim()) {
-      return showToast('Email Required', 'Please enter your email address.', 'warning');
-    }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
-      return showToast('Invalid Email', 'That email doesn’t look right — e.g. name@example.com.', 'warning');
-    }
-    if (!form.gender) {
-      return showToast('Gender Required', 'Please select your gender.', 'warning');
+    const validationError = getProfileSetupError(form);
+    if (validationError) {
+      return showToast(validationError.title, validationError.message, 'warning');
     }
 
     Keyboard.dismiss();
@@ -200,7 +190,7 @@ export default function ProfileSetupScreen() {
     return () => sub.remove();
   }, [isEditing, handleLogout]);
 
-  const isFormValid = form.firstName.trim() && form.lastName.trim() && form.email.trim() && form.gender && (isEditing || tosAccepted);
+  const isFormValid = isProfileSetupValid(form) && (isEditing || tosAccepted);
   const genderOptions = ['Male', 'Female', 'Other'];
 
   const renderInput = (

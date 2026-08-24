@@ -307,4 +307,107 @@ describe('WalletScreen', () => {
     });
     expect(mockBack).toHaveBeenCalled();
   });
+
+  it('navigates to manage-cards when the Cards action is pressed', async () => {
+    const r = await renderScreen();
+    const cardsBtn = findButtonByText(r, 'Cards');
+    act(() => {
+      cardsBtn.props.onPress();
+    });
+    expect(mockPush).toHaveBeenCalledWith('/manage-cards');
+  });
+
+  it('clears the selected preset when typing a custom amount', async () => {
+    const r = await renderScreen();
+    const topUpBtn = findButtonByText(r, 'Top Up');
+    act(() => {
+      topUpBtn.props.onPress();
+    });
+    const chip25 = findButtonByText(r, '"$",25');
+    act(() => {
+      chip25.props.onPress();
+    });
+    // chip is now selected -> "Add $25.00" is on screen
+    expect(allText(r)).toContain('Add $25.00');
+    const input = r.root.findByProps({ placeholder: 'Custom amount' });
+    act(() => {
+      input.props.onChangeText('12');
+    });
+    // preset was cleared, custom amount drives the total instead
+    expect(allText(r)).toContain('Add $12.00');
+    expect(allText(r)).not.toContain('Add $25.00');
+  });
+
+  it('toasts an Invalid Amount warning when handleTopUp runs with an out-of-range amount', async () => {
+    const r = await renderScreen();
+    const topUpBtn = findButtonByText(r, 'Top Up');
+    act(() => {
+      topUpBtn.props.onPress();
+    });
+    const input = r.root.findByProps({ placeholder: 'Custom amount' });
+    act(() => {
+      input.props.onChangeText('600');
+    });
+    // Button is disabled (600 > $500 cap) but its onPress handler still
+    // guards the amount itself -- invoke it directly to pin that guard.
+    const addFundsBtn = findButtonByText(r, 'Add $600.00');
+    await act(async () => {
+      await addFundsBtn.props.onPress();
+      await flush();
+    });
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Invalid Amount',
+      expect.stringContaining('between $1 and $500'),
+      'warning',
+    );
+    expect(mockTopUp).not.toHaveBeenCalled();
+  });
+
+  it('toasts a Top-up Failed message when topUp() itself rejects', async () => {
+    mockTopUp.mockRejectedValue(new Error('network error'));
+    const r = await renderScreen();
+    const topUpBtn = findButtonByText(r, 'Top Up');
+    act(() => {
+      topUpBtn.props.onPress();
+    });
+    const chip25 = findButtonByText(r, '"$",25');
+    act(() => {
+      chip25.props.onPress();
+    });
+    const addFundsBtn = findButtonByText(r, 'Add $25.00');
+    await act(async () => {
+      await addFundsBtn.props.onPress();
+      await flush();
+    });
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Top-up Failed',
+      'Could not complete your top-up. Please try again.',
+      'danger',
+    );
+    expect(mockInitPaymentSheet).not.toHaveBeenCalled();
+  });
+
+  it('closes the top-up panel and resets the form when Cancel is pressed', async () => {
+    const r = await renderScreen();
+    const topUpBtn = findButtonByText(r, 'Top Up');
+    act(() => {
+      topUpBtn.props.onPress();
+    });
+    const chip25 = findButtonByText(r, '"$",25');
+    act(() => {
+      chip25.props.onPress();
+    });
+    expect(allText(r)).toContain('Add $25.00');
+    const cancelBtn = findButtonByText(r, 'Cancel');
+    act(() => {
+      cancelBtn.props.onPress();
+    });
+    expect(allText(r)).not.toContain('Add Funds');
+    // Re-open: preset/custom amount should have been reset back to empty.
+    const topUpBtn2 = findButtonByText(r, 'Top Up');
+    act(() => {
+      topUpBtn2.props.onPress();
+    });
+    expect(allText(r)).toContain('Select an Amount');
+  });
 });

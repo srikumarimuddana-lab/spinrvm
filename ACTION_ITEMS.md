@@ -9374,6 +9374,180 @@ record of what was assumed vs. what was actually true</summary>
     (out of scope for a coverage-only pass). 69 tests; full rider-app
     suite still green (123 suites / 1393 tests), `yarn tsc --noEmit`
     clean.
+  - **rider-app `app/driver-arrived.tsx`: 84.52% → 98.8% stmts, 88.23% →
+    100% lines** (ride-critical: OTP handoff, cancellation-fee flow,
+    live map). Already had `driverArrivedScreen.test.tsx` (13 tests:
+    mount fetch, WS-vs-poll fetching, the in-progress redirect, the
+    server-quoted-fee cancel-confirm→reason→submit flow and its failure
+    toast, the hardware-back cancel trigger, OTP copy-to-clipboard,
+    Message Driver, Share Trip incl. a swallowed rejection, the
+    driver-photo-error fallback, and the no-ride loading/retry state) —
+    extended in place (+7 tests). Unlike `ride-options.tsx` above,
+    `GOOGLE_MAPS_API_KEY` here is read inline per-render (not a
+    module-level `const`), so setting `process.env...` in a test was
+    enough to exercise the previously-unreachable `MapViewDirections`
+    route: `onReady` drawing the route and re-fitting the map (plus the
+    &lt;2-point-result no-op guard), and the map-fit effect's
+    driver-position branch (only fires once `currentDriver.lat`/`lng`
+    are present — most tests have no live driver position yet). Also
+    closed: `ConfirmSheet`'s and `CancelReasonSheet`'s own `onClose`
+    (backdrop-tap dismissal, distinct from their button presses, and
+    correctly asserted as NOT cancelling the ride); and the `__DEV__`-
+    only "Start Ride (skip OTP)" button's success and swallowed-failure
+    branches (`await api.post(.../start')`, `catch(e) { console.log(e)
+    }`, then `fetchRide` either way). 20 tests; full rider-app suite
+    still green (123 suites / 1408 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/scheduled-rides.tsx`: 89.47% → 100% stmts, 90.38% →
+    100% lines** (money-adjacent: the C29 notice-window cancellation-fee
+    preview). Already had `scheduledRidesScreen.test.tsx` (12 tests:
+    mount fetch, empty-state CTA, ride-card rendering, "Dispatching..."
+    once past scheduled time, the fee-present-vs-absent confirm message,
+    the confirm→cancel→best-effort-reminder-cancel→success-toast flow
+    and its failure-toast path, back navigation) plus the separate,
+    untouched `scheduledRidesNoticeWindowFee.test.tsx`. Extended in
+    place (+3 tests, 15 total): pull-to-refresh (`onRefresh` on
+    `FlatList`'s `refreshControl`, asserting `fetchScheduledRides` is
+    called a second time and `refreshing` settles back to `false`);
+    `getTimeUntil`'s no-hours branch (`In ${mins} min` when under an
+    hour out, vs. the already-covered `In Xh Ym` case); and the "Keep"
+    button on the cancel confirm sheet, which pins that pressing it
+    dismisses the sheet via `onClose` (line 214) without calling
+    `cancelScheduledRide` — distinct from the existing "Cancel Ride"
+    confirm/failure tests, which only exercised the destructive button.
+    Left uncovered: line 128 (`isImminent` badge-color ternary's false
+    branch merged into Istanbul's branch count — every existing ride
+    fixture is either far enough out or already past, so the ~15-min
+    "imminent" window itself is untested display-only styling, no
+    money/state logic) and line 202 (the `{s}` pluralization suffix on
+    "N upcoming rides" when count !== 1 — all fixtures use exactly one
+    ride; purely cosmetic string branch). Both are display-only and
+    diminishing-returns per this sweep's convention. Full rider-app
+    suite still green (123 suites / 1411 tests), `yarn tsc --noEmit`
+    clean.
+  - **rider-app `app/emergency-contacts.tsx`: 87.5% → 100% stmts / 100%
+    lines.** Already had `emergencyContactsScreen.test.tsx` (12 tests:
+    load, empty state, both phone-format lengths, name/phone validation,
+    add success/failure, MAX_CONTACTS(3)-hides-the-trigger, remove
+    confirm/delete/failure, back nav) — extended in place (+8 tests).
+    Closed: the fetch-failure catch (silent per its own comment — no
+    toast, just a `console.error` and the empty state stays); the
+    unrecognised-phone-length fallback in `formatPhone` (returns the raw
+    string unchanged); all four of `getRelationshipIcon`'s named cases
+    beyond `spouse` (`parent`/`sibling`/`child`/`friend`) plus its
+    `default` (unrecognised relationship) fallback; selecting a
+    relationship chip and confirming it flows into the POST body;
+    Cancel actually clearing the form fields (re-opened the form after
+    cancelling to confirm the name input came back empty, not just
+    hidden-but-stale); the saving spinner replacing "Save Contact" and
+    disabling the button while the add request is in flight; and
+    dismissing the remove-confirmation sheet via Cancel without calling
+    delete. 20 tests; full rider-app suite still green (123 suites /
+    1351 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/ride-completed.tsx`: 85.14% → 97.52% stmts, 67.95% →
+    83.09% branch, 64.15% → 98.11% funcs, 89.5% → 100% lines** (money-
+    adjacent: post-trip rate + tip + pay/receipt screen). Already had
+    `rideCompletedScreen.test.tsx` (15 tests: mount fetch, the
+    already-paid auto-dismiss, hardware-back block, the full rate→pay→
+    clear→home success path, skip-payment-when-already-paid, the
+    payment-failure alert staying on screen, "Change Card" carrying
+    ride+tip+rated, "Retry" re-invoking submit on the same override
+    card without re-rating, the payWithCard auto-retry, both Google Pay
+    outcomes (success and silent-cancel) plus one failure-toasts case,
+    email receipt success, lost-item report submit success, and the
+    driver-photo-error fallback) — extended in place (+18 tests, 33
+    total). Closed: the entire v2-route rendering branch family that
+    was previously untouched — a ride with `route_schema_version: 2`,
+    `actual_route_segments` (both a `trip_in_progress` and a
+    `navigating_to_pickup` segment) and a `planned_route_polyline`
+    exercises `hasActualRoute`/`showPlannedUnderlay`/pickup-leg
+    dashed-underlay JSX, the `mapCoordinates` reduce (previously
+    uncovered at lines 127-133), and `onMapReady` → `fitToCoordinates`
+    (line 161) — the mock's `fitToCoordinates` was promoted from an
+    inline anonymous `jest.fn()` per-render to a shared module-level
+    mock so the assertion could see it. Also closed:
+    `useCompletedRouteRefresh`'s actual refresh callback (line 156,
+    previously only its dependency inputs were exercised) via
+    `jest.useFakeTimers()` + `advanceTimersByTime(3000)` on a ride with
+    `route_geometry_status: 'pending'`, confirming `fetchRide` fires a
+    second time; both email-receipt and lost-item-report failure
+    toasts (catch blocks at lines 265 and 287); the payment alert's
+    `support` button (line 332, pushes to `/support?...&topic=
+    payment_failed`) and its `cancel` button (no `onPress`, falls
+    through to `ConfirmSheet`'s own `onClose`, closing the sheet — this
+    doubles as coverage for the `onClose` prop at line 945);
+    `handleSubmit`'s outer catch (line 407) via `attemptRidePayment`
+    rejecting outright (distinct from the alert-returning failure path
+    already covered) — confirmed it toasts "Submit Failed" and does
+    NOT clear the ride; star-rating taps (line 542) and their
+    "Could be better" etc. copy; tip-preset select/deselect and a
+    custom-tip amount reflected in the "Pay $X & Done" total; the
+    "Message Driver" nav row; all three payment-badge text branches
+    (wallet, company_allowance, card-with-no-last4 falling back to
+    plain "Card"); the 0-duration "0 km/h" avg-speed guard; the
+    pre-auth-hold hint text and Google-Pay-button-hidden branch
+    (`hasHold` true); and the lost-item modal's Cancel button and
+    `onRequestClose` dismissal paths (lines 884-945 range). Left
+    uncovered (diminishing returns, all pure-catch/defensive lines
+    Istanbul folds into the same merged branch ranges, not chased
+    further): the two narrow-typed helper casts at lines 35-37
+    (`toNum`'s ternary arms — exercised indirectly by every fare/
+    duration render, just not hitting Istanbul's per-arm branch
+    counter in isolation); the `routeIsProcessing`/pending-vs-
+    processing distinction in the route-status label (lines 150-156
+    partial — `'processing'` was exercised via the v2-route test,
+    `'pending'` via the refresh test, but the exact label-text ternary
+    arms for each combination weren't individually asserted); a few
+    Animated.spring/timing internals (lines 175-213-ish, timing-only,
+    not meaningfully testable without faking the Animated clock); and
+    isolated single-line ternary arms inside the JSX tree (e.g. line
+    693's route-quality label variant, line 753's map-pin-array
+    variant) that render fine but weren't asserted on with a dedicated
+    expectation — visually/behaviorally low-value to chase given the
+    core money/state-machine paths above are now covered. Full
+    rider-app suite still green (123 suites / 1426 tests — 18 more
+    than the driver-arrived entry's count above, matching this file's
+    net new test additions across the two most recent sweeps combined
+    with baseline growth already recorded there), `yarn tsc --noEmit`
+    clean. A pre-existing "worker process failed to exit gracefully"
+    Jest warning appears on the full-suite run — present before this
+    change too (not introduced by the fake-timers test here, which
+    restores real timers in a `finally` block), not chased further per
+    the "don't chase CI checks unrelated to your diff" convention.
+  - **rider-app `app/wallet.tsx`: 89.02% → 100% stmts, 90.9% → 100% lines**
+    (money-critical: wallet balance display, Stripe top-up). Already had
+    `walletScreen.test.tsx` (10 tests: mount fetch, balance-error retry,
+    the no-Stripe-key block, the full Stripe topUp→initPaymentSheet→
+    presentPaymentSheet flow incl. init-error/cancelled/non-cancel-error
+    branches, ride-vs-non-ride transaction tappability, empty state, back
+    nav) — extended in place (+5 tests). Closed: `onCustomAmountChange`
+    clearing the selected preset when the rider types a custom amount
+    instead (previously only the preset-select path was exercised);
+    `handleTopUp`'s own in-function `isWalletTopUpAmountValid` re-check
+    (line 90-92) by typing a $600 custom amount — the Add-Funds button is
+    `disabled` in the UI for an out-of-range amount, but its `onPress` was
+    invoked directly (per this session's established mocked-button
+    pattern) to pin that the handler still guards the amount itself, not
+    just the button's `disabled` prop, and toasts "Invalid Amount" without
+    ever calling `topUp()`; the `catch` block (line 131) via a rejected
+    `topUp()` promise, asserting the generic "Could not complete your
+    top-up" fallback toast and that `initPaymentSheet` is never reached;
+    the Cards action button (line 234) navigating to `/manage-cards`; and
+    the top-up panel's Cancel button (line 289) closing the panel and
+    resetting `selectedPreset`/`customAmount` back to empty (verified by
+    re-opening and seeing "Select an Amount" again). 100% stmts/lines;
+    branch coverage is 84.72% and left there deliberately — the remaining
+    uncovered branches are `renderTransaction`'s `TXN_ICONS`/`TXN_COLORS`
+    fallback defaults (`|| 'swap-horizontal'`, `|| colors.textDim`) and
+    the `hasRideDetails` pickup/dropoff/bookingId metadata block, none of
+    which this pass's existing fixtures exercise (both test transactions
+    use `metadata: null`) — closing those would mean adding a third
+    transaction fixture whose only purpose is a metadata-shape check,
+    diminishing-returns for a coverage-only pass; documented here instead
+    of chased. No bug found in the production code itself — the $600
+    invalid-amount and `topUp()`-rejection branches both behave as the
+    money-critical guards should (block before any Stripe call, surface a
+    toast, never silently proceed). 15 tests; full rider-app suite still
+    green (123 suites / 1413 tests), `yarn tsc --noEmit` clean.
   - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
     85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
     tests: no-account-prefill, the CRC-consent auto-check-when-

@@ -8716,6 +8716,49 @@ record of what was assumed vs. what was actually true</summary>
     `(..._a: any[]) => _a[1]` instead. 14 new tests; full driver-app
     suite still green (113 suites / 1171 tests), `yarn tsc --noEmit`
     clean.
+  - **driver-app `app/driver/ride-detail.tsx`: 74.7% → 89.47% lines.**
+    Added `screens/driverRideDetailScreen.test.tsx` (25 tests, new file —
+    the two pre-existing files, `rideDetailBackButton.test.tsx` and
+    `ride-detail-route.test.tsx`, cover only the map back button's
+    `accessibilityLabel` and a source-string contract respectively,
+    contributing no real interaction coverage). Covers: the loading
+    spinner before fetch resolves; status badge + distance/duration/
+    rating stats, including the duration-from-timestamps-over-
+    `duration_minutes` preference and the `distance_km`
+    booking-vs-actual fallback; the completed-ride earnings breakdown
+    (rider first-name-only per PIPEDA, ride-fare = base+distance+time
+    with conditional surge suffix, conditional Tip/Area
+    Boost/Tax lines, the separate Tax Info card's GST/PST breakdown,
+    `total_earned`-preferred-over-`driver_earnings` for Total Earned,
+    the "Found an item?" nav, and the whole section hidden for a
+    non-completed ride); the cancellation-fee card's no-show vs
+    rider-cancelled variants; the trip timeline's per-step
+    timestamp-present/timestamp-missing rendering and the cancelled-ride
+    extra step; map-rendering gated on both pickup and dropoff
+    coordinates; and back-button navigation.
+    **Root cause found and fixed — a fixture bug, not a source bug:**
+    every `waitFor()`-based test initially failed with `"Unable to find
+    node on an unmounted component"`, reproducing even with the same
+    query pattern that passes in `rideDetailBackButton.test.tsx`.
+    Bisected by adding the new fixture's fields back one group at a time
+    to that known-working file's ride object. Isolated to
+    `distance_km: '5.2'` (a string) — the source computes
+    `(ride.actual_distance_km ?? ride.distance_km ?? 0).toFixed(1)`,
+    and `String.prototype.toFixed` doesn't exist, so passing a string
+    threw a `TypeError` during render, unmounting the component before
+    `waitFor` ever got a chance — the "unmounted component" message was
+    a downstream symptom, not the root cause. Fixed by using a numeric
+    `distance_km` in the fixture (matches the real API contract; nothing
+    in the source was changed). Two more iteration fixes surfaced by the
+    same default fixture's coincidental values: the "ride fare" test's
+    `$15.00` matched twice (Ride Fare row + Total Earned row both total
+    $15.00 with base 5+distance 8+time 2 and this fixture's
+    `total_earned: '15.00'`) — switched the primary assertion to the
+    unambiguous surge-suffix label and used `getAllByText` for the
+    fare-amount count; the cancelled-ride timeline test's `'Cancelled'`
+    matched twice (status badge + timeline step) — switched to
+    `getAllByText(...).length).toBe(2)`. 25 tests; full driver-app suite
+    still green (114 suites / 1196 tests), `yarn tsc --noEmit` clean.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

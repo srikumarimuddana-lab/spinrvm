@@ -8477,6 +8477,40 @@ record of what was assumed vs. what was actually true</summary>
     wherever a future session left off, re-running the coverage command
     above to confirm current numbers before starting (they'll have moved
     since this snapshot).
+  - **rider-app `app/ride-details.tsx`: 66.2% → 91.4% lines.** Already had
+    a comprehensive `rideDetailsScreen.test.tsx` (14 tests covering fetch,
+    status badge, cancellation-fee-vs-fare-breakdown gating, breakdown
+    consolidation/promo/tip injection, email/PDF receipt actions, nav) —
+    extended in place rather than adding a new file, since it wasn't a
+    narrow single-behavior pin. The 60-line exported `buildReceiptHtml`
+    (PDF receipt HTML builder) had **zero** direct coverage — it's only
+    reachable indirectly via `handleDownloadInvoice`, which per the file's
+    own test-file comment can never reach the dynamic-`import()` success
+    path in Jest's CJS runtime, so its branches (tax_breakdown formatting
+    with rate suffix, the grand_total-gap tax fallback, the negligible-gap
+    no-tax-line case, driver-block presence via `driver_name` vs. nested
+    `driver.first_name/last_name` vs. absent, the 3-way route-snapshot
+    image state — actual snapshot / stale-revision "unavailable" / legacy
+    planned-route image) were completely dark. Since it's exported, tested
+    it directly as a pure function (12 new tests) instead of only through
+    the screen. Also added the map-rendering branch (gated on
+    `ride.pickup_lat && ride.dropoff_lat`, entirely absent from the
+    existing fixtures): renders/omits the `MapView` correctly, and
+    `onMapReady` firing with 2+ route coordinates reaches the
+    `mapRef.current?.fitToCoordinates()` call without crashing. One nav
+    gap fixed too: the "Ride not found" state's own back button (a
+    separate `TouchableOpacity` from the main view's) was untested.
+    Footgun: `findByProps({ initialRegion: expect.anything() })` doesn't
+    match a component whose prop value is a plain object built from
+    `expect.anything()` used as a *sub*-matcher inside a larger literal —
+    switched to `findByType('MapView' as any)` (the mock's host-component
+    string type) instead. 16 new tests (30 total in the file); full
+    rider-app suite still green (120 suites / 1172 tests), `yarn tsc
+    --noEmit` clean. Remaining uncovered: the PDF-generation success path
+    (documented as unreachable in Jest), and the innermost Polyline
+    rendering for actual/pickup-leg route segments (needs synthetic
+    `actual_route_segments` shaped to match the `routeSegments` utility's
+    exact phase/coordinate format — diminishing returns for this pass).
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

@@ -8335,10 +8335,28 @@ record of what was assumed vs. what was actually true</summary>
     ON-toggle branch that calls them. No new footguns. 11 tests; full
     rider-app suite still green (119 suites / 1129 tests), `yarn tsc
     --noEmit` clean.
-  - **Next in the ranked list:** rider-app's `(tabs)/account.tsx`
-    (64.4%); driver-app's `driver/settings.tsx` (49.6%),
-    `driver/notifications.tsx` (56.8%), `login.tsx` (62.9%). This is an
-    open-ended coverage-improvement
+  - **rider-app `app/(tabs)/account.tsx`: 64.4% → 98.3% lines.** Already
+    had `accountEmailVerification.test.tsx` (covers only the email-
+    verification pill and the focus-refresh merge-not-replace fix — see
+    its own N14 note). Added `accountScreen.test.tsx` (27 tests)
+    covering the rest: every `MenuRow`'s navigation destination
+    (parameterized via `it.each`, 13 rows) plus the Edit button; Sign
+    Out's Alert-confirm → `logout()` → `router.replace('/login')` chain;
+    the avatar photo viewer (no-op when there's no `profile_image`, opens
+    and closes via backdrop tap when there is); the Work section's
+    visibility gate (hidden with zero work profiles) and its two
+    subtitle variants (company-count vs. active-mode) plus its own
+    navigation row; `formatPhone`'s 11-digit-NANP formatting vs. raw-
+    string fallback vs. no-phone `N/A`; the company-info footer's
+    hidden-when-empty vs. rendered-once-populated states; and the
+    conditional gender row. This closes out **every rider-app screen**
+    in the original ranked worst-offenders list. No new footguns
+    (reused `accountEmailVerification.test.tsx`'s real-zustand-authStore
+    convention verbatim). 27 tests; full rider-app suite still green
+    (120 suites / 1156 tests), `yarn tsc --noEmit` clean.
+  - **Next in the ranked list (driver-app only now):**
+    `driver/settings.tsx` (49.6%), `driver/notifications.tsx` (56.8%),
+    `login.tsx` (62.9%). This is an open-ended coverage-improvement
     effort, not a finish-line-shaped one like sub-item 4 —
     pick up wherever a future session left off by re-running the per-app
     `--collectCoverageFrom` coverage command above and ranking by line %.

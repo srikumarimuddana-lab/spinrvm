@@ -9548,6 +9548,26 @@ record of what was assumed vs. what was actually true</summary>
     money-critical guards should (block before any Stripe call, surface a
     toast, never silently proceed). 15 tests; full rider-app suite still
     green (123 suites / 1413 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/wallet.tsx`, round 2: 84.72% → 100% branch** (closes
+    the gap the round-1 entry above deliberately left). Extended
+    `walletScreen.test.tsx` in place (+6 tests, 21 total): the
+    `TXN_ICONS`/`TXN_COLORS` fallback defaults for an unrecognised
+    transaction `type` (`'swap-horizontal'`, `colors.textDim`); the
+    `hasRideDetails` metadata block for a `ride_payment` with saved
+    `pickup_address`/`dropoff_address` (both the `meta.ride_code`
+    booking-id path and its fallback to the `reference_id` prefix when
+    `ride_code` is absent); the balance's `wallet?.balance ?? '0'`
+    fallback with `wallet: null`; the loading skeleton shown while
+    `walletLoading`/`transactionsLoading` is true and no transactions
+    are cached yet; and the Add Funds button's spinner while a top-up
+    is in flight (a controllable pending `topUp()` promise, asserting
+    the button's own text is replaced rather than checking the
+    `ActivityIndicator` directly, since `@expo/vector-icons` icons are
+    mocked to `null` but React Native's real `ActivityIndicator` isn't
+    text-searchable the same way). 100% stmts/branch/lines; funcs stay
+    at 90.47% (an unreached closure, not chased further). No bug found.
+    Full rider-app suite still green (123 suites / 1448 tests), `yarn
+    tsc --noEmit` clean.
   - **rider-app `app/promotions.tsx`: 91.30% → 95.65% stmts, 70.37% →
     96.29% branch, 95.23% → 97.61% lines.** Already had
     `promotionsScreen.test.tsx` (8 tests: mount fetch, the empty state,

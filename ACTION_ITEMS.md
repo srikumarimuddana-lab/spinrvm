@@ -8537,6 +8537,26 @@ record of what was assumed vs. what was actually true</summary>
     uncovered: map-control zoom/recenter button handlers and the
     promo-code entry bottom sheet (355-392, 514-533) — good next
     increment for a future pass on this file.
+  - **rider-app `app/login.tsx`: 72.7% → 93.2% lines.** Already had
+    `loginConsentCheckbox.test.tsx` (pins only the explicit
+    unchecked-by-default consent checkbox's gating of the continue
+    button). Added `loginScreen.test.tsx` (9 tests) covering the rest:
+    the focus-effect already-authenticated redirect to `/(tabs)` (real
+    zustand `authStore`, `token` truthy) vs. staying put when signed out;
+    `handleSendCode`'s three response/error branches
+    (`success:false` → generic "Code Not Sent" toast; a thrown error
+    with a server message → "Sign-in Unavailable" with that message; a
+    thrown error with nothing extractable → generic "Connection Error");
+    the loading spinner while in flight and the button re-enabling in
+    `finally` after a failure; and the Terms of Service / Privacy Policy
+    links each navigating to `/legal` with their own `type` param. No
+    new footguns — reused the established real-zustand-`authStore`
+    convention (`create()` + `.setState()`) and the existing file's
+    render/enterPhone/toggleConsent helpers verbatim. 9 new tests (15
+    total across both files); full rider-app suite still green (121
+    suites / 1197 tests), `yarn tsc --noEmit` clean. Remaining uncovered:
+    the phone-input-container's own focus-forwarding `TouchableOpacity`
+    tap (154-175) — style/focus-only, low value.
 - **Files:** `admin-dashboard/vitest.config.ts`, `admin-dashboard/package.json`,
   `.github/workflows/ci.yml` (admin-dashboard test step),
   `rider-app/jest.config.js`, `driver-app/jest.config.js`.

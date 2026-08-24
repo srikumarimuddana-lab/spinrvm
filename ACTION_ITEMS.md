@@ -13656,6 +13656,53 @@ how much they de-risk a public launch._
   fresh PR that touches no rider-app dependency files, proving the gate
   itself (not just this one PR's diff) is green again.
 
+### C40. `pr-checks.yml`'s "Expand conditional template sections" step unconditionally re-appends a blank Tier 5 (UI change details) block on every PR body edit, even when a filled one already exists
+
+- [ ] **Status:** open — found 2026-08-22/2026-08-24 across three separate
+  PRs (#4469, #4470, #4481) in this session. Not fixed here — the fix is
+  in `.github/workflows/pr-checks.yml`, outside the scope of the
+  content-only PRs where this was observed.
+- **What's wrong:** when a PR is UI-labeled or `type: fix`, the
+  "Expand conditional template sections" step (part of `pr-checks.yml`)
+  appends a blank Tier 5 (`## Tier 5 · UI change details`) and/or Tier 6
+  (`## Tier 6 · Bug-fix notes`) block to the PR body on `pull_request`
+  events including plain body edits (`pull_request.edited`) — not just on
+  a new commit push. Confirmed via `update_pull_request` on #4481: after
+  filling in Tier 5 myself (placed correctly, right after Tier 4) and
+  submitting the corrected body, the very next re-fetch of the PR showed
+  a **second**, blank Tier 5 block appended at the true end of the body —
+  even though a fully-filled one already existed earlier in the same
+  body. This happened twice in a row on the same PR.
+- **Root cause (inferred, not confirmed by reading the workflow source in
+  this pass):** the step appears to check only "is this PR UI-labeled /
+  type:fix" before appending, not "does a Tier 5/6 section already exist
+  anywhere in the current body" — so every edit event re-appends,
+  regardless of prior state.
+- **Impact:** cosmetic/noisy, not blocking — confirmed on #4481 that the
+  "Required PR fields filled" check still passed with the duplicate blank
+  block present (it apparently scans for the first filled occurrence, not
+  the absence of any blank one). So this doesn't block merges today, but
+  it does mean every PR body update on an affected PR needs a manual
+  re-strip of the trailing blank duplicate to keep the PR description
+  clean for human readers, and burns an extra CI run per edit
+  (`pr-checks.yml`'s bot jobs re-run on every `pull_request.edited`).
+- **Action:** fix `pr-checks.yml`'s "Expand conditional template sections"
+  step to detect an existing non-blank Tier 5/6 section (e.g. grep the
+  current body for the heading followed by non-`[ ]`/non-"N/A" content)
+  before appending, so it only appends once, on the PR's initial creation
+  or when the section is genuinely still blank.
+- **Files:** `.github/workflows/pr-checks.yml` (the "Expand conditional
+  template sections" step).
+- **What was NOT verified:** the actual step's source/script logic (not
+  read directly in this pass — root cause is inferred from observed
+  behavior across three PRs, not confirmed by reading the workflow YAML);
+  whether this also affects Tier 6 (bug-fix notes) the same way, or only
+  Tier 5 — only Tier 5 was directly observed this time (Tier 6 was the
+  one observed duplicating in the earlier #4469/#4470 session note).
+- **Acceptance:** editing a PR body that already has a filled Tier 5/6
+  section (via `update_pull_request` or the GitHub UI) no longer appends
+  a second blank copy.
+
 ### A41. Legacy-migration data-quality audit (2026-08-19) — 5-agent sweep across backend/admin/driver-app/regulatory
 - [ ] **Status:** open — 3 live/near-live bugs found and fixed same session; a
   larger set of design-decision-dependent gaps documented below, not fixed.

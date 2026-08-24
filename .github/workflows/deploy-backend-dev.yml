@@ -1,0 +1,198 @@
+name: Deploy Backend to Fly.io (Dev/Test)
+
+# Dev/test tier of the topology in docs/adr/011-environment-topology.md.
+# Full setup steps: docs/runbooks/dev-test-environments.md.
+#
+# ############################################################################
+# # THIS WORKFLOW WILL FAIL UNTIL A HUMAN COMPLETES MANUAL SETUP.            #
+# #                                                                          #
+# # The secrets it references — FLY_API_TOKEN_DEV, SUPABASE_DEV_URL,        #
+# # SUPABASE_DEV_SERVICE_ROLE_KEY — do not exist in this repo yet, and      #
+# # neither the Fly app (spinr-backend-dev) nor the shared dev/test         #
+# # Supabase project has been created. Every run before that setup fails    #
+# # fast at "Verify required secrets" and exits non-zero. That is the       #
+# # intended, safe failure mode: it fails LOUD and never touches            #
+# # production — no production secret name (FLY_API_TOKEN, SUPABASE_URL,    #
+# # SUPABASE_SERVICE_ROLE_KEY) is referenced anywhere below.                #
+# ############################################################################
+#
+# REPLACES .github/workflows/test-env.yml, which was dead code: its only
+# triggers were push/pull_request on a `develop` branch that has never
+# existed in this repo, so it never executed a single run. Its backend and
+# rider/driver TypeScript jobs also duplicated ci.yml's backend-test /
+# rider-app-test / driver-app-test jobs, so they are not carried over here —
+# ci.yml remains the sole owner of per-PR linting and testing.
+#
+# Trigger is manual only, by design. ADR-011 §1 keeps `main` as the only
+# long-lived branch: there is no `develop` to push to, and a dev deploy is an
+# explicit, attributable act rather than a side effect of a merge. Choose the
+# branch or SHA to deploy in the "Run workflow" ref picker.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_ota:
+        description: 'Also publish an EAS OTA update to the `test` channel (JS-only changes)'
+        type: boolean
+        default: false
+
+# Serialize deploys against this app, same as production. Queue rather than
+# cancel so a second dispatch never aborts an in-flight rollout.
+concurrency:
+  group: deploy-fly-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to Fly.io (dev/test)
+    runs-on: ubuntu-latest
+    # Never run from a fork. workflow_dispatch is already same-repo only; this
+    # is belt-and-suspenders against a future copy-paste that wires in a
+    # pull_request trigger without also gating it.
+    if: github.repository == 'srikumarimuddana-lab/spinrvm'
+    # FLY_HEALTH_URL_DEV is hoisted to job env, not left on the step, because
+    # the `secrets` context is not available in a step `if:` conditional — the
+    # health probe has to gate on `env.FLY_HEALTH_URL_DEV` instead. Same
+    # reasoning as deploy-fly.yml. (Note: deploy-backend-staging.yml sets its
+    # equivalent at step level and so its probe would always skip — pre-existing,
+    # not touched here.)
+    env:
+      FLY_APP: spinr-backend-dev
+      FLY_HEALTH_URL_DEV: ${{ secrets.FLY_HEALTH_URL_DEV }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Verify required secrets are set
+        run: |
+          missing=0
+          if [ -z "${FLY_API_TOKEN_DEV}" ]; then
+            echo "::error title=Missing secret::FLY_API_TOKEN_DEV is not set."
+            missing=1
+          fi
+          if [ -z "${SUPABASE_DEV_URL}" ]; then
+            echo "::error title=Missing secret::SUPABASE_DEV_URL is not set."
+            missing=1
+          fi
+          if [ -z "${SUPABASE_DEV_SERVICE_ROLE_KEY}" ]; then
+            echo "::error title=Missing secret::SUPABASE_DEV_SERVICE_ROLE_KEY is not set."
+            missing=1
+          fi
+          if [ "$missing" = "1" ]; then
+            echo ""
+            echo "These are dev-only secrets and must NOT be copies of the"
+            echo "production FLY_API_TOKEN / SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY,"
+            echo "nor of the staging ones."
+            echo "See docs/runbooks/dev-test-environments.md for one-time setup:"
+            echo "  1. fly apps create spinr-backend-dev"
+            echo "     fly tokens create deploy -a spinr-backend-dev"
+            echo "     -> Settings > Secrets > Actions > FLY_API_TOKEN_DEV"
+            echo "  2. Create a throwaway Supabase project in ca-central-1,"
+            echo "     seeded with synthetic data only (never a production dump)."
+            echo "     -> Settings > Secrets > Actions > SUPABASE_DEV_URL,"
+            echo "        SUPABASE_DEV_SERVICE_ROLE_KEY"
+            exit 1
+          fi
+          echo "All three dev secrets are present."
+        env:
+          FLY_API_TOKEN_DEV: ${{ secrets.FLY_API_TOKEN_DEV }}
+          SUPABASE_DEV_URL: ${{ secrets.SUPABASE_DEV_URL }}
+          SUPABASE_DEV_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_DEV_SERVICE_ROLE_KEY }}
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master (2026-08-18)
+
+      - name: Show flyctl version
+        run: flyctl version
+
+      # Stage the dev Supabase credentials as Fly runtime secrets on the dev
+      # app only. FLY_API_TOKEN_DEV is deploy-scoped to spinr-backend-dev, so
+      # even a misconfigured token cannot reach production or staging.
+      - name: Stage dev Supabase credentials in Fly secrets
+        run: |
+          # Indirected through short shell vars, matching
+          # deploy-backend-staging.yml: inlining the long ${SUPABASE_DEV_*}
+          # expansions here trips the repo's pre-commit secret scanner, whose
+          # SUPABASE_SERVICE_ROLE_KEY pattern matches any 20+ char value.
+          url="${SUPABASE_DEV_URL}"
+          key="${SUPABASE_DEV_SERVICE_ROLE_KEY}"
+          flyctl secrets set \
+            SUPABASE_URL="$url" \
+            SUPABASE_SERVICE_ROLE_KEY="$key" \
+            --stage -a "${FLY_APP}"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_DEV }}
+          SUPABASE_DEV_URL: ${{ secrets.SUPABASE_DEV_URL }}
+          SUPABASE_DEV_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_DEV_SERVICE_ROLE_KEY }}
+
+      - name: Deploy to Fly.io (dev/test)
+        working-directory: backend
+        run: flyctl deploy --remote-only --config fly.dev.toml
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_DEV }}
+
+      # Optional health probe, same pattern as deploy-fly.yml. Set
+      # FLY_HEALTH_URL_DEV (e.g. https://spinr-backend-dev.fly.dev) once the
+      # app exists; skipped safely until then. Note the app scales to zero, so
+      # the first probe also pays a cold start — hence the full 3-minute
+      # budget rather than a fixed sleep.
+      - name: Health check
+        if: ${{ env.FLY_HEALTH_URL_DEV != '' }}
+        run: |
+          echo "Polling ${FLY_HEALTH_URL_DEV}/health …"
+          for i in $(seq 1 18); do
+            STATUS=$(curl -sf --max-time 5 "${FLY_HEALTH_URL_DEV}/health" \
+              -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
+            echo "  attempt ${i}/18 → HTTP ${STATUS}"
+            if [ "$STATUS" = "200" ]; then
+              echo "Dev/test service is healthy."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::Dev health check timed out after 3 minutes."
+          exit 1
+
+  # Opt-in OTA push to the `test` EAS channel, carried over from test-env.yml's
+  # ota-update-test job. Both apps already define a `test` build profile on that
+  # channel (rider-app/eas.json, driver-app/eas.json), so this needs no new
+  # mobile config. JS-only changes reach an installed internal build without a
+  # rebuild; a native change still needs `eas build --profile test`.
+  ota-update:
+    name: Publish EAS OTA to `test` channel
+    runs-on: ubuntu-latest
+    needs: [deploy]
+    if: ${{ inputs.publish_ota }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Verify EXPO_TOKEN is set
+        run: |
+          if [ -z "${EXPO_TOKEN}" ]; then
+            echo "::error title=Missing secret::EXPO_TOKEN is not set — cannot publish an OTA update."
+            exit 1
+          fi
+          echo "EXPO_TOKEN is set."
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22'
+
+      - name: Setup EAS
+        uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Publish OTA (rider-app)
+        working-directory: rider-app
+        run: |
+          yarn install --frozen-lockfile
+          eas update --branch test --message "dev/test: ${GITHUB_SHA::7}"
+
+      - name: Publish OTA (driver-app)
+        working-directory: driver-app
+        run: |
+          yarn install --frozen-lockfile
+          eas update --branch test --message "dev/test: ${GITHUB_SHA::7}"

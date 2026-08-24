@@ -14801,6 +14801,46 @@ how much they de-risk a public launch._
   `SUPABASE_STAGING_URL`, `SUPABASE_STAGING_SERVICE_ROLE_KEY` as new GitHub
   secrets. Until then the new workflow fails fast at its "Verify required
   secrets" step on every run — by design, and harmlessly.
+  **Topology decided 2026-08-24** (`docs/adr/011-environment-topology.md`):
+  four tiers — dev/test, staging, canary, production — promoted trunk-based
+  (no `develop`/`staging` long-lived branches). This item stays open and
+  unchanged; the three manual steps above are still the blocker. The dev/test
+  and canary tiers are tracked separately as E1a and E1b below.
+- [ ] **E1a. Dev/test environment** — scaffolding added 2026-08-24 (inert):
+  `backend/fly.dev.toml` (`spinr-backend-dev`, `ENV=development`,
+  scale-to-zero) and `.github/workflows/deploy-backend-dev.yml`
+  (`workflow_dispatch` only). Replaces `.github/workflows/test-env.yml`, which
+  was **dead code** — its only triggers were `push`/`pull_request` on a
+  `develop` branch that has never existed in this repo, so it had never
+  executed a single run; its backend/rider/driver jobs also duplicated
+  `ci.yml`'s. **Blocked** on the same class of human step as E1:
+  (1) `fly apps create spinr-backend-dev`, (2) a throwaway Supabase project in
+  `ca-central-1` with synthetic data only, (3) `FLY_API_TOKEN_DEV`,
+  `SUPABASE_DEV_URL`, `SUPABASE_DEV_SERVICE_ROLE_KEY` as GitHub secrets. Full
+  procedure: `docs/runbooks/dev-test-environments.md`. Note this tier shares one
+  Supabase project between dev and test by design (ADR-011 §2). Mobile needs
+  nothing — the EAS `test` profile and channel already exist and work.
+- [ ] **E1b. Canary environment** — scaffolding added 2026-08-24 (inert):
+  `backend/fly.canary.toml` (`spinr-backend-canary`) and
+  `.github/workflows/deploy-backend-canary.yml` (manual, typed confirmation,
+  refuses any ref not an ancestor of `origin/main`). Unlike every other
+  non-prod tier this runs against the **production** Supabase project and
+  Redis, taking ~5% of real traffic via Cloudflare weighted routing; abort is
+  a weight change to 0, no redeploy. It pins `ENV="production"` deliberately —
+  App Check enforcement (`core/middleware.py:890`), HSTS (`:879`), the
+  `secure` cookie flag (`utils/cookie_manager.py:37,64`), and APNs endpoint
+  selection (`utils/apns_client.py:230`) are each single-gated on that exact
+  string, so `ENV="canary"` would silently disable App Check and send every
+  iOS push to the APNs sandbox for real users. Separation is via the new
+  `SENTRY_ENVIRONMENT` setting (shipped 2026-08-24, defaults to `ENV` when
+  unset) plus a descriptive `SPINR_DEPLOY_TIER`. **Blocked** on
+  (1) `fly apps create spinr-backend-canary`, (2) production secrets set on
+  that app (byte-identical to production — `JWT_SECRET` especially, or
+  production-issued tokens will be rejected), (3) `FLY_API_TOKEN_CANARY`,
+  (4) a Cloudflare weighted origin pool with session affinity on. Full
+  procedure and soak/abort criteria: `docs/runbooks/canary-environment.md`.
+  **Does not** de-risk migrations — shared production database; a green canary
+  is not migration confidence.
 - [ ] **E2. Marketplace load/simulation testing** — harness BUILT on branch
   `claude/eager-franklin-69ta0w` (`loadtest/locustfile.py` + runbook with
   breaking-point register): rider+driver bots, real dispatch matchmaking, WS

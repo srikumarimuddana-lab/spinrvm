@@ -33,6 +33,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { hasInvalidTimeWindow, isTimeWindowValid } from "@/lib/policyTimeWindowSchema";
 
 const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 type Day = (typeof DAYS)[number];
@@ -63,7 +64,7 @@ function TimeWindowRow({
     onChange: (w: TimeWindowPolicy) => void;
     onRemove: () => void;
 }) {
-    const invalid = w.end <= w.start;
+    const invalid = !isTimeWindowValid(w);
     return (
         <div className="flex flex-wrap items-center gap-2">
             <Select value={w.day} onValueChange={(v) => onChange({ ...w, day: v as Day })}>
@@ -150,7 +151,7 @@ export default function CompanyPolicyPage() {
         setTimeWindows((prev) => prev.filter((_, i) => i !== index));
     }
 
-    const hasInvalidWindow = timeWindows.some((w) => w.end <= w.start);
+    const hasInvalidWindow = hasInvalidTimeWindow(timeWindows);
 
     async function handleSave() {
         if (hasInvalidWindow) {

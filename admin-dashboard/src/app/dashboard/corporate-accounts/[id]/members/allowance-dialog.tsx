@@ -27,6 +27,7 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { allowanceFormSchema, isAllowanceFormValid } from "@/lib/allowanceFormSchema";
 
 interface Props {
     companyId: string;
@@ -67,16 +68,16 @@ export default function AllowanceDialog({ companyId, member, onClose, onSaved }:
         setSaving(true);
         setErr(null);
         try {
+            const parsed = allowanceFormSchema.safeParse({ type, amount, periodStart, periodEnd });
+            if (!parsed.success) {
+                throw new Error(parsed.error.issues[0].message);
+            }
             const body: Parameters<typeof putMemberAllowance>[2] = { type };
             if (type === "unlimited") {
                 // nothing else
             } else {
-                if (!amount) throw new Error("Amount is required.");
                 body.amount = Number(amount);
                 if (type === "fixed_recurring") {
-                    if (!periodStart || !periodEnd) {
-                        throw new Error("fixed_recurring requires both period dates.");
-                    }
                     body.period_start = periodStart;
                     body.period_end = periodEnd;
                     body.rollover = rollover;
@@ -179,7 +180,7 @@ export default function AllowanceDialog({ companyId, member, onClose, onSaved }:
                     <Button variant="outline" onClick={onClose}>Cancel</Button>
                     <Button
                         onClick={save}
-                        disabled={saving || (type === "fixed_recurring" && (!periodStart || !periodEnd)) || (type !== "unlimited" && !amount)}
+                        disabled={saving || !isAllowanceFormValid({ type, amount, periodStart, periodEnd })}
                     >
                         {saving ? "Saving…" : "Save"}
                     </Button>

@@ -8390,6 +8390,37 @@ record of what was assumed vs. what was actually true</summary>
   other driver-app/rider-app form (login/signup fields feeding KYC/
   compliance checks, all admin-dashboard corporate/billing forms) remains
   unmigrated; no ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-24 update — step 4 done, admin-dashboard's first zod adoption
+  (all three frontend surfaces now have zod on at least one form):**
+  migrated `admin-dashboard/.../allowance-dialog.tsx` (admin sets a
+  corporate member's spend allowance — type, amount, recurring-period
+  dates, auto-approve caps; `corporate_wallet_apply_delta`-backed) — the
+  highest-priority unmigrated form per this item's own ordering
+  ("admin-dashboard corporate/billing forms... first-priority"). Added
+  `zod` to `admin-dashboard/package.json` (first zod dependency on this
+  surface — promoted from a transitive `shadcn` dev-dependency to a
+  direct one). New colocated `admin-dashboard/src/lib/allowanceFormSchema.ts`
+  reproduces `save()`'s two throw conditions (amount required unless
+  `unlimited`; both period dates required for `fixed_recurring`) via a
+  `superRefine`, in the same order, so the same first-error-wins message
+  survives; `isAllowanceFormValid` replaces the Save button's separately
+  duplicated `disabled` condition — closing the exact
+  "duplicated-logic-can-drift" case this item names, since the two call
+  sites encoded the same three rules by hand in two different syntactic
+  shapes. New `admin-dashboard/src/lib/__tests__/allowanceFormSchema.test.ts`
+  (12 accept/reject cases + 2 issue-priority cases). Verification: 12/12 +
+  2/2 new tests pass; full admin-dashboard suite 351/351 (36 files) pass,
+  0 regressions; `npx tsc --noEmit` clean; `npx eslint` clean on touched
+  files; **real production build** (`npm run build` → `next build`)
+  completed successfully; blast-radius grep confirmed
+  `members/page.tsx` is the only `AllowanceDialog` importer, untouched.
+  Full Change Impact Log:
+  `docs/change-log/2026-08-24-b39-admin-allowance-dialog-zod-step4.md`.
+  **Still open:** every other form across all three apps remains
+  unmigrated (login/signup fields feeding KYC/compliance checks on
+  rider-app/driver-app, every other admin-dashboard corporate/billing
+  form — subscriptions, KYB, wallet adjustments, etc.); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

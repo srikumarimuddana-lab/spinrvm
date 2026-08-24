@@ -11,7 +11,7 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { TouchableOpacity, Text } from 'react-native';
+import { TouchableOpacity, Text, ActivityIndicator } from 'react-native';
 
 import PromotionsScreen from '../app/promotions';
 
@@ -178,5 +178,52 @@ describe('PromotionsScreen', () => {
       backBtn.props.onPress();
     });
     expect(mockBack).toHaveBeenCalled();
+  });
+
+  it('falls back to an empty list when the API response has no data field', async () => {
+    mockApiGet.mockResolvedValue({});
+    const r = await renderScreen();
+    expect(allText(r)).toContain('No promotions available');
+  });
+
+  it('does nothing if Apply is triggered with an empty/whitespace code (defensive guard)', async () => {
+    const r = await renderScreen();
+    const applyBtn = r.root.findAllByType(TouchableOpacity)[1];
+    await act(async () => {
+      await applyBtn.props.onPress();
+      await flush();
+    });
+    expect(mockApiPost).not.toHaveBeenCalled();
+  });
+
+  it('renders a flat-discount promo with no description/expiry alongside a percentage promo with a max_discount cap', async () => {
+    mockApiGet.mockResolvedValue({
+      data: [
+        { promo_id: 'p1', code: 'CAPPED', discount_type: 'percentage', discount_value: 20, max_discount: 15, description: 'Capped percentage promo' },
+        { promo_id: 'p2', code: 'FLATOFF', discount_type: 'flat', discount_value: 5.5 },
+      ],
+    });
+    const r = await renderScreen();
+    const text = allText(r);
+    expect(text).toContain('20% off (max $15)');
+    expect(text).toContain('$5.50 off');
+    // p2 has no description/expiry_date — those Text nodes must not render for it.
+    expect(text).not.toContain('undefined');
+  });
+
+  it('shows a spinner on the Apply button while the request is in flight', async () => {
+    let resolvePost: (v: any) => void;
+    mockApiPost.mockImplementation(() => new Promise((resolve) => { resolvePost = resolve; }));
+    const r = await renderScreen();
+    const input = r.root.findByProps({ placeholder: 'Enter promo code' });
+    act(() => { input.props.onChangeText('pending'); });
+    const applyBtn = r.root.findAllByType(TouchableOpacity)[1];
+    act(() => { applyBtn.props.onPress(); });
+    await flush();
+    expect(r.root.findAllByType(ActivityIndicator).length).toBeGreaterThan(0);
+    await act(async () => {
+      resolvePost!({ data: { discount_type: 'flat', discount_value: 5 } });
+      await flush();
+    });
   });
 });

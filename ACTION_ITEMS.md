@@ -8939,6 +8939,40 @@ record of what was assumed vs. what was actually true</summary>
     list wherever a future session left off, re-running the coverage
     command above to confirm current numbers before starting (they'll
     have moved since this snapshot).
+  - **rider-app `app/driver-arriving.tsx`: 77.5% → 100% lines.** Already
+    had `driverArrivingScreen.test.tsx` (18 tests: mount fetch/poll,
+    status-based navigation, searching vs. driver-assigned states,
+    all four cancel-confirm dialogs, share/copy/message actions) —
+    extended in place (+20 tests). Same lesson as `ride-in-progress.tsx`
+    above (worked concurrently on a separate branch): the reported
+    `"425-595,686-720"` uncovered range wasn't one block — mostly
+    never-invoked callback bodies. Closed: service-area polygon
+    rendering (both the ≥3-point-renders and the <3-point-skipped
+    branches) — needed the `Polygon` mock upgraded from `() => null` to
+    a prop-forwarding double; seeding `rideRouteCoords` from a saved
+    `planned_route_polyline`; the two `MapViewDirections` legs (driver→
+    pickup and pickup→dropoff) each firing `onReady`, plus the
+    empty-coordinates no-op branch — needed the same prop-capturing mock
+    upgrade as `ride-in-progress.tsx`, tracked per-leg here since this
+    screen renders two instances at once (distinguished by `origin`);
+    the driver-origin-snapshot capture and its reset-on-reassignment
+    effect; the map-fitting `fitToCoordinates` call (mock upgraded to a
+    shared `jest.fn()` so it's assertable, unlike the previous
+    per-render throwaway stub); `FreeCancelTimer`'s `onExpire` callback
+    (needed a prop-capturing mock — it was `() => null`, silently
+    dropping the prop); the ETA countdown timer actually ticking down
+    (1s at a time — a single large `advanceTimersByTime` jump didn't
+    cascade through the effect's re-schedule-on-each-tick pattern the
+    way `ride-in-progress.tsx`'s simpler haversine effect did) and its
+    two label-format boundaries (`<30s` "Arriving shortly", `<120s`
+    seconds-only); the searching-state "Cancel" button's direct
+    (no-reason-sheet) cancel path; dismissing both the `ConfirmSheet`
+    and `CancelReasonSheet` via their own cancel/close actions without
+    cancelling; the driver-photo-load-error fallback; and all four
+    `__DEV__`-only status-simulation buttons (Assign/Arrive/Start/
+    Complete), including Assign's swallowed-failure branch. 38 tests;
+    full rider-app suite still green (122 suites / 1261 tests), `yarn
+    tsc --noEmit` clean.
   - **rider-app `app/search-destination.tsx`: 70.5% → 95.4% lines.**
     Already had `searchDestinationPinIntegrity.test.tsx` (stale-pin
     incident regression) and `searchDestinationScreen.test.tsx` (20

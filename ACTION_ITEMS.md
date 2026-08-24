@@ -9360,6 +9360,51 @@ record of what was assumed vs. what was actually true</summary>
   corporate/billing form (subscriptions, KYB, wallet adjustments, etc.)
   remain unmigrated; no ADR/migration-order doc written yet. Checkbox
   stays `[ ]`.
+- **2026-08-24 update — step 6 done, second admin-dashboard corporate
+  form migrated:** migrated `admin-dashboard/.../corporate-accounts/[id]/
+  policy/page.tsx`'s time-window validation (per-employee ride-policy
+  booking windows — day + start/end time pairs that gate when a company's
+  employees can expense a ride). The predicate `w.end <= w.start` was
+  duplicated by hand across two call sites — the `TimeWindowRow` child
+  component's per-row `invalid` flag (drives the red border + inline
+  "End must be after start" message) and the parent's `hasInvalidWindow`
+  (gates the Save button and blocks `handleSave`) — the same
+  duplicated-logic-can-drift shape step 4 closed for `allowance-dialog.tsx`,
+  found by working down this item's own "every other admin-dashboard
+  corporate/billing form" still-open list. `zod` was already a direct
+  admin-dashboard dependency as of step 4 — no dependency change this
+  step. New colocated `admin-dashboard/src/lib/policyTimeWindowSchema.ts`
+  (`timeWindowSchema` + `isTimeWindowValid` + `hasInvalidTimeWindow`)
+  reproduces the exact predicate via a `superRefine` with the identical
+  error message; both call sites now import the shared helpers instead of
+  re-deriving the check. The `maxFare` input's `min={1}`/`max={10000}`
+  HTML attributes were deliberately left untouched — they were never
+  backed by a JS check in `handleSave`, so adding one would be a new
+  validation rule, not a pure extraction, out of scope for this pass. New
+  `admin-dashboard/src/lib/__tests__/policyTimeWindowSchema.test.ts` (16
+  accept/reject cases, covering every day literal, equal/reversed/
+  one-minute-wide boundaries, and the exact error message + issue path).
+  Verification: 16/16 new tests pass; full admin-dashboard suite 367/367
+  (37 files) pass, 0 regressions (351 baseline from step 4 + growth from
+  other admin-dashboard work landed since + these 16); `npx tsc --noEmit`
+  clean; `npx eslint` clean on touched files (one pre-existing,
+  unrelated `react-hooks/set-state-in-effect` warning on an untouched
+  line of the same file, not introduced by this change); **real
+  production build** (`npm run build` → `next build`) completed
+  successfully, exit 0; blast-radius grep confirmed
+  `policyTimeWindowSchema` is imported only by the migrated page and its
+  own test file — a same-pattern `w.end <= w.start` duplicate also exists
+  in `admin-dashboard/src/app/company-portal/[id]/policy/page.tsx` (a
+  separate self-serve company-portal surface, not this internal
+  admin-dashboard review flow) but was left untouched, out of this pass's
+  scope. Full Change Impact Log:
+  `docs/change-log/2026-08-24-b39-admin-policy-timewindow-zod-step6.md`.
+  **Still open:** `rider-app/app/login.tsx`, driver-app's signup/
+  profile-setup fields, `company-portal/[id]/policy/page.tsx`'s own copy
+  of the same time-window check, and every other admin-dashboard
+  corporate/billing form (subscriptions assignment, KYB approve/reject
+  note, wallet adjustments, etc.) remain unmigrated; no ADR/
+  migration-order doc written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

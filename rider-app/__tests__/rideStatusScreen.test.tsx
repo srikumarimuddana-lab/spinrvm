@@ -209,6 +209,19 @@ describe('driver_assigned / driver_accepted', () => {
     act(() => { img.props.onError(); });
     expect(r.root.findAllByType(Image)).toHaveLength(0);
   });
+
+  it('computes the offer countdown from a real offer_expires_at, ticking down', async () => {
+    const expiresAt = new Date(Date.now() + 10_000).toISOString();
+    resetStore({
+      currentRide: { id: 'ride-1', status: 'driver_assigned', pickup_otp: '1234', offer_expires_at: expiresAt, offer_timeout_seconds: 10 } as any,
+      currentDriver: DRIVER as any,
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('"Driver has 10s to accept"');
+    await act(async () => { jest.advanceTimersByTime(1000); });
+    // Ticked down at least once via the 500ms interval.
+    expect(allText(r)).not.toContain('"Driver has 10s to accept"');
+  });
 });
 
 describe('driver_arrived state', () => {
@@ -223,6 +236,72 @@ describe('driver_arrived state', () => {
     expect(allText(r)).toContain('"2"');
     expect(allText(r)).toContain('"1"');
     expect(allText(r)).toContain('"Jamie Fox"');
+  });
+});
+
+describe('driver_arrived state (continued)', () => {
+  it('falls back to the person icon when the driver photo fails to load', async () => {
+    resetStore({
+      currentRide: { id: 'ride-1', status: 'driver_arrived', pickup_otp: '4821' } as any,
+      currentDriver: { ...DRIVER, photo_url: 'https://example.com/x.jpg' } as any,
+    });
+    const r = await renderScreen();
+    const img = r.root.findByType(Image);
+    act(() => { img.props.onError(); });
+    expect(r.root.findAllByType(Image)).toHaveLength(0);
+  });
+});
+
+describe('DEV controls', () => {
+  it('the Assign Driver button (searching) simulates a driver and refetches', async () => {
+    mockSimulateDriverArrival.mockResolvedValue(undefined);
+    resetStore({ currentRide: { id: 'ride-1', status: 'searching', pickup_otp: '1234' } as any });
+    const r = await renderScreen();
+    const assignBtn = r.root.findAllByType(TouchableOpacity).find((n) =>
+      n.findAllByType(Text).some((t) => t.props.children === 'Assign Driver')
+    )!;
+    await act(async () => { await assignBtn.props.onPress(); await flush(); });
+    expect(mockSimulateDriverArrival).toHaveBeenCalled();
+    expect(mockFetchRide).toHaveBeenCalledWith('ride-1');
+  });
+
+  it('the Assign Driver button logs and continues on failure', async () => {
+    mockSimulateDriverArrival.mockRejectedValue(new Error('down'));
+    resetStore({ currentRide: { id: 'ride-1', status: 'searching', pickup_otp: '1234' } as any });
+    const r = await renderScreen();
+    const assignBtn = r.root.findAllByType(TouchableOpacity).find((n) =>
+      n.findAllByType(Text).some((t) => t.props.children === 'Assign Driver')
+    )!;
+    await act(async () => { await assignBtn.props.onPress(); await flush(); });
+    expect(mockFetchRide).toHaveBeenCalledWith('ride-1');
+  });
+
+  it('the Arrive at Pickup button (driver_assigned) posts the arrive endpoint', async () => {
+    resetStore({
+      currentRide: { id: 'ride-1', status: 'driver_assigned', pickup_otp: '1234' } as any,
+      currentDriver: DRIVER as any,
+    });
+    const r = await renderScreen();
+    const arriveBtn = r.root.findAllByType(TouchableOpacity).find((n) =>
+      n.findAllByType(Text).some((t) => t.props.children === 'Arrive at Pickup')
+    )!;
+    const { default: api } = require('@shared/api/client');
+    await act(async () => { await arriveBtn.props.onPress(); await flush(); });
+    expect(api.post).toHaveBeenCalledWith('/drivers/rides/ride-1/arrive');
+    expect(mockFetchRide).toHaveBeenCalledWith('ride-1');
+  });
+
+  it('the Go to Arriving Screen button (driver_arrived) navigates', async () => {
+    resetStore({
+      currentRide: { id: 'ride-1', status: 'driver_arrived', pickup_otp: '1234' } as any,
+      currentDriver: DRIVER as any,
+    });
+    const r = await renderScreen();
+    const goBtn = r.root.findAllByType(TouchableOpacity).find((n) =>
+      n.findAllByType(Text).some((t) => t.props.children === 'Go to Arriving Screen')
+    )!;
+    act(() => { goBtn.props.onPress(); });
+    expect(mockReplace).toHaveBeenCalledWith({ pathname: '/driver-arriving', params: { rideId: 'ride-1' } });
   });
 });
 
@@ -315,6 +394,34 @@ describe('note-for-driver chip', () => {
     await act(async () => { await saveBtn.props.onPress(); await flush(); });
     expect(mockUpdateRideNotes).toHaveBeenCalledWith('New gate code');
     expect(allText(r)).not.toContain('"Saving…"');
+  });
+
+  it('closes via the Cancel button without saving', async () => {
+    resetStore({ currentRide: { id: 'ride-1', status: 'searching', pickup_otp: '1234' } as any });
+    const r = await renderScreen();
+    const chip = r.root.findAllByType(TouchableOpacity).find((n) =>
+      n.findAllByType(Text).some((t) => t.props.children === 'Add note for driver')
+    )!;
+    act(() => { chip.props.onPress(); });
+    const cancelBtn = r.root.findAllByType(TouchableOpacity).find((n) =>
+      n.findAllByType(Text).some((t) => t.props.children === 'Cancel')
+    )!;
+    act(() => { cancelBtn.props.onPress(); });
+    expect(mockUpdateRideNotes).not.toHaveBeenCalled();
+  });
+
+  it('closes via tapping the modal backdrop', async () => {
+    const { Modal } = require('react-native');
+    resetStore({ currentRide: { id: 'ride-1', status: 'searching', pickup_otp: '1234' } as any });
+    const r = await renderScreen();
+    const chip = r.root.findAllByType(TouchableOpacity).find((n) =>
+      n.findAllByType(Text).some((t) => t.props.children === 'Add note for driver')
+    )!;
+    act(() => { chip.props.onPress(); });
+    expect(r.root.findByType(Modal).props.visible).toBe(true);
+    const backdrop = r.root.findAllByType(TouchableOpacity).find((n) => n.props.activeOpacity === 1)!;
+    act(() => { backdrop.props.onPress(); });
+    expect(r.root.findByType(Modal).props.visible).toBe(false);
   });
 
   it('a save failure toasts and keeps the sheet open', async () => {

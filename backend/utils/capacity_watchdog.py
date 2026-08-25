@@ -17,9 +17,13 @@ Signals (all thresholds overridable by env, see the constants):
      consecutive ticks. 50 is the recorded breaking point in loadtest/README.md.
      Sustained rather than instantaneous because a brief queue during a burst is
      the pool doing its job; a persistent one means requests are losing.
-  2. DB call rejections — any increase in spinr_db_calls_rejected_total.
-     reason=circuit_open fires immediately (the DB is already failing);
-     deadline timeouts are reported too but are less acute.
+  2. DB call rejections — split by reason. reason=circuit_open fires
+     immediately on any increase (the DB is already failing). The other
+     reasons (deadline_exhausted / deadline_timeout) are client-budget
+     rejections — dominated by device clock skew and slow cellular transit,
+     not DB capacity — so they only alert when the fleet sheds them in
+     volume: > CAPACITY_DB_REJECTED_PER_MIN_THRESHOLD/min sustained for
+     SUSTAIN_TICKS (0 restores the legacy any-increase immediate mode).
   3. Rate-limit pressure — spinr_rate_limit_violation_total rising faster than
      120/min for 3 ticks. Distinguishes "real burst" from "a limit set too low".
 
@@ -36,12 +40,28 @@ would fail exactly when it mattered. It now uses ``send_ops_alert_email``, which
 runs on credentials cached at startup and touches no table. Startup priming is
 the one DB read, and it happens at a moment of our choosing.
 
-Per-replica alerting is INTENTIONAL, not an oversight: thread-pool saturation is
-a per-process condition, and metrics.py is explicitly per-process ("Each backend
-replica keeps its own counters"). A leader lock would mean the one elected
-replica reports its own healthy pool while seven saturated ones stay silent.
-Fan-out is bounded instead by a per-signal cooldown, and every message carries
-its FLY_MACHINE_ID so duplicates are attributable rather than confusing.
+Alert scope is per-signal, because the underlying conditions have different
+shapes:
+
+* PER-REPLICA (db_pool_saturation, db_circuit_open) — INTENTIONAL, not an
+  oversight. Thread-pool saturation is a per-process condition and metrics.py
+  is explicitly per-process ("Each backend replica keeps its own counters"). A
+  leader lock would mean the one elected replica reports its own healthy pool
+  while seven saturated ones stay silent.
+* FLEET-SCOPED (db_calls_rejected, rate_limit_pressure) — these count *user
+  requests*, so every replica observes its own slice of one fleet-wide
+  condition and they all alert about the same thing. With UVICORN_WORKERS=2 on
+  an 8-machine pool that is up to 16 near-identical messages per cooldown
+  window, two per FLY_MACHINE_ID (workers share a machine id, so they are not
+  even attributable). These claim a shared Redis key so the fleet reports once.
+
+The Redis claim FAILS OPEN: if Redis is unavailable the alert is sent anyway on
+per-process cooldown alone. Suppressing an alert because the deduper is down
+would reproduce the failure mode this whole module exists to prevent. Redis is
+also not the subsystem being reported on — the DB-free guarantee below is
+unaffected. Set CAPACITY_FLEET_DEDUP=off to disable dedup entirely (rollback).
+
+Every message carries its FLY_MACHINE_ID so duplicates stay attributable.
 
 See docs/runbooks/capacity-scaling.md §6-7 for thresholds and the response
 playbook.
@@ -77,6 +97,15 @@ QUEUE_DEPTH_THRESHOLD = int(os.environ.get("CAPACITY_QUEUE_DEPTH_THRESHOLD", "50
 # traffic in volume.
 RATE_LIMIT_VIOLATIONS_PER_MIN_THRESHOLD = int(os.environ.get("CAPACITY_RATE_LIMIT_VIOLATIONS_THRESHOLD", "120"))
 
+# Non-circuit DB rejections (deadline_exhausted / deadline_timeout) per minute
+# above which the deadline-rejection signal trips. These rejections are counted
+# per client request and are dominated by client-side conditions — a device
+# clock ≥15 s behind the server expires every deadline it sends — so a single
+# rejection per tick is not page-worthy; the 2026-08-24 alert storm was exactly
+# that. 0 restores the legacy any-increase immediate behaviour (rollback is a
+# config change + machine restart, no code deploy).
+DB_REJECTED_PER_MIN_THRESHOLD = int(os.environ.get("CAPACITY_DB_REJECTED_PER_MIN_THRESHOLD", "30"))
+
 # Consecutive ticks a sustained signal must hold before alerting. Guards against
 # alerting on a single spike that the queue absorbs on its own.
 SUSTAIN_TICKS = int(os.environ.get("CAPACITY_SUSTAIN_TICKS", "3"))
@@ -84,6 +113,20 @@ SUSTAIN_TICKS = int(os.environ.get("CAPACITY_SUSTAIN_TICKS", "3"))
 # Per-signal alert throttle. A burst lasts longer than one tick; without this a
 # 30-minute incident would post ~30 messages per replica.
 COOLDOWN_SECONDS = int(os.environ.get("CAPACITY_ALERT_COOLDOWN_SECONDS", "1800"))
+
+# Signals whose underlying condition is fleet-wide rather than per-process, so
+# every replica would otherwise alert about the same thing. See the module
+# docstring on alert scope.
+FLEET_SCOPED_SIGNALS = frozenset({"db_calls_rejected", "rate_limit_pressure"})
+
+# Kill-switch for the shared-Redis dedup (rollback to pure per-replica
+# alerting without a code deploy).
+FLEET_DEDUP_ENABLED = os.environ.get("CAPACITY_FLEET_DEDUP", "on").strip().lower() not in {
+    "off",
+    "0",
+    "false",
+    "no",
+}
 
 _LOOP_NAME = "capacity_watchdog (60s)"
 
@@ -117,6 +160,25 @@ def _counter_total(
                 continue
         total += value
     return total
+
+
+def _rejection_reason_deltas(snap: dict) -> Dict[str, float]:
+    """Per-reason increase of spinr_db_calls_rejected_total since last tick.
+
+    Excludes circuit_open (signal 2a owns it) and drops reasons whose delta is
+    zero or unknown, so the alert body names only what actually moved. Purely
+    informational: the signal itself is computed from the totals so its
+    baseline keys stay stable even if a new reason label appears mid-flight.
+    """
+    bucket = snap.get("counters", {}).get("spinr_db_calls_rejected_total", {})
+    reasons = {dict(labels).get("reason", "unknown") for labels in bucket}
+    deltas: Dict[str, float] = {}
+    for reason in sorted(reasons - {"circuit_open"}):
+        total = _counter_total(snap, "spinr_db_calls_rejected_total", "reason", reason)
+        delta = _delta(f"db_calls_rejected_reason:{reason}", total)
+        if delta:
+            deltas[reason] = delta
+    return deltas
 
 
 def _delta(name: str, current: float) -> Optional[float]:
@@ -203,10 +265,76 @@ async def _send_email(signal: str, subject: str, body: str, recipients: list) ->
             )
             any_sent = any_sent or bool(sent)
         except Exception as exc:
-            logger.error(
-                "capacity_watchdog: failed to email %s alert: %s", signal, exc, exc_info=True
-            )
+            logger.error("capacity_watchdog: failed to email %s alert: %s", signal, exc, exc_info=True)
     return any_sent
+
+
+def _fleet_claim_key(signal: str) -> str:
+    return f"spinr:capacity_alert:{signal}"
+
+
+def _claim_token() -> str:
+    """Identify this *process*, not just this machine.
+
+    UVICORN_WORKERS=2 means two processes share one FLY_MACHINE_ID, so the
+    machine id alone cannot tell two claim holders apart.
+    """
+    return f"{_machine_id()}:{os.getpid()}"
+
+
+async def _try_claim_fleet_cooldown(signal: str) -> bool:
+    """Claim the right to alert for `signal` on behalf of the whole fleet.
+
+    Returns True if this replica should send. FAILS OPEN — on any Redis error
+    we return True and let the per-process cooldown be the only bound, because
+    a missed capacity alert costs more than a duplicate one.
+
+    Note the in-process fallback in utils/redis_client.py makes this a no-op
+    when REDIS_URL is unset (dev/test): the claim always succeeds locally, so
+    behaviour matches the pre-dedup code path exactly.
+    """
+    if not FLEET_DEDUP_ENABLED or signal not in FLEET_SCOPED_SIGNALS:
+        return True
+    try:
+        from .redis_client import redis_set_nx
+    except ImportError:  # pragma: no cover - non-package entrypoint
+        from utils.redis_client import redis_set_nx  # type: ignore
+    try:
+        return await redis_set_nx(_fleet_claim_key(signal), _claim_token(), COOLDOWN_SECONDS)
+    except Exception as exc:
+        logger.error(
+            "capacity_watchdog: fleet dedup unavailable for %s, alerting anyway (fail-open): %s",
+            signal,
+            exc,
+        )
+        return True
+
+
+async def _release_fleet_cooldown(signal: str) -> None:
+    """Release a claim whose alert reached no channel, so another replica retries.
+
+    Best-effort compare-and-delete: we only clear the key if it still holds our
+    own token, so we cannot delete a claim another replica took in the interim.
+    There is no CAS here — the worst case is one duplicate alert, which is the
+    right way to be wrong for a watchdog.
+    """
+    if not FLEET_DEDUP_ENABLED or signal not in FLEET_SCOPED_SIGNALS:
+        return
+    try:
+        from .redis_client import redis_delete, redis_get
+    except ImportError:  # pragma: no cover - non-package entrypoint
+        from utils.redis_client import redis_delete, redis_get  # type: ignore
+    key = _fleet_claim_key(signal)
+    try:
+        if await redis_get(key) == _claim_token():
+            await redis_delete(key)
+    except Exception as exc:
+        logger.error(
+            "capacity_watchdog: failed to release fleet claim for %s (it will expire in %ss): %s",
+            signal,
+            COOLDOWN_SECONDS,
+            exc,
+        )
 
 
 async def _post_alert(signal: str, text: str, webhook_url: Optional[str]) -> None:
@@ -233,6 +361,16 @@ async def _post_alert(signal: str, text: str, webhook_url: Optional[str]) -> Non
     if not webhook_url and not recipients:
         return  # no channel configured — stay quiet (dev/test)
 
+    # Fleet-scoped signals dedupe across replicas. Claim AFTER the local
+    # cooldown and channel checks so a throttled or channel-less replica never
+    # burns the fleet's claim without sending anything.
+    if not await _try_claim_fleet_cooldown(signal):
+        # Another replica is reporting this window. Stamp the local cooldown so
+        # this process stops re-attempting (and re-hitting Redis) every tick.
+        _last_alerted[signal] = now
+        logger.info("capacity_watchdog: %s already reported by another replica this window", signal)
+        return
+
     body = f"{text}\nReplica: {_machine_id()}\nRunbook: docs/runbooks/capacity-scaling.md"
 
     delivered = False
@@ -245,9 +383,8 @@ async def _post_alert(signal: str, text: str, webhook_url: Optional[str]) -> Non
     if delivered:
         _last_alerted[signal] = now
     else:
-        logger.error(
-            "capacity_watchdog: %s alert reached NO channel — will retry next tick", signal
-        )
+        await _release_fleet_cooldown(signal)
+        logger.error("capacity_watchdog: %s alert reached NO channel — will retry next tick", signal)
 
 
 async def _tick(webhook_url: Optional[str]) -> None:
@@ -286,7 +423,7 @@ async def _tick(webhook_url: Optional[str]) -> None:
             webhook_url,
         )
 
-    # --- Signal 2: DB calls being rejected outright ------------------------
+    # --- Signal 2a: circuit breaker rejecting calls ------------------------
     # Circuit-open is immediate: the breaker only opens after real failures, so
     # there is nothing to wait and see about.
     if circuit_open_delta:
@@ -302,17 +439,58 @@ async def _tick(webhook_url: Optional[str]) -> None:
             f"The database is already failing — check Supabase status and tier.",
             webhook_url,
         )
-    elif rejected_delta:
-        # Deadline exhaustion/timeout: real, but less acute than an open circuit.
+
+    # --- Signal 2b: client-deadline rejections in volume -------------------
+    # Everything that isn't circuit_open is a deadline rejection
+    # (deadline_exhausted / deadline_timeout): the client's time budget ran
+    # out, usually because of device clock skew or slow transit rather than
+    # DB capacity. Alert only on sustained volume — a lone skewed handset
+    # produces a steady trickle that is diagnosable from logs, not pages.
+    non_circuit_delta = None
+    if rejected_delta is not None:
+        non_circuit_delta = max(rejected_delta - (circuit_open_delta or 0.0), 0.0)
+
+    reason_deltas = _rejection_reason_deltas(snap)
+    if non_circuit_delta:
+        # Tick-level trail regardless of whether an alert fires — the alert
+        # threshold must not cost us the forensic record.
         logger.warning(
-            "capacity_watchdog: DB calls rejected",
-            extra={"rejected_delta": rejected_delta, "breaker_state": breaker_state},
+            "capacity_watchdog: DB calls rejected on client deadline",
+            extra={
+                "rejected_delta": non_circuit_delta,
+                "reasons": reason_deltas,
+                "breaker_state": breaker_state,
+                "queue_depth": queue_depth,
+            },
         )
+
+    per_min = None
+    if non_circuit_delta is not None:
+        per_min = non_circuit_delta * (60.0 / max(INTERVAL_SECONDS, 1))
+
+    if DB_REJECTED_PER_MIN_THRESHOLD > 0:
+        rejected_tripped = _sustained(
+            "db_calls_rejected",
+            per_min is not None and per_min > DB_REJECTED_PER_MIN_THRESHOLD,
+        )
+        threshold_line = f"Sustained > {DB_REJECTED_PER_MIN_THRESHOLD}/min for {SUSTAIN_TICKS} consecutive ticks.\n"
+    else:
+        # Legacy mode: any increase alerts immediately (pre-2026-08-24
+        # behaviour, kept as the documented rollback switch).
+        rejected_tripped = bool(non_circuit_delta)
+        threshold_line = ""
+
+    if rejected_tripped:
+        breakdown = ", ".join(f"{reason}: {int(count)}" for reason, count in sorted(reason_deltas.items()))
+        breakdown = f" — {breakdown}" if breakdown else ""
         await _post_alert(
             "db_calls_rejected",
-            f":warning: *Spinr DB calls rejected*\n"
-            f"*{int(rejected_delta)}* rejected since last tick "
-            f"(breaker state: `{breaker_state}`, queue depth {queue_depth}).",
+            f":warning: *Spinr DB calls rejected (client deadline)*\n"
+            f"*{int(non_circuit_delta or 0)}* rejected in the last tick{breakdown} "
+            f"(breaker state: `{breaker_state}`, queue depth {queue_depth}).\n"
+            f"{threshold_line}"
+            f"`deadline_*` reasons usually mean device clock skew or slow transit, "
+            f"not DB capacity — see runbook §7 before scaling anything.",
             webhook_url,
         )
 

@@ -19,6 +19,7 @@ try:
     from ..services.zoho_desk_integration import create_ticket_for_dispute
     from ..settings_loader import get_app_settings
     from ..utils.audit_logger import log_admin_action
+    from ..utils.background import spawn as _spawn
     from ..utils.money import dollars_to_cents
 except ImportError:
     import db_supabase
@@ -27,6 +28,7 @@ except ImportError:
     from services.zoho_desk_integration import create_ticket_for_dispute
     from settings_loader import get_app_settings
     from utils.audit_logger import log_admin_action
+    from utils.background import spawn as _spawn  # type: ignore
     from utils.money import dollars_to_cents  # noqa: F401
 
 db = db_supabase  # legacy alias
@@ -107,7 +109,7 @@ async def create_dispute(
 
     # Raise a Zoho Desk ticket for support to track the dispute/refund —
     # fire-and-forget; no-op when the integration is disabled.
-    asyncio.create_task(create_ticket_for_dispute(dispute, ride))
+    _spawn(create_ticket_for_dispute(dispute, ride))
 
     return {"success": True, "dispute": dispute}
 

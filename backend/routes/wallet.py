@@ -15,8 +15,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 try:
     from ..utils.audit_logger import log_user_action as _audit_log_user
+    from ..utils.background import spawn as _spawn
 except ImportError:
     from utils.audit_logger import log_user_action as _audit_log_user
+    from utils.background import spawn as _spawn  # type: ignore
 from pydantic import BaseModel, Field
 
 try:
@@ -299,9 +301,7 @@ async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_cur
         description=f"Ride payment ${req.amount:.2f}",
     )
 
-    import asyncio
-
-    asyncio.create_task(
+    _spawn(
         _audit_log_user(
             current_user,
             "wallet_payment",

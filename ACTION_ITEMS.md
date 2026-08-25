@@ -9729,6 +9729,55 @@ record of what was assumed vs. what was actually true</summary>
     file). No bug found. Not money-touching; no auditor review sought.
     22 tests; full rider-app suite still green (123 suites / 1476
     tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/lost-and-found-chat.tsx`: 89.74% → 99.14% stmts,
+    75.25% → 98.96% branch, 88.57% → 100% funcs, 93.81% → 100% lines.**
+    Already had `lostAndFoundChatScreen.test.tsx` (14 tests: mount fetch,
+    load-failure toast, status-label mapping + unknown fallback, the
+    open-vs-closed empty state, closed-case input hiding, send success/
+    failure, camera/library permission-denied, a full camera-upload
+    success, an upload failure dropping the optimistic bubble, opening
+    the photo preview, the 10s poll's length-differs refresh, back nav)
+    — extended in place (+21 tests, 35 total). Closed: `loadAll`'s own
+    `!caseId` early return; the `??` fallbacks on both the case and
+    messages API responses when either field is absent from the
+    response shape; the poll's own `AppState.currentState !== 'active'`
+    skip and its silent `.catch(() => {})`; the poll's *other* two
+    outcomes beyond "length differs" — same-length-different-newest-id
+    (replaces) and identical-list (no-op, asserted via an unchanged
+    `allText()` snapshot); the post-send `scrollToEnd` `setTimeout`
+    actually firing (via `jest.advanceTimersByTime(100)`);
+    `sendMessage`'s whitespace-only no-op guard; both send/upload paths
+    leaving the optimistic bubble in place when the server response
+    omits its own `message` field; the image-picker's
+    `canceled`/no-`assets` no-op; the Photo Library picker path (only
+    Camera had a full success test); `uploadPhoto`'s own
+    `uploadingPhoto` double-tap re-entrancy guard; both the attach- and
+    send-button in-flight spinners (controllable pending promises — the
+    first attempt at these left the triggering `onPress()` un-awaited
+    outside of an `act(async () => ...)` scope, which both raised a
+    React "not wrapped in act" warning and left a dangling promise chain
+    that cascaded into "Can't access .root on unmounted test renderer"
+    failures on every subsequent test in the file; fixed by wrapping the
+    fire-and-flush pair together inside a single `await act(async () =>
+    { onPress(); await flush(); })` — same fix shape as this session's
+    established pending-promise pattern, just missing the `act` wrapper
+    initially); a rider's own message rendering with the "me" bubble
+    styling (previously only driver/system messages had ever been
+    rendered from history); a system/admin message's own row shape; a
+    still-uploading local-image message's pending-spinner overlay
+    (seeded directly via a history fixture, since the full send flow
+    can't hold that intermediate state open in Jest); and closing the
+    photo-preview modal both via its own `onRequestClose` and via
+    tapping the backdrop. Left uncovered (genuinely unreachable, not
+    chased): `attachPhoto`'s `if (!caseId || isClosed) return;` guard —
+    the attach button that calls it is itself never rendered in either
+    of those two states (no `caseId` means `loadAll` returns before
+    `setLoading(false)`, so the screen never leaves its loading spinner;
+    a closed case hides the entire input row, attach button included),
+    so the guard can't actually be reached through the UI in this
+    screen's own render logic. No bug found. Not money-touching; no
+    auditor review sought. 35 tests; full rider-app suite still green
+    (123 suites / 1524 tests), `yarn tsc --noEmit` clean.
   - **rider-app `app/referral.tsx`: 73.80% → 97.61% branch** (100%
     stmts/funcs/lines already). Already had `referralScreen.test.tsx` (9
     tests: parallel mount fetch, the error state + working Retry, Copy,
@@ -15592,6 +15641,77 @@ how much they de-risk a public launch._
   confirmed against a live PR edit event — flag for the reviewer of
   `claude/c40-fix-pr-checks-duplicate-append` to watch the next real PR
   edit on an affected PR before closing this out for good.
+
+### C42. Follow-ups from the DB deadline-rejection alert storm (2026-08-24)
+
+- [ ] **Status:** open — filed while fixing the recurring "*Spinr DB calls
+  rejected*" operator emails. Root cause and the shipped fix are written up in
+  `docs/change-log/2026-08-24-db-deadline-rejection-alert-storm.md`; these are
+  the three pieces deliberately left out of that change to keep it scoped.
+
+- [x] **C42-A. Raw `asyncio.create_task` call sites in request handlers
+  inherited the request deadline — DONE 2026-08-24.** `utils/background.spawn()`
+  clears the deadline ContextVar so backgrounded work is not bounded by how long
+  the rider waited for an HTTP response, but only `spawn()` callers got that. Raw
+  `asyncio.create_task(...)` in a request handler still inherited the budget, so
+  the backgrounded DB write was rejected with `deadline_exhausted` once the
+  response was sent — silently. Migrating them to `spawn()` also gives them the
+  strong-reference guarantee they lacked (a task nobody references can be GC'd
+  mid-flight — the original reason `spawn()` exists).
+
+  All 16 request-handler sites migrated across four commits:
+  `routes/payments.py` + `routes/wallet.py` (audit rows) → `0f564c2`;
+  `routes/auth.py` (9 sites: OTP lockout/verify, DSAR reactivation, new-device
+  notice, firebase login, logout) → `01ae337`;
+  `routes/safety.py` + `routes/disputes.py` + `routes/lost_and_found.py` (Zoho
+  tickets) → `9aa0f89`;
+  `routes/admin/support.py` (3) + `routes/admin/rides.py` +
+  `routes/admin/stripe_import.py` (2) + `routes/webhooks.py` → see the
+  admin/webhook commit. `routes/admin/rides.py`'s `_offer_timeout_handler` was
+  the worst of them — it deliberately sleeps `timeout_seconds + 15` (~35 s),
+  guaranteeing its post-sleep DB work fell outside any 15 s client budget.
+
+  **Deliberately NOT migrated**, because neither can inherit a deadline:
+  `routes/websocket.py` (3 sites) — Starlette's `BaseHTTPMiddleware` returns
+  early for any non-`http` scope, so `DeadlineMiddleware` never runs for a
+  WebSocket connection and no deadline is ever set; the heartbeat task at :676
+  also needs its handle kept for cancellation. `utils/scheduled_rides.py:587`
+  and `utils/ws_pubsub.py:153` — background loops with no request context.
+
+  Verify with:
+  `grep -rn "asyncio.create_task" backend/routes/ | grep -v websocket.py`
+  (should return nothing).
+
+- [ ] **C42-B. `shared/**/__tests__` is not wired into any CI job.** The tests
+  under `shared/api/__tests__/` and `shared/utils/__tests__/` are unreachable by
+  every workflow — rider-app's and driver-app's Jest `roots` default to their
+  own `rootDir`, so `shared/` is only reached through imports, never collected
+  as test files. They run today only via an explicit
+  `npx jest --roots ../shared` from `rider-app/`. Consequence: the new
+  `client.deadlineHeader.test.ts` (and the pre-existing `client.authHeader`,
+  `client.refresh`, `client.sos` suites) will not gate a regression. Note when
+  fixing: running them that way currently surfaces 2 pre-existing failures in
+  `shared/utils/__tests__/pii.test.ts` (a `redactCoords` rounding assertion),
+  which will need triage before the job can be made blocking.
+
+- [ ] **C42-C. Drop the legacy `X-Deadline-Ms` path once no deployed app build
+  sends it.** The absolute epoch header is the skew-vulnerable spelling; it is
+  retained only so app builds already in the field keep working, and is defanged
+  by the clamp in `core/middleware.py::resolve_deadline_budget_ms`. Once
+  `spinr_deadline_header_clamped_total{source="deadline"}` goes to zero in
+  production, delete the legacy branch, the `source` label, and the
+  `X-Deadline-Ms` half of `shared/api/client.ts::deadlineHeader`.
+
+- [ ] **C42-D. Confirm the dominant rejection reason in production.** The
+  clock-skew mechanism is proven from the code path but was never read off a
+  live `/metrics` scrape. If `deadline_timeout` (not `deadline_exhausted`)
+  dominates, slow queries are a bigger contributor than skew and
+  `CAPACITY_DB_REJECTED_PER_MIN_THRESHOLD` (default 30/min) should be re-tuned.
+  ```bash
+  flyctl ssh console -a spinr-backend-yyz -C \
+    "curl -s -H 'Authorization: Bearer $METRICS_AUTH_TOKEN' localhost:8000/metrics \
+     | grep -E 'spinr_db_calls_rejected|spinr_deadline_header_clamped'"
+  ```
 
 ### C41. `rider-app-test`/`driver-app-test` intermittently time out on unrelated files — two more leaked-async-update sources found and fixed (same class as C31/C37)
 

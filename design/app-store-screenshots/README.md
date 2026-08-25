@@ -1,36 +1,63 @@
 # Spinr store screenshots
 
-Source for the App Store and Google Play screenshot sets (rider + driver).
+Source for the Spinr **rider** App Store screenshot set. Each `*.dc.html` file is
+one artboard, laid out by `canvas.json` and published as a design canvas.
 
-Each `*.dc.html` file is one artboard. They are laid out by `canvas.json` and
-assembled into a single published design canvas that renders every artboard and
-exports them as PNG/PDF.
+## The set
 
-| File | Store | Size | Slot |
-|---|---|---|---|
-| `Main.dc.html` | App Store · Rider | 1290×2796 | 1 · Hero |
-| `Rider02.dc.html` | App Store · Rider | 1290×2796 | 2 · Fare transparency |
-| `Rider03.dc.html` | App Store · Rider | 1290×2796 | 3 · Safety |
-| `Rider04.dc.html` | App Store · Rider | 1290×2796 | 4 · Upfront pricing |
-| `Rider05.dc.html` | App Store · Rider | 1290×2796 | 5 · Plan ahead |
-| `Driver01.dc.html` | App Store · Driver | 1290×2796 | 1 · Keep 100% |
-| `Driver02.dc.html` | App Store · Driver | 1290×2796 | 2 · Fare before accept |
-| `Driver03.dc.html` | App Store · Driver | 1290×2796 | 3 · Weekly payouts |
-| `Play01.dc.html` | Google Play | 1080×1920 | Rider hero |
-| `Play02.dc.html` | Google Play | 1080×1920 | Driver hero |
-| `DirectionB/C/D.dc.html` | — | 1290×2796 | Alternate design directions (low-fi) |
+| File | Slot | Story |
+|---|---|---|
+| `Main.dc.html` | 1 | Your fare stays home |
+| `Rider02.dc.html` | 2 | See the price before you tap |
+| `Rider03.dc.html` | 3 | Watch your driver arrive |
+| `Rider04.dc.html` | 4 | Spinr's cut: $0.00 |
+| `Rider05.dc.html` | 5 | Help is one tap away |
 
-**Sizes are not interchangeable.** Google Play rejects images taller than 9:16,
-so the 1290×2796 App Store images cannot be reused for Play. `Play0*.dc.html`
-reuse the same phone markup at `scale(0.75)` inside a 1080×1920 frame.
+All five are **1290 × 2796** (App Store, iPhone 6.7"). Rendered PNGs at that exact
+size live in `png/`.
+
+Order follows the real ride flow — book, price, track, pay, safety. Apple only
+surfaces the first two or three in search results, so those carry the pitch.
+
+## How it's built
+
+`_build.py` is the generator: one template plus five per-frame configs, so the
+design system stays consistent across the set. It composes the phone screens
+from `_screens/*.html`, which are extracted from (and match) the real app.
+
+```bash
+python3 _build.py        # regenerate the five .dc.html artboards
+./_rebuild.sh            # build standalone render pages into _render/
+node _measure.mjs        # assert nothing overflows its artboard
+node _shoot.mjs          # render _render/*.html -> png/ at exact store size
+```
+
+Rendering needs Chromium (`/opt/pw-browsers/chromium-1194/chrome-linux/chrome`)
+and Playwright, plus `_fonts.css` — a base64 Plus Jakarta Sans **variable** face
+(`font-weight: 200 800`) fetched from Google Fonts. Four fixed-weight faces do
+not work: Google serves one variable file for all four weights, so fixed faces
+all render at the same weight.
+
+### The continuous route line
+
+The red line crossing each frame is continuous across the set: frame N exits its
+right edge at the same height frame N+1 enters its left edge (`ye` / `yx` in
+`_build.py`). Reorder the frames and those hand-off heights must be reordered too.
+
+### Gotcha that bit once
+
+`.sp * { box-sizing: border-box }` styles descendants, **not** `.sp` itself. The
+root artboard kept `content-box`, so its padding was added on top of its declared
+height and every frame overflowed by exactly its padding. The selector must be
+`.sp, .sp *`.
 
 ## Brand sources
 
 Colors and type are lifted from the live app, not invented — see
 `.claude/context/brand-spinr.md` and `shared/theme/index.ts`. Phone content
 mirrors the real screens (`rider-app/app/(tabs)/index.tsx`,
-`rider-app/app/ride-options.tsx`, `driver-app/components/**`) including exact
-radii, control sizes and copy, scaled ~2.13× from the 390pt design width.
+`rider-app/app/ride-options.tsx`) including exact radii, control sizes and copy,
+scaled ~2.13× from the 390pt design width.
 
 `spinr-logo.png` is copied verbatim from `rider-app/assets/images/`.
 `spinr-logo-light.png` is the same asset with its palette remapped for dark
@@ -39,24 +66,20 @@ than hand-editing if the source logo changes.
 
 ## Sample data
 
-Fares, addresses, driver name, plate, bank last-4, trip counts and balances are
-**placeholder sample data**. Vehicle tier names (`Standard`, `XL`,
-`Accessible`) are placeholders too — real tiers are admin-managed rows in
-`vehicle_types`. Replace all of it with real or clearly fictional values, and
-give the marketing claims a legal/marketing pass, before submitting to either
-store.
+Fares, addresses, "Sam R.", plate, card last-4, ratings and driver counts are
+**placeholder sample data**. The $22.99 fare and its line items are internally
+consistent (base + distance + time + booking fee, then GST 5% and PST 6%), and
+no screen claims a discount the total does not reflect — keep it that way if you
+edit the numbers. Vehicle tiers (`Standard` / `XL` / `Accessible`) are
+placeholders; the real ones are admin-managed `vehicle_types` rows.
 
-## Rebuilding
+Replace all of it, and give the marketing claims a legal/marketing pass, before
+submitting.
 
-```bash
-cd design/app-store-screenshots
-node "<claude design skill dir>/seed-canvas.mjs" \
-  --template "<claude design skill dir>/payload.template.html" \
-  --out spinr-app-store-screenshots.html \
-  --title "Spinr Store Screenshots" \
-  --artboard Main.dc.html --artboard Rider02.dc.html ... \
-  --image spinr-logo.png --image spinr-logo-light.png \
-  --canvas canvas.json
-```
+## Not built yet
 
-Then republish `spinr-app-store-screenshots.html` to the same artifact URL.
+- **Google Play** needs its own **1080 × 1920** set. Play rejects anything taller
+  than 9:16, so these 2796-tall images cannot be reused there.
+- **Spinr Driver** is a separate store listing and needs its own set.
+  `Driver01-03.dc.html` hold the driver story and copy from an earlier pass, but
+  predate this design system and need rebuilding through `_build.py`.

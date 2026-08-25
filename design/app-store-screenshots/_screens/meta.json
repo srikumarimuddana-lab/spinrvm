@@ -1,0 +1,18 @@
+{
+ "home": {
+  "bg": "#FFFFFF",
+  "lines": 82
+ },
+ "receipt": {
+  "bg": "#FFFFFF",
+  "lines": 52
+ },
+ "safety": {
+  "bg": "#FFFFFF",
+  "lines": 46
+ },
+ "options": {
+  "bg": "#F5F5F5",
+  "lines": 79
+ }
+}

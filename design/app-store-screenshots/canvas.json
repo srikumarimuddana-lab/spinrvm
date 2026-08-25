@@ -1,37 +1,20 @@
 {
-  "pages": [
-    { "id": "page-1", "name": "App Store · Rider" },
-    { "id": "page-2", "name": "App Store · Driver" },
-    { "id": "page-3", "name": "Google Play" },
-    { "id": "page-4", "name": "Directions" }
-  ],
   "artboards": [
-    { "file": "Main.dc.html",    "page": "page-1", "x": 0,    "y": 0, "w": 1290, "h": 2796, "title": "1 · Hero" },
-    { "file": "Rider02.dc.html", "page": "page-1", "x": 1390, "y": 0, "w": 1290, "h": 2796, "title": "2 · Fare transparency" },
-    { "file": "Rider03.dc.html", "page": "page-1", "x": 2780, "y": 0, "w": 1290, "h": 2796, "title": "3 · Safety" },
-    { "file": "Rider04.dc.html", "page": "page-1", "x": 4170, "y": 0, "w": 1290, "h": 2796, "title": "4 · Upfront pricing" },
-    { "file": "Rider05.dc.html", "page": "page-1", "x": 5560, "y": 0, "w": 1290, "h": 2796, "title": "5 · Plan ahead" },
-
-    { "file": "Driver01.dc.html", "page": "page-2", "x": 0,    "y": 0, "w": 1290, "h": 2796, "title": "1 · Keep 100%" },
-    { "file": "Driver02.dc.html", "page": "page-2", "x": 1390, "y": 0, "w": 1290, "h": 2796, "title": "2 · Fare before accept" },
-    { "file": "Driver03.dc.html", "page": "page-2", "x": 2780, "y": 0, "w": 1290, "h": 2796, "title": "3 · Weekly payouts" },
-
-    { "file": "Play01.dc.html", "page": "page-3", "x": 0,    "y": 0, "w": 1080, "h": 1920, "title": "Rider · 1080×1920" },
-    { "file": "Play02.dc.html", "page": "page-3", "x": 1180, "y": 0, "w": 1080, "h": 1920, "title": "Driver · 1080×1920" },
-
-    { "file": "DirectionB.dc.html", "page": "page-4", "x": 0,    "y": 0, "w": 1290, "h": 2796, "title": "B · Bright & civic" },
-    { "file": "DirectionC.dc.html", "page": "page-4", "x": 1390, "y": 0, "w": 1290, "h": 2796, "title": "C · Split block" },
-    { "file": "DirectionD.dc.html", "page": "page-4", "x": 2780, "y": 0, "w": 1290, "h": 2796, "title": "D · Full bleed" }
+    { "file": "Main.dc.html",    "x": 0,    "y": 0, "w": 1290, "h": 2796, "title": "1 · Your fare stays home" },
+    { "file": "Rider02.dc.html", "x": 1390, "y": 0, "w": 1290, "h": 2796, "title": "2 · See the price first" },
+    { "file": "Rider03.dc.html", "x": 2780, "y": 0, "w": 1290, "h": 2796, "title": "3 · Watch your driver arrive" },
+    { "file": "Rider04.dc.html", "x": 4170, "y": 0, "w": 1290, "h": 2796, "title": "4 · Spinr's cut: $0.00" },
+    { "file": "Rider05.dc.html", "x": 5560, "y": 0, "w": 1290, "h": 2796, "title": "5 · Help is one tap away" }
   ],
   "annotations": [
-    { "id": "note-store", "page": "page-1", "x": 0, "y": -300, "w": 1290,
-      "text": "APP STORE — iPhone 6.7\" · 1290 × 2796\nExport each artboard as PNG at natural size and upload in this order.\n\nApple shows the first 3 in search results, so slots 1–3 carry the pitch:\nwho we are → 0% commission → safety.\n\nFares, addresses, names and counts are SAMPLE data — swap for real\nvalues (or clearly fictional ones) before you submit." },
-    { "id": "note-driver", "page": "page-2", "x": 0, "y": -300, "w": 1290,
-      "text": "Spinr Driver is a separate store listing, so it gets its own set.\nSame 1290 × 2796 spec, same visual system, driver-side story:\nkeep 100% → see the fare before accepting → paid weekly + T4A.\n\n\"No penalty for passing, no shift you have to sign up for\" is deliberate\ncontractor-safe wording — keep control-of-work language out of app copy." },
-    { "id": "note-play", "page": "page-3", "x": 0, "y": -300, "w": 1080,
-      "text": "GOOGLE PLAY — 1080 × 1920 (9:16)\nPlay rejects anything taller than 9:16, so the 2796-tall App Store\nimages can NOT be reused here. Same phone markup, scaled to 0.75.\n\nThese two are the pattern; the remaining six reflow the same way\nonce you've settled the copy." },
-    { "id": "note-dirs", "page": "page-4", "x": 0, "y": -300, "w": 1290,
-      "text": "Three alternates to the built direction (dark premium), low-fi on purpose.\n\nB · Bright & civic — warm light ground, dark type. Friendlier and more\n   local-feeling; the phone pops less against a light background.\nC · Split block — hard red/charcoal seam. Loudest in a crowded search\n   result; harder to keep varied across eight frames without shouting.\nD · Full bleed — no marketing chrome at all. Most honest; leans entirely\n   on the UI being beautiful on its own.\n\nSay which one and I'll rebuild the whole set in it." }
+    { "id": "note-set", "x": 0, "y": -340, "w": 1290,
+      "text": "SPINR RIDER — App Store, iPhone 6.7\" · 1290 × 2796\n\nOrder follows the actual ride flow (book → price → track → pay → safety),\nwhich is how Lyft sequences theirs. Apple only shows the first 2 or 3 in\nsearch results, so those carry the pitch: who we are, then upfront pricing." },
+    { "id": "note-craft", "x": 1390, "y": -340, "w": 1290,
+      "text": "The red route line is continuous across all five frames — frame 1 exits\nright at the same height frame 2 enters left, and so on. Swiping the\ngallery reads as one panorama. If you reorder the set, the hand-off\nheights need reordering with it (ye / yx in _build.py)." },
+    { "id": "note-data", "x": 2780, "y": -340, "w": 1290,
+      "text": "SAMPLE DATA — swap before submitting.\nFares ($22.99 and its line items are internally consistent), Saskatoon\naddresses, \"Sam R.\", plate 4WX 812, Visa 4242, ratings and driver counts.\nVehicle tiers (Standard / XL / Accessible) are placeholders too — the real\nones are admin-managed rows in vehicle_types." },
+    { "id": "note-next", "x": 4170, "y": -340, "w": 1290,
+      "text": "STILL TO DO\n• Google Play needs its own 1080 × 1920 set — Play rejects anything\n  taller than 9:16, so these cannot be reused there.\n• Spinr Driver is a separate listing and needs its own set.\n\nSay the word and I'll build both in this same system." }
   ],
-  "launch": { "view": "canvas", "page": "page-1" }
+  "launch": { "view": "canvas" }
 }

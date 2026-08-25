@@ -1,2 +1,5 @@
-# Generated canvas bundle (~2.5 MB) — rebuild with seed-canvas.mjs, see README.md
+# Generated canvas bundle (~1 MB) — rebuild with seed-canvas.mjs, see README.md
 spinr-app-store-screenshots.html
+# Render intermediates (fonts are refetched, pages are regenerated)
+_render/
+_fonts.css

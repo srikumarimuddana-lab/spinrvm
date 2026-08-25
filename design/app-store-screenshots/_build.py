@@ -5,7 +5,6 @@ Layout follows the dominant pattern across top App Store / Play listings
 centered device, solid brand-red hero frame then clean warm-paper frames,
 floating feature chips overlapping the device edges.
 """
-import json
 
 TPL = '''<!doctype html>
 <html>
@@ -43,9 +42,12 @@ TPL = '''<!doctype html>
 
   <div style="position: absolute; left: 179px; top: {ptop}px; width: 932px; height: 1977px; z-index: 3;">
     <div style="width: 858px; height: 1820px; transform: scale(1.0862); transform-origin: top left;">
-      <div style="width: 858px; height: 1820px; border-radius: 76px; padding: 14px; background: linear-gradient(150deg, #3A3E46 0%, #111317 38%, #0A0B0D 100%); box-shadow: 0 -6px 0 rgba(255,255,255,0.06) inset, 0 60px 120px rgba(20,10,8,0.38), 0 0 0 1px rgba(255,255,255,0.06);">
-        <div style="width: 830px; height: 1792px; border-radius: 63px; overflow: hidden; background: {screenbg}; position: relative; display: flex; flex-direction: column;">
+      <div style="width: 858px; height: 1820px; border-radius: 132px; padding: 5px; background: linear-gradient(150deg, #55585F 0%, #2B2D33 28%, #101114 70%, #33353B 100%); box-shadow: 0 60px 120px rgba(20,10,8,0.40), 0 0 0 1px rgba(0,0,0,0.35);">
+        <div style="width: 848px; height: 1810px; border-radius: 127px; background: #050505; padding: 9px;">
+          <div style="width: 830px; height: 1792px; border-radius: 112px; overflow: hidden; background: {screenbg}; position: relative; display: flex; flex-direction: column;">
 {screen}
+            <div style="position: absolute; top: 22px; left: 287px; width: 256px; height: 74px; border-radius: 37px; background: #050505; z-index: 30;"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -92,6 +94,13 @@ I = {
  'bell':  '<svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#FF3B30" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18 9a6 6 0 1 0-12 0c0 6-2.5 7.5-2.5 7.5h17S18 15 18 9z"></path><path d="M10 20.5a2.2 2.2 0 0 0 4 0"></path></svg>',
 }
 
+I.update({
+ 'spark': '<svg width="38" height="38" viewBox="0 0 24 24" fill="#FF3B30"><path d="M12 2l2.1 5.6L20 9.5l-5.9 1.9L12 17l-2.1-5.6L4 9.5l5.9-1.9z"></path></svg>',
+ 'bolt':  '<svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#FF3B30" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4.5 13.5H11L10 22l8.5-11.5H12z"></path></svg>',
+ 'chat':  '<svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#FF3B30" stroke-width="2.4" stroke-linejoin="round"><path d="M21 11.5a8 8 0 0 1-8.5 8 9 9 0 0 1-3.3-.6L4 20.5l1.6-4.6A8 8 0 0 1 4.5 11 8 8 0 0 1 13 3.5a8 8 0 0 1 8 8z"></path></svg>',
+ 'tag2':  '<svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#FF3B30" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 13.5L13 21a2 2 0 0 1-2.8 0l-7-7A2 2 0 0 1 2.6 12.6V5a2 2 0 0 1 2-2h7.6a2 2 0 0 1 1.4.6l6.9 6.9a2 2 0 0 1 0 2.8z"></path><circle cx="8" cy="8" r="1.6"></circle></svg>',
+})
+
 PAPER = '#FAF6F4'
 RED   = '#E8352B'
 
@@ -106,9 +115,8 @@ FRAMES = [
  dict(out='Rider02.dc.html', screen='options', bg=PAPER, logo='spinr-logo.png',
    decor=decor_paper('r'), hcolor='#1A1A1A', scolor='#6B7280', ptop=760,
    headline='Know the price<br>before you <span style="color: #E8352B;">ride</span>',
-   sub='Every option and every fare upfront &mdash; surge shown before you book, never applied after.',
-   chips=[('r', 1060, I['eye'], 'No surprises', 'The price you see is the price'),
-          ('l', 2280, I['zero'], 'Pay your way', 'Card, wallet or work account')]),
+   sub='Economy to XL &mdash; every option and fare upfront, surge shown before you book.',
+   chips=[('r', 1060, I['eye'], 'No surprises', 'The price you see is the price')]),
 
  dict(out='Rider03.dc.html', screen='tracking', bg=PAPER, logo='spinr-logo.png',
    decor=decor_paper('l'), hcolor='#1A1A1A', scolor='#6B7280', ptop=760,
@@ -117,29 +125,27 @@ FRAMES = [
    chips=[('l', 1060, I['share'], 'Share your trip', 'Live location until you arrive'),
           ('r', 2020, I['eye'], 'Check the plate', 'Match it before you hop in')]),
 
- dict(out='Rider04.dc.html', screen='receipt', bg=PAPER, logo='spinr-logo.png',
+ dict(out='Rider04.dc.html', screen='ai', bg=PAPER, logo='spinr-logo.png',
    decor=decor_paper('r'), hcolor='#1A1A1A', scolor='#6B7280', ptop=760,
-   headline='Spinr&rsquo;s cut:<br><span style="color: #E8352B;">$0.00</span>',
-   sub='Base fare, distance, time, GST and PST &mdash; every line item on the receipt, nothing hidden.',
-   chips=[('l', 1010, I['zero'], '100% to driver', 'Spinr takes nothing')]),
+   headline='Your ride,<br>one <span style="color: #E8352B;">ask</span> away',
+   sub='The built-in assistant answers fare, wallet and promo questions &mdash; and gets you a ride quote by chat.',
+   chips=[('l', 1150, I['spark'], 'Book by chat', 'From quote to pickup'),
+          ('r', 2240, I['bolt'], 'Instant answers', 'Fares, wallet and promos')]),
 
- dict(out='Rider05.dc.html', screen='safety', bg=PAPER, logo='spinr-logo.png',
+ dict(out='Rider05.dc.html', screen='support', bg=PAPER, logo='spinr-logo.png',
    decor=decor_paper('l'), hcolor='#1A1A1A', scolor='#6B7280', ptop=760,
-   headline='Safety that<br>rides <span style="color: #E8352B;">with you</span>',
-   sub='One-tap SOS reaches your emergency contacts and our safety team. It never auto-dials 911.',
-   chips=[('l', 1060, I['check'], 'Trusted drivers', 'Background-checked yearly'),
-          ('r', 2280, I['shield'], 'Service animals', 'Always welcome aboard')]),
+   headline='Help, right<br>in the <span style="color: #E8352B;">app</span>',
+   sub='Searchable FAQs, AI chat and a direct line to the Spinr team &mdash; no hold music.',
+   chips=[('r', 2280, I['chat'], 'Real humans', 'The Spinr team replies'),
+          ('l', 2600, I['tag2'], 'Lost &amp; found', 'Chat to get items back')]),
 ]
-
-meta = json.load(open('_screens/meta.json'))
-meta['tracking'] = {'bg': '#FFFFFF'}
 
 for f in FRAMES:
     screen = open(f"_screens/{f['screen']}.html").read()
     chips = '\n'.join(chip(*c) for c in f['chips'])
     html = TPL.format(bg=f['bg'], decor=f['decor'], logo=f['logo'], hcolor=f['hcolor'],
                       scolor=f['scolor'], ptop=f['ptop'], headline=f['headline'], sub=f['sub'],
-                      screen=screen, screenbg=meta[f['screen']]['bg'], chips=chips)
+                      screen=screen, screenbg='#FFFFFF', chips=chips)
     open(f['out'], 'w').write(html)
     d, dc = html.count('<div'), html.count('</div>')
     s, sc = html.count('<svg'), html.count('</svg>')

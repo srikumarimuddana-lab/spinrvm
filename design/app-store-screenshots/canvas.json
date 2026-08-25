@@ -30,7 +30,7 @@
       "y": 0,
       "w": 1290,
       "h": 2796,
-      "title": "4 · Spinr's cut: $0.00"
+      "title": "4 · Spinr Assistant"
     },
     {
       "file": "Rider05.dc.html",
@@ -38,7 +38,7 @@
       "y": 0,
       "w": 1290,
       "h": 2796,
-      "title": "5 · Help is one tap away"
+      "title": "5 · Help & Support"
     }
   ],
   "annotations": [
@@ -47,28 +47,28 @@
       "x": 0,
       "y": -340,
       "w": 1290,
-      "text": "SPINR RIDER v3 — App Store, iPhone 6.7\" · 1290 × 2796\n\nLayout follows the store convention used by Uber, Lyft, DoorDash and\nDuolingo: centered headline, straight-on device, floating feature chips.\nFrame 1 is the solid brand-red hero; frames 2–5 sit on warm paper.\nUpload in this order — search results show only the first 2–3."
+      "text": "SPINR RIDER v4 — iOS App Store, iPhone 6.7\" · 1290 × 2796\n\nFaithful to the shipped app: iPhone frame with Dynamic Island, default\nGoogle-Maps-style map, RouteLine's real #FF9500→#EE2B2B gradient\npolyline, RoutePins spec (green dot pickup), the real car_marker@3x.png\nsprites, and vehicle tiers straight from production Supabase\n(Economy / Van / XL — names, capacities, descriptions)."
     },
     {
-      "id": "note-chips",
+      "id": "note-frames",
       "x": 1390,
       "y": -340,
       "w": 1290,
-      "text": "CHIP RULES (learned the hard way)\nEach floating chip carries a fact that is NOT already on the screen\nbeside it, and is positioned over a quiet zone — never over a price,\nplate, or button. If you move one, check what it covers."
+      "text": "Payment/receipt frame removed on request. The mocked SOS screen is\nreplaced by two text-content screens that mirror OLA/Bolt-style sets:\nthe Spinr Assistant welcome (real greeting, real quick prompts) and\nHelp & Support (real tabs + production FAQ questions)."
     },
     {
-      "id": "note-data",
+      "id": "note-veh",
       "x": 2780,
       "y": -340,
       "w": 1290,
-      "text": "SAMPLE DATA — swap before submitting.\nFares ($22.99 and its line items are internally consistent), Saskatoon\naddresses, \"Sam R.\", plate 4WX 812, Visa 4242, ratings, driver counts.\nVehicle tiers (Standard / XL / Accessible) are placeholders — real ones\nare admin-managed vehicle_types rows."
+      "text": "VEHICLE ART — the hosted Supabase illustrations (vehicle-illustrations\nbucket) are unreachable from this build environment, so the rows use\ndrawn side-view stand-ins in the app's own car-art palette. Drop the\nreal files in as veh-sedan.webp / veh-van.webp / veh-xl.webp next to\n_screens.py and re-run the build — they are picked up automatically."
     },
     {
-      "id": "note-next",
+      "id": "note-data",
       "x": 4170,
       "y": -340,
       "w": 1290,
-      "text": "STILL TO DO\n• Google Play set at 1080 × 1920 (Play rejects taller than 9:16).\n• Spinr Driver listing — separate set, same system.\nBoth are quick now that _build.py exists."
+      "text": "SAMPLE DATA — swap before submitting: fares, Saskatoon addresses,\n\"Sam R.\", plate 4WX 812, ratings, driver counts, ETAs. Tier names,\ncapacities and FAQ questions are real production values."
     }
   ],
   "launch": {

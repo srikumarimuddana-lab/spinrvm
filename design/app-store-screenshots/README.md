@@ -3,7 +3,7 @@
 Source for the Spinr **rider** App Store screenshot set. Each `*.dc.html` file is
 one artboard, laid out by `canvas.json` and published as a design canvas.
 
-## The set (v3 — store-convention layout)
+## The set (v4 — faithful to the shipped app)
 
 Layout follows the dominant pattern across top App Store / Play listings
 (Uber, Lyft, DoorDash, Duolingo): centered headline, straight-on centered
@@ -12,11 +12,30 @@ chips overlapping the device edges.
 
 | File | Slot | Story |
 |---|---|---|
-| `Main.dc.html` | 1 | Saskatchewan's own ride app (red hero) |
-| `Rider02.dc.html` | 2 | Know the price before you ride |
-| `Rider03.dc.html` | 3 | Track every ride, live |
-| `Rider04.dc.html` | 4 | Spinr's cut: $0.00 |
-| `Rider05.dc.html` | 5 | Safety that rides with you |
+| `Main.dc.html` | 1 | Saskatchewan's own ride app (red hero, home map) |
+| `Rider02.dc.html` | 2 | Know the price before you ride (real tiers) |
+| `Rider03.dc.html` | 3 | Track every ride, live (gradient route) |
+| `Rider04.dc.html` | 4 | Spinr Assistant (real welcome + prompts) |
+| `Rider05.dc.html` | 5 | Help & Support (real tabs + production FAQs) |
+
+Fidelity contract (v4):
+- Device is an iPhone: titanium rim, thin bezel, Dynamic Island, 112px screen radius.
+- Maps are default-Google-style (`_gmap.py`): warm land, white roads, amber
+  highway, blue water, Google-blue location dot.
+- The route is RouteLine's real gradient — `#FF9500` → `#EE2B2B`
+  (`shared/constants/routeMapStyle.ts`), 4pt at screen scale, round caps,
+  orange at the start and red at the destination.
+- Pins follow RoutePins: green `#10B981` disc + white ring + white dot pickup.
+- Car markers are the actual `shared/assets/car_marker@3x.png` sprites.
+- Vehicle tiers come from production Supabase `vehicle_types`: Economy / Van /
+  XL with real names, descriptions and capacities. The hosted illustrations
+  are network-blocked in this environment, so `_screens.py` draws side-view
+  stand-ins in the app's own car-art palette — drop the real files in as
+  `veh-sedan.webp` / `veh-van.webp` / `veh-xl.webp` and rebuild to swap them in.
+- AI and Help screens use the real copy from `rider-app/app/ai-assistant.tsx`
+  and `shared/components/SupportScreen.tsx`, plus production FAQ questions.
+- The receipt/payment frame and the mocked SOS screen are gone (both on
+  request).
 
 Chip rules: each floating chip carries a fact **not** already on the screen
 beside it, and sits over a quiet zone — never over a price, plate, or button.

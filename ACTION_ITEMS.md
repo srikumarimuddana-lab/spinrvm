@@ -10091,6 +10091,63 @@ record of what was assumed vs. what was actually true</summary>
     tier as `referral.tsx`'s prior entry) — no auditor review sought
     given the surface. 36 tests; full rider-app suite still green (123
     suites / 1578 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/pick-on-map.tsx`: 93.97% → 98.79% stmts, 81.81% →
+    96.36% branch, 100% funcs (unchanged), 97.46% → 100% lines**
+    (map-drag pickup/dropoff picker, incl. the AI-assistant "Drop a pin"
+    flow). Already had `pickOnMapScreen.test.tsx` (12 tests: AI-mode
+    immediate geocoding without a permission request, the
+    permission-denied/GPS-granted/GPS-failure region fallbacks, the
+    500ms pan-debounce, Confirm's disabled-while-no-address and
+    disabled-while-geocoding states, both AI-mode and normal-mode
+    Confirm's happy paths, the AI-mode stale-address guard, recenter's
+    permission-request-then-animate flow, and the back button) —
+    extended in place (+9 tests, 21 total). Closed: the
+    `params.field || 'dropoff'` fallback when the route supplies no
+    `field` param at all; the reverse-geocode response's own two
+    distinct coordinate-string fallbacks — a resolved response with no
+    `formatted_address` field, and the request itself rejecting
+    (different code paths: the `if (data?.formatted_address) {...} else
+    {...}` branch vs. the surrounding `try/catch`'s `catch` block, both
+    landing on the same `${lat.toFixed(5)}, ${lng.toFixed(5)}` fallback
+    text but via genuinely different branches); `handleRegionChange`'s
+    `if (geocodeTimeout.current) clearTimeout(...)` guard — a second pan
+    within the 500ms debounce window, asserting only the *latest* pan's
+    coordinates ever reach `api.get` (the first pan's stale timer is
+    provably cleared, not left to also fire); the *normal-mode* half of
+    the address-staleness guard at Confirm (`addressMatchesPin ? address
+    : coordinate-string`) — only the AI-mode half of this same ternary
+    had a stale-pin test before; both untested halves of `handleRecenter`
+    — permission already granted (skips the re-request entirely) and
+    permission still denied after requesting it (bails out silently,
+    `animateToRegion` never called) — previously only the "was
+    undetermined, request grants it" path was exercised;
+    `userInterfaceStyle={isDark ? "dark" : "light"}` on the map
+    (promoted the `useTheme` mock to a `jest.fn()` wrapper, same pattern
+    used for `driver-arrived.tsx` and `activity.tsx`'s dark-theme
+    tests); and the bottom card's `paddingBottom: Platform.OS === 'ios'
+    ? 36 : 24` render-time style branch — unlike the module-load-time
+    `MAP_PROVIDER` check (see below), `createStyles` re-evaluates
+    `Platform.OS` on every render via `useMemo`, so a direct
+    `Platform.OS = 'android'` mutation (the same pattern already used
+    elsewhere in this suite, e.g. `useExitOnBackPress.test.tsx` and
+    `rideCompletedScreen.test.tsx`) covers it cleanly with no module-
+    reset trickery needed. Two branches left deliberately uncovered and
+    documented rather than chased: `MAP_PROVIDER = Platform.OS ===
+    'android' ? PROVIDER_GOOGLE : undefined` (line 20) — the same
+    module-load-time pattern flagged as a pre-existing, repo-wide gap in
+    `driver-arrived.tsx`'s entry above, present here too; and
+    `handleConfirm`'s own `if (!region) return;` guard (line 135) —
+    genuinely unreachable through the rendered UI, since the entire
+    screen renders nothing but a loading spinner (`if (loading ||
+    !region) return <Spinner/>`) until `region` is set, so the Confirm
+    button (and therefore `handleConfirm`) never exists while `region`
+    could be null — same class of dead-code finding as `referral.tsx`'s
+    and `activity.tsx`'s prior entries. No bug found. Test-only diff
+    (production `app/pick-on-map.tsx` confirmed untouched via `git
+    diff`); not money-critical or auth/safety-critical (a location-pin
+    picker, same tier as the other map/UI screens in this sweep) — no
+    auditor review sought. 21 tests; full rider-app suite still green
+    (123 suites / 1587 tests), `yarn tsc --noEmit` clean.
   - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
     85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
     tests: no-account-prefill, the CRC-consent auto-check-when-

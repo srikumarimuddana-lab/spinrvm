@@ -9938,6 +9938,82 @@ record of what was assumed vs. what was actually true</summary>
     `promotions.tsx`'s prior entry); no auditor review sought given the
     surface. 13 tests; full rider-app suite still green (123 suites /
     1507 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/manage-cards.tsx`: 91.59% → 99.15% stmts, 77.52% →
+    97.75% branch, 83.33% → 100% funcs, 94.49% → 99.08% lines**
+    (money-critical: saved-card wallet, PCI-DSS surface — Stripe
+    CardField/createPaymentMethod, Set Default, Delete, and the
+    "pay for a stuck ride" re-charge flow). Already had
+    `manageCardsScreen.test.tsx` (15 tests: mount fetch, fetch-failure
+    empty state, rendering a default + non-default card, both
+    incomplete-details/missing-name Add-Card blocks, a full add-card
+    success + re-fetch, createPaymentMethod-error and POST-failure
+    toasts, the pay-for-ride add-then-charge flow with tip/rated
+    carried through, Set Default success/failure, blocking removal of
+    the last card, the default-card-removal warning + successful
+    delete, a delete failure, back nav) — extended in place (+16 tests,
+    31 total). Closed: the unknown-card-brand and empty-brand fallbacks
+    to the neutral graphite face (`brandStyle`'s `??`/`||` chain); the
+    "SPINR RIDER" cardholder-name fallback for a blank
+    `cardholder_name`; `handleAddCard`'s own
+    `createPaymentMethod`-not-ready guard (Stripe module still starting
+    up) via a controllable `useStripe()` mock; the pay-for-ride
+    `payRideWithCard` params construction omitting `tip`/`rated`
+    entirely when either is absent (previously only the
+    both-present case was exercised); pressing "Use & Pay" directly on
+    an *existing* card in the pay-for-ride flow (routes straight to
+    `/ride-completed` without ever calling `createPaymentMethod` — a
+    materially different path from the add-then-charge one already
+    tested); the plain "Are you sure you want to remove this card?"
+    delete-confirm message for a non-default card with others left
+    (only the last-card-blocked and default-card-removal-warns messages
+    had tests); dismissing the delete-confirm sheet via Cancel without
+    calling `api.delete`; the Stripe-key-not-loaded "Payment module
+    loading…" placeholder (`stripeKey` null) in place of the real
+    `CardField`; the dark-mode `CardField` `cardStyle` branch (required
+    promoting the theme mock's `isDark` to a mutable per-test variable,
+    same pattern as `settings.tsx`'s `Pressable` finding); the add-form
+    Cancel button closing the form and resetting `cardName`/
+    `cardDetailsComplete` (verified by re-opening and seeing a blank
+    name field); the Add Card button's in-flight spinner via a
+    controllable pending POST promise; `setCards`'s own `(res.data as
+    Card[]) || []` fallback when the fetch resolves with no `data`
+    field; the "no card is flagged `is_default`" fallback to the first
+    card (`cards.find(...) ?? cards[0]`); and — the one requiring real
+    investigation — the selected-card-preservation branch
+    (`setSelectedId(prev => prev && cards.some(...) ? prev : ...)`)
+    that was *entirely* unexercised (0 invocations, not just an
+    uncovered path) despite several existing tests re-fetching cards
+    after a state change. Root cause: `mockApiGet.mockResolvedValue({
+    data: [CARD_VISA, CARD_MC] })` caches and returns the *exact same*
+    array reference on every call, so a later `fetchCards()` call's
+    `setCards(res.data || [])` receives a value `Object.is`-identical to
+    the current `cards` state — React bails out of the update entirely,
+    and the `useEffect(..., [cards])` that contains this logic never
+    re-fires. Fixed by re-fetching with a genuinely fresh array/object
+    reference (spread copies with the same ids) so the effect actually
+    re-runs, then asserting the previously-selected (non-default) card
+    stays expanded/selected after the refetch rather than snapping back
+    to the new default. No bug found in production code — this is a
+    latent *test-environment* trap (a `mockResolvedValue`'d array is a
+    singleton across calls unless re-assigned), not a screen defect;
+    worth remembering for any other screen whose effect depends on an
+    API-fetched array reference. Money-critical (PCI-DSS surface, Add
+    Card / Set Default / Delete / pay-for-ride charge routing);
+    `spinr-money-auditor` reviewed the diff and returned SAFE —
+    production file confirmed untouched, and every money-relevant
+    assertion (the "Use & Pay"-on-existing-card path never calling
+    `createPaymentMethod` and routing with the real existing card id,
+    the `payRideWithCard` tip/rated-absent param construction, the
+    createPaymentMethod-not-ready guard, the default-selection and
+    selected-card-preservation fallbacks, and all three delete-confirm
+    message branches) traced against the real logic and confirmed
+    correct. One non-blocking nit noted: the selected-card-preservation
+    refetch fixture sets both cards' `is_default` to `true`
+    simultaneously (unrealistic app state) — doesn't affect what the
+    test actually verifies, since only the selected card's own
+    `is_default` value drives whether "Set Default" renders. 31 tests;
+    full rider-app suite still green (123 suites / 1519 tests), `yarn
+    tsc --noEmit` clean.
   - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
     85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
     tests: no-account-prefill, the CRC-consent auto-check-when-

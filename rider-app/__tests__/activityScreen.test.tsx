@@ -20,13 +20,19 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { TouchableOpacity, Text, FlatList } from 'react-native';
+import { TouchableOpacity, Text, FlatList, View } from 'react-native';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('react-native-safe-area-context', () => ({
   SafeAreaView: ({ children }: any) => children,
 }));
 jest.mock('../components/SkeletonBox', () => () => null);
+
+const mockUseWindowDimensions = jest.fn(() => ({ width: 800, height: 800, scale: 1, fontScale: 1 }));
+jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
+  __esModule: true,
+  default: () => mockUseWindowDimensions(),
+}));
 
 jest.mock('expo-router/react-navigation', () => {
   const ReactActual = require('react');
@@ -43,7 +49,8 @@ jest.mock('expo-router', () => ({ useRouter: () => ({ push: mockPush }) }));
 const COLORS = {
   primary: '#EF4444', surface: '#FFF', surfaceLight: '#F5F5F5', text: '#111', textDim: '#666', border: '#E5E7EB',
 };
-jest.mock('@shared/theme/ThemeContext', () => ({ useTheme: () => ({ colors: COLORS, isDark: false }) }));
+const mockUseTheme = jest.fn(() => ({ colors: COLORS, isDark: false }));
+jest.mock('@shared/theme/ThemeContext', () => ({ useTheme: () => mockUseTheme() }));
 
 const mockT = (key: string) => key;
 jest.mock('../i18n', () => ({ useTranslation: () => ({ t: mockT }) }));
@@ -117,6 +124,12 @@ afterEach(() => {
   });
   renderer = null;
   jest.restoreAllMocks();
+  // mockReturnValue (not mockReturnValueOnce) is needed for these two so the
+  // override survives the multiple re-renders a fetch-driven state update
+  // triggers — restore the defaults here since restoreAllMocks() doesn't
+  // touch a jest.fn()'s configured return value (only jest.spyOn mocks).
+  mockUseWindowDimensions.mockReturnValue({ width: 800, height: 800, scale: 1, fontScale: 1 });
+  mockUseTheme.mockReturnValue({ colors: COLORS, isDark: false });
 });
 
 describe('ActivityScreen', () => {
@@ -401,5 +414,228 @@ describe('ActivityScreen', () => {
       await flush();
     });
     expect(allText(r)).toContain('Trips');
+  });
+
+  it('ignores a stale stats response that resolves after a newer stats fetch already superseded it', async () => {
+    let resolveAll: (v: any) => void;
+    const allPromise = new Promise((resolve) => { resolveAll = resolve; });
+    mockApiGet.mockImplementation((url: string) => {
+      if (url.startsWith('/rides/history')) return Promise.resolve({ data: { rides: [RIDE_RECENT], next_cursor: null } });
+      if (url === '/rides/stats?period=all') return allPromise;
+      if (url === '/rides/stats?period=week') {
+        return Promise.resolve({ data: { period: 'week', total_rides: 2, total_distance_km: 4, total_saved: '1.00', co2_saved_kg: 0.5 } });
+      }
+      if (url === '/vehicle-types') return Promise.resolve({ data: [] });
+      return Promise.reject(new Error('unexpected url ' + url));
+    });
+    const r = await renderScreen();
+    // The initial (all-time) stats fetch is still pending when the pill
+    // press fires a newer ('week') fetch that supersedes it.
+    const weekPill = findButtonByText(r, 'This Week');
+    await act(async () => {
+      weekPill.props.onPress();
+      await flush();
+    });
+    expect(allText(r)).toContain('["$","1.00"]');
+    // The stale 'all' response resolving late must not clobber the newer
+    // stats, nor spuriously re-toggle the loading state.
+    await act(async () => {
+      resolveAll!({ data: { period: 'all', total_rides: 99, total_distance_km: 1, total_saved: '0', co2_saved_kg: 0 } });
+      await flush();
+    });
+    expect(allText(r)).not.toContain('99');
+    expect(allText(r)).toContain('["$","1.00"]');
+  });
+
+  it('falls back to an empty rides list and null cursor when the history response omits both fields', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url.startsWith('/rides/history')) return Promise.resolve({ data: {} });
+      if (url.startsWith('/rides/stats')) return Promise.resolve({ data: { period: 'all', total_rides: 0, total_distance_km: 0, total_saved: '0', co2_saved_kg: 0 } });
+      if (url === '/vehicle-types') return Promise.resolve({ data: [] });
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('activity.no_rides');
+  });
+
+  it('falls back vehicle-types to an empty map when the response data is not an array', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url.startsWith('/rides/history')) return Promise.resolve({ data: { rides: [RIDE_RECENT], next_cursor: null } });
+      if (url.startsWith('/rides/stats')) return Promise.resolve({ data: { period: 'all', total_rides: 1, total_distance_km: 1, total_saved: '0', co2_saved_kg: 0 } });
+      if (url === '/vehicle-types') return Promise.resolve({ data: null });
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    // getVehicleType falls back to 'Standard' since the vehicleTypes map stayed empty.
+    expect(allText(r)).toContain('Standard');
+  });
+
+  it('does not load more when there is no next cursor', async () => {
+    const r = await renderScreen();
+    mockApiGet.mockClear();
+    const list = r.root.findByType(FlatList);
+    await act(async () => { await list.props.onEndReached(); await flush(); });
+    expect(mockApiGet).not.toHaveBeenCalledWith(expect.stringContaining('/rides/history'));
+  });
+
+  it('does not retry loading more while a prior load-more error is still showing (without an explicit retry)', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/rides/history?limit=20') return Promise.resolve({ data: { rides: [RIDE_RECENT], next_cursor: 'cursor-1' } });
+      if (url === '/rides/history?limit=20&before=cursor-1') return Promise.reject(new Error('down'));
+      if (url.startsWith('/rides/stats')) return Promise.resolve({ data: { period: 'all', total_rides: 1, total_distance_km: 1, total_saved: '0', co2_saved_kg: 0 } });
+      if (url === '/vehicle-types') return Promise.resolve({ data: [] });
+      return Promise.reject(new Error('unexpected url ' + url));
+    });
+    const r = await renderScreen();
+    const list = r.root.findByType(FlatList);
+    await act(async () => { await list.props.onEndReached(); await flush(); });
+    expect(allText(r)).toContain('Could not load more rides.');
+    mockApiGet.mockClear();
+    // A second end-reached (e.g. more scrolling) without tapping retry is a no-op.
+    await act(async () => { await list.props.onEndReached(); await flush(); });
+    expect(mockApiGet).not.toHaveBeenCalledWith(expect.stringContaining('before=cursor-1'));
+  });
+
+  it('shows the loading-more spinner while the next page is in flight', async () => {
+    let resolveNext: (v: any) => void;
+    const nextPromise = new Promise((resolve) => { resolveNext = resolve; });
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/rides/history?limit=20') return Promise.resolve({ data: { rides: [RIDE_RECENT], next_cursor: 'cursor-1' } });
+      if (url === '/rides/history?limit=20&before=cursor-1') return nextPromise;
+      if (url.startsWith('/rides/stats')) return Promise.resolve({ data: { period: 'all', total_rides: 1, total_distance_km: 1, total_saved: '0', co2_saved_kg: 0 } });
+      if (url === '/vehicle-types') return Promise.resolve({ data: [] });
+      return Promise.reject(new Error('unexpected url ' + url));
+    });
+    const r = await renderScreen();
+    const list = r.root.findByType(FlatList);
+    act(() => { list.props.onEndReached(); });
+    await flush();
+    expect(allText(r)).toContain('Loading more rides...');
+    await act(async () => {
+      resolveNext!({ data: { rides: [], next_cursor: null } });
+      await flush();
+    });
+    expect(allText(r)).not.toContain('Loading more rides...');
+  });
+
+  it('falls back fare_breakdown-less rides to a $0.00 total when grand_total and total_fare are both missing', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url.startsWith('/rides/history')) {
+        return Promise.resolve({
+          data: { rides: [{ ...RIDE_RECENT, fare_breakdown: undefined, grand_total: undefined, total_fare: undefined }], next_cursor: null },
+        });
+      }
+      if (url.startsWith('/rides/stats')) return Promise.resolve({ data: { period: 'all', total_rides: 1, total_distance_km: 1, total_saved: '0', co2_saved_kg: 0 } });
+      if (url === '/vehicle-types') return Promise.resolve({ data: [] });
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('["$","0.00"]');
+  });
+
+  it('falls back to total_fare when grand_total is missing', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url.startsWith('/rides/history')) {
+        return Promise.resolve({
+          data: { rides: [{ ...RIDE_RECENT, fare_breakdown: [], grand_total: undefined, total_fare: '9.50' }], next_cursor: null },
+        });
+      }
+      if (url.startsWith('/rides/stats')) return Promise.resolve({ data: { period: 'all', total_rides: 1, total_distance_km: 1, total_saved: '0', co2_saved_kg: 0 } });
+      if (url === '/vehicle-types') return Promise.resolve({ data: [] });
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('["$","9.50"]');
+  });
+
+  it('treats a tip/discount line with a missing amount field as zero', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url.startsWith('/rides/history')) {
+        return Promise.resolve({
+          data: {
+            rides: [{
+              ...RIDE_RECENT,
+              fare_breakdown: [{ label: 'Tip', type: 'tip' }, { label: 'Promo', type: 'discount' }],
+            }],
+            next_cursor: null,
+          },
+        });
+      }
+      if (url.startsWith('/rides/stats')) return Promise.resolve({ data: { period: 'all', total_rides: 1, total_distance_km: 1, total_saved: '0', co2_saved_kg: 0 } });
+      if (url === '/vehicle-types') return Promise.resolve({ data: [] });
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    // Neither the tip nor the discount sub-line renders since both amounts fall back to 0.
+    expect(allText(r)).not.toContain('Tip $');
+    expect(allText(r)).not.toContain('Saved $');
+  });
+
+  it('shows only the "Saved" breakdown line when a ride has a discount but no tip', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url.startsWith('/rides/history')) {
+        return Promise.resolve({
+          data: {
+            rides: [{ ...RIDE_RECENT, fare_breakdown: [{ label: 'Promo', amount: '-2.00', type: 'discount' }] }],
+            next_cursor: null,
+          },
+        });
+      }
+      if (url.startsWith('/rides/stats')) return Promise.resolve({ data: { period: 'all', total_rides: 1, total_distance_km: 1, total_saved: '0', co2_saved_kg: 0 } });
+      if (url === '/vehicle-types') return Promise.resolve({ data: [] });
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Saved $2.00');
+    expect(allText(r)).not.toContain('Tip $');
+  });
+
+  it('falls back to the ride id and "Unknown destination" when ride_code and dropoff_address are missing', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url.startsWith('/rides/history')) {
+        return Promise.resolve({
+          data: {
+            rides: [{ ...RIDE_RECENT, id: 'abcdef1234567890', ride_code: undefined, dropoff_address: undefined, fare_breakdown: [] }],
+            next_cursor: null,
+          },
+        });
+      }
+      if (url.startsWith('/rides/stats')) return Promise.resolve({ data: { period: 'all', total_rides: 1, total_distance_km: 1, total_saved: '0', co2_saved_kg: 0 } });
+      if (url === '/vehicle-types') return Promise.resolve({ data: [] });
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Unknown destination');
+    expect(allText(r)).toContain('ABCDEF12');
+  });
+
+  it('falls back scheduled-ride cards to "Unknown destination", "Scheduled", and a $0.00 fare when those fields are missing', async () => {
+    mockRideState.scheduledRides = [{ id: 'sched-2', dropoff_address: undefined, vehicle_type_id: 'vt-1', scheduled_time: undefined, grand_total: undefined, total_fare: undefined }];
+    const r = await renderScreen();
+    const upcomingTab = findButtonByText(r, 'activity.upcoming_tab');
+    act(() => { upcomingTab.props.onPress(); });
+    expect(allText(r)).toContain('Unknown destination');
+    expect(allText(r)).toContain('["Scheduled"," · ","Sedan"]');
+    expect(allText(r)).toContain('["$","0.00"]');
+  });
+
+  it('uses the compact filter-tab layout (narrower paddings) when the window is under 380px wide', async () => {
+    mockUseWindowDimensions.mockReturnValue({ width: 350, height: 800, scale: 1, fontScale: 1 });
+    const r = await renderScreen();
+    const weekPill = findButtonByText(r, 'This Week');
+    const pillStyle = (weekPill.props.style as any[]).find((s) => s && s.borderRadius === 20);
+    expect(pillStyle.paddingHorizontal).toBe(10);
+    const personalTab = findButtonByText(r, 'Personal');
+    const tabStyle = (personalTab.props.style as any[]).find((s) => s && s.borderRadius === 24);
+    expect(tabStyle.paddingHorizontal).toBe(14);
+    expect(tabStyle.minWidth).toBe(92);
+    expect(tabStyle.flexGrow).toBe(1);
+  });
+
+  it('falls back the stats card background to colors.surface when colors.surfaceLight is unset', async () => {
+    mockUseTheme.mockReturnValue({ colors: { ...COLORS, surfaceLight: undefined } as any, isDark: false });
+    const r = await renderScreen();
+    const statsCard = r.root.findAllByType(View).find((n) => n.props.style && n.props.style.borderRadius === 16 && n.props.style.padding === 16);
+    expect(statsCard!.props.style.backgroundColor).toBe(COLORS.surface);
   });
 });

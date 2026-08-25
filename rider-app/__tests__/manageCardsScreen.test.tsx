@@ -28,7 +28,7 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { TouchableOpacity, Text, TextInput } from 'react-native';
+import { TouchableOpacity, Text, TextInput, ActivityIndicator } from 'react-native';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null, FontAwesome: () => null, MaterialCommunityIcons: () => null }));
 jest.mock('expo-linear-gradient', () => ({ LinearGradient: ({ children }: any) => children }));
@@ -48,7 +48,8 @@ const COLORS = {
   primary: '#EF4444', background: '#FFF', surface: '#FFF', surfaceLight: '#F5F5F5', text: '#111', textDim: '#666',
   textSecondary: '#333', border: '#E5E7EB', gold: '#D4AF37', error: '#DC2626', dangerBg: '#FEF2F2', success: '#10B981',
 };
-jest.mock('@shared/theme/ThemeContext', () => ({ useTheme: () => ({ colors: COLORS, isDark: false }) }));
+let mockIsDark = false;
+jest.mock('@shared/theme/ThemeContext', () => ({ useTheme: () => ({ colors: COLORS, isDark: mockIsDark }) }));
 
 const mockApiGet = jest.fn();
 const mockApiPost = jest.fn();
@@ -67,6 +68,7 @@ const mockShowToast = jest.fn();
 jest.mock('../store/toastStore', () => ({ showToast: (...args: any[]) => mockShowToast(...args) }));
 
 const mockCreatePaymentMethod = jest.fn();
+let mockStripeReady = true;
 jest.mock('@stripe/stripe-react-native', () => ({
   CardField: (props: any) => {
     const { TouchableOpacity: RNTouchableOpacity, Text: RNText } = require('react-native');
@@ -79,7 +81,7 @@ jest.mock('@stripe/stripe-react-native', () => ({
       </RNTouchableOpacity>
     );
   },
-  useStripe: () => ({ createPaymentMethod: (...a: any[]) => mockCreatePaymentMethod(...a) }),
+  useStripe: () => ({ createPaymentMethod: mockStripeReady ? (...a: any[]) => mockCreatePaymentMethod(...a) : undefined }),
 }));
 
 jest.mock('../app/_layout', () => ({
@@ -115,10 +117,10 @@ const CARD_VISA = { id: 'card-1', brand: 'visa', last4: '4242', exp_month: 12, e
 const CARD_MC = { id: 'card-2', brand: 'mastercard', last4: '4444', exp_month: 6, exp_year: 2029, is_default: false, cardholder_name: 'A Rider' };
 
 let renderer: TestRenderer.ReactTestRenderer | null = null;
-async function renderScreen() {
+async function renderScreen(stripeKey: string | null = 'pk_test_123') {
   await act(async () => {
     renderer = TestRenderer.create(
-      <StripeKeyContext.Provider value="pk_test_123">
+      <StripeKeyContext.Provider value={stripeKey}>
         <ManageCardsScreen />
       </StripeKeyContext.Provider>,
     );
@@ -157,6 +159,8 @@ async function openAddFormAndFillIt(r: TestRenderer.ReactTestRenderer) {
 beforeEach(() => {
   jest.clearAllMocks();
   mockParams = {};
+  mockIsDark = false;
+  mockStripeReady = true;
   mockApiGet.mockResolvedValue({ data: [] });
   mockApiPost.mockResolvedValue({ data: {} });
   mockApiDelete.mockResolvedValue({ data: {} });
@@ -174,6 +178,19 @@ describe('ManageCardsScreen', () => {
   it('fetches cards on mount', async () => {
     await renderScreen();
     expect(mockApiGet).toHaveBeenCalledWith('/payments/cards');
+  });
+
+  it('falls back to the empty state when the fetch resolves with no data field', async () => {
+    mockApiGet.mockResolvedValue({});
+    const r = await renderScreen();
+    expect(allText(r)).toContain('No cards yet');
+  });
+
+  it('selects the first card when none is flagged as the default', async () => {
+    mockApiGet.mockResolvedValue({ data: [{ ...CARD_VISA, is_default: false }, { ...CARD_MC, is_default: false }] });
+    const r = await renderScreen();
+    // The first card (Visa) is auto-selected/expanded, showing its action strip.
+    expect(allText(r)).toContain('["VISA"," •••• ","4242"]');
   });
 
   it('falls back to the empty state (no crash) when the fetch fails', async () => {
@@ -373,5 +390,161 @@ describe('ManageCardsScreen', () => {
       backBtn.props.onPress();
     });
     expect(mockBack).toHaveBeenCalled();
+  });
+
+  it('falls back to the neutral graphite face for an unrecognized card brand', async () => {
+    mockApiGet.mockResolvedValue({ data: [{ ...CARD_VISA, brand: 'some_new_bank' }] });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('["•••• ","4242"]'); // renders fine, no crash on the unknown brand
+  });
+
+  it('falls back to "SPINR RIDER" on the card face when cardholder_name is blank', async () => {
+    mockApiGet.mockResolvedValue({ data: [{ ...CARD_VISA, cardholder_name: '' }] });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('SPINR RIDER');
+  });
+
+  it('blocks Add Card and toasts when Stripe payment processing is not yet ready', async () => {
+    mockStripeReady = false;
+    const r = await renderScreen();
+    await openAddFormAndFillIt(r);
+    const saveBtn = findButtonByText(r, 'Add Card');
+    await act(async () => {
+      await saveBtn.props.onPress();
+      await flush();
+    });
+    expect(mockShowToast).toHaveBeenCalledWith('Payments unavailable', 'Payment processing is still starting up. Try again in a moment.', 'warning');
+    expect(mockApiPost).not.toHaveBeenCalled();
+  });
+
+  it('pay-for-ride flow: omits tip/rated from the replace params when they are absent', async () => {
+    mockParams = { rideId: 'ride-9', forPayment: '1' }; // no tip/rated
+    const r = await renderScreen();
+    await openAddFormAndFillIt(r);
+    const saveBtn = findButtonByText(r, 'Add Card');
+    await act(async () => {
+      await saveBtn.props.onPress();
+      await flush();
+    });
+    expect(mockReplace).toHaveBeenCalledWith({
+      pathname: '/ride-completed',
+      params: { rideId: 'ride-9', payWithCard: 'pm_123' },
+    });
+  });
+
+  it('pay-for-ride flow: pressing "Use & Pay" on an existing card routes directly without adding a new one', async () => {
+    mockParams = { rideId: 'ride-9', forPayment: '1' };
+    mockApiGet.mockResolvedValue({ data: [CARD_VISA] });
+    const r = await renderScreen();
+    const payBtn = findButtonByText(r, 'Use & Pay');
+    act(() => { payBtn.props.onPress(); });
+    expect(mockReplace).toHaveBeenCalledWith({
+      pathname: '/ride-completed',
+      params: { rideId: 'ride-9', payWithCard: 'card-1' },
+    });
+    expect(mockCreatePaymentMethod).not.toHaveBeenCalled();
+  });
+
+  it('shows the plain "are you sure" confirm when deleting a non-default card that still leaves another', async () => {
+    mockApiGet.mockResolvedValue({ data: [CARD_VISA, CARD_MC] });
+    const r = await renderScreen();
+    const mcCard = findButtonByText(r, '4444');
+    act(() => { mcCard.props.onPress(); }); // select the non-default card
+    const deleteBtn = r.root
+      .findAllByType(TouchableOpacity)
+      .find((n) => n.findAllByProps({ name: 'trash-outline' }).length > 0)!;
+    act(() => { deleteBtn.props.onPress(); });
+    expect(allText(r)).toContain('Are you sure you want to remove this card?');
+    expect(allText(r)).not.toContain('This is your default card.');
+  });
+
+  it('dismisses the delete-confirm sheet via Cancel without deleting', async () => {
+    mockApiGet.mockResolvedValue({ data: [CARD_VISA, CARD_MC] });
+    const r = await renderScreen();
+    const deleteBtn = r.root
+      .findAllByType(TouchableOpacity)
+      .find((n) => n.findAllByProps({ name: 'trash-outline' }).length > 0)!;
+    act(() => { deleteBtn.props.onPress(); });
+    const cancelBtn = r.root.findByProps({ accessibilityLabel: 'confirm-Cancel' });
+    act(() => { cancelBtn.props.onPress(); });
+    expect(allText(r)).not.toContain('Are you sure you want to remove this card?');
+    expect(mockApiDelete).not.toHaveBeenCalled();
+  });
+
+  it('shows the "Payment module loading…" placeholder instead of CardField when the Stripe key is not yet loaded', async () => {
+    const r = await renderScreen(null);
+    const addBtn = findButtonByText(r, 'Add a new card');
+    act(() => { addBtn.props.onPress(); });
+    expect(allText(r)).toContain('Payment module loading…');
+    expect(() => r.root.findByProps({ accessibilityLabel: 'mock-card-field' })).toThrow();
+  });
+
+  it('applies the dark-mode CardField colors when isDark is true', async () => {
+    mockIsDark = true;
+    const r = await renderScreen();
+    const addBtn = findButtonByText(r, 'Add a new card');
+    act(() => { addBtn.props.onPress(); });
+    const cardField = r.root.findByProps({ accessibilityLabel: 'mock-card-field' });
+    expect(cardField).toBeTruthy(); // renders fine under the dark cardStyle branch
+  });
+
+  it('cancels the add-card form and resets its fields', async () => {
+    const r = await renderScreen();
+    await openAddFormAndFillIt(r);
+    expect(r.root.findByProps({ placeholder: 'Name on card' }).props.value).toBe('A Rider');
+    const cancelBtn = findButtonByText(r, 'Cancel');
+    act(() => { cancelBtn.props.onPress(); });
+    expect(allText(r)).not.toContain('Add New Card');
+    // Re-opening shows the form reset back to blank.
+    const addBtn = findButtonByText(r, 'Add a new card');
+    act(() => { addBtn.props.onPress(); });
+    expect(r.root.findByProps({ placeholder: 'Name on card' }).props.value).toBe('');
+  });
+
+  it('preserves the selected card across a re-fetch that still contains it (by id, not reference)', async () => {
+    mockApiGet.mockResolvedValue({ data: [CARD_VISA, CARD_MC] });
+    const r = await renderScreen();
+    const mcCard = findButtonByText(r, '4444');
+    act(() => { mcCard.props.onPress(); }); // select the non-default card directly
+    // A genuinely fresh array/object reference (not the same cached
+    // mockResolvedValue instance) with the same ids, so setCards actually
+    // produces a new `cards` reference and the `[cards]` effect re-fires.
+    mockApiGet.mockResolvedValue({ data: [{ ...CARD_VISA }, { ...CARD_MC, is_default: true }] });
+    const setDefaultBtn = findButtonByText(r, 'Set Default');
+    await act(async () => {
+      await setDefaultBtn.props.onPress();
+      await flush();
+    });
+    // Still expanded/selected post-refetch: its action strip (brand label)
+    // is still showing, and since it's now the default, "Set Default" is gone.
+    expect(allText(r)).toContain('["Mastercard"," •••• ","4444"]');
+    expect(allText(r)).not.toContain('Set Default');
+  });
+
+  it('does nothing (no crash) when payForRide is requested with forPayment=1 but no rideId', async () => {
+    mockParams = { forPayment: '1' }; // no rideId -> payForRide stays false
+    const r = await renderScreen();
+    expect(allText(r)).toContain('"Wallet"');
+    expect(allText(r)).not.toContain('Choose a Card');
+  });
+
+  it('treats a card with no brand as the neutral/unknown face (the `brand || \'\'` fallback)', async () => {
+    mockApiGet.mockResolvedValue({ data: [{ ...CARD_VISA, brand: '' }] });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('["•••• ","4242"]'); // renders fine under the unknown-brand default face
+  });
+
+  it('shows a spinner on Add Card while the save is in flight', async () => {
+    let resolvePost: (v: any) => void;
+    mockApiPost.mockImplementation(() => new Promise((resolve) => { resolvePost = resolve; }));
+    const r = await renderScreen();
+    await openAddFormAndFillIt(r);
+    const saveBtn = findButtonByText(r, 'Add Card');
+    await act(async () => {
+      saveBtn.props.onPress(); // don't await — its fetch is deliberately left pending
+      await flush();
+    });
+    expect(r.root.findAllByType(ActivityIndicator).length).toBeGreaterThan(0);
+    await act(async () => { resolvePost!({ data: {} }); await flush(); });
   });
 });

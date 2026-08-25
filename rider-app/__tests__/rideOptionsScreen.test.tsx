@@ -190,9 +190,10 @@ import RideOptionsScreen from '../app/ride-options';
 import MapView, { Marker, Polygon } from 'react-native-maps';
 import { CarMarker } from '@shared/components/CarMarker';
 import BottomSheet from '@gorhom/bottom-sheet';
-import { BackHandler, Keyboard } from 'react-native';
+import { BackHandler, Keyboard, Platform } from 'react-native';
 import SchedulePicker from '../components/SchedulePicker';
 import ConfirmSheet from '../components/ConfirmSheet';
+import { Image as ExpoImageMock } from 'expo-image';
 
 const flush = async () => {
   await Promise.resolve();
@@ -1019,5 +1020,512 @@ describe('promo sheet: suggested-offers list', () => {
     const removeRow = findByText(r, 'Remove applied code')!;
     act(() => { removeRow.props.onPress(); });
     expect(mockApplyPromo).toHaveBeenCalledWith(null);
+  });
+});
+
+// ── Branch-coverage sweep additions (ACTION_ITEMS.md B37 sub-item 5) ──
+
+describe('corporateAccounts derivation (workProfiles.map fallback)', () => {
+  it('falls back to an empty id/name when a work profile is missing company.id or company.name', async () => {
+    mockWorkProfileState.profiles = [
+      { company: { name: 'No Id Co' } }, // missing id -- filtered out by .filter(a => a.id) since '' is falsy
+      { company: { id: 'co-2' } },       // missing name -- survives the filter, company_name falls back to ''
+    ];
+    const r = await renderScreen();
+    expect(allText(r)).not.toContain('No Id Co');
+  });
+});
+
+describe('work-mode lazy initial state', () => {
+  it('does not crash when work mode is already enabled at mount with no activeCompanyId yet', async () => {
+    mockWorkProfileState.workModeEnabled = true;
+    mockWorkProfileState.activeCompanyId = null;
+    mockWorkProfileState.profiles = [];
+    await expect(renderScreen()).resolves.toBeDefined();
+  });
+});
+
+describe('work-mode default-sync effect (late activeCompanyId/profiles arrival)', () => {
+  it('defaults selectedCorporateId to activeCompanyId once work mode turns on after mount', async () => {
+    mockWorkProfileState.workModeEnabled = false;
+    mockWorkProfileState.activeCompanyId = 'co-1';
+    mockWorkProfileState.profiles = [{ company: { id: 'co-1', name: 'Acme' } }];
+    const r = await renderScreen();
+    mockWorkProfileState.workModeEnabled = true;
+    await act(async () => { r.update(<RideOptionsScreen />); await flush(); });
+    expect(allText(r)).toContain('"Acme"');
+  });
+
+  it('defaults selectedCorporateId to the first corporate account when activeCompanyId is still null', async () => {
+    mockWorkProfileState.workModeEnabled = false;
+    mockWorkProfileState.activeCompanyId = null;
+    mockWorkProfileState.profiles = [{ company: { id: 'co-2', name: 'Beta' } }];
+    const r = await renderScreen();
+    mockWorkProfileState.workModeEnabled = true;
+    await act(async () => { r.update(<RideOptionsScreen />); await flush(); });
+    expect(allText(r)).toContain('"Beta"');
+  });
+});
+
+describe('promo sheet: platform-specific keyboard effect', () => {
+  it('does not register keyboard listeners on Android (effect returns early)', async () => {
+    const original = Platform.OS;
+    (Platform as any).OS = 'android';
+    const addListenerSpy = jest.spyOn(Keyboard, 'addListener');
+    await renderScreen();
+    expect(addListenerSpy).not.toHaveBeenCalledWith('keyboardWillShow', expect.anything());
+    (Platform as any).OS = original;
+    addListenerSpy.mockRestore();
+  });
+
+  // A keyboardWillHide firing with no pending close queued (promoPendingCloseRef
+  // still false) must be a safe no-op -- distinct from the existing "deferred
+  // close" test where a close was actually pending.
+  it('keyboardWillHide with no pending close queued is a no-op', async () => {
+    let hideHandler: (() => void) | null = null;
+    const addListenerSpy = jest.spyOn(Keyboard, 'addListener').mockImplementation((event: string, cb: any) => {
+      if (event === 'keyboardWillHide') hideHandler = cb;
+      return { remove: jest.fn() } as any;
+    });
+    await renderScreen();
+    expect(hideHandler).toBeDefined();
+    expect(() => act(() => { hideHandler!(); })).not.toThrow();
+    addListenerSpy.mockRestore();
+  });
+});
+
+describe('service-areas / saved-cards response shape fallbacks', () => {
+  it('treats a missing /service-areas "data" field as an empty polygon list', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/service-areas') return Promise.resolve({});
+      if (url === '/payments/cards') return Promise.resolve({ data: [{ id: 'card-1', brand: 'visa', last4: '4242', exp_month: 1, exp_year: 2030, is_default: true }] });
+      return Promise.resolve({ data: {} });
+    });
+    const r = await renderScreen();
+    expect(r.root.findAllByType(Polygon)).toHaveLength(0);
+  });
+
+  it('treats a non-array /payments/cards response as no saved cards', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/payments/cards') return Promise.resolve({ data: {} });
+      return Promise.resolve({ data: [] });
+    });
+    const r = await renderScreen();
+    expect(findByText(r, 'Tap to add a card')).toBeTruthy();
+  });
+});
+
+describe('selectedEstimate / totalFare fallbacks', () => {
+  it('renders safely with no estimates at all (selectedEstimate null, footer hidden)', async () => {
+    mockRideState.estimates = [];
+    mockRideState.selectedVehicle = null;
+    const r = await renderScreen();
+    expect(() => r.root.findByProps({ accessibilityLabel: 'Confirm Sedan' })).toThrow();
+  });
+
+  it('totalFare falls back to total_fare when grand_total is missing', async () => {
+    mockRideState.estimates = [makeEstimate({ grand_total: undefined, total_fare: '22.50' })];
+    const r = await renderScreen();
+    expect(allText(r)).toContain('22.50');
+  });
+});
+
+describe('paymentLabel fallbacks', () => {
+  it('falls back to "Company account" when selectedCorporateId has no matching corporate account', async () => {
+    mockWorkProfileState.workModeEnabled = true;
+    mockWorkProfileState.activeCompanyId = 'co-orphan';
+    mockWorkProfileState.profiles = [{ company: { id: 'co-real', name: 'Real Co' } }];
+    const r = await renderScreen();
+    expect(allText(r)).toContain('"Company account"');
+  });
+
+  it('shows $0.00 when wallet is selected but wallet data is null', async () => {
+    mockWalletState = { wallet: null, fetchWallet: mockFetchWallet };
+    const r = await renderScreen();
+    const walletRow = findByText(r, 'Spinr Wallet')!;
+    act(() => { walletRow.props.onPress(); });
+    expect(allText(r)).toContain('Wallet · $0.00');
+  });
+});
+
+describe('mount-time promo-fetch effect fare fallbacks', () => {
+  it('falls back to 0/0 when every fare field is missing', async () => {
+    mockRideState.estimates = [makeEstimate({
+      grand_total: undefined, total_fare: undefined,
+      base_fare: undefined, distance_fare: undefined, time_fare: undefined,
+    })];
+    await renderScreen();
+    expect(mockFetchAvailablePromos).toHaveBeenCalledWith(0, 0);
+  });
+
+  it('uses total_fare for the grand total when grand_total is missing', async () => {
+    mockRideState.estimates = [makeEstimate({ grand_total: undefined, total_fare: '18.00' })];
+    await renderScreen();
+    expect(mockFetchAvailablePromos).toHaveBeenCalledWith(18, expect.any(Number));
+  });
+
+  // Estimates shrinking past the currently-selected index in one update: the
+  // promo-fetch effect (declared before the clamp effect) runs first in the
+  // same commit and must fall back to estimates[0] instead of crashing on
+  // estimates[stale index] being undefined; the clamp effect then resets
+  // selectedIndex to 0.
+  it('recomputes against estimates[0] and resets selectedIndex when estimates shrinks past the selected index', async () => {
+    mockRideState.estimates = [
+      makeEstimate({ vehicle_type: { id: 'vt-sedan', name: 'Sedan', capacity: 4 } }),
+      makeEstimate({ vehicle_type: { id: 'vt-suv', name: 'SUV', capacity: 6 } }),
+    ];
+    const r = await renderScreen();
+    const suvCard = findByText(r, 'SUV')!;
+    await act(async () => { suvCard.props.onPress(); await flush(); });
+    mockRideState.estimates = [makeEstimate({ vehicle_type: { id: 'vt-sedan', name: 'Sedan', capacity: 4 } })];
+    await act(async () => { r.update(<RideOptionsScreen />); await flush(); });
+    expect(() => findByText(r, 'Sedan')).not.toThrow();
+  });
+});
+
+describe('handleSelect fare fallbacks', () => {
+  it('falls back to 0/0 when the newly selected card is missing every fare field', async () => {
+    mockRideState.estimates = [
+      makeEstimate({ vehicle_type: { id: 'vt-sedan', name: 'Sedan', capacity: 4 } }),
+      makeEstimate({
+        vehicle_type: { id: 'vt-suv', name: 'SUV', capacity: 6 },
+        grand_total: undefined, total_fare: undefined,
+        base_fare: undefined, distance_fare: undefined, time_fare: undefined,
+      }),
+    ];
+    const r = await renderScreen();
+    mockFetchAvailablePromos.mockClear();
+    const suvCard = findByText(r, 'SUV')!;
+    await act(async () => { suvCard.props.onPress(); await flush(); });
+    expect(mockFetchAvailablePromos).toHaveBeenCalledWith(0, 0);
+  });
+
+  it('uses total_fare for the newly selected card when grand_total is missing', async () => {
+    mockRideState.estimates = [
+      makeEstimate({ vehicle_type: { id: 'vt-sedan', name: 'Sedan', capacity: 4 } }),
+      makeEstimate({ vehicle_type: { id: 'vt-suv', name: 'SUV', capacity: 6 }, grand_total: undefined, total_fare: '12.00' }),
+    ];
+    const r = await renderScreen();
+    mockFetchAvailablePromos.mockClear();
+    const suvCard = findByText(r, 'SUV')!;
+    await act(async () => { suvCard.props.onPress(); await flush(); });
+    expect(mockFetchAvailablePromos).toHaveBeenCalledWith(12, expect.any(Number));
+  });
+});
+
+describe('handleBookRide/proceedWithBooking additional guards and fallbacks', () => {
+  // handleBookRide's own isBooking guard is checked BEFORE the payment/schedule/
+  // policy/surge logic, so a rapid second press while the first booking is
+  // still pending must be a pure no-op (and the pending state renders the
+  // in-flight spinner instead of the label -- the isBooking ? spinner : text
+  // branch in the Confirm button).
+  it('a second Confirm press while the first booking is still pending does not call createRide again', async () => {
+    let resolveCreate: (v: any) => void;
+    mockCreateRide.mockImplementation(() => new Promise((res) => { resolveCreate = res; }));
+    const r = await renderScreen();
+    const bookBtn1 = r.root.findByProps({ accessibilityLabel: 'Confirm Sedan' });
+    await act(async () => { bookBtn1.props.onPress(); await flush(); });
+    expect(mockCreateRide).toHaveBeenCalledTimes(1);
+    const bookBtn2 = r.root.findByProps({ accessibilityLabel: 'Confirm Sedan' });
+    expect(bookBtn2.props.disabled).toBe(true); // isBooking is now true
+    await act(async () => { bookBtn2.props.onPress(); await flush(); });
+    expect(mockCreateRide).toHaveBeenCalledTimes(1);
+    await act(async () => { resolveCreate!({ id: 'ride-1' }); await flush(); });
+  });
+
+  it('handleBookRide no-ops when selectedVehicle is unset, even though selectedEstimate is present', async () => {
+    mockRideState.selectedVehicle = null;
+    const r = await renderScreen();
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Confirm Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockCreateRide).not.toHaveBeenCalled();
+  });
+
+  it('booking via a selected corporate account bypasses the card requirement and sends no card pmId', async () => {
+    mockWorkProfileState.profiles = [{ company: { id: 'co-1', name: 'Acme Corp' } }];
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/payments/cards') return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: [] });
+    });
+    const r = await renderScreen();
+    const corpRow = findByText(r, 'Company account')!;
+    act(() => { corpRow.props.onPress(); });
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Confirm Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockCreateRide).toHaveBeenCalledWith('card', 'co-1', undefined);
+  });
+
+  it('booking via wallet sends an undefined pmId (selectedPayment !== "card" branch)', async () => {
+    const r = await renderScreen();
+    const walletRow = findByText(r, 'Spinr Wallet')!;
+    act(() => { walletRow.props.onPress(); });
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Confirm Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockCreateRide).toHaveBeenCalledWith('wallet', null, undefined);
+  });
+
+  it('treats a missing total_fare as 0 for the corporate policy check and books when checkRide allows it', async () => {
+    mockWorkProfileState.workModeEnabled = true;
+    mockWorkProfileState.activeCompanyId = 'co-1';
+    mockWorkProfileState.profiles = [{ company: { id: 'co-1', name: 'Acme' } }];
+    mockCheckRide.mockReturnValue({ ok: true, reasons: [] });
+    mockRideState.estimates = [makeEstimate({ total_fare: undefined })];
+    const r = await renderScreen();
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Confirm Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockCheckRide).toHaveBeenCalledWith(0, undefined);
+    expect(mockCreateRide).toHaveBeenCalled();
+  });
+
+  it('treats a missing surge_multiplier as no surge and books directly with no confirm gate', async () => {
+    mockRideState.estimates = [makeEstimate({ surge_multiplier: undefined })];
+    const r = await renderScreen();
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Confirm Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockCreateRide).toHaveBeenCalled();
+  });
+
+  it('a 409 error with no actual active ride found falls through to the generic failure toast', async () => {
+    const err: any = new Error('already active');
+    err.response = { status: 409 };
+    mockCreateRide.mockRejectedValue(err);
+    mockFetchActiveRide.mockResolvedValue({ active: false });
+    const r = await renderScreen();
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Confirm Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockReplace).not.toHaveBeenCalled();
+    expect(mockShowToast).toHaveBeenCalledWith('Booking Failed', expect.any(String), 'danger');
+  });
+
+  it('a 409 with an active ride in an unrecognized status navigates nowhere', async () => {
+    const err: any = new Error('already active');
+    err.response = { status: 409 };
+    mockCreateRide.mockRejectedValue(err);
+    mockFetchActiveRide.mockResolvedValue({ active: true, ride: { id: 'ride-x', status: 'cancelled' } });
+    const r = await renderScreen();
+    const bookBtn = r.root.findByProps({ accessibilityLabel: 'Confirm Sedan' });
+    await act(async () => { await bookBtn.props.onPress(); await flush(); });
+    expect(mockReplace).not.toHaveBeenCalled();
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+});
+
+describe('toggleFareBreakdown collapse', () => {
+  it('collapses the fare breakdown back down on a second tap', async () => {
+    mockRideState.estimates = [makeEstimate({ fare_breakdown: [{ label: 'Ride fare', amount: '15.00', type: 'ride' }] })];
+    const r = await renderScreen();
+    const header = r.root.findByProps({ accessibilityLabel: 'Expand fare breakdown' });
+    act(() => { header.props.onPress(); });
+    const collapseHeader = r.root.findByProps({ accessibilityLabel: 'Collapse fare breakdown' });
+    expect(() => act(() => { collapseHeader.props.onPress(); })).not.toThrow();
+    expect(r.root.findByProps({ accessibilityLabel: 'Expand fare breakdown' })).toBeTruthy();
+  });
+
+  it('skips a fare-breakdown line with a null amount instead of crashing', async () => {
+    mockRideState.estimates = [makeEstimate({
+      fare_breakdown: [
+        { label: 'Ride fare', amount: '15.00', type: 'ride' },
+        { label: 'Weird line', amount: null, type: 'other' },
+      ],
+    })];
+    const r = await renderScreen();
+    const header = r.root.findByProps({ accessibilityLabel: 'Expand fare breakdown' });
+    act(() => { header.props.onPress(); });
+    expect(allText(r)).not.toContain('Weird line');
+  });
+});
+
+describe('handleManualPromo additional branches', () => {
+  it('no-ops on empty/whitespace input submitted via the keyboard "done" action', async () => {
+    const r = await renderScreen();
+    const promoRow = findByText(r, 'Add promo code')!;
+    act(() => { promoRow.props.onPress(); });
+    const input = r.root.findByProps({ placeholder: 'Enter code' });
+    expect(() => act(() => { input.props.onSubmitEditing(); })).not.toThrow();
+    expect(mockApplyPromo).not.toHaveBeenCalled();
+  });
+
+  it('falls back to generic copy when the ineligible match has no ineligible_reason', async () => {
+    mockRideState.availablePromos = [{ code: 'NOPE', eligible: false }];
+    const r = await renderScreen();
+    const promoRow = findByText(r, 'Add promo code')!;
+    act(() => { promoRow.props.onPress(); });
+    const input = r.root.findByProps({ placeholder: 'Enter code' });
+    act(() => { input.props.onChangeText('nope'); });
+    const applyBtn = findByText(r, 'Apply');
+    await act(async () => { applyBtn?.props.onPress(); await flush(); });
+    expect(mockShowToast).toHaveBeenCalledWith('Not eligible', 'This promo cannot be applied to this ride', 'warning');
+    expect(allText(r)).toContain('Minimum fare not met');
+  });
+});
+
+describe('map provider by platform', () => {
+  it('uses PROVIDER_GOOGLE on Android', async () => {
+    const original = Platform.OS;
+    (Platform as any).OS = 'android';
+    const r = await renderScreen();
+    const mapView = r.root.findByType(MapView);
+    expect(mapView.props.provider).toBe('google');
+    (Platform as any).OS = original;
+  });
+});
+
+describe('promo entry row copy variants', () => {
+  it('shows "Free ride" copy when the applied promo is a free ride', async () => {
+    mockRideState.appliedPromo = { code: 'FREE1', free_ride: true };
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Free ride');
+  });
+
+  it('shows percentage-off copy for a percentage-type applied promo', async () => {
+    mockRideState.appliedPromo = { code: 'PCT10', discount_type: 'percentage', discount_value: 10 };
+    const r = await renderScreen();
+    expect(allText(r)).toContain('% off your ride fare');
+  });
+
+  it('shows singular "offer" (not "offers") when exactly one promo is available', async () => {
+    mockRideState.availablePromos = [{ code: 'ONE', eligible: true }];
+    const r = await renderScreen();
+    expect(allText(r)).toContain('[1," offer","",');
+  });
+});
+
+describe('work banner activeCompanyName fallback', () => {
+  it('shows "your employer" when activeCompanyId has no matching profile entry', async () => {
+    mockWorkProfileState.workModeEnabled = true;
+    mockWorkProfileState.activeCompanyId = 'co-orphan';
+    mockWorkProfileState.profiles = [];
+    const r = await renderScreen();
+    expect(allText(r)).toContain('your employer');
+  });
+});
+
+describe('WAV toggle additional branches', () => {
+  it('treats a missing wav_available as 0 (disabled, "No WAV drivers nearby")', async () => {
+    mockRideState.showWavOption = true;
+    mockRideState.estimates = [makeEstimate({ wav_available: undefined })];
+    const r = await renderScreen();
+    expect(allText(r)).toContain('No WAV drivers nearby');
+  });
+
+  it('uses singular "driver" copy for exactly one WAV driver available', async () => {
+    mockRideState.showWavOption = true;
+    mockRideState.estimates = [makeEstimate({ wav_available: 1 })];
+    const r = await renderScreen();
+    expect(allText(r)).toContain('1 WAV driver available');
+  });
+
+  it('WAV toggle thumb reflects the active color when requiresWav is already true', async () => {
+    mockRideState.showWavOption = true;
+    mockRideState.requiresWav = true;
+    mockRideState.estimates = [makeEstimate({ wav_available: 2 })];
+    const r = await renderScreen();
+    const toggle = r.root.findAllByProps({ accessibilityLabel: 'Request wheelchair-accessible vehicle' }).find((n: any) => typeof n.props.onValueChange === 'function')!;
+    expect(toggle.props.thumbColor).toBe(COLORS.primary);
+  });
+});
+
+describe('quiet mode toggle additional branches', () => {
+  it('thumb reflects the active color when quietMode is already true', async () => {
+    mockRideState.quietMode = true;
+    const r = await renderScreen();
+    const toggle = r.root.findAllByProps({ accessibilityLabel: 'Request quiet ride' }).find((n: any) => typeof n.props.onValueChange === 'function')!;
+    expect(toggle.props.thumbColor).toBe(COLORS.primary);
+  });
+});
+
+describe('payment sheet: wallet balance fallback', () => {
+  it('shows $0.00 wallet balance in the sheet when wallet is null', async () => {
+    mockWalletState = { wallet: null, fetchWallet: mockFetchWallet };
+    const r = await renderScreen();
+    expect(allText(r)).toContain('["Balance: $","0.00"]');
+  });
+});
+
+describe('promo sheet: offers list copy variants', () => {
+  it('shows the offer count suffix when more than one promo is available', async () => {
+    mockRideState.availablePromos = [{ code: 'A', eligible: true }, { code: 'B', eligible: true }];
+    const r = await renderScreen();
+    const promoRow = findByText(r, 'Add promo code')!;
+    act(() => { promoRow.props.onPress(); });
+    expect(allText(r)).toContain('· 2');
+  });
+
+  it('shows "Free ride" label for a free-ride promo row', async () => {
+    mockRideState.availablePromos = [{ code: 'FREE1', eligible: true, free_ride: true }];
+    const r = await renderScreen();
+    const promoRow = findByText(r, 'Add promo code')!;
+    act(() => { promoRow.props.onPress(); });
+    expect(allText(r)).toContain('"Free ride"');
+  });
+
+  it('shows percentage-off copy with a max-discount cap when set', async () => {
+    mockRideState.availablePromos = [{ code: 'PCT', eligible: true, discount_type: 'percentage', discount_value: 15, max_discount: 5 }];
+    const r = await renderScreen();
+    const promoRow = findByText(r, 'Add promo code')!;
+    act(() => { promoRow.props.onPress(); });
+    expect(allText(r)).toContain('max $5');
+  });
+
+  it('shows percentage-off copy with no cap suffix when max_discount is unset', async () => {
+    mockRideState.availablePromos = [{ code: 'PCTNOMAX', eligible: true, discount_type: 'percentage', discount_value: 15 }];
+    const r = await renderScreen();
+    const promoRow = findByText(r, 'Add promo code')!;
+    act(() => { promoRow.props.onPress(); });
+    expect(allText(r)).toContain('15% off');
+    expect(allText(r)).not.toContain('max $');
+  });
+
+  it('ineligible promo row without an ineligible_reason falls back to generic copy on tap', async () => {
+    mockRideState.availablePromos = [{ code: 'NOPE', eligible: false }];
+    const r = await renderScreen();
+    const promoRow = findByText(r, 'Add promo code')!;
+    act(() => { promoRow.props.onPress(); });
+    const offerRow = findByText(r, 'NOPE')!;
+    act(() => { offerRow.props.onPress(); });
+    expect(mockShowToast).toHaveBeenCalledWith('Not eligible', 'This promo cannot be applied to this ride', 'warning');
+  });
+
+  it("shows a promo's description line when present", async () => {
+    mockRideState.availablePromos = [{ code: 'DESC1', eligible: true, description: 'New rider bonus' }];
+    const r = await renderScreen();
+    const promoRow = findByText(r, 'Add promo code')!;
+    act(() => { promoRow.props.onPress(); });
+    expect(allText(r)).toContain('New rider bonus');
+  });
+
+  it('shows a minimum-fare hint for an ineligible promo with min_ride_fare set', async () => {
+    mockRideState.availablePromos = [{ code: 'MINFARE', eligible: false, min_ride_fare: 12, ineligible_reason: 'Minimum fare not met' }];
+    const r = await renderScreen();
+    const promoRow = findByText(r, 'Add promo code')!;
+    act(() => { promoRow.props.onPress(); });
+    expect(allText(r)).toContain('["Min. fare $","12.00"]');
+  });
+});
+
+describe('AnimatedVehicleCard additional branches', () => {
+  it('renders the vehicle image when vehicle_type.image_url is set', async () => {
+    mockRideState.estimates = [makeEstimate({ vehicle_type: { id: 'vt-sedan', name: 'Sedan', capacity: 4, image_url: 'https://example.com/car.png' } })];
+    const r = await renderScreen();
+    expect(r.root.findAllByType(ExpoImageMock as any).length).toBeGreaterThan(0);
+  });
+
+  it('treats a missing surge_multiplier as no surge (no "Higher demand" notice)', async () => {
+    mockRideState.estimates = [makeEstimate({ surge_multiplier: undefined })];
+    const r = await renderScreen();
+    expect(allText(r)).not.toContain('Higher demand');
+  });
+
+  it('shows "Nearby" when eta_minutes is falsy', async () => {
+    mockRideState.estimates = [makeEstimate({ eta_minutes: 0 })];
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Nearby');
+  });
+
+  it('uses singular "driver" copy for exactly one driver', async () => {
+    mockRideState.estimates = [makeEstimate({ driver_count: 1 })];
+    const r = await renderScreen();
+    expect(allText(r)).toContain('1 driver');
+    expect(allText(r)).not.toContain('1 drivers');
   });
 });

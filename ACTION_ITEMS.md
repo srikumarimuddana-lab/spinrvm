@@ -9778,6 +9778,70 @@ record of what was assumed vs. what was actually true</summary>
     screen's own render logic. No bug found. Not money-touching; no
     auditor review sought. 35 tests; full rider-app suite still green
     (123 suites / 1524 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/otp.tsx`: 95.19% → 100% stmts, 79.51% → 100% branch,
+    86.36% → 100% funcs, 96.84% → 100% lines** (auth-critical: OTP
+    verification, token issuance, reactivation routing). Already had
+    `otpScreen.test.tsx` (16 tests: no-phoneNumber back-nav, Verify
+    blocked until 4 digits, the token-path success setting tokens +
+    Analytics, the userData-present-vs-absent setState/initialize()
+    split, CompleteRegistration only for a new account, the
+    requires_reactivation route without setTokens, a verify failure's
+    shake/clear/toast, the resend-hidden-during-countdown state, resend
+    success re-arming the countdown, the 429 Retry-After path, a
+    generic non-429 resend failure, and the post-verify `user` effect's
+    three routing outcomes: profile-incomplete, profile-complete/no-
+    notice, and needs_notice) — extended in place (+14 tests, 30
+    total). Closed: the `hasProfileData` multi-field check
+    (`first_name && last_name && email`) actually driving
+    profile-complete routing on its own, independent of the
+    `profile_complete` flag (previously only the flag-driven and
+    flag-absent-with-no-fields cases were exercised); `handleCodeChange`
+    dropping digits typed past `CODE_LENGTH` (a paste); verify resolving
+    with no `data` field at all (`!response.data` throw, caught by the
+    outer handler, surfacing the same generic failure toast); the
+    `requires_reactivation` route's own `?? ''` fallbacks when the
+    backend omits `reactivation_token`/`deletion_scheduled_at`; a
+    successful verify response with no `token` field at all — confirms
+    `setTokens` is never called yet the flow still falls through to
+    `Analytics.otpVerified()` and `initialize()` exactly like the
+    already-covered no-`userData` path, just without ever touching
+    session state; the `refresh_token`/`expires_in` `?? ''`/`?? 900`
+    defaults when a response carries a `token` but omits the other two;
+    `handleResend`'s own `resendInFlight.current` double-tap guard (two
+    synchronous `onPress()` calls before the first's `await` yields —
+    the second sees `resendInFlight.current` already `true` and returns
+    before ever calling `api.post` a second time); the 429 retry-seconds
+    parsing's remaining combinations — no `Retry-After` header and no
+    parseable detail message (defaults to 60), a parseable detail
+    message when no header is present (uses the parsed value), and a
+    parsed-but-zero detail value, which found a genuine, correctly-
+    guarded behavioral split worth documenting: the toast text
+    interpolates the *raw* parsed `retrySeconds` value directly (so it
+    literally reads "wait 0 seconds"), while the *countdown state* that
+    actually re-arms the Resend button is separately guarded
+    (`retrySeconds > 0 ? retrySeconds : 60`) and never sits at a
+    non-positive value — the two intentionally diverge, and the new
+    test pins both halves rather than assuming they matched; the Verify
+    button's own in-flight spinner via a controllable pending promise;
+    and the header back button, the code-boxes tap-to-focus, and the
+    "Change phone number" button, none of which had ever been pressed
+    despite being in the render tree since the first test wrote (mount
+    render coverage only credits JSX creation, not the handler
+    functions themselves — the file's function-coverage number,
+    86.36%→100%, moved specifically because of these three). No bug
+    found — the toast-vs-countdown-state divergence on the zero-detail
+    case is intentional, correctly-guarded behavior, not a defect.
+    Auth-critical (OTP verify, token issuance); `spinr-security-auditor`
+    reviewed the diff and returned SAFE TO MERGE — production file
+    confirmed untouched, and every new assertion (token/refresh_token/
+    expires_in defaulting, the reactivation `?? ''` fallbacks, the
+    hasProfileData routing, the 429 retry-seconds parsing including the
+    toast-vs-countdown-state divergence, and the resend double-tap
+    guard) traced line-by-line against the real logic and confirmed
+    correct — explicitly noting the divergence is real, deliberate
+    production behavior the test documents rather than a bug being
+    pinned. 30 tests; full rider-app suite still green (123 suites /
+    1538 tests), `yarn tsc --noEmit` clean.
   - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
     85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
     tests: no-account-prefill, the CRC-consent auto-check-when-

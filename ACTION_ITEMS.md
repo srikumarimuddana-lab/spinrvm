@@ -10148,6 +10148,47 @@ record of what was assumed vs. what was actually true</summary>
     picker, same tier as the other map/UI screens in this sweep) — no
     auditor review sought. 21 tests; full rider-app suite still green
     (123 suites / 1587 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/loyalty.tsx`: 96.22% → 100% stmts, 82.05% → 97.43%
+    branch, 100% funcs (unchanged), 97.91% → 100% lines** (the rider
+    rewards/points screen). Already had `loyaltyScreen.test.tsx` (11
+    tests: parallel mount fetch of `/loyalty` + `/loyalty/history`, the
+    tier card/progress bar/points-info row, the "highest tier" copy
+    replacing the progress bar when `next_tier` is null, the
+    progress-percent calculation, positive-vs-negative history-row
+    styling, the empty-history state, a silently-swallowed load
+    failure, pull-to-refresh, three of the five `getHistoryIcon` type
+    mappings, and the `formatDate` catch-swallows-a-throw fallback) —
+    extended in place (+4 tests, 15 total). Closed: `getTierColor`'s own
+    `TIER_COLORS[tier] ?? '#CD7F32'` fallback for a tier string not in
+    the bronze/silver/gold/platinum map; the two remaining
+    `getHistoryIcon` switch cases that hadn't been exercised by their
+    own literal value (`'promo'` and `'expire'` — the test file already
+    covered their synonym cases, `'promotion'`/`'expiry'`, but a
+    `switch` tracks each case label as its own branch) plus the
+    `default` case for a genuinely unrecognised type string (the
+    generic `'ellipse'` icon, which the file's own docblock already
+    claimed was tested but wasn't); the history fetch's own
+    `(historyRes.data as LoyaltyHistoryItem[]) || []` fallback when the
+    response `data` isn't an array; and `progressPercent`'s `if (needed
+    <= 0) return 100;` guard — a `next_tier.points_needed` of exactly
+    `0` (e.g. the rider is one ride away from a threshold rounding to
+    zero remaining points) correctly caps the bar at 100% instead of
+    computing a divide-by-near-zero result. Left uncovered (genuinely
+    unreachable, not chased): `ListEmptyComponent={!loading ? (...) :
+    null}`'s own false path — the `FlatList` this belongs to only ever
+    renders once the outer `loading ? <Spinner/> : <FlatList/>` has
+    already resolved to the `FlatList` branch, so by the time
+    `ListEmptyComponent` itself evaluates, `loading` is always `false`
+    and the `!loading` check can never take its `null` branch — same
+    class of dead-code finding as `pick-on-map.tsx`'s `if (!region)
+    return;` guard in the prior entry above. No bug found. Test-only
+    diff (production `app/loyalty.tsx` confirmed untouched via `git
+    diff`); money-adjacent (points carry a `redemption_rate`, i.e. real
+    monetary value) but not money-critical (no wallet/Stripe write on
+    this screen, same tier as `referral.tsx`'s and `activity.tsx`'s
+    prior entries) — no auditor review sought given the surface. 15
+    tests; full rider-app suite still green (123 suites / 1591 tests),
+    `yarn tsc --noEmit` clean.
   - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
     85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
     tests: no-account-prefill, the CRC-consent auto-check-when-

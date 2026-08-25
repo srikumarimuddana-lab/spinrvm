@@ -10302,6 +10302,104 @@ record of what was assumed vs. what was actually true</summary>
     (the diff's only deletion is an import-line addition of `Platform`
     for the new platform-branch tests). 119 tests; full rider-app suite
     still green (123 suites / 1643 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/payment-confirm.tsx`: 98.52% → 99.26% stmts, 82.35%
+    → 98.23% branch, 94.11% funcs (unchanged), 99.2% lines (unchanged)**
+    (booking-confirmation/payment-method screen — Stripe card payment
+    with SCA/3DS, wallet payment, corporate billing, fare-breakdown
+    display). Shares most of its money-critical structure with
+    `ride-options.tsx`'s booking flow (same `corpId`/`pmId` derivation
+    shape, the same 409/402 active-ride-conflict routing, similar
+    fare-fallback chains) — the prior entry's patterns carried over
+    directly. Already had `paymentConfirmScreen.test.tsx` (31 tests,
+    including a deliberately-preserved "BUG (found, not fixed)" test
+    documenting a real production bug: manually toggling "Bill to
+    Business" with a single corporate account never sets
+    `selectedCorporateId`, so the ride silently books to the personal
+    card) — extended in place (+19 tests, 50 total), the pre-existing
+    bug test left untouched. Closed:
+    - The `corporateAccounts` derivation's `company.id ?? ''`/
+      `company.name ?? ''` fallbacks, and the work-mode default effect
+      picking the first corporate account when `activeCompanyId` isn't
+      yet known.
+    - `loadSavedCards`'s `Array.isArray(res.data) ? res.data : []`
+      fallback when the `/payments/cards` response isn't an array.
+    - `handleBookRide`'s `isBooking || isLoading` re-entrancy guard on a
+      rapid double-press — asserted `createRide` was called exactly
+      once, not just that the UI didn't crash; the in-flight spinner
+      render; and the `isLoading`-disabled state.
+    - Booking via the corporate bypass with no card selected at all
+      (`selectedCardId` stays `null` since no cards were ever loaded),
+      sending `pmId: undefined` alongside the real `corpId` — distinct
+      from the existing corporate tests, which all had a default card
+      present.
+    - The SCA confirm-error fallback (`confirmError.message ||
+      '...was not completed.'`) when the Stripe error carries no
+      `message`; and the payment-intent-status fallback (`(paymentIntent
+      ?.status || '').toString().toLowerCase()`) when `paymentIntent`
+      itself is `undefined` after confirm — both asserted against the
+      real fallback strings from the source, not echoed back from the
+      test's own fixture.
+    - `Analytics.rideRequested`'s `selectedVehicle?.name ?? 'unknown'`
+      fallback when `selectedVehicle` is `null`.
+    - The 409 active-ride-routing gap cases carried over from
+      `ride-options.tsx`'s prior entry: `active.active === false` falls
+      through to the generic failure toast; an active ride in an
+      unrecognized status (`'cancelled'`) navigates nowhere.
+    - `totalFare`'s `grand_total || total_fare || '0'` fallback chain
+      (both the missing-`grand_total`-only and both-missing cases), and
+      the separate vehicle-summary price's own `total_fare || '0'`
+      fallback.
+    - The wallet balance's `wallet?.balance ?? '0'` fallback when
+      `wallet` is `null`.
+    - The fare-breakdown's `fare_breakdown || []` fallback (no crash,
+      no lines, when the field is missing); a line with `amount: null`
+      being skipped entirely; a non-`'ride'`-type line (e.g. `'tax'`)
+      rendering its plain label instead of the driver-payout badge; and
+      a `'modifier'`-type line with a real amount rendering in the
+      modifier color on both its label and its value.
+
+    Three branches left deliberately uncovered, documented in the test
+    file's own docblock rather than chased: the work-mode default
+    effect's final `?? null` fallback in a three-deep `??` chain — dead,
+    because that effect only ever runs when `corporateAccounts.length >
+    0`, which guarantees the chain's middle fallback
+    (`firstCorporateAccountId`) is always truthy; the fare-breakdown
+    value's `line.amount != null ? ... : 'Applied'` ternary's false
+    branch — dead, the identical check one level up already gates
+    whether this row renders at all; and `createStyles`'s `sf` default
+    parameter — never hit because every real call site (and the test
+    mock) always supplies one. Same class of dead-code finding as this
+    sweep's prior entries. No production bugs newly found — the
+    pre-existing documented bug (corporate toggle not setting
+    `selectedCorporateId`) was left exactly as-is, not touched or
+    duplicated. Test-only diff (production `app/payment-confirm.tsx`
+    confirmed untouched via `git diff`). Money-critical (Stripe
+    SCA/3DS, wallet, corporate billing) so `spinr-money-auditor`
+    reviewed the diff and returned SAFE TO MERGE — traced the
+    corporate-bypass `pmId`/`corpId` derivation, confirmed the
+    double-press guard test proves `createRide` was called exactly
+    once (not just "UI didn't crash"), verified the SCA
+    confirmError/payment-intent fallback strings against the real
+    source literals rather than an echoed fixture, hand-verified the
+    JSX-serialization format the fare/wallet assertions assume via a
+    live `react-test-renderer` probe, confirmed the new work-mode-
+    default tests don't overlap or contradict the pre-existing BUG
+    test, and independently re-verified all three "deliberately
+    uncovered" branches by reading the surrounding source. The auditor
+    also caught two non-blocking test-quality nits, both fixed before
+    finalizing: the in-flight-spinner test's string assertion
+    (`not.toContain('["Book","Sedan"]')`) was vacuous — the real JSX
+    serializes as three children (`'["Book"," ","Sedan"]'`, with a
+    space), so the search string could never match whether or not the
+    spinner actually rendered; replaced with a direct
+    `ActivityIndicator` presence/absence check across all three
+    booking-lifecycle states. A comment on the vehicle-summary-price
+    fallback test incorrectly claimed the footer total also renders
+    $0.00 in that fixture (it doesn't — `grand_total` is untouched, so
+    the footer independently shows $15.00 via its own fallback chain);
+    corrected the comment and added the distinguishing assertion. 50
+    tests; full rider-app suite still green (123 suites / 1662 tests),
+    `yarn tsc --noEmit` clean.
   - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
     85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
     tests: no-account-prefill, the CRC-consent auto-check-when-

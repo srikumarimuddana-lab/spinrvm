@@ -10189,6 +10189,119 @@ record of what was assumed vs. what was actually true</summary>
     prior entries) — no auditor review sought given the surface. 15
     tests; full rider-app suite still green (123 suites / 1591 tests),
     `yarn tsc --noEmit` clean.
+  - **rider-app `app/ride-options.tsx`: 96.07% → 97.3% stmts, 82.14% →
+    96.63% branch, 93.22% funcs (unchanged), 97.95% lines (unchanged)**
+    (vehicle-selection/fare-estimate/booking-confirmation screen —
+    payment-source selection across card/wallet/corporate account, WAV,
+    promo codes, scheduling, surge). By far the largest branch count in
+    the rider-app sweep (476 total branches — 4x the next-largest
+    screen); given the file's size (2284 lines) and the number of
+    uncovered branches (85), this round was delegated to a background
+    `general-purpose` agent with detailed instructions covering this
+    sweep's established conventions (test-only, extend
+    `rideOptionsScreen.test.tsx` in place, the accepted module-load-time
+    `Platform.OS` exception, the render-time `Platform.OS` mutation
+    pattern for `createStyles`-level branches, the `useTheme`
+    `mockReturnValue`+`afterEach`-reset pattern, and the
+    `react-native/Libraries/Utilities/useWindowDimensions` submodule-mock
+    pattern for hook overrides) — independently re-verified after the
+    fact (coverage numbers, full suite, `tsc --noEmit`, and the empty
+    `git diff` on the production file all reconfirmed directly, not just
+    taken on the agent's word). Already had `rideOptionsScreen.test.tsx`
+    (69 tests) — extended in place (+50 tests, 119 total). Closed, by
+    area:
+    - **Payment/corporate**: booking via a selected corporate account
+      bypasses the card requirement and sends `pmId: undefined`; booking
+      via wallet sends `pmId: undefined` (the `selectedPayment !==
+      'card'` branch); `paymentLabel`/sheet fallbacks to `'Company
+      account'` when `selectedCorporateId` has no matching account, and
+      to `$0.00` when `wallet` is `null`; the work-mode default-sync
+      effect's `activeCompanyId` and `corporateAccounts[0].id` fallback
+      branches (via a `workModeEnabled` flip after mount); the
+      `corporateAccounts` derivation's `company.id ?? ''`/`company.name
+      ?? ''` fallbacks; the corporate policy check treating a missing
+      `total_fare` as `0` and proceeding when `checkRide` allows it.
+    - **Booking guards**: `handleBookRide`'s isBooking/isLoading
+      re-entrancy guard on a rapid double-press (also covers the
+      Confirm button's `isBooking ? spinner : text` render); the
+      `!selectedVehicle` guard firing independently of
+      `!selectedEstimate`; a missing `surge_multiplier` treated as
+      no-surge (books directly).
+    - **409/402 active-ride routing**: a 409 with no actual active ride
+      found falls through to the generic failure toast; a 409 with an
+      active ride in an unrecognized status (`'cancelled'`) navigates
+      nowhere.
+    - **Promo**: entry-row and offers-list copy for `free_ride`,
+      `percentage` (with/without `max_discount`), singular "1 offer
+      available", an ineligible promo with/without `ineligible_reason`
+      (both the manual-entry and tap-row code paths), the promo
+      description line, the `min_ride_fare` hint;
+      `handleManualPromo`'s empty/whitespace no-op via
+      `onSubmitEditing`.
+    - **WAV/quiet toggles**: a missing `wav_available` treated as `0`
+      (disabled); singular "1 WAV driver"; the active-state thumb color
+      for both toggles.
+    - **Fare/estimate math fallbacks**: the `grand_total`/`total_fare`/
+      `base_fare`/`distance_fare`/`time_fare` `||`/`??` fallback chains
+      in the mount-time promo-fetch effect and in `handleSelect`,
+      including the estimates-array-shrinks-past-selected-index race
+      (the promo effect runs before the clamp effect in the same
+      commit); `selectedEstimate` staying `null` when `estimates` is
+      empty.
+    - **Fare breakdown**: collapsing on a second tap; skipping a line
+      with `amount: null`.
+    - **Map/platform**: `PROVIDER_GOOGLE` on Android (render-time
+      `Platform.OS` mutation, not the module-load-time exception —
+      testable per the note above); the iOS-only keyboard-effect early
+      return on Android; a `keyboardWillHide` firing with no pending
+      close queued.
+    - **Misc UI**: the vehicle card image render when `image_url` is
+      set; a missing `surge_multiplier`/`eta_minutes`/singular
+      `driver_count` in the vehicle card; `/service-areas` and
+      `/payments/cards` malformed-response fallbacks.
+
+    Left deliberately uncovered (16 branch-paths, all documented in the
+    test file with reasoning): `onReadyDirections`'s two `if`s (lines
+    487-492) and the `MapViewDirections` waypoints/route-coords branches
+    (lines 740-749) — all gated behind `GOOGLE_MAPS_API_KEY`, a
+    module-load-time env-var constant that's always falsy in this test
+    env, so `MapViewDirections` never mounts; closing it safely would
+    need `jest.resetModules()`/`isolateModules` + re-requiring the
+    screen with the env var set, which risks loading a second `react`
+    module instance under jest-expo's `moduleNameMapper` (`'^react$'`
+    remap) and breaking hooks — same risk class as the documented
+    Platform.OS-at-module-load exception, left uncovered rather than
+    forced. Four more branches are provably unreachable given the
+    surrounding render-order/closure guarantees (a `card`-truthy guard's
+    implicit else once `selectDefaultCardId()`'s own contract is
+    honored; a `markers.length >= 2` false path that can't occur once
+    the enclosing effect already requires `pickup && dropoff`; a final
+    `?? null` fallback whose only call site already guarantees
+    `corporateAccounts.length > 0`; and `proceedWithBooking`'s own
+    `isBooking` re-check plus its `selectedVehicle?.name ?? 'unknown'`
+    fallback, both dead because the function's only two call sites are
+    frozen closures from a render where the upstream guards already
+    held) — same class of dead-code finding as this sweep's prior
+    entries (`referral.tsx`, `pick-on-map.tsx`, `activity.tsx`,
+    `loyalty.tsx`). No production bugs found; the "unreachable" findings
+    above are defensive/dead code, not defects, and were left alone.
+    Test-only diff (production `app/ride-options.tsx` confirmed
+    untouched via `git diff` — independently re-verified). Payment-
+    adjacent (card/wallet/corporate selection at booking, fare-fallback
+    math) so `spinr-money-auditor` reviewed the diff and returned SAFE
+    TO MERGE — traced the corporate-booking path (`corpId`/`pmId`
+    derivation with no card selected), the wallet path
+    (`selectedPayment !== 'card'` branch), the card-requirement guard's
+    corporate-bypass short-circuit, the `grand_total || total_fare`/
+    `base_fare + distance_fare + time_fare` fallback chains at all
+    three call sites, the corporate policy check's missing-`total_fare`
+    handling, the surge `?? 1` fallback, and both 409 active-ride-
+    routing tests, against the real production logic and confirmed each
+    assertion would fail against a broken branch rather than echoing
+    the mock; confirmed no existing assertion was weakened or removed
+    (the diff's only deletion is an import-line addition of `Platform`
+    for the new platform-branch tests). 119 tests; full rider-app suite
+    still green (123 suites / 1643 tests), `yarn tsc --noEmit` clean.
   - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
     85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
     tests: no-account-prefill, the CRC-consent auto-check-when-

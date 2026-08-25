@@ -10400,6 +10400,42 @@ record of what was assumed vs. what was actually true</summary>
     corrected the comment and added the distinguishing assertion. 50
     tests; full rider-app suite still green (123 suites / 1662 tests),
     `yarn tsc --noEmit` clean.
+  - **rider-app `app/reactivate-account.tsx`: 82.75% → 100% branch
+    (stmts/funcs/lines already 100%).** Self-serve account-reactivation
+    screen — reached from the OTP screen's `requires_reactivation` flow,
+    before the 7-year Saskatchewan Transportation Act / PIPEDA lawful-
+    retention ceiling. Not money- or safety-critical on its face (no
+    fare/wallet/Stripe path, no SOS/insurance-period logic), so no
+    `spinr-*-auditor` review was requested for this round. Already had
+    `reactivateAccountScreen.test.tsx` (9 tests covering the missing-
+    token redirect, happy-path reactivate + profile-complete routing,
+    incomplete-profile routing, no-user-payload re-initialize, the 410
+    permanent-deletion path, a generic-error path, "Keep it deleted",
+    and the formatted/fallback deletion-date rendering) — extended in
+    place (+4 tests, 13 total). Closed:
+    - `goToApp`'s `hasProfileData` 3-way `&&` chain
+      (`first_name && last_name && email`) — the existing incomplete-
+      profile test only exercised the all-three-empty case (short-
+      circuits on the first operand); added a first-name-only case
+      (short-circuits on the second operand) and a first+last-name-only
+      case (short-circuits on the third operand), both still routing to
+      `/profile-setup`.
+    - `handleReactivate`'s `if (token) { ... }` false path — a
+      reactivate response carrying a `user` but no `token` field; the
+      user still merges into the store and routing to `/(tabs)` still
+      happens, but `setTokens` is asserted as never called (an unguarded
+      call would have crashed on the destructured-undefined args).
+    - The button's `busy && styles.btnDisabled` style branch and the
+      `busy ? <ActivityIndicator/> : <Text/>` render branch, together in
+      one test using a held-pending-promise on the mocked
+      `/auth/reactivate` call: asserted zero `ActivityIndicator`s before
+      the tap, exactly one plus `disabled: true` on the button while the
+      request is in flight, then zero again after it resolves.
+
+    No production bugs found, no branches left uncovered — 100% branch
+    coverage. Test-only diff (production `app/reactivate-account.tsx`
+    confirmed untouched via `git diff`). 13 tests; full rider-app suite
+    still green (123 suites / 1666 tests), `yarn tsc --noEmit` clean.
   - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
     85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
     tests: no-account-prefill, the CRC-consent auto-check-when-

@@ -13,6 +13,7 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
+import { ActivityIndicator } from 'react-native';
 
 import ReactivateAccountScreen from '../app/reactivate-account';
 import { useAuthStore } from '@shared/store/authStore';
@@ -180,5 +181,50 @@ describe('ReactivateAccountScreen', () => {
     expect(text).toContain('scheduled for deletion');
     expect(text).toContain(' soon');
     expect(text).not.toContain('September');
+  });
+
+  it('routes to /profile-setup when only first_name is present (partial profile, first short-circuit)', async () => {
+    mockApiPost.mockResolvedValue({
+      data: { token: 'access-1', user: { id: 'u1', profile_complete: false, first_name: 'Jo', last_name: '', email: '' } },
+    });
+    const renderer = await renderScreen();
+    await tapReactivate(renderer);
+    expect(mockReplace).toHaveBeenCalledWith('/profile-setup');
+  });
+
+  it('routes to /profile-setup when first_name and last_name are present but email is missing', async () => {
+    mockApiPost.mockResolvedValue({
+      data: { token: 'access-1', user: { id: 'u1', profile_complete: false, first_name: 'Jo', last_name: 'Doe', email: '' } },
+    });
+    const renderer = await renderScreen();
+    await tapReactivate(renderer);
+    expect(mockReplace).toHaveBeenCalledWith('/profile-setup');
+  });
+
+  it('does not persist tokens when the reactivate response has no token', async () => {
+    mockApiPost.mockResolvedValue({ data: { user: { id: 'u1', profile_complete: true } } });
+    const renderer = await renderScreen();
+    await tapReactivate(renderer);
+    expect(mockSetTokens).not.toHaveBeenCalled();
+    expect(useAuthStore.getState().user).toEqual({ id: 'u1', profile_complete: true });
+    expect(mockReplace).toHaveBeenCalledWith('/(tabs)');
+  });
+
+  it('shows the in-flight spinner instead of the label while reactivation is in progress', async () => {
+    let resolvePost: (v: any) => void;
+    mockApiPost.mockImplementation(() => new Promise((resolve) => { resolvePost = resolve; }));
+    const renderer = await renderScreen();
+    expect(renderer.root.findAllByType(ActivityIndicator)).toHaveLength(0);
+    const btn = renderer.root.findByProps({ accessibilityLabel: 'Reactivate my account' });
+    act(() => {
+      btn.props.onPress();
+    });
+    expect(renderer.root.findAllByType(ActivityIndicator)).toHaveLength(1);
+    expect(btn.props.disabled).toBe(true);
+    await act(async () => {
+      resolvePost!({ data: { token: 'access-1', user: { id: 'u1', profile_complete: true } } });
+      await flush();
+    });
+    expect(renderer.root.findAllByType(ActivityIndicator)).toHaveLength(0);
   });
 });

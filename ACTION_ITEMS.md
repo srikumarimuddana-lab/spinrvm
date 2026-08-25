@@ -9842,6 +9842,69 @@ record of what was assumed vs. what was actually true</summary>
     production behavior the test documents rather than a bug being
     pinned. 30 tests; full rider-app suite still green (123 suites /
     1538 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/driver-arrived.tsx`: 98.8% → 100% stmts, 79.51% →
+    98.79% branch, 100% funcs (unchanged), 100% lines (unchanged)**
+    (ride-lifecycle/safety-adjacent: OTP handoff, cancellation-fee flow,
+    hosts the `RiderSOS` button). Already had `driverArrivedScreen.test.tsx`
+    (20 tests: fetch-on-mount, WS-vs-polling, the in_progress redirect,
+    the cancel-confirm→reason-sheet→cancel/clear/navigate happy path and
+    its failure toast, the hardware-back-button cancel trigger, OTP
+    copy-to-clipboard, Message Driver nav, Share Trip incl. the
+    Share.share-rejects fallback, the driver-photo-error fallback, the
+    no-currentRide loading/retry state, both map-fit paths (driver
+    coordinates present, MapViewDirections onReady with ≥2 vs 1 point),
+    both confirm/reason sheets' own dismiss-without-cancelling paths, and
+    the `__DEV__` "Start Ride (skip OTP)" button's success and
+    swallowed-failure paths) — extended in place (+6 tests, 26 total).
+    Closed: the `if (!rideId) return;` early-out on the fetch/poll effect
+    (no rideId route param — verified neither `fetchRide` fires on mount
+    nor a 15s poll interval is set up); the same route-param guard on the
+    `__DEV__` start button's `if (rideId) fetchRide(rideId);` (start
+    still posts, but never refetches when rideId is absent); the
+    driver-card and trip-summary fallback text when `currentDriver`
+    fields are missing (`'Your Driver'`, `'No ratings yet'`, `'Vehicle
+    info unavailable'`, `'N/A'` plate); the same class of fallback in the
+    Share Trip info blob — `currentDriver?.name || 'Unknown'`,
+    `rating || 'New'`, the three vehicle-field `|| ''` fallbacks, and
+    (found only once the driver-field test was in place and coverage
+    still showed two uncovered lines) `pickup_address`/`dropoff_address`
+    `|| ''` fallbacks when the ride record itself omits them; the loading
+    state's own `{rideId ? (Retry button) : null}` — no Retry button
+    renders when there's no rideId to retry with; and
+    `userInterfaceStyle={isDark ? "dark" : "light"}` on the map (the
+    `useTheme` mock was upgraded from a bare arrow function to a
+    `jest.fn()` wrapper so a single test could override it with
+    `mockReturnValueOnce` without touching every other test's fixture).
+    One line was deliberately left uncovered and documented rather than
+    chased: `MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE :
+    undefined` is computed once at module load, so exercising the Android
+    branch needs a fresh module registry with `Platform.OS` overridden
+    *before* the module (and its `react-native-maps` import) loads;
+    attempting this via `jest.resetModules()` +
+    `jest.doMock('react-native', () => ({ ...jest.requireActual(...),
+    Platform: {...} }))` hit jest-expo's native TurboModule mocking
+    (`Invariant Violation: TurboModuleRegistry.getEnforcing(...): 'DevMenu'
+    could not be found`) — `requireActual('react-native')` bypasses
+    jest-expo's own RN mock setup. The identical top-level pattern
+    (`Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined`) is
+    repeated, equally untested, in 7 other rider-app screens
+    (`ride-in-progress.tsx`, `pick-on-map.tsx`, `driver-arriving.tsx`,
+    `ride-details.tsx`, `ride-options.tsx`, `confirm-pickup.tsx`,
+    `ride-completed.tsx`) — a pre-existing, repo-wide gap, not something
+    to force through in one screen's test file; left as a standing note
+    rather than re-discovered per-screen. No bug found. Test-only diff
+    (production `app/driver-arrived.tsx` confirmed untouched via `git
+    diff origin/main`); ride-lifecycle/safety-adjacent (SOS button,
+    cancellation-fee flow) so `spinr-safety-sos-reviewer` reviewed the
+    diff and returned SAFE TO MERGE — confirmed the diff is additive only
+    (no existing SOS/cancellation-fee assertion weakened or removed) and
+    traced every new assertion line-by-line against the real logic
+    (driver-field/share-blob fallbacks, the no-rideId guard on both the
+    fetch/poll effect and the dev start button, the no-Retry-button
+    guard, the dark-theme `userInterfaceStyle` prop) and confirmed each
+    correct. 26 tests; full rider-app suite still green (123 suites /
+    1544 tests),
+    `yarn tsc --noEmit` clean.
   - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
     85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
     tests: no-account-prefill, the CRC-consent auto-check-when-

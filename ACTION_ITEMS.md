@@ -10375,9 +10375,31 @@ record of what was assumed vs. what was actually true</summary>
     duplicated. Test-only diff (production `app/payment-confirm.tsx`
     confirmed untouched via `git diff`). Money-critical (Stripe
     SCA/3DS, wallet, corporate billing) so `spinr-money-auditor`
-    reviewed the diff — review requested, result to be folded in once
-    it returns. 50 tests; full rider-app suite still green (123 suites
-    / 1662 tests), `yarn tsc --noEmit` clean.
+    reviewed the diff and returned SAFE TO MERGE — traced the
+    corporate-bypass `pmId`/`corpId` derivation, confirmed the
+    double-press guard test proves `createRide` was called exactly
+    once (not just "UI didn't crash"), verified the SCA
+    confirmError/payment-intent fallback strings against the real
+    source literals rather than an echoed fixture, hand-verified the
+    JSX-serialization format the fare/wallet assertions assume via a
+    live `react-test-renderer` probe, confirmed the new work-mode-
+    default tests don't overlap or contradict the pre-existing BUG
+    test, and independently re-verified all three "deliberately
+    uncovered" branches by reading the surrounding source. The auditor
+    also caught two non-blocking test-quality nits, both fixed before
+    finalizing: the in-flight-spinner test's string assertion
+    (`not.toContain('["Book","Sedan"]')`) was vacuous — the real JSX
+    serializes as three children (`'["Book"," ","Sedan"]'`, with a
+    space), so the search string could never match whether or not the
+    spinner actually rendered; replaced with a direct
+    `ActivityIndicator` presence/absence check across all three
+    booking-lifecycle states. A comment on the vehicle-summary-price
+    fallback test incorrectly claimed the footer total also renders
+    $0.00 in that fixture (it doesn't — `grand_total` is untouched, so
+    the footer independently shows $15.00 via its own fallback chain);
+    corrected the comment and added the distinguishing assertion. 50
+    tests; full rider-app suite still green (123 suites / 1662 tests),
+    `yarn tsc --noEmit` clean.
   - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
     85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
     tests: no-account-prefill, the CRC-consent auto-check-when-

@@ -40,7 +40,7 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { TouchableOpacity, Text } from 'react-native';
+import { TouchableOpacity, Text, ActivityIndicator } from 'react-native';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('react-native-safe-area-context', () => ({
@@ -559,13 +559,15 @@ describe('PaymentConfirmScreen', () => {
     let resolveCreate: (v: any) => void;
     mockCreateRide.mockImplementation(() => new Promise((resolve) => { resolveCreate = resolve; }));
     const r = await renderScreen();
+    expect(r.root.findAllByType(ActivityIndicator)).toHaveLength(0);
     const bookBtn = r.root.findByProps({ accessibilityLabel: 'Book Sedan' });
     act(() => { bookBtn.props.onPress(); });
-    expect(allText(r)).not.toContain('["Book","Sedan"]');
+    expect(r.root.findAllByType(ActivityIndicator)).toHaveLength(1);
     await act(async () => {
       resolveCreate!({ id: 'ride-1', status: 'searching' });
       await flush();
     });
+    expect(r.root.findAllByType(ActivityIndicator)).toHaveLength(0);
   });
 
   it('disables and dims the Book button while a global isLoading is true', async () => {
@@ -652,8 +654,11 @@ describe('PaymentConfirmScreen', () => {
   it('falls back the vehicle-summary price to $0.00 when total_fare is missing', async () => {
     mockRideState.estimates = [{ ...ESTIMATE, total_fare: undefined }];
     const r = await renderScreen();
-    // Both the summary price and the (grand_total-driven) footer total render $0.00 here.
+    // Only the summary price (its own `total_fare || '0'` fallback) renders
+    // $0.00 here -- grand_total is untouched, so the footer total (driven by
+    // the separate grand_total-first fallback chain) still shows $15.00.
     expect(allText(r)).toContain('["$","0.00"]');
+    expect(allText(r)).toContain('["$","15.00"]');
   });
 
   it('falls back the wallet balance to $0.00 when wallet is null', async () => {

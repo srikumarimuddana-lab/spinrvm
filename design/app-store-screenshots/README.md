@@ -3,7 +3,7 @@
 Source for the Spinr **rider** App Store screenshot set. Each `*.dc.html` file is
 one artboard, laid out by `canvas.json` and published as a design canvas.
 
-## The set (v4 — faithful to the shipped app)
+## The set (v6)
 
 Layout follows the dominant pattern across top App Store / Play listings
 (Uber, Lyft, DoorDash, Duolingo): centered headline, straight-on centered
@@ -12,12 +12,31 @@ chips overlapping the device edges.
 
 | File | Slot | Story |
 |---|---|---|
-| `Main.dc.html` | 1 | Saskatchewan's own ride app (red hero, white logo, Proudly Canadian pill) |
-| `Brand02.dc.html` | 2 | Proudly Canadian brand frame (flag maple leaf, stat rows) |
-| `Rider02.dc.html` | 3 | Know the price before you ride (real tiers) |
+| `Main.dc.html` | 1 | "your fare stays home." — text card, phone sliver entering right |
+| `Brand02.dc.html` | 2 | App showcase — the same phone continues from frame 1 |
+| `Rider02.dc.html` | 3 | Choose a ride — real illustrations, promo-slashed prices |
 | `Rider03.dc.html` | 4 | Track every ride, live (gradient route) |
 | `Rider04.dc.html` | 5 | Spinr Assistant (real welcome + prompts) |
 | `Rider05.dc.html` | 6 | Help & Support (real tabs + production FAQs) |
+
+Frames 1–2 are a connected pair (layout referenced from top fintech-style
+listings, colors are Spinr's): one tilted iPhone spans both frames — its left
+sliver exits frame 1's right edge at the position where frame 2 picks it up
+(assuming the store's ~30px gutter). Frame 1 carries the stacked lowercase
+headline (accent word in charcoal), the 0%/100% statement, and the Proudly
+Canadian badge.
+
+Frame 3 mirrors `ride-options.tsx` exactly: the selected row's illustration at
+full size vs 0.59 transform for unselected (the app's `imageScale`), charcoal
+selected border + checkmark (`optionCardSelected`), and per-row struck +
+discounted prices in `#10B981` (`optionPriceStruck`/`optionPriceDiscounted`).
+
+`veh-sedan.webp` / `veh-van.webp` / `veh-xl.webp` are the real production
+illustrations from the `vehicle-illustrations` storage bucket (Economy / Van /
+XL rows). This build environment cannot reach that bucket directly, so they
+were exported once via a temporary Supabase edge function (`asset-b64`, now
+retired to a 410 and safe to delete) — `_screens.py` embeds them automatically
+whenever they exist next to it.
 
 Logo variants on red: `spinr-logo-white.png` is the all-white palette remap —
 the bullseye's ring cutouts are alpha, so the red background paints the rings

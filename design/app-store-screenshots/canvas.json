@@ -6,7 +6,7 @@
       "y": 0,
       "w": 1290,
       "h": 2796,
-      "title": "1 · Own ride app"
+      "title": "1 · your fare stays home"
     },
     {
       "file": "Brand02.dc.html",
@@ -14,7 +14,7 @@
       "y": 0,
       "w": 1290,
       "h": 2796,
-      "title": "2 · Proudly Canadian"
+      "title": "2 · App showcase"
     },
     {
       "file": "Rider02.dc.html",
@@ -22,7 +22,7 @@
       "y": 0,
       "w": 1290,
       "h": 2796,
-      "title": "3 · Know the price"
+      "title": "3 · Choose a ride (promo)"
     },
     {
       "file": "Rider03.dc.html",
@@ -55,28 +55,21 @@
       "x": 0,
       "y": -340,
       "w": 1290,
-      "text": "SPINR RIDER v4 — iOS App Store, iPhone 6.7\" · 1290 × 2796\n\nFaithful to the shipped app: iPhone frame with Dynamic Island, default\nGoogle-Maps-style map, RouteLine's real #FF9500→#EE2B2B gradient\npolyline, RoutePins spec (green dot pickup), the real car_marker@3x.png\nsprites, and vehicle tiers straight from production Supabase\n(Economy / Van / XL — names, capacities, descriptions)."
+      "text": "SPINR RIDER v6 — iOS App Store · 1290 × 2796\n\nFrames 1–2 are a connected pair (reference-style layout, Spinr colors):\nthe tilted phone leaves frame 1's right edge and continues on frame 2,\nso side-by-side in the store they read as one composition. Proudly\nCanadian lives on frame 1's badge block."
     },
     {
-      "id": "note-frames",
-      "x": 1390,
-      "y": -340,
-      "w": 1290,
-      "text": "Payment/receipt frame removed on request. The mocked SOS screen is\nreplaced by two text-content screens that mirror OLA/Bolt-style sets:\nthe Spinr Assistant welcome (real greeting, real quick prompts) and\nHelp & Support (real tabs + production FAQ questions)."
-    },
-    {
-      "id": "note-veh",
+      "id": "note-frame3",
       "x": 2780,
       "y": -340,
       "w": 1290,
-      "text": "VEHICLE ART — the hosted Supabase illustrations (vehicle-illustrations\nbucket) are unreachable from this build environment, so the rows use\ndrawn side-view stand-ins in the app's own car-art palette. Drop the\nreal files in as veh-sedan.webp / veh-van.webp / veh-xl.webp next to\n_screens.py and re-run the build — they are picked up automatically."
+      "text": "FRAME 3 — faithful to ride-options.tsx: the real production\nillustrations (fetched from the vehicle-illustrations bucket), the\nselected row's image at full size vs 0.59 for unselected (the app's\nexact transform), charcoal selected border + checkmark, and per-row\nslashed prices in the app's green (#10B981) under a WELCOME15 promo.\nEconomy lands at $7.99. Promo code and prices are sample data."
     },
     {
       "id": "note-data",
       "x": 4170,
       "y": -340,
       "w": 1290,
-      "text": "SAMPLE DATA — swap before submitting: fares, Saskatoon addresses,\n\"Sam R.\", plate 4WX 812, ratings, driver counts, ETAs. Tier names,\ncapacities and FAQ questions are real production values."
+      "text": "SAMPLE DATA — swap before submitting: fares/discounts, WELCOME15,\naddresses, \"Sam R.\", plate 4WX 812, ratings, ETAs, driver counts.\nTier names/capacities and FAQ questions are real production values."
     }
   ],
   "launch": {

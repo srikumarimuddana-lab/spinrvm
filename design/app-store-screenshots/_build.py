@@ -105,20 +105,7 @@ I.update({
 PAPER = '#FAF6F4'
 RED   = '#E8352B'
 
-BADGE_PC = '''    <div style="display: flex; align-items: center; gap: 14px; margin-top: 34px; padding: 16px 34px; border-radius: 999px; background: #FFFFFF; box-shadow: 0 10px 30px rgba(0,0,0,0.18);">
-      <svg width="34" height="34" viewBox="0 0 1000 1000"><path d="M500 30 l-61 116 c-7 13 -19 12 -32 5 l-98 -51 74 383 c3 15 -8 21 -19 9 l-95 -110 -26 66 c-3 8 -12 7 -19 6 l-105 -22 36 131 c3 11 5 20 -6 24 l-38 13 181 148 c9 9 13 24 9 38 l-16 54 176 -30 c9 -2 22 2 22 12 l-8 179 h30 l-8 -179 c0 -10 13 -14 22 -12 l176 30 -16 -54 c-4 -14 0 -29 9 -38 l181 -148 -38 -13 c-11 -4 -9 -13 -6 -24 l36 -131 -105 22 c-7 1 -16 2 -19 -6 l-26 -66 -95 110 c-11 12 -22 6 -19 -9 l74 -383 -98 51 c-13 7 -25 8 -32 -5 z" fill="#E8352B"/></svg>
-      <span style="font-size: 26px; font-weight: 800; letter-spacing: 0.14em; color: #1A1A1A;">PROUDLY CANADIAN</span>
-    </div>
-'''
-
 FRAMES = [
- dict(out='Main.dc.html', screen='home', bg=RED, logo='spinr-logo-white.png', badge=BADGE_PC,
-   decor=DECOR_RED, hcolor='#FFFFFF', scolor='rgba(255,255,255,0.88)', ptop=760,
-   headline='Saskatchewan&rsquo;s<br>own ride app',
-   sub='Built here, run here. Spinr takes no cut &mdash; 100% of your fare goes to your driver.',
-   chips=[('l', 1010, I['zero'], '0% commission', 'Drivers keep every dollar'),
-          ('r', 2280, I['pin'], 'Saskatoon &amp; Regina', 'Saskatchewan-first, always')]),
-
  dict(out='Rider02.dc.html', screen='options', bg=PAPER, logo='spinr-logo.png',
    decor=decor_paper('r'), hcolor='#1A1A1A', scolor='#6B7280', ptop=760,
    headline='Know the price<br>before you <span style="color: #E8352B;">ride</span>',
@@ -158,8 +145,27 @@ for f in FRAMES:
     s, sc = html.count('<svg'), html.count('</svg>')
     print(f"{f['out']:16} screen={f['screen']:9} div {d}/{dc} svg {s}/{sc} {'OK' if d==dc and s==sc else 'MISMATCH'}")
 
-# ---- Brand frame: Proudly Canadian, original logo untouched on white ----
-BRAND = f'''<!doctype html>
+# ---- Frames 1-2: reference-layout pair (text card + phone showcase) --------
+OUTER = '#C0271E'
+PANEL = '#E8352B'
+
+def iphone(screen_html, left, top, scale=1.30, rot=-8):
+    w = 858 * scale
+    h = 1820 * scale
+    return f'''  <div style="position: absolute; left: {left}px; top: {top}px; width: {w:.0f}px; height: {h:.0f}px; transform: rotate({rot}deg); z-index: 3;">
+    <div style="width: 858px; height: 1820px; transform: scale({scale}); transform-origin: top left;">
+      <div style="width: 858px; height: 1820px; border-radius: 132px; padding: 5px; background: linear-gradient(150deg, #55585F 0%, #2B2D33 28%, #101114 70%, #33353B 100%); box-shadow: 0 60px 120px rgba(60,8,4,0.45), 0 0 0 1px rgba(0,0,0,0.35);">
+        <div style="width: 848px; height: 1810px; border-radius: 127px; background: #050505; padding: 9px;">
+          <div style="width: 830px; height: 1792px; border-radius: 112px; overflow: hidden; background: #FFFFFF; position: relative; display: flex; flex-direction: column;">
+{screen_html}
+            <div style="position: absolute; top: 22px; left: 287px; width: 256px; height: 74px; border-radius: 37px; background: #050505; z-index: 30;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>'''
+
+PAIR_SHELL = '''<!doctype html>
 <html>
 <head>
   <meta charset="utf-8">
@@ -173,51 +179,50 @@ BRAND = f'''<!doctype html>
     body {{ margin: 0; font-family: 'Plus Jakarta Sans', 'Segoe UI', system-ui, -apple-system, sans-serif; }}
     a {{ color: #FF453A; }} a:hover {{ color: #FF6F66; }}
     .sp, .sp * {{ box-sizing: border-box; }}
-    .sp .stat {{ display: flex; align-items: center; gap: 38px; padding: 64px 0; }}
   </style>
 </helmet>
 
-<div class="sp" style="width: 1290px; height: 2796px; position: relative; overflow: hidden; background: #E8352B; display: flex; flex-direction: column; align-items: center; padding: 130px 90px 0;">
-
-  <div style="position: absolute; top: -260px; right: -300px; width: 980px; height: 980px; border-radius: 490px; background: rgba(255,255,255,0.07); z-index: 0;"></div>
-  <div style="position: absolute; bottom: -220px; left: -260px; width: 760px; height: 760px; border-radius: 380px; background: rgba(0,0,0,0.10); z-index: 0;"></div>
-
-  <img src="spinr-logo-white.png" alt="Spinr" style="position: relative; width: 236px; height: 96px; object-fit: contain;">
-
-  <div style="position: relative; margin-top: 96px; width: 1110px; border-radius: 84px; background: #FFFFFF; box-shadow: 0 70px 150px rgba(0,0,0,0.30); padding: 110px 96px 96px; display: flex; flex-direction: column; align-items: center; text-align: center;">
-
-    <svg width="360" height="360" viewBox="0 0 1000 1000"><path d="{{LEAF_D}}" fill="#E8352B"/></svg>
-
-    <h1 style="margin: 80px 0 0; font-size: 156px; line-height: 1.02; font-weight: 800; letter-spacing: -0.04em; color: #1A1A1A;">Proudly<br><span style="color: #E8352B;">Canadian</span></h1>
-
-    <p style="margin: 46px 0 0; max-width: 880px; font-size: 40px; line-height: 1.5; font-weight: 500; color: #6B7280; text-wrap: pretty;">Owned and operated in Saskatchewan &mdash; every fare stays in the community that paid it.</p>
-
-    <div style="width: 100%; margin-top: 90px; display: flex; flex-direction: column;">
-      <div class="stat" style="border-top: 2px solid #F0EDEA;">
-        <span style="flex-shrink: 0; width: 300px; text-align: right; font-size: 96px; font-weight: 800; letter-spacing: -0.03em; color: #E8352B;">0%</span>
-        <span style="text-align: left; font-size: 36px; font-weight: 600; color: #1A1A1A;">platform commission</span>
-      </div>
-      <div class="stat" style="border-top: 2px solid #F0EDEA;">
-        <span style="flex-shrink: 0; width: 300px; text-align: right; font-size: 96px; font-weight: 800; letter-spacing: -0.03em; color: #E8352B;">100%</span>
-        <span style="text-align: left; font-size: 36px; font-weight: 600; color: #1A1A1A;">of every fare to the driver</span>
-      </div>
-      <div class="stat" style="border-top: 2px solid #F0EDEA; border-bottom: 2px solid #F0EDEA;">
-        <span style="flex-shrink: 0; width: 300px; text-align: right; font-size: 96px; font-weight: 800; letter-spacing: -0.03em; color: #E8352B;">2</span>
-        <span style="text-align: left; font-size: 36px; font-weight: 600; color: #1A1A1A;">cities &mdash; Saskatoon &amp; Regina</span>
-      </div>
-    </div>
-  </div>
-
-  <div style="position: relative; display: flex; align-items: center; gap: 18px; margin-top: 110px;">
-    <svg width="44" height="44" viewBox="0 0 1000 1000"><path d="{{LEAF_D}}" fill="#FFFFFF"/></svg>
-    <span style="font-size: 32px; font-weight: 700; letter-spacing: 0.12em; color: #FFFFFF; text-transform: uppercase;">Built in Saskatchewan</span>
+<div class="sp" style="width: 1290px; height: 2796px; position: relative; overflow: hidden; background: {outer}; padding: 36px;">
+  <div style="position: relative; width: 1218px; height: 2724px; border-radius: 72px; overflow: hidden; background: {panel};">
+    <div style="position: absolute; top: -220px; right: -260px; width: 820px; height: 820px; border-radius: 410px; background: rgba(255,255,255,0.06); z-index: 0;"></div>
+    <div style="position: absolute; bottom: -260px; left: -240px; width: 720px; height: 720px; border-radius: 360px; background: rgba(0,0,0,0.10); z-index: 0;"></div>
+{content}
   </div>
 </div>
 </x-dc>
 </body>
 </html>
 '''
-BRAND = BRAND.replace('{LEAF_D}', LEAF_D)
-open('Brand02.dc.html', 'w').write(BRAND)
-d, dc = BRAND.count('<div'), BRAND.count('</div>')
-print(f"Brand02.dc.html div {d}/{dc} svg {BRAND.count('<svg')}/{BRAND.count('</svg>')} {'OK' if d==dc else 'MISMATCH'}")
+
+home_screen = open('_screens/home.html').read()
+
+frame1_content = iphone(home_screen, 1020, 560) + '''
+  <div style="position: absolute; inset: 0; z-index: 4; padding: 96px 90px; display: flex; flex-direction: column; pointer-events: none;">
+    <img src="spinr-logo-white.png" alt="Spinr" style="width: 218px; height: 89px; object-fit: contain; align-self: flex-start;">
+
+    <h1 style="margin: 96px 0 0; font-size: 196px; line-height: 0.98; font-weight: 800; letter-spacing: -0.045em; color: #FFFFFF;">your<br>fare<br>stays<br><span style="color: #1A1A1A;">home.</span></h1>
+
+    <div style="margin-top: auto; display: flex; flex-direction: column; gap: 14px; max-width: 660px;">
+      <span style="font-size: 56px; font-weight: 800; letter-spacing: -0.02em; color: #FFFFFF;">0% commission.</span>
+      <span style="font-size: 36px; line-height: 1.42; font-weight: 500; color: rgba(255,255,255,0.88);">100% of every fare goes to your driver.</span>
+    </div>
+
+    <div style="margin-top: 84px; display: flex; align-items: center; gap: 22px;">
+      <svg width="64" height="64" viewBox="0 0 1000 1000"><path d="{LEAF}" fill="#FFFFFF"/></svg>
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <span style="font-size: 31px; font-weight: 800; letter-spacing: 0.12em; color: #FFFFFF;">PROUDLY CANADIAN</span>
+        <span style="font-size: 26px; font-weight: 500; color: rgba(255,255,255,0.82);">Built in Saskatchewan</span>
+      </div>
+    </div>
+  </div>'''
+
+frame2_content = iphone(home_screen, -300, 560) + '''
+  <div style="position: absolute; right: 90px; top: 96px; z-index: 4;">
+    <img src="spinr-logo-white.png" alt="Spinr" style="width: 252px; height: 103px; object-fit: contain;">
+  </div>'''
+
+for out, content in (('Main.dc.html', frame1_content), ('Brand02.dc.html', frame2_content)):
+    html = PAIR_SHELL.format(outer=OUTER, panel=PANEL, content=content).replace('{LEAF}', LEAF_D)
+    open(out, 'w').write(html)
+    d, dc = html.count('<div'), html.count('</div>')
+    print(f"{out:16} div {d}/{dc} {'OK' if d == dc else 'MISMATCH'}")

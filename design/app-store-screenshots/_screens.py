@@ -29,15 +29,21 @@ def _car_side(kind):
             f'<stop offset="0%" stop-color="#3B8DB5"/><stop offset="100%" stop-color="#62B4D8"/></linearGradient></defs>'
             f'<ellipse cx="89" cy="70" rx="72" ry="7" fill="rgba(0,0,0,0.10)"/>{body}{w}</svg>')
 
-def vehicle_art(kind):
-    """Prefer the real Supabase illustration if a veh-<kind>.webp sits in this
-    folder (drop-in from an environment that can reach storage); else the
-    drawn stand-in in the app's own art palette."""
+def vehicle_art(kind, w=320, h=209, scale=1.0):
+    """Real Supabase illustration when veh-<kind>.webp is present. Fixed layout
+    box like the app's carImageContainer (150x98pt); unselected rows render the
+    image at transform-scale 0.59 inside the same box. Drawn fallback otherwise."""
+    import base64, os
     f = f'veh-{kind}.webp'
+    iw, ih = round(w * scale), round(h * scale)
+    inner = None
     if os.path.exists(f):
-        import base64
-        return f'<img src="data:image/webp;base64,{base64.b64encode(open(f,"rb").read()).decode()}" style="width: 178px; height: 80px; object-fit: contain;">'
-    return _car_side(kind)
+        b = base64.b64encode(open(f, 'rb').read()).decode()
+        inner = f'<img src="data:image/webp;base64,{b}" style="width: {iw}px; height: {ih}px; object-fit: contain;">'
+    else:
+        inner = _car_side(kind)
+    return (f'<div style="flex-shrink: 0; width: {w}px; height: {h}px; display: flex; align-items: center; justify-content: center;">'
+            f'{inner}</div>')
 
 # ------------------------------- home ---------------------------------------
 def home():
@@ -102,10 +108,19 @@ def home():
 
 # ------------------------------ options -------------------------------------
 def options():
-    def row(kind, name, cap, meta_line, price, selected=False):
-        border = 'border: 3px solid #FF3B30; box-shadow: 0 8px 26px rgba(255,59,48,0.14);' if selected else 'border: 2px solid #E5E7EB;'
-        return f'''        <div style="display: flex; align-items: center; gap: 26px; padding: 28px 32px; border-radius: 34px; background: #FFFFFF; {border}">
-          {vehicle_art(kind)}
+    def price(orig, disc):
+        return ('<div style="display: flex; flex-direction: column; align-items: flex-end; gap: 2px;">'
+                f'<span style="font-size: 26px; font-weight: 500; color: #6B7280; text-decoration: line-through;">${orig}</span>'
+                f'<span style="font-size: 37px; font-weight: 800; color: #10B981;">${disc}</span></div>')
+
+    def row(kind, name, cap, meta_line, orig, disc, selected=False):
+        border = 'border: 3px solid #1A1A1A;' if selected else 'border: 2px solid #E5E7EB;'
+        check = ('<svg width="43" height="43" viewBox="0 0 24 24" fill="#1A1A1A" style="margin-top: 6px;">'
+                 '<path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-1.2 14.5L6.6 12.3l1.7-1.7 2.5 2.5 5-5 1.7 1.7z"></path></svg>') if selected else ''
+        art = vehicle_art(kind, 320, 209, 1.0 if selected else 0.59)
+        return (
+f'''        <div style="display: flex; align-items: center; gap: 22px; padding: 20px 30px; border-radius: 30px; background: #FFFFFF; {border}">
+          {art}
           <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 8px;">
             <div style="display: flex; align-items: center; gap: 14px;">
               <span style="font-size: 34px; font-weight: 700; color: #1A1A1A;">{name}</span>
@@ -116,54 +131,52 @@ def options():
             </div>
             <span style="font-size: 26px; font-weight: 500; color: #6B7280;">{meta_line}</span>
           </div>
-          <span style="font-size: 38px; font-weight: 800; color: #1A1A1A;">{price}</span>
-        </div>'''
-    return f'''      <div style="flex-shrink: 0; display: flex; align-items: center; gap: 26px; padding: 150px 43px 30px; background: #FFFFFF;">
+          <div style="display: flex; flex-direction: column; align-items: flex-end;">
+            {price(orig, disc)}
+            {check}
+          </div>
+        </div>''')
+
+    rows = '\n'.join([
+        row('sedan', 'Economy', 4, '3 min &middot; 5 drivers', '22.99', '7.99', selected=True),
+        row('van', 'Van', 6, '6 min &middot; 2 drivers', '29.75', '14.75'),
+        row('xl', 'XL', 6, '8 min &middot; 2 drivers', '31.40', '16.40'),
+    ])
+    return (
+f'''      <div style="flex-shrink: 0; display: flex; align-items: center; gap: 26px; padding: 150px 43px 26px; background: #FFFFFF;">
         <div style="width: 90px; height: 90px; border-radius: 45px; background: #F5F5F5; display: flex; align-items: center; justify-content: center;">
           <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="#1A1A1A" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"></path></svg>
         </div>
         <span style="font-size: 42px; font-weight: 800; letter-spacing: -0.02em; color: #1A1A1A;">Choose a ride</span>
       </div>
-      <div style="flex-shrink: 0; padding: 20px 43px 34px; background: #FFFFFF; display: flex; gap: 26px;">
+      <div style="flex-shrink: 0; padding: 14px 43px 30px; background: #FFFFFF; display: flex; gap: 26px;">
         <div style="flex-shrink: 0; display: flex; flex-direction: column; align-items: center; padding: 10px 0;">
           <div style="width: 21px; height: 21px; border-radius: 11px; background: #10B981; border: 4.5px solid #FFFFFF; box-shadow: 0 0 0 2px #10B981;"></div>
-          <div style="width: 4px; flex-grow: 1; min-height: 48px; background: #E5E7EB;"></div>
+          <div style="width: 4px; flex-grow: 1; min-height: 44px; background: #E5E7EB;"></div>
           <div style="width: 21px; height: 21px; background: #EF4444; border: 4.5px solid #FFFFFF; box-shadow: 0 0 0 2px #EF4444;"></div>
         </div>
-        <div style="flex-grow: 1; display: flex; flex-direction: column; justify-content: space-between; gap: 28px;">
+        <div style="flex-grow: 1; display: flex; flex-direction: column; justify-content: space-between; gap: 26px;">
           <span style="font-size: 30px; font-weight: 600; color: #1A1A1A;">Broadway Ave &amp; 8th St E</span>
           <span style="font-size: 30px; font-weight: 600; color: #1A1A1A;">Midtown Plaza</span>
         </div>
       </div>
-      <div style="flex-grow: 1; padding: 30px 43px 0; background: #F5F5F5; display: flex; flex-direction: column; gap: 22px;">
-{row('sedan', 'Economy', 4, '3 min &middot; 5 drivers', '$22.99', selected=True)}
-{row('van', 'Van', 6, '6 min &middot; 2 drivers', '$29.75')}
-{row('xl', 'XL', 6, '8 min &middot; 2 drivers', '$31.40')}
-        <div style="display: flex; align-items: center; gap: 26px; padding: 26px 32px; border-radius: 34px; background: #FFFFFF; border: 2px solid #E5E7EB;">
-          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#1A1A1A" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15.5" rx="3"></rect><path d="M3.5 10h17M8 3v4M16 3v4"></path></svg>
-          <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 4px;">
-            <span style="font-size: 30px; font-weight: 700; color: #1A1A1A;">Schedule for later</span>
-            <span style="font-size: 25px; font-weight: 500; color: #6B7280;">Pick a time up to 30 days out</span>
+      <div style="flex-grow: 1; padding: 26px 43px 0; background: #F5F5F5; display: flex; flex-direction: column; gap: 20px;">
+{rows}
+        <div style="display: flex; align-items: center; gap: 24px; padding: 24px 30px; border-radius: 30px; background: #ECFDF5; border: 2px solid #A7F3D0;">
+          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 13.5L13 21a2 2 0 0 1-2.8 0l-7-7A2 2 0 0 1 2.6 12.6V5a2 2 0 0 1 2-2h7.6a2 2 0 0 1 1.4.6l6.9 6.9a2 2 0 0 1 0 2.8z"></path><circle cx="8" cy="8" r="1.6"></circle></svg>
+          <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px;">
+            <span style="font-size: 30px; font-weight: 700; color: #059669;">WELCOME15 applied</span>
+            <span style="font-size: 25px; font-weight: 500; color: #3F7A5B;">$15.00 off your first ride</span>
           </div>
-          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"></path></svg>
-        </div>
-        <div style="display: flex; align-items: center; gap: 26px; padding: 26px 32px; border-radius: 34px; background: #FFFFFF; border: 2px solid #E5E7EB;">
-          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="15" r="5.5"></circle><circle cx="11" cy="4.5" r="2"></circle><path d="M11 7v4h5l3 6"></path></svg>
-          <span style="flex-grow: 1; font-size: 30px; font-weight: 700; color: #1A1A1A;">Wheelchair-accessible vehicle</span>
-          <div style="flex-shrink: 0; width: 96px; height: 56px; border-radius: 28px; background: #E5E7EB; padding: 5px;"><div style="width: 46px; height: 46px; border-radius: 23px; background: #FFFFFF; box-shadow: 0 2px 6px rgba(0,0,0,0.18);"></div></div>
-        </div>
-        <div style="display: flex; align-items: center; gap: 26px; padding: 26px 32px; border-radius: 34px; background: #FFFFFF; border: 2px solid #E5E7EB;">
-          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#6B7280" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h3l8-4.5v15L7 15H4a2 2 0 0 1-2-2v-2a2 2 0 0 1 2-2z"></path><path d="M22 5L15 19"></path></svg>
-          <span style="flex-grow: 1; font-size: 30px; font-weight: 700; color: #1A1A1A;">Quiet ride</span>
-          <div style="flex-shrink: 0; width: 96px; height: 56px; border-radius: 28px; background: #34C759; padding: 5px; display: flex; justify-content: flex-end;"><div style="width: 46px; height: 46px; border-radius: 23px; background: #FFFFFF; box-shadow: 0 2px 6px rgba(0,0,0,0.18);"></div></div>
+          <span style="font-size: 27px; font-weight: 600; color: #DC2626;">Remove</span>
         </div>
       </div>
-      <div style="flex-shrink: 0; padding: 30px 43px 46px; background: #F5F5F5;">
+      <div style="flex-shrink: 0; padding: 26px 43px 46px; background: #F5F5F5;">
         <div style="height: 119px; border-radius: 60px; background: #FF3B30; display: flex; align-items: center; justify-content: center; box-shadow: 0 10px 26px rgba(255,59,48,0.32);">
-          <span style="font-size: 34px; font-weight: 600; color: #FFFFFF;">Confirm Economy &middot; $22.99</span>
+          <span style="font-size: 34px; font-weight: 600; color: #FFFFFF;">Confirm Economy &middot; $7.99</span>
         </div>
-      </div>'''
-
+      </div>
+''')
 # ------------------------------ tracking ------------------------------------
 def tracking():
     m = M.base_map(830, 1200)
@@ -306,3 +319,4 @@ if __name__ == '__main__':
         open(f'_screens/{name}.html', 'w').write(s)
         ok = s.count('<div') == s.count('</div>') and s.count('<svg') == s.count('</svg>')
         print(f"{name:9} div {s.count('<div')}/{s.count('</div>')} svg {s.count('<svg')}/{s.count('</svg>')} {'OK' if ok else 'MISMATCH'}")
+

@@ -15897,12 +15897,28 @@ how much they de-risk a public launch._
 
 ### C39. `rider-app — expo export (android + ios)` CI check fails on every PR — `@supabase/supabase-js@2.112.3` requires Node ≥22, the runner is pinned to Node 20
 
-- [ ] **Status:** open — found 2026-08-24 on PR #4475's own CI run (unrelated
+- [x] **Status:** FIXED (2026-08-25) — found 2026-08-24 on PR #4475's own CI run (unrelated
   PR — that PR touches only `rider-app/app/wallet.tsx`,
   `rider-app/utils/*`, `ACTION_ITEMS.md`, and a change-log; confirmed via
   `git diff origin/main...HEAD -- rider-app/package.json
-  rider-app/yarn.lock` returning empty). Not fixed here — out of scope
-  for that PR's diff, per CLAUDE.md's CI-noise policy.
+  rider-app/yarn.lock` returning empty). Not fixed there — out of scope
+  for that PR's diff, per CLAUDE.md's CI-noise policy. Re-confirmed
+  pre-existing again on #4552/#4554/#4557/#4558 (2026-08-25 session) before
+  being fixed: chose Action (b) below — `@supabase/supabase-js` pinned back
+  to `2.105.3` (the exact pre-bump version, confirmed via `git show c21bd0f7`
+  to carry no CVE/security-advisory language — a routine dependabot
+  `semver-minor` bump, safe to revert) — rather than bumping the CI runner's
+  Node version. De-risked by the fact that `driver-app` already runs this
+  exact `2.105.3` pin in production-facing CI today (confirmed green via a
+  real run, `driver-app — expo export`, run `32903587028`), and that no
+  source file in `rider-app`/`shared` imports `@supabase/supabase-js`
+  directly at all (only a `.d.ts` peer-dependency type declaration
+  references it) — there is no runtime code path the version pin affects.
+  Verified: full `rider-app` Jest suite (1593 tests) passing, `tsc --noEmit`
+  clean, and `npx expo export --platform android` (the CI job's own command)
+  completing successfully after the pin. See
+  `docs/change-log/2026-08-25-rider-app-supabase-js-pin-back.md` for the full
+  Change Impact Log.
 - **What's wrong:** `yarn install --frozen-lockfile` fails outright in the
   `rider-app — expo export (android + ios)` job:
   `error @supabase/supabase-js@2.112.3: The engine "node" is incompatible
@@ -15927,11 +15943,18 @@ how much they de-risk a public launch._
   newer/patched dependency version actually works... before pinning it").
 - **Files:** `.github/workflows/ci.yml` (or wherever the
   `rider-app — expo export` job is defined), `rider-app/package.json`.
-- **What was NOT verified:** whether Node 22 is safe repo-wide for every
-  other rider-app CI job (not just this one), or whether an older
-  `@supabase/supabase-js` pin reintroduces any CVE/feature gap the bump
-  was fixing — out of scope for a same-day finding, needs the fix's own
-  verification pass.
+- **What was NOT verified (resolved as of the fix):** whether an older
+  `@supabase/supabase-js` pin reintroduces any CVE/feature gap the bump was
+  fixing — resolved: `git show c21bd0f7` confirms the original bump carried
+  no CVE/security-advisory language, so reverting it reintroduces nothing.
+  Node 22 repo-wide safety is now moot since option (b) was chosen instead
+  of (a) — no Node-version change was made anywhere. Still not separately
+  verified: iOS bundle export (`npx expo export --platform ios`) was not
+  re-run this session (only Android); this Node-20-pinned sandbox could not
+  be reproduced directly (session ran Node 22, which satisfies both the old
+  and new pin) — the fix's correctness rests on the `engines.node` field
+  match plus `driver-app`'s already-green CI on the identical pin, not a
+  literal local reproduction of the Node-20 failure.
 - **Acceptance:** `rider-app — expo export (android + ios)` passes on a
   fresh PR that touches no rider-app dependency files, proving the gate
   itself (not just this one PR's diff) is green again.

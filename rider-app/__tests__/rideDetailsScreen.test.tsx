@@ -170,6 +170,24 @@ describe('RideDetailsScreen', () => {
     expect(allText(r2)).toContain('disputed');
   });
 
+  it('shows the "Imported" badge and no-GPS disclaimer when the backend flags the ride as legacy', async () => {
+    mockApiGet.mockResolvedValue({ data: { ...RIDE_COMPLETED, show_legacy_badge: true } });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Imported');
+    expect(allText(r)).toContain('Imported from the previous app — no GPS was recorded for this ride');
+  });
+
+  it('hides the "Imported" badge and disclaimer for an ordinary ride even with legacy_import_metadata present', async () => {
+    // show_legacy_badge is the backend's own flag-gated field — a client must
+    // never derive this from legacy_import_metadata directly, so a ride that
+    // somehow carries metadata but not the flag must stay unbadged.
+    mockApiGet.mockResolvedValue({
+      data: { ...RIDE_COMPLETED, legacy_import_metadata: { source: 'legacy_mongo_booking_import' } },
+    });
+    const r = await renderScreen();
+    expect(allText(r)).not.toContain('Imported');
+  });
+
   it('shows only the flat cancellation fee for a cancelled ride, never the fare breakdown', async () => {
     mockApiGet.mockResolvedValue({ data: RIDE_CANCELLED });
     const r = await renderScreen();

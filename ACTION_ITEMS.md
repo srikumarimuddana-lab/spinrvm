@@ -9832,10 +9832,16 @@ record of what was assumed vs. what was actually true</summary>
     found — the toast-vs-countdown-state divergence on the zero-detail
     case is intentional, correctly-guarded behavior, not a defect.
     Auth-critical (OTP verify, token issuance); `spinr-security-auditor`
-    review of the diff requested before PR open per this session's
-    established pattern for sensitive surfaces — result to be folded in
-    once it returns. 30 tests; full rider-app suite still green (123
-    suites / 1538 tests), `yarn tsc --noEmit` clean.
+    reviewed the diff and returned SAFE TO MERGE — production file
+    confirmed untouched, and every new assertion (token/refresh_token/
+    expires_in defaulting, the reactivation `?? ''` fallbacks, the
+    hasProfileData routing, the 429 retry-seconds parsing including the
+    toast-vs-countdown-state divergence, and the resend double-tap
+    guard) traced line-by-line against the real logic and confirmed
+    correct — explicitly noting the divergence is real, deliberate
+    production behavior the test documents rather than a bug being
+    pinned. 30 tests; full rider-app suite still green (123 suites /
+    1538 tests), `yarn tsc --noEmit` clean.
   - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
     85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
     tests: no-account-prefill, the CRC-consent auto-check-when-

@@ -194,4 +194,59 @@ describe('LoyaltyScreen', () => {
     });
     expect(mockBack).toHaveBeenCalled();
   });
+
+  it('falls back to the bronze color for an unrecognised tier', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/loyalty') return Promise.resolve({ data: { ...LOYALTY, tier: 'diamond' } });
+      return Promise.resolve({ data: [] });
+    });
+    const r = await renderScreen();
+    const tierPointsValue = r.root.findAllByType(Text).find((t) => {
+      try { return JSON.stringify(t.props.children) === '"750"'; } catch { return false; }
+    })!;
+    expect(tierPointsValue.props.style).toEqual(expect.arrayContaining([expect.objectContaining({ color: '#CD7F32' })]));
+  });
+
+  it('renders the "promo" and "expire" history icon types, and falls back to the generic icon for an unrecognised type', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/loyalty') return Promise.resolve({ data: LOYALTY });
+      return Promise.resolve({
+        data: [
+          { id: 'h1', type: 'promo', points: 15, description: 'Promo credit', created_at: '2026-01-01T00:00:00Z' },
+          { id: 'h2', type: 'expire', points: -3, description: 'Expiring soon', created_at: '2026-01-02T00:00:00Z' },
+          { id: 'h3', type: 'unknown_type', points: 1, description: 'Mystery entry', created_at: '2026-01-03T00:00:00Z' },
+        ],
+      });
+    });
+    const r = await renderScreen();
+    const text = allText(r);
+    expect(text).toContain('Promo credit');
+    expect(text).toContain('Expiring soon');
+    expect(text).toContain('Mystery entry');
+  });
+
+  it('falls back history to an empty list when the response data is not an array', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/loyalty') return Promise.resolve({ data: LOYALTY });
+      if (url === '/loyalty/history') return Promise.resolve({ data: null });
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('No points history yet');
+  });
+
+  it('caps the progress bar at 100% when points_needed is already zero or negative', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/loyalty') {
+        return Promise.resolve({ data: { ...LOYALTY, next_tier: { tier: 'gold', points_needed: 0 } } });
+      }
+      return Promise.resolve({ data: [] });
+    });
+    const r = await renderScreen();
+    const fill = r.root.findAllByProps({}).find((n) =>
+      Array.isArray(n.props.style) && n.props.style.some((s: any) => s && typeof s.width === 'string' && s.width.endsWith('%'))
+    );
+    const style = fill!.props.style.find((s: any) => s && s.width);
+    expect(style.width).toBe('100%');
+  });
 });

@@ -28,6 +28,7 @@ try:
     from ..features import send_push_notification
     from ..services.zoho_desk_integration import create_ticket_for_lost_and_found
     from ..supabase_client import supabase
+    from ..utils.background import spawn as _spawn
     from ..utils.error_handling import DuplicateRecordError
 except ImportError:
     import db_supabase  # type: ignore
@@ -36,6 +37,7 @@ except ImportError:
     from features import send_push_notification  # type: ignore
     from services.zoho_desk_integration import create_ticket_for_lost_and_found  # type: ignore
     from supabase_client import supabase  # type: ignore
+    from utils.background import spawn as _spawn  # type: ignore
     from utils.error_handling import DuplicateRecordError  # type: ignore
 
 api_router = APIRouter(prefix="/lost-and-found", tags=["Lost & Found"])
@@ -325,7 +327,7 @@ async def driver_report_found_item(
     # Raise a Zoho Desk ticket for support to track the return — fire-and-forget
     # so a Zoho hiccup never blocks or fails the driver's report. No-op when the
     # integration is disabled.
-    asyncio.create_task(create_ticket_for_lost_and_found(case, ride))
+    _spawn(create_ticket_for_lost_and_found(case, ride))
 
     return {"success": True, "case": case}
 

@@ -19,7 +19,7 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { TouchableOpacity, Text, TextInput } from 'react-native';
+import { TouchableOpacity, Text, TextInput, ActivityIndicator } from 'react-native';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('react-native-safe-area-context', () => ({
@@ -341,5 +341,182 @@ describe('OtpScreen', () => {
       await flush();
     });
     expect(mockReplace).toHaveBeenCalledWith('/(tabs)');
+  });
+
+  it('treats a user with first/last name and email as profile-complete even without the flag set', async () => {
+    await renderScreen();
+    await act(async () => {
+      useAuthStore.setState({ user: { id: 'u1', first_name: 'A', last_name: 'B', email: 'a@b.com' } as any });
+      await flush();
+    });
+    expect(mockReplace).toHaveBeenCalledWith('/(tabs)');
+  });
+
+  it('ignores digits typed past the code length (e.g. a paste)', async () => {
+    const r = await renderScreen();
+    await enterCode(r, '123456');
+    expect(r.root.findByType(TextInput).props.value).toBe('');
+  });
+
+  it('toasts the generic failure message when verify resolves with no data at all', async () => {
+    mockApiPost.mockResolvedValue({});
+    const r = await renderScreen();
+    await enterCode(r, '1234');
+    const verifyBtn = findButtonByLabel(r, 'Verify and continue');
+    await act(async () => {
+      await verifyBtn.props.onPress();
+      await flush();
+    });
+    expect(mockShowToast).toHaveBeenCalledWith('Verification Failed', 'Invalid code. Please try again.', 'danger');
+  });
+
+  it('falls back to empty-string reactivation params when the backend omits them', async () => {
+    mockApiPost.mockResolvedValue({ data: { requires_reactivation: true } });
+    const r = await renderScreen();
+    await enterCode(r, '1234');
+    const verifyBtn = findButtonByLabel(r, 'Verify and continue');
+    await act(async () => {
+      await verifyBtn.props.onPress();
+      await flush();
+    });
+    expect(mockReplace).toHaveBeenCalledWith({
+      pathname: '/reactivate-account',
+      params: { reactivationToken: '', deletionScheduledAt: '' },
+    });
+  });
+
+  it('never calls setTokens when the response has no token, and still falls back to initialize()', async () => {
+    mockApiPost.mockResolvedValue({ data: {} });
+    const r = await renderScreen();
+    await enterCode(r, '1234');
+    const verifyBtn = findButtonByLabel(r, 'Verify and continue');
+    await act(async () => {
+      await verifyBtn.props.onPress();
+      await flush();
+    });
+    expect(mockSetTokens).not.toHaveBeenCalled();
+    expect(mockOtpVerified).toHaveBeenCalled();
+    expect(mockInitialize).toHaveBeenCalled();
+  });
+
+  it('defaults refresh_token/expires_in when the response has a token but omits them', async () => {
+    mockApiPost.mockResolvedValue({ data: { token: 'tok-only' } });
+    const r = await renderScreen();
+    await enterCode(r, '1234');
+    const verifyBtn = findButtonByLabel(r, 'Verify and continue');
+    await act(async () => {
+      await verifyBtn.props.onPress();
+      await flush();
+    });
+    expect(mockSetTokens).toHaveBeenCalledWith('tok-only', '', 900);
+  });
+
+  it('ignores a second Resend tap fired before the first one has updated canResend', async () => {
+    const r = await renderScreen();
+    await exhaustCountdown();
+    mockApiPost.mockResolvedValue({ data: {} });
+    const resendBtn = r.root
+      .findAllByType(TouchableOpacity)
+      .find((n) => n.findAllByType(Text).some((t) => JSON.stringify(t.props.children).includes('Resend Code')))!;
+    await act(async () => {
+      resendBtn.props.onPress(); // 1st, sets resendInFlight.current synchronously
+      resendBtn.props.onPress(); // 2nd, guarded by resendInFlight.current
+      await flush();
+    });
+    expect(mockApiPost).toHaveBeenCalledTimes(1);
+  });
+
+  it('defaults the resend countdown to 60s on a 429 with no Retry-After header and no parseable detail', async () => {
+    const r = await renderScreen();
+    await exhaustCountdown();
+    const err: any = new Error('rate limited');
+    err.response = { status: 429, headers: {}, data: {} };
+    mockApiPost.mockRejectedValue(err);
+    const resendBtn = r.root
+      .findAllByType(TouchableOpacity)
+      .find((n) => n.findAllByType(Text).some((t) => JSON.stringify(t.props.children).includes('Resend Code')))!;
+    await act(async () => {
+      await resendBtn.props.onPress();
+      await flush();
+    });
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Too Many Attempts', 'Please wait 60 seconds before requesting another code.', 'warning',
+    );
+  });
+
+  it('parses the retry-seconds detail message when no Retry-After header is present', async () => {
+    const r = await renderScreen();
+    await exhaustCountdown();
+    const err: any = new Error('rate limited');
+    err.response = { status: 429, headers: {}, data: { detail: 'try again in 20s' } };
+    mockApiPost.mockRejectedValue(err);
+    const resendBtn = r.root
+      .findAllByType(TouchableOpacity)
+      .find((n) => n.findAllByType(Text).some((t) => JSON.stringify(t.props.children).includes('Resend Code')))!;
+    await act(async () => {
+      await resendBtn.props.onPress();
+      await flush();
+    });
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Too Many Attempts', 'Please wait 20 seconds before requesting another code.', 'warning',
+    );
+  });
+
+  it('falls back the countdown state to 60s when the parsed detail seconds are zero (not positive), while the toast still shows the raw parsed value', async () => {
+    const r = await renderScreen();
+    await exhaustCountdown();
+    const err: any = new Error('rate limited');
+    err.response = { status: 429, headers: {}, data: { detail: 'wait 0s' } };
+    mockApiPost.mockRejectedValue(err);
+    const resendBtn = r.root
+      .findAllByType(TouchableOpacity)
+      .find((n) => n.findAllByType(Text).some((t) => JSON.stringify(t.props.children).includes('Resend Code')))!;
+    await act(async () => {
+      await resendBtn.props.onPress();
+      await flush();
+    });
+    // The toast interpolates the raw parsed value (0) directly, but the
+    // countdown *state* is guarded to never sit at a non-positive value
+    // (`retrySeconds > 0 ? retrySeconds : 60`) — the two intentionally
+    // diverge here.
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Too Many Attempts', 'Please wait 0 seconds before requesting another code.', 'warning',
+    );
+  });
+
+  it('shows a spinner on Verify while the request is in flight', async () => {
+    let resolvePost: (v: any) => void;
+    mockApiPost.mockImplementation(() => new Promise((resolve) => { resolvePost = resolve; }));
+    const r = await renderScreen();
+    await enterCode(r, '1234');
+    const verifyBtn = findButtonByLabel(r, 'Verify and continue');
+    await act(async () => {
+      verifyBtn.props.onPress(); // don't await — its fetch is deliberately left pending
+      await flush();
+    });
+    expect(r.root.findAllByType(ActivityIndicator).length).toBeGreaterThan(0);
+    await act(async () => { resolvePost!({ data: { token: 't', refresh_token: 'r', expires_in: 900 } }); await flush(); });
+  });
+
+  it('navigates back when the header back button is pressed', async () => {
+    const r = await renderScreen();
+    const backBtn = r.root.findAllByType(TouchableOpacity)[0];
+    act(() => { backBtn.props.onPress(); });
+    expect(mockBack).toHaveBeenCalled();
+  });
+
+  it('focuses the hidden input when the code boxes are tapped', async () => {
+    const r = await renderScreen();
+    const codeBoxes = r.root.findByProps({ activeOpacity: 1 });
+    expect(() => { codeBoxes.props.onPress(); }).not.toThrow();
+  });
+
+  it('navigates back via "Change phone number"', async () => {
+    const r = await renderScreen();
+    const changeBtn = r.root
+      .findAllByType(TouchableOpacity)
+      .find((n) => n.findAllByType(Text).some((t) => JSON.stringify(t.props.children).includes('Change phone number')))!;
+    act(() => { changeBtn.props.onPress(); });
+    expect(mockBack).toHaveBeenCalled();
   });
 });

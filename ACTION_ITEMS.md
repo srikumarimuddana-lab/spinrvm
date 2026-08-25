@@ -9905,6 +9905,39 @@ record of what was assumed vs. what was actually true</summary>
     correct. 26 tests; full rider-app suite still green (123 suites /
     1544 tests),
     `yarn tsc --noEmit` clean.
+  - **rider-app `app/referral.tsx`: 73.80% → 97.61% branch** (100%
+    stmts/funcs/lines already). Already had `referralScreen.test.tsx` (9
+    tests: parallel mount fetch, the error state + working Retry, Copy,
+    Share success, Share-throws clipboard fallback, the Earned-stat sum,
+    the empty-invites state, qualified-vs-in-progress referee rows, back
+    nav) — extended in place (+4 tests, 13 total). Closed: the referees
+    list's `refsRes.data?.referees || []` fallback when the response has
+    no `referees` field at all; `copyCode`'s `if (!info?.referral_code)
+    return;` guard when the loaded info has an empty `referral_code`
+    (code box still renders since `info` itself is truthy, but Copy
+    becomes a no-op); a successful (non-error) load that resolves `info`
+    to `null` — `share()`'s own `if (!info) return;` guard, and, since
+    every `info?.field ?? 0` fallback in the stats row/Earned-sum/
+    signup-bonus-gate shares this same null-`info` state, that single
+    fixture closed seven branch IDs at once (the Invited/Rewarded stat
+    `??`s, both `referral_earnings`/`referee_earnings` `??`s in the
+    Earned sum, and the signup-bonus gate's own `??`); and a referee row
+    with neither `completed_rides` nor `rides_required` set, closing the
+    progress-bar math's `(r.completed_rides || 0) / (r.rides_required ||
+    1)` pair of fallbacks. Left uncovered (genuinely unreachable, not
+    chased): the signup-bonus `Text`'s own `parseFloat(String(info?.
+    referee_earnings ?? 0))` `??` fallback (line 160) — reaching that
+    line at all requires the *identical* `?? 0 > 0` check one line above
+    (158) to already be `true`, which is only possible when
+    `referee_earnings` is a real, present, positive value; the `??`
+    fallback on 160 can therefore never actually fire — a duplicate
+    guard on an already-narrowed value, same class of finding as
+    `ride-details.tsx`'s inert `routeLabel` computation from the prior
+    PR. No bug found. Money-adjacent (referral earnings display) but not
+    money-critical (no wallet/Stripe write on this screen, same tier as
+    `promotions.tsx`'s prior entry); no auditor review sought given the
+    surface. 13 tests; full rider-app suite still green (123 suites /
+    1507 tests), `yarn tsc --noEmit` clean.
   - **rider-app `app/manage-cards.tsx`: 91.59% → 99.15% stmts, 77.52% →
     97.75% branch, 83.33% → 100% funcs, 94.49% → 99.08% lines**
     (money-critical: saved-card wallet, PCI-DSS surface — Stripe

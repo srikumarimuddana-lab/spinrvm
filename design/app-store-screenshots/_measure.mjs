@@ -14,6 +14,7 @@ for (const [name, [w, h]] of Object.entries(sizes)) {
     // deepest element bottom, and the phone frame specifically
     let maxBottom = 0, tag = '';
     for (const el of root.querySelectorAll('*')) {
+      if (el.closest('[style*="z-index: 0"]')) continue; // decorative bleed, clipped by design
       const b = el.getBoundingClientRect().bottom;
       if (b > maxBottom) { maxBottom = b; tag = el.tagName + '.' + (el.className || '-'); }
     }

@@ -3,15 +3,23 @@
 Source for the Spinr **rider** App Store screenshot set. Each `*.dc.html` file is
 one artboard, laid out by `canvas.json` and published as a design canvas.
 
-## The set
+## The set (v3 — store-convention layout)
+
+Layout follows the dominant pattern across top App Store / Play listings
+(Uber, Lyft, DoorDash, Duolingo): centered headline, straight-on centered
+device, solid brand-red hero frame then warm-paper frames, floating feature
+chips overlapping the device edges.
 
 | File | Slot | Story |
 |---|---|---|
-| `Main.dc.html` | 1 | Your fare stays home |
-| `Rider02.dc.html` | 2 | See the price before you tap |
-| `Rider03.dc.html` | 3 | Watch your driver arrive |
+| `Main.dc.html` | 1 | Saskatchewan's own ride app (red hero) |
+| `Rider02.dc.html` | 2 | Know the price before you ride |
+| `Rider03.dc.html` | 3 | Track every ride, live |
 | `Rider04.dc.html` | 4 | Spinr's cut: $0.00 |
-| `Rider05.dc.html` | 5 | Help is one tap away |
+| `Rider05.dc.html` | 5 | Safety that rides with you |
+
+Chip rules: each floating chip carries a fact **not** already on the screen
+beside it, and sits over a quiet zone — never over a price, plate, or button.
 
 All five are **1290 × 2796** (App Store, iPhone 6.7"). Rendered PNGs at that exact
 size live in `png/`.
@@ -38,11 +46,13 @@ and Playwright, plus `_fonts.css` — a base64 Plus Jakarta Sans **variable** fa
 not work: Google serves one variable file for all four weights, so fixed faces
 all render at the same weight.
 
-### The continuous route line
+### Logo variants
 
-The red line crossing each frame is continuous across the set: frame N exits its
-right edge at the same height frame N+1 enters its left edge (`ye` / `yx` in
-`_build.py`). Reorder the frames and those hand-off heights must be reordered too.
+Three palette remaps of the same shipped asset: `spinr-logo.png` (original,
+for light frames), `spinr-logo-light.png` (light wordmark, for dark frames),
+`spinr-logo-onred.png` (white wordmark + charcoal bullseye, for the red hero —
+the red mark vanishes on a red background otherwise). New image files must
+also be added to `_rebuild.sh`'s inline list or they render as broken images.
 
 ### Gotcha that bit once
 

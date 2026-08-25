@@ -1,20 +1,77 @@
 {
   "artboards": [
-    { "file": "Main.dc.html",    "x": 0,    "y": 0, "w": 1290, "h": 2796, "title": "1 · Your fare stays home" },
-    { "file": "Rider02.dc.html", "x": 1390, "y": 0, "w": 1290, "h": 2796, "title": "2 · See the price first" },
-    { "file": "Rider03.dc.html", "x": 2780, "y": 0, "w": 1290, "h": 2796, "title": "3 · Watch your driver arrive" },
-    { "file": "Rider04.dc.html", "x": 4170, "y": 0, "w": 1290, "h": 2796, "title": "4 · Spinr's cut: $0.00" },
-    { "file": "Rider05.dc.html", "x": 5560, "y": 0, "w": 1290, "h": 2796, "title": "5 · Help is one tap away" }
+    {
+      "file": "Main.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 1290,
+      "h": 2796,
+      "title": "1 · Your fare stays home"
+    },
+    {
+      "file": "Rider02.dc.html",
+      "x": 1390,
+      "y": 0,
+      "w": 1290,
+      "h": 2796,
+      "title": "2 · See the price first"
+    },
+    {
+      "file": "Rider03.dc.html",
+      "x": 2780,
+      "y": 0,
+      "w": 1290,
+      "h": 2796,
+      "title": "3 · Watch your driver arrive"
+    },
+    {
+      "file": "Rider04.dc.html",
+      "x": 4170,
+      "y": 0,
+      "w": 1290,
+      "h": 2796,
+      "title": "4 · Spinr's cut: $0.00"
+    },
+    {
+      "file": "Rider05.dc.html",
+      "x": 5560,
+      "y": 0,
+      "w": 1290,
+      "h": 2796,
+      "title": "5 · Help is one tap away"
+    }
   ],
   "annotations": [
-    { "id": "note-set", "x": 0, "y": -340, "w": 1290,
-      "text": "SPINR RIDER — App Store, iPhone 6.7\" · 1290 × 2796\n\nOrder follows the actual ride flow (book → price → track → pay → safety),\nwhich is how Lyft sequences theirs. Apple only shows the first 2 or 3 in\nsearch results, so those carry the pitch: who we are, then upfront pricing." },
-    { "id": "note-craft", "x": 1390, "y": -340, "w": 1290,
-      "text": "The red route line is continuous across all five frames — frame 1 exits\nright at the same height frame 2 enters left, and so on. Swiping the\ngallery reads as one panorama. If you reorder the set, the hand-off\nheights need reordering with it (ye / yx in _build.py)." },
-    { "id": "note-data", "x": 2780, "y": -340, "w": 1290,
-      "text": "SAMPLE DATA — swap before submitting.\nFares ($22.99 and its line items are internally consistent), Saskatoon\naddresses, \"Sam R.\", plate 4WX 812, Visa 4242, ratings and driver counts.\nVehicle tiers (Standard / XL / Accessible) are placeholders too — the real\nones are admin-managed rows in vehicle_types." },
-    { "id": "note-next", "x": 4170, "y": -340, "w": 1290,
-      "text": "STILL TO DO\n• Google Play needs its own 1080 × 1920 set — Play rejects anything\n  taller than 9:16, so these cannot be reused there.\n• Spinr Driver is a separate listing and needs its own set.\n\nSay the word and I'll build both in this same system." }
+    {
+      "id": "note-set",
+      "x": 0,
+      "y": -340,
+      "w": 1290,
+      "text": "SPINR RIDER v3 — App Store, iPhone 6.7\" · 1290 × 2796\n\nLayout follows the store convention used by Uber, Lyft, DoorDash and\nDuolingo: centered headline, straight-on device, floating feature chips.\nFrame 1 is the solid brand-red hero; frames 2–5 sit on warm paper.\nUpload in this order — search results show only the first 2–3."
+    },
+    {
+      "id": "note-chips",
+      "x": 1390,
+      "y": -340,
+      "w": 1290,
+      "text": "CHIP RULES (learned the hard way)\nEach floating chip carries a fact that is NOT already on the screen\nbeside it, and is positioned over a quiet zone — never over a price,\nplate, or button. If you move one, check what it covers."
+    },
+    {
+      "id": "note-data",
+      "x": 2780,
+      "y": -340,
+      "w": 1290,
+      "text": "SAMPLE DATA — swap before submitting.\nFares ($22.99 and its line items are internally consistent), Saskatoon\naddresses, \"Sam R.\", plate 4WX 812, Visa 4242, ratings, driver counts.\nVehicle tiers (Standard / XL / Accessible) are placeholders — real ones\nare admin-managed vehicle_types rows."
+    },
+    {
+      "id": "note-next",
+      "x": 4170,
+      "y": -340,
+      "w": 1290,
+      "text": "STILL TO DO\n• Google Play set at 1080 × 1920 (Play rejects taller than 9:16).\n• Spinr Driver listing — separate set, same system.\nBoth are quick now that _build.py exists."
+    }
   ],
-  "launch": { "view": "canvas" }
+  "launch": {
+    "view": "canvas"
+  }
 }

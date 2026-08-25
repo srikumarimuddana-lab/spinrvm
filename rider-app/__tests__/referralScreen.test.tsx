@@ -206,6 +206,69 @@ describe('RiderReferralScreen', () => {
     expect(text).toContain('[1,"/",3," rides"]');
   });
 
+  it('falls back to an empty referee list when the API response has no `referees` field', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/users/referral') return Promise.resolve({ data: BASE_INFO });
+      if (url === '/users/referrals') return Promise.resolve({ data: {} });
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('No invites yet');
+  });
+
+  it('does nothing when Copy is pressed but the loaded info has no referral_code', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/users/referral') return Promise.resolve({ data: { ...BASE_INFO, referral_code: '' } });
+      if (url === '/users/referrals') return Promise.resolve({ data: { referees: [] } });
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    const copyBtn = r.root
+      .findAllByType(TouchableOpacity)
+      .find((n) => n.findAllByType(Text).some((t) => JSON.stringify(t.props.children).includes('Copy')))!;
+    await act(async () => {
+      await copyBtn.props.onPress();
+      await flush();
+    });
+    expect(mockSetStringAsync).not.toHaveBeenCalled();
+    expect(mockShowToast).not.toHaveBeenCalled();
+  });
+
+  it('renders 0-valued stats (and never crashes on Share) when a successful load returns null info', async () => {
+    const shareSpy = jest.spyOn(Share, 'share');
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/users/referral') return Promise.resolve({ data: null });
+      if (url === '/users/referrals') return Promise.resolve({ data: { referees: [] } });
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    const text = allText(r);
+    expect(text).toContain('"0"'); // Invited/Rewarded stats fall back to 0
+    expect(text).toContain('$0.00'); // Earned stat falls back to 0 + 0
+    expect(text).not.toContain('RIDER123'); // code box is skipped when info is null
+
+    const shareBtn = r.root
+      .findAllByType(TouchableOpacity)
+      .find((n) => n.findAllByType(Text).some((t) => JSON.stringify(t.props.children).includes('Share Your Code')))!;
+    await act(async () => {
+      await shareBtn.props.onPress();
+      await flush();
+    });
+    expect(shareSpy).not.toHaveBeenCalled();
+    shareSpy.mockRestore();
+  });
+
+  it('defaults a referee row with no completed_rides/rides_required to a 0% progress bar', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/users/referral') return Promise.resolve({ data: BASE_INFO });
+      return Promise.resolve({
+        data: { referees: [{ name: 'Carl', referred_at: '2026-01-01', qualified: false, status: 'in_progress' }] },
+      });
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Carl');
+  });
+
   it('navigates back when the back button is pressed', async () => {
     const r = await renderScreen();
     const backBtn = r.root.findAllByType(TouchableOpacity)[0];

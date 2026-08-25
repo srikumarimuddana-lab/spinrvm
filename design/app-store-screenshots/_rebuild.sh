@@ -2,7 +2,7 @@
 python3 - <<'PY'
 import json, re, base64
 fonts=open('_fonts.css').read()
-imgs={n:'data:image/png;base64,'+base64.b64encode(open(n,'rb').read()).decode() for n in ('spinr-logo.png','spinr-logo-light.png','spinr-logo-onred.png')}
+imgs={n:'data:image/png;base64,'+base64.b64encode(open(n,'rb').read()).decode() for n in ('spinr-logo.png','spinr-logo-light.png','spinr-logo-onred.png','spinr-logo-white.png','spinr-logo-large.png')}
 sizes=json.load(open('_render/sizes.json'))
 TPL="""<!doctype html><html><head><meta charset="utf-8"><style>{fonts}</style>
 <style>html,body{{margin:0;padding:0;background:#0E1013;}}{css}</style></head><body>{body}</body></html>"""

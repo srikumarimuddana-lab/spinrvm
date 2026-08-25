@@ -36,7 +36,7 @@ TPL = '''<!doctype html>
 
   <div style="position: relative; z-index: 2; display: flex; flex-direction: column; align-items: center; padding: 96px 90px 0; text-align: center;">
     <img src="{logo}" alt="Spinr" style="width: 204px; height: 83px; object-fit: contain;">
-    <h1 style="margin: 44px 0 0; font-size: 112px; line-height: 1.04; font-weight: 800; letter-spacing: -0.04em; color: {hcolor}; text-wrap: balance;">{headline}</h1>
+{badge}    <h1 style="margin: 44px 0 0; font-size: 112px; line-height: 1.04; font-weight: 800; letter-spacing: -0.04em; color: {hcolor}; text-wrap: balance;">{headline}</h1>
     <p style="margin: 30px 0 0; max-width: 960px; font-size: 37px; line-height: 1.48; font-weight: 500; color: {scolor}; text-wrap: pretty;">{sub}</p>
   </div>
 
@@ -94,6 +94,7 @@ I = {
  'bell':  '<svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#FF3B30" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18 9a6 6 0 1 0-12 0c0 6-2.5 7.5-2.5 7.5h17S18 15 18 9z"></path><path d="M10 20.5a2.2 2.2 0 0 0 4 0"></path></svg>',
 }
 
+LEAF_D = 'M500 30 l-61 116 c-7 13 -19 12 -32 5 l-98 -51 74 383 c3 15 -8 21 -19 9 l-95 -110 -26 66 c-3 8 -12 7 -19 6 l-105 -22 36 131 c3 11 5 20 -6 24 l-38 13 181 148 c9 9 13 24 9 38 l-16 54 176 -30 c9 -2 22 2 22 12 l-8 179 h30 l-8 -179 c0 -10 13 -14 22 -12 l176 30 -16 -54 c-4 -14 0 -29 9 -38 l181 -148 -38 -13 c-11 -4 -9 -13 -6 -24 l36 -131 -105 22 c-7 1 -16 2 -19 -6 l-26 -66 -95 110 c-11 12 -22 6 -19 -9 l74 -383 -98 51 c-13 7 -25 8 -32 -5 z'
 I.update({
  'spark': '<svg width="38" height="38" viewBox="0 0 24 24" fill="#FF3B30"><path d="M12 2l2.1 5.6L20 9.5l-5.9 1.9L12 17l-2.1-5.6L4 9.5l5.9-1.9z"></path></svg>',
  'bolt':  '<svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#FF3B30" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4.5 13.5H11L10 22l8.5-11.5H12z"></path></svg>',
@@ -104,8 +105,14 @@ I.update({
 PAPER = '#FAF6F4'
 RED   = '#E8352B'
 
+BADGE_PC = '''    <div style="display: flex; align-items: center; gap: 14px; margin-top: 34px; padding: 16px 34px; border-radius: 999px; background: #FFFFFF; box-shadow: 0 10px 30px rgba(0,0,0,0.18);">
+      <svg width="34" height="34" viewBox="0 0 1000 1000"><path d="M500 30 l-61 116 c-7 13 -19 12 -32 5 l-98 -51 74 383 c3 15 -8 21 -19 9 l-95 -110 -26 66 c-3 8 -12 7 -19 6 l-105 -22 36 131 c3 11 5 20 -6 24 l-38 13 181 148 c9 9 13 24 9 38 l-16 54 176 -30 c9 -2 22 2 22 12 l-8 179 h30 l-8 -179 c0 -10 13 -14 22 -12 l176 30 -16 -54 c-4 -14 0 -29 9 -38 l181 -148 -38 -13 c-11 -4 -9 -13 -6 -24 l36 -131 -105 22 c-7 1 -16 2 -19 -6 l-26 -66 -95 110 c-11 12 -22 6 -19 -9 l74 -383 -98 51 c-13 7 -25 8 -32 -5 z" fill="#E8352B"/></svg>
+      <span style="font-size: 26px; font-weight: 800; letter-spacing: 0.14em; color: #1A1A1A;">PROUDLY CANADIAN</span>
+    </div>
+'''
+
 FRAMES = [
- dict(out='Main.dc.html', screen='home', bg=RED, logo='spinr-logo-onred.png',
+ dict(out='Main.dc.html', screen='home', bg=RED, logo='spinr-logo-white.png', badge=BADGE_PC,
    decor=DECOR_RED, hcolor='#FFFFFF', scolor='rgba(255,255,255,0.88)', ptop=760,
    headline='Saskatchewan&rsquo;s<br>own ride app',
    sub='Built here, run here. Spinr takes no cut &mdash; 100% of your fare goes to your driver.',
@@ -143,10 +150,74 @@ FRAMES = [
 for f in FRAMES:
     screen = open(f"_screens/{f['screen']}.html").read()
     chips = '\n'.join(chip(*c) for c in f['chips'])
-    html = TPL.format(bg=f['bg'], decor=f['decor'], logo=f['logo'], hcolor=f['hcolor'],
+    html = TPL.format(bg=f['bg'], decor=f['decor'], logo=f['logo'], badge=f.get('badge',''), hcolor=f['hcolor'],
                       scolor=f['scolor'], ptop=f['ptop'], headline=f['headline'], sub=f['sub'],
                       screen=screen, screenbg='#FFFFFF', chips=chips)
     open(f['out'], 'w').write(html)
     d, dc = html.count('<div'), html.count('</div>')
     s, sc = html.count('<svg'), html.count('</svg>')
     print(f"{f['out']:16} screen={f['screen']:9} div {d}/{dc} svg {s}/{sc} {'OK' if d==dc and s==sc else 'MISMATCH'}")
+
+# ---- Brand frame: Proudly Canadian, original logo untouched on white ----
+BRAND = f'''<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap">
+  <style>
+    body {{ margin: 0; font-family: 'Plus Jakarta Sans', 'Segoe UI', system-ui, -apple-system, sans-serif; }}
+    a {{ color: #FF453A; }} a:hover {{ color: #FF6F66; }}
+    .sp, .sp * {{ box-sizing: border-box; }}
+    .sp .stat {{ display: flex; align-items: center; gap: 38px; padding: 64px 0; }}
+  </style>
+</helmet>
+
+<div class="sp" style="width: 1290px; height: 2796px; position: relative; overflow: hidden; background: #E8352B; display: flex; flex-direction: column; align-items: center; padding: 130px 90px 0;">
+
+  <div style="position: absolute; top: -260px; right: -300px; width: 980px; height: 980px; border-radius: 490px; background: rgba(255,255,255,0.07); z-index: 0;"></div>
+  <div style="position: absolute; bottom: -220px; left: -260px; width: 760px; height: 760px; border-radius: 380px; background: rgba(0,0,0,0.10); z-index: 0;"></div>
+
+  <img src="spinr-logo-white.png" alt="Spinr" style="position: relative; width: 236px; height: 96px; object-fit: contain;">
+
+  <div style="position: relative; margin-top: 96px; width: 1110px; border-radius: 84px; background: #FFFFFF; box-shadow: 0 70px 150px rgba(0,0,0,0.30); padding: 110px 96px 96px; display: flex; flex-direction: column; align-items: center; text-align: center;">
+
+    <svg width="360" height="360" viewBox="0 0 1000 1000"><path d="{{LEAF_D}}" fill="#E8352B"/></svg>
+
+    <h1 style="margin: 80px 0 0; font-size: 156px; line-height: 1.02; font-weight: 800; letter-spacing: -0.04em; color: #1A1A1A;">Proudly<br><span style="color: #E8352B;">Canadian</span></h1>
+
+    <p style="margin: 46px 0 0; max-width: 880px; font-size: 40px; line-height: 1.5; font-weight: 500; color: #6B7280; text-wrap: pretty;">Owned and operated in Saskatchewan &mdash; every fare stays in the community that paid it.</p>
+
+    <div style="width: 100%; margin-top: 90px; display: flex; flex-direction: column;">
+      <div class="stat" style="border-top: 2px solid #F0EDEA;">
+        <span style="flex-shrink: 0; width: 300px; text-align: right; font-size: 96px; font-weight: 800; letter-spacing: -0.03em; color: #E8352B;">0%</span>
+        <span style="text-align: left; font-size: 36px; font-weight: 600; color: #1A1A1A;">platform commission</span>
+      </div>
+      <div class="stat" style="border-top: 2px solid #F0EDEA;">
+        <span style="flex-shrink: 0; width: 300px; text-align: right; font-size: 96px; font-weight: 800; letter-spacing: -0.03em; color: #E8352B;">100%</span>
+        <span style="text-align: left; font-size: 36px; font-weight: 600; color: #1A1A1A;">of every fare to the driver</span>
+      </div>
+      <div class="stat" style="border-top: 2px solid #F0EDEA; border-bottom: 2px solid #F0EDEA;">
+        <span style="flex-shrink: 0; width: 300px; text-align: right; font-size: 96px; font-weight: 800; letter-spacing: -0.03em; color: #E8352B;">2</span>
+        <span style="text-align: left; font-size: 36px; font-weight: 600; color: #1A1A1A;">cities &mdash; Saskatoon &amp; Regina</span>
+      </div>
+    </div>
+  </div>
+
+  <div style="position: relative; display: flex; align-items: center; gap: 18px; margin-top: 110px;">
+    <svg width="44" height="44" viewBox="0 0 1000 1000"><path d="{{LEAF_D}}" fill="#FFFFFF"/></svg>
+    <span style="font-size: 32px; font-weight: 700; letter-spacing: 0.12em; color: #FFFFFF; text-transform: uppercase;">Built in Saskatchewan</span>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>
+'''
+BRAND = BRAND.replace('{LEAF_D}', LEAF_D)
+open('Brand02.dc.html', 'w').write(BRAND)
+d, dc = BRAND.count('<div'), BRAND.count('</div>')
+print(f"Brand02.dc.html div {d}/{dc} svg {BRAND.count('<svg')}/{BRAND.count('</svg>')} {'OK' if d==dc else 'MISMATCH'}")

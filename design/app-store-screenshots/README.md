@@ -12,11 +12,19 @@ chips overlapping the device edges.
 
 | File | Slot | Story |
 |---|---|---|
-| `Main.dc.html` | 1 | Saskatchewan's own ride app (red hero, home map) |
-| `Rider02.dc.html` | 2 | Know the price before you ride (real tiers) |
-| `Rider03.dc.html` | 3 | Track every ride, live (gradient route) |
-| `Rider04.dc.html` | 4 | Spinr Assistant (real welcome + prompts) |
-| `Rider05.dc.html` | 5 | Help & Support (real tabs + production FAQs) |
+| `Main.dc.html` | 1 | Saskatchewan's own ride app (red hero, white logo, Proudly Canadian pill) |
+| `Brand02.dc.html` | 2 | Proudly Canadian brand frame (flag maple leaf, stat rows) |
+| `Rider02.dc.html` | 3 | Know the price before you ride (real tiers) |
+| `Rider03.dc.html` | 4 | Track every ride, live (gradient route) |
+| `Rider04.dc.html` | 5 | Spinr Assistant (real welcome + prompts) |
+| `Rider05.dc.html` | 6 | Help & Support (real tabs + production FAQs) |
+
+Logo variants on red: `spinr-logo-white.png` is the all-white palette remap —
+the bullseye's ring cutouts are alpha, so the red background paints the rings
+and the mark keeps its identity as a proper reversed logo. The untouched
+original (`spinr-logo.png`, hi-res `spinr-logo-large.png` from
+`backend/static/branding/`) appears on all paper frames. The maple leaf is the
+classic Canadian flag leaf geometry, not a drawn approximation.
 
 Fidelity contract (v4):
 - Device is an iPhone: titanium rim, thin bezel, Dynamic Island, 112px screen radius.

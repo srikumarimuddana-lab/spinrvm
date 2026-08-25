@@ -6,39 +6,47 @@
       "y": 0,
       "w": 1290,
       "h": 2796,
-      "title": "1 · Your fare stays home"
+      "title": "1 · Own ride app"
     },
     {
-      "file": "Rider02.dc.html",
+      "file": "Brand02.dc.html",
       "x": 1390,
       "y": 0,
       "w": 1290,
       "h": 2796,
-      "title": "2 · See the price first"
+      "title": "2 · Proudly Canadian"
     },
     {
-      "file": "Rider03.dc.html",
+      "file": "Rider02.dc.html",
       "x": 2780,
       "y": 0,
       "w": 1290,
       "h": 2796,
-      "title": "3 · Watch your driver arrive"
+      "title": "3 · Know the price"
     },
     {
-      "file": "Rider04.dc.html",
+      "file": "Rider03.dc.html",
       "x": 4170,
       "y": 0,
       "w": 1290,
       "h": 2796,
-      "title": "4 · Spinr Assistant"
+      "title": "4 · Track live"
     },
     {
-      "file": "Rider05.dc.html",
+      "file": "Rider04.dc.html",
       "x": 5560,
       "y": 0,
       "w": 1290,
       "h": 2796,
-      "title": "5 · Help & Support"
+      "title": "5 · Spinr Assistant"
+    },
+    {
+      "file": "Rider05.dc.html",
+      "x": 6950,
+      "y": 0,
+      "w": 1290,
+      "h": 2796,
+      "title": "6 · Help & Support"
     }
   ],
   "annotations": [

@@ -9729,6 +9729,55 @@ record of what was assumed vs. what was actually true</summary>
     file). No bug found. Not money-touching; no auditor review sought.
     22 tests; full rider-app suite still green (123 suites / 1476
     tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/lost-and-found-chat.tsx`: 89.74% → 99.14% stmts,
+    75.25% → 98.96% branch, 88.57% → 100% funcs, 93.81% → 100% lines.**
+    Already had `lostAndFoundChatScreen.test.tsx` (14 tests: mount fetch,
+    load-failure toast, status-label mapping + unknown fallback, the
+    open-vs-closed empty state, closed-case input hiding, send success/
+    failure, camera/library permission-denied, a full camera-upload
+    success, an upload failure dropping the optimistic bubble, opening
+    the photo preview, the 10s poll's length-differs refresh, back nav)
+    — extended in place (+21 tests, 35 total). Closed: `loadAll`'s own
+    `!caseId` early return; the `??` fallbacks on both the case and
+    messages API responses when either field is absent from the
+    response shape; the poll's own `AppState.currentState !== 'active'`
+    skip and its silent `.catch(() => {})`; the poll's *other* two
+    outcomes beyond "length differs" — same-length-different-newest-id
+    (replaces) and identical-list (no-op, asserted via an unchanged
+    `allText()` snapshot); the post-send `scrollToEnd` `setTimeout`
+    actually firing (via `jest.advanceTimersByTime(100)`);
+    `sendMessage`'s whitespace-only no-op guard; both send/upload paths
+    leaving the optimistic bubble in place when the server response
+    omits its own `message` field; the image-picker's
+    `canceled`/no-`assets` no-op; the Photo Library picker path (only
+    Camera had a full success test); `uploadPhoto`'s own
+    `uploadingPhoto` double-tap re-entrancy guard; both the attach- and
+    send-button in-flight spinners (controllable pending promises — the
+    first attempt at these left the triggering `onPress()` un-awaited
+    outside of an `act(async () => ...)` scope, which both raised a
+    React "not wrapped in act" warning and left a dangling promise chain
+    that cascaded into "Can't access .root on unmounted test renderer"
+    failures on every subsequent test in the file; fixed by wrapping the
+    fire-and-flush pair together inside a single `await act(async () =>
+    { onPress(); await flush(); })` — same fix shape as this session's
+    established pending-promise pattern, just missing the `act` wrapper
+    initially); a rider's own message rendering with the "me" bubble
+    styling (previously only driver/system messages had ever been
+    rendered from history); a system/admin message's own row shape; a
+    still-uploading local-image message's pending-spinner overlay
+    (seeded directly via a history fixture, since the full send flow
+    can't hold that intermediate state open in Jest); and closing the
+    photo-preview modal both via its own `onRequestClose` and via
+    tapping the backdrop. Left uncovered (genuinely unreachable, not
+    chased): `attachPhoto`'s `if (!caseId || isClosed) return;` guard —
+    the attach button that calls it is itself never rendered in either
+    of those two states (no `caseId` means `loadAll` returns before
+    `setLoading(false)`, so the screen never leaves its loading spinner;
+    a closed case hides the entire input row, attach button included),
+    so the guard can't actually be reached through the UI in this
+    screen's own render logic. No bug found. Not money-touching; no
+    auditor review sought. 35 tests; full rider-app suite still green
+    (123 suites / 1524 tests), `yarn tsc --noEmit` clean.
   - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
     85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
     tests: no-account-prefill, the CRC-consent auto-check-when-

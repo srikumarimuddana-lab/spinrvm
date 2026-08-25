@@ -24,7 +24,7 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { TouchableOpacity, Text, TextInput, Image, Alert, AppState } from 'react-native';
+import { TouchableOpacity, Text, TextInput, Image, Alert, AppState, ActivityIndicator, Modal } from 'react-native';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('react-native-safe-area-context', () => ({
@@ -301,5 +301,317 @@ describe('LostAndFoundChatScreen', () => {
     const backBtn = r.root.findAllByType(TouchableOpacity)[0];
     act(() => { backBtn.props.onPress(); });
     expect(mockBack).toHaveBeenCalled();
+  });
+
+  it('does nothing on mount when there is no caseId in the route params', async () => {
+    mockParams = {};
+    await renderScreen();
+    expect(mockApiGet).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a null case and an empty message list when the API responses omit those fields', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/lost-and-found/case-1') return Promise.resolve({ data: {} });
+      if (url === '/lost-and-found/case-1/messages') return Promise.resolve({ data: {} });
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Lost & Found');
+  });
+
+  it('skips the poll tick entirely while the app is backgrounded', async () => {
+    Object.defineProperty(AppState, 'currentState', { value: 'background', configurable: true });
+    await renderScreen();
+    mockApiGet.mockClear();
+    await act(async () => {
+      jest.advanceTimersByTime(10000);
+      await flush();
+    });
+    expect(mockApiGet).not.toHaveBeenCalled();
+  });
+
+  it('silently swallows a poll-tick fetch failure', async () => {
+    Object.defineProperty(AppState, 'currentState', { value: 'active', configurable: true });
+    const r = await renderScreen();
+    mockApiGet.mockImplementation((url: string) => Promise.reject(new Error('poll failed')));
+    await act(async () => {
+      jest.advanceTimersByTime(10000);
+      await flush();
+    });
+    // No crash, no toast for a background poll failure -- unlike the initial
+    // load, this is a silent .catch(() => {}).
+    expect(mockShowToast).not.toHaveBeenCalled();
+    expect(allText(r)).toBeDefined();
+  });
+
+  it('replaces the message list on a poll tick when the length matches but the newest id differs', async () => {
+    Object.defineProperty(AppState, 'currentState', { value: 'active', configurable: true });
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/lost-and-found/case-1') return Promise.resolve({ data: { case: CASE_OPEN } });
+      if (url === '/lost-and-found/case-1/messages') return Promise.resolve({ data: { messages: [MSG_FROM_DRIVER] } });
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    const EDITED = { ...MSG_FROM_DRIVER, id: 'm1-edited', message: 'Actually, found your bag!' };
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/lost-and-found/case-1/messages') return Promise.resolve({ data: { messages: [EDITED] } });
+      return Promise.reject(new Error('unexpected'));
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(10000);
+      await flush();
+    });
+    expect(allText(r)).toContain('Actually, found your bag!');
+  });
+
+  it('leaves the message list untouched on a poll tick when the fetched list is identical', async () => {
+    Object.defineProperty(AppState, 'currentState', { value: 'active', configurable: true });
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/lost-and-found/case-1') return Promise.resolve({ data: { case: CASE_OPEN } });
+      if (url === '/lost-and-found/case-1/messages') return Promise.resolve({ data: { messages: [MSG_FROM_DRIVER] } });
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    const before = allText(r);
+    await act(async () => {
+      jest.advanceTimersByTime(10000);
+      await flush();
+    });
+    expect(allText(r)).toBe(before);
+  });
+
+  it('scrolls the list to the end shortly after a new message is added', async () => {
+    const r = await renderScreen();
+    const input = r.root.findByType(TextInput);
+    act(() => { input.props.onChangeText('Found it near the seat'); });
+    const sendBtn = r.root.findAllByType(TouchableOpacity).find((n) =>
+      n.findAllByProps({ name: 'send' }).length > 0
+    )!;
+    await act(async () => {
+      await sendBtn.props.onPress();
+      await flush();
+      jest.advanceTimersByTime(100); // fires the scrollToEnd setTimeout
+    });
+    expect(allText(r)).toContain('I found it!');
+  });
+
+  it('does nothing when Send is triggered with only whitespace text', async () => {
+    const r = await renderScreen();
+    const input = r.root.findByType(TextInput);
+    act(() => { input.props.onChangeText('   '); });
+    const sendBtn = r.root.findAllByType(TouchableOpacity).find((n) =>
+      n.findAllByProps({ name: 'send' }).length > 0
+    )!;
+    await act(async () => {
+      await sendBtn.props.onPress();
+      await flush();
+    });
+    expect(mockApiPost).not.toHaveBeenCalled();
+  });
+
+  it('leaves the optimistic text message in place when the server response has no message field', async () => {
+    mockApiPost.mockResolvedValue({ data: {} });
+    const r = await renderScreen();
+    const input = r.root.findByType(TextInput);
+    act(() => { input.props.onChangeText('Found it near the seat'); });
+    const sendBtn = r.root.findAllByType(TouchableOpacity).find((n) =>
+      n.findAllByProps({ name: 'send' }).length > 0
+    )!;
+    await act(async () => {
+      await sendBtn.props.onPress();
+      await flush();
+    });
+    expect(allText(r)).toContain('Found it near the seat');
+  });
+
+  it('does nothing when the image picker is dismissed with no selection', async () => {
+    mockLaunchCameraAsync.mockResolvedValue({ canceled: true, assets: null });
+    const r = await renderScreen();
+    const attachBtn = r.root.findByProps({ accessibilityLabel: 'Attach a photo of the item' });
+    act(() => { attachBtn.props.onPress(); });
+    const alertCall = (Alert.alert as jest.Mock).mock.calls[0];
+    const cameraAction = alertCall[2].find((b: any) => b.text === 'Camera');
+    await act(async () => {
+      await cameraAction.onPress();
+      await flush();
+    });
+    expect(mockApiPost).not.toHaveBeenCalled();
+  });
+
+  it('uploads via the Photo Library picker path', async () => {
+    mockLaunchImageLibraryAsync.mockResolvedValue({ canceled: false, assets: [{ uri: 'file://library-item.jpg' }] });
+    const r = await renderScreen();
+    const attachBtn = r.root.findByProps({ accessibilityLabel: 'Attach a photo of the item' });
+    act(() => { attachBtn.props.onPress(); });
+    const alertCall = (Alert.alert as jest.Mock).mock.calls[0];
+    const libAction = alertCall[2].find((b: any) => b.text === 'Photo Library');
+    await act(async () => {
+      await libAction.onPress();
+      await flush();
+    });
+    expect(mockLaunchImageLibraryAsync).toHaveBeenCalled();
+    expect(mockApiPost).toHaveBeenCalledWith('/lost-and-found/case-1/messages/image', expect.any(FormData));
+  });
+
+  it('leaves the optimistic photo bubble in place when the server response has no message field', async () => {
+    mockLaunchCameraAsync.mockResolvedValue({ canceled: false, assets: [{ uri: 'file://item.jpg' }] });
+    mockApiPost.mockResolvedValue({ data: {} });
+    const r = await renderScreen();
+    const attachBtn = r.root.findByProps({ accessibilityLabel: 'Attach a photo of the item' });
+    act(() => { attachBtn.props.onPress(); });
+    const alertCall = (Alert.alert as jest.Mock).mock.calls[0];
+    const cameraAction = alertCall[2].find((b: any) => b.text === 'Camera');
+    await act(async () => {
+      await cameraAction.onPress();
+      await flush();
+    });
+    expect(r.root.findAllByType(Image)).toHaveLength(1); // the optimistic (local) bubble is still there
+  });
+
+  it('shows the pending-upload spinner overlay on an in-flight local image message', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/lost-and-found/case-1') return Promise.resolve({ data: { case: CASE_OPEN } });
+      if (url === '/lost-and-found/case-1/messages') {
+        return Promise.resolve({
+          data: { messages: [{ ...MSG_FROM_DRIVER, id: 'm-pending', message: '', local_image_uri: 'file://still-uploading.jpg', image_url: undefined }] },
+        });
+      }
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    const img = r.root.findAllByType(Image)[0];
+    expect(img.props.source.uri).toBe('file://still-uploading.jpg');
+  });
+
+  it("renders a rider's own message with the 'me' bubble styling and no avatar", async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/lost-and-found/case-1') return Promise.resolve({ data: { case: CASE_OPEN } });
+      if (url === '/lost-and-found/case-1/messages') {
+        return Promise.resolve({
+          data: { messages: [{ id: 'm-mine', lost_and_found_id: 'case-1', sender_id: 'me', sender_role: 'rider', message: 'Any updates?', created_at: '2026-08-22T10:10:00Z' }] },
+        });
+      }
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Any updates?');
+  });
+
+  it('renders a system/admin message as a centered system row (no bubble)', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/lost-and-found/case-1') return Promise.resolve({ data: { case: CASE_OPEN } });
+      if (url === '/lost-and-found/case-1/messages') {
+        return Promise.resolve({
+          data: { messages: [{ id: 'm-sys', lost_and_found_id: 'case-1', sender_id: null, sender_role: 'system', message: 'Case opened by support', created_at: '2026-08-22T10:00:00Z' }] },
+        });
+      }
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Case opened by support');
+  });
+
+  it('falls back to an empty list on a poll tick whose response omits the messages field', async () => {
+    Object.defineProperty(AppState, 'currentState', { value: 'active', configurable: true });
+    const r = await renderScreen();
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/lost-and-found/case-1/messages') return Promise.resolve({ data: {} });
+      return Promise.reject(new Error('unexpected'));
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(10000);
+      await flush();
+    });
+    expect(allText(r)).toContain('Waiting for driver to respond. You can send a message below.');
+  });
+
+  it('ignores a second photo pick while the first upload is still in flight', async () => {
+    let resolveUpload: (v: any) => void;
+    mockLaunchCameraAsync.mockResolvedValue({ canceled: false, assets: [{ uri: 'file://item.jpg' }] });
+    mockApiPost.mockImplementation(() => new Promise((resolve) => { resolveUpload = resolve; }));
+    const r = await renderScreen();
+    const attachBtn = r.root.findByProps({ accessibilityLabel: 'Attach a photo of the item' });
+    act(() => { attachBtn.props.onPress(); });
+    let alertCall = (Alert.alert as jest.Mock).mock.calls[0];
+    let cameraAction = alertCall[2].find((b: any) => b.text === 'Camera');
+    await act(async () => {
+      cameraAction.onPress(); // 1st pick, sets uploadingPhoto — don't await it, its own fetch is pending
+      await flush();
+    });
+
+    act(() => { attachBtn.props.onPress(); }); // 2nd tap while still uploading
+    alertCall = (Alert.alert as jest.Mock).mock.calls[1];
+    cameraAction = alertCall[2].find((b: any) => b.text === 'Camera');
+    await act(async () => { await cameraAction.onPress(); await flush(); }); // guarded by `if (uploadingPhoto) return;`, resolves immediately
+
+    expect(mockApiPost).toHaveBeenCalledTimes(1);
+    await act(async () => { resolveUpload!({ data: { message: MSG_FROM_DRIVER } }); await flush(); });
+  });
+
+  it('shows a spinner on the attach button while a photo upload is in flight', async () => {
+    let resolveUpload: (v: any) => void;
+    mockLaunchCameraAsync.mockResolvedValue({ canceled: false, assets: [{ uri: 'file://item.jpg' }] });
+    mockApiPost.mockImplementation(() => new Promise((resolve) => { resolveUpload = resolve; }));
+    const r = await renderScreen();
+    const attachBtn = r.root.findByProps({ accessibilityLabel: 'Attach a photo of the item' });
+    act(() => { attachBtn.props.onPress(); });
+    const alertCall = (Alert.alert as jest.Mock).mock.calls[0];
+    const cameraAction = alertCall[2].find((b: any) => b.text === 'Camera');
+    await act(async () => {
+      cameraAction.onPress(); // don't await — its own fetch is deliberately left pending
+      await flush();
+    });
+    expect(r.root.findAllByType(ActivityIndicator).length).toBeGreaterThan(0);
+    await act(async () => { resolveUpload!({ data: { message: MSG_FROM_DRIVER } }); await flush(); });
+  });
+
+  it('shows a spinner on the send button while a text message is in flight', async () => {
+    let resolveSend: (v: any) => void;
+    mockApiPost.mockImplementation(() => new Promise((resolve) => { resolveSend = resolve; }));
+    const r = await renderScreen();
+    const input = r.root.findByType(TextInput);
+    act(() => { input.props.onChangeText('Found it near the seat'); });
+    const sendBtn = r.root.findAllByType(TouchableOpacity).find((n) =>
+      n.findAllByProps({ name: 'send' }).length > 0
+    )!;
+    await act(async () => {
+      sendBtn.props.onPress(); // don't await — its fetch is deliberately left pending
+      await flush();
+    });
+    expect(r.root.findAllByType(ActivityIndicator).length).toBeGreaterThan(0);
+    await act(async () => { resolveSend!({ data: { message: MSG_FROM_DRIVER } }); await flush(); });
+  });
+
+  it('closes the photo-preview modal via its onRequestClose callback too', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/lost-and-found/case-1') return Promise.resolve({ data: { case: CASE_OPEN } });
+      if (url === '/lost-and-found/case-1/messages') {
+        return Promise.resolve({ data: { messages: [{ ...MSG_FROM_DRIVER, message: '', image_url: 'https://cdn.spinr.ca/item.jpg' }] } });
+      }
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    const photoBtn = r.root.findByProps({ accessibilityLabel: 'Item photo — tap to enlarge' });
+    act(() => { photoBtn.props.onPress(); });
+    const modal = r.root.findByType(Modal);
+    expect(modal.props.visible).toBe(true);
+    act(() => { modal.props.onRequestClose(); });
+    expect(r.root.findByType(Modal).props.visible).toBe(false);
+  });
+
+  it('closes the photo-preview modal via the backdrop press', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/lost-and-found/case-1') return Promise.resolve({ data: { case: CASE_OPEN } });
+      if (url === '/lost-and-found/case-1/messages') {
+        return Promise.resolve({ data: { messages: [{ ...MSG_FROM_DRIVER, message: '', image_url: 'https://cdn.spinr.ca/item.jpg' }] } });
+      }
+      return Promise.reject(new Error('unexpected'));
+    });
+    const r = await renderScreen();
+    const photoBtn = r.root.findByProps({ accessibilityLabel: 'Item photo — tap to enlarge' });
+    act(() => { photoBtn.props.onPress(); });
+    const closeBtn = r.root.findByProps({ accessibilityLabel: 'Close photo preview' });
+    act(() => { closeBtn.props.onPress(); });
+    expect(r.root.findAllByType(Image)).toHaveLength(1); // only the message thumbnail; the preview Image unmounted
   });
 });

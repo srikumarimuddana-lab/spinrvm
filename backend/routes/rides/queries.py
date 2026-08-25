@@ -614,4 +614,20 @@ async def get_ride(
         ride["tax_amount_total"] = tax
         ride["total_earned"] = round(fare_only + tip + ride["incentive_amount"] + cancel_fee + tax, 2)
 
+    # Legacy-imported-ride "honesty layer": an Imported badge + no-GPS
+    # disclaimer on rider/driver ride-detail screens, dark-shipped per
+    # CLAUDE.md's flagged-rollout convention (mirrors
+    # legacy_consent_notice_enabled, migration 356). legacy_import_metadata
+    # is already returned on every ride response unflagged -- this flag
+    # gates only the client-visible badge/disclaimer UX, not new data
+    # exposure. See docs/legacy-ride-history-presentation-plan.md Item 2.
+    show_legacy_badge = False
+    if ride.get("legacy_import_metadata"):
+        try:
+            settings = await _deps.get_app_settings()
+            show_legacy_badge = bool(settings.get("legacy_ride_badge_enabled", False))
+        except Exception:
+            logger.error("Failed to fetch app settings for legacy ride badge flag", exc_info=True)
+    ride["show_legacy_badge"] = show_legacy_badge
+
     return ride

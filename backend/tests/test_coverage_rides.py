@@ -579,6 +579,83 @@ async def test_get_ride_driver_assigned_sets_offer_expiry():
     assert result["offer_timeout_seconds"] == 15
 
 
+@pytest.mark.anyio
+async def test_get_ride_legacy_badge_off_by_default():
+    from backend.routes.rides import get_ride
+
+    req = _starlette_request()
+    ride = _ride(
+        status="completed",
+        rider_id=_RIDER_ID,
+        driver_id=None,
+        legacy_import_metadata={"source": "legacy_mongo_booking_import"},
+    )
+
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_rows = AsyncMock(return_value=[])
+        mock_db.get_driver_by_id = AsyncMock(return_value=None)
+
+        with patch("backend.routes.rides._deps.get_app_settings", new_callable=AsyncMock, return_value={}):
+            result = await get_ride(request=req, ride_id=_RIDE_ID, current_user=_USER)
+
+    # Flag defaults off: the badge stays hidden even though the ride is a
+    # real legacy import — legacy_import_metadata itself is unaffected.
+    assert result["show_legacy_badge"] is False
+    assert result["legacy_import_metadata"] == {"source": "legacy_mongo_booking_import"}
+
+
+@pytest.mark.anyio
+async def test_get_ride_legacy_badge_shown_when_flag_on():
+    from backend.routes.rides import get_ride
+
+    req = _starlette_request()
+    ride = _ride(
+        status="completed",
+        rider_id=_RIDER_ID,
+        driver_id=None,
+        legacy_import_metadata={"source": "legacy_mongo_booking_import"},
+    )
+
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_rows = AsyncMock(return_value=[])
+        mock_db.get_driver_by_id = AsyncMock(return_value=None)
+
+        with patch(
+            "backend.routes.rides._deps.get_app_settings",
+            new_callable=AsyncMock,
+            return_value={"legacy_ride_badge_enabled": True},
+        ):
+            result = await get_ride(request=req, ride_id=_RIDE_ID, current_user=_USER)
+
+    assert result["show_legacy_badge"] is True
+
+
+@pytest.mark.anyio
+async def test_get_ride_legacy_badge_false_for_non_legacy_ride():
+    from backend.routes.rides import get_ride
+
+    req = _starlette_request()
+    # No legacy_import_metadata at all — an ordinary, organic ride.
+    ride = _ride(status="completed", rider_id=_RIDER_ID, driver_id=None)
+
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_rows = AsyncMock(return_value=[])
+        mock_db.get_driver_by_id = AsyncMock(return_value=None)
+
+        with patch(
+            "backend.routes.rides._deps.get_app_settings",
+            new_callable=AsyncMock,
+            return_value={"legacy_ride_badge_enabled": True},
+        ):
+            result = await get_ride(request=req, ride_id=_RIDE_ID, current_user=_USER)
+
+    # Flag on but no metadata to badge — never true for a real, organic ride.
+    assert result["show_legacy_badge"] is False
+
+
 # ── add_tip ───────────────────────────────────────────────────────────────────
 
 

@@ -9778,6 +9778,133 @@ record of what was assumed vs. what was actually true</summary>
     screen's own render logic. No bug found. Not money-touching; no
     auditor review sought. 35 tests; full rider-app suite still green
     (123 suites / 1524 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/otp.tsx`: 95.19% → 100% stmts, 79.51% → 100% branch,
+    86.36% → 100% funcs, 96.84% → 100% lines** (auth-critical: OTP
+    verification, token issuance, reactivation routing). Already had
+    `otpScreen.test.tsx` (16 tests: no-phoneNumber back-nav, Verify
+    blocked until 4 digits, the token-path success setting tokens +
+    Analytics, the userData-present-vs-absent setState/initialize()
+    split, CompleteRegistration only for a new account, the
+    requires_reactivation route without setTokens, a verify failure's
+    shake/clear/toast, the resend-hidden-during-countdown state, resend
+    success re-arming the countdown, the 429 Retry-After path, a
+    generic non-429 resend failure, and the post-verify `user` effect's
+    three routing outcomes: profile-incomplete, profile-complete/no-
+    notice, and needs_notice) — extended in place (+14 tests, 30
+    total). Closed: the `hasProfileData` multi-field check
+    (`first_name && last_name && email`) actually driving
+    profile-complete routing on its own, independent of the
+    `profile_complete` flag (previously only the flag-driven and
+    flag-absent-with-no-fields cases were exercised); `handleCodeChange`
+    dropping digits typed past `CODE_LENGTH` (a paste); verify resolving
+    with no `data` field at all (`!response.data` throw, caught by the
+    outer handler, surfacing the same generic failure toast); the
+    `requires_reactivation` route's own `?? ''` fallbacks when the
+    backend omits `reactivation_token`/`deletion_scheduled_at`; a
+    successful verify response with no `token` field at all — confirms
+    `setTokens` is never called yet the flow still falls through to
+    `Analytics.otpVerified()` and `initialize()` exactly like the
+    already-covered no-`userData` path, just without ever touching
+    session state; the `refresh_token`/`expires_in` `?? ''`/`?? 900`
+    defaults when a response carries a `token` but omits the other two;
+    `handleResend`'s own `resendInFlight.current` double-tap guard (two
+    synchronous `onPress()` calls before the first's `await` yields —
+    the second sees `resendInFlight.current` already `true` and returns
+    before ever calling `api.post` a second time); the 429 retry-seconds
+    parsing's remaining combinations — no `Retry-After` header and no
+    parseable detail message (defaults to 60), a parseable detail
+    message when no header is present (uses the parsed value), and a
+    parsed-but-zero detail value, which found a genuine, correctly-
+    guarded behavioral split worth documenting: the toast text
+    interpolates the *raw* parsed `retrySeconds` value directly (so it
+    literally reads "wait 0 seconds"), while the *countdown state* that
+    actually re-arms the Resend button is separately guarded
+    (`retrySeconds > 0 ? retrySeconds : 60`) and never sits at a
+    non-positive value — the two intentionally diverge, and the new
+    test pins both halves rather than assuming they matched; the Verify
+    button's own in-flight spinner via a controllable pending promise;
+    and the header back button, the code-boxes tap-to-focus, and the
+    "Change phone number" button, none of which had ever been pressed
+    despite being in the render tree since the first test wrote (mount
+    render coverage only credits JSX creation, not the handler
+    functions themselves — the file's function-coverage number,
+    86.36%→100%, moved specifically because of these three). No bug
+    found — the toast-vs-countdown-state divergence on the zero-detail
+    case is intentional, correctly-guarded behavior, not a defect.
+    Auth-critical (OTP verify, token issuance); `spinr-security-auditor`
+    reviewed the diff and returned SAFE TO MERGE — production file
+    confirmed untouched, and every new assertion (token/refresh_token/
+    expires_in defaulting, the reactivation `?? ''` fallbacks, the
+    hasProfileData routing, the 429 retry-seconds parsing including the
+    toast-vs-countdown-state divergence, and the resend double-tap
+    guard) traced line-by-line against the real logic and confirmed
+    correct — explicitly noting the divergence is real, deliberate
+    production behavior the test documents rather than a bug being
+    pinned. 30 tests; full rider-app suite still green (123 suites /
+    1538 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/driver-arrived.tsx`: 98.8% → 100% stmts, 79.51% →
+    98.79% branch, 100% funcs (unchanged), 100% lines (unchanged)**
+    (ride-lifecycle/safety-adjacent: OTP handoff, cancellation-fee flow,
+    hosts the `RiderSOS` button). Already had `driverArrivedScreen.test.tsx`
+    (20 tests: fetch-on-mount, WS-vs-polling, the in_progress redirect,
+    the cancel-confirm→reason-sheet→cancel/clear/navigate happy path and
+    its failure toast, the hardware-back-button cancel trigger, OTP
+    copy-to-clipboard, Message Driver nav, Share Trip incl. the
+    Share.share-rejects fallback, the driver-photo-error fallback, the
+    no-currentRide loading/retry state, both map-fit paths (driver
+    coordinates present, MapViewDirections onReady with ≥2 vs 1 point),
+    both confirm/reason sheets' own dismiss-without-cancelling paths, and
+    the `__DEV__` "Start Ride (skip OTP)" button's success and
+    swallowed-failure paths) — extended in place (+6 tests, 26 total).
+    Closed: the `if (!rideId) return;` early-out on the fetch/poll effect
+    (no rideId route param — verified neither `fetchRide` fires on mount
+    nor a 15s poll interval is set up); the same route-param guard on the
+    `__DEV__` start button's `if (rideId) fetchRide(rideId);` (start
+    still posts, but never refetches when rideId is absent); the
+    driver-card and trip-summary fallback text when `currentDriver`
+    fields are missing (`'Your Driver'`, `'No ratings yet'`, `'Vehicle
+    info unavailable'`, `'N/A'` plate); the same class of fallback in the
+    Share Trip info blob — `currentDriver?.name || 'Unknown'`,
+    `rating || 'New'`, the three vehicle-field `|| ''` fallbacks, and
+    (found only once the driver-field test was in place and coverage
+    still showed two uncovered lines) `pickup_address`/`dropoff_address`
+    `|| ''` fallbacks when the ride record itself omits them; the loading
+    state's own `{rideId ? (Retry button) : null}` — no Retry button
+    renders when there's no rideId to retry with; and
+    `userInterfaceStyle={isDark ? "dark" : "light"}` on the map (the
+    `useTheme` mock was upgraded from a bare arrow function to a
+    `jest.fn()` wrapper so a single test could override it with
+    `mockReturnValueOnce` without touching every other test's fixture).
+    One line was deliberately left uncovered and documented rather than
+    chased: `MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE :
+    undefined` is computed once at module load, so exercising the Android
+    branch needs a fresh module registry with `Platform.OS` overridden
+    *before* the module (and its `react-native-maps` import) loads;
+    attempting this via `jest.resetModules()` +
+    `jest.doMock('react-native', () => ({ ...jest.requireActual(...),
+    Platform: {...} }))` hit jest-expo's native TurboModule mocking
+    (`Invariant Violation: TurboModuleRegistry.getEnforcing(...): 'DevMenu'
+    could not be found`) — `requireActual('react-native')` bypasses
+    jest-expo's own RN mock setup. The identical top-level pattern
+    (`Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined`) is
+    repeated, equally untested, in 7 other rider-app screens
+    (`ride-in-progress.tsx`, `pick-on-map.tsx`, `driver-arriving.tsx`,
+    `ride-details.tsx`, `ride-options.tsx`, `confirm-pickup.tsx`,
+    `ride-completed.tsx`) — a pre-existing, repo-wide gap, not something
+    to force through in one screen's test file; left as a standing note
+    rather than re-discovered per-screen. No bug found. Test-only diff
+    (production `app/driver-arrived.tsx` confirmed untouched via `git
+    diff origin/main`); ride-lifecycle/safety-adjacent (SOS button,
+    cancellation-fee flow) so `spinr-safety-sos-reviewer` reviewed the
+    diff and returned SAFE TO MERGE — confirmed the diff is additive only
+    (no existing SOS/cancellation-fee assertion weakened or removed) and
+    traced every new assertion line-by-line against the real logic
+    (driver-field/share-blob fallbacks, the no-rideId guard on both the
+    fetch/poll effect and the dev start button, the no-Retry-button
+    guard, the dark-theme `userInterfaceStyle` prop) and confirmed each
+    correct. 26 tests; full rider-app suite still green (123 suites /
+    1544 tests),
+    `yarn tsc --noEmit` clean.
   - **rider-app `app/referral.tsx`: 73.80% → 97.61% branch** (100%
     stmts/funcs/lines already). Already had `referralScreen.test.tsx` (9
     tests: parallel mount fetch, the error state + working Retry, Copy,

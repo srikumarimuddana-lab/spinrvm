@@ -10014,6 +10014,83 @@ record of what was assumed vs. what was actually true</summary>
     `is_default` value drives whether "Set Default" renders. 31 tests;
     full rider-app suite still green (123 suites / 1519 tests), `yarn
     tsc --noEmit` clean.
+  - **rider-app `app/(tabs)/activity.tsx`: 98.32% → 99.44% stmts, 80.24%
+    → 99.38% branch, 100% funcs (unchanged), 99.39% lines (unchanged)**
+    (ride history + upcoming scheduled rides tab). Already had
+    `activityScreen.test.tsx` (22 tests: focus-effect fetch of rides/
+    stats/scheduled rides with the 30s TTL guard, history/upcoming tab
+    switch, personal/business filter, RECENT-vs-month section grouping,
+    the fare-total tip-inclusive-vs-legacy split, load-failure and
+    empty-result states, infinite scroll append + a load-more retry
+    footer, card-tap navigation, date formatting, status text/color
+    fallbacks, and the stats-loading skeleton) — extended in place (+14
+    tests, 36 total). Closed: `fetchStats`'s own stale-response guard
+    (`if (gen !== statsGenRef.current) return;` and the matching
+    `statsLoading` finally-block guard) — a controllable pending promise
+    for the initial ('all') stats fetch let a newer ('week') fetch,
+    triggered by pressing a period pill, resolve and render first, then
+    the stale 'all' response resolving late is asserted to neither
+    clobber the newer numbers nor re-toggle the loading flag;
+    `fetchPage`'s own `res.data?.rides ?? []`/`?? null` fallbacks when
+    the history response omits both fields; the vehicle-types fetch's
+    `(typesRes.data as unknown[] || [])` fallback when the response
+    `data` isn't an array at all (falls back to the empty map, which
+    then drives `getVehicleType`'s own `'Standard'` fallback); both
+    halves of `loadMore`'s guard condition
+    (`loadingMore || !nextCursor || (loadMoreError && !forceRetry)`) —
+    a no-op end-reached with no cursor left, and a second end-reached
+    while a load-more error is still showing (without tapping retry)
+    — neither of which had ever actually triggered the guard's early
+    return, despite an existing test already covering the *successful*
+    retry path; the loading-more spinner render itself (`loadingMore ?
+    <Spinner/> : ...`), via a held pending promise — mount-render
+    coverage credited the JSX but never the state actually being `true`
+    at render time; several ride-field fallbacks in `renderItem`
+    (`fare_breakdown || []`, the `grand_total ?? total_fare ?? 0` chain
+    down to its final `0`, a fare-breakdown line's own `amount ?? 0`
+    for both tip and discount, `ride_code || id.slice(0,8)`, and
+    `dropoff_address || 'Unknown destination'`); the discount-only
+    fare-breakdown-line render (previously only tip-only was tested,
+    never "Saved $X" without "Tip $Y"); the matching fallbacks on the
+    *upcoming*-tab scheduled-ride card render (`dropoff_address`,
+    `scheduled_time ? ... : 'Scheduled'`, and its own
+    `grand_total ?? total_fare ?? 0` chain); the `isCompactFilterLayout`
+    (`width < 380`) styling branches on the period-pill and filter-tab
+    rows — mocking `react-native/Libraries/Utilities/useWindowDimensions`
+    directly (mocking the whole `react-native` module the way an
+    earlier round tried for `driver-arrived.tsx`'s `Platform.OS` check
+    hit the same jest-expo TurboModule-mocking crash there; the
+    submodule-specific mock sidesteps it cleanly) and asserting the
+    narrower `paddingHorizontal`/`minWidth`/`flexGrow` values render;
+    and the `colors.surfaceLight ?? colors.surface` stats-card
+    background fallback — promoted `useTheme`'s mock from a bare arrow
+    function to a `jest.fn()` wrapper (same pattern used for
+    `driver-arrived.tsx`'s dark-theme test) to override it for one test.
+    Debugging note: both the `useWindowDimensions` and `useTheme`
+    per-test overrides needed `mockReturnValue` (not
+    `mockReturnValueOnce`) plus an explicit reset back to the default in
+    `afterEach` — a fetch-driven screen re-renders several times after
+    mount (loading→false, rides set, stats set, ...), and each
+    re-render calls these hooks again, so a "once" override gets
+    consumed by an early re-render and silently reverts before the
+    test's own assertions run; `jest.restoreAllMocks()` in the existing
+    `afterEach` doesn't touch a plain `jest.fn()`'s configured return
+    value (it only restores `jest.spyOn` mocks), so the reset had to be
+    added explicitly. Left uncovered (genuinely unreachable, not
+    chased): the `filteredRides` filter callback's final `return true;`
+    (line 246) — same class of finding as `referral.tsx`'s and
+    `ride-details.tsx`'s prior entries: reaching that line at all
+    requires `filter === 'personal'` to already be true (the two prior
+    `if` branches return first for `'all'`/`'business'`), so the
+    `if (filter === 'personal')` check immediately above it is always
+    true when execution gets there — a duplicate guard on an
+    already-narrowed value, not a live branch. No bug found. Test-only
+    diff (production `app/(tabs)/activity.tsx` confirmed untouched via
+    `git diff`); money-adjacent (renders fare/tip/discount totals) but
+    not money-critical (no wallet/Stripe write on this screen, same
+    tier as `referral.tsx`'s prior entry) — no auditor review sought
+    given the surface. 36 tests; full rider-app suite still green (123
+    suites / 1578 tests), `yarn tsc --noEmit` clean.
   - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
     85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
     tests: no-account-prefill, the CRC-consent auto-check-when-

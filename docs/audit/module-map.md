@@ -17,7 +17,7 @@ shared/              Cross-surface shared code/types
 agents/              Separate multi-agent dev-automation SDK — NOT production runtime (agents/CLAUDE.md)
 scripts/             Ops/dev scripts
 docs/                Design docs, runbooks, ADRs
-tests/ (root) + test_admin_endpoints.py   Root-level test scaffolding in addition to backend/tests/
+tests/ (root)        Root-level integration tests (import backend.server, need repo root as cwd) in addition to backend/tests/
 ```
 
 ---

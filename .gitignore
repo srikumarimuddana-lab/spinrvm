@@ -7,6 +7,10 @@ backend/.venv/
 node_modules/
 backend/repro_issue.py
 
+# Playwright MCP interactive-session scratch captures — not test fixtures,
+# nothing in the repo reads these back
+.playwright-mcp/
+
 # Build outputs
 .next/
 .expo/
@@ -18,6 +22,7 @@ build/
 # Metro cache
 rider-app/.metro-cache/
 driver-app/.metro-cache/
+frontend/.metro-cache/
 
 # Logs
 *.log

@@ -1,8 +1,17 @@
 # Spinr
 
+> **Stale (flagged 2026-08-25):** this file describes a pre-launch state and an "Active"
+> requirements checklist (P0-1 through P0-7, WAV dispatch, etc.) that are, per
+> `.claude/context/sprint-current.md`'s own later entries, already shipped — WAV dispatch in
+> PR #240, the HttpOnly/admin-TTL/rating/fare/GPS/SOS P0s across #95–#127. `CLAUDE.md` (the
+> authoritative, actively-maintained project doc) states the product is **currently going through
+> live app testing with real users**, not pre-launch. The "What This Is" line and "Context" section
+> below are corrected to match that; the "Active" checklist is left as-is (historical record) rather
+> than guessed at — **use `ACTION_ITEMS.md`'s open `[ ]` items for actual current priorities.**
+
 ## What This Is
 
-Spinr is a pre-launch Canadian ride-sharing platform built Saskatchewan-first, operating on a 0% driver commission model. It connects riders and drivers through native mobile apps backed by a FastAPI monolith, managing real-time dispatch, payments, safety, and fleet operations. The platform has five integrated surfaces: backend API, rider app, driver app, admin dashboard, and a shared TypeScript library. It is in active development; device testing is the immediate next milestone before production launch.
+Spinr is a Canadian ride-sharing platform built Saskatchewan-first, operating on a 0% driver commission model, currently in live app testing with real users (see `CLAUDE.md`). It connects riders and drivers through native mobile apps backed by a FastAPI monolith, managing real-time dispatch, payments, safety, and fleet operations. The platform has five integrated surfaces: backend API, rider app, driver app, admin dashboard, and a shared TypeScript library.
 
 ## Core Value
 
@@ -52,7 +61,9 @@ Every fare dollar stays with the driver — Spinr monetises through corporate Sa
 
 ## Context
 
-**Stage**: Pre-launch, dev environment only. Device testing commences once P0 sprint closes and CI is green. Production deployment is the final milestone.
+**Stage**: Was pre-launch/dev-only as of this file's last update (2026-05-02). Per `CLAUDE.md`
+(the current source of truth), the product is now in live app testing with real users — the
+rest of this "Context" section describes the pre-launch state and has not been refreshed since.
 
 **Team**: Small team, Claude Code–assisted development, YOLO execution mode.
 

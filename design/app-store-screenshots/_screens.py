@@ -138,9 +138,9 @@ f'''        <div style="display: flex; align-items: center; gap: 22px; padding: 
         </div>''')
 
     rows = '\n'.join([
-        row('sedan', 'Economy', 4, '3 min &middot; 5 drivers', '22.99', '7.99', selected=True),
-        row('van', 'Van', 6, '6 min &middot; 2 drivers', '29.75', '14.75'),
-        row('xl', 'XL', 6, '8 min &middot; 2 drivers', '31.40', '16.40'),
+        row('sedan', 'Economy', 4, '3 min &middot; 5 drivers', '22.99', '5.75', selected=True),
+        row('van', 'Van', 6, '6 min &middot; 2 drivers', '29.75', '7.44'),
+        row('xl', 'XL', 6, '8 min &middot; 2 drivers', '31.40', '7.85'),
     ])
     return (
 f'''      <div style="flex-shrink: 0; display: flex; align-items: center; gap: 26px; padding: 150px 43px 26px; background: #FFFFFF;">
@@ -165,15 +165,15 @@ f'''      <div style="flex-shrink: 0; display: flex; align-items: center; gap: 2
         <div style="display: flex; align-items: center; gap: 24px; padding: 24px 30px; border-radius: 30px; background: #ECFDF5; border: 2px solid #A7F3D0;">
           <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 13.5L13 21a2 2 0 0 1-2.8 0l-7-7A2 2 0 0 1 2.6 12.6V5a2 2 0 0 1 2-2h7.6a2 2 0 0 1 1.4.6l6.9 6.9a2 2 0 0 1 0 2.8z"></path><circle cx="8" cy="8" r="1.6"></circle></svg>
           <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px;">
-            <span style="font-size: 30px; font-weight: 700; color: #059669;">WELCOME15 applied</span>
-            <span style="font-size: 25px; font-weight: 500; color: #3F7A5B;">$15.00 off your first ride</span>
+            <span style="font-size: 30px; font-weight: 700; color: #059669;">WELCOME75 applied</span>
+            <span style="font-size: 25px; font-weight: 500; color: #3F7A5B;">75% off your first ride</span>
           </div>
           <span style="font-size: 27px; font-weight: 600; color: #DC2626;">Remove</span>
         </div>
       </div>
       <div style="flex-shrink: 0; padding: 26px 43px 46px; background: #F5F5F5;">
         <div style="height: 119px; border-radius: 60px; background: #FF3B30; display: flex; align-items: center; justify-content: center; box-shadow: 0 10px 26px rgba(255,59,48,0.32);">
-          <span style="font-size: 34px; font-weight: 600; color: #FFFFFF;">Confirm Economy &middot; $7.99</span>
+          <span style="font-size: 34px; font-weight: 600; color: #FFFFFF;">Confirm Economy &middot; $5.75</span>
         </div>
       </div>
 ''')

@@ -55,14 +55,14 @@
       "x": 0,
       "y": -340,
       "w": 1290,
-      "text": "SPINR RIDER v6 — iOS App Store · 1290 × 2796\n\nFrames 1–2 are a connected pair (reference-style layout, Spinr colors):\nthe tilted phone leaves frame 1's right edge and continues on frame 2,\nso side-by-side in the store they read as one composition. Proudly\nCanadian lives on frame 1's badge block."
+      "text": "SPINR RIDER v7 — iOS App Store · 1290 × 2796\n\nFrames 1–2 are a connected full-bleed pair (same format as every\nother frame — no inner panel or border): the tilted phone leaves\nframe 1's right edge and continues on frame 2. Proudly Canadian\nlives on frame 1's badge block."
     },
     {
       "id": "note-frame3",
       "x": 2780,
       "y": -340,
       "w": 1290,
-      "text": "FRAME 3 — faithful to ride-options.tsx: the real production\nillustrations (fetched from the vehicle-illustrations bucket), the\nselected row's image at full size vs 0.59 for unselected (the app's\nexact transform), charcoal selected border + checkmark, and per-row\nslashed prices in the app's green (#10B981) under a WELCOME15 promo.\nEconomy lands at $7.99. Promo code and prices are sample data."
+      "text": "FRAME 3 — faithful to ride-options.tsx: real production illustrations,\nselected image full-size vs 0.59 unselected (the app's exact transform),\ncharcoal selected border + checkmark, per-row slashed prices in the\napp's green. WELCOME75 = 75% off, computed exactly:\n$22.99 → $5.75 · $29.75 → $7.44 · $31.40 → $7.85.\nPromo code and fares are sample data."
     },
     {
       "id": "note-data",

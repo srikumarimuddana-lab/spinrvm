@@ -182,12 +182,10 @@ PAIR_SHELL = '''<!doctype html>
   </style>
 </helmet>
 
-<div class="sp" style="width: 1290px; height: 2796px; position: relative; overflow: hidden; background: {outer}; padding: 36px;">
-  <div style="position: relative; width: 1218px; height: 2724px; border-radius: 72px; overflow: hidden; background: {panel};">
-    <div style="position: absolute; top: -220px; right: -260px; width: 820px; height: 820px; border-radius: 410px; background: rgba(255,255,255,0.06); z-index: 0;"></div>
-    <div style="position: absolute; bottom: -260px; left: -240px; width: 720px; height: 720px; border-radius: 360px; background: rgba(0,0,0,0.10); z-index: 0;"></div>
+<div class="sp" style="width: 1290px; height: 2796px; position: relative; overflow: hidden; background: {panel};">
+  <div style="position: absolute; top: -240px; right: -280px; width: 880px; height: 880px; border-radius: 440px; background: rgba(255,255,255,0.06); z-index: 0;"></div>
+  <div style="position: absolute; bottom: -280px; left: -260px; width: 780px; height: 780px; border-radius: 390px; background: rgba(0,0,0,0.10); z-index: 0;"></div>
 {content}
-  </div>
 </div>
 </x-dc>
 </body>
@@ -196,8 +194,8 @@ PAIR_SHELL = '''<!doctype html>
 
 home_screen = open('_screens/home.html').read()
 
-frame1_content = iphone(home_screen, 1020, 560) + '''
-  <div style="position: absolute; inset: 0; z-index: 4; padding: 96px 90px; display: flex; flex-direction: column; pointer-events: none;">
+frame1_content = iphone(home_screen, 1056, 596) + '''
+  <div style="position: absolute; inset: 0; z-index: 4; padding: 100px 96px; display: flex; flex-direction: column; pointer-events: none;">
     <img src="spinr-logo-white.png" alt="Spinr" style="width: 218px; height: 89px; object-fit: contain; align-self: flex-start;">
 
     <h1 style="margin: 96px 0 0; font-size: 196px; line-height: 0.98; font-weight: 800; letter-spacing: -0.045em; color: #FFFFFF;">your<br>fare<br>stays<br><span style="color: #1A1A1A;">home.</span></h1>
@@ -216,13 +214,13 @@ frame1_content = iphone(home_screen, 1020, 560) + '''
     </div>
   </div>'''
 
-frame2_content = iphone(home_screen, -300, 560) + '''
+frame2_content = iphone(home_screen, -264, 596) + '''
   <div style="position: absolute; right: 90px; top: 96px; z-index: 4;">
     <img src="spinr-logo-white.png" alt="Spinr" style="width: 252px; height: 103px; object-fit: contain;">
   </div>'''
 
 for out, content in (('Main.dc.html', frame1_content), ('Brand02.dc.html', frame2_content)):
-    html = PAIR_SHELL.format(outer=OUTER, panel=PANEL, content=content).replace('{LEAF}', LEAF_D)
+    html = PAIR_SHELL.format(panel=PANEL, content=content).replace('{LEAF}', LEAF_D)
     open(out, 'w').write(html)
     d, dc = html.count('<div'), html.count('</div>')
     print(f"{out:16} div {d}/{dc} {'OK' if d == dc else 'MISMATCH'}")

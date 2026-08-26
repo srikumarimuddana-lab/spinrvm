@@ -10509,6 +10509,42 @@ record of what was assumed vs. what was actually true</summary>
     No production bugs found — production `app/ai-assistant.tsx`
     confirmed untouched via `git diff`. 52 tests; full rider-app suite
     still green (123 suites / 1683 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/privacy-settings.tsx`: 76.00% → 96.00% branch
+    (stmts/funcs/lines already/now 100%/95.65%/100%).** PIPEDA data-export
+    (`/users/data-export`) and delete-account (`/users/account` + logout +
+    redirect) screen, plus push/marketing (CASL) consent toggles.
+    `spinr-regulatory-compliance-checker` reviewed the diff and returned
+    **SAFE TO MERGE**: spot-checked every new assertion against the real
+    source (none vacuous), confirmed no mischaracterization of the
+    PIPEDA/CASL consent or retention model documented in CLAUDE.md's
+    Compliance section, and independently re-derived the one
+    deliberately-uncovered branch's dead-code claim by reading all 8
+    `SettingRow` call sites. Already had `privacySettingsScreen.test.tsx`
+    (11 tests) — extended in place (+7 tests, 18 total; 22 combined with
+    the sibling `privacySettingsToggles.test.tsx` file that also covers
+    this screen). Closed:
+    - turning the push toggle OFF (skips the permission check) and the
+      mutate `onError` revert+toast path
+    - the `notificationPrefs?.push_enabled != null` hydrate guard when
+      the query has no value
+    - the `res?.data ?? res ?? {}` marketing-prefs hydrate fallback for
+      a raw/unwrapped response and a nullish response
+    - the `if (!active) return;` unmount guard in the marketing-prefs
+      fetch effect
+    - the delete-account confirm sheet's Cancel button closing it
+      without calling the delete endpoint
+
+    One branch left deliberately uncovered: `SettingRow`'s inner
+    `onPress ? <chevron/> : null` ternary's `null` path (line 259) is
+    unreachable — all 8 call sites in this screen pass either `toggle`
+    or `onPress`, never neither, and `SettingRow` isn't exported for
+    isolated testing.
+
+    No production bugs found. Test-only diff (production
+    `app/privacy-settings.tsx` confirmed untouched via `git diff`). 22
+    tests combined across both test files covering this screen; full
+    rider-app suite still green (123 suites / 1690 tests), `yarn tsc
+    --noEmit` clean.
   - **rider-app `app/(tabs)/account.tsx`: 84.41% → 100% branch (stmts
     98.5%, funcs 94.11%, lines 98.3%).** Rider's account/profile tab —
     menu navigation, sign-out, avatar viewer, work-profile summary, phone

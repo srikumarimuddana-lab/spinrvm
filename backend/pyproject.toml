@@ -1,0 +1,195 @@
+# Spinr backend packaging metadata.
+#
+# WHY THIS FILE EXISTS
+#
+# The dependency source of truth for Spinr is requirements.in -> requirements.txt
+# (pip-compile, enforced by .github/workflows/pip-compile-check.yml). Production
+# builds from requirements.txt via backend/Dockerfile, and that has not changed.
+#
+# This file exists solely because FastAPI Cloud's deploy path requires a
+# pyproject.toml: `fastapi deploy` resolves the app from the directory that holds
+# one. It is a MIRROR of requirements.txt, not a second source of truth — it
+# carries the identical pinned versions so the FastAPI Cloud dev tier runs the
+# same dependency set as production. A dev environment silently running different
+# package versions is worse than no dev environment: it manufactures confidence
+# that does not transfer.
+#
+# DO NOT hand-edit the dependency list below. It is generated, and
+# .github/workflows/pip-compile-check.yml fails the build when it drifts from
+# requirements.txt. To change a dependency:
+#
+#   1. edit backend/requirements.in
+#   2. pip-compile backend/requirements.in --output-file backend/requirements.txt \
+#        --strip-extras --no-header --annotation-style line --no-upgrade
+#   3. python -m backend.scripts.sync_pyproject_deps --write
+#
+# See docs/runbooks/fastapi-cloud-dev.md and docs/adr/011-environment-topology.md.
+
+[project]
+name = "spinr-backend"
+version = "1.0.0"
+description = "Spinr ride-sharing platform backend (FastAPI)"
+# Matches backend/Dockerfile's pinned python:3.12.13-slim runtime. Note
+# requirements.txt was pip-compiled under Python 3.11 (see its header) — a
+# pre-existing discrepancy, harmless in practice since production has always
+# installed this pin set under 3.12, but worth knowing before changing either.
+requires-python = ">=3.12,<3.13"
+
+dependencies = [
+# --- BEGIN GENERATED DEPENDENCIES (sync_pyproject_deps.py) ---
+    "aiohappyeyeballs==2.6.1",
+    "aiohttp==3.14.3",
+    "aiohttp-retry==2.9.1",
+    "aiosignal==1.4.0",
+    "annotated-doc==0.0.4",
+    "annotated-types==0.7.0",
+    "anthropic==0.109.1",
+    "anyio==4.13.0",
+    "attrs==26.1.0",
+    "bcrypt==5.0.0",
+    "boto3==1.42.96",
+    "botocore==1.42.96",
+    "cachecontrol==0.14.4",
+    "cachetools==6.2.6",
+    "certifi==2026.4.22",
+    "cffi==2.0.0",
+    "charset-normalizer==3.5.1",
+    "click==8.3.3",
+    "cloudinary==1.44.2",
+    "coverage[toml]==7.13.5",
+    "cryptography==50.0.0",
+    "defusedxml==0.7.1",
+    "deprecated==1.3.1",
+    "deprecation==2.1.0",
+    "distro==1.9.0",
+    "dnspython==2.8.0",
+    "docstring-parser==0.18.0",
+    "email-validator==2.3.0",
+    "et-xmlfile==2.0.0",
+    "fastapi==0.141.1",
+    "firebase-admin==7.5.0",
+    "fonttools==4.62.1",
+    "fpdf2==2.8.7",
+    "frozenlist==1.8.0",
+    "fsspec==2026.3.0",
+    "google-ai-generativelanguage==0.6.15",
+    "google-api-core[grpc]==2.30.3",
+    "google-api-python-client==2.194.0",
+    "google-auth==2.49.2",
+    "google-auth-httplib2==0.3.1",
+    "google-cloud-core==2.5.1",
+    "google-cloud-firestore==2.27.0",
+    "google-cloud-storage==3.10.1",
+    "google-crc32c==1.8.0",
+    "google-generativeai==0.8.6",
+    "google-resumable-media==2.8.2",
+    "googleapis-common-protos==1.74.0",
+    "grpcio==1.80.0",
+    "grpcio-status==1.71.2",
+    "h11==0.16.0",
+    "h2==4.4.1",
+    "hpack==4.2.0",
+    "httpcore==1.0.9",
+    "httplib2==0.32.0",
+    "httptools==0.8.0",
+    "httpx[http2]==0.28.1",
+    "httpx-sse==0.4.3",
+    "hyperframe==6.1.0",
+    "idna==3.18",
+    "iniconfig==2.3.0",
+    "jinja2==3.1.6",
+    "jiter==0.15.0",
+    "jmespath==1.1.0",
+    "jsonschema==4.26.0",
+    "jsonschema-specifications==2025.9.1",
+    "limits==5.8.0",
+    "loguru==0.7.3",
+    "lxml==6.1.1",
+    "markdown-it-py==4.0.0",
+    "markupsafe==3.0.3",
+    "mcp==1.28.1",
+    "mdurl==0.1.2",
+    "mmh3==5.2.1",
+    "msgpack==1.2.1",
+    "multidict==6.7.1",
+    "numpy==2.4.4",
+    "openai==2.41.1",
+    "openpyxl==3.1.5",
+    "packaging==26.2",
+    "pandas==3.0.2",
+    "pillow==12.3.0",
+    "pluggy==1.6.0",
+    "postgrest==2.29.0",
+    "propcache==0.4.1",
+    "proto-plus==1.27.2",
+    "protobuf==5.29.6",
+    "psycopg2-binary==2.9.12",
+    "pyasn1==0.6.4",
+    "pyasn1-modules==0.4.2",
+    "pycparser==3.0",
+    "pydantic==2.13.4",
+    "pydantic-core==2.46.4",
+    "pydantic-settings==2.15.0",
+    "pygments==2.20.0",
+    "pyiceberg==0.11.1",
+    "pyjwt[crypto]==2.13.0",
+    "pyotp==2.9.0",
+    "pyparsing==3.3.2",
+    "pypdf==6.15.0",
+    "pyroaring==1.1.0",
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "pytest-cov==7.1.0",
+    "pytest-env==1.7.0",
+    "pytest-mock==3.15.1",
+    "pytest-timeout==2.4.0",
+    "python-dateutil==2.9.0.post0",
+    "python-docx==1.1.2",
+    "python-dotenv==1.2.2",
+    "python-multipart==0.0.32",
+    "pytz==2026.2",
+    "pyyaml==6.0.3",
+    "realtime==2.29.0",
+    "redis[asyncio]==7.4.0",
+    "referencing==0.37.0",
+    "requests==2.33.1",
+    "rich==14.3.4",
+    "rpds-py==2026.5.1",
+    "s3transfer==0.16.1",
+    "sentry-sdk==2.59.0",
+    "shellingham==1.5.4",
+    "six==1.17.0",
+    "slowapi==0.1.9",
+    "sniffio==1.3.1",
+    "sse-starlette==3.4.4",
+    "starlette==1.3.1",
+    "staticmap==0.5.7",
+    "storage3==2.29.0",
+    "strenum==0.4.15",
+    "strictyaml==1.7.3",
+    "stripe==15.1.0",
+    "supabase==2.29.0",
+    "supabase-auth==2.29.0",
+    "supabase-functions==2.29.0",
+    "tenacity==9.1.4",
+    "tqdm==4.67.3",
+    "twilio==9.10.5",
+    "typer==0.25.0",
+    "typing-extensions==4.15.0",
+    "typing-inspection==0.4.2",
+    "uritemplate==4.2.0",
+    "urllib3==2.7.0",
+    "uvicorn[standard]==0.52.4",
+    "uvloop==0.22.1",
+    "watchfiles==1.1.1",
+    "websockets==15.0.1",
+    "wrapt==2.1.2",
+    "yarl==1.23.0",
+    "zstandard==0.25.0",
+    # --- END GENERATED DEPENDENCIES ---
+]
+
+[tool.setuptools]
+# The backend is deployed as an application, not installed as a library. Without
+# this, setuptools' auto-discovery walks the tree and errors on the flat layout.
+py-modules = []

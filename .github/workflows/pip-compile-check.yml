@@ -1,5 +1,15 @@
 name: pip-compile drift check
 
+# Verify two dependency invariants:
+#   1. requirements.txt is in sync with requirements.in (pip-compile), and
+#   2. backend/pyproject.toml's pinned deps mirror requirements.txt exactly.
+#
+# (2) exists because pyproject.toml feeds the FastAPI Cloud dev deploy while
+# production still builds from requirements.txt via backend/Dockerfile. If the
+# two drift, the dev tier silently runs different package versions than
+# production — see docs/runbooks/fastapi-cloud-dev.md.
+#
+# Original (1):
 # Verify that requirements.txt is in sync with requirements.in.
 # If it drifts (someone edited requirements.in without re-running pip-compile),
 # this job fails and prints the diff so the author knows what to regenerate.
@@ -16,12 +26,16 @@ on:
     paths:
       - 'backend/requirements.in'
       - 'backend/requirements.txt'
+      - 'backend/pyproject.toml'
+      - 'backend/scripts/sync_pyproject_deps.py'
       - '.github/workflows/pip-compile-check.yml'
   push:
     branches: [main]
     paths:
       - 'backend/requirements.in'
       - 'backend/requirements.txt'
+      - 'backend/pyproject.toml'
+      - 'backend/scripts/sync_pyproject_deps.py'
 
 jobs:
   check:
@@ -63,3 +77,19 @@ jobs:
             exit 1
           fi
           echo "requirements.txt is up to date."
+
+  pyproject-sync:
+    name: pyproject.toml mirrors requirements.txt
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+
+      # No install step: the checker uses only the standard library (tomllib is
+      # stdlib on 3.11+), so it cannot itself drift on a dependency.
+      - name: Check pyproject.toml is in sync
+        run: python -m backend.scripts.sync_pyproject_deps --check

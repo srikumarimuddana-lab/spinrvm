@@ -14820,6 +14820,22 @@ how much they de-risk a public launch._
   procedure: `docs/runbooks/dev-test-environments.md`. Note this tier shares one
   Supabase project between dev and test by design (ADR-011 §2). Mobile needs
   nothing — the EAS `test` profile and channel already exist and work.
+  **Hosting changed 2026-08-26 to a FastAPI Cloud trial** (ADR-011 addendum).
+  Added: `backend/pyproject.toml` (mirrors requirements.txt, CI-enforced by
+  pip-compile-check.yml's new `pyproject-sync` job),
+  `backend/scripts/sync_pyproject_deps.py`, `backend/main.py` (re-export shim
+  for FastAPI app discovery), and
+  `.github/workflows/deploy-backend-dev-fastapicloud.yml`. Setup needs
+  `fastapi cloud apps create` plus `FASTAPI_CLOUD_TOKEN` /
+  `FASTAPI_CLOUD_APP_ID` secrets — see `docs/runbooks/fastapi-cloud-dev.md`.
+  The Fly dev path stays as the fallback and must not be deleted.
+  **Three blocking gates must be answered by observation on the running dev
+  tier before FastAPI Cloud hosts any further tier** — record answers here:
+  (1) do the 18 `core/lifespan.py` background loops keep running through an
+  idle period, or does scale-to-zero stop them silently? (2) do rider/driver
+  WebSockets survive a full session? (3) which region actually serves the app
+  (regions are roadmap, not shipped — disqualifying for any tier with real
+  data under PIPEDA)? If any fails, stop at dev and stay on Fly.
 - [ ] **E1b. Canary environment** — scaffolding added 2026-08-24 (inert):
   `backend/fly.canary.toml` (`spinr-backend-canary`) and
   `.github/workflows/deploy-backend-canary.yml` (manual, typed confirmation,

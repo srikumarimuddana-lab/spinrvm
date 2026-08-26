@@ -1,7 +1,10 @@
 # ADR-011: Environment topology — dev/test, staging, canary
 
 **Date:** 2026-08-24
-**Status:** Accepted
+**Status:** Accepted. **Amended 2026-08-26** — the dev tier's *hosting* changed
+from Fly.io to a FastAPI Cloud trial; see the addendum at the end of this file.
+Every other decision below stands unchanged, and no section above the addendum
+has been edited (decisions stay immutable per `docs/adr/README.md`).
 
 ---
 
@@ -170,3 +173,77 @@ the failures that reach production untested today.
 - Frontend (Vercel) preview environments. Vercel already builds per-PR previews;
   no change proposed.
 - Mobile. EAS channels already cover it.
+
+---
+
+## Addendum, 2026-08-26 — dev tier moves to a FastAPI Cloud trial
+
+**Amends §2 and the dev row of the topology table, for hosting only.** The
+tier structure, the trunk-based promotion model, the shared dev/test Supabase
+project, and the entire canary design are unchanged.
+
+### What changed
+
+The dev tier is now deployed to **FastAPI Cloud** rather than Fly.io, as a
+deliberate trial with a decision at the end of it. The stated intent is to
+evaluate FastAPI Cloud for staging, canary, and eventually production, if it
+proves capable.
+
+The Fly.io dev path (`backend/fly.dev.toml`,
+`.github/workflows/deploy-backend-dev.yml`) is **retained, not removed**, as
+the fallback.
+
+### Why dev and only dev
+
+FastAPI Cloud is in public beta, and three of its features are on the published
+roadmap rather than shipped: **regions**, **background workers**, and
+**scheduled jobs**. Each maps onto something Spinr depends on:
+
+| Roadmap gap | What it threatens |
+|---|---|
+| Regions | PIPEDA data residency. `core/config.py` hard-fails in production when `SUPABASE_REGION` is not `ca-*`; an unselectable compute region is a legal question, not a hosting preference. |
+| Background workers | The 18 in-process asyncio loops in `core/lifespan.py`. If the platform scales to zero when idle they stop **silently** — scheduled rides never dispatch, surge never updates, no error is raised. |
+| Scheduled jobs | Same surface as above. |
+
+Dev is the only tier where all three are cheap to be wrong about: synthetic
+data, no riders, no money, and downtime nobody notices. Any of them would be a
+P0 in production.
+
+### What this required in the repo
+
+- `backend/pyproject.toml` — the deploy path resolves the app from a directory
+  holding one, and the repo had none. It **mirrors** `requirements.txt`'s 149
+  pins rather than becoming a second source of truth, so the dev tier runs the
+  same versions as production; a dev environment on different versions produces
+  confidence that does not transfer. CI-enforced by a `pyproject-sync` job.
+- `backend/main.py` — a re-export shim. FastAPI discovery looks for
+  `main.py`/`app.py`; Spinr's app object is in `server.py`, which is referenced
+  by `python -m backend.server`, the Dockerfile, `railway.json`, and much
+  documentation. Aliasing is the smaller change than renaming.
+- Production build path untouched: `backend/Dockerfile` and `railway.json`
+  still build from `requirements.txt` and target `server:app`.
+
+### The decision this defers
+
+Whether FastAPI Cloud hosts anything beyond dev is **not decided here**. It is
+gated on three observations recorded in `docs/runbooks/fastapi-cloud-dev.md`:
+do the background loops survive an idle period, do long-lived WebSockets hold,
+and which region actually serves the app. All three require observation on the
+running dev tier, not judgement.
+
+If they pass, a staging trial is the next step — never a jump straight to
+canary, which runs on the production database. If they fail, the trial ends by
+simply not running the workflow; nothing routes to it and the Fly dev path is
+one workflow run away.
+
+### Known limitation of this evaluation
+
+`fastapicloud.com` and `fastapi.tiangolo.com` are blocked by this
+organization's network egress policy, so their documentation could not be read
+directly while writing this. The deploy contract used here
+(`FASTAPI_CLOUD_TOKEN`, `FASTAPI_CLOUD_APP_ID`, the `deploy` command, the
+`env set` flags) was instead verified against the real `fastapi-cloud-cli`
+0.23.0 package from PyPI. The roadmap gaps above come from search-result
+summaries of the vendor's own pricing page and public-beta announcement, not
+from the pages themselves — treat them as well-supported but confirm with the
+vendor before acting on the migration question.

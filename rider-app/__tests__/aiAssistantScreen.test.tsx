@@ -20,6 +20,25 @@
  *    "Searching…" / driver-found copy / arrived copy per status, and its
  *    Share/Track buttons
  *  - the disclaimer footer falls back to a default when the store has none
+ *
+ * Branch coverage: 4 branch-paths deliberately left uncovered (95.45% ->
+ * 97.4% and no further -- all reachable branches are closed):
+ *  - LocationSuggestionsCard's own `if (item.action?.type !==
+ *    'location_suggestions') return null;` defensive guard, and the
+ *    onSelect handler's `item.action?.type === 'location_suggestions' ?
+ *    ... : null` role derivation -- both dead: this component (and this
+ *    handler's closure) is only ever reached via renderMessage's own gate
+ *    (`item.kind === 'location_suggestions' && item.action?.type ===
+ *    'location_suggestions'`), which already guarantees the type check.
+ *  - The two `if (!SpeechRecognition) return;` guards (the voice-listener
+ *    effect and handleMicPress) -- same class as the pre-existing
+ *    `require('expo-speech-recognition')` catch-branch exception already
+ *    documented in ACTION_ITEMS.md for this file: SpeechRecognition is
+ *    mocked present for every test in this file, so the module-absent path
+ *    is untestable without a `jest.resetModules()` re-require, which risks
+ *    a second `react` module instance under jest-expo's moduleNameMapper
+ *    remap (same accepted risk class as this sweep's other module-load-time
+ *    exceptions).
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
@@ -241,10 +260,32 @@ describe('AiAssistantScreen', () => {
     expect(allText(r)).toContain('Driver found: Sam Lee — Blue Toyota Camry, plate ABC 123');
   });
 
+  it('shows the driver-found status without a plate suffix when license_plate is missing', async () => {
+    mockRideState = {
+      currentRide: { id: 'ride-1', status: 'driver_accepted' },
+      currentDriver: { name: 'Sam Lee', vehicle_color: 'Blue', vehicle_make: 'Toyota', vehicle_model: 'Camry' },
+    };
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Driver found: Sam Lee — Blue Toyota Camry');
+    expect(allText(r)).not.toContain('plate');
+  });
+
+  it('shows the generic "on the way" copy when driver_assigned has no currentDriver yet', async () => {
+    mockRideState = { currentRide: { id: 'ride-1', status: 'driver_assigned' }, currentDriver: null };
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Driver found — on the way!');
+  });
+
   it('shows the arrived status', async () => {
     mockRideState = { currentRide: { id: 'ride-1', status: 'driver_arrived' }, currentDriver: null };
     const r = await renderScreen();
     expect(allText(r)).toContain('Your driver has arrived!');
+  });
+
+  it('falls back to the generic "Trip in progress" copy for a trackable status matching none of the named branches', async () => {
+    mockRideState = { currentRide: { id: 'ride-1', status: 'in_progress' }, currentDriver: null };
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Trip in progress');
   });
 
   it('shares the trip via the ride banner', async () => {
@@ -319,6 +360,19 @@ describe('AiAssistantScreen', () => {
     });
   });
 
+  it('pushes to /pick-on-map without aiLat/aiLng when there are no approx coords', async () => {
+    mockAiChatState.messages = [
+      { id: 'm1', role: 'assistant', kind: 'map_picker', content: '', action: { type: 'open_map_picker', location_role: 'dropoff' } },
+    ];
+    const r = await renderScreen();
+    const btn = findButtonByText(r, 'Drop a pin');
+    act(() => { btn.props.onPress(); });
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: '/pick-on-map',
+      params: { field: 'dropoff', ai: '1' },
+    });
+  });
+
   it('disables a map_picker bubble once a newer conversation turn has started (stale card)', async () => {
     mockAiChatState.messages = [
       { id: 'm1', role: 'assistant', kind: 'map_picker', content: '', action: { type: 'open_map_picker', location_role: 'pickup' } },
@@ -357,6 +411,29 @@ describe('AiAssistantScreen', () => {
     expect(allText(r)).toContain('Hello! How can I help?');
   });
 
+  it('falls back the welcome title to the no-name copy when the user has no first_name', async () => {
+    mockAuthUser = {};
+    const r = await renderScreen();
+    expect(allText(r)).toContain("Hi! Let's get going");
+  });
+
+  it('shows the transient tool-status row while a tool is running', async () => {
+    mockAiChatState.toolStatus = 'Looking up your fare…';
+    mockAiChatState.messages = [{ id: 'm1', role: 'user', kind: 'text', content: 'hi' }];
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Looking up your fare…');
+  });
+
+  it('shows the Stop button (not Send) and hides the mic button while streaming', async () => {
+    mockAiChatState.isStreaming = true;
+    const r = await renderScreen();
+    expect(r.root.findByProps({ accessibilityLabel: 'Stop' })).toBeTruthy();
+    expect(() => r.root.findByProps({ accessibilityLabel: 'Send' })).toThrow();
+    expect(() => r.root.findByProps({ accessibilityLabel: 'Start voice input' })).toThrow();
+    act(() => { r.root.findByProps({ accessibilityLabel: 'Stop' }).props.onPress(); });
+    expect(mockStopStreaming).toHaveBeenCalled();
+  });
+
   it('shows the default disclaimer when the store has none', async () => {
     const r = await renderScreen();
     expect(allText(r)).toContain('AI answers can be inaccurate. For emergencies, call 911 or use the SOS button.');
@@ -375,6 +452,16 @@ describe('AiAssistantScreen', () => {
     const sendBtn = r.root.findByProps({ accessibilityLabel: 'Send' });
     act(() => { sendBtn.props.onPress(); });
     expect(mockSendMessage).toHaveBeenCalledWith('hello');
+  });
+
+  it('does not call Share.share when the response has no share_url', async () => {
+    mockRideState = { currentRide: { id: 'ride-1', status: 'driver_arrived' }, currentDriver: null };
+    mockApiGet.mockResolvedValue({ data: {} });
+    const r = await renderScreen();
+    const shareBtn = r.root.findByProps({ accessibilityLabel: 'Share trip' });
+    await act(async () => { await shareBtn.props.onPress(); await flush(); });
+    expect(mockApiGet).toHaveBeenCalledWith('/rides/ride-1/share');
+    expect(Share.share).not.toHaveBeenCalled();
   });
 
   it('logs (and does not crash) when the trip-share fetch fails', async () => {
@@ -429,6 +516,112 @@ describe('AiAssistantScreen', () => {
       expect(optionBtn.props.disabled).toBe(true);
       expect(allText(r)).toContain('The conversation has moved on');
     });
+
+    it('shows the generic "Choose a location" title for a role that is neither pickup nor dropoff', async () => {
+      mockAiChatState.messages = [
+        {
+          id: 'm1', role: 'assistant', kind: 'location_suggestions', content: '',
+          action: { type: 'location_suggestions', location_role: null, candidates: [CANDIDATE] },
+        },
+      ];
+      const r = await renderScreen();
+      expect(allText(r)).toContain('Choose a location');
+    });
+
+    it('falls the primary label back to address when name is missing', async () => {
+      const candidate = { address: '100 Main St', lat: 50.1, lng: -104.1 };
+      mockAiChatState.messages = [
+        {
+          id: 'm1', role: 'assistant', kind: 'location_suggestions', content: '',
+          action: { type: 'location_suggestions', location_role: 'pickup', candidates: [candidate] },
+        },
+      ];
+      const r = await renderScreen();
+      expect(r.root.findByProps({ accessibilityLabel: 'Use 100 Main St' })).toBeTruthy();
+    });
+
+    it('falls the primary label back to "Option N" and no-ops on select when both name and address are missing', async () => {
+      const candidate = { lat: 50.1, lng: -104.1 };
+      mockAiChatState.messages = [
+        {
+          id: 'm1', role: 'assistant', kind: 'location_suggestions', content: '',
+          action: { type: 'location_suggestions', location_role: 'pickup', candidates: [candidate] },
+        },
+      ];
+      const r = await renderScreen();
+      const optionBtn = r.root.findByProps({ accessibilityLabel: 'Use Option 1' });
+      expect(optionBtn).toBeTruthy();
+      act(() => { optionBtn.props.onPress(); });
+      // buildLocationChoiceMessage returns null with no name/address label -- the
+      // onSelect handler's `if (!message) return;` guard swallows the tap.
+      expect(mockSendMessage).not.toHaveBeenCalled();
+    });
+
+    it('falls the secondary line back to service_area when name+address are not both present', async () => {
+      const candidate = { name: 'Home', service_area: 'Regina', lat: 50.1, lng: -104.1 };
+      mockAiChatState.messages = [
+        {
+          id: 'm1', role: 'assistant', kind: 'location_suggestions', content: '',
+          action: { type: 'location_suggestions', location_role: 'pickup', candidates: [candidate] },
+        },
+      ];
+      const r = await renderScreen();
+      expect(allText(r)).toContain('Regina');
+    });
+
+    it('renders no secondary line when neither name+address nor service_area is available', async () => {
+      const candidate = { name: 'Home', lat: 50.1, lng: -104.1 };
+      mockAiChatState.messages = [
+        {
+          id: 'm1', role: 'assistant', kind: 'location_suggestions', content: '',
+          action: { type: 'location_suggestions', location_role: 'pickup', candidates: [candidate] },
+        },
+      ];
+      const r = await renderScreen();
+      const optionBtn = r.root.findByProps({ accessibilityLabel: 'Use Home' });
+      // Only the primary label text renders inside this option row -- no
+      // secondary/route Text siblings.
+      expect(optionBtn.findAllByType(Text)).toHaveLength(2); // pin index + primary label
+    });
+
+    it('shows the road-distance route summary, with duration when available', async () => {
+      const candidate = { name: 'Home', address: '100 Main St', driving_distance_km: 3.456, driving_duration_minutes: 8, lat: 50.1, lng: -104.1 };
+      mockAiChatState.messages = [
+        {
+          id: 'm1', role: 'assistant', kind: 'location_suggestions', content: '',
+          action: { type: 'location_suggestions', location_role: 'pickup', candidates: [candidate] },
+        },
+      ];
+      const r = await renderScreen();
+      expect(allText(r)).toContain('Closest · 3.5 km by road · about 8 min');
+    });
+
+    it('omits the duration clause when driving_duration_minutes is not available', async () => {
+      const candidate = { name: 'Home', address: '100 Main St', driving_distance_km: 3.456, lat: 50.1, lng: -104.1 };
+      mockAiChatState.messages = [
+        {
+          id: 'm1', role: 'assistant', kind: 'location_suggestions', content: '',
+          action: { type: 'location_suggestions', location_role: 'pickup', candidates: [candidate] },
+        },
+      ];
+      const r = await renderScreen();
+      expect(allText(r)).toContain('Closest · 3.5 km by road');
+      expect(allText(r)).not.toContain('about');
+    });
+
+    it('only labels the first candidate as "Closest" -- later candidates show the plain route summary', async () => {
+      const first = { name: 'Home', address: '100 Main St', driving_distance_km: 2, lat: 50.1, lng: -104.1 };
+      const second = { name: 'Work', address: '200 Elm St', driving_distance_km: 5, lat: 50.2, lng: -104.2 };
+      mockAiChatState.messages = [
+        {
+          id: 'm1', role: 'assistant', kind: 'location_suggestions', content: '',
+          action: { type: 'location_suggestions', location_role: 'pickup', candidates: [first, second] },
+        },
+      ];
+      const r = await renderScreen();
+      expect(allText(r)).toContain('Closest · 2.0 km by road');
+      expect(allText(r)).toContain('"5.0 km by road"');
+    });
   });
 
   describe('voice input (mic button)', () => {
@@ -469,6 +662,13 @@ describe('AiAssistantScreen', () => {
       const r = await renderScreen();
       act(() => { mockSpeechListeners.result({ results: [{ transcript: 'book me a ride' }] }); });
       expect(r.root.findByType(TextInput).props.value).toBe('book me a ride');
+    });
+
+    it('a "result" event with no usable transcript leaves the input unchanged', async () => {
+      const r = await renderScreen();
+      act(() => { r.root.findByType(TextInput).props.onChangeText('typed so far'); });
+      act(() => { mockSpeechListeners.result({ results: [] }); });
+      expect(r.root.findByType(TextInput).props.value).toBe('typed so far');
     });
 
     it('an "end" event stops the listening indicator', async () => {

@@ -132,6 +132,22 @@ placeholders; the real ones are admin-managed `vehicle_types` rows.
 Replace all of it, and give the marketing claims a legal/marketing pass, before
 submitting.
 
+## Google Play set
+
+`_play.py` reflows the same six frames to **1080 × 1920** (9:16 — Play rejects
+anything taller than 2:1, so the 1290 × 2796 App Store images cannot be
+reused). It imports `_build.py` for the device, palette, leaf and frame copy;
+floating chips are dropped at this size. Rendered PNGs: `png/spinr-play-*.png`.
+
+Store size requirements (2026):
+- **App Store**: one iPhone set at the largest size (1290 × 2796) is required;
+  Apple auto-scales for smaller iPhones. `supportsTablet: true` in
+  `rider-app/app.config.ts` means an iPad 13" set (2048 × 2732) is also
+  required — not built yet.
+- **Google Play**: one phone set within 2:1 aspect (this 1080 × 1920 set),
+  plus a 1024 × 500 feature graphic (not built yet). Tablet sets only if
+  targeting tablets.
+
 ## Not built yet
 
 - **Google Play** needs its own **1080 × 1920** set. Play rejects anything taller

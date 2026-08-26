@@ -10444,9 +10444,20 @@ record of what was assumed vs. what was actually true</summary>
     it renders a `FareQuoteCard`/`BookingProposalCard` whose own selection
     handlers were already covered) but explicitly named as a proactive-
     review trigger for `spinr-ai-guardrail-reviewer` in this repo's agent
-    roster, so that agent reviewed the diff — review requested, result to
-    be folded in once it returns. Already had `aiAssistantScreen.test.tsx`
-    (35 tests) — extended in place (+17 tests, 52 total). Closed:
+    roster, so that agent reviewed the diff and returned **SAFE TO
+    MERGE**: spot-checked every new assertion against the real source
+    (confirmed none are vacuous — e.g. the "later candidates" test's
+    quoted-string assertion is a deliberate check that `allText()`'s
+    `JSON.stringify` serialization excludes the "Closest ·" prefix on a
+    non-first candidate, not a typo), independently re-derived and
+    confirmed all 4 "deliberately uncovered" branch claims by reading the
+    source and the file's own mocking setup, confirmed no PII in the new
+    fixture coordinates (fixed non-real Regina-area placeholders matching
+    existing file conventions), and confirmed no prompt-injection-
+    relevant assertions were touched (this diff is UI-rendering branch
+    coverage only — no conversation-history, tool-call, or provider-
+    payload behavior). Already had `aiAssistantScreen.test.tsx` (35
+    tests) — extended in place (+17 tests, 52 total). Closed:
     - `RideStatusBanner`'s driver-found copy: currentDriver present
       without a `license_plate` (no ", plate ..." suffix); currentDriver
       `null` with `driver_assigned` status (falls to the generic "on the

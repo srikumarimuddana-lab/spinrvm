@@ -9,11 +9,11 @@ This repository contains a full-stack rideshare application built with React Nat
     *   `db.py`: Database abstraction layer (Mongo-like interface).
     *   `db_supabase.py`: Supabase (PostgreSQL) data access logic.
     *   `tests/`: Verification scripts.
-*   `frontend/`: React Native (Expo) frontend.
-    *   `app/`: Expo Router screens.
-    *   `store/`: Zustand state management.
-    *   `api/`: API client configuration.
+*   `rider-app/`: React Native (Expo) rider app — canonical, production mobile client.
+*   `driver-app/`: React Native (Expo) driver app — canonical, production mobile client.
 *   `admin-dashboard/`: Admin panel (Next.js/React).
+*   `shared/`: Cross-surface shared TypeScript code/types.
+*   `frontend/`: **Deprecated** legacy combined rider app (see `frontend/DEPRECATED.md`) — use `rider-app/` instead.
 
 ## Deployment
 
@@ -58,10 +58,13 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed step-by-step instructions.
     python3 -m unittest backend/tests/verify_db.py
     ```
 
-### Frontend
+### Rider App / Driver App
+
+`frontend/` (the legacy combined app referenced by older docs) is deprecated — use `rider-app/`
+and `driver-app/` instead, which are the canonical, production mobile clients.
 
 1.  **Prerequisites**: Node.js, Expo CLI.
-2.  **Environment Variables**: Create `.env` in `frontend/` with:
+2.  **Environment Variables**: Create `.env` in `rider-app/` and/or `driver-app/` with:
     *   `EXPO_PUBLIC_BACKEND_URL`: URL of your running backend (e.g., `http://localhost:8000`).
     *   `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY`: Google Maps API Key.
     *   `EXPO_PUBLIC_FB_APP_ID`: Meta App ID for conversion tracking. **Different value per app** — the rider and driver apps have separate Meta Apps and separate datasets. Optional; the app runs normally without it and simply logs no events.
@@ -74,13 +77,14 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed step-by-step instructions.
     backend secret and never appears in app code. See `META_EVENTS.md`.
 3.  **Install Dependencies**:
     ```bash
-    cd frontend
-    npm install
+    cd rider-app && yarn install    # or: cd driver-app && yarn install
     ```
 4.  **Run App**:
     ```bash
     npx expo start
     ```
+
+    See `docs/dev-setup.md` for the full local dev setup across all surfaces.
 
 ## Key Features
 

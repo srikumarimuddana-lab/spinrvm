@@ -31,7 +31,8 @@ native library + keep all ride logic in shared TS/Zustand*.
   is separate: head units render Apple/Google *templates*, not React Native views, so we add
   a parallel "car UI" that observes the same stores. Natively this adds a second entry point
   (an Android `CarAppService`, and on iOS a `CPTemplateApplicationScene`) in the *same* binary.
-- **Library: `@iternio/react-native-auto-play@0.4.7`** + `react-native-nitro-modules@0.35.9`.
+- **Library: `@iternio/react-native-auto-play@0.5.13`** + `react-native-nitro-modules@0.35.9`
+  (upgraded from 0.4.7 on 2026-08-26 — see the upgrade note below).
   Built on **Nitro Modules** (New-Architecture native — which we're on, via Reanimated 4),
   peers `react-native: *` (no version ceiling — important, we run **0.85.2**), supports both
   CarPlay and Android Auto, and ships its own merged `AndroidManifest` (CarAppService +
@@ -114,9 +115,10 @@ store and hand turn-by-turn to the driver's own Google Maps / Waze.
 - **Hardware-validated (2026-08-16):** Nitro codegen builds under Expo prebuild on SDK 57 /
   RN 0.86.2; the surface hosts the React tree; the live map renders. Still unseen in a car:
   marker rotation/glide, the redesigned earnings card, and the alert/header rendering.
-  The JS contract is covered by **56 unit tests** (`lib/androidAuto/__tests__/`) — but note
-  the suite currently cannot run at all (`jest.setup.js` fails to resolve `firebase/auth`),
-  so treat that coverage as stale until the runner is repaired.
+  The JS contract is covered by **211 unit tests across 12 suites**
+  (`lib/androidAuto/__tests__/`). (An earlier version of this note said the suite could not
+  run because `jest.setup.js` failed to resolve `firebase/auth` — that is fixed; re-verified
+  green 2026-08-26, including against the 0.5.13 upgrade.)
 - **How the surface actually works** (learned the hard way, worth not re-deriving):
   iternio's `VirtualRenderer.kt` creates a `VirtualDisplay` from the car's `SurfaceContainer`
   with `VIRTUAL_DISPLAY_FLAG_PRESENTATION`, hosts an Android `Presentation` on it, and mounts
@@ -143,6 +145,57 @@ store and hand turn-by-turn to the driver's own Google Maps / Waze.
 - **No animation, ever.** Google's Car app quality guidelines forbid animated elements on a
   connected head unit and Play enforces it at review before a public release. The card's
   richness comes from hierarchy, type scale, contrast and spacing only.
+
+### Library upgrade 0.4.7 → 0.5.13 (2026-08-26)
+
+Dependency-only bump; **no call-site changes** — every API `register.ts` uses is
+byte-identical between the two versions' Nitro specs (the only removals are the voice
+methods, which moved from `HybridAutoPlay` to a new `HybridVoice` object we never called).
+`react-native-nitro-modules` stays at 0.35.9, exactly the version 0.5.13 is generated
+against. What the bump changes, all in the library's own native layer:
+
+- **Head-unit freeze fix (0.5.13):** 0.4.7 released the old `VirtualDisplay` before its
+  replacement existed; the window-absent gap stopped Choreographer, freezing map animation
+  (`ValueAnimator`) and RN `setInterval`/`setTimeout` until the phone screen woke. 0.5.x
+  releases the old display only after the new one has drawn. This is a plausible cause for
+  marker-glide/countdown failures we'd have hit in the still-pending device test.
+- **Resize reflow (0.5.10):** on head units that run Android Auto windowed, the React
+  surface's layout params, scale and Fabric measure specs are now recomputed when the host
+  recreates the surface with new dimensions (0.4.7 kept a stale-sized tree). The React
+  surface survives the resize, and root components get an updated `window` prop via the new
+  `WindowInformationWrapper` the library wraps around our `CarMapSurface` automatically.
+- **Car-derived density:** `window.scale`/insets now come from `surfaceContainer.dpi`, not
+  the phone's `displayMetrics.density` — the trip-card overlay and inset math were silently
+  mis-scaled on any head unit whose density differs from the phone's.
+- **ProGuard requirement (0.5.3):** Nitro resolves hybrid objects by class name, so
+  minified release builds need
+  `-keep class com.margelo.nitro.swe.iternio.reactnativeautoplay.** { *; }`. Wired into
+  `app.config.ts` (`expo-build-properties` → `android.extraProguardRules`); inert today
+  because minification is off, present so flipping it on later can't break car-only builds.
+- **`runtimeVersion` 2.6.0 → 2.7.0:** the bump adds new native hybrid objects
+  (`HybridVoice`, `AndroidWindowInformation`), so 0.5.13 JS must never OTA onto a 0.4.7
+  binary — the `register.ts` guard would degrade that to silently losing car support.
+- **Newly available, not yet used:** `HybridAutoPlay.isCarServiceRunning()` (distinguish an
+  AA/CP headless start from e.g. a notification wake) and the real voice API
+  (`HybridVoice.startVoiceInput` — speech-to-text, streaming chunks, cancel detection via
+  `ErrorUtil.isVoiceInputCanceledError`, car-mic capture). Voice is the sanctioned route to
+  driver actions Google's distraction rules forbid touch targets for (the unwired
+  online/offline toggle is the realistic candidate) but is a product + PIPEDA decision
+  (RECORD_AUDIO, raw-audio egress), not a free win. Note 0.5.10 also added non-navigation
+  app categories via `ReactNativeAutoPlay_androidAutoAppCategory` — we must stay on the
+  default `navigation`: the live-map surface needs `MAP_TEMPLATES`/`ACCESS_SURFACE`, which
+  the non-nav manifest drops.
+- **CarPlay-day items banked:** the maneuver travel-estimate fix (0.5.8 — CarPlay only
+  applies estimate updates to the already-active maneuver, so in-dash ETA on the current
+  turn went stale) and the README's new Expo SDK ≥ 56 requirement that
+  `buildReactNativeFromSource: true` be set for the screen-lock timer patch — already true
+  in our `app.config.ts` for the Firebase/dev-launcher reasons documented there.
+
+**Validation state:** jest (12 suites / 211 tests), `tsc --noEmit` and eslint are green
+against 0.5.13. The EAS `android-auto`-profile build and a head-unit session have NOT been
+re-run for the bump — same gate as everything else on this surface: do not release until a
+Play-internal build has been seen in a car, ideally re-checking exactly the three behaviours
+the native fixes target (marker glide during offer countdown, surface resize, card scale).
 
 ### iOS CarPlay — dormant
 
@@ -182,7 +235,7 @@ phone" prompt for those.
 
 | | `birkir/react-native-carplay` | `@g4rb4g3/react-native-carplay` | **`@iternio/react-native-auto-play`** |
 |---|---|---|---|
-| Latest | `2.4.1-beta.0` (Jun 2024) | `2.7.22` (Dec 2025) | **`0.4.7`** (May 2026) |
+| Latest | `2.4.1-beta.0` (Jun 2024) | `2.7.22` (Dec 2025) | **`0.5.13`** (Jul 2026; adopted 2026-08-26, initially integrated at 0.4.7) |
 | React peer | `^17 \|\| ^18` ❌ | `^18 \|\| ^19` ✅ | `*` ✅ |
 | RN peer | `^0.60` | `^0.74 \|\| ^0.76 \|\| ^0.79` (we run **0.85.2** — gap) | **`*`** ✅ (no ceiling) |
 | Architecture | old-arch | legacy bridge + new-arch compat | **Nitro (New-Architecture native)** ✅ |
@@ -255,7 +308,7 @@ launch path (iternio's `CarAppService` is a new `<service>` merged from its libr
 ## What's committed vs what the build must validate
 
 Committed on this branch (verifiable without a device): the dependency swap to iternio, the
-entry registration, and the `lib/androidAuto/` car-UI layer with 56 unit tests (lint/tsc clean
+entry registration, and the `lib/androidAuto/` car-UI layer with 211 unit tests (lint/tsc clean
 on the new files; pure logic fully covered).
 
 **Not yet validated** (needs an EAS build + head unit, which this environment can't run): that

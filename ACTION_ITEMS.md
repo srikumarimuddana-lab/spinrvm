@@ -10436,6 +10436,68 @@ record of what was assumed vs. what was actually true</summary>
     coverage. Test-only diff (production `app/reactivate-account.tsx`
     confirmed untouched via `git diff`). 13 tests; full rider-app suite
     still green (123 suites / 1666 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/ai-assistant.tsx`: 83.11% → 97.4% branch** (stmts/
+    funcs/lines unchanged at 96.49%/95.83%/98.59% — this round targeted
+    branches specifically; a prior round already closed lines from
+    73.9%→98.6%, see the earlier entry above). AI chat screen — money-
+    adjacent only at the margins (no fare/wallet/Stripe path of its own;
+    it renders a `FareQuoteCard`/`BookingProposalCard` whose own selection
+    handlers were already covered) but explicitly named as a proactive-
+    review trigger for `spinr-ai-guardrail-reviewer` in this repo's agent
+    roster, so that agent reviewed the diff — review requested, result to
+    be folded in once it returns. Already had `aiAssistantScreen.test.tsx`
+    (35 tests) — extended in place (+17 tests, 52 total). Closed:
+    - `RideStatusBanner`'s driver-found copy: currentDriver present
+      without a `license_plate` (no ", plate ..." suffix); currentDriver
+      `null` with `driver_assigned` status (falls to the generic "on the
+      way" copy); and a trackable-but-unnamed status (`in_progress`)
+      falling through all three named `if`/`else if` branches to the
+      default "Trip in progress" copy.
+    - `handleShare`'s implicit-else when the `/rides/:id/share` response
+      has no `share_url` — confirmed `Share.share` is never called.
+    - `LocationSuggestionsCard`'s title falling back to "Choose a
+      location" for a role that's neither `pickup` nor `dropoff`; the
+      primary-label fallback chain (`name || address || "Option N"`) for
+      a candidate missing `name`, and for one missing both `name` and
+      `address` (which also closes `onSelect`'s `if (!message) return;`
+      guard, since `buildLocationChoiceMessage` returns `null` with no
+      usable label — asserted `sendMessage` is never called); the
+      secondary-line fallback to `service_area` when `name`+`address`
+      aren't both present, and to no secondary line at all when nothing
+      is available; the road-distance/duration route-summary line (with
+      and without `driving_duration_minutes`), and the "Closest ·" prefix
+      applying only to the first candidate, not later ones in the same
+      list.
+    - `map_picker`'s `hasApprox ? {...} : {}` params spread when there
+      are no `approx_lat`/`approx_lng` coordinates.
+    - The welcome-title fallback to "Hi! Let's get going" when the user
+      has no `first_name`.
+    - The transient tool-status row rendering while `toolStatus` is set.
+    - `isStreaming`'s Stop-button/no-Send-button/no-mic-button render
+      state, plus wiring the Stop button to `stopStreaming`.
+    - The voice-input `result` listener's implicit-else when the speech
+      event carries no usable transcript (results array empty) — input
+      text is left unchanged.
+
+    Four branch-paths left deliberately uncovered, documented in the test
+    file's own docblock: `LocationSuggestionsCard`'s own `if
+    (item.action?.type !== 'location_suggestions') return null;` guard
+    and the `onSelect` handler's matching ternary — both dead, because
+    this component (and this handler's closure) is only ever reached via
+    `renderMessage`'s own gate, which already guarantees the type check;
+    and the two `if (!SpeechRecognition) return;` guards (the voice-
+    listener effect and `handleMicPress`) — same class as the pre-
+    existing `require('expo-speech-recognition')` catch-branch exception
+    already on record for this file: `SpeechRecognition` is mocked
+    present for every test, so the module-absent path needs a
+    `jest.resetModules()` re-require to reach, which risks a second
+    `react` module instance under jest-expo's `moduleNameMapper` remap
+    (same accepted risk class as this sweep's other module-load-time
+    exceptions, e.g. `ride-options.tsx`'s `GOOGLE_MAPS_API_KEY` gate).
+
+    No production bugs found — production `app/ai-assistant.tsx`
+    confirmed untouched via `git diff`. 52 tests; full rider-app suite
+    still green (123 suites / 1683 tests), `yarn tsc --noEmit` clean.
   - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
     85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
     tests: no-account-prefill, the CRC-consent auto-check-when-

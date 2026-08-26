@@ -2057,7 +2057,12 @@ async def admin_get_heatmap_data(
 
     # Corporate vs regular filter
     if filter == "corporate":
-        query_filters["corporate_account_id"] = {"$ne": None}
+        # $notnull, NOT {"$ne": None} — $ne compiles to SQL `<> NULL`, which
+        # never matches anything (see repositories/_base.py's $notnull note;
+        # same bug already fixed in routes/admin/drivers.py). With the old
+        # form, selecting "Corporate" in the admin Heat Map always returned
+        # zero points and 0/0 stats.
+        query_filters["corporate_account_id"] = {"$notnull": True}
     elif filter == "regular":
         query_filters["corporate_account_id"] = None
 

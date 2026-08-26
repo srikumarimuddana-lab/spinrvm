@@ -951,7 +951,8 @@ class TestAdminRidesReadEndpointsSmoke:
                 "corporate_account_id": None,
             },
         ]
-        with patch("db_supabase.get_rows", AsyncMock(return_value=rows)):
+        mock_get_rows = AsyncMock(return_value=rows)
+        with patch("db_supabase.get_rows", mock_get_rows):
             resp = client.get(
                 "/api/admin/rides/heatmap-data",
                 params={"filter": "corporate", "start_date": "2026-01-01", "end_date": "2026-01-31"},
@@ -961,6 +962,12 @@ class TestAdminRidesReadEndpointsSmoke:
         assert body["stats"]["total_rides"] == 2
         assert body["stats"]["corporate_rides"] == 1
         assert len(body["pickup_points"]) == 1
+        # Regression: must use $notnull, not {"$ne": None} — the latter compiles
+        # to SQL `<> NULL`, which never matches any row (repositories/_base.py's
+        # $notnull note), so the real Supabase query always returned zero
+        # corporate rides even though this mocked test still passed.
+        sent_filters = mock_get_rows.call_args.args[1]
+        assert sent_filters["corporate_account_id"] == {"$notnull": True}
 
     def test_get_earnings_happy_path(self, client, as_super_admin):
         rollup = [

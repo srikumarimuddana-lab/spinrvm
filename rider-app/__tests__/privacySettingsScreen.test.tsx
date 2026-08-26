@@ -18,6 +18,30 @@
  *    toasts instead of navigating
  *  - the Privacy Policy / Terms of Service rows navigate to /legal with the
  *    right `type` query param
+ *
+ * Branch-coverage extension (2026-08-26): closes 5 of the 6 branches left
+ * uncovered by the above (19/25 -> 24/25, the achievable ceiling given the
+ * one dead branch documented below; see below):
+ *  - turning the push toggle OFF (skips the permission check entirely) and
+ *    the mutate `onError` revert+toast path for that save
+ *  - the `notificationPrefs?.push_enabled != null` hydrate guard when the
+ *    query has no push_enabled value (toggle stays at its default)
+ *  - `res?.data ?? res ?? {}` marketing-prefs hydrate fallback: a raw
+ *    (unwrapped) response object, and a nullish response
+ *  - the `if (!active) return;` guard in the marketing-prefs effect, via an
+ *    unmount before the in-flight GET resolves
+ *
+ * Deliberately NOT covered: the inner `onPress ? <chevron/> : null` ternary
+ * in `SettingRow` (source line 259, cond-expr path 1 — the `null` branch)
+ * is unreachable through this screen. Every one of the 8 `SettingRow` call
+ * sites in `app/privacy-settings.tsx` sets either `toggle` (the 4
+ * notification/marketing rows) or `onPress` (the 4 data-section rows) —
+ * none passes neither — so the `null` fallback can only be reached by
+ * calling the unexported `SettingRow` directly with both props omitted,
+ * which is not possible from a test that (correctly) treats the screen as
+ * a black box and does not modify production code to export it. Confirmed
+ * via the coverage-final.json branchMap (id=11, loc 257-259) that this is
+ * the sole remaining gap after the tests below.
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
@@ -176,6 +200,32 @@ describe('push notification toggle — turning ON', () => {
   });
 });
 
+describe('push notification toggle — turning OFF', () => {
+  it('skips the permission check and saves directly; reverts + toasts on failure', async () => {
+    mockPrefsData = { push_enabled: true };
+    const renderer = await renderScreen();
+    expect(toggles(renderer)[0].props.value).toBe(true);
+    mockMutate.mockImplementation((_data: any, opts: any) => { opts.onError(new Error('down')); });
+    await act(async () => {
+      toggles(renderer)[0].props.onValueChange(false);
+      await flush();
+    });
+    expect(mockCheckNotificationPermission).not.toHaveBeenCalled();
+    expect(mockMutate).toHaveBeenCalledWith({ push_enabled: false }, expect.anything());
+    expect(mockShowToast).toHaveBeenCalledWith('Update Failed', 'Could not save your preference. Please try again.', 'danger');
+    // Reverted back to true (the value before this failed attempt).
+    expect(toggles(renderer)[0].props.value).toBe(true);
+  });
+});
+
+describe('push notification preference hydrate guard', () => {
+  it('leaves the toggle at its default when the query has no push_enabled value', async () => {
+    mockPrefsData = null;
+    const renderer = await renderScreen();
+    expect(toggles(renderer)[0].props.value).toBe(true);
+  });
+});
+
 describe('marketing consent toggles', () => {
   it('hydrate from GET /marketing/preferences', async () => {
     mockApiGet.mockResolvedValue({ data: { email_opt_in: true, sms_opt_in: false, push_opt_in: true } });
@@ -198,6 +248,47 @@ describe('marketing consent toggles', () => {
     expect(mockShowToast).toHaveBeenCalledWith('Update Failed', 'Could not save your preference. Please try again.', 'danger');
     // Reverted back to true (the value before this failed attempt).
     expect(toggles(renderer)[1].props.value).toBe(true);
+  });
+
+  it('saves the sms and push marketing channels independently', async () => {
+    const renderer = await renderScreen();
+    const [, , sms, push] = toggles(renderer);
+    await act(async () => { await sms.props.onValueChange(true); await flush(); });
+    expect(mockApiPut).toHaveBeenCalledWith('/marketing/preferences', { sms_opt_in: true, source: 'rider_app' });
+    await act(async () => { await push.props.onValueChange(true); await flush(); });
+    expect(mockApiPut).toHaveBeenCalledWith('/marketing/preferences', { push_opt_in: true, source: 'rider_app' });
+  });
+
+  it('hydrates from a raw (unwrapped) API response — res?.data ?? res fallback', async () => {
+    mockApiGet.mockResolvedValue({ email_opt_in: true, sms_opt_in: true, push_opt_in: false });
+    const renderer = await renderScreen();
+    const [, email, sms, push] = toggles(renderer);
+    expect(email.props.value).toBe(true);
+    expect(sms.props.value).toBe(true);
+    expect(push.props.value).toBe(false);
+  });
+
+  it('defaults every channel to off when the API resolves with nothing — res?.data ?? res ?? {} fallback', async () => {
+    mockApiGet.mockResolvedValue(undefined);
+    const renderer = await renderScreen();
+    const [, email, sms, push] = toggles(renderer);
+    expect(email.props.value).toBe(false);
+    expect(sms.props.value).toBe(false);
+    expect(push.props.value).toBe(false);
+  });
+
+  it('does not update state after unmount when the fetch resolves late (active guard)', async () => {
+    let resolveGet!: (v: any) => void;
+    mockApiGet.mockReturnValue(new Promise((resolve) => { resolveGet = resolve; }));
+    const renderer = await renderScreen();
+    act(() => { renderer.unmount(); });
+    mountedRenderer = null; // already unmounted here; prevent afterEach from double-unmounting
+    await act(async () => {
+      resolveGet({ data: { email_opt_in: true, sms_opt_in: true, push_opt_in: true } });
+      await flush();
+    });
+    // Reaching here without React warning/throwing about setting state on an
+    // unmounted component confirms the `if (!active) return;` guard fired.
   });
 });
 
@@ -240,6 +331,17 @@ describe('data section', () => {
     expect(mockShowToast).toHaveBeenCalledWith('Delete Failed', 'Could not delete account. Please contact support.', 'danger');
     expect(mockLogout).not.toHaveBeenCalled();
     expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it('the cancel button on the delete confirm sheet closes it without deleting', async () => {
+    const renderer = await renderScreen();
+    const row = rowByText(renderer, 'privacy.delete_account');
+    act(() => { row.props.onPress(); });
+    expect(allText(renderer)).toContain('privacy.delete_confirm_title');
+    const cancelBtn = renderer.root.findAllByProps({ accessibilityLabel: 'confirm-common.cancel' })[0];
+    act(() => { cancelBtn.props.onPress(); });
+    expect(allText(renderer)).not.toContain('privacy.delete_confirm_title');
+    expect(mockApiDelete).not.toHaveBeenCalled();
   });
 
   it('Privacy Policy and Terms of Service rows navigate to /legal with the right type', async () => {

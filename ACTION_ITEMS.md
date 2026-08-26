@@ -10680,6 +10680,20 @@ record of what was assumed vs. what was actually true</summary>
     `app/chat-driver.tsx` confirmed untouched via `git diff`). 16 tests;
     full rider-app suite still green (123 suites / 1689 tests), `yarn
     tsc --noEmit` clean.
+  - **Status note (2026-08-26): 5-screen parallel batch closed.** The five
+    entries directly above (`privacy-settings.tsx`, `(tabs)/account.tsx`,
+    `chat-driver.tsx`, `ride-in-progress.tsx`, `driver-arriving.tsx`) were
+    run as a parallel batch — 5 isolated worktree agents, one per screen,
+    with independent re-verification of every claim (coverage, full
+    suite, `tsc --noEmit`, production-diff-empty) before any push. All 5
+    PRs (#4569–#4573) merged 2026-08-26. This is progress on sub-item 5,
+    **not** its completion — sub-item 5 remains an open-ended effort per
+    its own framing above; real gaps are still open in the ranked
+    backlog (e.g. driver-app's `driver/(tabs)/index.tsx` at 74.5%,
+    rider-app's `ride-options.tsx` at 80.7%, several screens in the
+    high-80s% — see the tier lists above for the fuller ranking). Do not
+    check sub-item 5 off as done; pick up from the backlog per the
+    existing "continues as an open-ended effort" guidance.
   - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
     85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
     tests: no-account-prefill, the CRC-consent auto-check-when-

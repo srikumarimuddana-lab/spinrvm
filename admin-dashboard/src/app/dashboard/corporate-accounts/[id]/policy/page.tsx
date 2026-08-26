@@ -33,6 +33,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { hasInvalidTimeWindow, isTimeWindowValid } from "@/lib/policyTimeWindowSchema";
 
 const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 type Day = (typeof DAYS)[number];
@@ -63,7 +64,7 @@ function TimeWindowRow({
     onChange: (w: TimeWindowPolicy) => void;
     onRemove: () => void;
 }) {
-    const invalid = w.end <= w.start;
+    const invalid = !isTimeWindowValid(w);
     return (
         <div className="flex flex-wrap items-center gap-2">
             <Select value={w.day} onValueChange={(v) => onChange({ ...w, day: v as Day })}>
@@ -150,7 +151,7 @@ export default function CompanyPolicyPage() {
         setTimeWindows((prev) => prev.filter((_, i) => i !== index));
     }
 
-    const hasInvalidWindow = timeWindows.some((w) => w.end <= w.start);
+    const hasInvalidWindow = hasInvalidTimeWindow(timeWindows);
 
     async function handleSave() {
         if (hasInvalidWindow) {
@@ -201,12 +202,12 @@ export default function CompanyPolicyPage() {
                     Ride Policy
                 </h1>
                 {exists && (
-                    <Badge variant="secondary" className="bg-emerald-100 text-emerald-800">
+                    <Badge variant="secondary" className="bg-success/15 text-success">
                         Configured
                     </Badge>
                 )}
                 {!exists && (
-                    <Badge variant="secondary" className="bg-yellow-100 text-yellow-800">
+                    <Badge variant="secondary" className="bg-warning/15 text-warning">
                         Not set
                     </Badge>
                 )}
@@ -346,7 +347,7 @@ export default function CompanyPolicyPage() {
                 </Button>
 
                 {success && (
-                    <span className="text-sm text-emerald-700 dark:text-emerald-300 font-medium">
+                    <span className="text-sm text-success font-medium">
                         ✓ Policy saved
                     </span>
                 )}

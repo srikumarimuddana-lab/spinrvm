@@ -57,7 +57,7 @@ export default function RideFlagForm({ open, onClose, rideId, targetType, target
             <DialogContent className="sm:max-w-md">
                 <DialogHeader>
                     <DialogTitle className="flex items-center gap-2">
-                        <AlertTriangle className="h-5 w-5 text-red-500" />
+                        <AlertTriangle className="h-5 w-5 text-destructive" />
                         Flag {targetType === "rider" ? "Rider" : "Driver"}
                     </DialogTitle>
                 </DialogHeader>
@@ -82,7 +82,7 @@ export default function RideFlagForm({ open, onClose, rideId, targetType, target
                 <DialogFooter>
                     <button onClick={onClose} className="px-4 py-2 text-sm font-medium rounded-lg hover:bg-muted">Cancel</button>
                     <button onClick={handleSubmit} disabled={!reason || loading}
-                        className="px-4 py-2 text-sm font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50">
+                        className="px-4 py-2 text-sm font-semibold text-destructive-foreground bg-destructive rounded-lg hover:bg-destructive/90 disabled:opacity-50">
                         {loading ? "Flagging..." : "Flag"}
                     </button>
                 </DialogFooter>

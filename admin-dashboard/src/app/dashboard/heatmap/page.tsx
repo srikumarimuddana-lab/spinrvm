@@ -271,7 +271,12 @@ export default function HeatMapPage() {
         [settings?.heat_map_radius, settings?.heat_map_blur],
     );
 
-    const stats = heatMapData?.stats || { total_rides: 0, corporate_rides: 0, regular_rides: 0 };
+    const stats = {
+        total_rides: 0,
+        corporate_rides: 0,
+        regular_rides: 0,
+        ...(heatMapData?.stats || {}),
+    };
 
     return (
         <div className="space-y-6">
@@ -552,6 +557,7 @@ export default function HeatMapPage() {
                         <Card>
                             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                                 <CardTitle className="text-sm font-medium">Active Demand</CardTitle>
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon accent, not a status signal (#2816) */}
                                 <TrendingUp className="h-4 w-4 text-orange-500" />
                             </CardHeader>
                             <CardContent>
@@ -566,7 +572,7 @@ export default function HeatMapPage() {
                         <Card>
                             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                                 <CardTitle className="text-sm font-medium">Idle Supply</CardTitle>
-                                <Car className="h-4 w-4 text-green-500" />
+                                <Car className="h-4 w-4 text-success" />
                             </CardHeader>
                             <CardContent>
                                 <div className="text-2xl font-bold">
@@ -596,6 +602,7 @@ export default function HeatMapPage() {
                         <Card>
                             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                                 <CardTitle className="text-sm font-medium">Surge Active</CardTitle>
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon accent, not a status signal (#2816) */}
                                 <TrendingDown className="h-4 w-4 text-amber-500" />
                             </CardHeader>
                             <CardContent>
@@ -657,7 +664,7 @@ export default function HeatMapPage() {
                                             <CardTitle className="text-sm font-medium">{area.name}</CardTitle>
                                             <div className="flex items-center gap-1.5">
                                                 {area.surge_active && (
-                                                    <Badge variant="outline" className="text-xs bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30">
+                                                    <Badge variant="outline" className="text-xs bg-warning/10 text-warning border-warning/30">
                                                         {area.multiplier.toFixed(2)}× surge
                                                     </Badge>
                                                 )}
@@ -708,7 +715,7 @@ export default function HeatMapPage() {
                                                 <div className="mt-1">
                                                     <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted">
                                                         <div
-                                                            className="h-full bg-green-600 transition-all"
+                                                            className="h-full bg-success transition-all"
                                                             style={{ width: `${bar.supplyPct}%` }}
                                                         />
                                                         <div
@@ -762,7 +769,8 @@ export default function HeatMapPage() {
                             <div className="flex items-end gap-2 h-32">
                                 {forecast.slice(0, 12).map((slot) => (
                                     <div key={slot.hour} className="flex flex-1 flex-col items-center gap-1">
-                                        <div
+                                            <div
+                                            // eslint-disable-next-line no-restricted-syntax -- forecast bar-chart fill, single-hue intensity accent not a success/warning/destructive signal (#2816)
                                             className={`w-full rounded-t transition-all ${slot.isPeak ? "bg-orange-600" : "bg-orange-500/70"}`}
                                             style={{ height: `${forecastBarHeightPct(slot, forecast.slice(0, 12))}%` }}
                                         />

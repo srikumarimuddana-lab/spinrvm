@@ -2,6 +2,14 @@
 
 _Update this file at the start of every sprint. Claude loads it via `@.claude/context/sprint-current.md` referenced from CLAUDE.md._
 
+> **Stale (flagged 2026-08-25):** this file's last real status entry is dated 2026-05-06 —
+> everything below describes a sprint that closed months ago, not current work. It was meant to
+> be refreshed at the start of every sprint per the instruction above but hasn't been; the
+> session-start hook already warns about this every session. **For current priorities, use
+> `ACTION_ITEMS.md`'s open `[ ]` items instead of the "Sprint goal" / "In-flight" sections below.**
+> Left as historical record rather than rewritten — the PR/ticket history below is still accurate
+> for what it documents, it's just not "current."
+
 ## Sprint goal
 
 Close all P0 security/safety findings across backend, admin, and rider surfaces — HttpOnly token storage, admin TTL reduction, first-rating crash, fare-collection state mismatch, GPS OOM, and SOS silent failure.

@@ -125,13 +125,28 @@ def _mock_create_ride_deps(*, memberships=None, allowance=None, policy=None, com
 
 
 def _apply_all_patches(patch_dict):
+    """Start every patch in patch_dict and return (patchers, mocks).
+
+    Two entries here can alias the SAME underlying attribute (e.g.
+    "routes.rides._deps.db_supabase.find_one" and "routes.rides._deps.db.find_one"
+    -- _deps.py's `db = db_supabase` legacy alias means both patch targets sit on
+    the identical module object). unittest.mock.patch saves whatever value is
+    live *at start() time* as the value to restore on stop(), so two overlapping
+    patches on the same attribute must be stopped in the reverse of the order
+    they were started (LIFO) -- otherwise the later patch's stop() restores the
+    EARLIER patch's mock instead of the real original, permanently leaving the
+    attribute monkeypatched after the test's own try/finally believes it cleaned
+    up. Caller loops (`for p in patchers: p.stop()`) don't know about the
+    aliasing, so the list is reversed here once, up front, rather than fixing
+    every call site.
+    """
     patchers = []
     mocks = {}
     for target, mock_obj in patch_dict.items():
         p = patch(target, mock_obj)
         mocks[target] = p.start()
         patchers.append(p)
-    return patchers, mocks
+    return list(reversed(patchers)), mocks
 
 
 # ─────────────────────────────────────────────────────────────────────────────

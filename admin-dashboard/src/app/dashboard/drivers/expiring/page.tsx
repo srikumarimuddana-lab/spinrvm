@@ -31,9 +31,9 @@ import { useRequireModule } from "@/hooks/useRequireModule";
 type Window = 7 | 14 | 30;
 
 const daysTone = (days: number) => {
-    if (days < 7) return "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300 border-red-200 dark:border-red-800";
-    if (days < 14) return "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 border-amber-200 dark:border-amber-800";
-    return "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800";
+    if (days < 7) return "bg-destructive/15 text-destructive border-destructive/30";
+    if (days < 14) return "bg-warning/15 text-warning border-warning/30";
+    return "bg-success/15 text-success border-success/30";
 };
 
 const initials = (name: string) => {
@@ -153,11 +153,11 @@ export default function ExpiringDocsPage() {
 
                 <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
                     <span className="inline-flex items-center gap-1.5">
-                        <AlertTriangle className="h-3.5 w-3.5 text-red-600" />
+                        <AlertTriangle className="h-3.5 w-3.5 text-destructive" />
                         {counts.lt7} urgent
                     </span>
                     <span className="inline-flex items-center gap-1.5">
-                        <Calendar className="h-3.5 w-3.5 text-amber-600" />
+                        <Calendar className="h-3.5 w-3.5 text-warning" />
                         {counts.lt14} within 14d
                     </span>
                     <span className="inline-flex items-center gap-1.5">

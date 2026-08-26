@@ -7,9 +7,9 @@ import {
     LayoutDashboard, Car, Users, DollarSign, Settings, MapPin, Ticket,
     Flame, Building2, LifeBuoy, HelpCircle,
     Menu, X,
-    Shield, ShieldAlert, Cloud, Trophy, TrendingUp, Activity,
-    Inbox, Clock, Headphones, BarChart3, Send, Sparkles, Gift, Upload, FileText, Bug, Mail, Gavel,
-    PackageSearch, Flag, FileWarning, ScrollText,
+    Shield, ShieldAlert, Cloud, Trophy, Activity,
+    Inbox, Clock, Headphones, BarChart3, Sparkles, Gift, Upload, FileText, Bug, Mail, Gavel,
+    PackageSearch, Flag, FileWarning, ScrollText, BookOpen,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Suspense, useState, useEffect } from "react";
@@ -43,7 +43,7 @@ interface NavItem {
      *  route, instead of the default muted grey every other item shares.
      *  Reserved for genuinely higher-severity destinations (currently just
      *  Safety) that shouldn't visually blend into an otherwise flat list
-     *  of same-weight items like FAQs/Disputes in the same group. */
+     *  of same-weight items like Notifications in the same group. */
     emphasize?: boolean;
 }
 
@@ -86,14 +86,15 @@ const NAV_GROUPS: NavGroup[] = [
             // grantable list; see the note on AVAILABLE_MODULES in
             // backend/routes/admin/staff.py.
             { href: "/dashboard/heatmap", label: "Heat Map", icon: Flame, module: "rides" },
+            // Dispatch Offers and Demand Forecast are tabs on this page
+            // (?tab=offers / ?tab=forecast); their old standalone routes
+            // redirect here, so they no longer need their own nav entries.
             { href: "/dashboard/analytics", label: "Analytics", icon: LayoutDashboard, module: "dashboard" },
-            { href: "/dashboard/driver-offers", label: "Driver Offers", icon: Send, module: "dashboard" },
             // Referrals live inside Earnings & Payouts → Referrals tab. This
             // entry (to the still-existing standalone page) shows ONLY for
             // staff with drivers but not earnings — e.g. the "operations"
             // role — who would otherwise lose all navigable referral access.
             { href: "/dashboard/referrals", label: "Referrals", icon: Gift, module: "drivers", hideIfModule: "earnings" },
-            { href: "/dashboard/forecast", label: "Demand Forecast", icon: TrendingUp, module: "dashboard" },
         ],
     },
     {
@@ -123,18 +124,23 @@ const NAV_GROUPS: NavGroup[] = [
                 label: "Support & Issues",
                 icon: LifeBuoy,
                 module: "support",
-                // Real nav children only for the sub-views with no other nav
-                // entry. Disputes and FAQs deliberately excluded — each
-                // already has its own top-level entry below, and both are
-                // covered by a separate documented decision not to merge
-                // them into this page (see support/_tabs/{disputes,faqs}.tsx)
-                // — adding a second nav path to an already-unreconciled pair
-                // would add duplication, not remove it (IA audit, Finding G).
+                // All 7 sub-views are now real nav children (IA audit,
+                // Finding G). Disputes and FAQs were excluded when this was
+                // first added — each still had its own top-level entry, and
+                // both were covered by a documented "don't merge" product
+                // decision. That decision was escalated and approved for a
+                // full merge (Findings A/B follow-up): support/_tabs/
+                // {disputes,faqs}.tsx now render the same components their
+                // old standalone pages did, so those two top-level entries
+                // were removed in favour of the children below — one nav
+                // path per view, matching the rest of this group.
                 children: [
                     { href: "/dashboard/support?tab=tickets", label: "Support Tickets", icon: LifeBuoy, module: "support" },
+                    { href: "/dashboard/support?tab=disputes", label: "Disputes & Refunds", icon: HelpCircle, module: "support" },
                     { href: "/dashboard/support?tab=complaints", label: "Complaints", icon: FileWarning, module: "support" },
                     { href: "/dashboard/support?tab=lost-found", label: "Lost & Found", icon: PackageSearch, module: "support" },
                     { href: "/dashboard/support?tab=flags", label: "Flags", icon: Flag, module: "support" },
+                    { href: "/dashboard/support?tab=faqs", label: "FAQs", icon: BookOpen, module: "support" },
                     { href: "/dashboard/support?tab=legal", label: "Legal", icon: ScrollText, module: "support" },
                 ],
             },
@@ -150,10 +156,10 @@ const NAV_GROUPS: NavGroup[] = [
             },
             // emphasize: Safety (SOS, insurance-period audit trail) is the
             // one P0-severity destination in this group — visually flat
-            // next to FAQs/Disputes previously undersold what it's for.
+            // next to same-weight siblings like Notifications previously
+            // undersold what it's for. (Disputes & FAQs moved under
+            // Support & Issues as children — see above.)
             { href: "/dashboard/safety", label: "Safety", icon: ShieldAlert, module: "support", emphasize: true },
-            { href: "/dashboard/disputes", label: "Disputes & Refunds", icon: Shield, module: "support" },
-            { href: "/dashboard/faqs", label: "FAQs", icon: HelpCircle, module: "support" },
             { href: "/dashboard/cloud-messaging", label: "Notifications", icon: Cloud, module: "notifications" },
         ],
     },
@@ -185,20 +191,15 @@ const NAV_GROUPS: NavGroup[] = [
             // to /dashboard/records?tab=<slug>), so nothing bookmarked or
             // linked from an old audit-log entry breaks.
             //
-            // Tab-level permissions differ (Data Transfer/Bulk
-            // Operations/Export Approvals require strict super_admin; the
-            // Compliance tab is grantable to non-super-admin staff via the
-            // "compliance" module) — this single nav entry is intentionally
-            // visible to EITHER group, matching /dashboard/records/page.tsx's
-            // own per-tab visibility logic exactly: `module: "compliance"`
-            // with no `superAdminOnly` means isSuperAdmin (role ===
-            // "super_admin" only, see NAV_GROUPS filter above) OR the
-            // compliance module makes this entry visible — the page itself
-            // then shows only the tabs that specific user can actually
-            // use, or a "no access" state if none apply (e.g. a staff
-            // member with no compliance module and no super_admin role
-            // never sees this entry at all).
-            { href: "/dashboard/records", label: "Records & Compliance", icon: Upload, module: "compliance" },
+            // All 4 tabs (Data Transfer, Compliance, Bulk Operations, Export
+            // Approvals) are super-admin-only: the backend mounts
+            // compliance_router under require_super_admin, same as the other
+            // three (decision log 2026-08-19, section 2, option B —
+            // "compliance" was never in AVAILABLE_MODULES/ROLE_PRESETS, so no
+            // non-super-admin could ever reach it; this just states that
+            // restriction explicitly instead of via a dead module string).
+            // Same shape as Sentry/AI Console above.
+            { href: "/dashboard/records", label: "Records & Compliance", icon: Upload, module: "settings", superAdminOnly: true },
             { href: "/dashboard/staff", label: "Staff", icon: Users, module: "staff" },
         ],
     },
@@ -354,7 +355,7 @@ function SidebarInner() {
                                                     className={cn(
                                                         "shrink-0",
                                                         collapsed ? "h-[18px] w-[18px]" : "h-4 w-4",
-                                                        item.emphasize && !active && "text-amber-600 dark:text-amber-500",
+                                                        item.emphasize && !active && "text-warning",
                                                     )}
                                                 />
                                                 {!collapsed && item.label}
@@ -392,7 +393,7 @@ function SidebarInner() {
                                                                     the top-right corner. Tooltip
                                                                     above carries the actual count. */}
                                                                 {childBadge != null && childBadge > 0 && (
-                                                                    <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-amber-500 ring-2 ring-sidebar" />
+                                                                    <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-warning ring-2 ring-sidebar" />
                                                                 )}
                                                             </Link>
                                                         );
@@ -421,7 +422,7 @@ function SidebarInner() {
                                                                         when > 0 so a clean queue
                                                                         doesn't visually nag. */}
                                                                     {childBadge != null && childBadge > 0 && (
-                                                                        <span className="ml-auto bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full tabular-nums">
+                                                                        <span className="ml-auto bg-warning/15 text-warning text-[10px] font-bold px-1.5 py-0.5 rounded-full tabular-nums">
                                                                             {childBadge > 99 ? "99+" : childBadge}
                                                                         </span>
                                                                     )}

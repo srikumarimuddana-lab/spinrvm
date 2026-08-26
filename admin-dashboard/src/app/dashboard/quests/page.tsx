@@ -94,10 +94,13 @@ const CREATABLE_QUEST_TYPES = QUEST_TYPES.filter((t) =>
 );
 
 const STATUS_COLORS: Record<string, string> = {
+  // eslint-disable-next-line no-restricted-syntax -- distinct quest lifecycle stages that must stay visually distinguishable; collapsing to success/warning tokens would make "completed" and "claimed" indistinguishable (#2816)
   active: "bg-blue-100 text-blue-700",
+  // eslint-disable-next-line no-restricted-syntax -- see above
   completed: "bg-green-100 text-green-700",
+  // eslint-disable-next-line no-restricted-syntax -- see above
   claimed: "bg-amber-100 text-amber-700",
-  expired: "bg-gray-100 text-gray-500",
+  expired: "bg-muted text-muted-foreground",
 };
 
 export default function QuestsPage() {
@@ -231,6 +234,7 @@ export default function QuestsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
+            {/* eslint-disable-next-line no-restricted-syntax -- decorative trophy icon tint, not a status signal (#2816) */}
             <Trophy className="h-6 w-6 text-amber-500" />
             Quests & Bonus Challenges
           </h1>
@@ -261,7 +265,7 @@ export default function QuestsPage() {
         <Card>
           <CardContent className="pt-4">
             <div className="text-sm text-muted-foreground">Active Now</div>
-            <div className="text-2xl font-bold text-green-600">{activeQuests}</div>
+            <div className="text-2xl font-bold text-success">{activeQuests}</div>
           </CardContent>
         </Card>
         <Card>
@@ -273,6 +277,7 @@ export default function QuestsPage() {
         <Card>
           <CardContent className="pt-4">
             <div className="text-sm text-muted-foreground">Rewards Paid</div>
+            {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card accent (reward amount), not a status signal (#2816) */}
             <div className="text-2xl font-bold text-amber-600">${totalRewardsPaid.toFixed(0)}</div>
           </CardContent>
         </Card>
@@ -326,6 +331,7 @@ export default function QuestsPage() {
                         {quest.target_value}
                       </TableCell>
                       <TableCell>
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative reward-amount accent, not a status signal (#2816) */}
                         <span className="font-semibold text-amber-600">${quest.reward_amount}</span>
                         <br />
                         <span className="text-xs text-muted-foreground">{quest.reward_type}</span>
@@ -348,11 +354,11 @@ export default function QuestsPage() {
                       </TableCell>
                       <TableCell>
                         {isExpired(quest.end_date) ? (
-                          <Badge className="bg-gray-100 text-gray-500">Expired</Badge>
+                          <Badge className="bg-muted text-muted-foreground">Expired</Badge>
                         ) : quest.is_active ? (
-                          <Badge className="bg-green-100 text-green-700">Active</Badge>
+                          <Badge className="bg-success/15 text-success">Active</Badge>
                         ) : (
-                          <Badge className="bg-gray-100 text-gray-500">Paused</Badge>
+                          <Badge className="bg-muted text-muted-foreground">Paused</Badge>
                         )}
                       </TableCell>
                       <TableCell>
@@ -400,7 +406,7 @@ export default function QuestsPage() {
                                         <div className="flex items-center gap-2">
                                           <div className="w-24 h-2 bg-muted rounded-full overflow-hidden">
                                             <div
-                                              className="h-full bg-blue-500 rounded-full"
+                                              className="h-full bg-primary rounded-full"
                                               style={{ width: `${Math.min(100, p.progress_pct)}%` }}
                                             />
                                           </div>
@@ -410,7 +416,7 @@ export default function QuestsPage() {
                                         </div>
                                       </TableCell>
                                       <TableCell>
-                                        <Badge className={STATUS_COLORS[p.status] || "bg-gray-100"}>
+                                        <Badge className={STATUS_COLORS[p.status] || "bg-muted"}>
                                           {p.status}
                                         </Badge>
                                       </TableCell>
@@ -439,6 +445,7 @@ export default function QuestsPage() {
         <DialogContent className="sm:max-w-[500px]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative trophy icon tint, not a status signal (#2816) */}
               <Trophy className="h-5 w-5 text-amber-500" />
               Create New Quest
             </DialogTitle>

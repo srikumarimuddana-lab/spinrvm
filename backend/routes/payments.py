@@ -7,6 +7,11 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 try:
+    from ..utils.background import spawn as _spawn
+except ImportError:
+    from utils.background import spawn as _spawn  # type: ignore
+
+try:
     from .. import db_supabase
     from ..core.config import settings as core_settings
     from ..dependencies import get_current_user
@@ -1151,7 +1156,7 @@ async def set_default_card(
 
     await db_supabase.update_one("users", {"id": current_user["id"]}, {"default_payment_method": card_id})
 
-    asyncio.create_task(
+    _spawn(
         _audit_log_user(
             current_user,
             "default_payment_method_set",

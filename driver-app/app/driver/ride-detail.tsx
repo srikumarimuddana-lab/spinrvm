@@ -193,6 +193,10 @@ export default function RideDetailScreen() {
     }
 
     const isCompleted = ride.status === 'completed';
+    // Backend-computed, flag-gated (app_settings.legacy_ride_badge_enabled) —
+    // never derive this from legacy_import_metadata directly, so the dark-ship
+    // flag stays the single source of truth for this UI.
+    const isImported = !!ride.show_legacy_badge;
     const statusColor = isCompleted ? colors.primary : colors.primary;
     const statusLabel = ride.status?.charAt(0).toUpperCase() + ride.status?.slice(1);
 
@@ -278,8 +282,12 @@ export default function RideDetailScreen() {
                             <Ionicons name="arrow-back" size={22} color="#fff" />
                         </TouchableOpacity>
                         <View style={styles.routeStatusPill}>
-                            <Ionicons name={hasActualRoute ? 'navigate-circle-outline' : 'map-outline'} size={14} color="#2563EB" />
-                            <Text style={styles.routeStatusText} numberOfLines={1}>{routeLabel} · {routeStatus}</Text>
+                            <Ionicons name={isImported ? 'archive-outline' : hasActualRoute ? 'navigate-circle-outline' : 'map-outline'} size={14} color="#2563EB" />
+                            <Text style={styles.routeStatusText} numberOfLines={1}>
+                                {isImported
+                                    ? 'Imported from the previous app — no GPS was recorded for this ride'
+                                    : `${routeLabel} · ${routeStatus}`}
+                            </Text>
                         </View>
                     </View>
                 )}
@@ -293,6 +301,18 @@ export default function RideDetailScreen() {
                         </View>
                         <Text style={styles.dateText}>{formattedDate}</Text>
                     </View>
+
+                    {/* Imported from the previous app (legacy migration) — honesty
+                        layer, mirrors admin-dashboard's ride-detail-modal.tsx badge
+                        and rider-app's ride-details.tsx. Never shown unless the
+                        backend flag is on AND this specific ride is a real legacy
+                        import. */}
+                    {isImported && (
+                        <View style={styles.importedBadge}>
+                            <Ionicons name="archive-outline" size={12} color={colors.textDim} />
+                            <Text style={styles.importedBadgeText}>Imported</Text>
+                        </View>
+                    )}
 
                     {/* Route */}
                     <View style={styles.card}>
@@ -623,6 +643,12 @@ function createStyles(colors: ThemeColors) {
         statusDot: { width: 7, height: 7, borderRadius: 4 },
         statusText: { fontSize: 13, fontWeight: '700' },
         dateText: { color: colors.textDim, fontSize: 12 },
+        importedBadge: {
+            flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start',
+            backgroundColor: colors.surfaceLight, paddingHorizontal: 10, paddingVertical: 4,
+            borderRadius: 10, marginBottom: 14,
+        },
+        importedBadgeText: { fontSize: 11, fontWeight: '600', color: colors.textDim },
         card: {
             backgroundColor: colors.surface,
             borderRadius: 18,

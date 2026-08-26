@@ -78,10 +78,10 @@ interface ProfileFormData {
 }
 
 const STATUS_PILL_CLASSES: Record<CompanyStatus, string> = {
-    pending_verification: "bg-yellow-100 text-yellow-800 hover:bg-yellow-100",
-    active: "bg-emerald-100 text-emerald-800 hover:bg-emerald-100",
-    suspended: "bg-orange-100 text-orange-800 hover:bg-orange-100",
-    closed: "bg-gray-200 text-gray-700 hover:bg-gray-200",
+    pending_verification: "bg-warning/15 text-warning hover:bg-warning/15",
+    active: "bg-success/15 text-success hover:bg-success/15",
+    suspended: "bg-destructive/15 text-destructive hover:bg-destructive/15",
+    closed: "bg-muted text-muted-foreground hover:bg-muted",
 };
 
 type TransitionKind = "suspend" | "reactivate" | "close";
@@ -103,6 +103,10 @@ const TRANSITIONS: Record<TransitionKind, TransitionConfig> = {
         targetStatus: "suspended",
         confirmLabel: "Suspend",
         captureReason: true,
+        // No solid-fill --warning-foreground token exists in this design system
+        // (dark-mode --warning is not contrast-verified against white text); this
+        // stays a fixed shade rather than a partial/incorrect token substitution (#2816)
+        // eslint-disable-next-line no-restricted-syntax
         confirmClass: "bg-orange-600 hover:bg-orange-700",
     },
     reactivate: {
@@ -111,6 +115,7 @@ const TRANSITIONS: Record<TransitionKind, TransitionConfig> = {
         targetStatus: "active",
         confirmLabel: "Reactivate",
         captureReason: false,
+        // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text button; dark-mode --success (2.02:1) fails WCAG AA against white text (#2816)
         confirmClass: "bg-emerald-600 hover:bg-emerald-700",
     },
     close: {
@@ -120,7 +125,7 @@ const TRANSITIONS: Record<TransitionKind, TransitionConfig> = {
         targetStatus: "closed",
         confirmLabel: "Close",
         captureReason: true,
-        confirmClass: "bg-red-600 hover:bg-red-700",
+        confirmClass: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
     },
 };
 
@@ -302,7 +307,7 @@ export default function CompanyDetailPage() {
 
     if (error) {
         return (
-            <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <div className="rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
                 {error}
             </div>
         );
@@ -359,7 +364,7 @@ export default function CompanyDetailPage() {
                         <Button
                             variant="outline"
                             onClick={() => openTransition("suspend")}
-                            className="text-orange-700 dark:text-orange-400"
+                            className="text-destructive"
                         >
                             <PauseCircle className="mr-2 h-4 w-4" /> Suspend
                         </Button>
@@ -367,6 +372,7 @@ export default function CompanyDetailPage() {
                     {company.status === "suspended" && (
                         <Button
                             onClick={() => openTransition("reactivate")}
+                            // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text button; dark-mode --success (2.02:1) fails WCAG AA against white text (#2816)
                             className="bg-emerald-600 hover:bg-emerald-700"
                         >
                             <PlayCircle className="mr-2 h-4 w-4" /> Reactivate
@@ -475,7 +481,8 @@ export default function CompanyDetailPage() {
                             <div className="md:col-span-2">
                                 <button
                                     type="button"
-                                    className="inline-flex items-center gap-1 text-blue-600 hover:underline"
+                                    // eslint-disable-next-line no-restricted-syntax -- decorative link-style accent, not a status signal (#2816)
+                                    className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:underline"
                                     onClick={async () => {
                                         try {
                                             const blob = await fetchKybDocumentBlob(company.id);

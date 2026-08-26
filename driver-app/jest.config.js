@@ -1,5 +1,16 @@
 module.exports = {
   preset: 'jest-expo',
+  // Raised from Jest's 5000ms default 2026-08-24: no individual test hangs
+  // (every affected test passes standalone and in a plain local full-suite
+  // run) — three DIFFERENT test files across this app and rider-app
+  // (driverProfileScreen here, rideOptions/homeScreen in rider-app)
+  // intermittently exceeded 5000ms one at a time in CI's coverage-
+  // instrumented full-suite run as the repo's suite size grew, each only
+  // under real CPU contention on the runner. Bumping the same file's
+  // timeout each time it was that file's turn was whack-a-mole; fixing the
+  // shared default addresses the actual cause. See rider-app/jest.config.js
+  // for the matching change.
+  testTimeout: 15000,
   setupFiles: ['./jest.setup.js'],
   testPathIgnorePatterns: ['/node_modules/', '/e2e/'],
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx'],
@@ -12,20 +23,41 @@ module.exports = {
   transformIgnorePatterns: [
     'node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules|sentry-expo|native-base|react-native-svg|@shared/.*)'
   ],
+  // ACTION_ITEMS.md B37: was scoped to store/+components/ only (29 of
+  // ~116 source files) -- widened 2026-08-22 in four steps: first
+  // hooks/+utils/ (smaller, more unit-testable), then app/ (the actual
+  // screens), then lib/+services/, then api/ (its only file, client.ts).
+  // Every top-level source directory in this app is now measured.
   collectCoverageFrom: [
     'store/**/*.{ts,tsx}',
     'components/**/*.{ts,tsx}',
+    'hooks/**/*.{ts,tsx}',
+    'utils/**/*.{ts,tsx}',
+    'app/**/*.{ts,tsx}',
+    'lib/**/*.{ts,tsx}',
+    'services/**/*.{ts,tsx}',
+    'api/**/*.{ts,tsx}',
     '!**/*.d.ts',
     '!**/node_modules/**',
+    '!**/__tests__/**',
   ],
   coverageThreshold: {
     global: {
-      // P3-4: raised to actuals minus ~2 pp headroom (measured 2026-05-05).
-      // Actuals: lines≈50.32%, functions≈35.89%, statements≈49.1%.
-      // Next step: 2026-07 sprint → 55/40/52.
-      lines: 48,
-      functions: 34,
-      statements: 47,
+      // ACTION_ITEMS.md B37 milestone ratchet (see
+      // docs/testing/coverage-ratchet-plan.md): the extensive app/-screen
+      // test-authoring work logged in ACTION_ITEMS.md's B37 entry moved
+      // real coverage far past the last-set threshold below without the
+      // gate ever being tightened to track it. Fresh measurement
+      // 2026-08-24 (`npx jest --coverage`, 115/115 suites, 1243/1243
+      // tests): lines 67.37%, statements 65.73%, functions 63.25%,
+      // branches 57.45% (no `branches` key here, matching this config's
+      // pre-existing pattern). Threshold raised to ~2-3pts below that
+      // measured ceiling -- a real regression tripwire again instead of a
+      // stale floor 30+pts under actual. Next ratchet step per the plan
+      // doc.
+      lines: 65,
+      functions: 60,
+      statements: 63,
     },
   },
   moduleNameMapper: {

@@ -60,18 +60,18 @@ _SGI_AUTHORITY = "SGI"
 
 
 def _out_of_scope_drivers(driver_rows: list[dict]) -> list[dict]:
-    """Drivers whose `regulatory_authority` is explicitly populated and is
-    NOT `_SGI_AUTHORITY`. A NULL/missing `regulatory_authority` is treated
-    as in-scope (not blocked) — 22 of 209 real drivers in the (currently
-    single-province) production data predate this field being backfilled;
-    silently blocking them would be a regression on working functionality
-    for legitimate Saskatchewan drivers, not a safety improvement. This is
-    a deliberate grandfather allowance, not an oversight — see
-    ACTION_ITEMS.md for the backfill tracked to close this gap for real.
-    Once every driver has a populated regulatory_authority (post-backfill,
-    and for every new Alberta driver going forward via driver_import_service),
-    this NULL-passes behavior stops mattering in practice."""
-    return [d for d in driver_rows if d.get("regulatory_authority") and d["regulatory_authority"] != _SGI_AUTHORITY]
+    """Drivers whose `regulatory_authority` is not exactly `_SGI_AUTHORITY`
+    — this now includes NULL/missing. ACTION_ITEMS.md B13 (round 2, 2026-08-22):
+    the backfill is confirmed complete (production: 0 of 212 drivers NULL,
+    all SGI/SK) and every driver write path (`routes/drivers/profile.py`'s
+    two auto-create branches, `routes/drivers/location.py`'s admin
+    `POST /drivers`) now goes through `_shared._resolve_regulatory_defaults()`,
+    so a NULL row can no longer be produced by normal driver creation. The
+    former NULL-passes grandfather allowance is retired — a NULL row is
+    now treated the same as any other non-SGI authority (out of scope,
+    blocked), since a NULL row post-backfill would mean the write-path fix
+    regressed, not that it's a legitimate legacy row to wave through."""
+    return [d for d in driver_rows if d.get("regulatory_authority") != _SGI_AUTHORITY]
 
 
 class SgiFormRequest(BaseModel):
@@ -145,7 +145,7 @@ async def generate_sgi_form(
 
     out_of_scope = _out_of_scope_drivers(driver_rows)
     if out_of_scope:
-        authorities = sorted({d["regulatory_authority"] for d in out_of_scope})
+        authorities = sorted({d.get("regulatory_authority") or "unspecified" for d in out_of_scope})
         raise HTTPException(
             status_code=422,
             detail=(
@@ -348,7 +348,7 @@ async def download_sgi_supporting_documents(
     # not be assembled into an SGI submission package either.
     out_of_scope = _out_of_scope_drivers(driver_rows)
     if out_of_scope:
-        authorities = sorted({d["regulatory_authority"] for d in out_of_scope})
+        authorities = sorted({d.get("regulatory_authority") or "unspecified" for d in out_of_scope})
         raise HTTPException(
             status_code=422,
             detail=(
@@ -516,7 +516,7 @@ async def download_sgi_submission_package(
 
     out_of_scope = _out_of_scope_drivers(driver_rows)
     if out_of_scope:
-        authorities = sorted({d["regulatory_authority"] for d in out_of_scope})
+        authorities = sorted({d.get("regulatory_authority") or "unspecified" for d in out_of_scope})
         raise HTTPException(
             status_code=422,
             detail=(

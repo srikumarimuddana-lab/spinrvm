@@ -14,6 +14,7 @@ try:
     )
     from ..features import send_push_notification
     from ..settings_loader import get_app_settings
+    from ..utils.background import spawn as _spawn
     from ..utils.money import cents_to_dollars, dollars_to_cents
     from ..utils.rate_limiter import default_limiter
     from ..utils.rider_emails import send_refund_email, send_wallet_topup_email
@@ -29,6 +30,7 @@ except ImportError:
     )
     from features import send_push_notification
     from settings_loader import get_app_settings
+    from utils.background import spawn as _spawn  # type: ignore
     from utils.money import cents_to_dollars, dollars_to_cents
     from utils.rate_limiter import default_limiter
     from utils.rider_emails import send_refund_email, send_wallet_topup_email
@@ -1650,9 +1652,7 @@ async def stripe_webhook(request: Request):
                 # One-off plans email from _activate_subscription instead.
                 # Fire-and-forget so we don't hold Stripe's webhook response open.
                 if _inv_amount and Decimal(str(_inv_amount)) > 0:
-                    import asyncio as _asyncio
-
-                    _asyncio.create_task(
+                    _spawn(
                         _drv_subs._send_subscription_invoice_email(
                             driver_id=row.get("driver_id"),
                             plan_name=row.get("plan_name") or "Spinr Pass",
@@ -2130,11 +2130,24 @@ async def _resolve_user_id_by_phone(phone: str) -> "str | None":
 async def _handle_sms_keyword(phone: str, opted_in: bool) -> None:
     """Apply an SMS opt-in/opt-out for the number. On opt-out we also add the
     number to the marketing suppression list so a future broadcast can't reach
-    it even before the preference is re-read."""
+    it even before the preference is re-read.
+
+    Independently of Spinr user_id resolution, this also updates the
+    sos_contact_suppressions list (SOS emergency-contact SMS is a safety
+    notification, not a CASL marketing message, so it's a separate opt-out
+    list): the sender of an inbound STOP may be a pure third-party emergency
+    contact with no Spinr account at all, so this call is unconditional
+    rather than gated behind `if user_id:` like the marketing-consent call
+    above.
+    """
     try:
         from ..services import marketing_consent
     except ImportError:
         from services import marketing_consent  # type: ignore
+    try:
+        from ..services import sos_contact_consent
+    except ImportError:
+        from services import sos_contact_consent  # type: ignore
 
     user_id = await _resolve_user_id_by_phone(phone)
     if user_id:
@@ -2145,6 +2158,14 @@ async def _handle_sms_keyword(phone: str, opted_in: bool) -> None:
         await marketing_consent.add_marketing_suppression(
             "sms", phone, reason="sms_stop", source="twilio", user_id=user_id
         )
+
+    try:
+        if opted_in:
+            await sos_contact_consent.unsuppress(phone)
+        else:
+            await sos_contact_consent.suppress(phone, reason="sms_stop", source="twilio")
+    except Exception:
+        logger.error("[TWILIO] sos_contact_consent update failed", exc_info=True)
 
 
 @api_router.post("/twilio-inbound")

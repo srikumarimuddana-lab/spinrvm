@@ -35,7 +35,14 @@ Install each workspace:
 ```bash
 # Backend
 cd backend && pip install -r requirements.txt && cd ..
+```
 
+> **Windows**: `requirements.txt` includes `uvloop`, which has no Windows wheels and will fail
+> `pip install`. Use `backend/requirements-win.txt` instead — identical pins minus `uvloop`
+> (uvicorn falls back to its default event loop, which is fine for local dev):
+> `cd backend && pip install -r requirements-win.txt && cd ..`
+
+```bash
 # Rider app
 cd rider-app && yarn install && cd ..
 

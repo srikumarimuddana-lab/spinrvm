@@ -22,6 +22,7 @@ import { useDriverMe, useUpdateDriverMe } from '@shared/hooks/queries';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
+import { isGstBnValid, isGstBnOnFile, isSinValid } from '../../utils/payoutFormsSchema';
 
 function PayoutScreen() {
     const router = useRouter();
@@ -222,7 +223,7 @@ function PayoutScreen() {
     const handleSaveGst = async () => {
         // Validate GST/BN format: 9 digits or 15 chars (9-digit BN + RT0001)
         const cleaned = gstNumber.replace(/\s/g, '');
-        if (cleaned && !/^\d{9}(RT\d{4})?$/.test(cleaned)) {
+        if (!isGstBnValid(cleaned)) {
             showToast('warning', 'Invalid Format', 'Enter your 9-digit Business Number (BN) or full GST number (e.g., 123456789RT0001)');
             return;
         }
@@ -244,7 +245,7 @@ function PayoutScreen() {
         // Length only. The checksum and the leading-digit rule live on the
         // server (backend/utils/sin.py) and are returned as a clean 422 —
         // duplicating them here would drift, and the server is authoritative.
-        if (cleaned.length !== 9) {
+        if (!isSinValid(cleaned)) {
             showToast('warning', 'Invalid Format', 'Your SIN is 9 digits.');
             return;
         }
@@ -320,7 +321,7 @@ function PayoutScreen() {
     // CRA hard requirement: rideshare drivers must be GST/HST-registered before
     // any payout (the backend rejects payouts without a valid BN). Mirror the
     // server-side ^\d{9}(RT\d{4})?$ check so we gate the UI before the request.
-    const gstOnFile = /^\d{9}(RT\d{4})?$/.test((gstNumber || '').replace(/\s/g, '').toUpperCase());
+    const gstOnFile = isGstBnOnFile(gstNumber);
 
     // Guided-setup checklist. Every payout prerequisite lives here as a single
     // ordered list so the driver sees exactly what's done vs. what still needs a

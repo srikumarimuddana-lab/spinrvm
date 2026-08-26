@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,6 +40,15 @@ const DRIVER_PAGE_SIZE = 25;
 
 /** Sentinel for "no area filter" — Radix Select cannot hold an empty value. */
 const ALL_AREAS = "__all__";
+
+/** Tab ids are part of the URL contract — /dashboard/driver-offers and
+ *  /dashboard/forecast redirect to ?tab=offers / ?tab=forecast, so renaming
+ *  one of these breaks those redirects and any bookmark. */
+const TAB_IDS = [
+  "overview", "supply", "efficiency", "financial",
+  "cancellations", "acceptance", "offers", "forecast",
+] as const;
+const DEFAULT_TAB = "overview";
 
 /** Server-side sortable columns on /driver-acceptance. Sorting must be
  *  server-side here: a client-side sort only reorders the rows already on
@@ -91,7 +101,7 @@ const REASON_LABELS: Record<string, string> = {
 function SectionError({ onRetry }: { onRetry: () => void }) {
   return (
     <div className="py-8 text-center space-y-3">
-      <p className="text-sm text-red-600 dark:text-red-400">
+      <p className="text-sm text-destructive">
         Couldn&apos;t load this data — it isn&apos;t zero, it&apos;s unknown.
       </p>
       <Button variant="outline" size="sm" onClick={onRetry}>
@@ -101,7 +111,17 @@ function SectionError({ onRetry }: { onRetry: () => void }) {
   );
 }
 
+/** Next.js requires any component calling useSearchParams() to sit under a
+ *  Suspense boundary, or the build fails on the prerender pass. */
 export default function AnalyticsPage() {
+  return (
+    <Suspense fallback={<div className="py-16 text-center text-sm text-muted-foreground">Loading analytics…</div>}>
+      <AnalyticsPageInner />
+    </Suspense>
+  );
+}
+
+function AnalyticsPageInner() {
   const [dateRange, setDateRange] = useState("30d");
   // One service-area filter shared by every tab, so "Saskatoon" means the
   // same thing on the funnel, the cancellations, and the offer ledger.
@@ -133,6 +153,27 @@ export default function AnalyticsPage() {
   const [driversLoading, setDriversLoading] = useState(true);
 
   const svcArea = areaId === ALL_AREAS ? undefined : areaId;
+
+  // Tab selection lives in the URL so a tab can be linked, bookmarked and
+  // reached by the redirects from the old standalone routes.
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const requestedTab = searchParams.get("tab");
+  const tab = (TAB_IDS as readonly string[]).includes(requestedTab ?? "")
+    ? (requestedTab as string)
+    : DEFAULT_TAB;
+
+  const onTabChange = useCallback(
+    (next: string) => {
+      const sp = new URLSearchParams(searchParams.toString());
+      if (next === DEFAULT_TAB) sp.delete("tab");
+      else sp.set("tab", next);
+      const qs = sp.toString();
+      // replace, not push — flipping tabs shouldn't fill the back button.
+      router.replace(qs ? `?${qs}` : "/dashboard/analytics", { scroll: false });
+    },
+    [router, searchParams],
+  );
 
   const { resolvedTheme } = useTheme();
   const REASON_COLORS = useMemo(() => reasonColors(resolvedTheme === "dark"), [resolvedTheme]);
@@ -254,6 +295,7 @@ export default function AnalyticsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
+            {/* eslint-disable-next-line no-restricted-syntax -- decorative header icon tint, not a status signal (#2816) */}
             <BarChart3 className="h-6 w-6 text-blue-500" />
             Operational Analytics
           </h1>
@@ -299,9 +341,9 @@ export default function AnalyticsPage() {
 
       {/* Backend error banner */}
       {fetchError && !loading && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 flex flex-wrap items-center justify-between gap-2 dark:border-red-800 dark:bg-red-950 dark:text-red-200">
+        <div className="rounded-md border border-destructive bg-destructive/10 px-4 py-3 text-sm text-destructive flex flex-wrap items-center justify-between gap-2">
           <span>Analytics data unavailable — the backend returned an error. Check service health and try again.</span>
-          <Button variant="outline" size="sm" onClick={fetchAll} className="text-red-700 border-red-300 hover:bg-red-100 dark:text-red-200 dark:border-red-700 dark:hover:bg-red-900">
+          <Button variant="outline" size="sm" onClick={fetchAll} className="text-destructive border-destructive/40 hover:bg-destructive/10">
             <RefreshCw className="h-3 w-3 mr-1" /> Retry
           </Button>
         </div>
@@ -322,22 +364,23 @@ export default function AnalyticsPage() {
           <Card>
             <CardContent className="pt-4">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <CheckCircle className="h-4 w-4 text-green-500" /> Completion Rate
+                <CheckCircle className="h-4 w-4 text-success" /> Completion Rate
               </div>
-              <div className="text-2xl font-bold mt-1 text-green-600 dark:text-green-400">{overview.completion_rate}%</div>
+              <div className="text-2xl font-bold mt-1 text-success">{overview.completion_rate}%</div>
             </CardContent>
           </Card>
           <Card>
             <CardContent className="pt-4">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <XCircle className="h-4 w-4 text-red-500" /> Cancellation Rate
+                <XCircle className="h-4 w-4 text-destructive" /> Cancellation Rate
               </div>
-              <div className="text-2xl font-bold mt-1 text-red-600 dark:text-red-400">{overview.cancellation_rate}%</div>
+              <div className="text-2xl font-bold mt-1 text-destructive">{overview.cancellation_rate}%</div>
             </CardContent>
           </Card>
           <Card>
             <CardContent className="pt-4">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon tint, not a status signal (#2816) */}
                 <DollarSign className="h-4 w-4 text-amber-500" /> Revenue
               </div>
               <div className="text-2xl font-bold mt-1">${overview.total_revenue?.toLocaleString()}</div>
@@ -375,7 +418,7 @@ export default function AnalyticsPage() {
         </CardContent>
       </Card>
 
-      <Tabs defaultValue="overview">
+      <Tabs value={tab} onValueChange={onTabChange}>
         {/* Horizontally scrollable so the tab row degrades gracefully on
             narrow screens instead of wrapping into the content below. */}
         <div className="overflow-x-auto">
@@ -548,7 +591,7 @@ export default function AnalyticsPage() {
             <Card>
               <CardContent className="pt-4">
                 <div className="text-sm text-muted-foreground">Avg Completion Rate</div>
-                <div className="text-2xl font-bold text-green-600 dark:text-green-400">
+                <div className="text-2xl font-bold text-success">
                   {driverRates?.avg_completion_rate_active ?? 0}%
                 </div>
                 {/* Averaging over every registered driver (idle ones score 0)
@@ -567,13 +610,13 @@ export default function AnalyticsPage() {
                 </p>
               </CardContent>
             </Card>
-            <Card className={lowOnly ? "ring-2 ring-red-500" : undefined}>
+            <Card className={lowOnly ? "ring-2 ring-destructive" : undefined}>
               <CardContent className="pt-4">
                 <div className="text-sm text-muted-foreground flex items-center gap-1">
-                  <TrendingDown className="h-3 w-3 text-red-500" />
+                  <TrendingDown className="h-3 w-3 text-destructive" />
                   Low completion (&lt;{driverRates?.low_performer_threshold?.rate_below ?? 70}%)
                 </div>
-                <div className="text-2xl font-bold text-red-600 dark:text-red-400">
+                <div className="text-2xl font-bold text-destructive">
                   {driverRates?.low_performer_count || 0}
                 </div>
                 {/* The count is meaningless if you can't see who it refers to —
@@ -618,7 +661,7 @@ export default function AnalyticsPage() {
                   />
                 </div>
                 {lowOnly && (
-                  <Badge variant="outline" className="border-red-300 text-red-700 dark:text-red-400">
+                  <Badge variant="outline" className="border-destructive/40 text-destructive">
                     Low performers only
                     <button
                       type="button"
@@ -634,7 +677,7 @@ export default function AnalyticsPage() {
               {/* The driver list is capped server-side; say so rather than
                   presenting a partial list as the whole fleet. */}
               {driverRates?.scan_truncated && (
-                <div className="flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+                <div className="flex items-center gap-2 rounded-md border border-warning bg-warning/10 px-3 py-2 text-xs text-warning">
                   <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                   Driver list hit the server scan cap — totals below cover only the drivers scanned. Narrow by service area or search.
                 </div>
@@ -656,7 +699,7 @@ export default function AnalyticsPage() {
                 </TableHeader>
                 <TableBody>
                   {driverRows.map((d: any, i: number) => (
-                    <TableRow key={d.driver_id} className={isLowPerformer(d) ? "bg-red-50/60 dark:bg-red-950/30" : undefined}>
+                    <TableRow key={d.driver_id} className={isLowPerformer(d) ? "bg-destructive/10" : undefined}>
                       {/* Absolute position in the current server-side sort,
                           not a per-page index. */}
                       <TableCell className="text-muted-foreground tabular-nums">
@@ -686,8 +729,8 @@ export default function AnalyticsPage() {
                       </TableCell>
                       <TableCell>
                         <Badge className={d.is_online
-                          ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200"
-                          : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"}>
+                          ? "bg-success/15 text-success"
+                          : "bg-muted text-muted-foreground"}>
                           {d.is_online ? "Online" : "Offline"}
                         </Badge>
                       </TableCell>
@@ -698,7 +741,7 @@ export default function AnalyticsPage() {
                       <TableCell
                         colSpan={8}
                         className={`text-center py-8 ${
-                          driverError ? "text-red-600 dark:text-red-400" : "text-muted-foreground"
+                          driverError ? "text-destructive" : "text-muted-foreground"
                         }`}
                       >
                         {driverError

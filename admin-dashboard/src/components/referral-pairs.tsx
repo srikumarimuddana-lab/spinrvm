@@ -12,9 +12,9 @@ import { Users } from "lucide-react";
  * which only shows top-referrer counts. Respects the rider/driver toggle.
  */
 const STATUS_COLOR: Record<string, string> = {
-    paid: "text-emerald-600 dark:text-emerald-400",
-    processing: "text-blue-600 dark:text-blue-400",
-    failed: "text-red-600 dark:text-red-400",
+    paid: "text-success",
+    processing: "text-warning",
+    failed: "text-destructive",
     expired: "text-muted-foreground",
 };
 
@@ -39,6 +39,7 @@ export default function ReferralPairs({ source }: { source: "driver" | "rider" }
         <Card className="border-border/50">
             <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-3">
+                    {/* eslint-disable-next-line no-restricted-syntax -- decorative section icon tint, not a status signal (#2816) */}
                     <Users className="h-4 w-4 text-violet-500" />
                     <h3 className="text-sm font-semibold">Referrer → referee ({pairs.length})</h3>
                 </div>

@@ -8,10 +8,11 @@ import { Sec } from "./ride-ui-helpers";
 import { useToast } from "@/components/ui/use-toast";
 
 const STATUS_ICONS: Record<string, { icon: any; color: string }> = {
-    reported: { icon: Clock, color: "text-amber-500" },
+    reported: { icon: Clock, color: "text-warning" },
+    // eslint-disable-next-line no-restricted-syntax -- "driver_notified" (in progress, neither good nor bad) has no semantic-token equivalent; must stay distinct from reported/resolved/unresolved (#2816)
     driver_notified: { icon: Bell, color: "text-blue-500" },
-    resolved: { icon: CheckCircle, color: "text-emerald-500" },
-    unresolved: { icon: XCircle, color: "text-red-500" },
+    resolved: { icon: CheckCircle, color: "text-success" },
+    unresolved: { icon: XCircle, color: "text-destructive" },
 };
 
 interface Props {
@@ -70,8 +71,8 @@ export default function RideLostFound({ rideId, items, onRefresh }: Props) {
                                     </div>
                                     {(item.status === "reported" || item.status === "driver_notified") && (
                                         <div className="flex gap-1">
-                                            <button onClick={() => handleResolve(item.id, "resolved")} className="text-[10px] px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 hover:bg-emerald-200">Resolved</button>
-                                            <button onClick={() => handleResolve(item.id, "unresolved")} className="text-[10px] px-2 py-0.5 rounded bg-red-100 text-red-700 hover:bg-red-200">Unresolved</button>
+                                            <button onClick={() => handleResolve(item.id, "resolved")} className="text-[10px] px-2 py-0.5 rounded bg-success/15 text-success hover:bg-success/25">Resolved</button>
+                                            <button onClick={() => handleResolve(item.id, "unresolved")} className="text-[10px] px-2 py-0.5 rounded bg-destructive/15 text-destructive hover:bg-destructive/25">Unresolved</button>
                                         </div>
                                     )}
                                 </div>

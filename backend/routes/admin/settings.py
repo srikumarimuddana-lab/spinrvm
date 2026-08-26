@@ -222,6 +222,11 @@ class SettingsUpdateRequest(BaseModel):
     # falls back to the bundled asset for anything that is not an absolute
     # http(s) URL. Does NOT affect report PDF/Excel/Word headers.
     company_logo_url: Optional[str] = None
+    # "Open/install the app" CTA link for the rider welcome email. Empty =
+    # the email ships without a CTA button. Validated at render time by
+    # utils/company_details._safe_app_download_url, same rule as the logo URL
+    # above. See schemas.AppSettings.company_app_download_url.
+    company_app_download_url: Optional[str] = None
     # Renders the ride receipt and Spinr Pass invoice with the shared branded
     # shell and the company details above. Presentation only — never the fare
     # rows, GST/PST line items or totals. See migration 288.
@@ -334,6 +339,11 @@ class SettingsUpdateRequest(BaseModel):
     ai_embedding_model: Optional[str] = Field(default=None, max_length=120)
     ai_faq_semantic_min_score: Optional[float] = Field(default=None, ge=0, le=1)
     ai_escalation_creates_ticket: Optional[bool] = None
+    # Public website assistant (spinr.ca chat widget -> POST /ai/public-chat).
+    # Separate from ai_assistant_enabled so the anonymous surface can be turned
+    # off on its own without taking the rider/driver assistant down with it.
+    # Defaults OFF — the feature ships dark.
+    ai_public_chat_enabled: Optional[bool] = None
     ai_disclaimer: Optional[str] = Field(default=None, max_length=300)
     # iOS Live Activity APNs (.p8 token auth). key_id/team_id/bundle_id are
     # identifiers (visible); apns_p8_key is the secret (masked, in
@@ -370,6 +380,12 @@ class SettingsUpdateRequest(BaseModel):
     # See schemas.py::AppSettings.rideless_sos_enabled for the sign-off
     # requirement before enabling in any environment.
     rideless_sos_enabled: Optional[bool] = None
+    # Legacy/re-consent notice rollout gate (ACTION_ITEMS.md, 2026-08-19
+    # legacy-migration audit) -- dark-launched, both apps. Not a credential,
+    # no masking/super-admin gate needed. See schemas.py::AppSettings.
+    # legacy_consent_notice_enabled for what flipping this on actually does
+    # (both apps are live-wired to it; it is not a no-op).
+    legacy_consent_notice_enabled: Optional[bool] = None
     # Kill switches (ACTION_ITEMS.md E5). scheduled_dispatch_enabled already
     # existed in AppSettings/gated the loop (2026-08-02) but was never added
     # here — there was previously no way to set it via the admin API at all,
@@ -379,6 +395,10 @@ class SettingsUpdateRequest(BaseModel):
     surge_engine_enabled: Optional[bool] = None
     promo_redemption_enabled: Optional[bool] = None
     corporate_billing_enabled: Optional[bool] = None
+    # Demand-side kill switch (ACTION_ITEMS.md G5) — pauses new ride requests
+    # generally, checked at the top of POST /rides. Same plain-boolean shape
+    # as the four flags above, no super-admin gate needed.
+    new_ride_requests_enabled: Optional[bool] = None
     # Rolling-window cap on referrer_reward payouts per referrer
     # (utils/referral_payout.py, ranked blocker #6 / audit finding N2,
     # 2026-08-19) — closes a real-money leak (a $0-cost first_ride_only promo

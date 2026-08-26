@@ -231,11 +231,11 @@ export default function RidesPage() {
 
             {/* Load error banner */}
             {loadError && !loading && (
-                <div className="rounded-md border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/10 px-4 py-3 text-sm text-red-700 dark:text-red-300 flex items-center justify-between">
+                <div className="rounded-md border border-destructive bg-destructive/10 px-4 py-3 text-sm text-destructive flex items-center justify-between">
                     <span>Failed to load rides — check backend health.</span>
                     <button
                         onClick={() => reload(page, pageSize)}
-                        className="ml-4 text-red-700 dark:text-red-300 underline hover:no-underline text-sm"
+                        className="ml-4 text-destructive underline hover:no-underline text-sm"
                     >
                         Retry
                     </button>

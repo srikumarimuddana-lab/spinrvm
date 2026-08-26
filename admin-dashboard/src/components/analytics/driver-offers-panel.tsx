@@ -96,9 +96,9 @@ export function DriverOffersPanel({
   const totals = data?.totals || {};
   const kpis = [
     { label: "Offers Sent", value: totals.offered ?? 0, Icon: Send, cls: "text-foreground" },
-    { label: "Accepted", value: totals.accepted ?? 0, Icon: CheckCircle, cls: "text-emerald-600" },
-    { label: "Declined", value: totals.declined ?? 0, Icon: XCircle, cls: "text-red-600" },
-    { label: "Ignored", value: totals.ignored ?? 0, Icon: Clock, cls: "text-amber-600" },
+    { label: "Accepted", value: totals.accepted ?? 0, Icon: CheckCircle, cls: "text-success" },
+    { label: "Declined", value: totals.declined ?? 0, Icon: XCircle, cls: "text-destructive" },
+    { label: "Ignored", value: totals.ignored ?? 0, Icon: Clock, cls: "text-warning" },
   ];
 
   const filtered = useMemo(() => {
@@ -179,7 +179,7 @@ export function DriverOffersPanel({
             <div className="py-16 text-center text-sm text-muted-foreground">Loading…</div>
           ) : error ? (
             <div className="py-16 text-center space-y-3">
-              <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+              <p className="text-sm text-destructive">{error}</p>
               <button onClick={fetchData} className="text-xs font-semibold border rounded-lg px-3 py-1.5 hover:bg-muted transition-colors">Retry</button>
             </div>
           ) : sorted.length === 0 ? (
@@ -212,14 +212,14 @@ export function DriverOffersPanel({
                     >
                       <TableCell className="font-medium">
                         <span className="flex items-center gap-2">
-                          {d.is_online && <span className="h-2 w-2 rounded-full bg-emerald-500" title="Online" />}
+                          {d.is_online && <span className="h-2 w-2 rounded-full bg-success" title="Online" />}
                           {d.name}
                         </span>
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{d.offered}</TableCell>
-                      <TableCell className="text-right tabular-nums text-emerald-600">{d.accepted}</TableCell>
-                      <TableCell className="text-right tabular-nums text-red-600">{d.declined}</TableCell>
-                      <TableCell className="text-right tabular-nums text-amber-600">{d.ignored}</TableCell>
+                      <TableCell className="text-right tabular-nums text-success">{d.accepted}</TableCell>
+                      <TableCell className="text-right tabular-nums text-destructive">{d.declined}</TableCell>
+                      <TableCell className="text-right tabular-nums text-warning">{d.ignored}</TableCell>
                       <TableCell className="text-right tabular-nums text-muted-foreground">{d.preempted ?? 0}</TableCell>
                       <TableCell className="text-right tabular-nums font-semibold">{d.accept_rate}%</TableCell>
                       <TableCell className="text-right tabular-nums">{d.ignore_rate}%</TableCell>

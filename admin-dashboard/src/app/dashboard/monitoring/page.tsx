@@ -586,6 +586,9 @@ export default function MonitoringPage() {
     <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden">
       {/* Page header */}
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
+        {/* eslint-disable no-restricted-syntax -- standard "live broadcast" red-dot
+            convention (Radio icon + pulsing dot), not a success/warning/destructive
+            signal (#2816) */}
         <h1 className="flex items-center gap-2 text-xl font-bold">
           <Radio className="h-5 w-5 text-red-500" />
           Live Ride Monitoring
@@ -594,6 +597,7 @@ export default function MonitoringPage() {
             <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
           </span>
         </h1>
+        {/* eslint-enable no-restricted-syntax */}
       </div>
 
       {/* Toolbar */}
@@ -612,9 +616,9 @@ export default function MonitoringPage() {
 
       {/* Stale-data warning banner — visible whenever live feed is interrupted */}
       {wsStatus !== "connected" && (
-        <div className="flex items-center gap-2 bg-yellow-50 border-b border-yellow-200 px-4 py-2 text-sm text-yellow-800 dark:bg-yellow-900/20 dark:border-yellow-800 dark:text-yellow-300">
+        <div className="flex items-center gap-2 bg-warning/10 border-b border-warning/30 px-4 py-2 text-sm text-warning">
           <span className="font-medium">Live data paused</span>
-          <span className="text-yellow-700 dark:text-yellow-400">
+          <span className="text-warning">
             — map and ride list may be stale ({wsStatus === "connecting" ? "reconnecting…" : wsError || "connection lost"})
           </span>
         </div>
@@ -657,10 +661,13 @@ export default function MonitoringPage() {
                   <div className="flex items-center justify-between">
                     <span
                       className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                        r.status === "searching" ? "bg-amber-100 text-amber-700" :
-                        r.status === "driver_assigned" ? "bg-blue-100 text-blue-700" :
-                        r.status === "driver_arrived" ? "bg-purple-100 text-purple-700" :
-                        "bg-green-100 text-green-700"
+                        // eslint-disable-next-line no-restricted-syntax -- ride lifecycle stages must stay visually distinct (#2816)
+                        r.status === "searching" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" :
+                        // eslint-disable-next-line no-restricted-syntax -- see above
+                        r.status === "driver_assigned" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" :
+                        // eslint-disable-next-line no-restricted-syntax -- see above
+                        r.status === "driver_arrived" ? "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300" :
+                        "bg-success/15 text-success"
                       }`}
                     >
                       {r.status === "searching" ? "Searching" :

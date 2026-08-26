@@ -35,6 +35,7 @@ try:
     from ..settings_loader import get_app_settings
     from ..sms_service import send_otp_sms
     from ..utils.audit_logger import log_user_action as _audit_log_user
+    from ..utils.background import spawn as _spawn
     from ..utils.crypto import hash_otp, verify_otp_hash
     from ..utils.email_provider import send_transactional_email
     from ..utils.error_handling import (
@@ -87,6 +88,7 @@ except ImportError:
     from settings_loader import get_app_settings
     from sms_service import send_otp_sms
     from utils.audit_logger import log_user_action as _audit_log_user
+    from utils.background import spawn as _spawn  # type: ignore
     from utils.crypto import hash_otp, verify_otp_hash
     from utils.email_provider import send_transactional_email
     from utils.error_handling import (
@@ -137,7 +139,20 @@ _CORPORATE_EMAIL_OTP_TABLE = "corporate_email_otp_records"
 # CONSENT_VERSION constant for CASL consent) until a real consent screen
 # lands; bump it whenever the shipped ToS/Privacy Policy text materially
 # changes.
-CONSENT_VERSION = "consumer-tos-2026-01-draft"
+#
+# Bumped 2026-08-20 (consumer-tos-2026-01-draft -> consumer-tos-2026-08-v1):
+# product owner decision to re-run consent for both existing and new users,
+# per docs/audit/2026-08-20-legacy-consent-legal-sufficiency-factsheet.md —
+# no old-app user has any recorded affirmative acceptance, and the old app's
+# text materially diverges from Spinr's current text (surge cap, GPS
+# retention window, undisclosed subprocessors). Ties to the real
+# docs/legal/terms-of-service.md + privacy-policy.md publication event
+# (legal_documents version 1, rider+driver rows, 2026-08-17 — see
+# docs/legal/legal-text-publication-checklist.md). This bump alone changes
+# nothing live: existing users are only re-prompted once
+# app_settings.legacy_consent_notice_enabled flips true (routes/legacy_consent.py,
+# separate change, not this commit).
+CONSENT_VERSION = "consumer-tos-2026-08-v1"
 
 
 class CompanyEmailOtpSendRequest(BaseModel):
@@ -252,9 +267,7 @@ async def _record_otp_failure(phone: str) -> None:
             logger.error(f"OTP_LOCKOUT_TRIGGERED phone=...{phone[-4:]} after {count} failures")
             _metric_inc("spinr_auth_otp_lockout_total")
             try:
-                import asyncio
-
-                asyncio.create_task(
+                _spawn(
                     _audit_log_user(
                         {"id": f"phone:{phone[-4:]}", "role": "anonymous"},
                         "otp_lockout_triggered",
@@ -487,7 +500,6 @@ async def send_otp(request: Request, body: SendOTPRequest):
     response = {"success": True, "message": f"OTP sent to ***{phone[-4:]}"}
     # Dev OTP is logged to server console via sms_service.py — never return it
     # in the API response to avoid accidental exposure in client-side logs.
-    import asyncio
     import hashlib
 
     _ph = hashlib.sha256(phone.encode()).hexdigest()[:16]
@@ -500,7 +512,7 @@ async def send_otp(request: Request, body: SendOTPRequest):
     if _is_reviewer:
         _audit_meta["reviewer_bypass"] = True
     try:
-        asyncio.create_task(
+        _spawn(
             _audit_log_user(
                 {"id": f"phone_hash:{_ph}", "role": "anonymous"},
                 _audit_action,
@@ -571,7 +583,7 @@ async def _alert_if_new_device(user: Dict[str, Any], user_agent: str) -> None:
     """
     try:
         if await is_new_device(user["id"], "rider", user_agent):
-            asyncio.create_task(send_new_device_notice(user))
+            _spawn(send_new_device_notice(user))
     except Exception:
         logger.error("new-device alert check failed for user_id=%s", user.get("id"), exc_info=True)
 
@@ -1040,7 +1052,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
             if str(existing_user.get("status") or "").lower() == "pending_deletion":
                 logger.info("verify_otp: account pending_deletion — returning reactivation handoff")
                 try:
-                    asyncio.create_task(
+                    _spawn(
                         _audit_log_user(existing_user, "otp_verify_pending_deletion", "users", existing_user["id"], {})
                     )
                 except Exception:
@@ -1116,9 +1128,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                 max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             )
             try:
-                import asyncio
-
-                asyncio.create_task(
+                _spawn(
                     _audit_log_user(
                         existing_user,
                         "otp_verify_success",
@@ -1144,6 +1154,22 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                 admin_ttl_minutes=15,
             )
         else:
+            # PIPEDA: a brand-new account may only be created off an actual,
+            # logged user gesture — the signup screen's "I agree to the Terms
+            # of Service and Privacy Policy" checkbox (rider-app / driver-app
+            # login.tsx), not an auto-stamped consent_version with no action
+            # behind it. Reject the whole signup (no row is created, no
+            # consent_version is stamped) rather than silently proceeding
+            # without consent or creating the account minus the stamp — see
+            # docs/change-log/2026-08-20-explicit-signup-consent-checkbox.md.
+            if not body.consent_accepted:
+                raise SpinrException(
+                    message="Please agree to the Terms of Service and Privacy Policy to continue.",
+                    error_code=ErrorCode.VALIDATION_MISSING_FIELD,
+                    status_code=400,
+                    message_key=ErrorKeys.AUTH_CONSENT_REQUIRED,
+                    action_hint="Check the consent checkbox and try again",
+                )
             logger.info("Creating new user")
             user_id = str(uuid.uuid4())
             session_id = str(uuid.uuid4())
@@ -1194,9 +1220,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                 max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             )
             try:
-                import asyncio
-
-                asyncio.create_task(
+                _spawn(
                     _audit_log_user(
                         new_user,
                         "otp_verify_success",
@@ -1305,7 +1329,7 @@ async def reactivate_account(request: Request, response: Response, body: Reactiv
             ) from e
         user["status"] = "active"
         try:
-            asyncio.create_task(_audit_log_user(user, "dsar_reactivated", "users", user_id, {"pipeda": True}))
+            _spawn(_audit_log_user(user, "dsar_reactivated", "users", user_id, {"pipeda": True}))
         except Exception:
             logger.error("audit_log write failed for dsar_reactivated", exc_info=True)
 
@@ -1521,9 +1545,7 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
         max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
     try:
-        import asyncio
-
-        asyncio.create_task(
+        _spawn(
             _audit_log_user(
                 user,
                 "firebase_auth_login",
@@ -1910,9 +1932,7 @@ async def logout(
         if should_tombstone(token_session_id, current_user.get("current_session_id")):
             await revoke_session(str(token_session_id))
         try:
-            import asyncio
-
-            asyncio.create_task(
+            _spawn(
                 _audit_log_user(
                     current_user,
                     "user_logged_out",

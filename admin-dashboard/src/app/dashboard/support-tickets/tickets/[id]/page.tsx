@@ -62,11 +62,12 @@ function ticketTagNames(t: any): string[] {
 
 function statusClass(status: string): string {
     const s = (status || "").toLowerCase();
+    // eslint-disable-next-line no-restricted-syntax -- "open" (new/active) has no semantic-token equivalent; must stay visually distinct from hold/escalated/closed (#2816)
     if (s.includes("open")) return "bg-blue-100 text-blue-800 hover:bg-blue-100";
-    if (s.includes("hold")) return "bg-amber-100 text-amber-800 hover:bg-amber-100";
-    if (s.includes("escal")) return "bg-red-100 text-red-800 hover:bg-red-100";
-    if (s.includes("closed")) return "bg-gray-200 text-gray-700 hover:bg-gray-200";
-    return "bg-slate-100 text-slate-700 hover:bg-slate-100";
+    if (s.includes("hold")) return "bg-warning/15 text-warning hover:bg-warning/15";
+    if (s.includes("escal")) return "bg-destructive/15 text-destructive hover:bg-destructive/15";
+    if (s.includes("closed")) return "bg-muted text-muted-foreground hover:bg-muted";
+    return "bg-muted text-muted-foreground hover:bg-muted";
 }
 
 function fmtTime(s?: string): string {
@@ -377,6 +378,7 @@ export default function TicketDetailPage() {
                                     const body = isOpen && fullBody[key] ? fullBody[key] : preview;
                                     const role = isComment ? "Internal note" : isOut ? "Agent reply" : "Customer";
                                     const accent = isComment
+                                        // eslint-disable-next-line no-restricted-syntax -- message-role differentiator (internal note/agent reply/customer), not a health-state signal (#2816)
                                         ? "border-l-amber-400 bg-amber-50/60 dark:bg-amber-950/20"
                                         : isOut
                                         ? "border-l-blue-400"
@@ -403,7 +405,8 @@ export default function TicketDetailPage() {
                                             </p>
                                             <button
                                                 onClick={() => toggleMsg(m)}
-                                                className="mt-1 flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
+                                                // eslint-disable-next-line no-restricted-syntax -- decorative link-style accent, not a status signal (#2816)
+                                                className="mt-1 flex items-center gap-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline"
                                             >
                                                 {isOpen ? <><ChevronUp className="h-3 w-3" /> Show less</> : <><ChevronDown className="h-3 w-3" /> Show full message</>}
                                             </button>
@@ -454,7 +457,8 @@ export default function TicketDetailPage() {
                                     <div className="rounded-md border border-dashed bg-muted/30 p-3">
                                         <p className="mb-1 text-[11px] font-medium text-muted-foreground">Signature (auto-appended)</p>
                                         <div
-                                            className="text-sm text-muted-foreground [&_a]:text-blue-600 [&_a]:underline"
+                                            // eslint-disable-next-line no-restricted-syntax -- decorative link-style accent, not a status signal (#2816)
+                                            className="text-sm text-muted-foreground [&_a]:text-blue-600 dark:[&_a]:text-blue-400 [&_a]:underline"
                                             dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(emailSignature) }}
                                         />
                                     </div>
@@ -494,7 +498,7 @@ export default function TicketDetailPage() {
                             </CardContent>
                         </Card>
 
-                        <Card className={areaInfo?.needs_assignment ? "border-amber-400 bg-amber-50/50 dark:bg-amber-950/20" : undefined}>
+                        <Card className={areaInfo?.needs_assignment ? "border-warning bg-warning/10" : undefined}>
                             <CardHeader>
                                 <CardTitle className="flex items-center gap-2 text-base">
                                     <MapPin className="h-4 w-4" /> Service area
@@ -505,7 +509,7 @@ export default function TicketDetailPage() {
                             </CardHeader>
                             <CardContent className="space-y-2">
                                 {areaInfo?.needs_assignment && (
-                                    <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+                                    <p className="flex items-start gap-1.5 text-xs text-warning">
                                         <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                                         No service area on file for this requester — assign one (optional, helps routing & reporting).
                                     </p>

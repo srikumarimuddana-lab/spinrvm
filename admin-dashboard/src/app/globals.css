@@ -28,6 +28,8 @@
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+  --color-warning: var(--warning);
+  --color-success: var(--success);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -72,6 +74,17 @@
   --accent: #f3f4f6;
   --accent-foreground: #1f2937;
   --destructive: #dc2626;
+  /* Admin Portal UX Audit P2: no first-class "pending"/"success" token
+     existed before this — every status badge in the codebase hardcoded
+     Tailwind amber/emerald classes instead (113 files, see #2816). Picked
+     for real WCAG AA text contrast (verified via the same relative-
+     luminance formula as --primary/--destructive above, not eyeballed):
+     #b45309 (Tailwind amber-700) reaches 4.81:1 on --background and
+     5.02:1 on --card; #15803d (green-700) reaches 4.80:1 / 5.02:1. Both
+     clear the 4.5:1 AA-normal-text threshold with a small margin, same
+     bar --primary's #d32f2f pick used. */
+  --warning: #b45309;
+  --success: #15803d;
   --border: #e5e7eb;
   --input: #e5e7eb;
   --ring: #ff3b30;
@@ -125,6 +138,14 @@
   --accent: #18181b;
   --accent-foreground: #fafafa;
   --destructive: #dc2626;
+  /* Same tokens as :root above (Admin Portal UX Audit P2). Reuse the
+     existing --chart-4/--chart-2 dark values rather than inventing new
+     ones — both already clear AA text contrast on --card (#0a0a0c) by a
+     wide margin (9.21:1, 9.78:1), unlike their light-mode counterparts
+     (--chart-4 light #d97706 is only 3.19:1 as text — why light mode
+     needed dedicated darker hex values instead of reusing chart-4/2). */
+  --warning: #f59e0b;
+  --success: #30d158;
   --border: #27272a;
   --input: #27272a;
   --ring: #ff453a;

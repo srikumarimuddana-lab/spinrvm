@@ -170,6 +170,98 @@ export const adminCommitBookingImport = (files: BookingImportFiles, opts?: Booki
         body: bookingImportFormData(files, opts),
     });
 
+/* ── Legacy Wallet-Balance Import (3 CSVs) ── */
+// Super-admin-only (backend/routes/admin/wallet_import.py). Imports prepaid
+// rider/driver wallet credits from the previous app's `wallets` collection.
+// Applies real money via the row-locked wallet_apply_delta RPC — never a
+// plain balance write. Takes three files: wallets, customers, drivers —
+// customers/drivers supply the phone numbers used to match each wallet row
+// to an existing Spinr account.
+export interface WalletImportReportItem {
+    row_num: number;
+    old_id: string;
+    field: string;
+    message: string;
+}
+/** Mirrors WalletImportPlan.stats — all ints except the sum_* money fields. */
+export interface WalletImportCounts {
+    rows_read: number;
+    skipped_missing_id: number;
+    skipped_duplicate_id: number;
+    skipped_unmatched: number;
+    skipped_zero_amount: number;
+    target_rows: number;
+    rider_rows: number;
+    driver_rows: number;
+    sum_add: number;
+    sum_deduct: number;
+    sum_net: number;
+}
+export interface WalletImportReport {
+    batch: string;
+    can_commit: boolean;
+    counts: WalletImportCounts;
+    warnings: WalletImportReportItem[];
+    errors: WalletImportReportItem[];
+}
+/** One row per planned delta, in plan order — present only on a committed response. */
+export interface WalletImportDeltaResult {
+    reference_id: string;
+    status: "applied" | "deduped" | "failed";
+    transaction_id?: string;
+    balance_after?: string;
+    applied_delta?: string;
+}
+export interface WalletImportCommitResult {
+    batch: string;
+    committed: boolean;
+    applied?: number;
+    deduped?: number;
+    failed?: number;
+    results?: WalletImportDeltaResult[];
+    counts?: WalletImportCounts;
+    warnings?: WalletImportReportItem[];
+    // Present (with can_commit=false) when the commit was refused on errors.
+    can_commit?: boolean;
+    errors?: WalletImportReportItem[];
+}
+export interface WalletImportFiles {
+    wallets: File;
+    customers: File;
+    drivers: File;
+}
+export interface WalletImportOptions {
+    batch?: string;
+}
+
+function walletImportFormData(files: WalletImportFiles, opts?: WalletImportOptions): FormData {
+    const fd = new FormData();
+    fd.append("wallets_csv", files.wallets);
+    fd.append("customers_csv", files.customers);
+    fd.append("drivers_csv", files.drivers);
+    if (opts?.batch) fd.append("batch", opts.batch);
+    return fd;
+}
+
+/** Dry-run: parse + validate the three CSVs and return the report (no writes). */
+export const adminValidateWalletImport = (files: WalletImportFiles, opts?: WalletImportOptions) =>
+    request<WalletImportReport>("/api/admin/wallets/import/validate", {
+        method: "POST",
+        body: walletImportFormData(files, opts),
+    });
+
+/**
+ * Commit the import. Applies every planned delta via wallet_apply_delta.
+ * Returns committed=false + errors if the CSVs no longer validate, or if
+ * there is nothing left to import. Pass the batch from the validate response
+ * so a re-send dedups via the RPC instead of double-crediting.
+ */
+export const adminCommitWalletImport = (files: WalletImportFiles, opts?: WalletImportOptions) =>
+    request<WalletImportCommitResult>("/api/admin/wallets/import/commit", {
+        method: "POST",
+        body: walletImportFormData(files, opts),
+    });
+
 /* ── Legacy Stripe Mapping Import (CSV) ───── */
 // Super-admin-only endpoints (backend/routes/admin/stripe_import.py). Maps
 // old-app Stripe IDs onto imported rows: drivers.stripe_account_id (payout

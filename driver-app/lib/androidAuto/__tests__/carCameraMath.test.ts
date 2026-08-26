@@ -3,6 +3,7 @@
  * where the car map's camera points. No head unit, no native module.
  */
 import {
+  formatHeadingReadout,
   angularDelta,
   HEADING_COMMIT_DEG,
   normalizeHeading,
@@ -112,5 +113,28 @@ describe('zoomForSpan', () => {
     const z = zoomForSpan(0.02, W, H, 90);
     expect(z).not.toBeNull();
     expect(Number.isFinite(z!)).toBe(true);
+  });
+});
+
+describe('formatHeadingReadout — the line a driver can actually report', () => {
+  it('names the source when there is a GPS course, and says the map is turning', () => {
+    expect(formatHeadingReadout(271.4, 'gps', 271)).toBe('271° gps · course-up');
+  });
+
+  it('distinguishes a derived course from a held one', () => {
+    expect(formatHeadingReadout(90, 'derived', 90)).toBe('90° derived · course-up');
+    expect(formatHeadingReadout(90, 'carried', null)).toBe('90° held · north-up');
+  });
+
+  it('says "no course" rather than inventing north — the reported symptom', () => {
+    // This is the state the wrong-way marker photos were taken in. It has to be
+    // distinguishable on screen from a real 0° bearing pointing north.
+    expect(formatHeadingReadout(null, 'none', null)).toBe('no course · north-up');
+    expect(formatHeadingReadout(-1, 'none', null)).toBe('no course · north-up');
+    expect(formatHeadingReadout(0, 'gps', null)).toBe('0° gps · north-up');
+  });
+
+  it('wraps an out-of-range bearing instead of printing it raw', () => {
+    expect(formatHeadingReadout(365, 'gps', 5)).toBe('5° gps · course-up');
   });
 });

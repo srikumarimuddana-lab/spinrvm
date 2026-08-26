@@ -283,6 +283,7 @@ function StatCard({ label, value, accent }: { label: string; value: string; acce
                 <CardTitle className="text-xs font-medium text-muted-foreground">{label}</CardTitle>
             </CardHeader>
             <CardContent>
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card accent, not a status signal (#2816) */}
                 <div className={`text-2xl font-bold ${accent ? "text-blue-600" : ""}`}>{value}</div>
             </CardContent>
         </Card>

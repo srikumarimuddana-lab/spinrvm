@@ -39,13 +39,13 @@ function triggerBrowserDownload(blob: Blob, filename: string) {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  needs_response: "bg-red-100 text-red-700",
-  warning_needs_response: "bg-red-100 text-red-700",
-  under_review: "bg-amber-100 text-amber-700",
-  warning_under_review: "bg-amber-100 text-amber-700",
-  won: "bg-green-100 text-green-700",
-  lost: "bg-gray-100 text-gray-500",
-  warning_closed: "bg-green-100 text-green-700",
+  needs_response: "bg-destructive/15 text-destructive",
+  warning_needs_response: "bg-destructive/15 text-destructive",
+  under_review: "bg-warning/15 text-warning",
+  warning_under_review: "bg-warning/15 text-warning",
+  won: "bg-success/15 text-success",
+  lost: "bg-muted text-muted-foreground",
+  warning_closed: "bg-success/15 text-success",
 };
 
 const OPEN_STATUSES = new Set(["needs_response", "warning_needs_response", "under_review", "warning_under_review"]);
@@ -62,8 +62,8 @@ function daysRemainingLabel(days: number | null, status: string): string {
 
 function daysRemainingColor(days: number | null, status: string): string {
   if (!OPEN_STATUSES.has(status) || days == null) return "text-muted-foreground";
-  if (days <= 1) return "text-red-600 font-semibold";
-  if (days <= 3) return "text-amber-600 font-medium";
+  if (days <= 1) return "text-destructive font-semibold";
+  if (days <= 3) return "text-warning font-medium";
   return "text-muted-foreground";
 }
 
@@ -211,7 +211,7 @@ export default function ChargebacksTab() {
               {error && (
                 <div
                   role="alert"
-                  className="flex items-center justify-between gap-3 border-b bg-red-50 dark:bg-red-950/30 px-4 py-3 text-sm text-red-700 dark:text-red-400"
+                  className="flex items-center justify-between gap-3 border-b bg-destructive/10 px-4 py-3 text-sm text-destructive"
                 >
                   <span className="flex items-center gap-2">
                     <AlertTriangle className="h-4 w-4" />
@@ -225,7 +225,7 @@ export default function ChargebacksTab() {
               {downloadError && (
                 <div
                   role="alert"
-                  className="flex items-center justify-between gap-3 border-b bg-red-50 dark:bg-red-950/30 px-4 py-3 text-sm text-red-700 dark:text-red-400"
+                  className="flex items-center justify-between gap-3 border-b bg-destructive/10 px-4 py-3 text-sm text-destructive"
                 >
                   <span className="flex items-center gap-2">
                     <AlertTriangle className="h-4 w-4" />
@@ -267,7 +267,7 @@ export default function ChargebacksTab() {
                           ${(c.amount_cents / 100).toFixed(2)}
                         </TableCell>
                         <TableCell>
-                          <Badge className={STATUS_COLORS[c.status] || "bg-gray-100"}>
+                          <Badge className={STATUS_COLORS[c.status] || "bg-muted"}>
                             {c.status?.replace(/_/g, " ")}
                           </Badge>
                         </TableCell>
@@ -331,13 +331,13 @@ export default function ChargebacksTab() {
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Send className="h-5 w-5 text-amber-500" />
+              <Send className="h-5 w-5 text-warning" />
               Submit Evidence to Stripe
             </DialogTitle>
           </DialogHeader>
           {submitTarget && (
             <div className="space-y-4">
-              <div className="bg-amber-50 dark:bg-amber-950/30 rounded-lg p-3 text-sm text-amber-800 dark:text-amber-300">
+              <div className="bg-warning/10 rounded-lg p-3 text-sm text-warning">
                 <p className="font-semibold">
                   This immediately submits evidence to Stripe and cannot be undone.
                 </p>

@@ -31,14 +31,21 @@ import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 //   bulk_operations   deliberately removed backend-side; the Data Transfer
 //                     surface is now require_super_admin, so offering it here
 //                     implied a full-fidelity PII export could be delegated
-//   compliance        the OPPOSITE drift — require_module("compliance") is a
-//                     real, enforced gate (routes/admin/__init__.py) that is
-//                     NOT in AVAILABLE_MODULES, so nobody can hold it and the
-//                     router is super_admin-only by omission. Removed from the
-//                     picker because it cannot currently be granted; making it
-//                     grantable is a product decision about who may reach tax
-//                     and compliance reporting, not a cleanup. Tracked as a
-//                     follow-up rather than decided here.
+//   compliance        the OPPOSITE drift — require_module("compliance") was a
+//                     real, enforced gate (routes/admin/__init__.py) that was
+//                     NOT in AVAILABLE_MODULES, so nobody could hold it and the
+//                     router was super_admin-only by omission. Removed from the
+//                     picker because it could not be granted; decision log
+//                     2026-08-19 section 2 resolved the follow-up as option B
+//                     (require_super_admin, stated explicitly rather than by
+//                     omission) — the backend mount no longer calls
+//                     require_module() at all, so this module string must stay
+//                     out of AVAILABLE_MODULES/this list rather than being
+//                     added back.
+//   surge, pricing    removed 2026-08-21 (decision-log item 3, docs/audit/
+//                     2026-08-19-decision-writeups.md): both were grantable
+//                     but gated no backend route. The real surge/pricing admin
+//                     capability is entirely gated by require_module("service_areas").
 //
 // A test in backend/tests/test_admin_module_list_parity.py now compares the two
 // lists so this cannot drift again silently.
@@ -49,10 +56,8 @@ const ALL_MODULES = [
   { key: "rides", label: "Rides" },
   { key: "earnings", label: "Earnings" },
   { key: "promotions", label: "Promotions" },
-  { key: "surge", label: "Surge Pricing" },
   { key: "service_areas", label: "Service Areas" },
   { key: "vehicle_types", label: "Vehicle Types" },
-  { key: "pricing", label: "Pricing" },
   { key: "support", label: "Support" },
   { key: "disputes", label: "Disputes" },
   { key: "notifications", label: "Cloud Messaging" },
@@ -66,18 +71,22 @@ const ALL_MODULES = [
 
 const ROLE_PRESETS: Record<string, string[]> = {
   super_admin: ALL_MODULES.map((m) => m.key),
-  operations: ["dashboard", "rides", "drivers", "surge", "service_areas", "vehicle_types"],
+  operations: ["dashboard", "rides", "drivers", "service_areas", "vehicle_types"],
   support: ["dashboard", "support", "support_tickets", "disputes", "notifications", "users"],
-  finance: ["dashboard", "earnings", "promotions", "corporate_accounts", "pricing", "audit"],
+  finance: ["dashboard", "earnings", "promotions", "corporate_accounts", "audit"],
 };
 
+/* eslint-disable no-restricted-syntax -- categorical admin-role map (5 distinct
+   roles), not a success/warning/destructive signal — too many states for the
+   3-token system, see comment above (#2816) */
 const ROLE_COLORS: Record<string, string> = {
-  super_admin: "bg-red-100 text-red-700",
-  operations: "bg-blue-100 text-blue-700",
-  support: "bg-green-100 text-green-700",
-  finance: "bg-purple-100 text-purple-700",
-  custom: "bg-gray-100 text-gray-700",
+  super_admin: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
+  operations: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+  support: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
+  finance: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
+  custom: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400",
 };
+/* eslint-enable no-restricted-syntax */
 
 interface Staff {
   id: string;
@@ -434,10 +443,10 @@ export default function StaffPage() {
                     <TableCell>
                       <div className="flex items-center gap-1.5">
                         {!s.is_active && (
-                          <span className="px-2 py-0.5 rounded-md text-xs font-bold bg-yellow-100 text-yellow-700">DISABLED</span>
+                          <span className="px-2 py-0.5 rounded-md text-xs font-bold bg-warning/15 text-warning">DISABLED</span>
                         )}
                         {s.mfa_enabled && (
-                          <span className="flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-bold bg-green-100 text-green-700">
+                          <span className="flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-bold bg-success/15 text-success">
                             <ShieldCheck className="h-3 w-3" />
                             MFA
                           </span>
@@ -455,10 +464,10 @@ export default function StaffPage() {
                         {user?.role === "super_admin" && s.mfa_enabled && s.id !== user?.id && (
                           <button
                             onClick={() => setMfaResetTarget(s)}
-                            className="p-2 hover:bg-orange-50 rounded-lg transition"
+                            className="p-2 hover:bg-warning/10 rounded-lg transition"
                             title="Reset MFA (lost phone)"
                           >
-                            <ShieldOff className="h-4 w-4 text-orange-500" />
+                            <ShieldOff className="h-4 w-4 text-warning" />
                           </button>
                         )}
                         <button onClick={() => handleEdit(s)} className="p-2 hover:bg-muted rounded-lg transition" title="Edit">
@@ -469,10 +478,10 @@ export default function StaffPage() {
                           className="p-2 hover:bg-muted rounded-lg transition"
                           title={s.is_active ? "Disable" : "Enable"}
                         >
-                          {s.is_active ? <X className="h-4 w-4 text-yellow-500" /> : <Check className="h-4 w-4 text-green-500" />}
+                          {s.is_active ? <X className="h-4 w-4 text-warning" /> : <Check className="h-4 w-4 text-success" />}
                         </button>
-                        <button onClick={() => handleDelete(s)} className="p-2 hover:bg-red-50 rounded-lg transition" title="Delete">
-                          <Trash2 className="h-4 w-4 text-red-400" />
+                        <button onClick={() => handleDelete(s)} className="p-2 hover:bg-destructive/10 rounded-lg transition" title="Delete">
+                          <Trash2 className="h-4 w-4 text-destructive" />
                         </button>
                       </div>
                     </TableCell>
@@ -497,7 +506,7 @@ export default function StaffPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmMfaReset} className="bg-orange-600 hover:bg-orange-700">Reset MFA</AlertDialogAction>
+            <AlertDialogAction onClick={confirmMfaReset} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Reset MFA</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -510,7 +519,7 @@ export default function StaffPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+            <AlertDialogAction onClick={confirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

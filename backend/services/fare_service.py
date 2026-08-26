@@ -52,6 +52,19 @@ def _f(v: Decimal) -> float:
     return float(v)
 
 
+def _money_str(v: Decimal) -> str:
+    """Quantize ``v`` to 2 decimal places and emit as a JSON-safe string.
+
+    Mirrors ``routes/rides/_shared.py``'s helper of the same name (not
+    imported directly — that module imports ``._deps``, which imports back
+    into this file for ``calculate_fare``/``build_fare_breakdown_lines``, so
+    importing it here would be circular). Use for any value written into a
+    NUMERIC/DECIMAL DB column; see CLAUDE.md § Critical Conventions
+    ("Money arithmetic") and ACTION_ITEMS.md B28/B29/B30/B35.
+    """
+    return str(_round(_d(v)))
+
+
 def _fd(v: Any) -> float:
     """Convert any numeric value to a 2-decimal-place float (backward-compat alias for tests)."""
     return float(_round(_d(v)))
@@ -456,10 +469,16 @@ def recalculate_fare_for_distance(
 
     return {
         "distance_km": round(actual_distance_km, 2),
+        # distance_fare/total_fare/driver_earnings are FLOAT8 on `rides` —
+        # verified against the live schema (information_schema.columns) — so
+        # `_f()` is the correct serialization for them (see ACTION_ITEMS.md
+        # B35, which confirmed the same for this table's other fare fields).
         "distance_fare": _f(new_distance_fare),
         "total_fare": _f(new_total_fare),
         "driver_earnings": _f(new_driver_earnings),
-        "grand_total": _f(new_grand_total),
+        # grand_total is NUMERIC(10,2) on `rides` — write the Decimal-safe
+        # string, not a float (ACTION_ITEMS.md B36).
+        "grand_total": _money_str(new_grand_total),
     }
 
 

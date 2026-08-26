@@ -21,7 +21,7 @@
 
 SPINR ACCESSIBILITY STATEMENT
 
-Last updated: [INSERT PUBLICATION DATE]
+Last updated: August 21, 2026
 
 Spinr is committed to making our rider app, driver app, and website
 accessible to everyone, including people with disabilities.
@@ -30,9 +30,7 @@ OUR STANDARD
 
 We design and build toward the Web Content Accessibility Guidelines (WCAG)
 2.1, Level AA. This is our target for every customer-facing surface. We are
-continuing to test and improve against this standard — [IF TRUE: an
-independent accessibility audit is in progress / planned for
-DATE — DO NOT STATE THIS UNLESS IT IS ACTUALLY TRUE].
+continuing to test and improve against this standard.
 
 WHAT WE'VE BUILT SO FAR
 
@@ -67,15 +65,14 @@ with assistive technology, we want to know — see "Tell us" below.
 REQUESTING AN ALTERNATE FORMAT
 
 If you need this statement, our Terms of Service, or our Privacy Policy in
-an alternate format, contact accessibility@spinr.ca and we will work with
-you to provide one.
+an alternate format, contact support@spinr.ca and we will work with you to
+provide one.
 
 TELL US ABOUT AN ACCESSIBILITY BARRIER
 
-Email accessibility@spinr.ca with what you were trying to do, what
-happened, and what device/assistive technology you were using. We review
-every report and prioritize fixes based on severity and how many people are
-affected.
+Email support@spinr.ca with what you were trying to do, what happened, and
+what device/assistive technology you were using. We review every report and
+prioritize fixes based on severity and how many people are affected.
 
 ## END DRAFT
 
@@ -113,3 +110,15 @@ affected.
    table has moved since 2026-04-09, and the `spinr-accessibility-reviewer`
    agent should still sanity-check the final list against the actual
    codebase before publication.
+4. **Published 2026-08-21** to `legal_documents` (rider + driver rows,
+   version 1) at the explicit direction of the product owner, without
+   counsel review and without waiting for `accessibility@spinr.ca` to be
+   provisioned — same accepted-risk pattern as `terms-of-service.md`/
+   `privacy-policy.md`. Both contact mentions were pointed at
+   `support@spinr.ca` (live, monitored) instead, so the published page does
+   not cite a dead inbox; re-point them to `accessibility@spinr.ca` once
+   that mailbox exists and is monitored. The "IF TRUE" conditional
+   audit-status sentence was deleted rather than filled in, since no
+   independent audit is in progress. Counsel review and a full rider/driver-
+   app accessibility audit remain open, tracked in
+   `legal-text-publication-checklist.md`.

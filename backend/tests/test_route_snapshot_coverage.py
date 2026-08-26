@@ -469,7 +469,7 @@ class TestRenderRideSnapshotGoogle:
             dropoff_lng=-104.1,
             completion_point={"lat": 50.05, "lng": -104.05},
         )
-        assert "markers=color:orange|label:C|50.05,-104.05" in fake_async_client.last_url
+        assert "markers=color:0xF59E0B|label:C|50.05,-104.05" in fake_async_client.last_url
 
     @pytest.mark.anyio
     async def test_invalid_completion_point_skips_marker(self, fake_async_client):

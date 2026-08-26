@@ -344,7 +344,7 @@ export function DocumentUploadDialog({
                 )}
 
                 {rows.length > 0 && unmapped > 0 && (
-                    <p className="text-xs text-amber-600 dark:text-amber-400">
+                    <p className="text-xs text-warning">
                         Map every file to a document type before uploading ({unmapped} remaining).
                     </p>
                 )}

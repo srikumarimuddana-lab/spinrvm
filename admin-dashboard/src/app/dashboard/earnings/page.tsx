@@ -129,8 +129,8 @@ function DeltaChip({ pct }: { pct: number | null }) {
     const up = pct > 0;
     const Icon = up ? TrendingUp : TrendingDown;
     const color = up
-        ? "text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20"
-        : "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20";
+        ? "text-success bg-success/10"
+        : "text-destructive bg-destructive/10";
     return (
         <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold ${color}`}>
             <Icon className="h-3 w-3" />
@@ -255,8 +255,9 @@ function CeoMetricsHeader({
 
             <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
                 <MetricCard icon={DollarSign} label="GBV"               metric={m?.gbv}             format={fmtMoney} loading={loading} />
-                <MetricCard icon={Wallet}     label="Net Revenue"       metric={m?.net_revenue}     format={fmtMoney} accent="text-emerald-600 dark:text-emerald-400" loading={loading} />
+                <MetricCard icon={Wallet}     label="Net Revenue"       metric={m?.net_revenue}     format={fmtMoney} accent="text-success" loading={loading} />
                 <MetricCard icon={Percent}    label="Take Rate"         metric={m?.take_rate_pct}   format={fmtPct}   loading={loading} />
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card accent color, not a status signal (#2816) */}
                 <MetricCard icon={CreditCard} label="Spinr Pass MRR"    metric={m?.spinr_pass_mrr}  format={fmtMoney} accent="text-violet-600 dark:text-violet-400" loading={loading} />
                 <MetricCard icon={Car}        label="Completed Trips"   metric={m?.completed_trips} format={fmtCount} loading={loading} />
                 <MetricCard icon={Receipt}    label="Avg Fare"          metric={m?.avg_fare}        format={fmtMoney} loading={loading} />
@@ -333,9 +334,9 @@ function CeoMetricsHeader({
                 </h2>
                 <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
                     <MetricCard icon={XCircle}  label="Cancellation Rate"   metric={m?.cancellation_rate_pct} format={fmtPct}   loading={loading} />
-                    <MetricCard icon={Undo2}    label="Refunds"             metric={m?.refund_amount}        format={fmtMoney} accent="text-red-600 dark:text-red-400" loading={loading} />
-                    <MetricCard icon={Ticket}   label="Promo Spend"         metric={m?.promo_spend}          format={fmtMoney} accent="text-red-600 dark:text-red-400" loading={loading} />
-                    <MetricCard icon={Zap}      label="Surge Revenue"       metric={m?.surge_revenue}        format={fmtMoney} accent="text-amber-600 dark:text-amber-400" loading={loading} />
+                    <MetricCard icon={Undo2}    label="Refunds"             metric={m?.refund_amount}        format={fmtMoney} accent="text-destructive" loading={loading} />
+                    <MetricCard icon={Ticket}   label="Promo Spend"         metric={m?.promo_spend}          format={fmtMoney} accent="text-destructive" loading={loading} />
+                    <MetricCard icon={Zap}      label="Surge Revenue"       metric={m?.surge_revenue}        format={fmtMoney} accent="text-warning" loading={loading} />
                     <MetricCard icon={Landmark} label="GST Collected"       metric={m?.gst_collected}        format={fmtMoney} loading={loading} />
                     <MetricCard icon={Landmark} label="PST Collected"       metric={m?.pst_collected}        format={fmtMoney} loading={loading} />
                     <MetricCard icon={CreditCard} label="Cancellation Fees" metric={m?.cancellation_revenue} format={fmtMoney} loading={loading} />
@@ -360,11 +361,11 @@ function CeoMetricsHeader({
                         <MetricCard icon={Search}        label="Price Searches"        metric={fn?.price_searches}        format={fmtCount} loading={loading} />
                         <MetricCard icon={Car}           label="Rides Requested"       metric={fn?.requested}             format={fmtCount} loading={loading} />
                         <MetricCard icon={Radar}         label="Searched for Driver"   metric={fn?.reached_searching}     format={fmtCount} loading={loading} />
-                        <MetricCard icon={Flag}          label="Travelled"             metric={fn?.completed}             format={fmtCount} accent="text-emerald-600 dark:text-emerald-400" loading={loading} />
-                        <MetricCard icon={XCircle}       label="Rider Cancelled"       metric={fn?.rider_cancelled}       format={fmtCount} accent="text-amber-600 dark:text-amber-400" loading={loading} />
-                        <MetricCard icon={XCircle}       label="Driver Cancelled"      metric={fn?.driver_cancelled}      format={fmtCount} accent="text-red-600 dark:text-red-400" loading={loading} />
+                        <MetricCard icon={Flag}          label="Travelled"             metric={fn?.completed}             format={fmtCount} accent="text-success" loading={loading} />
+                        <MetricCard icon={XCircle}       label="Rider Cancelled"       metric={fn?.rider_cancelled}       format={fmtCount} accent="text-warning" loading={loading} />
+                        <MetricCard icon={XCircle}       label="Driver Cancelled"      metric={fn?.driver_cancelled}      format={fmtCount} accent="text-destructive" loading={loading} />
                         <MetricCard icon={XCircle}       label="System / No Driver"    metric={fn?.system_cancelled}      format={fmtCount} loading={loading} />
-                        <MetricCard icon={AlertTriangle} label="Cancelled After Start" metric={fn?.cancelled_after_start} format={fmtCount} accent="text-red-600 dark:text-red-400" loading={loading} />
+                        <MetricCard icon={AlertTriangle} label="Cancelled After Start" metric={fn?.cancelled_after_start} format={fmtCount} accent="text-destructive" loading={loading} />
                     </div>
                 </div>
 
@@ -384,11 +385,11 @@ function CeoMetricsHeader({
                             />
                             <div className="flex items-center gap-4 mt-2 text-[11px] text-muted-foreground">
                                 <span className="inline-flex items-center gap-1.5">
-                                    <span className="w-2 h-2 rounded-full bg-amber-500" />
+                                    <span className="w-2 h-2 rounded-full bg-warning" />
                                     Rider {cx.current.rider}
                                 </span>
                                 <span className="inline-flex items-center gap-1.5">
-                                    <span className="w-2 h-2 rounded-full bg-red-500" />
+                                    <span className="w-2 h-2 rounded-full bg-destructive" />
                                     Driver {cx.current.driver}
                                 </span>
                                 <span className="inline-flex items-center gap-1.5">
@@ -412,8 +413,8 @@ function CancellationMixBar({ rider, driver, system }: { rider: number; driver: 
     const pct = (n: number) => `${(n / total) * 100}%`;
     return (
         <div className="flex h-3 w-full rounded-md overflow-hidden bg-muted">
-            <div className="bg-amber-500" style={{ width: pct(rider) }} title={`${rider} rider-cancelled`} />
-            <div className="bg-red-500" style={{ width: pct(driver) }} title={`${driver} driver-cancelled`} />
+            <div className="bg-warning" style={{ width: pct(rider) }} title={`${rider} rider-cancelled`} />
+            <div className="bg-destructive" style={{ width: pct(driver) }} title={`${driver} driver-cancelled`} />
             <div className="bg-muted-foreground/60" style={{ width: pct(system) }} title={`${system} system / no-driver-found`} />
         </div>
     );
@@ -509,7 +510,7 @@ function PayoutsCeoHeader({
                     label="Outstanding to drivers"
                     metric={m?.outstanding_payable}
                     format={fmtMoney}
-                    accent="text-amber-600 dark:text-amber-400"
+                    accent="text-warning"
                     loading={loading}
                 />
                 <MetricCard
@@ -517,7 +518,7 @@ function PayoutsCeoHeader({
                     label="Paid out"
                     metric={m?.total_paid_out}
                     format={fmtMoney}
-                    accent="text-emerald-600 dark:text-emerald-400"
+                    accent="text-success"
                     loading={loading}
                 />
                 <MetricCard
@@ -532,7 +533,7 @@ function PayoutsCeoHeader({
                     label="Failed"
                     metric={m?.failed_amount}
                     format={fmtMoney}
-                    accent="text-red-600 dark:text-red-400"
+                    accent="text-destructive"
                     loading={loading}
                 />
                 <MetricCard
@@ -540,7 +541,7 @@ function PayoutsCeoHeader({
                     label="Success rate"
                     metric={m?.success_rate_pct}
                     format={fmtPct}
-                    accent="text-emerald-600 dark:text-emerald-400"
+                    accent="text-success"
                     loading={loading}
                 />
                 <MetricCard
@@ -647,7 +648,7 @@ function PayoutsOpsQueues({ overview }: { overview: PayoutsOverview }) {
                 counters that need intervention; rendered as alert-toned
                 cards so a non-zero value reads as a thing to address. */}
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                <Card className={`border-border/50 ${stuck_over_48h.count > 0 ? "border-amber-300 dark:border-amber-800" : ""}`}>
+                <Card className={`border-border/50 ${stuck_over_48h.count > 0 ? "border-warning/40" : ""}`}>
                     <CardContent className="p-4">
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
@@ -656,13 +657,13 @@ function PayoutsOpsQueues({ overview }: { overview: PayoutsOverview }) {
                             </div>
                             <span className="text-[10px] text-muted-foreground">manual review</span>
                         </div>
-                        <p className={`text-2xl font-bold tabular-nums mt-1.5 ${stuck_over_48h.count > 0 ? "text-amber-600 dark:text-amber-400" : ""}`}>
+                        <p className={`text-2xl font-bold tabular-nums mt-1.5 ${stuck_over_48h.count > 0 ? "text-warning" : ""}`}>
                             {stuck_over_48h.count}
                         </p>
                         <p className="text-[11px] text-muted-foreground mt-1">{fmtMoney(stuck_over_48h.amount)} held up</p>
                     </CardContent>
                 </Card>
-                <Card className={`border-border/50 ${blocked_drivers.count > 0 ? "border-red-300 dark:border-red-800" : ""}`}>
+                <Card className={`border-border/50 ${blocked_drivers.count > 0 ? "border-destructive/40" : ""}`}>
                     <CardContent className="p-4">
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
@@ -671,7 +672,7 @@ function PayoutsOpsQueues({ overview }: { overview: PayoutsOverview }) {
                             </div>
                             <span className="text-[10px] text-muted-foreground">payouts_enabled=false</span>
                         </div>
-                        <p className={`text-2xl font-bold tabular-nums mt-1.5 ${blocked_drivers.count > 0 ? "text-red-600 dark:text-red-400" : ""}`}>
+                        <p className={`text-2xl font-bold tabular-nums mt-1.5 ${blocked_drivers.count > 0 ? "text-destructive" : ""}`}>
                             {blocked_drivers.count}
                         </p>
                         <p className="text-[11px] text-muted-foreground mt-1">{fmtMoney(blocked_drivers.outstanding_balance)} undeliverable</p>
@@ -699,7 +700,7 @@ function PayoutsOpsQueues({ overview }: { overview: PayoutsOverview }) {
                 <Card className="border-border/50">
                     <CardHeader className="pb-2">
                         <CardTitle className="text-sm flex items-center gap-2">
-                            <AlertTriangle className="h-4 w-4 text-red-500" />
+                            <AlertTriangle className="h-4 w-4 text-destructive" />
                             Why payouts are failing
                         </CardTitle>
                     </CardHeader>
@@ -738,7 +739,7 @@ function PayoutsOpsQueues({ overview }: { overview: PayoutsOverview }) {
                 <Card className="border-border/50">
                     <CardHeader className="pb-2">
                         <CardTitle className="text-sm flex items-center gap-2">
-                            <UserCheck className="h-4 w-4 text-amber-500" />
+                            <UserCheck className="h-4 w-4 text-warning" />
                             At-risk drivers
                         </CardTitle>
                     </CardHeader>
@@ -768,7 +769,7 @@ function PayoutsOpsQueues({ overview }: { overview: PayoutsOverview }) {
                                                     {d.name}
                                                 </a>
                                             </TableCell>
-                                            <TableCell className="text-xs text-right tabular-nums font-semibold text-red-600 dark:text-red-400">
+                                            <TableCell className="text-xs text-right tabular-nums font-semibold text-destructive">
                                                 {d.failure_count}
                                             </TableCell>
                                             <TableCell className="text-xs text-muted-foreground font-mono truncate max-w-[220px]" title={d.last_reason ?? ""}>
@@ -788,7 +789,7 @@ function PayoutsOpsQueues({ overview }: { overview: PayoutsOverview }) {
             <Card className="border-border/50">
                 <CardHeader className="pb-2">
                     <CardTitle className="text-sm flex items-center gap-2">
-                        <TrendingUp className="h-4 w-4 text-emerald-500" />
+                        <TrendingUp className="h-4 w-4 text-success" />
                         Top drivers by payout volume
                     </CardTitle>
                 </CardHeader>
@@ -933,10 +934,10 @@ function PayoutsCompliance({ overview, onClosed }: { overview: PayoutsOverview; 
                                     <TableCell className="text-xs text-right tabular-nums">{t4a_snapshot.buckets.from_10k_to_30k}</TableCell>
                                     <TableCell className="text-[11px] text-muted-foreground">T4A required · GST elective</TableCell>
                                 </TableRow>
-                                <TableRow className="bg-amber-50/50 dark:bg-amber-900/10">
+                                <TableRow className="bg-warning/5">
                                     <TableCell className="text-xs font-mono font-semibold">≥ $30k</TableCell>
-                                    <TableCell className="text-xs text-right tabular-nums font-bold text-amber-700 dark:text-amber-300">{t4a_snapshot.buckets.over_30k}</TableCell>
-                                    <TableCell className="text-[11px] text-amber-700 dark:text-amber-300">T4A + GST/HST registration MANDATORY</TableCell>
+                                    <TableCell className="text-xs text-right tabular-nums font-bold text-warning">{t4a_snapshot.buckets.over_30k}</TableCell>
+                                    <TableCell className="text-[11px] text-warning">T4A + GST/HST registration MANDATORY</TableCell>
                                 </TableRow>
                             </TableBody>
                         </Table>
@@ -991,6 +992,7 @@ function PayoutsCompliance({ overview, onClosed }: { overview: PayoutsOverview; 
                                 onClick={handleClose}
                                 disabled={closing}
                                 size="sm"
+                                // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text success button; --success fails WCAG AA contrast vs white text in dark mode (#2816)
                                 className="bg-emerald-600 hover:bg-emerald-700 text-white"
                             >
                                 <CheckCircle className="h-3.5 w-3.5 mr-1.5" />
@@ -1162,10 +1164,13 @@ function RideEarningsTab() {
                 <Card className="border-border/50"><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Total Fares (custom range)</CardTitle></CardHeader>
                     <CardContent><p className="text-2xl font-bold">{formatCurrency(totals.totalFare)}</p></CardContent></Card>
                 <Card className="border-border/50"><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Driver Earnings</CardTitle></CardHeader>
+                    {/* eslint-disable-next-line no-restricted-syntax -- decorative category accent (driver earnings), not a status signal (#2816) */}
                     <CardContent><p className="text-2xl font-bold text-emerald-500">{formatCurrency(totals.driverEarnings)}</p></CardContent></Card>
                 <Card className="border-border/50"><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Platform Revenue</CardTitle></CardHeader>
+                    {/* eslint-disable-next-line no-restricted-syntax -- decorative category accent (platform revenue), not a status signal (#2816) */}
                     <CardContent><p className="text-2xl font-bold text-violet-500">{formatCurrency(totals.adminEarnings)}</p></CardContent></Card>
                 <Card className="border-border/50"><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Tips</CardTitle></CardHeader>
+                    {/* eslint-disable-next-line no-restricted-syntax -- decorative category accent (tips), not a status signal (#2816) */}
                     <CardContent><p className="text-2xl font-bold text-amber-500">{formatCurrency(totals.tips)}</p></CardContent></Card>
             </div>
 
@@ -1224,8 +1229,11 @@ function RideEarningsTab() {
                                             <TableCell className="text-xs truncate max-w-[140px]" title={r.driver_name || ""}>{r.driver_name || "—"}</TableCell>
                                             <TableCell className="text-xs truncate max-w-[140px]" title={r.rider_name || ""}>{r.rider_name || "—"}</TableCell>
                                             <TableCell className="text-sm font-medium text-right tabular-nums">{formatCurrency(r.total_fare || 0)}</TableCell>
+                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative category accent (driver earnings), not a status signal (#2816) */}
                                             <TableCell className="text-sm text-right tabular-nums text-emerald-500">{formatCurrency(r.driver_earnings || 0)}</TableCell>
+                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative category accent (platform revenue), not a status signal (#2816) */}
                                             <TableCell className="text-sm text-right tabular-nums text-violet-500">{formatCurrency(r.admin_earnings || 0)}</TableCell>
+                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative category accent (tips), not a status signal (#2816) */}
                                             <TableCell className="text-sm text-right tabular-nums text-amber-500">{r.tip_amount > 0 ? formatCurrency(r.tip_amount) : <span className="text-muted-foreground">—</span>}</TableCell>
                                             <TableCell>
                                                 {r.stripe_charge_id ? (
@@ -1351,6 +1359,7 @@ function SpinrPassRevenueTab() {
                 {selectedAreas.length >= 2 && (
                     <button onClick={() => setComparing(!comparing)}
                         className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${
+                            // eslint-disable-next-line no-restricted-syntax -- decorative brand accent for the "compare" toggle active state, not a status signal (#2816)
                             comparing ? "bg-violet-500 text-white border-violet-500" : "text-muted-foreground border-border hover:bg-muted"
                         }`}>
                         <GitCompareArrows className="h-3.5 w-3.5" /> Compare
@@ -1387,20 +1396,23 @@ function SpinrPassRevenueTab() {
                             <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground flex items-center gap-1.5"><Users className="h-4 w-4" /> Total Subscribers</CardTitle></CardHeader>
                             <CardContent><p className="text-2xl font-bold">{stats.total_subscribers}</p>
                                 <p className="text-xs text-muted-foreground mt-1">
-                                    <span className="text-emerald-500 font-semibold">{stats.active} active</span> · {stats.expired} expired · {stats.cancelled} cancelled
+                                    <span className="text-success font-semibold">{stats.active} active</span> · {stats.expired} expired · {stats.cancelled} cancelled
                                 </p>
                             </CardContent>
                         </Card>
                         <Card className="border-border/50">
                             <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground flex items-center gap-1.5"><DollarSign className="h-4 w-4" /> Total Revenue</CardTitle></CardHeader>
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card accent color, not a status signal (#2816) */}
                             <CardContent><p className="text-2xl font-bold text-emerald-500">{formatCurrency(stats.total_revenue)}</p></CardContent>
                         </Card>
                         <Card className="border-border/50">
                             <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground flex items-center gap-1.5"><TrendingUp className="h-4 w-4" /> Active MRR</CardTitle></CardHeader>
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card accent color, not a status signal (#2816) */}
                             <CardContent><p className="text-2xl font-bold text-violet-500">{formatCurrency(stats.active_mrr)}</p></CardContent>
                         </Card>
                         <Card className="border-border/50">
                             <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground flex items-center gap-1.5"><CreditCard className="h-4 w-4" /> Period Revenue</CardTitle></CardHeader>
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card accent color, not a status signal (#2816) */}
                             <CardContent><p className="text-2xl font-bold text-amber-500">{formatCurrency(stats.range_revenue)}</p>
                                 <p className="text-xs text-muted-foreground mt-1">{stats.range_transactions} transactions</p>
                             </CardContent>
@@ -1411,14 +1423,17 @@ function SpinrPassRevenueTab() {
                     {comparing && selectedAreas.length >= 2 ? (
                         compareLoading ? (
                             <div className="flex items-center justify-center py-12">
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative brand accent on the comparison-loading spinner, not a status signal (#2816) */}
                                 <div className="h-8 w-8 animate-spin rounded-full border-2 border-violet-500 border-t-transparent" />
                                 <span className="ml-3 text-sm text-muted-foreground">Loading comparison...</span>
                             </div>
                         ) : (
                             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative brand accent border for the comparison-mode card, not a status signal (#2816) */}
                                 <Card className="border-violet-200 dark:border-violet-800">
                                     <CardHeader className="pb-2">
                                         <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative brand accent icon color, not a status signal (#2816) */}
                                             <GitCompareArrows className="h-4 w-4 text-violet-500" /> Revenue Comparison
                                         </CardTitle>
                                     </CardHeader>
@@ -1438,9 +1453,11 @@ function SpinrPassRevenueTab() {
                                         </ResponsiveContainer>
                                     </CardContent>
                                 </Card>
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative brand accent border for the comparison-mode card, not a status signal (#2816) */}
                                 <Card className="border-violet-200 dark:border-violet-800">
                                     <CardHeader className="pb-2">
                                         <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative brand accent icon color, not a status signal (#2816) */}
                                             <GitCompareArrows className="h-4 w-4 text-violet-500" /> Subscribers Comparison
                                         </CardTitle>
                                     </CardHeader>
@@ -1462,6 +1479,7 @@ function SpinrPassRevenueTab() {
                                 </Card>
 
                                 {/* Comparison summary table */}
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative brand accent border for the comparison-mode card, not a status signal (#2816) */}
                                 <Card className="border-violet-200 dark:border-violet-800 lg:col-span-2">
                                     <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold">Area Comparison Summary</CardTitle></CardHeader>
                                     <CardContent className="p-0">
@@ -1486,8 +1504,10 @@ function SpinrPassRevenueTab() {
                                                                 {name}
                                                             </TableCell>
                                                             <TableCell className="text-right">{s?.total_subscribers || 0}</TableCell>
+                                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative category accent (active subscribers), not a status signal (#2816) */}
                                                             <TableCell className="text-right text-emerald-500 font-medium">{s?.active || 0}</TableCell>
                                                             <TableCell className="text-right font-semibold">{formatCurrency(s?.total_revenue || 0)}</TableCell>
+                                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative category accent (MRR), not a status signal (#2816) */}
                                                             <TableCell className="text-right text-violet-500 font-medium">{formatCurrency(s?.active_mrr || 0)}</TableCell>
                                                         </TableRow>
                                                     );
@@ -1504,6 +1524,7 @@ function SpinrPassRevenueTab() {
                             <Card className="border-border/50">
                                 <CardHeader className="pb-2">
                                     <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                                        {/* eslint-disable-next-line no-restricted-syntax -- decorative chart-card icon accent, not a status signal (#2816) */}
                                         <DollarSign className="h-4 w-4 text-emerald-500" /> Daily Subscription Revenue
                                     </CardTitle>
                                 </CardHeader>
@@ -1524,6 +1545,7 @@ function SpinrPassRevenueTab() {
                             <Card className="border-border/50">
                                 <CardHeader className="pb-2">
                                     <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                                        {/* eslint-disable-next-line no-restricted-syntax -- decorative chart-card icon accent, not a status signal (#2816) */}
                                         <UserPlus className="h-4 w-4 text-violet-500" /> New Subscribers Per Day
                                     </CardTitle>
                                 </CardHeader>
@@ -1559,6 +1581,7 @@ function SpinrPassRevenueTab() {
                                             <TableRow key={p.plan_id}>
                                                 <TableCell className="font-semibold">{p.name}</TableCell>
                                                 <TableCell className="text-right">{p.count}</TableCell>
+                                                {/* eslint-disable-next-line no-restricted-syntax -- decorative category accent (active subscribers), not a status signal (#2816) */}
                                                 <TableCell className="text-right text-emerald-500 font-medium">{p.active}</TableCell>
                                                 <TableCell className="text-right font-semibold">{formatCurrency(p.revenue)}</TableCell>
                                             </TableRow>
@@ -1587,12 +1610,13 @@ function SpinrPassRevenueTab() {
                                         <TableRow key={t.id}>
                                             <TableCell className="font-medium">{t.driver_name}</TableCell>
                                             <TableCell>{t.plan_name}</TableCell>
+                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative category accent (transaction amount), not a status signal (#2816) */}
                                             <TableCell className="font-semibold text-emerald-500">{formatCurrency(t.price)}</TableCell>
                                             <TableCell>
                                                 <Badge variant="secondary" className={
-                                                    t.status === "active" ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" :
-                                                    t.status === "expired" ? "bg-amber-500/15 text-amber-700 dark:text-amber-400" :
-                                                    "bg-red-500/15 text-red-700 dark:text-red-400"
+                                                    t.status === "active" ? "bg-success/15 text-success" :
+                                                    t.status === "expired" ? "bg-warning/15 text-warning" :
+                                                    "bg-destructive/15 text-destructive"
                                                 }>{t.status}</Badge>
                                             </TableCell>
                                             <TableCell className="text-xs text-muted-foreground">{formatDate(t.started_at)}</TableCell>
@@ -1736,10 +1760,10 @@ function PayoutsTab() {
     const { sorted: sortedFiltered, sort: payoutsSort, toggle: payoutsToggle } = useTableSort<any>(filtered);
 
     const statusBadge = (s: string) => {
-        if (s === "completed") return "bg-emerald-500/15 text-emerald-600";
-        if (s === "pending") return "bg-amber-500/15 text-amber-600";
-        if (s === "failed") return "bg-red-500/15 text-red-600";
-        return "bg-zinc-500/15 text-zinc-600";
+        if (s === "completed") return "bg-success/15 text-success";
+        if (s === "pending") return "bg-warning/15 text-warning";
+        if (s === "failed") return "bg-destructive/15 text-destructive";
+        return "bg-muted text-muted-foreground";
     };
 
     return (
@@ -1768,17 +1792,17 @@ function PayoutsTab() {
             ) : stats && (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <Card><CardContent className="pt-4">
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground"><CheckCircle className="h-4 w-4 text-green-500" /> Total Paid</div>
-                        <div className="text-2xl font-bold text-green-600">${stats.total_paid?.toLocaleString()}</div>
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground"><CheckCircle className="h-4 w-4 text-success" /> Total Paid</div>
+                        <div className="text-2xl font-bold text-success">${stats.total_paid?.toLocaleString()}</div>
                     </CardContent></Card>
                     <Card><CardContent className="pt-4">
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground"><Clock className="h-4 w-4 text-amber-500" /> Pending</div>
-                        <div className="text-2xl font-bold text-amber-600">${stats.total_pending?.toLocaleString()}</div>
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground"><Clock className="h-4 w-4 text-warning" /> Pending</div>
+                        <div className="text-2xl font-bold text-warning">${stats.total_pending?.toLocaleString()}</div>
                         <p className="text-xs text-muted-foreground">{stats.pending_count} payouts</p>
                     </CardContent></Card>
                     <Card><CardContent className="pt-4">
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground"><AlertTriangle className="h-4 w-4 text-red-500" /> Failed</div>
-                        <div className="text-2xl font-bold text-red-600">${stats.total_failed?.toLocaleString()}</div>
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground"><AlertTriangle className="h-4 w-4 text-destructive" /> Failed</div>
+                        <div className="text-2xl font-bold text-destructive">${stats.total_failed?.toLocaleString()}</div>
                     </CardContent></Card>
                     <Card><CardContent className="pt-4">
                         <div className="flex items-center gap-2 text-sm text-muted-foreground"><Wallet className="h-4 w-4" /> Total Payouts</div>
@@ -1846,7 +1870,7 @@ function PayoutsTab() {
                                         <TableCell>
                                             <Badge className={statusBadge(p.status)}>{p.status}</Badge>
                                             {p.error_message && (
-                                                <p className="text-[10px] text-red-600 dark:text-red-400 mt-0.5 truncate max-w-[200px]" title={p.error_message}>
+                                                <p className="text-[10px] text-destructive mt-0.5 truncate max-w-[200px]" title={p.error_message}>
                                                     {p.error_message}
                                                 </p>
                                             )}

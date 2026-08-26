@@ -337,6 +337,7 @@ export default function UsersPage() {
             <div className="flex items-center justify-between">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative page-header icon tint (#2816) */}
                         <Users className="h-8 w-8 text-sky-500" />
                         Users
                     </h1>
@@ -377,6 +378,7 @@ export default function UsersPage() {
                 <Card>
                     <CardContent className="pt-4 pb-3">
                         <div className="flex items-center gap-2">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon tint (#2816) */}
                             <Users className="h-5 w-5 text-sky-500" />
                             <div>
                                 <p className="text-xs text-muted-foreground">
@@ -390,6 +392,7 @@ export default function UsersPage() {
                 <Card>
                     <CardContent className="pt-4 pb-3">
                         <div className="flex items-center gap-2">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon tint (#2816) */}
                             <Users className="h-5 w-5 text-emerald-500" />
                             <div>
                                 <p className="text-xs text-muted-foreground">Riders (page)</p>
@@ -401,6 +404,7 @@ export default function UsersPage() {
                 <Card>
                     <CardContent className="pt-4 pb-3">
                         <div className="flex items-center gap-2">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon tint (#2816) */}
                             <Car className="h-5 w-5 text-violet-500" />
                             <div>
                                 <p className="text-xs text-muted-foreground">Drivers (page)</p>
@@ -412,6 +416,7 @@ export default function UsersPage() {
                 <Card>
                     <CardContent className="pt-4 pb-3">
                         <div className="flex items-center gap-2">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon tint (#2816) */}
                             <ShieldCheck className="h-5 w-5 text-sky-500" />
                             <div>
                                 <p className="text-xs text-muted-foreground">Dual-role (page)</p>
@@ -424,10 +429,10 @@ export default function UsersPage() {
 
             {/* Error State */}
             {error && (
-                <Card className="border-red-200 dark:border-red-900/50">
+                <Card className="border-destructive/30">
                     <CardContent className="pt-4 pb-4">
                         <div className="flex items-center justify-between">
-                            <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+                            <p className="text-sm text-destructive">{error}</p>
                             <Button variant="outline" size="sm" onClick={fetchUsers}>Retry</Button>
                         </div>
                     </CardContent>
@@ -529,9 +534,11 @@ export default function UsersPage() {
                                                 <TableCell>
                                                     <div className="flex flex-wrap items-center gap-1">
                                                         {user.is_rider && (
+                                                            // eslint-disable-next-line no-restricted-syntax -- role badge, not a status signal (#2816)
                                                             <Badge variant="secondary" className="bg-sky-500/15 text-sky-600">Rider</Badge>
                                                         )}
                                                         {user.is_driver && (
+                                                            // eslint-disable-next-line no-restricted-syntax -- role badge, not a status signal (#2816)
                                                             <Badge variant="secondary" className="bg-violet-500/15 text-violet-600">Driver</Badge>
                                                         )}
                                                         {!user.is_rider && !user.is_driver && (
@@ -541,10 +548,11 @@ export default function UsersPage() {
                                                 </TableCell>
                                                 <TableCell>
                                                     <Badge className={
-                                                        user.status === "banned" ? "bg-red-500/15 text-red-600"
-                                                        : user.status === "suspended" ? "bg-amber-500/15 text-amber-600"
+                                                        user.status === "banned" ? "bg-destructive/15 text-destructive"
+                                                        : user.status === "suspended" ? "bg-warning/15 text-warning"
+                                                        // eslint-disable-next-line no-restricted-syntax -- pending_deletion has no semantic-token equivalent (#2816)
                                                         : user.status === "pending_deletion" ? "bg-orange-500/15 text-orange-600"
-                                                        : "bg-emerald-500/15 text-emerald-600"
+                                                        : "bg-success/15 text-success"
                                                     }>
                                                         {user.status === "banned" ? "Banned"
                                                         : user.status === "suspended" ? "Suspended"
@@ -584,6 +592,7 @@ export default function UsersPage() {
                 <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
                     <DialogHeader>
                         <DialogTitle className="flex items-center gap-2">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative dialog-title icon tint (#2816) */}
                             <Users className="h-5 w-5 text-sky-500" />
                             User Details
                         </DialogTitle>
@@ -591,6 +600,7 @@ export default function UsersPage() {
                     {selectedUser && (
                         <div className="space-y-4">
                             <div className="flex items-center gap-4">
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative avatar gradient, not a status signal (#2816) */}
                                 <div className="h-16 w-16 rounded-full bg-gradient-to-br from-sky-500 to-blue-600 flex items-center justify-center text-white text-xl font-bold">
                                     {selectedUser.name?.charAt(0)?.toUpperCase() || "?"}
                                 </div>
@@ -598,9 +608,11 @@ export default function UsersPage() {
                                     <p className="text-lg font-semibold">{selectedUser.name}</p>
                                     <div className="flex flex-wrap items-center gap-1 mt-0.5">
                                         {selectedUser.is_rider && (
+                                            // eslint-disable-next-line no-restricted-syntax -- role badge, not a status signal (#2816)
                                             <Badge variant="secondary" className="bg-sky-500/15 text-sky-600">Rider</Badge>
                                         )}
                                         {selectedUser.is_driver && (
+                                            // eslint-disable-next-line no-restricted-syntax -- role badge, not a status signal (#2816)
                                             <Badge variant="secondary" className="bg-violet-500/15 text-violet-600">Driver</Badge>
                                         )}
                                         {/* legacy_import_metadata is only present on the DETAIL fetch
@@ -678,10 +690,11 @@ export default function UsersPage() {
                                 <Label className="text-xs text-muted-foreground mb-2 block">Account Status</Label>
                                 <div className="flex items-center gap-2 mb-3">
                                     <Badge className={
-                                        selectedUser.status === "banned" ? "bg-red-500/15 text-red-600"
-                                        : selectedUser.status === "suspended" ? "bg-amber-500/15 text-amber-600"
+                                        selectedUser.status === "banned" ? "bg-destructive/15 text-destructive"
+                                        : selectedUser.status === "suspended" ? "bg-warning/15 text-warning"
+                                        // eslint-disable-next-line no-restricted-syntax -- pending_deletion has no semantic-token equivalent (#2816)
                                         : selectedUser.status === "pending_deletion" ? "bg-orange-500/15 text-orange-600"
-                                        : "bg-emerald-500/15 text-emerald-600"
+                                        : "bg-success/15 text-success"
                                     }>
                                         {selectedUser.status === "banned" ? "Banned"
                                         : selectedUser.status === "suspended" ? "Suspended"
@@ -722,7 +735,7 @@ export default function UsersPage() {
                                                 } finally { setStatusUpdating(null); }
                                             }}
                                         >
-                                            <CheckCircle className="h-4 w-4 mr-2 text-green-600" /> Activate
+                                            <CheckCircle className="h-4 w-4 mr-2 text-success" /> Activate
                                         </Button>
                                     )}
                                     {selectedUser.status !== "suspended" && (
@@ -736,7 +749,7 @@ export default function UsersPage() {
                                                 name: `${selectedUser.first_name || ''} ${selectedUser.last_name || ''}`.trim() || selectedUser.phone,
                                             })}
                                         >
-                                            <AlertTriangle className="h-4 w-4 mr-2 text-amber-600" /> Suspend
+                                            <AlertTriangle className="h-4 w-4 mr-2 text-warning" /> Suspend
                                         </Button>
                                     )}
                                     {selectedUser.status !== "banned" && (
@@ -818,6 +831,7 @@ export default function UsersPage() {
                                     </div>
                                 ) : walletData ? (
                                     <div className="space-y-3">
+                                        {/* eslint-disable-next-line no-restricted-syntax -- decorative wallet-card gradient accent, not a status signal (#2816) */}
                                         <div className="rounded-lg bg-gradient-to-br from-sky-500/10 to-blue-600/10 border border-sky-500/20 p-4">
                                             <p className="text-xs text-muted-foreground">Current Balance</p>
                                             <p className="text-3xl font-bold">
@@ -853,6 +867,7 @@ export default function UsersPage() {
 
                                         <div className="flex gap-2">
                                             <Button
+                                                // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text button; dark-mode --success (2.02:1) fails WCAG AA against white text (#2816)
                                                 className="flex-1 bg-emerald-600 hover:bg-emerald-700"
                                                 disabled={walletSubmitting !== null}
                                                 onClick={() => requestWalletAction("credit")}
@@ -872,7 +887,7 @@ export default function UsersPage() {
                                         </div>
 
                                         {walletError && (
-                                            <p className="text-sm text-red-600 dark:text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-3 py-2">
+                                            <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md px-3 py-2">
                                                 {walletError}
                                             </p>
                                         )}
@@ -913,7 +928,7 @@ export default function UsersPage() {
                                                                     )}
                                                                 </div>
                                                                 <div className="text-right shrink-0">
-                                                                    <p className={`text-sm font-semibold ${isCredit ? "text-emerald-600" : "text-red-600"}`}>
+                                                                    <p className={`text-sm font-semibold ${isCredit ? "text-success" : "text-destructive"}`}>
                                                                         {isCredit ? "+" : ""}${amt.toFixed(2)}
                                                                     </p>
                                                                     <p className="text-[10px] text-muted-foreground">
@@ -928,7 +943,7 @@ export default function UsersPage() {
                                         </div>
                                     </div>
                                 ) : walletError ? (
-                                    <p className="text-sm text-red-600 dark:text-red-400">{walletError}</p>
+                                    <p className="text-sm text-destructive">{walletError}</p>
                                 ) : (
                                     <p className="text-sm text-muted-foreground">Loading wallet...</p>
                                 )}
@@ -942,7 +957,7 @@ export default function UsersPage() {
                                 {userDetail == null ? (
                                     <p className="text-sm text-muted-foreground">Loading…</p>
                                 ) : userDetail.cards_error ? (
-                                    <p className="text-sm text-red-600 dark:text-red-400">{userDetail.cards_error}</p>
+                                    <p className="text-sm text-destructive">{userDetail.cards_error}</p>
                                 ) : !userDetail.cards || userDetail.cards.length === 0 ? (
                                     <p className="text-sm text-muted-foreground">No cards on file.</p>
                                 ) : (
@@ -1002,8 +1017,8 @@ export default function UsersPage() {
                                                             {(r.pickup_address || "Pickup").split(",")[0]} → {(r.dropoff_address || "Dropoff").split(",")[0]}
                                                         </span>
                                                         <Badge variant="outline" className={`text-[10px] shrink-0 ${
-                                                            r.status === "completed" ? "text-emerald-600"
-                                                            : r.status === "cancelled" ? "text-red-600" : "text-amber-600"}`}>
+                                                            r.status === "completed" ? "text-success"
+                                                            : r.status === "cancelled" ? "text-destructive" : "text-warning"}`}>
                                                             {r.status}
                                                         </Badge>
                                                     </div>
@@ -1051,6 +1066,7 @@ export default function UsersPage() {
                     <AlertDialogFooter>
                         <AlertDialogCancel disabled={walletSubmitting !== null}>Cancel</AlertDialogCancel>
                         <AlertDialogAction
+                            // eslint-disable-next-line no-restricted-syntax -- credit branch is a solid-fill white-text button; dark-mode --success fails WCAG AA against white text (#2816)
                             className={pendingWalletAction?.action === "credit" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-destructive text-destructive-foreground hover:bg-destructive/90"}
                             disabled={walletSubmitting !== null}
                             onClick={(e) => {
@@ -1081,7 +1097,7 @@ export default function UsersPage() {
 
                     <div className="space-y-3 py-1">
                         <div className="space-y-1.5">
-                            <Label className="text-xs">Reason <span className="text-red-500">*</span></Label>
+                            <Label className="text-xs">Reason <span className="text-destructive">*</span></Label>
                             <div className="flex flex-wrap gap-1.5">
                                 {["Payment / chargeback", "Safety report", "Policy violation", "Fraud / abuse"].map((r) => (
                                     <button

@@ -162,6 +162,42 @@ async def test_whitespace_logo_url_falls_back():
     assert details.logo_url.endswith("/api/v1/branding/spinr-logo.png")
 
 
+# --- app_download_url: "open/install the app" CTA link ---------------------
+# Unlike every other field here, there is no hardcoded fallback — a made-up
+# app-store link would be worse than no CTA. Unconfigured/unsafe → None, and
+# callers (utils/rider_emails.py) must render without a button in that case.
+
+
+async def test_app_download_url_defaults_to_none():
+    details = await _load({})
+    assert details.app_download_url is None
+
+
+async def test_configured_app_download_url_wins():
+    details = await _load({"company_app_download_url": "https://spinr.onelink.me/book"})
+    assert details.app_download_url == "https://spinr.onelink.me/book"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "javascript:alert(1)",
+        "data:text/html,<script>alert(1)</script>",
+        "/book",  # relative: nothing to resolve against in an inbox
+        "book",
+        "ftp://example.test/book",
+    ],
+)
+async def test_unusable_app_download_urls_fall_back_to_none(bad):
+    details = await _load({"company_app_download_url": bad})
+    assert details.app_download_url is None
+
+
+async def test_whitespace_app_download_url_falls_back_to_none():
+    details = await _load({"company_app_download_url": "   "})
+    assert details.app_download_url is None
+
+
 # --- Sentence-final name ----------------------------------------------------
 # This one shipped: the receipt read "Thanks for riding with Spinr Technologies
 # Inc..". Caught by rendering a real receipt, not by a test — so it gets one.

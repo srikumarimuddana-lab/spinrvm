@@ -104,10 +104,25 @@ See CLAUDE.md for the auto-mode tier table. Additional payment rules:
 
 ## Corporate billing
 
-- Payment source priority: rider wallet → corporate allowance → master wallet → rider card
+- **Payment method is chosen ONCE, upfront, per ride** — rider selection or a corporate/Work-mode
+  override (`_is_corporate_paid()` in `routes/rides/_shared.py`) — and stored as
+  `ride.payment_method ∈ {"card", "wallet", "company_allowance"}` at booking time
+  (`routes/rides/booking.py`). There is no re-selection at settlement.
+- **Settlement dispatches on that single field with no cross-method fallback**
+  (`routes/rides/payments.py`, the `settle_wallet` / `settle_corporate` / `settle_card` branch).
+  If `settle_wallet` hits insufficient funds, or a card charge fails, the settlement **fails and
+  leaves the ride `payment_status="pending"`**, requiring a new charge attempt on a different
+  `payment_method` — it does not automatically fall through to allowance, master wallet, or card.
+- **The one real in-transaction fallback is allowance → master wallet**, scoped strictly to rides
+  already tagged `payment_method="company_allowance"` (`services/payment_service.py::settle_corporate`):
+  the member's allowance is debited first (up to its remaining cap), and any shortfall is charged
+  to the company's master wallet. Even this narrower fallback **terminates in a hard failure**
+  (503, ride left `payment_status="pending"`) if the master wallet is also exhausted or at its
+  floor — it never reaches the rider's personal card.
 - All wallet deltas go through `corporate_wallet_apply_delta` Postgres function (`SECURITY DEFINER`, row lock)
 - Allowance reset loop (`allowance_reset.py`) runs monthly; uses `auto_approved_this_period` flag for replay safety
-- Never bypass allowance caps — if a ride exceeds cap, fall through to next payment source, not over-spend
+- Never bypass allowance caps — the allowance→master fallback above enforces the per-member cap
+  and the master wallet's floor rather than over-spending either; it does not extend to card
 
 ## Receipts
 

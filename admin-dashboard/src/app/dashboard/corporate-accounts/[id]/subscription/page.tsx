@@ -36,9 +36,9 @@ import {
 import { useToast } from "@/components/ui/use-toast";
 
 const STATUS_BADGE: Record<string, string> = {
-    active: "bg-emerald-100 text-emerald-800",
-    past_due: "bg-amber-100 text-amber-800",
-    cancelled: "bg-slate-100 text-slate-700",
+    active: "bg-success/15 text-success",
+    past_due: "bg-warning/15 text-warning",
+    cancelled: "bg-muted text-muted-foreground",
 };
 
 function formatDate(iso: string | null) {
@@ -167,7 +167,7 @@ export default function CompanySubscriptionPage() {
                             <div className="text-sm text-muted-foreground space-y-1">
                                 <p>Current period ends: {formatDate(current.current_period_end)}</p>
                                 {current.cancel_at_period_end && (
-                                    <p className="text-amber-700 dark:text-amber-400">
+                                    <p className="text-warning">
                                         Cancels at period end — access continues until then.
                                     </p>
                                 )}

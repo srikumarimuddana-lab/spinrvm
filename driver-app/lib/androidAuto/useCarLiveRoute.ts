@@ -41,7 +41,10 @@ export const LIVE_ROUTE_MAX_AGE_MS = POLL_MS * 3;
 
 export interface CarLiveRoute {
   polyline: { latitude: number; longitude: number }[];
+  /** Minutes REMAINING to the current leg's destination, server-derived. */
   etaMinutes: number | null;
+  /** Kilometres REMAINING to the current leg's destination, server-derived. */
+  distanceKm: number | null;
 }
 
 /**
@@ -137,5 +140,12 @@ export function useCarLiveRoute(
 
   if (!active || !leg) return null;
   if (!isLiveRouteUsable(snapshot, rideId, leg, LIVE_ROUTE_MAX_AGE_MS, now)) return null;
-  return { polyline: snapshot.polyline, etaMinutes: snapshot.etaMinutes };
+  // distanceKm rides along with etaMinutes: the status bar leads with what is
+  // LEFT of the leg, and dropping it here forced the surface back onto the
+  // booking-time trip figures, which read as remaining distance and are not.
+  return {
+    polyline: snapshot.polyline,
+    etaMinutes: snapshot.etaMinutes,
+    distanceKm: snapshot.distanceKm,
+  };
 }

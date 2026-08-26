@@ -537,7 +537,9 @@ class TestRecalculateFareForDistance:
         )
         out = recalculate_fare_for_distance(ride, actual_distance_km=0.1)
         # total_fare (8.00, floored) + 3.50 in area fees, no tax/discount.
-        assert out["grand_total"] == 11.50
+        # grand_total is NUMERIC on `rides` — written as a Decimal-safe
+        # string (ACTION_ITEMS.md B36), not a float like the FLOAT8 fields.
+        assert out["grand_total"] == "11.50"
 
 
 class TestDriverEarningsWithTip:

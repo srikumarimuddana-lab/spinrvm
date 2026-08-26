@@ -27,10 +27,14 @@ address), that is a manual, legally-reviewed extraction — deliberately not a
 CLI flag on this script.
 
 Read-only and replay-safe: only ``get_rows`` reads ``driver_insurance_periods``
-+ embedded ``rides``; the only write is one ``compliance_export_events`` audit
-row per invocation (that a row is written per run, not deduped, is
-intentional — each run is itself the audit-worthy event: "who exported what
-range, when").
++ embedded ``rides`` (plus, per ACTION_ITEMS.md B34, ``driver_insurance_period_
+corrections`` for any period rows that have a sanctioned correction on file —
+preferred over the original ``started_at``/``ended_at`` when present, flagged
+via ``is_corrected`` in the export so a regulator never sees a corrected value
+indistinguishable from an original one); the only write is one
+``compliance_export_events`` audit row per invocation (that a row is written
+per run, not deduped, is intentional — each run is itself the audit-worthy
+event: "who exported what range, when").
 
 Usage:
     python scripts/compliance_export.py --start 2026-01-01 --end 2026-04-01 \\
@@ -91,6 +95,7 @@ FIELDNAMES = [
     "phase_distances",
     "total_fare_cad",
     "is_reconstructed",
+    "is_corrected",
 ]
 
 
@@ -123,7 +128,34 @@ def redact_row(period_row: Dict[str, Any]) -> Dict[str, Any]:
         # contemporaneously by the app. Regulator/SGI exports must not present
         # reconstructed data indistinguishable from a live-logged record.
         "is_reconstructed": bool(period_row.get("is_reconstructed", False)),
+        # Migration 355 (ACTION_ITEMS.md B34): true when _scan() found a
+        # sanctioned driver_insurance_period_corrections row for this period
+        # and already substituted period_started_at/period_ended_at with the
+        # corrected values below, in redact_row's caller. Same "never present
+        # indistinguishably from the original" rule as is_reconstructed.
+        "is_corrected": bool(period_row.get("is_corrected", False)),
     }
+
+
+async def _fetch_corrections(period_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    """READ-ONLY: driver_insurance_period_corrections rows for the given
+    driver_insurance_periods ids, keyed by original_period_id. ACTION_ITEMS.md
+    B34 — a correction is preferred over its original row's started_at/
+    ended_at when one exists (see _scan). Empty input short-circuits rather
+    than issuing an all-empty $in — CLAUDE.md's query-filter rules require
+    the empty-ID case be guarded by the caller, not left to widen the query."""
+    if not period_ids:
+        return {}
+    rows = (
+        await db.get_rows(
+            "driver_insurance_period_corrections",
+            {"original_period_id": {"$in": period_ids}},
+            columns="original_period_id,corrected_started_at,corrected_ended_at",
+            limit=len(period_ids),
+        )
+        or []
+    )
+    return {r["original_period_id"]: r for r in rows}
 
 
 async def _scan(
@@ -134,7 +166,10 @@ async def _scan(
 ) -> List[Dict[str, Any]]:
     """READ-ONLY paginated scan of driver_insurance_periods for periods 2/3
     (the only periods that carry a ride_id — see CLAUDE.md's insurance-period
-    table), in [start, end), joined to rides via embedded select."""
+    table), in [start, end), joined to rides via embedded select. Any row
+    with a sanctioned correction on file (migration 355) has its
+    started_at/ended_at replaced by the corrected values before being
+    returned — see _fetch_corrections."""
     filters: Dict[str, Any] = {
         "$and": [
             {"started_at": {"$gte": start}},
@@ -165,6 +200,14 @@ async def _scan(
         if len(page) < _PAGE:
             break
         offset += _PAGE
+
+    corrections = await _fetch_corrections([r["id"] for r in rows if r.get("id")])
+    for r in rows:
+        correction = corrections.get(r.get("id"))
+        if correction:
+            r["started_at"] = correction["corrected_started_at"]
+            r["ended_at"] = correction["corrected_ended_at"]
+            r["is_corrected"] = True
     return rows
 
 

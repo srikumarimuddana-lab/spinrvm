@@ -119,6 +119,7 @@ from .users import router as users_router
 from .vehicle_fleet import router as vehicle_fleet_router
 from .venues import router as venues_router
 from .wallet import router as wallet_router
+from .wallet_import import router as wallet_import_router
 
 # Router-level dependency: every request that lands on an admin_router
 # sub-route must carry a valid JWT whose payload resolves to a user
@@ -204,6 +205,10 @@ admin_router.include_router(export_approvals_router, dependencies=[Depends(requi
 # get_driver_balance reads to bound a Stripe payout Transfer. The handlers
 # re-check the role themselves so the guard survives a future re-mount.
 admin_router.include_router(booking_import_router, dependencies=[Depends(require_super_admin)])
+# Legacy wallet-balance import (previous-app prepaid rider/driver wallet
+# credit -> wallet_apply_delta). Same require_super_admin boundary as the
+# booking importer, for the same reason: it applies real money deltas.
+admin_router.include_router(wallet_import_router, dependencies=[Depends(require_super_admin)])
 # Bulk driver tax-ID import (SIN + GST BN migration for drivers who predate
 # in-app collection). Writes Vault-encrypted SINs, so it takes the reveal-sin
 # posture: require_super_admin at the mount AND re-checked in each handler.
@@ -248,7 +253,14 @@ admin_router.include_router(wallet_router, dependencies=[Depends(require_module(
 admin_router.include_router(auto_payouts_router, dependencies=[Depends(require_module("earnings"))])
 admin_router.include_router(incentives_router, dependencies=[Depends(require_module("service_areas"))])
 admin_router.include_router(disputes_admin_router, dependencies=[Depends(require_module("disputes"))])
-admin_router.include_router(compliance_router, dependencies=[Depends(require_module("compliance"))])
+# GST/PST remittance, SGI insurance billing, T4A filer handoff, airport report.
+# "compliance" is absent from AVAILABLE_MODULES/ROLE_PRESETS (staff.py) so no
+# non-super-admin has ever been grantable this module — require_super_admin
+# makes that existing restriction explicit instead of leaving a module string
+# that looks grantable but never has been. Same posture as Data Transfer /
+# Bulk Operations / Export Approvals above. See decision log 2026-08-19,
+# section 2, option B.
+admin_router.include_router(compliance_router, dependencies=[Depends(require_super_admin)])
 # Live Sentry issue viewer (read production errors across surfaces + resolve
 # them). Raw production error data is super_admin-only — same posture as the
 # data-transfer / booking-import surfaces above. As with stripe_payout_sync,

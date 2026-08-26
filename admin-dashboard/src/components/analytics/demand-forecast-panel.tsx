@@ -38,9 +38,9 @@ const DATA_BASIS_LABELS: Record<string, string> = {
   default_pattern: "Estimated (no history yet)",
 };
 const DATA_BASIS_COLORS: Record<string, string> = {
-  historical_average: "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200",
-  limited_history: "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-200",
-  default_pattern: "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400",
+  historical_average: "bg-success/15 text-success",
+  limited_history: "bg-warning/15 text-warning",
+  default_pattern: "bg-muted text-muted-foreground",
 };
 
 export interface DemandForecastPanelProps {
@@ -114,7 +114,7 @@ export function DemandForecastPanel({
               <div className="text-2xl font-bold mt-1">
                 {summary.current_hour?.predicted_rides || 0} rides
               </div>
-              <Badge className={DATA_BASIS_COLORS[summary.data_basis] || "bg-gray-100 dark:bg-gray-800"}>
+              <Badge className={DATA_BASIS_COLORS[summary.data_basis] || "bg-muted"}>
                 {DATA_BASIS_LABELS[summary.data_basis] || summary.data_basis}
               </Badge>
             </CardContent>
@@ -122,6 +122,7 @@ export function DemandForecastPanel({
           <Card>
             <CardContent className="pt-4">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative icon tint, not a success/warning/destructive signal (#2816) */}
                 <Zap className="h-4 w-4 text-amber-500" /> Next Peak
               </div>
               <div className="text-2xl font-bold mt-1">
@@ -135,6 +136,7 @@ export function DemandForecastPanel({
           <Card>
             <CardContent className="pt-4">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative icon tint, not a success/warning/destructive signal (#2816) */}
                 <Sun className="h-4 w-4 text-amber-500" /> 24h Total
               </div>
               <div className="text-2xl font-bold mt-1">{summary.total_predicted_24h || 0}</div>
@@ -146,7 +148,8 @@ export function DemandForecastPanel({
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Clock className="h-4 w-4" /> Peak Hours
               </div>
-              <div className="text-2xl font-bold mt-1 text-amber-600">{summary.peak_hours_count || 0}</div>
+              {/* eslint-disable-next-line no-restricted-syntax -- peak-hour KPI accent, not a success/warning/destructive signal (#2816) */}
+              <div className="text-2xl font-bold mt-1 text-amber-600 dark:text-amber-400">{summary.peak_hours_count || 0}</div>
               <p className="text-xs text-muted-foreground">of next 24h</p>
             </CardContent>
           </Card>
@@ -213,16 +216,19 @@ export function DemandForecastPanel({
                   key={i}
                   className={`text-center p-2 rounded-lg border ${
                     f.is_peak
+                      // eslint-disable-next-line no-restricted-syntax -- peak-hour highlight accent, not a success/warning/destructive signal (#2816)
                       ? "bg-amber-50 border-amber-200 dark:bg-amber-950 dark:border-amber-800"
                       : "bg-muted border-border"
                   }`}
                 >
                   <p className="text-[10px] text-muted-foreground font-medium">{f.day_name}</p>
                   <p className="text-xs font-bold">{f.hour}:00</p>
+                  {/* eslint-disable-next-line no-restricted-syntax -- peak-hour highlight accent, not a success/warning/destructive signal (#2816) */}
                   <p className={`text-sm font-bold mt-1 ${f.is_peak ? "text-amber-600 dark:text-amber-400" : "text-foreground"}`}>
                     {f.predicted_rides}
                   </p>
-                  {f.is_peak && <Zap className="h-3 w-3 text-amber-500 mx-auto mt-0.5" />}
+                  {/* eslint-disable-next-line no-restricted-syntax -- decorative icon tint, not a success/warning/destructive signal (#2816) */}
+                  {f.is_peak && <Zap className="h-3 w-3 text-amber-500 dark:text-amber-400 mx-auto mt-0.5" />}
                 </div>
               ))}
             </div>

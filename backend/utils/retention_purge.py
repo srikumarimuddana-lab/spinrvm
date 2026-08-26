@@ -338,11 +338,50 @@ async def _tick() -> None:
         logger.info("retention_purge_loop: another replica holds the lock, skipping")
 
 
+def _escalate_tick_failure(exc: BaseException) -> None:
+    """CRITICAL log + Sentry `fatal` capture on a failed tick, mirroring
+    ``retention_guard_monitor.py``'s ``_escalate`` pattern (same domain-tag
+    rationale: "closest fit — this is a database-security/regulatory-posture
+    control, not a product domain"). This is the daily regulatory PII/DSAR
+    purge; a failed run must page, not just log, or it can silently stop
+    running for days with nobody noticing (see docs/audit/2026-08-19-
+    decision-writeups.md section 9).
+
+    Message/context carry only the exception type and loop name — never
+    row-level PII (CLAUDE.md: raw GPS/names/emails/etc. must never appear in
+    logs or Sentry events). The preceding ``logger.exception`` call already
+    carries the full traceback for on-call to pull up separately.
+    """
+    logger.critical(
+        "retention_purge_loop: tick failed — daily PII/DSAR retention purge did not "
+        "complete; regulatory retention windows may be missed if this repeats"
+    )
+    try:
+        import sentry_sdk  # type: ignore
+
+        sentry_sdk.capture_message(
+            "RETENTION PURGE TICK FAILED",
+            level="fatal",
+            tags={"spinr_alert": "retention_purge_tick_failed", "domain": "admin", "surface": "backend"},
+            contexts={"retention_purge": {"exception_type": type(exc).__name__}},
+        )
+    except Exception as sentry_err:  # pragma: no cover - telemetry must never break the loop
+        logger.debug(f"retention_purge_loop: Sentry escalation unavailable: {sentry_err}")
+
+
 async def retention_purge_loop() -> None:
     """Daily retention-purge loop with ±10% jitter sleep.
 
     Runs every ~24 h (INTERVAL_SECONDS ± 10%). Idempotent across replicas via
     the Redis SET NX EX leader lock inside _tick.
+
+    The heartbeat only fires on a SUCCESSFUL tick (a leader-lock skip counts
+    as success — another replica already ran). A failing tick must NOT
+    refresh it, or the loop watchdog (core/lifespan.py -> loop_monitor.py)
+    would see a healthy heartbeat every day even while the purge itself keeps
+    failing — exactly the failure mode that let the original Step D/Step F
+    bugs go undetected (see docs/audit/2026-08-19-decision-writeups.md
+    section 9).
     """
     while True:
         t0 = asyncio.get_event_loop().time()
@@ -353,8 +392,9 @@ async def retention_purge_loop() -> None:
                 (asyncio.get_event_loop().time() - t0) * 1000,
                 {"loop": "retention_purge"},
             )
-        except Exception:
+            _record_heartbeat("retention_purge (24h)")
+        except Exception as exc:
             logger.exception("retention_purge_loop: tick raised")
             _metric_inc("spinr_bgloop_errors_total", {"loop": "retention_purge"})
-        _record_heartbeat("retention_purge (24h)")
+            _escalate_tick_failure(exc)
         await asyncio.sleep(INTERVAL_SECONDS * (0.9 + random.random() * 0.2))

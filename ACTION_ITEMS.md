@@ -10509,6 +10509,40 @@ record of what was assumed vs. what was actually true</summary>
     No production bugs found — production `app/ai-assistant.tsx`
     confirmed untouched via `git diff`. 52 tests; full rider-app suite
     still green (123 suites / 1683 tests), `yarn tsc --noEmit` clean.
+  - **rider-app `app/chat-driver.tsx`: 83.33% → 93.93% branch (stmts/
+    lines already 100%, funcs unchanged at 90.9%).** Rider<->driver
+    in-ride text chat screen — no fare/wallet/Stripe path, no
+    SOS/insurance-period logic, so no `spinr-*-auditor` review was
+    requested for this round. Already had `chatDriverScreen.test.tsx`
+    (10 tests covering the no-rideId redirect, cache-then-backend
+    history load, driver-header fallbacks, send success/failure, quick
+    replies, back nav) — extended in place (+6 tests, 16 total). Closed:
+    - the load effect's cache-read-throws and backend-fetch-throws
+      catch paths (both now logged-and-swallowed, screen still renders)
+    - the backend response guard when `res.data.messages` is `undefined`
+      (store left untouched instead of overwritten)
+    - the message-list's driver-message render path (no timestamp ->
+      blank time label; driver-vs-rider avatar/bubble/status branches),
+      untested before because every prior test left `chatMessages` empty
+      at render time
+    - the send-guard's true branch via a direct empty-input invocation
+      (previously only asserted via the button's `disabled` prop)
+    - the send-success path when the server response omits a `message`
+      payload (optimistic message left standing, no replace call)
+
+    4 of 66 branches deliberately left uncovered: the `CHAT_STORAGE_KEY`
+    `else` branches in the load effect (lines 56, 71) are unreachable —
+    the effect returns early whenever `rideId` is falsy, so
+    `CHAT_STORAGE_KEY` is always truthy by the time it's checked; the
+    `msg.status === 'read'` / `'delivered'` read-receipt branches
+    (lines 237, 240) are dead code — the `chatMessages` -> `Message`
+    mapping only ever produces `'sent'` or `undefined`, never
+    `'read'`/`'delivered'`.
+
+    No production bugs found. Test-only diff (production
+    `app/chat-driver.tsx` confirmed untouched via `git diff`). 16 tests;
+    full rider-app suite still green (123 suites / 1689 tests), `yarn
+    tsc --noEmit` clean.
   - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
     85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
     tests: no-account-prefill, the CRC-consent auto-check-when-

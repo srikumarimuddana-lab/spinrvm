@@ -186,17 +186,55 @@ which may just mean one is stale.
 
 ## Summary table
 
-| Priority | Finding | Files affected | Action needed |
-|---|---|---|---|
-| P0 | Real SIN/bank data committed, live on `main` | 2 root `.sql` files | Escalate — human decision on incident response + history remediation |
-| P1 | `.gitignore` Firebase-key rule silently non-functional | `.gitignore` | Re-save as UTF-8, re-verify with `git check-ignore` |
-| P1 | Deprecated `frontend/` still wired into CI + 1,391 cached files tracked | `ci.yml`, `ci-error-audit.yml`, `security-gates.yml`, `frontend/.metro-cache/`, `README.md` | Decide: finish deletion (SPR-02 was the stated timeline) or explicitly re-scope |
-| P2 | Sprint/planning docs 3.5 months stale, contradict `CLAUDE.md` | `.claude/context/sprint-current.md`, `.planning/PROJECT.md` | Update or mark historical |
-| P2 | Root/app-level scratch files tracked | ~20 files across root, `driver-app/`, `rider-app/`, `backend/` | Delete, add gitignore rules for the pattern |
-| P2 | Orphan root `tests/` dir, not wired to CI | `tests/*.py` | Confirm still needed; move into `backend/tests/` or wire into CI |
-| P3 | Mixed package-manager lockfiles | root, `frontend/` | Pick one per directory |
-| P3 | `requirements-win.txt` drifted from main lock | `backend/requirements-win.txt` | Regenerate or document why it's allowed to drift |
-| P3 | Generated artifacts tracked as source | `.planning/graphs/*.json`, `.playwright-mcp/*.yml` | Gitignore or confirm intentional |
+| Priority | Finding | Files affected | Action needed | Status |
+|---|---|---|---|---|
+| P0 | Real SIN/bank data committed, live on `main` | 2 root `.sql` files | Escalate — human decision on incident response + history remediation | **Open** — incident #4547 filed, awaiting decision |
+| P1 | `.gitignore` Firebase-key rule silently non-functional | `.gitignore` | Re-save as UTF-8, re-verify with `git check-ignore` | Fixed — #4561 (merged) |
+| P1 | Deprecated `frontend/` still wired into CI + 1,391 cached files tracked | `ci.yml`, `ci-error-audit.yml`, `security-gates.yml`, `frontend/.metro-cache/`, `README.md` | Decide: finish deletion (SPR-02 was the stated timeline) or explicitly re-scope | Fixed — dead CI jobs removed (#4563, merged); cache untracked (#4564, open). `frontend/` deletion itself and `README.md` still not addressed — separate, larger decision |
+| P2 | Sprint/planning docs 3.5 months stale, contradict `CLAUDE.md` | `.claude/context/sprint-current.md`, `.planning/PROJECT.md` | Update or mark historical | Fixed — staleness banners + factual correction (#4564, open) |
+| P2 | Root/app-level scratch files tracked | ~20 files across root, `driver-app/`, `rider-app/`, `backend/` | Delete, add gitignore rules for the pattern | Fixed — 18 files removed (see "Follow-up corrections" below for the 2 files reclassified as real tests, not scratch) |
+| P2 | Orphan root `tests/` dir, not wired to CI | `tests/*.py` | Confirm still needed; move into `backend/tests/` or wire into CI | **Corrected, not fixed** — see "Follow-up corrections" below |
+| P3 | Mixed package-manager lockfiles | root, `frontend/` | Pick one per directory | Fixed (#4564, open) |
+| P3 | `requirements-win.txt` drifted from main lock | `backend/requirements-win.txt` | Regenerate or document why it's allowed to drift | Fixed — regenerated + documented (#4564, open) |
+| P3 | Generated artifacts tracked as source | `.planning/graphs/*.json`, `.playwright-mcp/*.yml` | Gitignore or confirm intentional | **Split** — `.playwright-mcp/*.yml` untracked; `.planning/graphs/*.json` is deliberate, see "Follow-up corrections" |
+
+## Follow-up corrections (2026-08-26)
+
+Two of this audit's original findings turned out to be wrong on deeper investigation while
+working through the fix list. Corrected here rather than silently edited above, per this repo's
+own convention for handling drift in a prior finding.
+
+**Root `tests/` directory is not orphan scratch.** The original framing ("orphan root `tests/`
+dir, not wired to CI") undersold what's actually there: `tests/test_cross_app_ride_lifecycle.py`
+and `tests/test_rate_limits.py` are real, well-documented integration tests — the former is a
+genuine cross-app E2E test (rider + driver hitting the same `TestClient` app to catch status-enum
+drift, WebSocket channel mismatches, and payload-shape drift between the two client codebases).
+Both need repo root as their working directory because they `import backend.server` — that's
+*why* they live outside `backend/tests/`, not an accident. Confirmed via `ci.yml` that `pytest`
+always runs with `working-directory: backend`, and `backend/pytest.ini`'s `testpaths = tests`
+only scans `backend/tests/` relative to that cwd, so this directory genuinely never runs in CI.
+
+Actually running them (`pytest tests/ -v` from repo root, deps installed, dummy Supabase env
+vars) gave **2 passed, 1 skipped, 2 failed, 4 errored** — real failures against a live
+(unmocked) Supabase connection attempt, plus `AttributeError`s in the rate-limit tests, unlike
+`backend/tests/`'s convention of mocking Supabase via the `mock_supabase_client` fixture. Neither
+deleting this directory (real test-writing effort, not scratch) nor wiring it into CI as-is
+(would introduce new, real CI failures on unrelated PRs) is a hygiene-scope fix — both need actual
+test-engineering work (proper mocking, or an isolated E2E job with its own real-Supabase-test-tier
+setup) that's out of scope here. Left untouched; flagged as a known, real gap instead.
+
+**`.planning/graphs/graph.json`, `GRAPH_REPORT.md`, and `.last-build-snapshot.json` are deliberate,
+not clutter.** `AGENTS.md` documents an active Graphify knowledge-graph convention: "Before
+answering architecture or codebase questions, read `graphify-out/GRAPH_REPORT.md` for god nodes
+and community structure," and explicitly lists `graph.json`, `GRAPH_REPORT.md`, and `manifest.json`
+as the tool's intentionally-tracked outputs (only its `cache/` subdirectory is gitignored,
+regenerated on rebuild). `.planning/graphs/` holds this project's version of that same output.
+`ACTION_ITEMS.md` (B38-adjacent sweep) already documents both `.planning/graphs/graph.json` and
+`.last-build-snapshot.json` by name as "auto-generated Graphify build outputs... correctly left
+untouched" from a prior cleanup pass. This audit's original "candidate for `.gitignore` unless
+intentionally versioned" framing was answered by that prior decision — it already is intentionally
+versioned. Left untouched; `.playwright-mcp/*.yml` (the other half of that original finding, with
+zero references anywhere in the repo) was untracked as planned.
 
 ## What was NOT verified
 

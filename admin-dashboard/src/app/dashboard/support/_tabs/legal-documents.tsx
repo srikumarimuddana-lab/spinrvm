@@ -62,7 +62,9 @@ const DOCS: { audience: Audience; doc_type: DocType; label: string }[] = [
 ];
 
 const A_CFG: Record<Audience, { l: string; c: string }> = {
+    // eslint-disable-next-line no-restricted-syntax -- audience-tag differentiator (rider vs driver), not a status signal (#2816)
     rider: { l: "Rider", c: "bg-sky-500/15 text-sky-600" },
+    // eslint-disable-next-line no-restricted-syntax -- audience-tag differentiator (rider vs driver), not a status signal (#2816)
     driver: { l: "Driver", c: "bg-emerald-500/15 text-emerald-600" },
 };
 
@@ -227,7 +229,7 @@ export default function LegalDocumentsTab() {
                                     />
                                     <p className="text-xs text-muted-foreground mt-2">
                                         {draft.length.toLocaleString()} characters
-                                        {dirty && <span className="ml-2 text-amber-600 dark:text-amber-400">· unsaved changes</span>}
+                                        {dirty && <span className="ml-2 text-warning">· unsaved changes</span>}
                                     </p>
                                 </CardContent>
                             </Card>

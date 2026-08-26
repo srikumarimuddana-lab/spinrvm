@@ -262,7 +262,9 @@ export default function RideList({
                                     </td>
                                     <td className="py-3 px-4 hidden lg:table-cell">
                                         <div className="flex items-center gap-2">
+                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative rider-avatar badge tint, not a status signal (#2816) */}
                                             <div className="w-7 h-7 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center shrink-0">
+                                                {/* eslint-disable-next-line no-restricted-syntax -- decorative rider-avatar icon tint, not a status signal (#2816) */}
                                                 <User className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
                                             </div>
                                             <div className="min-w-0">
@@ -273,7 +275,9 @@ export default function RideList({
                                     </td>
                                     <td className="py-3 px-4 hidden lg:table-cell">
                                         <div className="flex items-center gap-2">
+                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative driver-avatar badge tint, not a status signal (#2816) */}
                                             <div className="w-7 h-7 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center shrink-0">
+                                                {/* eslint-disable-next-line no-restricted-syntax -- decorative driver-avatar icon tint, not a status signal (#2816) */}
                                                 <Car className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
                                             </div>
                                             <div className="min-w-0">
@@ -285,7 +289,7 @@ export default function RideList({
                                     <td className="py-3 px-4 text-right">
                                         <p className="text-sm font-bold">{formatCurrency(ride.total_fare || 0)}</p>
                                         {parseFloat(String(ride.tip_amount ?? 0)) > 0 && (
-                                            <p className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 mt-0.5">+{formatCurrency(ride.tip_amount)} tip</p>
+                                            <p className="text-[10px] font-semibold text-success mt-0.5">+{formatCurrency(ride.tip_amount)} tip</p>
                                         )}
                                     </td>
                                     <td className="py-3 px-4 text-right hidden md:table-cell tabular-nums">
@@ -311,8 +315,8 @@ export default function RideList({
                                                     <Row k={toPickupKm} label="Pickup" />
                                                     <Row k={tripKm} label="Trip" accent />
                                                     <div className="flex items-center justify-end gap-1.5 leading-tight mt-0.5 pt-0.5 border-t border-border/40">
-                                                        <span className="text-[10px] uppercase tracking-wide text-emerald-600 dark:text-emerald-400 font-semibold">Time</span>
-                                                        <span className="text-xs font-bold whitespace-nowrap text-emerald-700 dark:text-emerald-300">
+                                                        <span className="text-[10px] uppercase tracking-wide text-success font-semibold">Time</span>
+                                                        <span className="text-xs font-bold whitespace-nowrap text-success">
                                                             {actualMin != null ? `${actualMin} min` : estMin != null ? `~${estMin} min` : "—"}
                                                         </span>
                                                     </div>

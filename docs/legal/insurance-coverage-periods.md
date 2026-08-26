@@ -92,3 +92,12 @@ trip, contact support@spinr.ca.
    This page's wording is now accurate as written; no copy change needed. See
    `docs/change-log/2026-08-18-period-2-insurance-timing-fix.md` for the
    verification detail.
+3. **Published 2026-08-21** to `legal_documents` (rider + driver rows,
+   version 1) at the explicit direction of the product owner, without
+   counsel review and without SGI rules cross-check — same accepted-risk
+   pattern as `terms-of-service.md`/`privacy-policy.md`. This page is not
+   yet linked from either app's Safety Center/Safety Hub screen (neither
+   has an entry point to it) — it is reachable today only via the general
+   Legal menu (`legal.tsx`, `type=insurance-periods`), not the "in-app
+   Safety Center" this file's own header describes. Wiring up that link is
+   tracked as follow-up, not done in this publish.

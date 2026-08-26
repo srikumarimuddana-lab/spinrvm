@@ -23,16 +23,18 @@ import { useCompanyAuthStore } from "@/store/companyAuthStore";
 const POLL_MS = 12_000;
 const PRE_TRIP = new Set(["scheduled", "searching", "driver_assigned", "driver_accepted", "driver_arrived"]);
 
+/* eslint-disable no-restricted-syntax -- ride state machine (8 distinct operational states); collapsing driver_assigned/driver_accepted/driver_arrived onto the 3-token system would lose the exact stage a corporate booking is at, which matters to a business user tracking their own bookings (#2816) */
 const STATUS_STYLES: Record<string, string> = {
-    scheduled: "bg-sky-100 text-sky-800",
-    searching: "bg-amber-100 text-amber-800",
-    driver_assigned: "bg-indigo-100 text-indigo-800",
-    driver_accepted: "bg-indigo-100 text-indigo-800",
-    driver_arrived: "bg-violet-100 text-violet-800",
-    in_progress: "bg-emerald-100 text-emerald-800",
-    completed: "bg-emerald-50 text-emerald-700",
-    cancelled: "bg-red-100 text-red-700",
+    scheduled: "bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300",
+    searching: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300",
+    driver_assigned: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300",
+    driver_accepted: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300",
+    driver_arrived: "bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-300",
+    in_progress: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300",
+    completed: "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
+    cancelled: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
 };
+/* eslint-enable no-restricted-syntax */
 
 function StatusBadge({ status }: { status: string }) {
     return (

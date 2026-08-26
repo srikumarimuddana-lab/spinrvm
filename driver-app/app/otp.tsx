@@ -25,8 +25,8 @@ import type { ThemeColors } from '@shared/theme/index';
 export default function OtpScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ phoneNumber: string }>();
-  const { phoneNumber } = params;
+  const params = useLocalSearchParams<{ phoneNumber: string; consentAccepted?: string }>();
+  const { phoneNumber, consentAccepted } = params;
   const { t } = useLanguageStore();
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -168,6 +168,10 @@ export default function OtpScreen() {
         // endpoint and the backend defaults to 'rider', so without this every
         // driver signup would be reported as a rider acquisition.
         client_app: 'driver',
+        // Explicit consent gesture from login.tsx's checkbox. Only enforced
+        // by the backend when this call actually creates a new account —
+        // harmless to send on a returning-user login too.
+        consent_accepted: consentAccepted === 'true',
       });
       if (!response.data) throw new Error('Empty response from auth server');
       const otpData = response.data as any;

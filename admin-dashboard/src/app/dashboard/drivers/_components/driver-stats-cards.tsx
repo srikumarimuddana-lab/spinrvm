@@ -56,6 +56,15 @@ export default function DriverStatsCards({ stats, loading }: { stats: DriverStat
 
     return (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            {/* Mixed stat-tile set: total/online/total_rides/earnings/avg_rating
+                are neutral counts (money-category-differentiation exclusion,
+                same pattern as dashboard/page.tsx's STAT_COLOR_CLASSES), while
+                active/pending/suspended/banned/needs_review mirror the
+                established driver-lifecycle-status categorical exclusion
+                (driver-action-bar.tsx's STATUS_CONFIG, drivers/page.tsx's
+                inline Badge ternary) — kept together as one hand-picked
+                10-color set rather than partially converted. (#2816) */}
+            {/* eslint-disable no-restricted-syntax -- mixed count-differentiation + driver-lifecycle-status tile set, see comment above (#2816) */}
             <StatCard icon={Users}
                 color="text-blue-600 dark:text-blue-400"
                 bg="bg-blue-100 dark:bg-blue-900/30"
@@ -96,6 +105,7 @@ export default function DriverStatsCards({ stats, loading }: { stats: DriverStat
                 color="text-orange-600 dark:text-orange-400"
                 bg="bg-orange-100 dark:bg-orange-900/30"
                 label="Avg Rating" value={stats.avg_rating?.toFixed(1) || "0.0"} />
+            {/* eslint-enable no-restricted-syntax */}
         </div>
     );
 }

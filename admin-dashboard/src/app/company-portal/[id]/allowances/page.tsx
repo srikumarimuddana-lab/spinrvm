@@ -200,7 +200,7 @@ export default function AllowancesPage() {
                     </div>
 
                     {feedback && (
-                        <p className="rounded bg-emerald-50 dark:bg-emerald-900/20 p-2 text-xs text-emerald-800 dark:text-emerald-300">
+                        <p className="rounded bg-success/15 p-2 text-xs text-success">
                             {feedback}
                         </p>
                     )}

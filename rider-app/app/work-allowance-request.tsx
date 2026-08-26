@@ -17,6 +17,7 @@ import type { ThemeColors } from '@shared/theme/index';
 import { showToast } from '../store/toastStore';
 import { getApiErrorMessage } from '@shared/api/client';
 import { useWorkProfileStore } from '../store/workProfileStore';
+import { isWorkAllowanceRequestValid } from '../utils/workAllowanceRequestSchema';
 
 const QUICK_AMOUNTS = [25, 50, 100, 200];
 
@@ -38,7 +39,11 @@ export default function WorkAllowanceRequestScreen() {
   const pendingRequest = requests.find(r => r.status === 'pending');
 
   const parsedAmount = parseFloat(amount);
-  const isValid = !isNaN(parsedAmount) && parsedAmount > 0 && reason.trim().length >= 5;
+  // ACTION_ITEMS.md B39: extracted to a colocated zod schema
+  // (utils/workAllowanceRequestSchema.ts) — same accept/reject behavior
+  // as before, now with a dedicated schema test file instead of being
+  // invisible inline logic.
+  const isValid = isWorkAllowanceRequestValid(amount, reason);
 
   const handleSubmit = async () => {
     if (!isValid || submitting) return;

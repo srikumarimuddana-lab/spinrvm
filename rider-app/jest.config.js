@@ -1,5 +1,14 @@
 module.exports = {
   preset: 'jest-expo',
+  // Raised from Jest's 5000ms default 2026-08-24: no individual test hangs
+  // (every affected test passes standalone and in a plain local full-suite
+  // run) — three DIFFERENT test files (driverProfileScreen, rideOptions,
+  // homeScreen — the last two in this app) intermittently exceeded 5000ms
+  // one at a time in CI's coverage-instrumented full-suite run as the repo's
+  // suite size grew, each only under real CPU contention on the runner.
+  // Bumping the same file's timeout each time it was that file's turn was
+  // whack-a-mole; fixing the shared default addresses the actual cause.
+  testTimeout: 15000,
   setupFiles: ['./jest-setup-expo.js'],
   setupFilesAfterEnv: ['@testing-library/jest-native/extend-expect'],
   testPathIgnorePatterns: [
@@ -46,18 +55,50 @@ module.exports = {
     'expo/src/winter/index': '<rootDir>/__mocks__/expo-winter-stub.js',
   },
   // R-P1-22: Enforce minimum coverage thresholds before merging to main.
-  // Scoped to store/ files where unit tests exist; app screens are covered by e2e.
+  // ACTION_ITEMS.md B37: was scoped to store/ only (6 of ~96 source
+  // files) -- widened 2026-08-22 in four steps: hooks/+utils/ (smaller,
+  // more unit-testable), then app/ (the actual screens), then
+  // components/, then lib/+services/. api/ remains outside
+  // collectCoverageFrom.
   collectCoverageFrom: [
     'store/**/*.ts',
     '!store/**/__tests__/**',
     '!store/**/*.d.ts',
     '!store/workProfileStore.ts',
+    'hooks/**/*.{ts,tsx}',
+    '!hooks/**/__tests__/**',
+    '!hooks/**/*.d.ts',
+    'utils/**/*.{ts,tsx}',
+    '!utils/**/__tests__/**',
+    '!utils/**/*.d.ts',
+    'app/**/*.{ts,tsx}',
+    '!app/**/__tests__/**',
+    '!app/**/*.d.ts',
+    'components/**/*.{ts,tsx}',
+    '!components/**/__tests__/**',
+    '!components/**/*.d.ts',
+    'lib/**/*.{ts,tsx}',
+    '!lib/**/__tests__/**',
+    '!lib/**/*.d.ts',
+    'services/**/*.{ts,tsx}',
+    '!services/**/__tests__/**',
+    '!services/**/*.d.ts',
   ],
   coverageThreshold: {
     global: {
-      lines: 58,
-      functions: 50,
-      branches: 40,
+      // ACTION_ITEMS.md B37 milestone ratchet (see
+      // docs/testing/coverage-ratchet-plan.md): the extensive app/-screen
+      // test-authoring work logged in ACTION_ITEMS.md's B37 entry moved
+      // real coverage far past the last-set threshold below without the
+      // gate ever being tightened to track it. Fresh measurement
+      // 2026-08-24 (`npx jest --coverage`, 122/122 suites, 1241/1241
+      // tests): lines 76.42%, statements 74.73%, functions 71.77%,
+      // branches 65.68%. Threshold raised to ~2-3pts below that measured
+      // ceiling -- a real regression tripwire again instead of a stale
+      // floor 50+pts under actual. Next ratchet step per the plan doc.
+      lines: 73,
+      functions: 69,
+      branches: 63,
     },
   },
 };

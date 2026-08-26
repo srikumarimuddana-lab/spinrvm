@@ -27,7 +27,7 @@ const CODE_LENGTH = 4;
 export default function OtpScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { phoneNumber } = useLocalSearchParams<{ phoneNumber: string }>();
+  const { phoneNumber, consentAccepted } = useLocalSearchParams<{ phoneNumber: string; consentAccepted?: string }>();
 
   const [code, setCode] = useState('');
   const [verifying, setVerifying] = useState(false);
@@ -135,6 +135,10 @@ export default function OtpScreen() {
         // signup is reported to the rider dataset. Both apps share this
         // endpoint; without the hint the backend defaults to 'rider'.
         client_app: 'rider',
+        // Explicit consent gesture from login.tsx's checkbox. Only enforced
+        // by the backend when this call actually creates a new account —
+        // harmless to send on a returning-user login too.
+        consent_accepted: consentAccepted === 'true',
       });
       if (!response.data) throw new Error('Empty response from auth server');
       const data = response.data as any;

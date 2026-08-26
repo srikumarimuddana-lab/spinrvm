@@ -13,6 +13,7 @@ import { showToast } from '../store/toastStore';
 import { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { isWalletTopUpAmountValid } from '../utils/walletTopUpSchema';
 
 const TOP_UP_AMOUNTS = [10, 25, 50, 100];
 
@@ -63,7 +64,7 @@ export default function WalletScreen() {
   const [customAmount, setCustomAmount] = useState('');
   const [topUpLoading, setTopUpLoading] = useState(false);
   const effectiveAmount = selectedPreset ?? (parseFloat(customAmount) || 0);
-  const canTopUp = effectiveAmount >= 1 && effectiveAmount <= 500 && !topUpLoading;
+  const canTopUp = isWalletTopUpAmountValid(effectiveAmount) && !topUpLoading;
 
   useEffect(() => {
     clearError();
@@ -86,7 +87,7 @@ export default function WalletScreen() {
       showToast('Payment Not Available', 'Payment processing is not set up yet. Please add a card in Cards settings first, or try again later.', 'warning');
       return;
     }
-    if (effectiveAmount < 1 || effectiveAmount > 500) {
+    if (!isWalletTopUpAmountValid(effectiveAmount)) {
       showToast('Invalid Amount', 'Please select or enter an amount between $1 and $500.', 'warning');
       return;
     }

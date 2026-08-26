@@ -26,9 +26,41 @@ from ._deps import (  # noqa: F401
     ride_action_limit,
     timezone,
     uuid,
+    vault_decrypt,
 )
 
+try:
+    from ...services import sos_contact_consent
+except ImportError:
+    from services import sos_contact_consent  # type: ignore
+
 router = APIRouter()
+
+
+async def _decrypt_emergency_contacts(contacts_rows) -> list:
+    """Decrypt name/phone on emergency-contact rows (migration 357 Vault
+    fields) before any SOS use — the stored values are vault.secrets UUIDs,
+    not dialable numbers. Shared by trigger_emergency and
+    trigger_emergency_rideless: security review (2026-08-21) caught the
+    rideless path missing this exact decrypt when it was only inlined once,
+    so both SOS entry points now go through this one function instead of
+    duplicating the mapping.
+
+    vault_decrypt degrades to returning the raw stored value on any failure
+    (never raises) — a decrypt hiccup can't silently drop an SOS.
+    """
+    return [
+        {
+            **c,
+            "name": await vault_decrypt("decrypt_emergency_contact_pii", str(c["name"]), "sos.contact.name")
+            if c.get("name")
+            else c.get("name"),
+            "phone": await vault_decrypt("decrypt_emergency_contact_pii", str(c["phone"]), "sos.contact.phone")
+            if c.get("phone")
+            else c.get("phone"),
+        }
+        for c in (contacts_rows or [])
+    ]
 
 
 class EmergencyRequest(BaseModel):
@@ -313,7 +345,7 @@ async def trigger_emergency(
     try:
         sms_settings = await _deps.get_app_settings()
         contacts_rows = await _deps.db_supabase.get_rows("emergency_contacts", {"user_id": current_user["id"]}, limit=5)
-        contacts = list(contacts_rows) if contacts_rows else []
+        contacts = await _decrypt_emergency_contacts(contacts_rows)
 
         user = await _deps.db_supabase.get_user_by_id(current_user["id"])
         user_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "A Spinr user"
@@ -330,6 +362,40 @@ async def trigger_emergency(
         # contacts_notified count must reflect what actually happened —
         # this is a safety flow, never claim delivery that wasn't attempted.
         _sms_targets = [c for c in contacts if c.get("phone")]
+
+        # PIA finding R-002: drop any contact who STOP'd out of SOS SMS
+        # before sending. Checked concurrently (same asyncio.gather posture
+        # as the SMS sends below) to stay off this low-latency SOS path.
+        # is_suppressed() is itself fail-open (returns False on error) --
+        # this whole step is ALSO wrapped fail-open so a totally unexpected
+        # failure here (e.g. import breakage) can never turn into "don't
+        # send the SOS". Never add a per-call try/except around
+        # is_suppressed itself; that would just duplicate its own fail-open
+        # handling and risk masking it.
+        _suppressed_ids: set = set()
+        if _sms_targets:
+            try:
+                _suppression_flags = await asyncio.gather(
+                    *(sos_contact_consent.is_suppressed(c["phone"]) for c in _sms_targets)
+                )
+                _suppressed_ids = {
+                    c.get("id") for c, suppressed in zip(_sms_targets, _suppression_flags, strict=False) if suppressed
+                }
+            except Exception:
+                logger.error(
+                    "[SOS] Suppression check step failed unexpectedly -- failing open "
+                    "(sending SOS SMS to all contacts)",
+                    exc_info=True,
+                )
+                _suppressed_ids = set()
+
+        if _suppressed_ids:
+            logger.info(
+                f"SOS: skipped {len(_suppressed_ids)}/{len(_sms_targets)} emergency contacts "
+                f"due to SOS suppression for user {current_user['id']}"
+            )
+            _sms_targets = [c for c in _sms_targets if c.get("id") not in _suppressed_ids]
+
         _sms_results = await asyncio.gather(
             *(
                 _deps.send_sms(
@@ -374,9 +440,18 @@ async def trigger_emergency(
     # list needs to know which specific contacts were reached, not just the
     # aggregate count above (kept unchanged for backward compatibility with
     # existing callers/tests). Built from data the loop above already
-    # computed -- no extra DB/SMS work, purely additive.
+    # computed -- no extra DB/SMS work, purely additive. A suppressed
+    # contact never entered the SMS loop, so it's always "notified": False;
+    # the extra "status" key (added only when true, to keep the existing
+    # {id, name, notified} shape byte-for-byte for everyone else) lets
+    # callers tell "STOP'd out" apart from "SMS attempted and failed".
     contacts_status = [
-        {"id": c.get("id"), "name": c.get("name", ""), "notified": c.get("id") in _notified_contact_ids}
+        {
+            "id": c.get("id"),
+            "name": c.get("name", ""),
+            "notified": c.get("id") in _notified_contact_ids,
+            **({"status": "suppressed"} if c.get("id") in _suppressed_ids else {}),
+        }
         for c in contacts
     ]
 
@@ -621,7 +696,7 @@ async def trigger_emergency_rideless(
     try:
         sms_settings = app_settings
         contacts_rows = await _deps.db_supabase.get_rows("emergency_contacts", {"user_id": current_user["id"]}, limit=5)
-        contacts = list(contacts_rows) if contacts_rows else []
+        contacts = await _decrypt_emergency_contacts(contacts_rows)
 
         user = await _deps.db_supabase.get_user_by_id(current_user["id"])
         user_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "A Spinr user"
@@ -633,6 +708,37 @@ async def trigger_emergency_rideless(
         )
 
         _sms_targets = [c for c in contacts if c.get("phone")]
+
+        # PIA finding R-002: drop any contact who STOP'd out of SOS SMS
+        # before sending. Same fail-open posture as trigger_emergency --
+        # is_suppressed() already fails open per-call, and this whole step
+        # is wrapped fail-open too, so an unexpected failure here can never
+        # turn into "don't send the SOS". Checked concurrently via
+        # asyncio.gather, mirroring the SMS-send gather below.
+        _suppressed_ids: set = set()
+        if _sms_targets:
+            try:
+                _suppression_flags = await asyncio.gather(
+                    *(sos_contact_consent.is_suppressed(c["phone"]) for c in _sms_targets)
+                )
+                _suppressed_ids = {
+                    c.get("id") for c, suppressed in zip(_sms_targets, _suppression_flags, strict=False) if suppressed
+                }
+            except Exception:
+                logger.error(
+                    "[SOS-rideless] Suppression check step failed unexpectedly -- failing open "
+                    "(sending SOS SMS to all contacts)",
+                    exc_info=True,
+                )
+                _suppressed_ids = set()
+
+        if _suppressed_ids:
+            logger.info(
+                f"SOS-rideless: skipped {len(_suppressed_ids)}/{len(_sms_targets)} emergency contacts "
+                f"due to SOS suppression for user {current_user['id']}"
+            )
+            _sms_targets = [c for c in _sms_targets if c.get("id") not in _suppressed_ids]
+
         _sms_results = await asyncio.gather(
             *(
                 _deps.send_sms(
@@ -671,7 +777,12 @@ async def trigger_emergency_rideless(
         }
 
     contacts_status = [
-        {"id": c.get("id"), "name": c.get("name", ""), "notified": c.get("id") in _notified_contact_ids}
+        {
+            "id": c.get("id"),
+            "name": c.get("name", ""),
+            "notified": c.get("id") in _notified_contact_ids,
+            **({"status": "suppressed"} if c.get("id") in _suppressed_ids else {}),
+        }
         for c in contacts
     ]
 

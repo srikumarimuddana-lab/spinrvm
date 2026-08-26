@@ -679,7 +679,7 @@ export default function SettingsPage() {
                                         </div>
                                         <div className="rounded-lg border border-border/50 p-3">
                                             <p className="text-xs text-muted-foreground">Failed</p>
-                                            <p className={`text-lg font-bold ${deliverability.failure_rate > 0.01 ? "text-red-600" : ""}`}>{deliverability.by_status?.failed ?? 0}</p>
+                                            <p className={`text-lg font-bold ${deliverability.failure_rate > 0.01 ? "text-destructive" : ""}`}>{deliverability.by_status?.failed ?? 0}</p>
                                         </div>
                                         <div className="rounded-lg border border-border/50 p-3">
                                             <p className="text-xs text-muted-foreground">Failure rate</p>
@@ -1196,6 +1196,21 @@ export default function SettingsPage() {
                                 </p>
                             </div>
                             <div className="space-y-2 sm:col-span-2">
+                                <Label>App download / open link</Label>
+                                <Input
+                                    value={settings.company_app_download_url || ""}
+                                    onChange={(e) => update("company_app_download_url", e.target.value)}
+                                    placeholder="Leave blank to omit the button in the welcome email"
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    Powers the &quot;Book your first ride&quot; button in the rider
+                                    welcome email. Use a smart/universal link that opens the app if
+                                    installed and falls back to the App Store / Play Store otherwise.
+                                    Leave blank and the email ships without the button rather than a
+                                    broken or placeholder link.
+                                </p>
+                            </div>
+                            <div className="space-y-2 sm:col-span-2">
                                 <Label>Email logo URL</Label>
                                 <Input
                                     value={settings.company_logo_url || ""}
@@ -1351,7 +1366,7 @@ export default function SettingsPage() {
                                 <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
                             ) : mfaEnabled ? (
                                 <>
-                                    <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
+                                    <div className="flex items-center gap-2 text-sm text-success">
                                         <ShieldCheck className="h-4 w-4" />
                                         MFA is enabled on your account.
                                     </div>

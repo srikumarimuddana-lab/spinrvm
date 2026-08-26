@@ -23,7 +23,7 @@
 
 SPINR PROMOTIONS AND REFERRAL TERMS
 
-Last updated: [INSERT PUBLICATION DATE]
+Last updated: August 21, 2026
 
 These terms apply to promo codes, referral bonuses, and other promotional
 offers on the Spinr platform, in addition to the Terms of Service.
@@ -108,6 +108,14 @@ yet earned as of the date an offer changes or ends.
 2. Cross-reference `backend/utils/referral_terms.py` and migration 176 for
    the actual per-service-area terms already configured, and make sure this
    public page doesn't promise something broader than what's enforced.
+4. **Published 2026-08-21** to `legal_documents` (rider + driver rows,
+   version 1) at the explicit direction of the product owner, without
+   counsel review — same accepted-risk pattern as `terms-of-service.md`/
+   `privacy-policy.md`. The 30-day/1-ride/10-ride figures were not
+   re-checked against the live service-area override table at publish
+   time (no DB access in this session) — they rely on the 2026-08-19
+   verification recorded above; re-check before relying on this note if
+   meaningful time has passed.
 3. **Fixed 2026-08-20** (`spinr-legal-readiness-reviewer`): the anti-abuse
    paragraph previously named device, phone-number, and payment-method
    velocity signals — none of those exist in code. The only real guard is a

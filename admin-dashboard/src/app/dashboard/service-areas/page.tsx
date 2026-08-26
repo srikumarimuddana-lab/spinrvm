@@ -301,7 +301,7 @@ export default function ServiceAreasPage() {
               </Suspense>
             </div>
             {createForm.polygon.length > 0 && (
-              <p className="text-xs text-green-600 mt-1">{createForm.polygon.length} points defined</p>
+              <p className="text-xs text-success mt-1">{createForm.polygon.length} points defined</p>
             )}
           </div>
 
@@ -330,15 +330,17 @@ export default function ServiceAreasPage() {
               <div key={area.id} className="bg-card rounded-2xl border overflow-hidden">
                 {/* Area Header — click to expand */}
                 <div className="flex items-center gap-4 p-5 cursor-pointer" role="button" tabIndex={0} aria-expanded={isExpanded} onClick={() => { const newId = isExpanded ? null : area.id; setExpandedId(newId); setEditTab("general"); if (newId && !areaFees[newId]) loadAreaFees(newId); }} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); const newId = isExpanded ? null : area.id; setExpandedId(newId); setEditTab("general"); if (newId && !areaFees[newId]) loadAreaFees(newId); } }}>
-                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${area.is_active ? 'bg-green-100' : 'bg-muted'}`}>
-                    <MapPin className={`h-5 w-5 ${area.is_active ? 'text-green-600' : 'text-muted-foreground'}`} />
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${area.is_active ? 'bg-success/15' : 'bg-muted'}`}>
+                    <MapPin className={`h-5 w-5 ${area.is_active ? 'text-success' : 'text-muted-foreground'}`} />
                   </div>
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
                       <h4 className="font-bold text-foreground">{area.name}</h4>
-                      {area.is_airport && <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-bold rounded-md">AIRPORT</span>}
-                      {!area.is_active && <span className="px-2 py-0.5 bg-gray-100 text-gray-500 text-xs font-bold rounded-md">INACTIVE</span>}
-                      {subRegions.length > 0 && <span className="px-2 py-0.5 bg-violet-100 text-violet-700 text-xs font-bold rounded-md">{subRegions.length} airport zone{subRegions.length > 1 ? 's' : ''}</span>}
+                      {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-category badge, not a health-state signal (#2816) */}
+                      {area.is_airport && <span className="px-2 py-0.5 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 text-xs font-bold rounded-md">AIRPORT</span>}
+                      {!area.is_active && <span className="px-2 py-0.5 bg-muted text-muted-foreground text-xs font-bold rounded-md">INACTIVE</span>}
+                      {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-zone-count badge, not a health-state signal (#2816) */}
+                      {subRegions.length > 0 && <span className="px-2 py-0.5 bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400 text-xs font-bold rounded-md">{subRegions.length} airport zone{subRegions.length > 1 ? 's' : ''}</span>}
                     </div>
                     <p className="text-sm text-muted-foreground">{area.city || ''}{area.province ? `, ${area.province}` : ''} · GST {area.gst_rate || 5}% · PST {area.pst_rate || 0}%</p>
                   </div>
@@ -349,7 +351,8 @@ export default function ServiceAreasPage() {
                       e.stopPropagation();
                       router.push(`/dashboard/monitoring?areaId=${encodeURIComponent(area.id)}`);
                     }}
-                    className="flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-semibold text-violet-700 transition-colors hover:bg-violet-100"
+                    // eslint-disable-next-line no-restricted-syntax -- decorative brand accent for the live-monitor link button, not a health-state signal (#2816)
+                    className="flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 dark:border-violet-800 dark:bg-violet-900/20 px-3 py-1.5 text-xs font-semibold text-violet-700 dark:text-violet-400 transition-colors hover:bg-violet-100"
                     title="Open this area on the live monitor"
                   >
                     <Radar className="h-3.5 w-3.5" />
@@ -445,6 +448,7 @@ export default function ServiceAreasPage() {
                             </div>
                             {addAirportFor !== area.id && (
                               <button onClick={() => { setAddAirportFor(area.id); setAirportForm({ name: "", airport_fee: 2.0, polygon: [] }); setAirportMapKey(k => k + 1); }}
+                                // eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816)
                                 className="flex items-center gap-2 bg-blue-500 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-blue-600">
                                 <Plane className="h-4 w-4" /> Add Airport Zone
                               </button>
@@ -453,31 +457,39 @@ export default function ServiceAreasPage() {
 
                           {/* Add Airport Form */}
                           {addAirportFor === area.id && (
-                            <div className="bg-blue-50 border border-blue-200 rounded-xl p-5 mb-5">
-                              <h5 className="font-bold text-blue-900 mb-3 flex items-center gap-2">
+                            /* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */
+                            <div className="bg-blue-50 border border-blue-200 dark:bg-blue-900/20 dark:border-blue-800 rounded-xl p-5 mb-5">
+                              {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
+                              <h5 className="font-bold text-blue-900 dark:text-blue-200 mb-3 flex items-center gap-2">
                                 <Plane className="h-4 w-4" /> New Airport Zone in {area.name}
                               </h5>
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                                 <div>
-                                  <label className="block text-xs font-semibold text-blue-800 mb-1">Airport Zone Name *</label>
-                                  <input className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm"
+                                  {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
+                                  <label className="block text-xs font-semibold text-blue-800 dark:text-blue-300 mb-1">Airport Zone Name *</label>
+                                  {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
+                                  <input className="w-full border border-blue-200 dark:border-blue-800 rounded-lg px-3 py-2 text-sm"
                                     value={airportForm.name}
                                     onChange={e => setAirportForm({ ...airportForm, name: e.target.value })}
                                     placeholder={`e.g. ${area.city || area.name} Airport`} />
                                 </div>
                                 <div>
-                                  <label className="block text-xs font-semibold text-blue-800 mb-1">Airport Fee ($)</label>
-                                  <input className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm"
+                                  {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
+                                  <label className="block text-xs font-semibold text-blue-800 dark:text-blue-300 mb-1">Airport Fee ($)</label>
+                                  {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
+                                  <input className="w-full border border-blue-200 dark:border-blue-800 rounded-lg px-3 py-2 text-sm"
                                     type="number" step="0.50" min="0"
                                     value={airportForm.airport_fee}
                                     onChange={e => setAirportForm({ ...airportForm, airport_fee: parseFloat(e.target.value) || 0 })} />
                                 </div>
                               </div>
                               <div className="mb-4">
-                                <label className="block text-xs font-semibold text-blue-800 mb-2">
-                                  Draw Airport Boundary on Map {airportForm.polygon.length === 0 && <span className="text-red-500">(required)</span>}
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
+                                <label className="block text-xs font-semibold text-blue-800 dark:text-blue-300 mb-2">
+                                  Draw Airport Boundary on Map {airportForm.polygon.length === 0 && <span className="text-destructive">(required)</span>}
                                 </label>
-                                <div className="h-64 rounded-xl overflow-hidden border border-blue-200">
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
+                                <div className="h-64 rounded-xl overflow-hidden border border-blue-200 dark:border-blue-800">
                                   <Suspense fallback={<div className="h-full bg-muted flex items-center justify-center text-muted-foreground">Loading map...</div>}>
                                     <GeofenceMap
                                       key={airportMapKey}
@@ -488,9 +500,10 @@ export default function ServiceAreasPage() {
                                     />
                                   </Suspense>
                                 </div>
-                                {airportForm.polygon.length > 0 && <p className="text-xs text-green-600 mt-1">{airportForm.polygon.length} points defined</p>}
+                                {airportForm.polygon.length > 0 && <p className="text-xs text-success mt-1">{airportForm.polygon.length} points defined</p>}
                               </div>
                               <div className="flex gap-3">
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
                                 <button onClick={() => handleCreateAirportSubRegion(area.id)} className="bg-blue-500 text-white px-5 py-2 rounded-xl text-sm font-semibold hover:bg-blue-600">Create Airport Zone</button>
                                 <button onClick={() => setAddAirportFor(null)} className="bg-muted text-foreground px-5 py-2 rounded-xl text-sm font-semibold">Cancel</button>
                               </div>
@@ -507,15 +520,19 @@ export default function ServiceAreasPage() {
                           ) : (
                             <div className="space-y-4">
                               {subRegions.map((sub: any) => (
-                                <div key={sub.id} className="bg-blue-50 border border-blue-100 rounded-xl p-4">
+                                // eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816)
+                                <div key={sub.id} className="bg-blue-50 border border-blue-100 dark:bg-blue-900/20 dark:border-blue-800 rounded-xl p-4">
                                   <div className="flex items-center justify-between mb-3">
                                     <div className="flex items-center gap-2">
-                                      <Plane className="h-4 w-4 text-blue-600" />
-                                      <span className="font-bold text-blue-900">{sub.name}</span>
-                                      <span className="px-2 py-0.5 bg-blue-200 text-blue-800 text-xs font-bold rounded-md">AIRPORT</span>
-                                      {!sub.is_active && <span className="px-2 py-0.5 bg-gray-200 text-gray-600 text-xs font-bold rounded-md">INACTIVE</span>}
+                                      {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
+                                      <Plane className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                                      {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
+                                      <span className="font-bold text-blue-900 dark:text-blue-200">{sub.name}</span>
+                                      {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-category badge, not a health-state signal (#2816) */}
+                                      <span className="px-2 py-0.5 bg-blue-200 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300 text-xs font-bold rounded-md">AIRPORT</span>
+                                      {!sub.is_active && <span className="px-2 py-0.5 bg-muted text-muted-foreground text-xs font-bold rounded-md">INACTIVE</span>}
                                     </div>
-                                    <button onClick={() => handleDelete(sub.id, sub.name)} className="text-sm text-red-500 hover:underline">Delete</button>
+                                    <button onClick={() => handleDelete(sub.id, sub.name)} className="text-sm text-destructive hover:underline">Delete</button>
                                   </div>
                                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
                                     <FieldInput label="Zone Name" value={sub.name} onSave={v => handleFieldUpdate(sub.id, 'name', v)} />
@@ -524,8 +541,10 @@ export default function ServiceAreasPage() {
                                   </div>
                                   {/* Airport zone boundary map */}
                                   <div>
-                                    <label className="block text-xs font-semibold text-blue-800 mb-2">Airport Zone Boundary</label>
-                                    <div className="h-56 rounded-xl overflow-hidden border border-blue-200">
+                                    {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
+                                    <label className="block text-xs font-semibold text-blue-800 dark:text-blue-300 mb-2">Airport Zone Boundary</label>
+                                    {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
+                                    <div className="h-56 rounded-xl overflow-hidden border border-blue-200 dark:border-blue-800">
                                       <Suspense fallback={<div className="h-full bg-muted flex items-center justify-center text-muted-foreground">Loading map...</div>}>
                                         <GeofenceMap
                                           key={`sub-${sub.id}`}
@@ -540,7 +559,7 @@ export default function ServiceAreasPage() {
                                       </Suspense>
                                     </div>
                                     {getAreaPolygon(sub).length > 0 && (
-                                      <p className="text-xs text-green-600 mt-1">{getAreaPolygon(sub).length} boundary points</p>
+                                      <p className="text-xs text-success mt-1">{getAreaPolygon(sub).length} boundary points</p>
                                     )}
                                   </div>
                                 </div>
@@ -803,13 +822,13 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
         <div className="flex items-center gap-2 pt-5">
           <label className="text-xs font-semibold text-muted-foreground">Active</label>
           <button onClick={() => setForm({ ...form, is_active: !form.is_active })}>
-            {form.is_active ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-muted-foreground" />}
+            {form.is_active ? <ToggleRight className="h-6 w-6 text-success" /> : <ToggleLeft className="h-6 w-6 text-muted-foreground" />}
           </button>
         </div>
         <div className="flex items-center gap-2 pt-5">
           <label className="text-xs font-semibold text-muted-foreground">Demand Heatmap</label>
           <button onClick={() => setForm({ ...form, show_demand_heatmap: !form.show_demand_heatmap })}>
-            {form.show_demand_heatmap ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-muted-foreground" />}
+            {form.show_demand_heatmap ? <ToggleRight className="h-6 w-6 text-success" /> : <ToggleLeft className="h-6 w-6 text-muted-foreground" />}
           </button>
           <span className="text-xs text-muted-foreground">Show ride demand overlay to drivers</span>
         </div>
@@ -833,7 +852,8 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
                 // Mirrors the backend /surge/auto reset endpoint.
                 await onSave({ surge_source: "auto", surge_enabled: true, surge_active: true });
               }}
-              className="text-[11px] text-blue-600 hover:underline font-semibold"
+              // eslint-disable-next-line no-restricted-syntax -- decorative link accent for the auto-surge reset action, not a health-state signal (#2816)
+              className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline font-semibold"
             >
               Reset to auto-surge
             </button>
@@ -843,15 +863,16 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
           Temporarily raise fares in this area during high-demand periods. When active,
           every vehicle&apos;s fare is multiplied by the surge factor.
           {area.surge_source === "auto" && (
-            <span className="text-blue-600"> Currently auto-managed by the surge engine; editing these fields will switch it to manual.</span>
+            // eslint-disable-next-line no-restricted-syntax -- decorative info accent for the "auto-managed" state, not a success/warning/destructive signal (#2816)
+            <span className="text-blue-600 dark:text-blue-400"> Currently auto-managed by the surge engine; editing these fields will switch it to manual.</span>
           )}
           {area.surge_source === "manual" && (
-            <span className="text-amber-600"> Currently on manual override — surge engine will not touch this area until you reset.</span>
+            <span className="text-warning"> Currently on manual override — surge engine will not touch this area until you reset.</span>
           )}
         </p>
         <div className="flex items-center gap-2 pt-1">
           <button type="button" onClick={() => setForm({ ...form, surge_enabled: !form.surge_enabled })}>
-            {form.surge_enabled ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-muted-foreground" />}
+            {form.surge_enabled ? <ToggleRight className="h-6 w-6 text-success" /> : <ToggleLeft className="h-6 w-6 text-muted-foreground" />}
           </button>
           <label className="text-xs font-semibold text-muted-foreground">
             Surge {form.surge_enabled ? "ON" : "off"}
@@ -875,12 +896,12 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
               <p className="text-[11px] text-muted-foreground pb-2">1.0 = no surge · 1.5 = +50% · 2.0 = double · Auto cap = 2.5×</p>
             </div>
             {needsJustification && (
-              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2 mt-3">
-                <p className="text-xs font-semibold text-amber-800">
+              <div className="rounded-lg border border-warning/30 bg-warning/10 p-3 space-y-2 mt-3">
+                <p className="text-xs font-semibold text-warning">
                   Surge above 2.5× requires documented justification (regulatory + reputational risk).
                 </p>
                 <textarea
-                  className="w-full border border-amber-300 rounded-lg px-3 py-2 text-sm"
+                  className="w-full border border-warning/30 rounded-lg px-3 py-2 text-sm"
                   rows={2}
                   placeholder="e.g. Major event surge — approved by ops lead @name on 2026-05-21"
                   value={form.surge_justification}
@@ -943,7 +964,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
           </Suspense>
         </div>
         {(pendingPolygon || getAreaPolygon(area).length > 0) && (
-          <p className="text-xs text-green-600 mt-1">
+          <p className="text-xs text-success mt-1">
             {pendingPolygon ? `${pendingPolygon.coordinates[0].length} points (unsaved)` : `${getAreaPolygon(area).length} boundary points`}
           </p>
         )}
@@ -951,8 +972,9 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
 
       {/* Save + Delete */}
       <div className="flex items-center justify-between pt-2 border-t">
-        <button onClick={onDelete} className="text-sm text-red-500 hover:underline">Delete this area</button>
+        <button onClick={onDelete} className="text-sm text-destructive hover:underline">Delete this area</button>
         <button onClick={handleSave} disabled={saving}
+          // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text success state; --success fails WCAG AA against white text in dark mode, cannot convert to bg-success (#2816)
           className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition ${saved ? 'bg-green-500 text-white' : 'bg-primary text-primary-foreground hover:bg-primary/90'} disabled:opacity-50`}>
           {saving ? 'Saving...' : saved ? 'Saved!' : 'Save General Settings'}
         </button>
@@ -1007,7 +1029,7 @@ function FieldToggle({ label, value, onSave }: { label: string; value: boolean; 
     <div className="flex items-center gap-2">
       <label className="text-xs font-semibold text-muted-foreground">{label}</label>
       <button onClick={() => onSave(!value)}>
-        {value ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-muted-foreground" />}
+        {value ? <ToggleRight className="h-6 w-6 text-success" /> : <ToggleLeft className="h-6 w-6 text-muted-foreground" />}
       </button>
     </div>
   );
@@ -1107,7 +1129,7 @@ function VehiclePricingEditor({ pricing, vehicleTypes, onSave }: { pricing: any[
         </table>
       </div>
       {vehicleTypes.length === 0 && (
-        <p className="text-xs text-amber-600 mt-2">
+        <p className="text-xs text-warning mt-2">
           No vehicle types defined yet. Add them under <span className="font-semibold">Dashboard → Vehicle Types</span> first.
         </p>
       )}
@@ -1180,8 +1202,8 @@ function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => 
         </div>
         <div className="flex items-center gap-4 text-xs text-muted-foreground">
           <span className="flex items-center gap-1"><FileText className="h-3.5 w-3.5" /> {rows.length} total</span>
-          <span className="flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5 text-emerald-500" /> {requiredCount} required</span>
-          <span className="flex items-center gap-1"><Clock className="h-3.5 w-3.5 text-amber-500" /> {expiryCount} with expiry</span>
+          <span className="flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5 text-success" /> {requiredCount} required</span>
+          <span className="flex items-center gap-1"><Clock className="h-3.5 w-3.5 text-warning" /> {expiryCount} with expiry</span>
         </div>
       </div>
 
@@ -1200,8 +1222,8 @@ function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => 
               <div key={i} className={`rounded-xl border overflow-hidden transition-all ${isEditing ? 'ring-2 ring-primary/30 border-primary/50 shadow-md' : 'bg-card hover:shadow-sm border-border'}`}>
                 {/* Card Header with preview */}
                 <div className={`px-4 py-3 flex items-center gap-3 ${isEditing ? 'bg-primary/10' : 'bg-muted'}`}>
-                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${r.required !== false ? 'bg-emerald-100' : 'bg-muted'}`}>
-                    <FileText className={`h-5 w-5 ${r.required !== false ? 'text-emerald-600' : 'text-muted-foreground'}`} />
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${r.required !== false ? 'bg-success/15' : 'bg-muted'}`}>
+                    <FileText className={`h-5 w-5 ${r.required !== false ? 'text-success' : 'text-muted-foreground'}`} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-bold text-foreground truncate">{r.label || 'Untitled Document'}</p>
@@ -1220,17 +1242,18 @@ function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => 
                 {/* Status badges */}
                 <div className="px-4 py-2.5 flex items-center gap-2 flex-wrap">
                   {r.required !== false ? (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-700"><ShieldCheck className="h-3 w-3" /> Required</span>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-success/15 text-success"><ShieldCheck className="h-3 w-3" /> Required</span>
                   ) : (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-500"><ShieldAlert className="h-3 w-3" /> Optional</span>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-muted text-muted-foreground"><ShieldAlert className="h-3 w-3" /> Optional</span>
                   )}
                   {r.has_expiry ? (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-700"><Clock className="h-3 w-3" /> Has Expiry</span>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-warning/15 text-warning"><Clock className="h-3 w-3" /> Has Expiry</span>
                   ) : (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-400">No Expiry</span>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-muted text-muted-foreground">No Expiry</span>
                   )}
                   {r.requires_back_side && (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-100 text-blue-700"><Image className="h-3 w-3" /> Both Sides</span>
+                    // eslint-disable-next-line no-restricted-syntax -- decorative informational badge (not a health-state signal) distinguishing a document-format attribute (#2816)
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"><Image className="h-3 w-3" /> Both Sides</span>
                   )}
                 </div>
 
@@ -1288,7 +1311,7 @@ function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => 
           <Plus className="h-4 w-4" /> Add document type
         </button>
         <div className="flex-1" />
-        {dirty && <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">Unsaved changes</span>}
+        {dirty && <span className="text-xs text-warning font-medium">Unsaved changes</span>}
         <button onClick={() => { onSave(rows); setDirty(false); }} className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition ${dirty ? 'bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm' : 'bg-muted text-muted-foreground'}`}>
           <span className="flex items-center gap-1.5"><CheckCircle className="h-4 w-4" /> Save Documents</span>
         </button>
@@ -1669,7 +1692,7 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
   return (
     <div>
       {/* Kill switch */}
-      <div className={`flex items-center justify-between p-4 rounded-xl mb-3 ${enabled ? 'bg-green-50 border border-green-200' : 'bg-muted border border-border'}`}>
+      <div className={`flex items-center justify-between p-4 rounded-xl mb-3 ${enabled ? 'bg-success/10 border border-success/30' : 'bg-muted border border-border'}`}>
         <div>
           <h4 className="font-bold text-foreground">Spinr Pass for {area.name}</h4>
           <p className="text-sm text-muted-foreground">
@@ -1680,7 +1703,7 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
       </div>
 
       {/* Mandatory-subscription toggle */}
-      <div className={`flex items-center justify-between p-4 rounded-xl mb-5 ${required ? 'bg-amber-50 border border-amber-200' : 'bg-muted border border-border'}`}>
+      <div className={`flex items-center justify-between p-4 rounded-xl mb-5 ${required ? 'bg-warning/10 border border-warning/30' : 'bg-muted border border-border'}`}>
         <div>
           <h4 className="font-bold text-foreground">Require Subscription to Drive</h4>
           <p className="text-sm text-muted-foreground">
@@ -1761,7 +1784,7 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
           {plans.map(p => (
             <div key={p.id} className={`bg-card rounded-xl border p-5 relative ${!p.is_active ? "opacity-50" : ""}`}>
               <button onClick={() => handleTogglePlan(p)} className="absolute top-3 right-3">
-                {p.is_active ? <ToggleRight className="h-5 w-5 text-green-500" /> : <ToggleLeft className="h-5 w-5 text-muted-foreground" />}
+                {p.is_active ? <ToggleRight className="h-5 w-5 text-success" /> : <ToggleLeft className="h-5 w-5 text-muted-foreground" />}
               </button>
               <h5 className="font-bold text-foreground text-lg">{p.name}</h5>
               {p.description && <p className="text-muted-foreground text-xs mt-0.5">{p.description}</p>}
@@ -1814,7 +1837,7 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
                         <td className="px-4 py-2 font-mono text-xs">{s.driver_id?.slice(0, 8)}...</td>
                         <td className="px-4 py-2">{s.plan_name}</td>
                         <td className="px-4 py-2">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${s.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>{s.status?.toUpperCase()}</span>
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${s.status === 'active' ? 'bg-success/15 text-success' : 'bg-muted text-muted-foreground'}`}>{s.status?.toUpperCase()}</span>
                         </td>
                         <td className="px-4 py-2 text-xs text-muted-foreground">{s.expires_at ? new Date(s.expires_at).toLocaleDateString() : '—'}</td>
                       </tr>
@@ -1922,10 +1945,10 @@ function CascadeEditor({
       </div>
 
       {vehicleTypes.length === 0 ? (
-        <div className="text-center py-10 bg-amber-50 rounded-xl border-2 border-dashed border-amber-200">
-          <Car className="h-10 w-10 text-amber-300 mx-auto mb-3" />
-          <p className="text-amber-700 font-medium">No vehicle types configured for this area</p>
-          <p className="text-amber-600 text-sm mt-1">
+        <div className="text-center py-10 bg-warning/10 rounded-xl border-2 border-dashed border-warning/30">
+          <Car className="h-10 w-10 text-warning mx-auto mb-3" />
+          <p className="text-warning font-medium">No vehicle types configured for this area</p>
+          <p className="text-warning text-sm mt-1">
             Add vehicle types under the <span className="font-semibold">Vehicle Pricing</span> tab first,
             then return here to set up cascade rules.
           </p>
@@ -2014,6 +2037,7 @@ function CascadeEditor({
         <button
           onClick={handleSave}
           disabled={!dirty || saving}
+          // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text success state; --success fails WCAG AA against white text in dark mode, cannot convert to bg-success (#2816)
           className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition ${saved ? 'bg-green-500 text-white' : dirty ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'bg-muted text-muted-foreground cursor-not-allowed'} disabled:opacity-50`}
         >
           {saving ? 'Saving...' : saved ? 'Saved!' : 'Save Cascade Rules'}
@@ -2080,6 +2104,7 @@ function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; are
         </div>
         {!showForm && (
           <button onClick={() => setShowForm(true)}
+            // eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816)
             className="flex items-center gap-2 bg-amber-500 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-amber-600">
             <Gift className="h-4 w-4" /> Add Incentive
           </button>
@@ -2087,47 +2112,61 @@ function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; are
       </div>
 
       {showForm && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 mb-5">
-          <h5 className="font-bold text-amber-900 mb-3 flex items-center gap-2">
+        // eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816)
+        <div className="bg-amber-50 border border-amber-200 dark:bg-amber-900/20 dark:border-amber-800 rounded-xl p-5 mb-5">
+          {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
+          <h5 className="font-bold text-amber-900 dark:text-amber-200 mb-3 flex items-center gap-2">
             <Gift className="h-4 w-4" /> New Incentive for {areaName}
           </h5>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <div>
-              <label className="block text-xs font-semibold text-amber-800 mb-1">Name *</label>
-              <input className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm"
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
+              <label className="block text-xs font-semibold text-amber-800 dark:text-amber-300 mb-1">Name *</label>
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
+              <input className="w-full border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2 text-sm"
                 value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
                 placeholder="e.g. Peak Hour Bonus" />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-amber-800 mb-1">Type</label>
-              <select className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm"
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
+              <label className="block text-xs font-semibold text-amber-800 dark:text-amber-300 mb-1">Type</label>
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
+              <select className="w-full border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2 text-sm"
                 value={form.incentive_type} onChange={e => setForm({ ...form, incentive_type: e.target.value })}>
                 {INCENTIVE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label} — {t.desc}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-xs font-semibold text-amber-800 mb-1">Bonus Amount ($)</label>
-              <input className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm"
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
+              <label className="block text-xs font-semibold text-amber-800 dark:text-amber-300 mb-1">Bonus Amount ($)</label>
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
+              <input className="w-full border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2 text-sm"
                 type="number" step="0.50" min="0.50" max="500"
                 value={form.bonus_amount} onChange={e => setForm({ ...form, bonus_amount: parseFloat(e.target.value) || 0 })} />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-amber-800 mb-1">Vehicle Type (optional)</label>
-              <select className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm"
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
+              <label className="block text-xs font-semibold text-amber-800 dark:text-amber-300 mb-1">Vehicle Type (optional)</label>
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
+              <select className="w-full border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2 text-sm"
                 value={form.vehicle_type_id} onChange={e => setForm({ ...form, vehicle_type_id: e.target.value })}>
                 <option value="">All vehicle types</option>
                 {vehicleTypes.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-xs font-semibold text-amber-800 mb-1">Description</label>
-              <input className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm"
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
+              <label className="block text-xs font-semibold text-amber-800 dark:text-amber-300 mb-1">Description</label>
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
+              <input className="w-full border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2 text-sm"
                 value={form.description} onChange={e => setForm({ ...form, description: e.target.value })}
                 placeholder="Shown to drivers on ride offer" />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-amber-800 mb-1">Budget Cap ($ optional)</label>
-              <input className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm"
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
+              <label className="block text-xs font-semibold text-amber-800 dark:text-amber-300 mb-1">Budget Cap ($ optional)</label>
+              {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
+              <input className="w-full border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2 text-sm"
                 type="number" step="100" min="0"
                 value={form.max_budget} onChange={e => setForm({ ...form, max_budget: e.target.value })}
                 placeholder="Leave empty for unlimited" />
@@ -2135,6 +2174,7 @@ function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; are
           </div>
           <div className="flex gap-3">
             <button onClick={handleCreate} disabled={saving || !form.name}
+              // eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816)
               className="bg-amber-600 text-white px-5 py-2 rounded-lg text-sm font-semibold hover:bg-amber-700 disabled:opacity-50">
               {saving ? 'Creating...' : 'Create Incentive'}
             </button>
@@ -2159,15 +2199,19 @@ function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; are
               ? vehicleTypes.find((v: any) => v.id === inc.vehicle_type_id)?.name || 'Specific vehicle'
               : 'All vehicles';
             return (
-              <div key={inc.id} className={`flex items-center gap-4 p-4 rounded-xl border ${inc.is_active ? 'bg-card border-amber-200' : 'bg-muted border-border opacity-60'}`}>
-                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${inc.is_active ? 'bg-amber-100' : 'bg-muted'}`}>
-                  <Gift className={`h-5 w-5 ${inc.is_active ? 'text-amber-600' : 'text-muted-foreground'}`} />
+              // eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816)
+              <div key={inc.id} className={`flex items-center gap-4 p-4 rounded-xl border ${inc.is_active ? 'bg-card border-amber-200 dark:border-amber-800' : 'bg-muted border-border opacity-60'}`}>
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
+                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${inc.is_active ? 'bg-amber-100 dark:bg-amber-900/30' : 'bg-muted'}`}>
+                  {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent, not a health-state signal (#2816) */}
+                  <Gift className={`h-5 w-5 ${inc.is_active ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}`} />
                 </div>
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
                     <span className="font-bold text-foreground">{inc.name}</span>
-                    <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs font-bold rounded-md">${parseFloat(inc.bonus_amount).toFixed(2)}</span>
-                    <span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs font-semibold rounded-md">{typeInfo?.label || inc.incentive_type}</span>
+                    {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent for the bonus-amount badge, not a health-state signal (#2816) */}
+                    <span className="px-2 py-0.5 bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-xs font-bold rounded-md">${parseFloat(inc.bonus_amount).toFixed(2)}</span>
+                    <span className="px-2 py-0.5 bg-muted text-muted-foreground text-xs font-semibold rounded-md">{typeInfo?.label || inc.incentive_type}</span>
                   </div>
                   <p className="text-sm text-muted-foreground">{vtName}{inc.description ? ` · ${inc.description}` : ''}</p>
                   {inc.max_budget && (
@@ -2175,7 +2219,7 @@ function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; are
                   )}
                 </div>
                 <button onClick={() => handleToggle(inc.id)}
-                  className={`p-2 rounded-lg ${inc.is_active ? 'text-green-600 hover:bg-green-50' : 'text-muted-foreground hover:bg-muted'}`}
+                  className={`p-2 rounded-lg ${inc.is_active ? 'text-success hover:bg-success/10' : 'text-muted-foreground hover:bg-muted'}`}
                   title={inc.is_active ? 'Deactivate' : 'Activate'}>
                   {inc.is_active ? <ToggleRight className="h-5 w-5" /> : <ToggleLeft className="h-5 w-5" />}
                 </button>
@@ -2271,7 +2315,7 @@ function SurgeHistoryChart({ areaId, areaName }: { areaId: string; areaName: str
       </div>
 
       {truncated && (
-        <p className="mb-2 text-xs text-amber-700 dark:text-amber-400">
+        <p className="mb-2 text-xs text-warning">
           Showing the most recent 500 readings — the selected range is longer than
           the server returns in one response, so earlier readings are not charted.
         </p>
@@ -2352,7 +2396,7 @@ function SurgeHistoryChart({ areaId, areaName }: { areaId: string; areaName: str
           <span>Avg: <span className="font-semibold text-foreground">{(data.reduce((s, d) => s + d.multiplier, 0) / data.length).toFixed(2)}×</span></span>
           <span>Points: {data.length}</span>
           {data.some(d => d.source === 'manual') && (
-            <span className="text-amber-600 font-semibold">Contains manual overrides</span>
+            <span className="text-warning font-semibold">Contains manual overrides</span>
           )}
         </div>
       )}
@@ -2579,6 +2623,7 @@ export function AreaHeatmapOverrides({
                   className={`mt-2 rounded-md border px-2 py-1.5 text-xs ${
                     w.severity === "warning"
                       ? "border-destructive/40 bg-destructive/5 text-destructive"
+                      // eslint-disable-next-line no-restricted-syntax -- lower-severity ("info") tier below "warning"; no dedicated semantic token exists for it (#2816)
                       : "border-amber-500/40 bg-amber-500/5 text-amber-700 dark:text-amber-400"
                   }`}
                 >
@@ -2725,8 +2770,8 @@ function HeatmapConfigTab({ onSuccess, onError }: { onSuccess: () => void; onErr
             dashboard's own Heat Map page. Both facts have to be unmissable:
             an operator who reads this as "tuning Saskatoon's display" can change
             what every driver in every region sees in one click. */}
-        <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 px-3 py-2">
-          <p className="text-sm text-amber-900 dark:text-amber-200">
+        <div className="mt-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2">
+          <p className="text-sm text-warning">
             <span className="font-semibold">Applies to all service areas and all drivers.</span>{" "}
             These settings control the demand heatmap inside the <span className="font-semibold">driver app</span>,
             not the Heat Map page in this dashboard. They are not per-area.
@@ -2827,7 +2872,7 @@ function HeatmapConfigTab({ onSuccess, onError }: { onSuccess: () => void; onErr
                 // Surfaced, not dropped: the allowlist decides who gets v2
                 // during a dark launch, so an entry that matches nothing makes
                 // the rollout look like it did nothing.
-                <p role="alert" className="text-xs text-amber-700 dark:text-amber-400 mt-1">
+                <p role="alert" className="text-xs text-warning mt-1">
                   {invalid.length} entr{invalid.length === 1 ? "y does" : "ies do"} not look like a
                   user ID and will match no driver: {invalid.slice(0, 3).join(", ")}
                   {invalid.length > 3 ? "…" : ""}
@@ -2847,7 +2892,7 @@ function HeatmapConfigTab({ onSuccess, onError }: { onSuccess: () => void; onErr
         >
           {saving ? 'Saving…' : dirty ? 'Save Heatmap Config' : 'Saved'}
         </button>
-        {!dirty && !saving && <span className="text-xs text-green-600 flex items-center gap-1"><CheckCircle className="h-3.5 w-3.5" /> Up to date</span>}
+        {!dirty && !saving && <span className="text-xs text-success flex items-center gap-1"><CheckCircle className="h-3.5 w-3.5" /> Up to date</span>}
       </div>
     </div>
   );

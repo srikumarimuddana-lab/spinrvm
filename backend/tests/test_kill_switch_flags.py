@@ -1,4 +1,4 @@
-"""Tests for the E5 kill-switch flags (ACTION_ITEMS.md).
+"""Tests for the E5/G5 kill-switch flags (ACTION_ITEMS.md).
 
 surge_engine_enabled, promo_redemption_enabled, corporate_billing_enabled
 are new; scheduled_dispatch_enabled already existed in AppSettings and
@@ -7,6 +7,14 @@ SettingsUpdateRequest -- there was previously no way to set it via the
 admin API at all, only a direct DB update. All four are plain booleans, no
 credential masking or super_admin gate needed (same shape as
 admin_theme_v2_enabled / driver_discreet_sos_enabled).
+
+new_ride_requests_enabled (G5) is the demand-side sibling added later --
+distinct from the four E5 flags above, which gate scheduled dispatch,
+surge, promo redemption, and corporate billing specifically, not new ride
+requests generally. Same plain-boolean shape, included in this file's
+shared flag list so it gets the same schema/round-trip/non-super-admin
+coverage; its own booking-path enforcement is tested separately in
+test_booking_new_ride_requests_kill_switch.py.
 
 These tests pin: schema defaults (all default True -- a kill switch must
 default to "not killing anything"), that SettingsUpdateRequest round-trips
@@ -28,6 +36,7 @@ _FLAGS = [
     "surge_engine_enabled",
     "promo_redemption_enabled",
     "corporate_billing_enabled",
+    "new_ride_requests_enabled",
 ]
 
 

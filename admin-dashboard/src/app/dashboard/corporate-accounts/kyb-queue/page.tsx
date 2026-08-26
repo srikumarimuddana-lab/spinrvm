@@ -147,7 +147,7 @@ export default function KybQueuePage() {
             </div>
 
             {error && (
-                <div className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+                <div className="rounded-md border border-destructive/40 bg-destructive/5 px-4 py-2 text-sm text-destructive">
                     {error}
                 </div>
             )}
@@ -218,7 +218,8 @@ export default function KybQueuePage() {
                                             {c.kyb_document_url ? (
                                                 <button
                                                     type="button"
-                                                    className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline disabled:opacity-50"
+                                                    // eslint-disable-next-line no-restricted-syntax -- decorative link-style action button, not a status signal (#2816)
+                                                    className="inline-flex items-center gap-1 text-sm text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50"
                                                     onClick={() => preview(c)}
                                                     disabled={busyId === c.id}
                                                 >
@@ -236,6 +237,7 @@ export default function KybQueuePage() {
                                                     size="sm"
                                                     onClick={() => approve(c.id)}
                                                     disabled={busyId === c.id}
+                                                    // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text button; dark-mode --success (2.02:1) fails WCAG AA against white text (#2816)
                                                     className="bg-emerald-600 hover:bg-emerald-700"
                                                 >
                                                     <CheckCircle2 className="mr-1 h-4 w-4" />
@@ -299,7 +301,7 @@ export default function KybQueuePage() {
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
                         <AlertDialogAction
                             onClick={confirmReject}
-                            className="bg-red-600 hover:bg-red-700"
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                         >
                             {busyId && busyId === rejectTarget?.id ? "Rejecting…" : "Reject"}
                         </AlertDialogAction>

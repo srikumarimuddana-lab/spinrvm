@@ -33,7 +33,7 @@ import {
   type CarLatLng,
 } from './carFixChannel';
 
-export { getLastCarFix, type CarLatLng } from './carFixChannel';
+export { getLastCarFix, getHeadingSource, type CarLatLng } from './carFixChannel';
 
 /** A fix older than this is treated as stale and actively refreshed. */
 const STALE_AFTER_MS = 5_000;

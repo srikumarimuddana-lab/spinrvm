@@ -376,8 +376,8 @@ export default function DriverRegistrationPage() {
             );
             case 5: return (
                 <div className="text-center py-8 space-y-4">
-                    <div className="mx-auto bg-green-100 p-4 rounded-full w-20 h-20 flex items-center justify-center">
-                        <Check className="h-10 w-10 text-green-600" />
+                    <div className="mx-auto bg-success/15 p-4 rounded-full w-20 h-20 flex items-center justify-center">
+                        <Check className="h-10 w-10 text-success" />
                     </div>
                     <h2 className="text-2xl font-bold">Application Submitted!</h2>
                     <p className="text-muted-foreground max-w-md mx-auto">

@@ -78,29 +78,31 @@ def _enforced_module_gates() -> set[str]:
 # removing one is a decision about the permission model, not a cleanup, so they
 # are pinned here rather than deleted as a side effect of the heatmap work.
 # Surfaced by this test on 2026-08-14; see the change log entry.
-_KNOWN_UNGATED_GRANTS = {
-    # Ranked blocker #28 / audit finding N16 (2026-08-19): "pricing" used to
-    # gate the Vehicle Types sidebar link and page-level check, but that
-    # page's API has always used require_module("vehicle_types") — the
-    # mismatch silently locked out staff granted "vehicle_types" (no
-    # sidebar link, page-level denial) while a "pricing"-only grant looked
-    # like access but 403'd on every API call. Both frontend sites were
-    # repointed to "vehicle_types"; "pricing" itself now gates nothing.
-    "pricing",
-    "surge",  # surge endpoints live on the service_areas router and use that gate
-}
+#
+# "pricing" and "surge" were pinned here until 2026-08-21, when decision-log
+# item 3 (docs/audit/2026-08-19-decision-writeups.md, recommendation A) retired
+# both outright rather than leaving them ungated — same treatment as
+# "heatmap"/"bulk_operations" below. They are no longer grantable at all, so
+# this set is empty; see test_removed_modules_stay_removed for their
+# regression pin.
+_KNOWN_UNGATED_GRANTS: set[str] = set()
 
 # Modules the sidebar gates links on that no grant can satisfy, so only
 # super_admin ever sees those links.
-_KNOWN_UNGRANTABLE_SIDEBAR = {
-    "compliance",  # a REAL require_module gate that is not in AVAILABLE_MODULES
-    # `ai_console` used to be here too: the sidebar hid that entry behind a
-    # module no role could hold, which produced the right outcome for the wrong
-    # reason — it depended on nobody ever adding that string to
-    # AVAILABLE_MODULES. It now uses the explicit `superAdminOnly` flag (same as
-    # Sentry) against a grantable module, and the router is mounted under
-    # require_super_admin. See test_ai_console_super_admin_mount.py.
-}
+#
+# Currently empty. `ai_console` used to be here: the sidebar hid that entry
+# behind a module no role could hold, which produced the right outcome for
+# the wrong reason — it depended on nobody ever adding that string to
+# AVAILABLE_MODULES. It now uses the explicit `superAdminOnly` flag (same as
+# Sentry) against a grantable module, and the router is mounted under
+# require_super_admin. See test_ai_console_super_admin_mount.py.
+#
+# `compliance` was here too, for the same reason, until decision log
+# 2026-08-19 section 2 option B: the sidebar's Records & Compliance entry now
+# uses `superAdminOnly` (module: "settings") and the backend router is
+# mounted under require_super_admin, same shape as ai_console/Sentry. See
+# test_compliance_super_admin_mount.py.
+_KNOWN_UNGRANTABLE_SIDEBAR: set[str] = set()
 
 
 def test_backend_grantable_and_jwt_lists_match():
@@ -170,9 +172,11 @@ def test_enforced_gates_are_reachable_through_a_grant():
     test lists the known ones and fails on any new one.
     """
     enforced = _enforced_module_gates()
-    # Known and deliberate: tracked as a follow-up decision about who may reach
-    # tax/compliance reporting. Documented here rather than silently tolerated.
-    known_unreachable = {"compliance"}
+    # "compliance" used to be pinned here as a known-deliberate exception —
+    # decision log 2026-08-19 section 2 resolved it as option B
+    # (require_super_admin), so the router no longer calls require_module() at
+    # all and there is nothing left to pin.
+    known_unreachable: set[str] = set()
     unreachable = sorted(enforced - set(AVAILABLE_MODULES) - known_unreachable)
 
     assert not unreachable, (
@@ -257,15 +261,18 @@ def test_vehicle_types_and_audit_logs_frontend_strings_match_backend_gate():
     )
 
 
-@pytest.mark.parametrize("dead_module", ["heatmap", "bulk_operations"])
+@pytest.mark.parametrize("dead_module", ["heatmap", "bulk_operations", "surge", "pricing"])
 def test_removed_modules_stay_removed(dead_module):
-    """Regression pin for the two strings removed on 2026-08-14.
+    """Regression pin for the strings removed on 2026-08-14 and 2026-08-21.
 
-    Both were removed for a documented reason (see the note on AVAILABLE_MODULES
+    All were removed for a documented reason (see the note on AVAILABLE_MODULES
     and the bulk_operations comment in routes/admin/__init__.py). Re-adding
-    either should be a deliberate act that fails this test first, not a quiet
+    any should be a deliberate act that fails this test first, not a quiet
     edit — bulk_operations especially, since re-granting it would reopen a
-    full-fidelity, unredacted PII export surface.
+    full-fidelity, unredacted PII export surface. "surge" and "pricing" were
+    retired 2026-08-21 (decision-log item 3, docs/audit/2026-08-19-decision-
+    writeups.md, recommendation A) — both were grantable but gated no backend
+    route; the real gate is require_module("service_areas").
     """
     assert dead_module not in AVAILABLE_MODULES
     assert dead_module not in ALL_MODULES

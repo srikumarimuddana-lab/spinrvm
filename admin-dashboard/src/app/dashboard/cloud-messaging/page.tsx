@@ -85,6 +85,7 @@ const AUDIENCE_OPTIONS = [
     { value: "particular_driver", label: "Particular Driver", icon: User },
 ];
 
+/* eslint-disable no-restricted-syntax -- categorical notification-type map (5 states), not a success/warning/destructive signal — too many states for the 3-token system (#2816) */
 const NOTIFICATION_TYPES = [
     { value: "info", label: "Information", icon: Info, color: "text-blue-500" },
     { value: "alert", label: "Alert", icon: AlertCircle, color: "text-amber-500" },
@@ -92,13 +93,15 @@ const NOTIFICATION_TYPES = [
     { value: "promotion", label: "Promotion", icon: Flame, color: "text-pink-500" },
     { value: "system", label: "System", icon: Clock, color: "text-gray-500" },
 ];
+/* eslint-enable no-restricted-syntax */
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
-    sent: { label: "Sent", color: "bg-emerald-500/15 text-emerald-600", icon: CheckCircle2 },
+    sent: { label: "Sent", color: "bg-success/15 text-success", icon: CheckCircle2 },
+    // eslint-disable-next-line no-restricted-syntax -- "scheduled" (future, neither good nor bad) has no semantic-token equivalent (#2816)
     scheduled: { label: "Scheduled", color: "bg-blue-500/15 text-blue-600", icon: Timer },
-    failed: { label: "Failed", color: "bg-red-500/15 text-red-600", icon: XCircle },
-    pending: { label: "Pending", color: "bg-amber-500/15 text-amber-600", icon: Clock },
-    cancelled: { label: "Cancelled", color: "bg-zinc-500/15 text-zinc-600", icon: XCircle },
+    failed: { label: "Failed", color: "bg-destructive/15 text-destructive", icon: XCircle },
+    pending: { label: "Pending", color: "bg-warning/15 text-warning", icon: Clock },
+    cancelled: { label: "Cancelled", color: "bg-muted text-muted-foreground", icon: XCircle },
 };
 
 const PER_PAGE = 20;
@@ -397,6 +400,7 @@ export default function CloudMessagingPage() {
             <div className="flex items-center justify-between">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative header icon tint, not a status signal (#2816) */}
                         <Cloud className="h-8 w-8 text-violet-500" />
                         Notifications
                     </h1>
@@ -410,12 +414,15 @@ export default function CloudMessagingPage() {
             {/* Stats */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                 {[
+                    // eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon accent, not a status signal (#2816)
                     { label: "Total Messages", value: stats.total_messages, icon: Cloud, color: "text-violet-500" },
-                    { label: "Sent", value: stats.total_sent, icon: CheckCircle2, color: "text-emerald-500" },
+                    { label: "Sent", value: stats.total_sent, icon: CheckCircle2, color: "text-success" },
+                    // eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon accent, not a status signal (#2816)
                     { label: "Scheduled", value: stats.total_scheduled, icon: Timer, color: "text-blue-500" },
-                    { label: "Failed", value: stats.total_failed, icon: XCircle, color: "text-red-500" },
+                    { label: "Failed", value: stats.total_failed, icon: XCircle, color: "text-destructive" },
+                    // eslint-disable-next-line no-restricted-syntax -- decorative KPI-card icon accent, not a status signal (#2816)
                     { label: "Recipients Reached", value: stats.total_recipients_reached.toLocaleString(), icon: Users, color: "text-amber-500" },
-                    { label: "Success Rate", value: `${stats.success_rate}%`, icon: CheckCircle2, color: "text-emerald-500" },
+                    { label: "Success Rate", value: `${stats.success_rate}%`, icon: CheckCircle2, color: "text-success" },
                 ].map((s, i) => (
                     <Card key={i}>
                         <CardContent className="pt-4 pb-3">
@@ -439,6 +446,7 @@ export default function CloudMessagingPage() {
                     { key: "history", label: "Message History", icon: FileText },
                     { key: "suppressions", label: "Unsubscribe List", icon: ShieldOff },
                 ].map((tab) => (
+                    // eslint-disable-next-line no-restricted-syntax -- decorative active-tab indicator color, not a status signal (#2816)
                     <button key={tab.key} onClick={() => setActiveTab(tab.key as any)} className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${activeTab === tab.key ? "border-red-500 text-red-600 dark:text-red-400" : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"}`}>
                         <tab.icon className="h-4 w-4" /> {tab.label}
                     </button>
@@ -583,6 +591,7 @@ export default function CloudMessagingPage() {
                         {/* Marketing (CASL) */}
                         <Card>
                             <CardHeader className="pb-3">
+                                {/* eslint-disable-next-line no-restricted-syntax -- decorative section-icon tint, not a status signal (#2816) */}
                                 <CardTitle className="text-base flex items-center gap-2"><Megaphone className="h-4 w-4 text-pink-500" /> Marketing message</CardTitle>
                             </CardHeader>
                             <CardContent className="space-y-3">
@@ -664,6 +673,7 @@ export default function CloudMessagingPage() {
                 <Card>
                     <CardHeader className="pb-3">
                         <CardTitle className="flex items-center gap-2 text-lg">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative section-icon tint, not a status signal (#2816) */}
                             <Timer className="h-5 w-5 text-blue-500" /> Upcoming Scheduled Messages <Badge variant="secondary" className="ml-2">{scheduledMessages.length}</Badge>
                         </CardTitle>
                     </CardHeader>
@@ -685,6 +695,7 @@ export default function CloudMessagingPage() {
                                             <TableCell><p className="font-medium text-sm">{msg.title}</p><p className="text-xs text-muted-foreground truncate max-w-[250px]">{msg.description}</p></TableCell>
                                             <TableCell><span className="text-sm capitalize">{msg.audience.replace(/_/g, " ")}</span></TableCell>
                                             <TableCell><div className="flex gap-1">{getChannels(msg).map((c) => <Badge key={c} variant="outline" className="text-xs capitalize">{c}</Badge>)}</div></TableCell>
+                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative date icon tint, not a status signal (#2816) */}
                                             <TableCell><div className="flex items-center gap-1 text-sm"><Calendar className="h-3 w-3 text-blue-500" />{msg.scheduled_at ? formatDate(msg.scheduled_at) : "—"}</div></TableCell>
                                             <TableCell className="text-sm">{msg.total_recipients.toLocaleString()}</TableCell>
                                             <TableCell className="text-right"><div className="flex justify-end gap-1">
@@ -705,6 +716,7 @@ export default function CloudMessagingPage() {
                 <Card>
                     <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative section-icon tint, not a status signal (#2816) */}
                             <CardTitle className="flex items-center gap-2 text-lg"><FileText className="h-5 w-5 text-violet-500" /> Message History & Report</CardTitle>
                             <div className="flex gap-2">
                                 <Button variant="outline" size="sm" onClick={handleExportSummary}><Download className="mr-2 h-4 w-4" /> Summary</Button>
@@ -751,8 +763,8 @@ export default function CloudMessagingPage() {
                                                     <TableCell><div className="flex gap-1">{getChannels(msg).map((c) => <Badge key={c} variant="outline" className="text-[10px] capitalize">{c}</Badge>)}</div></TableCell>
                                                     <TableCell><Badge className={sc.color}><SI className="h-3 w-3 mr-1" />{sc.label}</Badge></TableCell>
                                                     <TableCell className="text-sm">{msg.total_recipients.toLocaleString()}</TableCell>
-                                                    <TableCell><span className="text-sm text-emerald-600 font-medium">{msg.successful.toLocaleString()}</span></TableCell>
-                                                    <TableCell><span className={`text-sm font-medium ${msg.failed_count > 0 ? "text-red-500" : "text-muted-foreground"}`}>{msg.failed_count.toLocaleString()}</span></TableCell>
+                                                    <TableCell><span className="text-sm text-success font-medium">{msg.successful.toLocaleString()}</span></TableCell>
+                                                    <TableCell><span className={`text-sm font-medium ${msg.failed_count > 0 ? "text-destructive" : "text-muted-foreground"}`}>{msg.failed_count.toLocaleString()}</span></TableCell>
                                                     <TableCell className="text-xs text-muted-foreground">{formatDate(msg.sent_at || msg.scheduled_at || msg.created_at)}</TableCell>
                                                     <TableCell className="text-right">
                                                         <div className="flex justify-end gap-1">
@@ -786,6 +798,7 @@ export default function CloudMessagingPage() {
                 <Card>
                     <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative section-icon tint, not a status signal (#2816) */}
                             <CardTitle className="flex items-center gap-2 text-lg"><ShieldOff className="h-5 w-5 text-red-500" /> Marketing Unsubscribe List</CardTitle>
                             <div className="flex items-center gap-2">
                                 <Select value={suppChannel} onValueChange={setSuppChannel}>
@@ -852,6 +865,7 @@ export default function CloudMessagingPage() {
             {/* ═══ DETAIL DIALOG ═══ */}
             <Dialog open={!!selectedMessage} onOpenChange={(open) => { if (!open) setSelectedMessage(null); }}>
                 <DialogContent className="sm:max-w-lg">
+                    {/* eslint-disable-next-line no-restricted-syntax -- decorative dialog-icon tint, not a status signal (#2816) */}
                     <DialogHeader><DialogTitle className="flex items-center gap-2"><Cloud className="h-5 w-5 text-violet-500" /> Message Details</DialogTitle></DialogHeader>
                     {selectedMessage && (
                         <div className="space-y-4">
@@ -862,19 +876,19 @@ export default function CloudMessagingPage() {
                                 <div><Label className="text-xs text-muted-foreground">Audience</Label><p className="text-sm capitalize">{selectedMessage.audience.replace(/_/g, " ")}</p></div>
                                 <div><Label className="text-xs text-muted-foreground">Channels</Label><div className="flex gap-1 mt-0.5">{getChannels(selectedMessage).map((c) => <Badge key={c} variant="outline" className="text-xs capitalize">{c}</Badge>)}</div></div>
                             </div>
-                            <div><Label className="text-xs text-muted-foreground">Status</Label><div className="mt-1"><Badge className={STATUS_CONFIG[selectedMessage.status]?.color || "bg-zinc-500/15"}>{STATUS_CONFIG[selectedMessage.status]?.label || selectedMessage.status}</Badge></div></div>
+                            <div><Label className="text-xs text-muted-foreground">Status</Label><div className="mt-1"><Badge className={STATUS_CONFIG[selectedMessage.status]?.color || "bg-muted"}>{STATUS_CONFIG[selectedMessage.status]?.label || selectedMessage.status}</Badge></div></div>
                             <Separator />
                             <div>
                                 <Label className="text-xs text-muted-foreground mb-2 block">Delivery Report</Label>
                                 <div className="grid grid-cols-3 gap-3">
                                     <div className="rounded-lg bg-muted/50 p-3 text-center"><p className="text-lg font-bold">{selectedMessage.total_recipients.toLocaleString()}</p><p className="text-xs text-muted-foreground">Recipients</p></div>
-                                    <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 p-3 text-center"><p className="text-lg font-bold text-emerald-600">{selectedMessage.successful.toLocaleString()}</p><p className="text-xs text-muted-foreground">Successful</p></div>
-                                    <div className="rounded-lg bg-red-50 dark:bg-red-900/20 p-3 text-center"><p className="text-lg font-bold text-red-500">{selectedMessage.failed_count.toLocaleString()}</p><p className="text-xs text-muted-foreground">Failed</p></div>
+                                    <div className="rounded-lg bg-success/10 p-3 text-center"><p className="text-lg font-bold text-success">{selectedMessage.successful.toLocaleString()}</p><p className="text-xs text-muted-foreground">Successful</p></div>
+                                    <div className="rounded-lg bg-destructive/10 p-3 text-center"><p className="text-lg font-bold text-destructive">{selectedMessage.failed_count.toLocaleString()}</p><p className="text-xs text-muted-foreground">Failed</p></div>
                                 </div>
                                 {selectedMessage.total_recipients > 0 && selectedMessage.status === "sent" && (
                                     <div className="mt-3">
                                         <div className="flex justify-between text-xs text-muted-foreground mb-1"><span>Success Rate</span><span>{((selectedMessage.successful / selectedMessage.total_recipients) * 100).toFixed(1)}%</span></div>
-                                        <div className="h-2 rounded-full bg-muted overflow-hidden"><div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${(selectedMessage.successful / selectedMessage.total_recipients) * 100}%` }} /></div>
+                                        <div className="h-2 rounded-full bg-muted overflow-hidden"><div className="h-full rounded-full bg-success transition-all" style={{ width: `${(selectedMessage.successful / selectedMessage.total_recipients) * 100}%` }} /></div>
                                     </div>
                                 )}
                             </div>
@@ -896,7 +910,7 @@ export default function CloudMessagingPage() {
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel>Keep</AlertDialogCancel>
-                        <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">Cancel Message</AlertDialogAction>
+                        <AlertDialogAction onClick={confirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Cancel Message</AlertDialogAction>
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>

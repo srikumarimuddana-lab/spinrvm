@@ -23,12 +23,14 @@ const STATUS_LABELS: Record<string, string> = {
 
 const STATUS_STEPS = ["searching", "driver_assigned", "driver_arrived", "in_progress"];
 
+/* eslint-disable no-restricted-syntax -- solid-fill white-text ride-progress badge; token substitution risks a dark-mode contrast regression (see #2816 Batch 1 finding on --success vs white text), and yellow/purple have no token equivalent regardless */
 const STATUS_COLORS: Record<string, string> = {
     searching: "bg-yellow-500",
     driver_assigned: "bg-blue-500",
     driver_arrived: "bg-purple-500",
     in_progress: "bg-green-500",
 };
+/* eslint-enable no-restricted-syntax */
 
 export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }: RidePanelProps) {
     const currentStepIdx = STATUS_STEPS.indexOf(ride.status);
@@ -54,6 +56,7 @@ export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }:
                         </button>
                     </div>
                     <Badge
+                        // eslint-disable-next-line no-restricted-syntax -- fallback for the solid-fill white-text badge above; same contrast-risk exclusion (#2816)
                         className={`mt-1 text-white ${STATUS_COLORS[ride.status] ?? "bg-gray-500"}`}
                     >
                         {STATUS_LABELS[ride.status] ?? ride.status}
@@ -104,6 +107,7 @@ export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }:
                     </p>
                     <div className="rounded-lg border border-border p-3 text-xs">
                         <div className="flex gap-2">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative pickup map-pin marker color (#2816) */}
                             <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-500" />
                             <p className="text-foreground">
                                 {ride.pickup_address ?? `${ride.pickup_lat?.toFixed(4)}, ${ride.pickup_lng?.toFixed(4)}`}
@@ -111,6 +115,7 @@ export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }:
                         </div>
                         <div className="my-1 ml-1.5 h-3 border-l border-dashed border-muted-foreground" />
                         <div className="flex gap-2">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative dropoff map-pin marker color (#2816) */}
                             <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-500" />
                             <p className="text-foreground">
                                 {ride.dropoff_address ?? `${ride.dropoff_lat?.toFixed(4)}, ${ride.dropoff_lng?.toFixed(4)}`}
@@ -132,7 +137,7 @@ export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }:
                         <p className="text-muted-foreground">Distance</p>
                     </div>
                     <div className="rounded-lg bg-muted p-2">
-                        <p className="font-bold text-green-600">
+                        <p className="font-bold text-success">
                             {ride.total_fare ? `$${ride.total_fare.toFixed(2)}` : "—"}
                         </p>
                         <p className="text-muted-foreground">Fare</p>
@@ -222,10 +227,12 @@ export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }:
                             >
                                 <div className="relative shrink-0">
                                     <Avatar className="h-11 w-11 border-2 border-background shadow-sm">
+                                        {/* eslint-disable-next-line no-restricted-syntax -- decorative driver-avatar brand accent color (#2816) */}
                                         <AvatarFallback className="bg-purple-100 text-sm font-bold text-purple-700">
                                             {(ride.driver_name ?? "DR").slice(0, 2).toUpperCase()}
                                         </AvatarFallback>
                                     </Avatar>
+                                    {/* eslint-disable-next-line no-restricted-syntax -- decorative driver-icon badge accent color (#2816) */}
                                     <div className="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-purple-500 ring-2 ring-card">
                                         <Car className="h-2.5 w-2.5 text-white" />
                                     </div>
@@ -248,6 +255,7 @@ export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }:
                                         <Button
                                             size="icon"
                                             variant="outline"
+                                            // eslint-disable-next-line no-restricted-syntax -- decorative driver-accent hover color, matches avatar badge (#2816)
                                             className="h-9 w-9 rounded-full shadow-sm transition-colors hover:border-purple-200 hover:bg-purple-50 hover:text-purple-600"
                                             onClick={(e) => {
                                                 e.stopPropagation();
@@ -262,11 +270,11 @@ export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }:
                                 </div>
                             </div>
                         ) : (
-                            <div className="flex items-center gap-3 rounded-lg border border-dashed border-amber-300 dark:border-amber-700 bg-amber-50/50 dark:bg-amber-900/10 p-3 text-amber-700 dark:text-amber-300">
+                            <div className="flex items-center gap-3 rounded-lg border border-dashed border-warning/40 bg-warning/10 p-3 text-warning">
                                 <Loader2 className="h-4 w-4 animate-spin" />
                                 <div className="text-xs">
                                     <p className="font-semibold">Searching for a driver…</p>
-                                    <p className="text-[11px] text-amber-600/80 dark:text-amber-400/80">
+                                    <p className="text-[11px] text-warning/80">
                                         No driver matched yet. Dispatch is still scanning.
                                     </p>
                                 </div>
@@ -280,7 +288,7 @@ export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }:
                     <Button
                         variant="outline"
                         size="sm"
-                        className="w-full gap-1.5 text-xs text-green-600 dark:text-green-400 border-green-600 dark:border-green-700 hover:bg-green-50 dark:hover:bg-green-900/20"
+                        className="w-full gap-1.5 text-xs text-success border-success/40 hover:bg-success/10"
                         onClick={() => onCompleteRide(ride.id)}
                     >
                         <CheckCircle className="h-3.5 w-3.5" /> Complete Ride

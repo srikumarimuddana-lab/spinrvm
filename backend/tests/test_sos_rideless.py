@@ -30,7 +30,7 @@ Run:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID
 
 import pytest
@@ -68,6 +68,7 @@ class TestTriggerEmergencyRideless:
 
         persisted = []
         ws_calls = []
+        sms_calls = []
 
         async def _insert(table, row):
             if insert_one_side_effect:
@@ -85,6 +86,7 @@ class TestTriggerEmergencyRideless:
             return []
 
         async def _default_send_sms(phone, body, **kwargs):
+            sms_calls.append({"phone": phone, "body": body, **kwargs})
             return {"success": True, "provider": "mock"}
 
         send_sms_mock = AsyncMock(side_effect=send_sms_side_effect or _default_send_sms)
@@ -108,7 +110,7 @@ class TestTriggerEmergencyRideless:
                 current_user={"id": sender_user_id, "is_driver": is_driver},
             )
 
-        return result, persisted, ws_calls
+        return result, persisted, ws_calls, sms_calls
 
     async def test_flag_off_returns_404_and_fires_no_side_effects(self):
         """The default (AppSettings.rideless_sos_enabled=False) must 404 --
@@ -121,7 +123,7 @@ class TestTriggerEmergencyRideless:
         assert exc_info.value.status_code == 404
 
     async def test_rider_sos_incident_persisted_with_no_ride_id(self):
-        result, persisted, _ = await self._trigger(RIDER_ID)
+        result, persisted, _, _ = await self._trigger(RIDER_ID)
 
         assert result["success"] is True
         assert persisted, "Incident not persisted"
@@ -133,7 +135,7 @@ class TestTriggerEmergencyRideless:
         assert row["category"] == "sos_button_rideless"
 
     async def test_driver_sos_persisted_with_driver_role(self):
-        result, persisted, _ = await self._trigger(DRIVER_USER_ID, is_driver=True)
+        result, persisted, _, _ = await self._trigger(DRIVER_USER_ID, is_driver=True)
 
         assert result["success"] is True
         _, row = persisted[0]
@@ -142,7 +144,7 @@ class TestTriggerEmergencyRideless:
         assert row["ride_id"] is None
 
     async def test_rider_sos_admin_notified_via_ws(self):
-        _, _, ws_calls = await self._trigger(RIDER_ID)
+        _, _, ws_calls, _ = await self._trigger(RIDER_ID)
 
         admin_events = [(ch, msg) for ch, msg in ws_calls if "admin" in str(ch)]
         assert admin_events, "Admin was not notified via WS"
@@ -161,15 +163,15 @@ class TestTriggerEmergencyRideless:
         assert exc_info.value.status_code == 503
 
     async def test_response_contains_unique_incident_id(self):
-        result1, _, _ = await self._trigger(RIDER_ID)
-        result2, _, _ = await self._trigger(RIDER_ID)
+        result1, _, _, _ = await self._trigger(RIDER_ID)
+        result2, _, _, _ = await self._trigger(RIDER_ID)
 
         assert result1["incident_id"] != result2["incident_id"]
         UUID(result1["incident_id"])
         UUID(result2["incident_id"])
 
     async def test_lat_lon_forwarded_to_incident_record(self):
-        _, persisted, _ = await self._trigger(RIDER_ID)
+        _, persisted, _, _ = await self._trigger(RIDER_ID)
 
         _, row = persisted[0]
         assert row["latitude"] == _Req.latitude
@@ -182,11 +184,32 @@ class TestTriggerEmergencyRideless:
         class _ReqBadKey(_Req):
             idempotency_key = "!!! not a valid key !!!"
 
-        result, persisted, _ = await self._trigger(RIDER_ID, body=_ReqBadKey())
+        result, persisted, _, _ = await self._trigger(RIDER_ID, body=_ReqBadKey())
 
         assert result["success"] is True
         _, row = persisted[0]
         assert "sos_idempotency_key" not in row
+
+    async def test_emergency_contacts_decrypted_before_sms(self):
+        """Migration 357: name/phone are Vault tokens in the DB row — the
+        SMS must go out to the decrypted phone, never the raw stored token.
+        Security review (2026-08-21) found this path originally skipped
+        decryption entirely (unlike its trigger_emergency sibling), which
+        would have sent every vault UUID straight to Twilio as a phone
+        number and silently reported contacts_notified=0."""
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        contacts = [{"id": "ec-1", "phone": "vault-token-phone", "name": "vault-token-name"}]
+        vault_decrypt = _AsyncMock(
+            side_effect=lambda rpc, v, _hint="": v.replace("vault-token-", "+1306real") if rpc.startswith("decrypt") else v
+        )
+        with patch("backend.routes.rides.safety.vault_decrypt", vault_decrypt):
+            result, _, _, sms_calls = await self._trigger(RIDER_ID, emergency_contacts=contacts)
+
+        assert result["contacts_notified"] == 1
+        assert sms_calls[0]["phone"] == "+1306realphone"
+        for call in vault_decrypt.call_args_list:
+            assert call.args[0] == "decrypt_emergency_contact_pii"
 
     async def test_duplicate_idempotency_key_returns_original_not_new_incident(self):
         """Replaying the same idempotency_key (a retry after a lost response)
@@ -228,3 +251,106 @@ class TestTriggerEmergencyRideless:
         assert result["duplicate"] is True
         insert_mock.assert_not_called()
         assert ws_calls == [], "a deduplicated replay must fire zero new side effects"
+
+    async def test_suppressed_contact_excluded_from_sos_sms(self):
+        """Same suppression contract as trigger_emergency: a STOP'd-out
+        contact is excluded from the SOS SMS and flagged distinctly, while a
+        non-suppressed contact in the same request still gets the alert."""
+        from backend.routes import rides as rides_mod
+
+        contacts = [
+            {"id": "ec-1", "phone": "+13061112222", "name": "Mom"},
+            {"id": "ec-2", "phone": "+13063334444", "name": "Dad"},
+        ]
+        sms_calls = []
+
+        async def _send_sms(phone, body, **kwargs):
+            sms_calls.append({"phone": phone, "body": body})
+            return {"success": True, "provider": "mock"}
+
+        async def _is_suppressed(phone):
+            return phone == "+13061112222"
+
+        settings_mock = AsyncMock(return_value={"rideless_sos_enabled": True})
+
+        async def _get_rows(table, query, **kwargs):
+            if table == "emergency_contacts":
+                return contacts
+            return []
+
+        with (
+            patch("backend.routes.rides._deps.get_app_settings", settings_mock),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.rides._deps.db_supabase.insert_one", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch(
+                "backend.routes.rides._deps.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"first_name": "Test", "last_name": "User"}),
+            ),
+            patch("backend.routes.rides._deps.send_sms", AsyncMock(side_effect=_send_sms)),
+            patch(
+                "backend.routes.rides.safety.sos_contact_consent.is_suppressed",
+                AsyncMock(side_effect=_is_suppressed),
+            ),
+        ):
+            result = await rides_mod.trigger_emergency_rideless(
+                body=_Req(),
+                current_user={"id": RIDER_ID, "is_driver": False},
+            )
+
+        assert result["contacts_notified"] == 1
+        phones_notified = {c["phone"] for c in sms_calls}
+        assert phones_notified == {"+13063334444"}
+        assert result["contacts"] == [
+            {"id": "ec-1", "name": "Mom", "notified": False, "status": "suppressed"},
+            {"id": "ec-2", "name": "Dad", "notified": True},
+        ]
+
+    async def test_suppression_check_failure_fails_open_sends_to_all(self):
+        """SAFETY-CRITICAL: an unexpected failure in the suppression-check
+        step must never block the SOS SMS -- every contact still gets the
+        alert (fail-open end to end, not just at the service layer)."""
+        from backend.routes import rides as rides_mod
+
+        contacts = [
+            {"id": "ec-1", "phone": "+13061112222", "name": "Mom"},
+            {"id": "ec-2", "phone": "+13063334444", "name": "Dad"},
+        ]
+        sms_calls = []
+
+        async def _send_sms(phone, body, **kwargs):
+            sms_calls.append({"phone": phone, "body": body})
+            return {"success": True, "provider": "mock"}
+
+        broken_is_suppressed = Mock(side_effect=RuntimeError("suppression service unreachable"))
+        settings_mock = AsyncMock(return_value={"rideless_sos_enabled": True})
+
+        async def _get_rows(table, query, **kwargs):
+            if table == "emergency_contacts":
+                return contacts
+            return []
+
+        with (
+            patch("backend.routes.rides._deps.get_app_settings", settings_mock),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.rides._deps.db_supabase.insert_one", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch(
+                "backend.routes.rides._deps.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"first_name": "Test", "last_name": "User"}),
+            ),
+            patch("backend.routes.rides._deps.send_sms", AsyncMock(side_effect=_send_sms)),
+            patch("backend.routes.rides.safety.sos_contact_consent.is_suppressed", broken_is_suppressed),
+        ):
+            result = await rides_mod.trigger_emergency_rideless(
+                body=_Req(),
+                current_user={"id": RIDER_ID, "is_driver": False},
+            )
+
+        assert result["contacts_notified"] == 2
+        phones_notified = {c["phone"] for c in sms_calls}
+        assert phones_notified == {"+13061112222", "+13063334444"}
+        assert result["contacts"] == [
+            {"id": "ec-1", "name": "Mom", "notified": True},
+            {"id": "ec-2", "name": "Dad", "notified": True},
+        ]

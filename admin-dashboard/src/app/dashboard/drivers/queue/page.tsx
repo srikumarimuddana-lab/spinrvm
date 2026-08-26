@@ -48,9 +48,9 @@ const formatTimeInQueue = (seconds: number) => {
 };
 
 const slaTone = (seconds: number) => {
-    if (seconds >= 86400) return "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300 border-red-200 dark:border-red-800";
-    if (seconds >= 14400) return "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 border-amber-200 dark:border-amber-800";
-    return "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800";
+    if (seconds >= 86400) return "bg-destructive/15 text-destructive border-destructive/30";
+    if (seconds >= 14400) return "bg-warning/15 text-warning border-warning/30";
+    return "bg-success/15 text-success border-success/30";
 };
 
 const initials = (name: string) => {
@@ -276,8 +276,9 @@ export default function ApprovalQueuePage() {
                                     variant="outline"
                                     className={
                                         it.status === "pending"
-                                            ? "bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300 border-blue-200 dark:border-blue-800"
-                                            : "bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300 border-amber-200 dark:border-amber-800"
+                                            ? // eslint-disable-next-line no-restricted-syntax -- "pending" (new, neither good nor bad) has no semantic-token equivalent; must stay distinct from the other statuses (#2816)
+                                              "bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300 border-blue-200 dark:border-blue-800"
+                                            : "bg-warning/15 text-warning border-warning/30"
                                     }
                                 >
                                     {it.status}
@@ -285,6 +286,7 @@ export default function ApprovalQueuePage() {
                                 {it.has_pending_photo && tab !== "photo" && (
                                     <Badge
                                         variant="outline"
+                                        // eslint-disable-next-line no-restricted-syntax -- decorative photo-review badge accent, not a status signal (#2816)
                                         className="bg-violet-50 text-violet-700 dark:bg-violet-900/20 dark:text-violet-300 border-violet-200 dark:border-violet-800"
                                         title="Profile photo pending review"
                                     >
@@ -295,7 +297,7 @@ export default function ApprovalQueuePage() {
                             <div className="text-sm tabular-nums">
                                 {it.pending_docs_count > 0 ? (
                                     <span className="inline-flex items-center gap-1 font-medium">
-                                        <FileWarning className="h-3.5 w-3.5 text-amber-600" />
+                                        <FileWarning className="h-3.5 w-3.5 text-warning" />
                                         {it.pending_docs_count}
                                     </span>
                                 ) : (
@@ -304,12 +306,12 @@ export default function ApprovalQueuePage() {
                             </div>
                             <div className="text-sm tabular-nums">
                                 {it.missing_docs_count > 0 ? (
-                                    <span className="inline-flex items-center gap-1 font-medium text-red-600 dark:text-red-400">
+                                    <span className="inline-flex items-center gap-1 font-medium text-destructive">
                                         <FileWarning className="h-3.5 w-3.5" />
                                         {it.missing_docs_count}
                                     </span>
                                 ) : (
-                                    <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                                    <span className="inline-flex items-center gap-1 text-success">
                                         <FileCheck className="h-3.5 w-3.5" />
                                         0
                                     </span>
@@ -328,6 +330,7 @@ export default function ApprovalQueuePage() {
                                     <>
                                         <Button
                                             size="sm"
+                                            // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text button; dark-mode --success (2.02:1) fails WCAG AA against white text (#2816)
                                             className="h-8 bg-emerald-600 hover:bg-emerald-700 text-white px-2.5"
                                             disabled={photoActingId === it.driver_id}
                                             onClick={() => handlePhotoReview(it.driver_id, "approve")}
@@ -338,7 +341,7 @@ export default function ApprovalQueuePage() {
                                         <Button
                                             size="sm"
                                             variant="outline"
-                                            className="h-8 text-red-600 border-red-200 hover:bg-red-50 dark:border-red-800 dark:hover:bg-red-900/20 px-2.5"
+                                            className="h-8 text-destructive border-destructive/30 hover:bg-destructive/10 px-2.5"
                                             disabled={photoActingId === it.driver_id}
                                             onClick={() => handlePhotoReview(it.driver_id, "reject")}
                                             title="Reject photo"

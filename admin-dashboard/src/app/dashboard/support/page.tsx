@@ -8,19 +8,21 @@
  * representation at all (compare Help Desk, whose 2 sub-views are real
  * sidebar children) and no URL sync, so a tab couldn't be bookmarked, deep
  * -linked, or highlighted in the sidebar. Switched to the same
- * Tabs + useSearchParams pattern records/page.tsx already uses, and
- * sidebar.tsx now gives real nav children to the sub-views that don't
- * already have their own top-level nav entry (Support Tickets, Complaints,
- * Lost & Found, Flags, Legal). Disputes and FAQs are deliberately NOT given
- * nav children here — they already have standalone top-level entries
- * ("Disputes & Refunds", "FAQs"), and both are covered by a separate,
- * documented "point to the dedicated page, don't merge" product decision
- * (see support/_tabs/disputes.tsx and support/_tabs/faqs.tsx) that this
- * change does not revisit — adding a second nav path to the same
- * unreconciled pair would add duplication, not remove it.
+ * Tabs + useSearchParams pattern records/page.tsx already uses; sidebar.tsx
+ * now gives all 7 sub-views real nav children.
+ *
+ * Findings A/B follow-up: Disputes and FAQs originally kept their own
+ * standalone top-level nav entries here instead of becoming children,
+ * because both were covered by a documented "point to the dedicated page,
+ * don't merge" product decision. That decision was escalated and approved
+ * for a full merge — support/_tabs/disputes.tsx and support/_tabs/faqs.tsx
+ * now render the exact same components their old standalone pages did
+ * (/dashboard/faqs and /dashboard/disputes redirect here, matching the
+ * records/page.tsx precedent), so those entries were removed in favour of
+ * the children below like every other sub-view.
  */
 
-import { Suspense, useState } from "react";
+import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { LifeBuoy, HelpCircle, PackageSearch, Flag, FileWarning, BookOpen, ScrollText } from "lucide-react";
 import dynamic from "next/dynamic";
@@ -62,13 +64,21 @@ function SupportPageInner() {
     const router = useRouter();
     const searchParams = useSearchParams();
 
+    // Derived straight from the URL on every render — not local state seeded
+    // once at mount. This page is also reached via sidebar.tsx's Support &
+    // Issues children (?tab=<slug> links to this same route), and Next.js
+    // reuses this component instance across those same-route navigations
+    // rather than remounting it. A `useState(initialTab)` seeded only once
+    // went stale on every subsequent sidebar click — the sidebar highlighted
+    // the newly-clicked child correctly (it reads searchParams live) while
+    // the Tabs content kept showing whichever tab was active on first load.
+    // Deriving activeTab fresh each render removes the state/URL sync bug
+    // entirely instead of patching it with an effect.
     const requestedTab = searchParams.get("tab");
-    const initialTab = isValidTab(requestedTab) ? requestedTab : "tickets";
-    const [activeTab, setActiveTab] = useState<TabSlug>(initialTab);
+    const activeTab: TabSlug = isValidTab(requestedTab) ? requestedTab : "tickets";
 
     const onTabChange = (value: string) => {
         if (!isValidTab(value)) return;
-        setActiveTab(value);
         router.replace(`/dashboard/support?tab=${value}`, { scroll: false });
     };
 

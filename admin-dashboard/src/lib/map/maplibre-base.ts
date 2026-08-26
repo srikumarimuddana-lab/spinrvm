@@ -5,6 +5,11 @@
 
 import type { LngLatBoundsLike, Map as MapLibreMap } from "maplibre-gl";
 import maplibregl from "maplibre-gl";
+import {
+    ROUTE_MARKER_SIZE,
+    routePinSvg,
+    type RoutePinKind,
+} from "@spinr/shared/constants/routeMapStyle";
 
 // OpenFreeMap styles — free, no API key, vector tiles.
 // Swap the key in the URL to change the look (liberty / positron / bright / dark-matter).
@@ -52,6 +57,35 @@ export const MAP_STYLE_FALLBACK = MAP_STYLE_URL; // liberty — different look f
 // should land somewhere operational even before service areas load or
 // the user's geolocation resolves. MapLibre uses [lng, lat] ordering.
 export const DEFAULT_CENTER: [number, number] = [-106.67, 52.13];
+
+/**
+ * THE ride pickup / dropoff / completion marker, as a DOM element.
+ *
+ * Draws `routePinSvg()` from shared/constants/routeMapStyle — the same disc,
+ * ring and glyph the phone apps and the Android Auto surface render. Admin maps
+ * previously built bare 16/20px circles here with no glyph at all, so the same
+ * ride looked like a different product on every screen it appeared on.
+ *
+ * Use this for pickup/dropoff/completion. `makeCircleMarkerEl` below stays for
+ * everything else (drivers, venues, service areas), which is not part of the
+ * route-marker language.
+ */
+export function makeRoutePinEl(opts: {
+    kind: RoutePinKind;
+    size?: number;
+    title?: string;
+}): HTMLDivElement {
+    const size = opts.size ?? ROUTE_MARKER_SIZE;
+    const el = document.createElement("div");
+    el.className = "spinr-map-marker spinr-route-pin";
+    el.style.width = `${size}px`;
+    el.style.height = `${size}px`;
+    el.style.cursor = "pointer";
+    el.style.filter = "drop-shadow(0 1px 3px rgba(0,0,0,0.35))";
+    el.innerHTML = routePinSvg(opts.kind, size);
+    if (opts.title) el.title = opts.title;
+    return el;
+}
 
 /** Build a styled DOM <div> for a circular map marker. */
 export function makeCircleMarkerEl(opts: {

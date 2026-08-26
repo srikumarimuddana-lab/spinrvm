@@ -807,6 +807,43 @@ class TestAdminPayoutsOverview:
         assert body["metrics"]["outstanding_payable"]["current"] == 200.0
         assert body["t4a_snapshot"]["drivers_with_earnings"] == 8
 
+    def test_payouts_overview_uses_round_half_up(self, client, as_super_admin):
+        """Regression test for ACTION_ITEMS G8/A40's N15 fast-follow: stuck_amount,
+        blocked_outstanding, and t4a_ytd_gross were rounded via bare `round()` on
+        the Decimal `_agg_dec()` returns, which defaults to ROUND_HALF_EVEN and can
+        disagree with the codebase's ROUND_HALF_UP convention on an exact
+        .5-boundary value. Mirrors the daily_series gbv/net_revenue regression test
+        from docs/change-log/2026-08-19-admin-decimal-round-convention-fix.md."""
+        agg = [
+            {
+                "earned_up_to_end": "0",
+                "paid_up_to_end": "0",
+                "earned_up_to_prev": "0",
+                "paid_up_to_prev": "0",
+                "stuck_count": 1,
+                "stuck_amount": "10.125",
+                "blocked_count": 1,
+                "blocked_outstanding": "20.125",
+                "t4a_under_500": 0,
+                "t4a_500_10k": 0,
+                "t4a_10k_30k": 0,
+                "t4a_over_30k": 0,
+                "t4a_drivers_with_earnings": 1,
+                "t4a_ytd_gross": "30.125",
+            }
+        ]
+        with (
+            patch("db_supabase.rpc", AsyncMock(return_value=agg)),
+            patch("db_supabase.get_rows", AsyncMock(return_value=[])),
+        ):
+            resp = client.get("/api/admin/payouts/overview")
+        assert resp.status_code == 200
+        body = resp.json()
+        # ROUND_HALF_UP: x.125 -> x.13 (banker's rounding would give x.12).
+        assert body["stuck_over_48h"]["amount"] == 10.13
+        assert body["blocked_drivers"]["outstanding_balance"] == 20.13
+        assert body["t4a_snapshot"]["ytd_gross_earnings"] == 30.13
+
     def test_payouts_overview_service_area_no_drivers_returns_empty_shell(self, client, as_super_admin):
         with patch("db_supabase.get_rows", AsyncMock(return_value=[])):
             resp = client.get("/api/admin/payouts/overview", params={"service_area_id": "area-empty"})

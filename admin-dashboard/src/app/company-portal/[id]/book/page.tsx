@@ -158,7 +158,7 @@ function AddressPicker({
                     ))}
                 </div>
             )}
-            {value && <p className="mt-1 truncate text-xs text-emerald-700">✓ {value.address}</p>}
+            {value && <p className="mt-1 truncate text-xs text-success">✓ {value.address}</p>}
         </div>
     );
 }
@@ -329,7 +329,7 @@ export default function CompanyBookRidePage() {
         return (
             <Card className="mx-auto max-w-xl">
                 <CardHeader className="text-center">
-                    <CheckCircle2 className="mx-auto h-10 w-10 text-emerald-600" />
+                    <CheckCircle2 className="mx-auto h-10 w-10 text-success" />
                     <CardTitle>Ride booked</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3 text-sm">

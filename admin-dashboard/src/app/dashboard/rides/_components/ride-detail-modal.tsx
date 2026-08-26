@@ -22,6 +22,13 @@ import { routeQualityLabel } from "@spinr/shared/utils/routeSegments";
 const RideRouteMap = dynamic(() => import("./ride-route-map"), { ssr: false });
 
 // ── Status meta ──────────────────────────────────────────────────────────────
+// Categorical ride-state hero badge (the 7 states from CLAUDE.md's ride
+// state machine) — not a #2816 migration target. A gradient fill is a
+// deliberate, self-contained visual element regardless of page theme, and
+// a 3-token semantic system (success/warning/destructive) can't express 7
+// distinct lifecycle states (driver_assigned/driver_accepted/driver_arrived
+// have no success/warning/destructive equivalent).
+/* eslint-disable no-restricted-syntax -- categorical ride-state hero badge, see comment above (#2816) */
 const STATUS_META: Record<string, { label: string; gradient: string; ring: string; icon: React.ElementType }> = {
     searching:        { label: "Searching",        gradient: "from-amber-500 to-orange-500",    ring: "ring-amber-400",   icon: Route },
     driver_assigned:  { label: "Driver Assigned",  gradient: "from-blue-500 to-cyan-500",       ring: "ring-blue-400",    icon: Car },
@@ -31,7 +38,10 @@ const STATUS_META: Record<string, { label: string; gradient: string; ring: strin
     completed:        { label: "Completed",         gradient: "from-green-500 to-emerald-600",   ring: "ring-green-400",   icon: CheckCircle2 },
     cancelled:        { label: "Cancelled",         gradient: "from-red-500 to-rose-600",        ring: "ring-red-400",     icon: XCircle },
 };
+/* eslint-enable no-restricted-syntax */
 
+/* eslint-disable no-restricted-syntax -- categorical driver-phase map (5 states), not a
+   success/warning/destructive signal — too many states for the 3-token system (#2816) */
 const PHASE_COLORS: Record<string, string> = {
     navigating_to_pickup: "text-blue-600 bg-blue-50 dark:bg-blue-900/30 dark:text-blue-400",
     arrived_at_pickup:    "text-violet-600 bg-violet-50 dark:bg-violet-900/30 dark:text-violet-400",
@@ -39,6 +49,7 @@ const PHASE_COLORS: Record<string, string> = {
     online_idle:          "text-gray-600 bg-gray-50 dark:bg-gray-800/50 dark:text-gray-400",
     unknown:              "text-gray-500 bg-gray-50 dark:bg-gray-800/30 dark:text-gray-500",
 };
+/* eslint-enable no-restricted-syntax */
 
 // ── Small reusable card wrapper ───────────────────────────────────────────────
 function Card({ children, className = "" }: { children: React.ReactNode; className?: string }) {
@@ -161,7 +172,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
 
                     {loadError ? (
                         <div className="flex flex-col items-center justify-center py-24">
-                            <p className="text-sm text-red-600 dark:text-red-400">{loadError}</p>
+                            <p className="text-sm text-destructive">{loadError}</p>
                         </div>
                     ) : loading || !ride ? (
                         <div className="flex flex-col items-center justify-center py-24">
@@ -222,16 +233,21 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                         <div className="p-4">
                                             <div className="flex gap-3">
                                                 <div className="flex flex-col items-center pt-1.5 shrink-0">
+                                                    {/* eslint-disable-next-line no-restricted-syntax -- decorative map-pin marker convention (pickup=blue), not a status signal (#2816) */}
                                                     <div className="w-2.5 h-2.5 rounded-full bg-blue-500 ring-2 ring-blue-200 dark:ring-blue-900/50" />
+                                                    {/* eslint-disable-next-line no-restricted-syntax -- decorative route-line gradient between pickup/dropoff pins, not a status signal (#2816) */}
                                                     <div className="w-0.5 flex-1 bg-gradient-to-b from-blue-400 to-red-400 my-1.5" style={{ minHeight: 32 }} />
+                                                    {/* eslint-disable-next-line no-restricted-syntax -- decorative map-pin marker convention (dropoff=red), not a status signal (#2816) */}
                                                     <div className="w-2.5 h-2.5 rounded-full bg-red-500 ring-2 ring-red-200 dark:ring-red-900/50" />
                                                 </div>
                                                 <div className="flex-1 min-w-0 space-y-3">
                                                     <div>
+                                                        {/* eslint-disable-next-line no-restricted-syntax -- decorative pickup label color matching map-pin convention (#2816) */}
                                                         <p className="text-[10px] font-bold uppercase tracking-wider text-blue-500 mb-0.5">Pickup</p>
                                                         <p className="text-sm font-medium">{ride.pickup_address || "—"}</p>
                                                     </div>
                                                     <div>
+                                                        {/* eslint-disable-next-line no-restricted-syntax -- decorative dropoff label color matching map-pin convention (#2816) */}
                                                         <p className="text-[10px] font-bold uppercase tracking-wider text-red-500 mb-0.5">Dropoff</p>
                                                         <p className="text-sm font-medium">{ride.dropoff_address || "—"}</p>
                                                     </div>
@@ -264,17 +280,23 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 return (
                                                     <>
                                                         {hasActual && (
+                                                            /* eslint-disable-next-line no-restricted-syntax -- decorative "actual GPS vs planned" accent color, not a status signal (#2816) */
                                                             <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-100 dark:border-emerald-900/30 px-3 py-2">
+                                                                {/* eslint-disable-next-line no-restricted-syntax -- decorative "actual GPS" accent, not a status signal (#2816) */}
                                                                 <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 mb-1.5">Actual (GPS)</p>
                                                                 <div className="flex gap-4">
                                                                     <div className="flex items-center gap-1.5">
-                                                                        <Route className="h-3.5 w-3.5 text-emerald-500" />
+                                                                        {/* eslint-disable-next-line no-restricted-syntax -- decorative "actual GPS" accent, not a status signal (#2816) */}
+                                                                        <Route className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" />
+                                                                        {/* eslint-disable-next-line no-restricted-syntax -- decorative "actual GPS" accent, not a status signal (#2816) */}
                                                                         <span className="text-sm font-extrabold tabular-nums text-emerald-700 dark:text-emerald-300">
                                                                             {actualKm != null ? `${Number(actualKm).toFixed(1)} km` : "—"}
                                                                         </span>
                                                                     </div>
                                                                     <div className="flex items-center gap-1.5">
-                                                                        <Clock className="h-3.5 w-3.5 text-emerald-500" />
+                                                                        {/* eslint-disable-next-line no-restricted-syntax -- decorative "actual GPS" accent, not a status signal (#2816) */}
+                                                                        <Clock className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" />
+                                                                        {/* eslint-disable-next-line no-restricted-syntax -- decorative "actual GPS" accent, not a status signal (#2816) */}
                                                                         <span className="text-sm font-extrabold tabular-nums text-emerald-700 dark:text-emerald-300">
                                                                             {actualMin != null ? `${actualMin} min` : "—"}
                                                                         </span>
@@ -303,7 +325,9 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 );
                                             })()}
                                             <div className="flex gap-2">
+                                                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-tile accent color, not a status signal (#2816) */}
                                                 <StatPill label="Surge" value={`${ride.surge_multiplier || 1.0}×`} icon={Percent} color="bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" />
+                                                {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-tile accent color, not a status signal (#2816) */}
                                                 <StatPill label="Total Fare" value={formatCurrency(ride.total_fare || 0)} icon={DollarSign} color="bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" />
                                             </div>
                                         </div>
@@ -315,12 +339,15 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
 
                                     {/* Rider Card */}
                                     <Card>
+                                        {/* eslint-disable-next-line no-restricted-syntax -- decorative rider/driver role-differentiator color (rider=blue), not a status signal (#2816) */}
                                         <CardHead title="Rider" icon={User} accent="bg-blue-50/80 dark:bg-blue-900/20 border-blue-100 dark:border-blue-900/30" />
                                         <div className="p-4">
                                             <div className="flex items-center gap-3">
+                                                {/* eslint-disable-next-line no-restricted-syntax -- decorative rider role-differentiator color, not a status signal (#2816) */}
                                                 <div className="w-11 h-11 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center shrink-0 ring-2 ring-blue-200/50 dark:ring-blue-800/30">
                                                     {ride.rider_profile_image
                                                         ? <img src={ride.rider_profile_image} alt="" className="w-11 h-11 rounded-full object-cover" />
+                                                        // eslint-disable-next-line no-restricted-syntax -- decorative rider role-differentiator color, not a status signal (#2816)
                                                         : <User className="h-5 w-5 text-blue-600 dark:text-blue-400" />}
                                                 </div>
                                                 <div className="flex-1 min-w-0">
@@ -331,7 +358,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     </div>
                                                 </div>
                                                 {ride.rider_flag_count > 0 && (
-                                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md shrink-0 ${ride.rider_flag_count >= 2 ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"}`}>
+                                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md shrink-0 ${ride.rider_flag_count >= 2 ? "bg-destructive/15 text-destructive" : "bg-warning/15 text-warning"}`}>
                                                         {ride.rider_flag_count} flag{ride.rider_flag_count > 1 ? "s" : ""}
                                                     </span>
                                                 )}
@@ -354,14 +381,17 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
 
                                     {/* Driver Card */}
                                     <Card>
+                                        {/* eslint-disable-next-line no-restricted-syntax -- decorative rider/driver role-differentiator color (driver=emerald), not a status signal (#2816) */}
                                         <CardHead title="Driver" icon={Car} accent="bg-emerald-50/80 dark:bg-emerald-900/20 border-emerald-100 dark:border-emerald-900/30" />
                                         <div className="p-4">
                                             {ride.driver_id ? (
                                                 <>
                                                     <div className="flex items-center gap-3">
+                                                        {/* eslint-disable-next-line no-restricted-syntax -- decorative driver role-differentiator color, not a status signal (#2816) */}
                                                         <div className="w-11 h-11 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center shrink-0 ring-2 ring-emerald-200/50 dark:ring-emerald-800/30">
                                                             {ride.driver_photo_url
                                                                 ? <img src={ride.driver_photo_url} alt="" className="w-11 h-11 rounded-full object-cover" />
+                                                                // eslint-disable-next-line no-restricted-syntax -- decorative driver role-differentiator color, not a status signal (#2816)
                                                                 : <Car className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />}
                                                         </div>
                                                         <div className="flex-1 min-w-0">
@@ -373,12 +403,14 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                         </div>
                                                         <div className="flex items-center gap-1.5 shrink-0">
                                                             {ride.driver_flag_count > 0 && (
-                                                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${ride.driver_flag_count >= 2 ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"}`}>
+                                                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${ride.driver_flag_count >= 2 ? "bg-destructive/15 text-destructive" : "bg-warning/15 text-warning"}`}>
                                                                     {ride.driver_flag_count} flag{ride.driver_flag_count > 1 ? "s" : ""}
                                                                 </span>
                                                             )}
                                                             {ride.driver_rating != null && (
+                                                                // eslint-disable-next-line no-restricted-syntax -- star-rating amber convention, not a status signal (#2816)
                                                                 <span className="flex items-center gap-0.5 bg-amber-50 dark:bg-amber-900/20 px-2 py-0.5 rounded-md">
+                                                                    {/* eslint-disable-next-line no-restricted-syntax -- star-rating amber convention, not a status signal (#2816) */}
                                                                     <Star className="h-3 w-3 text-amber-400 fill-amber-400" />
                                                                     <span className="text-xs font-bold">{Number(ride.driver_rating).toFixed(1)}</span>
                                                                 </span>
@@ -464,6 +496,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     <FR l={`Distance (${(ride.distance_km || 0).toFixed(1)} km)`} v={ride.distance_fare} />
                                                     <FR l={`Time (${ride.duration_minutes || 0} min)`} v={ride.time_fare} />
                                                     {(ride.surge_multiplier || 1) > 1 && (
+                                                        // eslint-disable-next-line no-restricted-syntax -- decorative surge-line accent color, not a status signal (#2816)
                                                         <p className="text-[11px] text-amber-600 dark:text-amber-400">Includes {ride.surge_multiplier}× surge</p>
                                                     )}
                                                     <FR l="Booking fee" v={ride.booking_fee} />
@@ -477,8 +510,9 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     <FR l="Subtotal (pre-tax)" v={n(ride.total_fare) + areaFeesTotal} b />
                                                     {discount > 0 && (
                                                         <div className="flex justify-between items-center">
+                                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative promo-code accent color, not a status signal (#2816) */}
                                                             <span className="flex items-center gap-2 text-sm"><Ticket className="h-4 w-4 text-violet-500" />Promo{ride.promo_code ? <b className="font-mono text-xs bg-violet-50 dark:bg-violet-900/20 px-1.5 py-0.5 rounded">{ride.promo_code}</b> : null}</span>
-                                                            <span className="text-sm font-semibold text-emerald-600">-{formatCurrency(discount)}</span>
+                                                            <span className="text-sm font-semibold text-success">-{formatCurrency(discount)}</span>
                                                         </div>
                                                     )}
                                                     {taxEntries.length > 0
@@ -488,7 +522,9 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                         : taxTotal > 0 && <FR l="Tax" v={taxTotal} />}
                                                     {tip > 0 && (
                                                         <div className="flex justify-between items-center">
+                                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative tip-line accent color, not a status signal (#2816) */}
                                                             <span className="flex items-center gap-2 text-sm"><DollarSign className="h-4 w-4 text-amber-500" />Tip</span>
+                                                            {/* eslint-disable-next-line no-restricted-syntax -- decorative tip-line accent color, not a status signal (#2816) */}
                                                             <span className="text-sm font-semibold text-amber-600">{formatCurrency(tip)}</span>
                                                         </div>
                                                     )}
@@ -529,6 +565,9 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                             const platformNet = platformGross - incentives - discount;
                                             return (
                                                 <div className="p-4">
+                                                    {/* eslint-disable no-restricted-syntax -- categorical earnings-split tiles (driver/platform/incentives,
+                                                       3 categories), a decorative breakdown of money categories rather than a
+                                                       success/warning/destructive status signal (#2816) */}
                                                     <div className="grid grid-cols-3 gap-2.5 mb-4">
                                                         <div className="bg-emerald-50 dark:bg-emerald-900/20 rounded-xl p-3.5 text-center">
                                                             <p className="text-lg font-extrabold text-emerald-600 dark:text-emerald-400">{formatCurrency(driverTotal)}</p>
@@ -556,6 +595,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                         <FR l="Driver total" v={driverTotal} b />
                                                         <div className="border-t my-2" />
                                                         <p className="text-[10px] font-bold uppercase tracking-wider text-violet-600 dark:text-violet-400">Platform</p>
+                                                        {/* eslint-enable no-restricted-syntax */}
                                                         <FR l="Booking + airport fees" v={bookingAirport} />
                                                         {areaFeesTotal > 0 && <FR l="Area fees (Platform/Insurance/City/Infra)" v={areaFeesTotal} />}
                                                         {incentives > 0 && <FR l="Less incentives funded" v={-incentives} />}
@@ -592,10 +632,10 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                             </span>
                                             <span className={`text-xs font-bold px-2.5 py-1 rounded-lg ${
                                                 ride.payment_status === "paid" || ride.payment_status === "waived_admin"
-                                                    ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                                                    ? "bg-success/15 text-success"
                                                     : ride.payment_status === "failed"
-                                                        ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
-                                                        : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                                                        ? "bg-destructive/15 text-destructive"
+                                                        : "bg-warning/15 text-warning"
                                             }`}>
                                                 {(ride.payment_status || "pending").replace(/_/g, " ").toUpperCase()}
                                             </span>
@@ -617,6 +657,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 <div>
                                                     <div className="flex items-center gap-1 mb-2">
                                                         {[1, 2, 3, 4, 5].map(i => (
+                                                            // eslint-disable-next-line no-restricted-syntax -- star-rating amber convention, not a status signal (#2816)
                                                             <Star key={i} className={`h-5 w-5 ${i <= ride.rider_rating ? "text-amber-400 fill-amber-400" : "text-muted/30"}`} />
                                                         ))}
                                                         <span className="text-sm font-bold ml-1.5">{ride.rider_rating}/5</span>
@@ -634,8 +675,8 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
 
                                 {/* Cancellation */}
                                 {ride.status === "cancelled" && (
-                                    <Card className="border-red-200 dark:border-red-900/30">
-                                        <CardHead title="Cancellation" icon={XCircle} accent="bg-red-50 dark:bg-red-900/20 border-red-100 dark:border-red-900/30" />
+                                    <Card className="border-destructive/30">
+                                        <CardHead title="Cancellation" icon={XCircle} accent="bg-destructive/10 border-destructive/20" />
                                         <div className="p-4 space-y-1">
                                             <FR l="Cancelled by" v={ride.cancelled_by ? String(ride.cancelled_by).replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()) : "—"} t />
                                             <FR l="Type" v={ride.cancellation_type === "no_drivers_found" ? "No drivers found" : ride.cancellation_type ? String(ride.cancellation_type).replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()) : "—"} t />
@@ -842,9 +883,10 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 <p className="text-sm text-muted-foreground">No dispatch offers recorded for this ride. (Offers are logged for rides matched through the batch-dispatch engine.)</p>
                                             ) : (() => {
                                                 const OFFER_META: Record<string, { label: string; cls: string; Icon: React.ElementType }> = {
-                                                    accepted:  { label: "Accepted",  cls: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400", Icon: CheckCircle2 },
-                                                    declined:  { label: "Declined",  cls: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400", Icon: XCircle },
-                                                    expired:   { label: "Ignored",   cls: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400", Icon: Clock },
+                                                    accepted:  { label: "Accepted",  cls: "bg-success/15 text-success", Icon: CheckCircle2 },
+                                                    declined:  { label: "Declined",  cls: "bg-destructive/15 text-destructive", Icon: XCircle },
+                                                    expired:   { label: "Ignored",   cls: "bg-warning/15 text-warning", Icon: Clock },
+                                                    // eslint-disable-next-line no-restricted-syntax -- "preempted" is a neutral dispatch outcome, not success/warning/destructive; no dedicated token exists (#2816)
                                                     preempted: { label: "Preempted", cls: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400", Icon: Radio },
                                                     pending:   { label: "Pending",   cls: "bg-muted text-muted-foreground", Icon: Radio },
                                                 };
@@ -859,9 +901,10 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 }, {});
                                                 const summary = [
                                                     { k: "received", lbl: "Received", v: offers.length, cls: "text-foreground" },
-                                                    { k: "accepted", lbl: "Accepted", v: counts.accepted || 0, cls: "text-emerald-600 dark:text-emerald-400" },
-                                                    { k: "declined", lbl: "Rejected", v: counts.declined || 0, cls: "text-red-600 dark:text-red-400" },
-                                                    { k: "ignored", lbl: "Ignored", v: counts.ignored || 0, cls: "text-amber-600 dark:text-amber-400" },
+                                                    { k: "accepted", lbl: "Accepted", v: counts.accepted || 0, cls: "text-success" },
+                                                    { k: "declined", lbl: "Rejected", v: counts.declined || 0, cls: "text-destructive" },
+                                                    { k: "ignored", lbl: "Ignored", v: counts.ignored || 0, cls: "text-warning" },
+                                                    // eslint-disable-next-line no-restricted-syntax -- mirrors OFFER_META's "preempted" exception above (#2816)
                                                     { k: "preempted", lbl: "Preempted", v: counts.preempted || 0, cls: "text-blue-600 dark:text-blue-400" },
                                                 ];
                                                 return (
@@ -884,6 +927,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                                         <span className="text-xs font-semibold truncate flex-1">{o.driver_name || o.driver_id?.slice(0, 12)}</span>
                                                                         {o.driver_rating != null && (
                                                                             <span className="flex items-center gap-0.5 text-[11px] text-muted-foreground">
+                                                                                {/* eslint-disable-next-line no-restricted-syntax -- star-rating amber convention, not a status signal (#2816) */}
                                                                                 <Star className="h-3 w-3 text-amber-400 fill-amber-400" />{Number(o.driver_rating).toFixed(1)}
                                                                             </span>
                                                                         )}
@@ -928,9 +972,10 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                             <div className="space-y-2">
                                                 {ride.flags.map((f: any, i: number) => (
                                                     <div key={f.id || i} className="flex items-center gap-2.5 bg-muted/40 rounded-lg p-2.5">
+                                                        {/* eslint-disable-next-line no-restricted-syntax -- decorative rider/driver role-differentiator color, not a status signal (#2816) */}
                                                         <Flag className={`h-3.5 w-3.5 shrink-0 ${f._party === "rider" ? "text-blue-500" : "text-emerald-500"}`} />
                                                         <span className="text-xs font-semibold">{f._party === "rider" ? "Rider" : "Driver"}</span>
-                                                        <span className="text-xs bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded font-medium">{f.reason?.replace(/_/g, " ")}</span>
+                                                        <span className="text-xs bg-destructive/15 text-destructive px-1.5 py-0.5 rounded font-medium">{f.reason?.replace(/_/g, " ")}</span>
                                                         {f.description && <span className="text-xs text-muted-foreground truncate flex-1">{f.description}</span>}
                                                         <span className="text-[10px] text-muted-foreground tabular-nums">{fmtTime(f.created_at)}</span>
                                                     </div>
@@ -942,11 +987,11 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                             <div className="space-y-2">
                                                 {ride.complaints.map((c: any) => (
                                                     <div key={c.id} className="flex items-center gap-2.5 bg-muted/40 rounded-lg p-2.5">
-                                                        <FileWarning className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                                                        <FileWarning className="h-3.5 w-3.5 shrink-0 text-warning" />
                                                         <span className="text-xs font-semibold">{c.against_type}</span>
-                                                        <span className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 px-1.5 py-0.5 rounded font-medium">{c.category}</span>
+                                                        <span className="text-xs bg-warning/15 text-warning px-1.5 py-0.5 rounded font-medium">{c.category}</span>
                                                         <span className="text-xs text-muted-foreground truncate flex-1">{c.description}</span>
-                                                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${c.status === "open" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>{c.status}</span>
+                                                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${c.status === "open" ? "bg-warning/15 text-warning" : "bg-success/15 text-success"}`}>{c.status}</span>
                                                     </div>
                                                 ))}
                                             </div>
@@ -957,9 +1002,9 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                         )}
 
                                         {(ride.rider_flag_count >= 2 || ride.driver_flag_count >= 2) && (
-                                            <div className="flex items-center gap-2.5 bg-red-50 dark:bg-red-900/20 rounded-lg p-3">
-                                                <AlertTriangle className="h-4 w-4 text-red-500 shrink-0" />
-                                                <p className="text-xs font-semibold text-red-600 dark:text-red-400">
+                                            <div className="flex items-center gap-2.5 bg-destructive/10 rounded-lg p-3">
+                                                <AlertTriangle className="h-4 w-4 text-destructive shrink-0" />
+                                                <p className="text-xs font-semibold text-destructive">
                                                     {ride.rider_flag_count >= 2 && `Rider has ${ride.rider_flag_count} flags (1 more = ban). `}
                                                     {ride.driver_flag_count >= 2 && `Driver has ${ride.driver_flag_count} flags (1 more = ban).`}
                                                 </p>
@@ -969,23 +1014,23 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                         <div className="flex gap-2 flex-wrap pt-1 border-t">
                                             {ride.rider_id && (
                                                 <button onClick={() => setFlagTarget({ type: "rider", name: ride.rider_name || "Rider" })}
-                                                    className="flex items-center gap-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900/30 transition-colors">
+                                                    className="flex items-center gap-1.5 text-xs font-semibold text-destructive hover:bg-destructive/10 px-3 py-2 rounded-lg border border-destructive/30 transition-colors">
                                                     <Flag className="h-3.5 w-3.5" /> Flag Rider
                                                 </button>
                                             )}
                                             {ride.driver_id && (
                                                 <button onClick={() => setFlagTarget({ type: "driver", name: ride.driver_name || "Driver" })}
-                                                    className="flex items-center gap-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900/30 transition-colors">
+                                                    className="flex items-center gap-1.5 text-xs font-semibold text-destructive hover:bg-destructive/10 px-3 py-2 rounded-lg border border-destructive/30 transition-colors">
                                                     <Flag className="h-3.5 w-3.5" /> Flag Driver
                                                 </button>
                                             )}
                                             <button onClick={() => setShowComplaint(true)}
-                                                className="flex items-center gap-1.5 text-xs font-semibold text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 px-3 py-2 rounded-lg border border-amber-200 dark:border-amber-900/30 transition-colors">
+                                                className="flex items-center gap-1.5 text-xs font-semibold text-warning hover:bg-warning/10 px-3 py-2 rounded-lg border border-warning/30 transition-colors">
                                                 <FileWarning className="h-3.5 w-3.5" /> Raise Complaint
                                             </button>
                                             {ride.status && !["completed", "cancelled"].includes(ride.status) && (
                                                 <button onClick={() => { setCancelReason("Cancelled by admin"); setShowCancelDialog(true); }}
-                                                    className="flex items-center gap-1.5 text-xs font-semibold text-red-700 hover:bg-red-100 dark:hover:bg-red-900/30 px-3 py-2 rounded-lg border border-red-300 dark:border-red-800 transition-colors ml-auto">
+                                                    className="flex items-center gap-1.5 text-xs font-semibold text-destructive hover:bg-destructive/15 px-3 py-2 rounded-lg border border-destructive/40 transition-colors ml-auto">
                                                     <Ban className="h-3.5 w-3.5" /> Force Cancel
                                                 </button>
                                             )}
@@ -1062,7 +1107,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                     setCancelling(false);
                                 }
                             }}
-                            className="px-4 py-2 text-sm font-semibold rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 transition-colors"
+                            className="px-4 py-2 text-sm font-semibold rounded-lg bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50 transition-colors"
                         >
                             {cancelling ? "Cancelling..." : "Confirm Cancel"}
                         </button>

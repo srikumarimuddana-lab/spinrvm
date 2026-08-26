@@ -35,9 +35,15 @@ describe('admin route replay contract', () => {
     expect(mapSource).not.toContain('"line-color": "#3b82f6"');
   });
 
-  it('uses the shared pin colours for pickup (green) and dropoff (red)', () => {
-    expect(mapSource).toContain('ROUTE_PIN_COLORS.pickup');
-    expect(mapSource).toContain('ROUTE_PIN_COLORS.dropoff');
+  it('draws the shared route pin (disc + glyph), not a bare admin circle', () => {
+    // makeRoutePinEl renders routePinSvg from the shared spec — the same pin
+    // the rider/driver apps and the Android Auto surface draw. A bare
+    // makeCircleMarkerEl here is what made the same ride look like a different
+    // product on every screen.
+    expect(mapSource).toContain('makeRoutePinEl');
+    expect(mapSource).toContain('kind: "pickup"');
+    expect(mapSource).toContain('kind: "dropoff"');
+    expect(mapSource).not.toContain('makeCircleMarkerEl');
   });
 
   it('passes the v2 actual segments and their quality label from the admin detail', () => {

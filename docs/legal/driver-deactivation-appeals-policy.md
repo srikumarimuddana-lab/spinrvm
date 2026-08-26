@@ -92,7 +92,16 @@ validity before you can go online again.
 
 1. **All bracketed timeframes need a real number from the safety team**, not
    a guess — check whether an internal SLA already exists for safety-hold
-   investigations before publishing a number here.
+   investigations before publishing a number here. This is not a
+   theoretical risk: the AALDEF's 2025 driver-deactivation-appeals report
+   found 70–76% of studied deactivations came with no advance notice, and
+   95% of appeals filed against incumbent platforms failed — evidence that
+   an appeals process without real SLAs and a genuinely independent
+   reviewer functions as a formality rather than a remedy. The
+   different-reviewer mechanism noted in item 2 below is the concrete
+   design choice meant to avoid landing in that failure mode; the missing
+   bracketed numbers are the remaining gap between that intent and a
+   process a driver can actually rely on.
 2. **Fixed 2026-08-19/2026-08-20**: confirmed the in-app appeal channel is
    real and wired (`driver-app/app/appeal.tsx` → `backend/services/
    driver_appeals.py` → `routes/drivers/appeals.py`/`routes/admin/

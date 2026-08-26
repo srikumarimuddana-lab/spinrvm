@@ -115,8 +115,31 @@ SOS must never be rate-limited or blocked (E911 spirit). However:
 
 - `sos_events` table schema — confirm it exists with correct columns
 - Twilio fallback chain if primary responder phone is down — document backup rotation
-- Trauma-support vendor onboarding — open item
+- Trauma-support vendor onboarding — open item. Both Uber (RapidSOS + ADT)
+  and Lyft (ADT) outsource physical incident monitoring/911-routing to a
+  third-party safety vendor rather than building it in-house; Noonlight is
+  the commonly-cited equivalent at startup scale. Worth evaluating as a
+  build-vs-buy option before committing engineering time to an in-house
+  equivalent — see `docs/safety/sos-vendor-options.md` if/when that
+  evaluation is written up.
 - Quarterly tabletop: "SOS triggered during ride, responder unreachable" scenario
+
+## Why this matters (incident precedent, for calibration)
+
+Not Spinr incidents — cited only to calibrate what "good" looks like on
+this surface: GAO-26-108552 found no U.S. federal requirement exists to
+collect rideshare assault data at all (the absence of a mandate is itself
+a known industry gap, not evidence of safety). CNN's 2018 investigation
+and Uber's own 14-month-delayed safety report, and the "Uber Files" leak
+covering a 2014 Delhi incident, are both widely cited as slow-response
+failure cases — the throughline is that response speed and transparency
+after the fact are what get scrutinized, not just whether SOS exists.
+Saskatoon Bylaw 9651 (per external research this cycle, **not yet
+confirmed against the City directly** — see the same caveat in
+`docs/runbooks/saskatoon-launch.md` §I-2) reportedly requires driver
+identity be disclosed to a rider on request, which is a lower bar than
+what this runbook already does at incident time — worth reconfirming once
+the bylaw citation itself is verified.
 
 ---
 

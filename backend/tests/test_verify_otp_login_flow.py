@@ -94,11 +94,15 @@ def _stop(patches):
         p.stop()
 
 
-async def _call_verify_otp(patches, code=CODE):
+async def _call_verify_otp(patches, code=CODE, consent_accepted=True):
     from backend.routes.auth import verify_otp
     from backend.schemas import VerifyOTPRequest
 
-    body = VerifyOTPRequest(phone=PHONE, code=code)
+    # Defaults True: every test in this file except the dedicated
+    # consent-gating tests below is exercising unrelated behaviour (existing
+    # user login, OTP validation branches, etc.) and would otherwise trip the
+    # new-user consent gate incidentally.
+    body = VerifyOTPRequest(phone=PHONE, code=code, consent_accepted=consent_accepted)
     request = MagicMock()
     request.client = MagicMock(host="127.0.0.1")
     request.headers = {"user-agent": "pytest"}
@@ -313,6 +317,77 @@ async def test_new_user_created_and_logged_in():
 
     assert created_payload["consent_version"] == CONSENT_VERSION
     assert created_payload["consent_accepted_at"]
+
+
+@pytest.mark.asyncio
+async def test_new_user_signup_rejected_without_consent_checkbox():
+    """PIPEDA: a brand-new account may only be created off an actual,
+    explicit consent gesture (rider-app / driver-app login.tsx's checkbox),
+    not an auto-stamped consent_version with no user action behind it. See
+    docs/change-log/2026-08-20-explicit-signup-consent-checkbox.md."""
+    from backend.utils.error_handling import SpinrException
+
+    create_mock = AsyncMock(return_value={"id": "new-1"})
+    patches = _base_patches(otp_record=_valid_otp_record(), user_lookup_result=None)
+    patches += [patch("backend.routes.auth.db_supabase.create_user", create_mock)]
+
+    with pytest.raises(SpinrException) as exc:
+        await _call_verify_otp(patches, consent_accepted=False)
+
+    assert exc.value.status_code == 400
+    from backend.utils.error_keys import ErrorKeys
+
+    assert exc.value.message_key == ErrorKeys.AUTH_CONSENT_REQUIRED
+    # No row is created and no consent_version is stamped — reject the
+    # whole signup, don't silently proceed without consent.
+    create_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_new_user_signup_rejected_when_consent_field_omitted():
+    """Default value (an older client body that never sends the field at
+    all) must fail closed — reject, not silently treat as consented."""
+    from backend.schemas import VerifyOTPRequest
+    from backend.utils.error_handling import SpinrException
+
+    assert VerifyOTPRequest(phone=PHONE, code=CODE).consent_accepted is False
+
+    create_mock = AsyncMock(return_value={"id": "new-1"})
+    patches = _base_patches(otp_record=_valid_otp_record(), user_lookup_result=None)
+    patches += [patch("backend.routes.auth.db_supabase.create_user", create_mock)]
+
+    with pytest.raises(SpinrException) as exc:
+        await _call_verify_otp(patches, consent_accepted=False)
+    assert exc.value.status_code == 400
+    create_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_existing_user_login_ignores_missing_consent_field():
+    """A returning user's own consent was already captured at their
+    original signup — this endpoint must never re-require the checkbox (or
+    touch consent_version at all) on the existing-user branch."""
+    user = {
+        "id": "u1",
+        "phone": PHONE,
+        "role": "rider",
+        "is_rider": True,
+        "is_driver": False,
+        "token_version": 0,
+        "profile_complete": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    patches = _base_patches(otp_record=_valid_otp_record(), user_lookup_result=dict(user))
+    patches += [
+        patch("backend.routes.auth.db_supabase.update_one", AsyncMock(return_value=True)),
+        patch(
+            "backend.routes.auth.issue_refresh_token",
+            AsyncMock(return_value=("raw-refresh", "row-1", datetime.now(timezone.utc) + timedelta(days=30))),
+        ),
+    ]
+    result = await _call_verify_otp(patches, consent_accepted=False)
+    assert result.is_new_user is False
+    assert result.token
 
 
 @pytest.mark.asyncio

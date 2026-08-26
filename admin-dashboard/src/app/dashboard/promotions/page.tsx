@@ -103,9 +103,9 @@ interface UserOption {
 // --- Constants ---
 
 const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
-    active: { label: "Active", color: "bg-emerald-500/15 text-emerald-600" },
-    inactive: { label: "Inactive", color: "bg-zinc-500/15 text-zinc-600" },
-    expired: { label: "Expired", color: "bg-red-500/15 text-red-600" },
+    active: { label: "Active", color: "bg-success/15 text-success" },
+    inactive: { label: "Inactive", color: "bg-muted text-muted-foreground" },
+    expired: { label: "Expired", color: "bg-destructive/15 text-destructive" },
 };
 
 const DATE_RANGES = [
@@ -534,6 +534,7 @@ export default function PromotionsPage() {
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div>
+                    {/* eslint-disable-next-line no-restricted-syntax -- decorative brand icon tint, not a status signal (#2816) */}
                     <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2"><Ticket className="h-8 w-8 text-violet-500" /> Promotions</h1>
                     <p className="text-muted-foreground mt-1">Manage promo codes, private coupons, and track usage.</p>
                 </div>
@@ -545,6 +546,7 @@ export default function PromotionsPage() {
             {/* Summary Stats */}
             {stats && (
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+                    {/* eslint-disable no-restricted-syntax -- categorical KPI-card accent map (6 cards, 5 hues), decorative icon tints not a success/warning/destructive signal (#2816) */}
                     {[
                         { label: "Total Codes", value: stats.total_codes, icon: Tag, color: "text-violet-500" },
                         { label: "Active", value: stats.active_codes, icon: ToggleRight, color: "text-emerald-500" },
@@ -552,6 +554,7 @@ export default function PromotionsPage() {
                         { label: "Private Coupons", value: stats.total_private, icon: Lock, color: "text-blue-500" },
                         { label: "Redemptions", value: stats.total_redemptions, icon: Users, color: "text-amber-500" },
                         { label: "Discount Given", value: formatCurrency(stats.total_discount_given), icon: DollarSign, color: "text-red-500" },
+                    /* eslint-enable no-restricted-syntax */
                     ].map((s, i) => (
                         <Card key={i}><CardContent className="pt-4 pb-3"><div className="flex items-center gap-2"><s.icon className={`h-5 w-5 ${s.color}`} /><div><p className="text-xs text-muted-foreground">{s.label}</p><p className="text-2xl font-bold">{s.value}</p></div></div></CardContent></Card>
                     ))}
@@ -560,12 +563,15 @@ export default function PromotionsPage() {
 
             {/* Promo Tabs: Public | Private | Expired */}
             <div className="flex gap-1 border-b">
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative active-tab underline color, not a status signal (#2816) */}
                 <button onClick={() => setPromoTab("public")} className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px ${promoTab === "public" ? "border-red-500 text-red-600 dark:text-red-400" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
                     <Globe className="h-4 w-4" /> Public Codes ({publicCount})
                 </button>
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative active-tab underline color, not a status signal (#2816) */}
                 <button onClick={() => setPromoTab("private")} className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px ${promoTab === "private" ? "border-red-500 text-red-600 dark:text-red-400" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
                     <Lock className="h-4 w-4" /> Private Coupons ({privateCount})
                 </button>
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative active-tab underline color, not a status signal (#2816) */}
                 <button onClick={() => setPromoTab("expired")} className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px ${promoTab === "expired" ? "border-red-500 text-red-600 dark:text-red-400" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
                     <Clock className="h-4 w-4" /> Expired ({expiredCount})
                 </button>
@@ -610,8 +616,9 @@ export default function PromotionsPage() {
                                         const sc = STATUS_CONFIG[status] || STATUS_CONFIG.inactive;
                                         return (
                                             <TableRow key={p.id}>
+                                                {/* eslint-disable-next-line no-restricted-syntax -- decorative brand accent for the promo code chip, not a status signal (#2816) */}
                                                 <TableCell><span className="font-mono font-semibold text-violet-600 dark:text-violet-400 bg-violet-500/10 px-2 py-0.5 rounded">{p.code}</span>{p.description && <p className="text-xs text-muted-foreground mt-1">{p.description}</p>}</TableCell>
-                                                <TableCell className="text-sm">{p.free_ride ? <span className="text-emerald-600 dark:text-emerald-400 font-semibold">Free Ride</span> : p.discount_type === "flat" ? formatCurrency(p.discount_value) : `${p.discount_value}%`}{!p.free_ride && p.max_discount != null && <span className="text-xs text-muted-foreground ml-1">(max {formatCurrency(p.max_discount)})</span>}</TableCell>
+                                                <TableCell className="text-sm">{p.free_ride ? <span className="text-success font-semibold">Free Ride</span> : p.discount_type === "flat" ? formatCurrency(p.discount_value) : `${p.discount_value}%`}{!p.free_ride && p.max_discount != null && <span className="text-xs text-muted-foreground ml-1">(max {formatCurrency(p.max_discount)})</span>}</TableCell>
                                                 <TableCell className="text-sm">{p.uses}/{p.max_uses || "∞"}</TableCell>
                                                 {promoTab === "expired" && <TableCell><Badge variant="outline" className="text-xs">{p.promo_type === "private" ? "Private" : "Public"}</Badge></TableCell>}
                                                 {(promoTab === "private" || promoTab === "expired") && <TableCell className="text-sm">{(p.assigned_user_ids || []).length > 0 ? `${(p.assigned_user_ids || []).length} user${(p.assigned_user_ids || []).length !== 1 ? "s" : ""}` : "—"}</TableCell>}
@@ -619,7 +626,7 @@ export default function PromotionsPage() {
                                                 <TableCell><Badge className={sc.color}>{sc.label}</Badge></TableCell>
                                                 <TableCell className="text-right"><div className="flex gap-1 justify-end">
                                                     <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button>
-                                                    {promoTab !== "expired" && <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => toggleActive(p)}>{p.is_active ? <ToggleRight className="h-4 w-4 text-emerald-500" /> : <ToggleLeft className="h-4 w-4 text-muted-foreground" />}</Button>}
+                                                    {promoTab !== "expired" && <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => toggleActive(p)}>{p.is_active ? <ToggleRight className="h-4 w-4 text-success" /> : <ToggleLeft className="h-4 w-4 text-muted-foreground" />}</Button>}
                                                     <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => handleDelete(p.id)}><Trash2 className="h-4 w-4" /></Button>
                                                 </div></TableCell>
                                             </TableRow>
@@ -644,6 +651,7 @@ export default function PromotionsPage() {
             {stats && stats.daily_usage && stats.daily_usage.length > 0 && (
                 <div className="space-y-3">
                     <div className="flex items-center justify-between">
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative section icon tint, not a status signal (#2816) */}
                         <h2 className="text-lg font-semibold flex items-center gap-2"><BarChart3 className="h-5 w-5 text-blue-500" /> Analytics</h2>
                         <Select value={chartFilter} onValueChange={setChartFilter}>
                             <SelectTrigger className="w-44" aria-label="Filter chart by promotion type"><SelectValue /></SelectTrigger>
@@ -656,6 +664,7 @@ export default function PromotionsPage() {
                     </div>
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                         <Card>
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative chart-card icon tint, not a status signal (#2816) */}
                             <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><BarChart3 className="h-4 w-4 text-blue-500" /> Daily Redemptions</CardTitle></CardHeader>
                             <CardContent>
                                 <ResponsiveContainer width="100%" height={220}>
@@ -670,6 +679,7 @@ export default function PromotionsPage() {
                             </CardContent>
                         </Card>
                         <Card>
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative chart-card icon tint, not a status signal (#2816) */}
                             <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><TrendingUp className="h-4 w-4 text-emerald-500" /> Daily Discount Amount</CardTitle></CardHeader>
                             <CardContent>
                                 <ResponsiveContainer width="100%" height={220}>
@@ -691,6 +701,7 @@ export default function PromotionsPage() {
             <Card>
                 <CardHeader className="pb-3">
                     <div className="flex items-center justify-between">
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative section icon tint, not a status signal (#2816) */}
                         <CardTitle className="text-lg flex items-center gap-2"><Users className="h-5 w-5 text-amber-500" /> Usage History</CardTitle>
                         <Button variant="outline" size="sm" onClick={handleExportUsage} disabled={filteredUsage.length === 0}><Download className="mr-2 h-4 w-4" /> Export</Button>
                     </div>
@@ -699,6 +710,7 @@ export default function PromotionsPage() {
                     {/* Date range selectors for usage */}
                     <div className="flex flex-wrap items-center gap-2">
                         {DATE_RANGES.map((r) => (
+                            // eslint-disable-next-line no-restricted-syntax -- decorative solid-fill selected-range button, not a status signal (#2816)
                             <Button key={r.key} variant={usageDateRange === r.key ? "default" : "outline"} size="sm" onClick={() => setUsageDateRange(r.key)} className={usageDateRange === r.key ? "bg-red-500 hover:bg-red-600 text-white" : ""}>
                                 {r.label}
                             </Button>
@@ -754,12 +766,14 @@ export default function PromotionsPage() {
                                                         ? <span className="font-medium">{u.user_name}</span>
                                                         : <span className="font-mono text-muted-foreground">{u.user_id?.slice(0, 10)}…</span>}
                                                 </TableCell>
+                                                {/* eslint-disable-next-line no-restricted-syntax -- decorative brand accent for the promo code chip, not a status signal (#2816) */}
                                                 <TableCell><span className="font-mono font-semibold text-violet-600 dark:text-violet-400 bg-violet-500/10 px-2 py-0.5 rounded text-xs">{u.code}</span></TableCell>
                                                 <TableCell><Badge variant="outline" className="text-xs">{pType === "private" ? "Private" : "Public"}</Badge></TableCell>
                                                 <TableCell>
                                                     {u.ride_id ? (
                                                         <button
                                                             onClick={() => setSelectedRideId(u.ride_id!)}
+                                                            // eslint-disable-next-line no-restricted-syntax -- decorative link-card accent color, not a status signal (#2816)
                                                             className="font-mono text-xs text-blue-600 dark:text-blue-400 hover:underline bg-blue-500/10 px-2 py-0.5 rounded"
                                                         >
                                                             {u.ride_id.slice(0, 8)}…
@@ -768,7 +782,7 @@ export default function PromotionsPage() {
                                                         <span className="text-muted-foreground text-xs">—</span>
                                                     )}
                                                 </TableCell>
-                                                <TableCell className="text-sm font-medium text-emerald-600 dark:text-emerald-400">{formatCurrency(u.discount_applied)}</TableCell>
+                                                <TableCell className="text-sm font-medium text-success">{formatCurrency(u.discount_applied)}</TableCell>
                                             </TableRow>
                                         );
                                     })}
@@ -790,6 +804,7 @@ export default function PromotionsPage() {
             {/* Create/Edit Dialog */}
             <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open) { setDialogOpen(false); resetForm(); } }}>
                 <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+                    {/* eslint-disable-next-line no-restricted-syntax -- decorative brand icon tint, not a status signal (#2816) */}
                     <DialogHeader><DialogTitle className="flex items-center gap-2"><Ticket className="h-5 w-5 text-violet-500" /> {editingPromo ? "Edit" : "Create"} {(promoTab === "private" || editingPromo?.promo_type === "private") ? "Private Coupon" : "Promo Code"}</DialogTitle></DialogHeader>
                     <div className="space-y-4">
                         <div className="grid grid-cols-2 gap-4">
@@ -825,10 +840,10 @@ export default function PromotionsPage() {
                                 {form.discount_type === "percentage" && (
                                     <div className="grid grid-cols-2 gap-4">
                                         <div className="space-y-2">
-                                            <Label>Max Discount Cap ($) <span className="text-red-500 font-normal">*required</span></Label>
-                                            <Input type="number" placeholder="25.00" value={form.max_discount} onChange={(e) => setForm({ ...form, max_discount: e.target.value })} className={!form.max_discount ? "border-amber-400 focus-visible:ring-amber-400" : ""} />
+                                            <Label>Max Discount Cap ($) <span className="text-destructive font-normal">*required</span></Label>
+                                            <Input type="number" placeholder="25.00" value={form.max_discount} onChange={(e) => setForm({ ...form, max_discount: e.target.value })} className={!form.max_discount ? "border-warning focus-visible:ring-warning" : ""} />
                                             {!form.max_discount && (
-                                                <p className="text-xs text-amber-600 dark:text-amber-400">Without a cap, a 75% promo on a $100 fare gives $75 off. Set a cap to limit this.</p>
+                                                <p className="text-xs text-warning">Without a cap, a 75% promo on a $100 fare gives $75 off. Set a cap to limit this.</p>
                                             )}
                                         </div>
                                     </div>
@@ -875,9 +890,10 @@ export default function PromotionsPage() {
                                     {selectedUsers.length > 0 && (
                                         <div className="flex flex-wrap gap-1.5">
                                             {selectedUsers.map((u) => (
+                                                // eslint-disable-next-line no-restricted-syntax -- decorative brand accent for the selected-user chip, not a status signal (#2816)
                                                 <span key={u.id} className="inline-flex items-center gap-1 bg-violet-500/10 text-violet-700 dark:text-violet-300 rounded-full px-2.5 py-1 text-xs font-medium">
                                                     <User className="h-3 w-3" /> {u.label}
-                                                    <button onClick={() => toggleUserSelection(u)} className="ml-0.5 hover:text-red-500"><X className="h-3 w-3" /></button>
+                                                    <button onClick={() => toggleUserSelection(u)} className="ml-0.5 hover:text-destructive"><X className="h-3 w-3" /></button>
                                                 </span>
                                             ))}
                                         </div>
@@ -889,8 +905,10 @@ export default function PromotionsPage() {
                                             {userOptions.map((opt) => {
                                                 const isSel = form.assigned_user_ids.includes(opt.id);
                                                 return (
+                                                    // eslint-disable-next-line no-restricted-syntax -- decorative brand accent for the selected-row highlight, not a status signal (#2816)
                                                     <button key={opt.id} className={`w-full text-left px-3 py-1.5 text-sm border-b last:border-b-0 flex items-center justify-between ${isSel ? "bg-violet-500/5" : "hover:bg-muted/50"}`} onClick={() => toggleUserSelection(opt)}>
                                                         <div><p className="font-medium text-xs">{opt.label}</p><p className="text-[10px] text-muted-foreground">{[opt.email, opt.phone].filter(Boolean).join(" · ")}</p></div>
+                                                        {/* eslint-disable-next-line no-restricted-syntax -- decorative brand accent for the selected-row check icon, not a status signal (#2816) */}
                                                         {isSel && <Check className="h-3 w-3 text-violet-500" />}
                                                     </button>
                                                 );
@@ -920,7 +938,7 @@ export default function PromotionsPage() {
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+                        <AlertDialogAction onClick={confirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>

@@ -92,7 +92,7 @@ export default function DashboardPage() {
             </div>
 
             {error && (
-                <div className="rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
+                <div className="rounded-md border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
                     Dashboard data is temporarily unavailable. Check backend health and try again.
                 </div>
             )}
@@ -123,13 +123,16 @@ export default function DashboardPage() {
 
                     {/* Money — Spinr is 0% commission: drivers keep 100% of fares. */}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative brand gradient, solid-fill white text (contrast-risk, not a status signal) (#2816) */}
                         <RevenueCard label="Platform Revenue" value={money.platform_revenue} disabled={aggOff} icon={DollarSign} color="from-red-500 to-rose-600" subtitle="Spinr Pass (0% on rides)" />
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative brand gradient, solid-fill white text (contrast-risk, not a status signal) (#2816) */}
                         <RevenueCard label="Driver Earnings" value={money.driver_earnings} disabled={aggOff} icon={TrendingUp} color="from-emerald-500 to-teal-600" subtitle={`${formatCurrency(money.ride_volume ?? 0)} ride volume`} />
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative brand gradient, solid-fill white text (contrast-risk, not a status signal) (#2816) */}
                         <RevenueCard label="Spinr Pass Earnings" value={money.spinr_pass_earnings} disabled={aggOff} icon={CreditCard} color="from-violet-500 to-purple-600" subtitle={rangeLabel.toLowerCase()} />
                     </div>
 
                     {aggOff && (
-                        <div className="rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/10 px-4 py-2 text-xs text-amber-800 dark:text-amber-300">
+                        <div className="rounded-md border border-warning/30 bg-warning/10 px-4 py-2 text-xs text-warning">
                             Revenue figures need PostgREST aggregate functions enabled on the Supabase project (counts are unaffected).
                         </div>
                     )}
@@ -140,22 +143,25 @@ export default function DashboardPage() {
                             Ride Breakdown · {rangeLabel}
                         </h3>
                         <div className="space-y-3">
-                            <BarStat label="Completed" value={bd.completed} total={rides.total} color="bg-emerald-500" />
+                            <BarStat label="Completed" value={bd.completed} total={rides.total} color="bg-success" />
+                            {/* eslint-disable-next-line no-restricted-syntax -- categorical ride-breakdown status map (5 states), not a success/warning/destructive signal (#2816) */}
                             <BarStat label="In progress" value={bd.in_progress} total={rides.total} color="bg-blue-500" />
+                            {/* eslint-disable-next-line no-restricted-syntax -- categorical ride-breakdown status map (5 states), not a success/warning/destructive signal (#2816) */}
                             <BarStat label="Searching" value={bd.searching} total={rides.total} color="bg-amber-500" />
+                            {/* eslint-disable-next-line no-restricted-syntax -- categorical ride-breakdown status map (5 states), not a success/warning/destructive signal (#2816) */}
                             <BarStat label="Scheduled" value={bd.scheduled} total={rides.total} color="bg-violet-500" />
-                            <BarStat label="Cancelled" value={bd.cancelled} total={rides.total} color="bg-red-400" />
+                            <BarStat label="Cancelled" value={bd.cancelled} total={rides.total} color="bg-destructive" />
                         </div>
                         <div className="flex items-center gap-4 mt-4 pt-4 border-t">
                             <div className="flex-1">
                                 <p className="text-xs text-muted-foreground">Completion rate</p>
-                                <p className="text-lg font-bold text-emerald-500">
+                                <p className="text-lg font-bold text-success">
                                     {rides.total > 0 ? (((bd.completed ?? 0) / rides.total) * 100).toFixed(1) : 0}%
                                 </p>
                             </div>
                             <div className="flex-1">
                                 <p className="text-xs text-muted-foreground">Cancellation rate</p>
-                                <p className="text-lg font-bold text-red-400">
+                                <p className="text-lg font-bold text-destructive">
                                     {rides.total > 0 ? (((bd.cancelled ?? 0) / rides.total) * 100).toFixed(1) : 0}%
                                 </p>
                             </div>
@@ -184,6 +190,7 @@ function Pill({ active, onClick, children }: { active: boolean; onClick: () => v
 
 // Static lookup avoids dynamic Tailwind class interpolation (bg-${color}-500/10),
 // which is purged at build time and produces invisible icons in production.
+/* eslint-disable no-restricted-syntax -- categorical stat-card icon accent map (7 states), not a success/warning/destructive signal — too many states for the 3-token system (#2816) */
 const STAT_COLOR_CLASSES: Record<string, { bg: string; text: string }> = {
     blue:   { bg: "bg-blue-500/10",    text: "text-blue-500" },
     emerald: { bg: "bg-emerald-500/10", text: "text-emerald-500" },
@@ -193,6 +200,7 @@ const STAT_COLOR_CLASSES: Record<string, { bg: string; text: string }> = {
     teal:   { bg: "bg-teal-500/10",    text: "text-teal-500" },
     sky:    { bg: "bg-sky-500/10",     text: "text-sky-500" },
 };
+/* eslint-enable no-restricted-syntax */
 
 function StatCard({ icon: Icon, label, value, color, subtitle, pulse }: {
     icon: any; label: string; value: number | undefined; color: string; subtitle?: string; pulse?: boolean;
@@ -209,6 +217,7 @@ function StatCard({ icon: Icon, label, value, color, subtitle, pulse }: {
             </div>
             <div className="flex items-end gap-2">
                 <p className="text-2xl font-bold tracking-tight">{v.toLocaleString()}</p>
+                {/* eslint-disable-next-line no-restricted-syntax -- decorative "live" pulsing-dot convention, not a status signal (#2816) */}
                 {pulse && v > 0 && <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse mb-2" />}
             </div>
             {subtitle && <p className="text-[11px] text-muted-foreground mt-1">{subtitle}</p>}

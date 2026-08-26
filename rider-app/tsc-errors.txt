@@ -1,3 +1,0 @@
-﻿env: load .env
-env: export EXPO_PUBLIC_GOOGLE_MAPS_API_KEY EXPO_PUBLIC_BACKEND_URL
-Dependencies are up to date

@@ -67,10 +67,12 @@ interface LogRow {
     is_reconstructed: boolean;
 }
 
+// Insurance periods 1/2/3 (available / en route / passenger aboard) — mirrors
+// the P1/P2/P3 neutral/warn/good treatment used in analytics/supply-panel.tsx.
 const PHASE_TINT: Record<number, string> = {
-    1: "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300",
-    2: "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300",
-    3: "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300",
+    1: "bg-muted text-muted-foreground",
+    2: "bg-warning/15 text-warning",
+    3: "bg-success/15 text-success",
 };
 
 function DayLogs({ driverId, date }: { driverId: string; date: string }) {

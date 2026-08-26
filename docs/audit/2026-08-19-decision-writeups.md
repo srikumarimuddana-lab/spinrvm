@@ -72,6 +72,12 @@ encryption in isolation.
 **What NOT to do:** don't introduce a second, inconsistent encryption mechanism (raw `pgcrypto`) when
 pgsodium/Vault is already the proven, running pattern for the same class of problem in `drivers`.
 
+**Decided 2026-08-21** (@vikas, standing in for Privacy/Legal — full record in
+`docs/audit/2026-08-21-emergency-contact-pia-memo.md` Section 9): **both** recommendations approved
+together — encrypt `name`/`phone` at rest (mirroring migration 32) **and** build the third-party
+consent/opt-out handshake alongside it, not sequenced apart. Implementation not yet built as of this
+decision; tracked as its own effort.
+
 ---
 
 ## 2. `compliance` admin module: add to `AVAILABLE_MODULES` or switch to `require_super_admin`
@@ -121,6 +127,22 @@ removes a confusing "looks grantable, isn't" dead code path) and can ship today 
 decision needed. Recommend **B as the default** unless product actively wants to delegate this,
 since it requires zero new access-scoping judgment calls to get right.
 
+### Resolution — implemented 2026-08-21
+
+Shipped as **Option B**. `compliance_router`'s mount in `routes/admin/__init__.py` now uses
+`Depends(require_super_admin)` in place of the dead `Depends(require_module("compliance"))` — same
+posture as Data Transfer/Bulk Operations/Export Approvals and `ai-console`. `sidebar.tsx`'s "Records
+& Compliance" entry now uses `superAdminOnly: true` (matching the `ai-console` entry's exact
+pattern) instead of `module: "compliance"`; `records/page.tsx`'s `hasComplianceModule` derivation
+collapsed to plain `isSuperAdmin`, since `"compliance"` can never appear in a non-super-admin's
+`modules` array; `compliance/page.tsx` switched from `useRequireModule("compliance")` to
+`useRequireSuperAdmin()` (the hook already used by the router's sibling tabs). Zero functional
+change from the prior behavior — see
+`docs/change-log/2026-08-21-compliance-module-super-admin-fix.md` for the full Change Impact & Risk
+Log, including blast-radius confirmation that no other route reads the `"compliance"` module string.
+Option A (adding `"compliance"` to `AVAILABLE_MODULES`/a preset) remains available as a future
+product decision if a non-super-admin role is later found to need this reporting surface.
+
 ---
 
 ## 3. Inert `surge`/`pricing` grantable module strings — retire or wire up
@@ -169,6 +191,16 @@ the audit or this research found a stated business need for surge-only/pricing-o
 distinct from `service_areas` — building it now would be solving a problem nobody's asked for. If
 that need surfaces later, B can be revisited as a fresh feature request, not bundled into this
 cleanup.
+
+**Implemented 2026-08-21** (Option A). `"surge"` and `"pricing"` removed from `AVAILABLE_MODULES`
+and `ROLE_PRESETS["operations"]`/`ROLE_PRESETS["finance"]` in `backend/routes/admin/staff.py`,
+from `ALL_MODULES` in `backend/routes/admin/auth.py`, and from the `ALL_MODULES` checkbox picker
+and `operations`/`finance` presets in `admin-dashboard/src/app/dashboard/staff/page.tsx` — same
+pattern as the `"heatmap"` precedent. `test_admin_module_list_parity.py` updated: both strings
+removed from `_KNOWN_UNGATED_GRANTS` (they are no longer grantable at all, so there is nothing left
+to pin as "ungated") and added to `test_removed_modules_stay_removed`'s regression pin alongside
+`"heatmap"`/`"bulk_operations"`. See `docs/change-log/2026-08-21-retire-surge-pricing-modules-fix.md`
+for the full Change Impact & Risk Log.
 
 ---
 
@@ -371,6 +403,15 @@ whether B is ever pursued. B is a legitimate feature idea (guaranteed-settlement
 good for riders) but is out of scope for a documentation-accuracy fix and should go through normal
 product scoping if wanted.
 
+**Status: Resolved (Option A).** `.claude/context/domain-payments.md`'s "Corporate billing"
+section was corrected to describe the upfront single `payment_method` selection, the no-fallback
+settlement dispatch, and the narrower allowance→master-wallet fallback (with its own hard-failure
+floor) — re-verified independently against `backend/routes/rides/payments.py`,
+`backend/services/payment_service.py::settle_wallet`/`settle_corporate`, and
+`backend/routes/rides/booking.py`/`_shared.py::_is_corporate_paid` before rewriting, confirming
+this write-up's characterization. Commit: `af5f5cb6904803ef8261b4c7ab9b79bfbdf1d6c5` (this branch). Option B (the literal
+four-source cascade) remains unbuilt and out of scope, per the recommendation above.
+
 ---
 
 ## 7. Admin surge override >2.5x accepted (1.0-10.0) but always clamped to 2.5x at fare-calc
@@ -428,6 +469,14 @@ capability that may be intentionally in use for audit/record purposes without fi
 that. Recommend closing this purely as a documentation clarification unless Product/Legal has a
 specific reason to want A or B.
 
+**Resolved (2026-08-21):** Option C implemented — CLAUDE.md's "Surge pricing rules" section now
+states explicitly that the >2.5 admin override is record/audit-only and is always clamped to
+`SURGE_CAP` at every fare-calc call site, so it never reaches a rider's fare above the cap.
+Re-verified independently against `backend/routes/admin/service_areas.py`,
+`backend/services/fare_service.py`, `backend/routes/fares.py`, and `backend/features.py` before
+editing the doc — no divergence found from this write-up's claim. Pure documentation change, no
+code/behavior change. See commit 0243332.
+
 ---
 
 ## 8. Fare-estimate 3.5s Directions-wait: accept as permanent SLA exception, or add a hard ceiling
@@ -469,6 +518,12 @@ value and an explicit acceptance of the resulting undercharge tail before shippi
 Product call on risk tolerance, not an engineering one. No action recommended without Product/Eng
 lead's explicit sign-off either way — that's the actual ask of this decision item.
 
+**Decided 2026-08-21** (@vikas, standing in for Product/Eng lead): **Option A approved** — accept
+the 3.5s worst-case Directions wait as a permanent, documented SLA exception. No code change; the
+exception is already documented in CLAUDE.md's Performance SLA section (ranked blocker #24). This
+closes the open half of that item — the exception is no longer just documented, it is now the
+accepted permanent trade-off, not a placeholder pending a future ceiling decision.
+
 ---
 
 ## 9. Confirm whether the silently-failed `purge_pii_retention()` job ever produced a loud alert
@@ -509,6 +564,16 @@ a distinct failure-aware heartbeat) so the watchdog can actually detect a stuck-
 failure mode. This is a small, well-scoped observability fix with an exact template to copy — should
 be picked up as a normal engineering task rather than left open as a "decision," but flagged here
 since it was in the decision log as posed.
+
+**Status: implemented 2026-08-21** (commit `bb6a0f5`). `retention_purge_loop` now calls
+a new `_escalate_tick_failure()` on tick failure — CRITICAL log + `sentry_sdk.capture_message(...,
+level="fatal", tags={"domain": "admin", "surface": "backend", ...})`, matching
+`retention_guard_monitor.py`'s `_escalate()` shape — and `_record_heartbeat("retention_purge
+(24h)")` now fires only on a successful tick (a leader-lock skip still counts as success), so the
+watchdog can detect a stuck-but-still-ticking failure. See
+`docs/change-log/2026-08-21-purge-pii-retention-alerting-fix.md` for the full Change Impact & Risk
+Log, including the blast-radius grep confirming the heartbeat key and metric names are read only
+by the watchdog itself.
 
 ---
 

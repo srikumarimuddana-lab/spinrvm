@@ -105,3 +105,38 @@ export function zoomForSpan(
   if (!Number.isFinite(zoom)) return null;
   return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom));
 }
+
+/**
+ * The one-line heading summary shown in the on-surface DEBUG PANEL.
+ *
+ * Exists because "the car is pointing the wrong way" was reported from a
+ * photograph, and a photograph cannot say WHY — a bearing the GPS supplied, one
+ * derived from two positions, one carried from an earlier reading, and none at
+ * all all look identical on the map.
+ *
+ * It was briefly drawn on the live surface so a production build could report
+ * it, and taken back off: a line of instrumentation on a dashboard is something
+ * a driver has to decide to ignore, and "271° gps · course-up" reads like a
+ * warning to someone who has no idea what it means. Diagnosis stays in the
+ * debug panel, which is dev-only by design; hardware confirmation comes from a
+ * non-production build.
+ *
+ * Deliberately terse — it is one row of a fact table. Examples:
+ *   "271° gps · course-up"      healthy — real course, map rotating
+ *   "271° derived · course-up"  no GPS course; bearing from movement
+ *   "271° held · north-up"      carried from an earlier reading
+ *   "no course · north-up"      nothing to point with (the reported symptom)
+ */
+export function formatHeadingReadout(
+  headingDeg: number | null | undefined,
+  source: 'gps' | 'derived' | 'carried' | 'none',
+  cameraHeadingDeg: number | null,
+): string {
+  const label =
+    source === 'gps' ? 'gps' : source === 'derived' ? 'derived' : source === 'carried' ? 'held' : null;
+  const bearing = normalizeHeading(headingDeg);
+  const left =
+    bearing === null || label === null ? 'no course' : `${Math.round(bearing)}° ${label}`;
+  const right = cameraHeadingDeg === null ? 'north-up' : 'course-up';
+  return `${left} · ${right}`;
+}

@@ -111,7 +111,9 @@ export default function CompanyPortalLayout({
                         <ArrowLeft className="h-3.5 w-3.5" /> Switch company
                     </Link>
                     <div className="flex items-center gap-2">
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative company icon badge, not a status signal (#2816) */}
                         <div className="rounded-md bg-emerald-50 dark:bg-emerald-900/20 p-2">
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative company icon tint, not a status signal (#2816) */}
                             <Building2 className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
                         </div>
                         <div>
@@ -119,7 +121,7 @@ export default function CompanyPortalLayout({
                                 {profile?.company.name ?? "Loading…"}
                             </div>
                             {profile?.membership.role && (
-                                <Badge className="mt-1 text-[10px] bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
+                                <Badge className="mt-1 text-[10px] bg-success/15 text-success hover:bg-success/15">
                                     {profile.membership.role}
                                 </Badge>
                             )}

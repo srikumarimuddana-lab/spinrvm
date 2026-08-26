@@ -45,7 +45,7 @@ finds zero matching rows.
 **Out of scope for this job** (handled elsewhere or follow-ups):
 - `disputes` — retain 7y by policy; separate migration
 - `saved_addresses`, `emergency_contacts` — cascaded with user soft-delete (also reachable via Step H for a DSAR-deleted account, and now via Step N's 30-day scrub for `saved_addresses` specifically)
-- `driver_insurance_periods`, `driver_period_distances`, `stripe_disputes` — each has its own `NO ACTION` FK on `rides(id)`; Step B does not (yet) account for any of the three the way it now does for `financial_events` — see ACTION_ITEMS.md B23
+- `driver_insurance_periods`, `driver_period_distances`, `stripe_disputes` — each has its own `NO ACTION` FK on `rides(id)`; Step B does not (yet) account for any of the three the way it now does for `financial_events` — see ACTION_ITEMS.md B17 (corrected 2026-08-24: this cross-reference previously pointed at B23, which is the unrelated rider-identity-hashing item; B17 is the one that actually tracks Step B's FK handling)
 
 Changing any of the windows above is a **compliance event**, not a code
 tweak. Process:
@@ -167,14 +167,17 @@ on it). What Step N closes is the separate, unambiguous 30-day promise that
 nothing implemented at all — additive to user privacy regardless of which
 way the anonymize-vs-delete question is eventually decided.
 
-**Known gap, not implemented:** `regulatory-sk.md` also promises "rider
-identity linked to trip: 7 years (hashed after 2)" — a general rule for
-every ride, not just DSAR-requested ones. Implementing this literally
-(hashing/nulling `rides.rider_id` at 2 years) would break every active
-rider's own trip-history screen and any admin/refund lookup by rider for a
-ride older than 2 years — a live, real-user-facing regression that needs its
-own product/legal scoping before any code change, not a narrow backend fix.
-Left as an open, documented gap — see ACTION_ITEMS.md B18.
+**Resolved 2026-08-22 (ACTION_ITEMS.md B23):** `regulatory-sk.md` previously
+promised "rider identity linked to trip: 7 years (hashed after 2)" — a
+general rule for every ride, not just DSAR-requested ones. That was never
+implemented, and implementing it literally (hashing/nulling `rides.rider_id`
+at 2 years) would break every active rider's own trip-history screen and any
+admin/refund lookup by rider for a ride older than 2 years — a live,
+real-user-facing regression, not a narrow backend fix. Rather than build
+that, `regulatory-sk.md` was corrected to describe the product's actual,
+deliberate retention model: rider identity stays fully attributable for the
+whole 7-year window (same "Uber/Lyft attributable retention" model as Step
+H above), no 2-year hashing step exists or is planned.
 
 ---
 

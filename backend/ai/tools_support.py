@@ -32,6 +32,16 @@ logger = logging.getLogger(__name__)
 
 _BOTH = frozenset({"rider", "driver"})
 
+# The public website assistant (backend/ai/public_assistant.py) runs anonymous,
+# unauthenticated turns for spinr.ca visitors. It gets its own tool audience so
+# the registry — not the caller — decides what an anonymous session may reach:
+# only the two read-only tools below opt into it. Every account/ride/booking
+# tool stays rider/driver-only, so there is nothing for a "web" turn to call
+# that could read a user's data. escalate_to_support is excluded too: it can
+# open a real Zoho ticket, and an anonymous visitor has no account to attach.
+WEB = "web"
+_BOTH_AND_WEB = _BOTH | {WEB}
+
 ESCALATION_CATEGORIES = [
     "refund",
     "account",
@@ -246,8 +256,30 @@ def _in_area_scope(row_area_ids, scope: set) -> bool:
     return bool(set(row_area_ids) & scope)
 
 
-async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
+def _faq_audience(user: Dict[str, Any]) -> str:
+    """The FAQ-row audience to query for.
+
+    ``faqs.audience`` is tagged rider/driver/both, so for the in-app assistant
+    the tool audience already IS the FAQ audience. The public website assistant
+    runs under the "web" tool audience — a narrower, anonymous tool set that is
+    not an FAQ tag — and carries the kind of visitor the site is serving
+    separately. Falls back to rider, the website's primary audience.
+    """
     audience = user.get("ai_audience", "rider")
+    if audience == WEB:
+        requested = user.get("_web_visitor_type")
+        return requested if requested in _BOTH else "rider"
+    return audience
+
+
+async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
+    # Tool audience: gates the service-area fallback below (only a signed-in
+    # driver has an assigned area). FAQ-row audience is resolved separately —
+    # they differ for the anonymous website assistant. Passing the resolved
+    # value to _current_area_scope would send an anonymous "driver-type"
+    # visitor down the driver lookup, which needs a real user id.
+    audience = user.get("ai_audience", "rider")
+    faq_audience = _faq_audience(user)
     settings = await get_app_settings()
     semantic = bool(settings.get("ai_faq_semantic_enabled"))
     # Only pull the (large JSONB) embedding vector when the semantic path will
@@ -260,7 +292,7 @@ async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
     rows = (
         await db_supabase.get_rows(
             "faqs",
-            {"is_active": True, "audience": {"$in": ["both", audience]}},
+            {"is_active": True, "audience": {"$in": ["both", faq_audience]}},
             limit=200,
             columns=columns,
         )
@@ -395,7 +427,7 @@ register(
             "required": ["query"],
         },
         handler=search_faqs,
-        audiences=_BOTH,
+        audiences=_BOTH_AND_WEB,
     )
 )
 
@@ -407,7 +439,7 @@ register(
         ),
         input_schema={"type": "object", "properties": {}, "required": []},
         handler=get_company_info,
-        audiences=_BOTH,
+        audiences=_BOTH_AND_WEB,
     )
 )
 

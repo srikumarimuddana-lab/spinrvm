@@ -33,6 +33,12 @@ _DRIVER_ROW = {
     "user_id": "user-1",
     "name": "Jane Driver",
     "license_number": "vault:abc123",
+    # ACTION_ITEMS.md B13 round 2: the segregation guard now blocks a NULL
+    # regulatory_authority too, so fixtures representing a normal in-scope
+    # driver need it set explicitly — a bare-row fixture without it would
+    # now trip the out-of-scope 422 on every test that doesn't care about
+    # the guard specifically.
+    "regulatory_authority": "SGI",
 }
 
 
@@ -58,16 +64,20 @@ def test_out_of_scope_drivers_all_sgi_returns_empty():
     assert _out_of_scope_drivers(rows) == []
 
 
-def test_out_of_scope_drivers_null_and_missing_are_grandfathered_in():
+def test_out_of_scope_drivers_null_and_missing_are_now_blocked():
+    # ACTION_ITEMS.md B13 (round 2, 2026-08-22): the NULL-passes grandfather
+    # allowance is retired now that the backfill is confirmed complete and
+    # every driver write path sets regulatory_authority — a NULL row is
+    # treated the same as any other non-SGI authority.
     rows = [{"regulatory_authority": None}, {}]
-    assert _out_of_scope_drivers(rows) == []
+    assert _out_of_scope_drivers(rows) == rows
 
 
-def test_out_of_scope_drivers_filters_only_non_sgi():
+def test_out_of_scope_drivers_filters_non_sgi_and_null():
     sk = {"regulatory_authority": "SGI"}
     ab = {"regulatory_authority": "AMVIC"}
     null = {"regulatory_authority": None}
-    assert _out_of_scope_drivers([sk, ab, null]) == [ab]
+    assert _out_of_scope_drivers([sk, ab, null]) == [ab, null]
 
 
 # ── observability call-arg assertions ───────────────────────────────────────
@@ -290,3 +300,20 @@ def test_out_of_scope_message_dedups_repeated_authority_but_count_is_per_driver(
     assert detail.startswith("2 of the selected drivers are regulated by AMVIC, not SGI")
     # AMVIC appears exactly once in the authorities list despite 2 drivers.
     assert detail.count("AMVIC") == 1
+
+
+def test_out_of_scope_message_labels_null_authority_as_unspecified(admin_client):
+    # ACTION_ITEMS.md B13 round 2: a NULL regulatory_authority is now blocked
+    # too (see test_out_of_scope_drivers_null_and_missing_are_now_blocked) —
+    # this pins that the 422 detail renders something readable instead of the
+    # literal string "None" when that happens.
+    null_row = {**_DRIVER_ROW, "user_id": "user-1", "regulatory_authority": None}
+    with patch("backend.db_supabase.get_rows", AsyncMock(return_value=[null_row])):
+        resp = admin_client.post(
+            "/api/admin/data-transfer/sgi-forms/generate",
+            json={"form_type": "driver_details", "driver_ids": ["user-1"]},
+        )
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "unspecified" in detail
+    assert "None" not in detail

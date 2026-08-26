@@ -101,11 +101,12 @@ export default function FlagsTab() {
                 : <Table><TableHeader><TableRow><SortableHead column="target_type" sort={sort} onSort={toggle}>Target</SortableHead><SortableHead column="reason" sort={sort} onSort={toggle}>Reason</SortableHead><SortableHead column="service_area_id" sort={sort} onSort={toggle}>Area</SortableHead><SortableHead column="description" sort={sort} onSort={toggle}>Description</SortableHead><SortableHead column="is_active" sort={sort} onSort={toggle}>Status</SortableHead><SortableHead column="created_at" sort={sort} onSort={toggle}>Date</SortableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
                     <TableBody>{sorted.map((f) => (
                         <TableRow key={f.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelected(f)}>
+                            {/* eslint-disable-next-line no-restricted-syntax -- decorative rider/driver icon tint, not a status signal (#2816) */}
                             <TableCell><div className="flex items-center gap-1.5">{f.target_type === "rider" ? <Users className="h-3.5 w-3.5 text-blue-500" /> : <Car className="h-3.5 w-3.5 text-emerald-500" />}<span className="text-sm capitalize">{f.target_type}</span></div></TableCell>
                             <TableCell><Badge variant="outline" className="text-[10px]">{f.reason?.replace(/_/g, " ") || "other"}</Badge></TableCell>
                             <TableCell className="text-xs text-muted-foreground">{areaName(f.service_area_id) || "—"}</TableCell>
                             <TableCell className="max-w-[200px] truncate text-xs text-muted-foreground">{f.description || "—"}</TableCell>
-                            <TableCell>{f.is_active === false ? <Badge className="text-[10px] bg-zinc-500/15 text-zinc-600">Inactive</Badge> : <Badge className="text-[10px] bg-amber-500/15 text-amber-600">Active</Badge>}</TableCell>
+                            <TableCell>{f.is_active === false ? <Badge className="text-[10px] bg-muted text-muted-foreground">Inactive</Badge> : <Badge className="text-[10px] bg-warning/15 text-warning">Active</Badge>}</TableCell>
                             <TableCell className="text-[10px] text-muted-foreground">{formatDate(f.created_at)}</TableCell>
                             <TableCell className="text-right"><div className="flex justify-end gap-0.5">
                                 <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); setSelected(f); }}><Eye className="h-3.5 w-3.5" /></Button>
@@ -120,7 +121,7 @@ export default function FlagsTab() {
 
             {/* Detail Dialog */}
             <Dialog open={!!selected && !dialogOpen} onOpenChange={(o) => { if (!o) setSelected(null); }}>
-                <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle className="text-base flex items-center gap-2"><Flag className="h-4 w-4 text-amber-500" />Flag Details</DialogTitle></DialogHeader>
+                <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle className="text-base flex items-center gap-2"><Flag className="h-4 w-4 text-warning" />Flag Details</DialogTitle></DialogHeader>
                     {selected && (<div className="space-y-3">
                         <div className="grid grid-cols-2 gap-3 text-sm">
                             <div><Label className="text-[10px] text-muted-foreground">Target Type</Label><p className="capitalize">{selected.target_type}</p></div>
@@ -163,7 +164,7 @@ export default function FlagsTab() {
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction onClick={() => { if (deleteTarget) deleteFlag(deleteTarget).then(() => { setSelected(null); load(); }).finally(() => setDeleteTarget(null)); }} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+                        <AlertDialogAction onClick={() => { if (deleteTarget) deleteFlag(deleteTarget).then(() => { setSelected(null); load(); }).finally(() => setDeleteTarget(null)); }} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>

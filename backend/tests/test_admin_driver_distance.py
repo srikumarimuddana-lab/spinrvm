@@ -339,3 +339,115 @@ async def test_distance_logs_surfaces_is_reconstructed_per_span():
     live, backfilled = out["logs"]
     assert live["is_reconstructed"] is False
     assert backfilled["is_reconstructed"] is True
+
+
+@pytest.mark.asyncio
+async def test_distance_logs_prefers_correction_over_original_span():
+    """ACTION_ITEMS.md B34: when a driver_insurance_period_corrections row
+    exists for a span, the drill-down must render the CORRECTED
+    started_at/ended_at (and flag is_corrected), not the original — not
+    just that the corrections table can be queried."""
+    ws = datetime(2026, 8, 10, 6, 0, 0, tzinfo=timezone.utc)
+    spans = [
+        {
+            "id": "span-1",
+            "period": 2,
+            "started_at": (ws + timedelta(hours=2)).isoformat(),  # wrong original start
+            "ended_at": (ws + timedelta(hours=2, minutes=10)).isoformat(),
+            "ride_id": "ride-1",
+        }
+    ]
+    corrected_start = (ws + timedelta(hours=1, minutes=45)).isoformat()  # real GPS start, earlier
+
+    async def _get_rows(table, filters=None, **kw):
+        if table == "driver_insurance_periods":
+            return spans
+        if table == "driver_insurance_period_corrections":
+            assert filters == {"original_period_id": {"$in": ["span-1"]}}
+            return [
+                {
+                    "original_period_id": "span-1",
+                    "corrected_started_at": corrected_start,
+                    "corrected_ended_at": spans[0]["ended_at"],
+                }
+            ]
+        if table == "driver_period_distances_current":
+            return []
+        if table == "rides":
+            return [{"id": "ride-1", "ride_code": "SPR-PE7TTB"}]
+        raise AssertionError(f"unexpected table {table}")
+
+    with patch.object(mod.db_supabase, "get_rows", AsyncMock(side_effect=_get_rows)):
+        out = await mod.admin_driver_distance_logs(driver_id="drv-1", date=DAY, admin_user=ADMIN)
+
+    assert len(out["logs"]) == 1
+    row = out["logs"][0]
+    assert row["from"] == corrected_start
+    assert row["is_corrected"] is True
+    # Corrected span is 25 minutes (1h45m -> 2h10m offset), not the
+    # original 10 minutes.
+    assert row["seconds"] == 25 * 60
+
+
+@pytest.mark.asyncio
+async def test_distance_logs_keeps_original_when_no_correction_on_file():
+    ws = datetime(2026, 8, 10, 6, 0, 0, tzinfo=timezone.utc)
+    original_start = (ws + timedelta(hours=2)).isoformat()
+    spans = [
+        {
+            "id": "span-1",
+            "period": 2,
+            "started_at": original_start,
+            "ended_at": (ws + timedelta(hours=2, minutes=10)).isoformat(),
+            "ride_id": "ride-1",
+        }
+    ]
+
+    async def _get_rows(table, filters=None, **kw):
+        if table == "driver_insurance_periods":
+            return spans
+        if table == "driver_insurance_period_corrections":
+            assert filters == {"original_period_id": {"$in": ["span-1"]}}
+            return []
+        if table == "driver_period_distances_current":
+            return []
+        if table == "rides":
+            return [{"id": "ride-1", "ride_code": "SPR-PE7TTB"}]
+        raise AssertionError(f"unexpected table {table}")
+
+    with patch.object(mod.db_supabase, "get_rows", AsyncMock(side_effect=_get_rows)):
+        out = await mod.admin_driver_distance_logs(driver_id="drv-1", date=DAY, admin_user=ADMIN)
+
+    assert len(out["logs"]) == 1
+    row = out["logs"][0]
+    assert row["from"] == original_start
+    assert row["is_corrected"] is False
+
+
+@pytest.mark.asyncio
+async def test_distance_logs_no_correction_lookup_when_spans_carry_no_id():
+    """Existing fixtures/spans that never carried an `id` field (id-less
+    fixture rows, or any future response missing it) must short-circuit —
+    never issue an all-empty $in against the corrections table."""
+    ws = datetime(2026, 8, 10, 6, 0, 0, tzinfo=timezone.utc)
+    spans = [
+        {
+            "period": 1,
+            "started_at": (ws + timedelta(hours=1)).isoformat(),
+            "ended_at": (ws + timedelta(hours=2)).isoformat(),
+            "ride_id": None,
+        }
+    ]
+    calls = []
+
+    async def _get_rows(table, filters=None, **kw):
+        calls.append(table)
+        if table == "driver_insurance_periods":
+            return spans
+        return []
+
+    with patch.object(mod.db_supabase, "get_rows", AsyncMock(side_effect=_get_rows)):
+        out = await mod.admin_driver_distance_logs(driver_id="drv-1", date=DAY, admin_user=ADMIN)
+
+    assert "driver_insurance_period_corrections" not in calls
+    assert out["logs"][0]["is_corrected"] is False

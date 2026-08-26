@@ -431,6 +431,15 @@ data_transfer_import_commit_limit = default_limiter.limit("10/hour")
 booking_import_validate_limit = default_limiter.limit("30/hour")
 booking_import_commit_limit = default_limiter.limit("10/hour")
 
+# Admin legacy wallet-balance import — same shape and posture as
+# booking_import above: /validate is a read-only dry-run over three CSVs
+# (wallets, customers, drivers); /commit applies real money deltas via the
+# row-locked wallet_apply_delta RPC. commit gets the tighter limit. A
+# one-time operation over ~13 rows (per the 2026-08-19 Mongo-export audit),
+# so both limits are generous headroom, not a tuned production ceiling.
+wallet_import_validate_limit = default_limiter.limit("30/hour")
+wallet_import_commit_limit = default_limiter.limit("10/hour")
+
 # Admin driver-import (CSV) — /validate is a read-only dry-run (parse +
 # report, no writes); /commit creates user + driver rows. Same shape as
 # data_transfer_import/booking_import above: commit is the write path and
@@ -482,6 +491,16 @@ admin_statement_download_limit = default_limiter.limit("60/hour")
 # by rotating source IPs, multiplying one account's effective per-minute
 # budget by however many IPs it rotates through.
 ai_chat_limit = default_limiter.limit("10/minute", key_func=get_ai_chat_key)
+
+# Public website assistant (POST /ai/public-chat, backend/ai/public_assistant.py).
+# Unlike ai_chat_limit above there is no account to key on — the caller is an
+# anonymous spinr.ca visitor — so this falls back to the default per-IP key.
+# That IS defeatable by rotating source IPs; it is a speed bump, not the
+# control. The real ceilings on this surface are the ai_public_chat_enabled
+# kill switch and the fact that a "web" turn can only reach two read-only FAQ
+# tools, so abuse costs LLM spend and nothing else. Tighter than the in-app
+# limit (6 vs 10/minute) precisely because it is unauthenticated.
+ai_public_chat_limit = default_limiter.limit("6/minute")
 
 # In-ride messaging — generous but bounded to prevent SMS relay abuse
 ride_message_limit = default_limiter.limit("30/minute", key_func=get_user_or_ip_key)

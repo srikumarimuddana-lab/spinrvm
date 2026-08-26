@@ -641,28 +641,28 @@ export default function SubscriptionsPage() {
                     <Card>
                         <CardContent className="pt-4 pb-3">
                             <div className="flex items-center gap-1">
-                                <CheckCircle className="h-3 w-3 text-green-500" />
+                                <CheckCircle className="h-3 w-3 text-success" />
                                 <p className="text-xs text-muted-foreground">Active</p>
                             </div>
-                            <p className="text-2xl font-bold text-green-600">{stats.active}</p>
+                            <p className="text-2xl font-bold text-success">{stats.active}</p>
                         </CardContent>
                     </Card>
                     <Card>
                         <CardContent className="pt-4 pb-3">
                             <div className="flex items-center gap-1">
-                                <Clock className="h-3 w-3 text-yellow-500" />
+                                <Clock className="h-3 w-3 text-muted-foreground" />
                                 <p className="text-xs text-muted-foreground">Expired</p>
                             </div>
-                            <p className="text-2xl font-bold text-yellow-600">{stats.expired}</p>
+                            <p className="text-2xl font-bold text-muted-foreground">{stats.expired}</p>
                         </CardContent>
                     </Card>
                     <Card>
                         <CardContent className="pt-4 pb-3">
                             <div className="flex items-center gap-1">
-                                <XCircle className="h-3 w-3 text-red-500" />
+                                <XCircle className="h-3 w-3 text-destructive" />
                                 <p className="text-xs text-muted-foreground">Cancelled</p>
                             </div>
-                            <p className="text-2xl font-bold text-red-600">{stats.cancelled}</p>
+                            <p className="text-2xl font-bold text-destructive">{stats.cancelled}</p>
                         </CardContent>
                     </Card>
                     <Card>
@@ -759,7 +759,7 @@ export default function SubscriptionsPage() {
                                                         <Pencil className="h-3 w-3" />
                                                     </Button>
                                                     <Button size="sm" variant="outline" onClick={() => openDelete(plan)}>
-                                                        <Trash2 className="h-3 w-3 text-red-500" />
+                                                        <Trash2 className="h-3 w-3 text-destructive" />
                                                     </Button>
                                                 </div>
                                             </TableCell>

@@ -60,10 +60,10 @@ import { useRequireModule } from "@/hooks/useRequireModule";
 import { useToast } from "@/components/ui/use-toast";
 
 const STATUS_PILL_CLASSES: Record<CompanyStatus, string> = {
-    pending_verification: "bg-yellow-100 text-yellow-800 hover:bg-yellow-100",
-    active: "bg-emerald-100 text-emerald-800 hover:bg-emerald-100",
-    suspended: "bg-orange-100 text-orange-800 hover:bg-orange-100",
-    closed: "bg-gray-200 text-gray-700 hover:bg-gray-200",
+    pending_verification: "bg-warning/15 text-warning hover:bg-warning/15",
+    active: "bg-success/15 text-success hover:bg-success/15",
+    suspended: "bg-destructive/15 text-destructive hover:bg-destructive/15",
+    closed: "bg-muted text-muted-foreground hover:bg-muted",
 };
 
 const RISK_FLAG_LABELS: Record<string, string> = {
@@ -105,8 +105,8 @@ export default function CorporateAccountsPage() {
         getWalletRiskPortfolio()
             .then((res) => {
                 if (cancelled) return;
-                setFlaggedWallets(res.wallets.filter((w) => w.risk_flags.length > 0));
-                setTotalWallets(res.total_wallets);
+                setFlaggedWallets((res.wallets ?? []).filter((w) => (w.risk_flags?.length ?? 0) > 0));
+                setTotalWallets(res.total_wallets ?? 0);
             })
             .catch(() => {
                 if (!cancelled) {
@@ -133,7 +133,7 @@ export default function CorporateAccountsPage() {
         getKybReverificationDue()
             .then((res) => {
                 if (cancelled) return;
-                setKybDue(res.companies);
+                setKybDue(res.companies ?? []);
                 setKybThresholdMonths(res.threshold_months);
             })
             .catch(() => {
@@ -329,9 +329,9 @@ export default function CorporateAccountsPage() {
             {/* Wallet risk portfolio — flags across every company at once,
                 so a risk doesn't require opening each account individually. */}
             {!riskLoading && flaggedWallets.length > 0 && (
-                <Card className="border-amber-300/50 bg-amber-50/40 dark:bg-amber-950/10">
+                <Card className="border-warning/40 bg-warning/10">
                     <CardContent className="p-4">
-                        <div className="flex items-center gap-2 text-sm font-semibold text-amber-800 dark:text-amber-400 mb-2">
+                        <div className="flex items-center gap-2 text-sm font-semibold text-warning mb-2">
                             <AlertTriangle className="h-4 w-4" />
                             {flaggedWallets.length} of {totalWallets} wallets flagged
                         </div>
@@ -340,7 +340,7 @@ export default function CorporateAccountsPage() {
                                 <Link
                                     key={w.wallet_id}
                                     href={`/dashboard/corporate-accounts/${w.company_id}`}
-                                    className="flex items-center gap-1.5 rounded-md border border-amber-300/60 bg-background px-2.5 py-1 text-xs hover:border-amber-500 transition"
+                                    className="flex items-center gap-1.5 rounded-md border border-warning/30 bg-background px-2.5 py-1 text-xs hover:border-warning transition"
                                     title={w.risk_flags.map((f) => RISK_FLAG_LABELS[f] || f).join(", ")}
                                 >
                                     <span className="font-medium">{w.company_name || w.company_id.slice(0, 8)}</span>
@@ -362,9 +362,9 @@ export default function CorporateAccountsPage() {
                 company's status, it's a reminder for an admin to manually
                 re-run the KYB review flow. */}
             {!kybLoading && kybDue.length > 0 && (
-                <Card className="border-sky-300/50 bg-sky-50/40 dark:bg-sky-950/10">
+                <Card className="border-warning/40 bg-warning/10">
                     <CardContent className="p-4">
-                        <div className="flex items-center gap-2 text-sm font-semibold text-sky-800 dark:text-sky-400 mb-2">
+                        <div className="flex items-center gap-2 text-sm font-semibold text-warning mb-2">
                             <ShieldAlert className="h-4 w-4" />
                             {kybDue.length} compan{kybDue.length === 1 ? "y" : "ies"} due for KYB re-verification
                             <span className="font-normal text-muted-foreground">
@@ -376,7 +376,7 @@ export default function CorporateAccountsPage() {
                                 <Link
                                     key={c.id}
                                     href={`/dashboard/corporate-accounts/${c.id}`}
-                                    className="flex items-center gap-1.5 rounded-md border border-sky-300/60 bg-background px-2.5 py-1 text-xs hover:border-sky-500 transition"
+                                    className="flex items-center gap-1.5 rounded-md border border-warning/30 bg-background px-2.5 py-1 text-xs hover:border-warning/60 transition"
                                     title={c.kyb_reviewed_at ? `Last reviewed ${c.kyb_reviewed_at.slice(0, 10)}` : ""}
                                 >
                                     <span className="font-medium">{c.legal_name || c.name || c.id.slice(0, 8)}</span>
@@ -485,7 +485,11 @@ export default function CorporateAccountsPage() {
                                         </TableCell>
                                         <TableCell>${account.credit_limit?.toLocaleString() || "0"}</TableCell>
                                         <TableCell>
-                                            <Badge variant={account.is_active ? "default" : "secondary"} className={account.is_active ? "bg-emerald-500 hover:bg-emerald-600" : ""}>
+                                            <Badge
+                                                variant={account.is_active ? "default" : "secondary"}
+                                                // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text badge; dark-mode --success (2.02:1) fails WCAG AA against white text (#2816)
+                                                className={account.is_active ? "bg-emerald-500 hover:bg-emerald-600" : ""}
+                                            >
                                                 {account.is_active ? "Active" : "Inactive"}
                                             </Badge>
                                         </TableCell>
@@ -495,7 +499,7 @@ export default function CorporateAccountsPage() {
                                                     <Pencil className="h-4 w-4 text-muted-foreground" />
                                                 </Button>
                                                 <Button variant="ghost" size="icon" onClick={() => handleOpenDelete(account)}>
-                                                    <Trash2 className="h-4 w-4 text-red-500" />
+                                                    <Trash2 className="h-4 w-4 text-destructive" />
                                                 </Button>
                                             </div>
                                         </TableCell>
@@ -679,7 +683,7 @@ export default function CorporateAccountsPage() {
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction onClick={handleDelete} className="bg-red-600 hover:bg-red-700">
+                        <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
                             {formLoading ? "Deleting..." : "Delete"}
                         </AlertDialogAction>
                     </AlertDialogFooter>

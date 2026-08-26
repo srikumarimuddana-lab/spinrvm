@@ -65,6 +65,17 @@ class VerifyOTPRequest(BaseModel):
     # existed) keep working unchanged — it only affects conversion reporting,
     # never auth behaviour or the role assigned to the new row.
     client_app: Optional[Literal["rider", "driver"]] = "rider"
+    # Explicit-consent gesture from the new-signup screen's checkbox
+    # (rider-app / driver-app login.tsx) — true only when the user actively
+    # checked "I agree to the Terms of Service and Privacy Policy" before
+    # tapping continue. Optional and defaulting to False (not a required
+    # field) so an existing/returning-user login body that omits it never
+    # fails validation — routes/auth.py's verify_otp only *enforces* this
+    # field on the branch that creates a brand-new account; it is never read
+    # for an existing user, whose consent was already captured at their own
+    # original signup. See
+    # docs/change-log/2026-08-20-explicit-signup-consent-checkbox.md.
+    consent_accepted: bool = False
 
 
 class CreateProfileRequest(BaseModel):
@@ -365,6 +376,18 @@ class AppSettings(BaseModel):
     # incident that caused this switch to be flipped off, and blocking that
     # path would work against the person responding to the incident.
     corporate_billing_enabled: bool = True
+    # Kill switch for new ride requests generally (ACTION_ITEMS.md G5).
+    # Distinct from the four flags above — none of those stop demand-side
+    # booking; they gate scheduled dispatch, surge, promo redemption, and
+    # corporate billing specifically. This is the demand-side lever: checked
+    # at the top of POST /rides (create_ride) before any DB write. Defaults
+    # to true (current, always-on behavior). Flip to false during an
+    # incident (e.g. a dispatch bug, a payment-processing problem) to stop
+    # new bookings without forcing every driver offline
+    # (saskatoon-launch.md §N-4's existing bulk is_online=false lever is the
+    # supply-side equivalent). Does NOT affect rides already in flight —
+    # existing rides continue through their normal state machine untouched.
+    new_ride_requests_enabled: bool = True
     # Fraud guard for the referral payout loop (utils/referral_payout.py,
     # ranked blocker #6 / audit finding N2, 2026-08-19): caps how many
     # referrer_reward payouts a single referrer can earn in a rolling 24h
@@ -409,6 +432,13 @@ class AppSettings(BaseModel):
     company_phone: str = ""
     company_email: str = ""
     company_website: str = ""
+    # Smart/universal link for "open or install the app" CTAs in transactional
+    # email (rider welcome, etc). Deliberately separate from company_website:
+    # that's the marketing site, this should resolve to the app itself (an
+    # app-store listing or a universal link that opens the installed app).
+    # Empty = no app download link is configured yet; callers must omit the
+    # CTA rather than link to a blank/placeholder URL. See utils/rider_emails.py.
+    company_app_download_url: str = ""
     # Logo rendered in transactional-email headers. Empty = use the bundled
     # asset at backend/static/branding/spinr_logo.png, served by
     # routes/branding.py — which is the correct default, not a placeholder.
@@ -533,6 +563,10 @@ class AppSettings(BaseModel):
     # When true, escalate_to_support creates a Zoho ticket. Default is a
     # deep-link handoff only — the AI triggers no server-side side effects.
     ai_escalation_creates_ticket: bool = False
+    # Public website assistant (spinr.ca chat widget -> POST /ai/public-chat,
+    # backend/ai/public_assistant.py). Separate from ai_assistant_enabled so the
+    # anonymous surface can be turned off on its own; both must be on. Ships dark.
+    ai_public_chat_enabled: bool = False
     # Shown under the chat input in both apps; also returned by /ai/config.
     ai_disclaimer: str = "AI answers can be inaccurate. For emergencies, call 911 or use the SOS button."
     # ── iOS Live Activity APNs (Phase 3, .p8 token auth) ─────────────────
@@ -585,9 +619,21 @@ class AppSettings(BaseModel):
     # 334) is behind routes/auth.py's CONSENT_VERSION — legacy-imported
     # riders/drivers who never saw a Spinr consent flow, and organic users
     # who predate consent-version tracking — is shown the one-time notice.
-    # Neither app has the notice screen wired to check this endpoint yet;
-    # flipping this on ahead of that shipping is a no-op, not a live risk.
+    # Both apps' otp.tsx/profile-setup.tsx/index.tsx are now live-wired to
+    # check GET /consent/status on app-open/login and redirect to
+    # legacy-consent-notice.tsx — flipping this on is a real, immediate,
+    # user-facing change, not a no-op (this comment previously said
+    # otherwise; corrected alongside migration 356, which also adds the
+    # column this flag reads/writes — it didn't exist in the DB before).
     legacy_consent_notice_enabled: bool = False
+    # Dark-launch gate for the legacy-imported-ride "Imported" badge + no-GPS
+    # disclaimer on rider/driver ride-detail screens (routes/rides/queries.py's
+    # GET /{ride_id}, docs/legacy-ride-history-presentation-plan.md). Off
+    # (default): GET /{ride_id} always reports show_legacy_badge=false, even
+    # for a ride with legacy_import_metadata populated -- the underlying
+    # metadata itself is unaffected, this flag only gates the client-visible
+    # badge/disclaimer UX. Migration 364 adds the column this flag reads.
+    legacy_ride_badge_enabled: bool = False
     # ── Demand heatmap v2 (P1 HM-10/HM-13) ──────────────────────────────
     # v2 adds per-cell {live, baseline, scheduled} components + surge mirror
     # to the driver heatmap endpoint. Gated by this flag; legacy `points`

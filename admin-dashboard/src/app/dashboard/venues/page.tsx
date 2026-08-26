@@ -246,7 +246,7 @@ export default function VenuesPage() {
                   </div>
                 </div>
                 {!d.is_active && (
-                  <p className="text-xs text-muted-foreground border-l-2 border-amber-500 pl-2">
+                  <p className="text-xs text-muted-foreground border-l-2 border-warning pl-2">
                     Inactive venues are never returned by the rider app. Verify the centre and every
                     pickup point on the map before activating — riders are sent to these exact coordinates.
                   </p>
@@ -294,6 +294,7 @@ export default function VenuesPage() {
                     return (
                       <div
                         key={i}
+                        // eslint-disable-next-line no-restricted-syntax -- decorative row-selection highlight, not a status signal (#2816)
                         className={`grid gap-2 sm:grid-cols-[auto_1fr_auto_auto_auto_auto] items-center rounded-lg p-1.5 transition-colors ${selected ? "bg-amber-50 dark:bg-amber-900/20 ring-1 ring-amber-400" : ""}`}
                       >
                         <button
@@ -301,6 +302,7 @@ export default function VenuesPage() {
                           onClick={() => setSelectedPoint(selected ? null : i)}
                           aria-pressed={selected}
                           aria-label={`${selected ? "Deselect" : "Select"} pickup point ${i + 1} for map placement`}
+                          // eslint-disable-next-line no-restricted-syntax -- decorative numbered-marker selection state, not a status signal; solid-fill white-text also fails the success/warning-foreground contrast check (#2816)
                           className={`h-7 w-7 rounded-full text-xs font-bold shrink-0 ${selected ? "bg-amber-500 text-white" : "bg-sky-500 text-white hover:bg-sky-600"}`}
                         >
                           {i + 1}
@@ -312,7 +314,7 @@ export default function VenuesPage() {
                           {Number.isFinite(dist) ? `${Math.round(dist)} m` : "—"}
                           {outside && " outside"}
                         </span>
-                        <button onClick={() => removePoint(i)} aria-label={`Delete pickup point ${i + 1}`} className="text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg p-2"><Trash2 className="h-4 w-4" /></button>
+                        <button onClick={() => removePoint(i)} aria-label={`Delete pickup point ${i + 1}`} className="text-destructive hover:bg-destructive/10 rounded-lg p-2"><Trash2 className="h-4 w-4" /></button>
                       </div>
                     );
                   })}
@@ -433,7 +435,7 @@ export default function VenuesPage() {
                             >
                               <Crosshair className="h-3.5 w-3.5" /> Edit
                             </button>
-                            <button onClick={() => remove(v)} aria-label={`Delete ${v.name}`} className="text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg p-2"><Trash2 className="h-4 w-4" /></button>
+                            <button onClick={() => remove(v)} aria-label={`Delete ${v.name}`} className="text-destructive hover:bg-destructive/10 rounded-lg p-2"><Trash2 className="h-4 w-4" /></button>
                           </div>
                         </TableCell>
                       </TableRow>

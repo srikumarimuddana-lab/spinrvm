@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 try:
     from ..utils.company_details import load_company_details
@@ -83,6 +83,7 @@ async def _send(
     footnote: Optional[str] = None,
     to_override: Optional[str] = None,
     company: Optional[Any] = None,
+    cta: Optional[Tuple[str, str]] = None,
 ) -> bool:
     """Render and hand off. Resolves the user row once if the caller has none.
 
@@ -90,6 +91,9 @@ async def _send(
     to interpolate the support address into its copy does not read settings
     twice — and so the footer and that copy cannot disagree about where to
     write for help.
+
+    ``cta`` is ``(label, url)`` for a single call-to-action button — optional,
+    since most senders here are confirmations with nothing to click through to.
     """
     try:
         recipient = user if user is not None else await resolve_recipient(user_id)
@@ -103,6 +107,7 @@ async def _send(
                 paragraphs=paragraphs,
                 footnote=footnote,
                 company=company,
+                cta=cta,
             ),
             email_type=email_type,
             email_class=EmailClass.TRANSACTIONAL,
@@ -124,21 +129,28 @@ async def send_welcome_email(user: dict[str, Any]) -> bool:
     earliest point we can reach them — and it doubles as a confirmation that
     the address we hold actually works, which nothing else in the rider flow
     ever checks.
+
+    Carries a "Book your first ride" CTA when ``company_app_download_url`` is
+    configured (see ``utils/company_details.py``) — without it there's no
+    real link to send riders to, so the email renders without a button rather
+    than a placeholder one. Content review, 2026-08-24: the original version
+    of this email stated a value prop but never asked the rider to act on it.
     """
     company = await load_company_details()
     return await _send(
         company=company,
         user_id=user["id"],
         user=user,
-        subject=f"Welcome to {company.app_name}",
+        subject=f"Welcome to {company.app_name} — drivers keep 100% of your fare",
         heading=f"Welcome to {company.app_name}",
         paragraphs=[
-            f"Your account is ready. You can book a ride from the {company.app_name} app whenever you need one.",
+            f"Your account is ready. Open the {company.app_name} app, set a pickup and drop-off, "
+            "and you'll see the full price before you confirm — no surprises at drop-off.",
             f"{company.app_name} is Saskatchewan-built and takes 0% commission — every dollar of the fare "
-            "goes to your driver. You'll always see the full price before you confirm a ride, "
-            "with GST and PST shown as separate line items on your receipt.",
+            "goes to your driver. GST and PST are shown as separate line items on your receipt.",
             f"Questions any time: {company.support_email}",
         ],
+        cta=("Book your first ride", company.app_download_url) if company.app_download_url else None,
         email_type="rider_welcome",
     )
 

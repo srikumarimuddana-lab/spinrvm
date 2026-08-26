@@ -25,10 +25,11 @@ import {
 const PAGE_SIZE = 50;
 
 const S_CFG: Record<string, { l: string; c: string }> = {
-    open: { l: "Open", c: "bg-amber-500/15 text-amber-600" },
+    open: { l: "Open", c: "bg-warning/15 text-warning" },
+    // eslint-disable-next-line no-restricted-syntax -- "investigating" (in progress, neither good nor bad) has no semantic-token equivalent; must stay distinct from open/resolved/dismissed (#2816)
     investigating: { l: "Investigating", c: "bg-blue-500/15 text-blue-600" },
-    resolved: { l: "Resolved", c: "bg-emerald-500/15 text-emerald-600" },
-    dismissed: { l: "Dismissed", c: "bg-zinc-500/15 text-zinc-600" },
+    resolved: { l: "Resolved", c: "bg-success/15 text-success" },
+    dismissed: { l: "Dismissed", c: "bg-muted text-muted-foreground" },
 };
 const CATS = ["rude_behavior", "unsafe_driving", "vehicle_condition", "route_issue", "overcharge", "harassment", "other"];
 
@@ -138,7 +139,7 @@ export default function ComplaintsTab() {
 
             {/* Review Dialog */}
             <Dialog open={!!selected && !dialogOpen} onOpenChange={(o) => { if (!o) setSelected(null); }}>
-                <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle className="text-base flex items-center gap-2"><FileWarning className="h-4 w-4 text-amber-500" />Review Complaint</DialogTitle></DialogHeader>
+                <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle className="text-base flex items-center gap-2"><FileWarning className="h-4 w-4 text-warning" />Review Complaint</DialogTitle></DialogHeader>
                     {selected && (<div className="space-y-3">
                         <div className="grid grid-cols-2 gap-3 text-sm">
                             <div><Label className="text-[10px] text-muted-foreground">Against</Label><p className="capitalize">{selected.against_type || "—"}</p></div>
@@ -151,6 +152,7 @@ export default function ComplaintsTab() {
                         {(selected.status === "open" || selected.status === "investigating") && (<>
                             <div className="space-y-1.5"><Label className="text-xs">Resolution Notes</Label><Textarea placeholder="Notes..." value={resolution} onChange={(e) => setResolution(e.target.value)} rows={2} /></div>
                             <div className="flex gap-2">
+                                {/* eslint-disable-next-line no-restricted-syntax -- solid-fill success button with white text; --success fails WCAG AA contrast in dark mode (#2816) */}
                                 <Button size="sm" className="flex-1 bg-emerald-600 hover:bg-emerald-700" onClick={() => handleResolve("resolved")}><CheckCircle className="h-3.5 w-3.5 mr-1.5" />Resolve</Button>
                                 <Button size="sm" variant="outline" className="flex-1" onClick={() => handleResolve("dismissed")}><XCircle className="h-3.5 w-3.5 mr-1.5" />Dismiss</Button>
                             </div>
@@ -183,7 +185,7 @@ export default function ComplaintsTab() {
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction onClick={() => { if (deleteTarget) deleteComplaint(deleteTarget).then(load).finally(() => setDeleteTarget(null)); }} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+                        <AlertDialogAction onClick={() => { if (deleteTarget) deleteComplaint(deleteTarget).then(load).finally(() => setDeleteTarget(null)); }} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>

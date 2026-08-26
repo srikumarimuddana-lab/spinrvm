@@ -10545,6 +10545,37 @@ record of what was assumed vs. what was actually true</summary>
     tests combined across both test files covering this screen; full
     rider-app suite still green (123 suites / 1690 tests), `yarn tsc
     --noEmit` clean.
+  - **rider-app `app/(tabs)/account.tsx`: 84.41% → 100% branch (stmts
+    98.5%, funcs 94.11%, lines 98.3%).** Rider's account/profile tab —
+    menu navigation, sign-out, avatar viewer, work-profile summary, phone
+    formatting, and a company-info footer. Purely display/navigation; the
+    only money-adjacent element is a "Wallet" row that just
+    `router.push('/wallet')`s with no balance display, calculation, or
+    mutation on this screen, so no `spinr-*-auditor` review was requested
+    for this round. Already had `accountScreen.test.tsx` (27 tests) plus
+    `accountEmailVerification.test.tsx` (5 tests, covering the
+    email-verify pill and the focus-refresh merge-not-replace fix) —
+    extended `accountScreen.test.tsx` in place (+7 tests, 34 total; 39
+    combined with the email-verification file). Closed:
+    - focus-refresh IIFE edge cases: effect cancelled before `/auth/me`
+      resolves (unmount mid-fetch), and merging a fresh response into a
+      null store user (replace, not spread-merge)
+    - `/company-info`'s `res?.data || {}` fallback when `res.data` is
+      itself undefined
+    - rating-stars outline/dim-color branch for a sub-5 rounded rating
+    - the `last_name || ''` fallback with a missing last name
+    - the Work section's plural "N company accounts" subtitle
+    - company-info footer's `name || 'Spinr'` fallback and the
+      address/email/website individual-field branches
+
+    No production bugs found. One statement/function (not a branch) left
+    deliberately uncovered: the photo-viewer Modal's `onRequestClose`
+    (Android hardware-back handler) — react-test-renderer can't simulate
+    that native gesture; the same close path is already covered via
+    backdrop-tap. Test-only diff (production `app/(tabs)/account.tsx`
+    confirmed untouched via `git diff`). 39 tests across the two files;
+    full rider-app suite still green (123 suites / 1690 tests), `yarn
+    tsc --noEmit` clean.
   - **rider-app `app/ride-in-progress.tsx`: 83.73% → 100% branch
     (stmts/lines already 100%; funcs 97.67% unchanged — one pre-existing
     no-op stub, `handleLocation`, out of scope for branch coverage).**

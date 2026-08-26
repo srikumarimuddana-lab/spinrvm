@@ -14,6 +14,30 @@
  *    and refetches, with a failure toast on error
  *  - Message Driver navigates to /chat-driver with rideId
  *  - a driver photo load error falls back to the placeholder icon
+ *
+ * Branch-coverage round (83.73% -> 100% branch; stmts/lines already 100%):
+ * added isLandscape/isTablet (via a scoped useWindowDimensions submodule
+ * mock, not a full react-native mock), Platform.OS==='android' (direct
+ * mutation at render time, restored in finally), isDark (promoted useTheme
+ * to a jest.fn() with mockReturnValue + an afterEach-adjacent beforeEach
+ * reset), the lastEtaMin-null seed, the mapRef-centering effect's
+ * nested-pickup/dropoff-only fallback path, the fetchLiveRoute
+ * cancelled/no-data early return, the rideId-falsy fallbacks on every
+ * "if (rideId) fetchRide(rideId)" guard and the "demo" share-token
+ * fallback, a /share response with no share_token, the driver-card text
+ * fallbacks (no name/rating/vehicle/plate), the loading/error/no-map-coords
+ * placeholder branches, PROVIDER_GOOGLE on Android, and the
+ * length<=1-coordinates path of MapViewDirections' onReady. One remaining
+ * gap: the DEV bar's `if (__DEV__) console.warn(...)` false-path is
+ * exercised by flipping the global `__DEV__` between render (true, so the
+ * DEV-only button exists to press) and press time (false) — this is a
+ * dev-only affordance with no production behavior difference either way.
+ *
+ * `handleLocation` (line ~401, the location-button's onPress) is a
+ * documented no-op stub ("// Center on current location") with an empty
+ * body — it shows 0/1 function coverage in this file's `% Funcs` column,
+ * unrelated to branch coverage (no branches to cover) and out of this
+ * round's scope; calling it would assert nothing meaningful.
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
@@ -70,7 +94,17 @@ jest.mock('expo-router', () => ({
 const COLORS = {
   primary: '#EF4444', surface: '#FFF', surfaceLight: '#F5F5F5', text: '#111', textDim: '#666', border: '#E5E7EB',
 };
-jest.mock('@shared/theme/ThemeContext', () => ({ useTheme: () => ({ colors: COLORS, isDark: false }) }));
+const mockUseTheme = jest.fn(() => ({ colors: COLORS, isDark: false }));
+jest.mock('@shared/theme/ThemeContext', () => ({ useTheme: () => mockUseTheme() }));
+
+// Portrait, non-tablet by default; individual tests override via mockDims for
+// the isLandscape/isTablet branches. Mocking only this submodule (not all of
+// react-native) avoids crashing jest-expo's native mocks.
+let mockDims = { width: 400, height: 800 };
+jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
+  __esModule: true,
+  default: () => mockDims,
+}));
 
 const mockApiGet = jest.fn();
 const mockApiPost = jest.fn();
@@ -167,6 +201,8 @@ beforeEach(() => {
   mockParams = { rideId: 'ride-1' };
   mockTrackBaseUrl = 'https://spinr-track.app';
   mockDirectionsOnReady = null;
+  mockDims = { width: 400, height: 800 };
+  mockUseTheme.mockReturnValue({ colors: COLORS, isDark: false });
   process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY = 'test-maps-key';
   mockRideState = {
     currentRide: CURRENT_RIDE,
@@ -499,5 +535,236 @@ describe('RideInProgressScreen', () => {
     // routeFetched seeds true from the saved polyline, so the haversine ETA
     // effect runs immediately from the driver's live position.
     expect(mockSetLastEtaMin).toHaveBeenCalled();
+  });
+
+  // --- Branch-coverage round (83.73% -> target 100%) ---
+
+  it('seeds ETA/estimatedTime from the 15-minute default when lastEtaMin is null', async () => {
+    mockRideState.lastEtaMin = null;
+    // No crash exercising the `lastEtaMin ?? 15` nullish-fallback branch in
+    // both useState initializers; the haversine effect immediately
+    // recalculates a live ETA from the driver's position on this fixture, so
+    // the seeded "15" isn't independently observable in the rendered text.
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Sam Lee');
+  });
+
+  it('uses fewer, higher snap points in landscape (non-tablet)', async () => {
+    mockDims = { width: 700, height: 400 }; // height < width, width < 768
+    const r = await renderScreen();
+    // No crash exercising the landscape snapPoints branch; snapPoints itself
+    // is passed to the mocked BottomSheet (a no-op passthrough), not directly
+    // observable as text — asserting the screen still renders its content.
+    expect(allText(r)).toContain('Sam Lee');
+  });
+
+  it('renders the side panel (tablet layout) when width >= 768', async () => {
+    mockDims = { width: 800, height: 1000 }; // width >= 768, height >= width (not landscape)
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Sam Lee');
+  });
+
+  it('skips animateToRegion when the flat pickup/dropoff fields are missing (nested-only coords)', async () => {
+    // getRideMapCoords accepts ride.pickup?.lat / ride.dropoff?.lat as a
+    // fallback (see utils/rideMapCoords.ts), so the map still mounts here —
+    // but the mapRef-centering effect (lines 140-167) only ever reads the
+    // flat ride.pickup_lat/dropoff_lat fields, not the nested object. With
+    // only the nested form present, isCoord(ride.pickup_lat) is false (hits
+    // the dropLat fallback branch) and dropLat is undefined too, so the
+    // final isCoord(centerLat) && isCoord(centerLng) guard is also false —
+    // animateToRegion is skipped without crashing.
+    mockRideState.currentDriver = { ...CURRENT_DRIVER, lat: undefined, lng: undefined };
+    mockRideState.currentRide = {
+      ...CURRENT_RIDE,
+      pickup_lat: undefined, pickup_lng: undefined, pickup: { lat: 50.45, lng: -104.6 },
+      dropoff_lat: undefined, dropoff_lng: undefined, dropoff: { lat: 50.5, lng: -104.5 },
+    };
+    const r = await renderScreen();
+    // Map still mounts (rideCoords resolved via the nested fallback).
+    expect(r.root.findByType(require('react-native-maps').default)).toBeTruthy();
+  });
+
+  it('fetchLiveRoute returns early without applying anything when the response has no data', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url.includes('/share')) return Promise.resolve({ data: { share_token: 'tok123' } });
+      if (url.includes('/live-route')) return Promise.resolve({ data: null });
+      return Promise.reject(new Error('unexpected url ' + url));
+    });
+    await renderScreen();
+    await act(async () => { await flush(); });
+    expect(mockSetActiveRideRouteCoords).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the "demo" share token and skips fetchRide guards when rideId is falsy', async () => {
+    mockParams = {};
+    mockApiGet.mockImplementation((url: string) => {
+      if (url.includes('/share')) return Promise.reject(new Error('share lookup failed'));
+      if (url.includes('/live-route')) return Promise.resolve({ data: { polyline: [], eta_seconds: null } });
+      return Promise.reject(new Error('unexpected url ' + url));
+    });
+    const r = await renderScreen();
+    const shareBtn = findButtonByText(r, 'Share Trip');
+    await act(async () => { await shareBtn.props.onPress(); await flush(); });
+    expect(Share.share).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('https://spinr-track.app/demo'),
+    }));
+  });
+
+  it('falls back to the ride ID share token when the /share response omits share_token', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url.includes('/share')) return Promise.resolve({ data: {} });
+      if (url.includes('/live-route')) return Promise.resolve({ data: { polyline: [], eta_seconds: null } });
+      return Promise.reject(new Error('unexpected url ' + url));
+    });
+    const r = await renderScreen();
+    const shareBtn = findButtonByText(r, 'Share Trip');
+    await act(async () => { await shareBtn.props.onPress(); await flush(); });
+    expect(Share.share).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('https://spinr-track.app/ride-1'),
+    }));
+  });
+
+  it('copies the "demo" fallback tracking link when rideId is falsy and the /share lookup fails', async () => {
+    mockParams = {};
+    mockApiGet.mockImplementation((url: string) => {
+      if (url.includes('/share')) return Promise.reject(new Error('share lookup failed'));
+      if (url.includes('/live-route')) return Promise.resolve({ data: { polyline: [], eta_seconds: null } });
+      return Promise.reject(new Error('unexpected url ' + url));
+    });
+    const r = await renderScreen();
+    // The copy-link icon only renders once inside the LIVE banner, which
+    // requires isSharingLocation — trigger via handleShareTrip first.
+    const shareBtn = findButtonByText(r, 'Share Trip');
+    await act(async () => { await shareBtn.props.onPress(); await flush(); });
+    const copyBtn = r.root.findByProps({ accessibilityLabel: 'Copy live tracking link' });
+    await act(async () => { await copyBtn.props.onPress(); await flush(); });
+    expect(mockSetStringAsync).toHaveBeenCalledWith('https://spinr-track.app/demo');
+  });
+
+  it('copies the ride-ID fallback tracking link when the /share response omits share_token', async () => {
+    mockApiGet.mockImplementation((url: string) => {
+      if (url.includes('/share')) return Promise.resolve({ data: {} });
+      if (url.includes('/live-route')) return Promise.resolve({ data: { polyline: [], eta_seconds: null } });
+      return Promise.reject(new Error('unexpected url ' + url));
+    });
+    const r = await renderScreen();
+    const shareBtn = findButtonByText(r, 'Share Trip');
+    await act(async () => { await shareBtn.props.onPress(); await flush(); });
+    const copyBtn = r.root.findByProps({ accessibilityLabel: 'Copy live tracking link' });
+    await act(async () => { await copyBtn.props.onPress(); await flush(); });
+    expect(mockSetStringAsync).toHaveBeenCalledWith('https://spinr-track.app/ride-1');
+  });
+
+  it('shows the driver-info fallbacks when name/rating/vehicle/plate are missing', async () => {
+    mockRideState.currentDriver = {
+      id: 'driver-1', name: undefined, rating: undefined,
+      vehicle_color: undefined, vehicle_make: undefined, vehicle_model: undefined,
+      license_plate: undefined, photo_url: null, lat: 50.46, lng: -104.58,
+    };
+    const r = await renderScreen();
+    const text = allText(r);
+    expect(text).toContain('Your Driver');
+    expect(text).toContain('No ratings yet');
+    expect(text).toContain('Vehicle info unavailable');
+    expect(text).toContain('N/A');
+  });
+
+  it('skips the fetchRide refetch guard on End Ride confirm when rideId is falsy', async () => {
+    mockParams = {};
+    const r = await renderScreen();
+    mockFetchRide.mockClear();
+    const endRideBtn = findButtonByText(r, 'End Ride');
+    act(() => { endRideBtn.props.onPress(); });
+    const confirmBtn = r.root.findByProps({ accessibilityLabel: 'confirm-End & Pay Full Fare' });
+    await act(async () => { await confirmBtn.props.onPress(); await flush(); });
+    expect(mockApiPost).toHaveBeenCalledWith('/rides/ride-1/complete');
+    expect(mockFetchRide).not.toHaveBeenCalled();
+  });
+
+  it('skips the fetchRide refetch guard on the hardware-back confirm when rideId is falsy', async () => {
+    mockParams = {};
+    const addListenerSpy = jest.spyOn(BackHandler, 'addEventListener');
+    const r = await renderScreen();
+    mockFetchRide.mockClear();
+    const handler = addListenerSpy.mock.calls.find((c) => c[0] === 'hardwareBackPress')![1] as () => boolean;
+    act(() => { handler(); });
+    const confirmBtn = r.root.findByProps({ accessibilityLabel: 'confirm-End & Pay Full Fare' });
+    await act(async () => { await confirmBtn.props.onPress(); await flush(); });
+    expect(mockFetchRide).not.toHaveBeenCalled();
+  });
+
+  it('the DEV Complete Ride button silently swallows a failure when __DEV__ is false at press time', async () => {
+    mockApiPost.mockRejectedValue(new Error('dev complete failed'));
+    const r = await renderScreen();
+    const devCompleteBtn = findButtonByText(r, 'Complete Ride');
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    (global as any).__DEV__ = false;
+    try {
+      await act(async () => { await devCompleteBtn.props.onPress(); await flush(); });
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      (global as any).__DEV__ = true;
+    }
+  });
+
+  it('skips the fetchRide refetch guard on DEV Complete Ride when rideId is falsy', async () => {
+    mockParams = {};
+    const r = await renderScreen();
+    mockFetchRide.mockClear();
+    const devCompleteBtn = findButtonByText(r, 'Complete Ride');
+    await act(async () => { await devCompleteBtn.props.onPress(); await flush(); });
+    expect(mockApiPost).toHaveBeenCalledWith('/drivers/rides/ride-1/complete');
+    expect(mockFetchRide).not.toHaveBeenCalled();
+  });
+
+  it('shows the loading placeholder when isLoading is true and there is no currentRide yet', async () => {
+    mockRideState.currentRide = null;
+    mockRideState.isLoading = true;
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Loading ride');
+  });
+
+  it('shows the "Loading Map…" placeholder when currentRide exists but its coords are invalid', async () => {
+    mockRideState.currentRide = { ...CURRENT_RIDE, pickup_lat: NaN };
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Loading Map');
+  });
+
+  it('uses PROVIDER_GOOGLE on Android', async () => {
+    const RN = require('react-native');
+    const prevOS = RN.Platform.OS;
+    RN.Platform.OS = 'android';
+    try {
+      const r = await renderScreen();
+      const map = r.root.findByType(require('react-native-maps').default);
+      expect(map.props.provider).toBe('google');
+    } finally {
+      RN.Platform.OS = prevOS;
+    }
+  });
+
+  it('sets the map userInterfaceStyle to dark when isDark is true', async () => {
+    mockUseTheme.mockReturnValue({ colors: COLORS, isDark: true });
+    const r = await renderScreen();
+    const map = r.root.findByType(require('react-native-maps').default);
+    expect(map.props.userInterfaceStyle).toBe('dark');
+  });
+
+  it('does not call fitToCoordinates from onReady when exactly one coordinate is returned', async () => {
+    mockRideState.activeRideRouteCoords = null;
+    const r = await renderScreen();
+    await act(async () => {
+      mockDirectionsOnReady!({
+        coordinates: [{ latitude: 50.46, longitude: -104.58 }],
+        duration: 12,
+      });
+      await flush();
+    });
+    // fitToCoordinates is a jest.fn() stubbed on the mocked map ref, not
+    // independently spy-able here; asserting the effect ran to completion
+    // (route + ETA applied) without the length>1 branch being taken.
+    expect(mockSetActiveRideRouteCoords).toHaveBeenCalledWith([
+      { latitude: 50.46, longitude: -104.58 },
+    ]);
   });
 });

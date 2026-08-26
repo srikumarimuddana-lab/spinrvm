@@ -1,4 +1,4 @@
--- 356_seed_retention_and_passenger_insurance_faqs.sql
+-- 366_seed_retention_and_passenger_insurance_faqs.sql
 --
 -- Two questions the product answers internally but has never published, both
 -- identified in desktop_website/docs/faq-parity.md:

@@ -1,8 +1,8 @@
--- 357_seed_remaining_compliance_faqs.sql
+-- 367_seed_remaining_compliance_faqs.sql
 --
 -- The last five gaps from desktop_website/docs/faq-parity.md: minimum age,
 -- children and car seats, data residency, complaint escalation, and app
--- accessibility. 356 covered retention and passenger insurance.
+-- accessibility. 366 covered retention and passenger insurance.
 --
 -- SOURCES — every claim below is taken from something that already exists,
 -- not written fresh:
@@ -36,7 +36,7 @@
 --
 -- The accessibility answer is about the APP — screen readers, text size. The
 -- existing rider FAQ already covers wheelchair-accessible vehicles and service
--- animals, and 355 was spent merging duplicates, so this does not restate it.
+-- animals, and 365 was spent merging duplicates, so this does not restate it.
 --
 -- Idempotent: insert-if-not-exists by (question, audience).
 -- Rollback: DELETE FROM faqs WHERE question IN (the five below);

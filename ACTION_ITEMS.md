@@ -10613,6 +10613,39 @@ record of what was assumed vs. what was actually true</summary>
     `app/driver-arriving.tsx` confirmed untouched via `git diff`).
     57 tests; full rider-app suite green (123 suites / 1702 tests),
     `yarn tsc --noEmit` clean.
+  - **rider-app `app/ride-in-progress.tsx`: 83.73% → 100% branch
+    (stmts/lines already 100%; funcs 97.67% unchanged — one pre-existing
+    no-op stub, `handleLocation`, out of scope for branch coverage).**
+    Ride-critical in-trip screen (live map, ETA, end-ride-early flow,
+    share trip) — Period 3 per CLAUDE.md's insurance-period table, but
+    this screen only reads `currentRide.status`/displays state, it never
+    writes ride state or insurance-period rows, so no
+    `spinr-safety-sos-reviewer` / `spinr-insurance-period-auditor`
+    review was requested for this round. A prior round (PR #4503) already
+    closed line coverage (76.9% → 100%) without targeting branches.
+    Already had `rideInProgressScreen.test.tsx` (28 tests) — extended in
+    place (+19 tests, 47 total). Closed:
+    - isLandscape/isTablet responsive-layout branches (scoped
+      `useWindowDimensions` submodule mock)
+    - isDark / Platform.OS==='android' branches (promoted `useTheme` to a
+      jest.fn(), direct Platform.OS mutation)
+    - `lastEtaMin ?? 15` nullish-fallback seed
+    - mapRef-centering effect's dropoff-fallback and "no valid center"
+      skip branches (nested pickup/dropoff coord fixture)
+    - `fetchLiveRoute`'s cancelled/no-data early return
+    - every `if (rideId) fetchRide(rideId)` guard's false path, and the
+      `rideId || 'demo'` share-token fallback (share + copy-link)
+    - `/share` response missing `share_token`
+    - driver-card text fallbacks (name/rating/vehicle/plate)
+    - loading / no-map-coords placeholder branches
+    - MapViewDirections onReady's exactly-one-coordinate path
+    - DEV bar's `if (__DEV__) console.warn(...)` false path (global
+      `__DEV__` flipped between render and press time, restored after)
+
+    No production bugs found, no branches left uncovered — 100% branch
+    coverage. Test-only diff (production `app/ride-in-progress.tsx`
+    confirmed untouched via `git diff`). 47 tests; full rider-app suite
+    still green (123 suites / 1702 tests), `yarn tsc --noEmit` clean.
   - **rider-app `app/chat-driver.tsx`: 83.33% → 93.93% branch (stmts/
     lines already 100%, funcs unchanged at 90.9%).** Rider<->driver
     in-ride text chat screen — no fare/wallet/Stripe path, no

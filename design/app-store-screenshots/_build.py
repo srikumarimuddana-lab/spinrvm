@@ -198,11 +198,11 @@ frame1_content = iphone(home_screen, 1056, 596) + '''
   <div style="position: absolute; inset: 0; z-index: 4; padding: 100px 96px 132px; display: flex; flex-direction: column; pointer-events: none;">
     <img src="spinr-logo-white.png" alt="Spinr" style="width: 218px; height: 89px; object-fit: contain; align-self: flex-start;">
 
-    <h1 style="margin: 96px 0 0; font-size: 196px; line-height: 0.98; font-weight: 800; letter-spacing: -0.045em; color: #FFFFFF;">your<br>fare<br>stays<br><span style="color: #1A1A1A;">home.</span></h1>
+    <h1 style="margin: 96px 0 0; font-size: 186px; line-height: 1.0; font-weight: 800; letter-spacing: -0.045em; color: #FFFFFF;">proudly<br><span style="color: #1A1A1A;">Canadian</span><br>rideshare.</h1>
 
     <div style="margin-top: 52px; display: flex; align-items: center; gap: 20px; max-width: 880px;">
       <svg width="46" height="46" viewBox="0 0 1000 1000" style="flex-shrink: 0;"><path d="{LEAF}" fill="#FFFFFF"/></svg>
-      <span style="font-size: 46px; font-weight: 700; letter-spacing: -0.01em; color: #FFFFFF;">Proudly Canadian rideshare.</span>
+      <span style="font-size: 46px; font-weight: 700; letter-spacing: -0.01em; color: #FFFFFF;">Your fare stays home.</span>
     </div>
 
     <div style="margin-top: auto; display: flex; flex-direction: column; gap: 14px; max-width: 660px;">

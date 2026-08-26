@@ -195,22 +195,19 @@ PAIR_SHELL = '''<!doctype html>
 home_screen = open('_screens/home.html').read()
 
 frame1_content = iphone(home_screen, 1056, 596) + '''
-  <div style="position: absolute; inset: 0; z-index: 4; padding: 100px 96px; display: flex; flex-direction: column; pointer-events: none;">
+  <div style="position: absolute; inset: 0; z-index: 4; padding: 100px 96px 132px; display: flex; flex-direction: column; pointer-events: none;">
     <img src="spinr-logo-white.png" alt="Spinr" style="width: 218px; height: 89px; object-fit: contain; align-self: flex-start;">
 
     <h1 style="margin: 96px 0 0; font-size: 196px; line-height: 0.98; font-weight: 800; letter-spacing: -0.045em; color: #FFFFFF;">your<br>fare<br>stays<br><span style="color: #1A1A1A;">home.</span></h1>
 
+    <div style="margin-top: 52px; display: flex; align-items: center; gap: 20px; max-width: 880px;">
+      <svg width="46" height="46" viewBox="0 0 1000 1000" style="flex-shrink: 0;"><path d="{LEAF}" fill="#FFFFFF"/></svg>
+      <span style="font-size: 46px; font-weight: 700; letter-spacing: -0.01em; color: #FFFFFF;">Proudly Canadian rideshare.</span>
+    </div>
+
     <div style="margin-top: auto; display: flex; flex-direction: column; gap: 14px; max-width: 660px;">
       <span style="font-size: 56px; font-weight: 800; letter-spacing: -0.02em; color: #FFFFFF;">0% commission.</span>
       <span style="font-size: 36px; line-height: 1.42; font-weight: 500; color: rgba(255,255,255,0.88);">100% of every fare goes to your driver.</span>
-    </div>
-
-    <div style="margin-top: 84px; display: flex; align-items: center; gap: 22px;">
-      <svg width="64" height="64" viewBox="0 0 1000 1000"><path d="{LEAF}" fill="#FFFFFF"/></svg>
-      <div style="display: flex; flex-direction: column; gap: 4px;">
-        <span style="font-size: 31px; font-weight: 800; letter-spacing: 0.12em; color: #FFFFFF;">PROUDLY CANADIAN</span>
-        <span style="font-size: 26px; font-weight: 500; color: rgba(255,255,255,0.82);">Built in Saskatchewan</span>
-      </div>
     </div>
   </div>'''
 

@@ -10576,6 +10576,43 @@ record of what was assumed vs. what was actually true</summary>
     confirmed untouched via `git diff`). 39 tests across the two files;
     full rider-app suite still green (123 suites / 1690 tests), `yarn
     tsc --noEmit` clean.
+  - **rider-app `app/driver-arriving.tsx`: 84.93% → 99.54% branch
+    (stmts/lines already 100%; funcs 98.14%, one never-invoked
+    `.catch(() => {})` no-op, out of scope).** Ride-critical searching +
+    driver-en-route/map screen (Period 2 per CLAUDE.md's insurance-period
+    table). Display/navigation-only — reads `currentRide.status` to
+    render and to `router.replace()`, never writes ride state; the
+    `__DEV__`-only Assign/Arrive/Start/Complete buttons are local test
+    scaffolding, not production insurance/dispatch logic — so no
+    `spinr-*-auditor` review was requested for this round. A prior round
+    (PR #4504) already closed line coverage (77.5% → 100%) without
+    targeting branches. Already had `driverArrivingScreen.test.tsx` (38
+    tests) — extended in place (+19 tests, 57 total). Closed:
+    - `||`/template fallbacks: service-areas `res.data`, all 7
+      handleShareTrip fields + `rideId||'demo'`, all 5
+      handleCopyDetails fields, Directions `apikey` env-unset
+      (both legs), pickup-OTP digit fallback
+    - route-coord seeding: `activeRideRouteCoords.length>1` direct use;
+      `planned_route_polyline` with valid-count < 2 falling through to `[]`
+    - guards: `rideId`-falsy mount/poll skip; `currentRide.id !== rideId`
+      navigation-effect skip; driver-leg Directions empty-coordinates
+      early return; each DEV button's own `if (rideId)` re-fetch guard
+    - rendering: Android map provider; `currentRide === null` ->
+      "Loading ride..." + Pickup/Dropoff address fallback
+    - failure paths: Arrive/Start/Complete DEV buttons' swallowed
+      `try/catch` (Assign's was already covered)
+
+    One branch left deliberately uncovered (documented in the test
+    file's docblock, not forced): the `s <= 0` false arm of the
+    countdown-decrement ternary (line ~213) is unreachable — the owning
+    effect only schedules that timer when `countdownSeconds > 0`, and
+    any update driving it to <=0 also triggers synchronous
+    `clearTimeout` cleanup first.
+
+    No production bugs found. Test-only diff (production
+    `app/driver-arriving.tsx` confirmed untouched via `git diff`).
+    57 tests; full rider-app suite green (123 suites / 1702 tests),
+    `yarn tsc --noEmit` clean.
   - **driver-app `app/become-driver.tsx`: 80.68% → 98.1% lines, 67.04% →
     85.05% branches.** Already had `becomeDriverScreen.test.tsx` (26
     tests: no-account-prefill, the CRC-consent auto-check-when-

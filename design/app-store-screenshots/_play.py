@@ -44,7 +44,7 @@ def decor_paper(corner):
 home = open('_screens/home.html').read()
 
 # ---- frames 1-2: the connected pair at Play size ----
-f1 = B.iphone(home, 878, 400, scale=0.95, rot=-8) + '''
+f1 = B.android(home, 878, 400, scale=0.95, rot=-8) + '''
   <div style="position: absolute; inset: 0; z-index: 4; padding: 66px 64px 92px; display: flex; flex-direction: column; pointer-events: none;">
     <img src="spinr-logo-white.png" alt="Spinr" style="width: 168px; height: 68px; object-fit: contain; align-self: flex-start;">
     <h1 style="margin: 60px 0 0; font-size: 126px; line-height: 1.0; font-weight: 800; letter-spacing: -0.045em; color: #FFFFFF;">Proudly<br><span style="color: #1A1A1A;">Canadian</span><br>rideshare.</h1>
@@ -58,7 +58,7 @@ f1 = B.iphone(home, 878, 400, scale=0.95, rot=-8) + '''
     </div>
   </div>'''
 
-f2 = B.iphone(home, -224, 400, scale=0.95, rot=-8) + '''
+f2 = B.android(home, -224, 400, scale=0.95, rot=-8) + '''
   <div style="position: absolute; right: 64px; top: 66px; z-index: 4;">
     <img src="spinr-logo-white.png" alt="Spinr" style="width: 196px; height: 80px; object-fit: contain;">
   </div>'''
@@ -68,7 +68,7 @@ def tpl_frame(fr, corner):
     screen = open(f"_screens/{fr['screen']}.html").read()
     logo = fr['logo']
     hcolor, scolor = fr['hcolor'], fr['scolor']
-    phone = B.iphone(screen, 197, 442, scale=0.80, rot=0)
+    phone = B.android(screen, 197, 442, scale=0.80, rot=0)
     return f'''{phone}
   <div style="position: relative; z-index: 2; display: flex; flex-direction: column; align-items: center; padding: 60px 64px 0; text-align: center;">
     <img src="{logo}" alt="Spinr" style="width: 150px; height: 61px; object-fit: contain;">

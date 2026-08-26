@@ -165,6 +165,24 @@ def iphone(screen_html, left, top, scale=1.30, rot=-8):
     </div>
   </div>'''
 
+def android(screen_html, left, top, scale=1.30, rot=-8):
+    """Android device frame for the Google Play set: cooler aluminum rim,
+    smaller corner radius, centered punch-hole camera instead of an island."""
+    w = 858 * scale
+    h = 1820 * scale
+    return f'''  <div style="position: absolute; left: {left}px; top: {top}px; width: {w:.0f}px; height: {h:.0f}px; transform: rotate({rot}deg); z-index: 3;">
+    <div style="width: 858px; height: 1820px; transform: scale({scale}); transform-origin: top left;">
+      <div style="width: 858px; height: 1820px; border-radius: 96px; padding: 5px; background: linear-gradient(150deg, #4E5158 0%, #26282E 30%, #0E0F12 72%, #2E3036 100%); box-shadow: 0 60px 120px rgba(60,8,4,0.45), 0 0 0 1px rgba(0,0,0,0.35);">
+        <div style="width: 848px; height: 1810px; border-radius: 91px; background: #050505; padding: 9px;">
+          <div style="width: 830px; height: 1792px; border-radius: 76px; overflow: hidden; background: #FFFFFF; position: relative; display: flex; flex-direction: column;">
+{screen_html}
+            <div style="position: absolute; top: 26px; left: 401px; width: 28px; height: 28px; border-radius: 14px; background: #050505; z-index: 30; box-shadow: 0 0 0 2px rgba(255,255,255,0.05);"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>'''
+
 PAIR_SHELL = '''<!doctype html>
 <html>
 <head>

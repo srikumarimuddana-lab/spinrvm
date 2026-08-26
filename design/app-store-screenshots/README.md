@@ -136,7 +136,9 @@ submitting.
 
 `_play.py` reflows the same six frames to **1080 × 1920** (9:16 — Play rejects
 anything taller than 2:1, so the 1290 × 2796 App Store images cannot be
-reused). It imports `_build.py` for the device, palette, leaf and frame copy;
+reused). It imports `_build.py` for the palette, leaf and frame copy, and renders on
+the **Android device frame** (`_build.android()` — centred punch-hole camera,
+squarer corners) rather than the iPhone frame used on the App Store set;
 floating chips are dropped at this size. Rendered PNGs: `png/spinr-play-*.png`.
 
 Store size requirements (2026):

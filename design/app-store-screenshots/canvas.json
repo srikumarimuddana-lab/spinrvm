@@ -140,7 +140,7 @@
       "x": 0,
       "y": -300,
       "w": 1080,
-      "text": "GOOGLE PLAY — 1080 × 1920 (9:16, inside Play's 2:1 aspect limit).\nSame six frames reflowed by _play.py; floating chips dropped (too small\nto read at this size). Play also wants a 1024 × 500 feature graphic —\nnot built yet."
+      "text": "GOOGLE PLAY — 1080 × 1920 (9:16, inside Play's 2:1 aspect limit).\nSame six frames reflowed by _play.py, shown on an ANDROID device\nframe (centred punch-hole camera, squarer corners) — never the\niPhone frame used on the App Store page. Play also wants a\n1024 × 500 feature graphic — not built yet."
     }
   ],
   "launch": {

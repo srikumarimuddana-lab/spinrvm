@@ -1,0 +1,133 @@
+name: Deploy Backend to FastAPI Cloud (Dev)
+
+# Dev tier on FastAPI Cloud. Decision and evaluation criteria:
+# docs/adr/011-environment-topology.md (2026-08-26 addendum) and
+# docs/runbooks/fastapi-cloud-dev.md.
+#
+# ############################################################################
+# # THIS WORKFLOW WILL FAIL UNTIL A HUMAN COMPLETES MANUAL SETUP.            #
+# #                                                                          #
+# # FASTAPI_CLOUD_TOKEN and FASTAPI_CLOUD_APP_ID do not exist in this repo   #
+# # yet, and no FastAPI Cloud app has been created. Runs before that setup   #
+# # fail fast at "Verify required secrets" and exit non-zero — loudly, and   #
+# # without touching production: no production secret name appears below.    #
+# ############################################################################
+#
+# THIS IS A TRIAL. FastAPI Cloud is in public beta and its region, background-
+# worker, and scheduled-job features are on the published roadmap rather than
+# shipped. The dev tier is where we find out whether it can carry Spinr before
+# any thought is given to staging, canary, or production. The Fly.io dev path
+# (backend/fly.dev.toml + deploy-backend-dev.yml) is deliberately KEPT so this
+# can be abandoned without re-doing work. Do not delete it.
+#
+# The env-var contract below (FASTAPI_CLOUD_TOKEN, FASTAPI_CLOUD_APP_ID) is
+# taken from the CLI's own generated workflow (`fastapi cloud ci
+# print-workflow`, fastapi-cloud-cli 0.23.0), not guessed. The invocation
+# deviates from it deliberately — see the comment on the deploy step.
+# Regenerate and re-diff that output when bumping the CLI.
+
+on:
+  workflow_dispatch:
+    inputs:
+      wait:
+        description: 'Wait for the deployment to finish and report its status'
+        type: boolean
+        default: true
+
+# Serialize: queue rather than cancel, so a second dispatch never aborts an
+# in-flight rollout.
+concurrency:
+  group: deploy-fastapicloud-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to FastAPI Cloud (dev)
+    runs-on: ubuntu-latest
+    if: github.repository == 'srikumarimuddana-lab/spinrvm'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Verify required secrets are set
+        run: |
+          missing=0
+          if [ -z "${FASTAPI_CLOUD_TOKEN}" ]; then
+            echo "::error title=Missing secret::FASTAPI_CLOUD_TOKEN is not set."
+            missing=1
+          fi
+          if [ -z "${FASTAPI_CLOUD_APP_ID}" ]; then
+            echo "::error title=Missing secret::FASTAPI_CLOUD_APP_ID is not set."
+            missing=1
+          fi
+          if [ "$missing" = "1" ]; then
+            echo ""
+            echo "See docs/runbooks/fastapi-cloud-dev.md for one-time setup:"
+            echo "  pip install fastapi-cloud-cli"
+            echo "  fastapi cloud login"
+            echo "  fastapi cloud apps create        # run from backend/"
+            echo "  fastapi cloud tokens create      # -> FASTAPI_CLOUD_TOKEN"
+            echo "  fastapi cloud apps list          # -> FASTAPI_CLOUD_APP_ID"
+            echo ""
+            echo "Both are dev-tier values. Neither is a production credential,"
+            echo "and this workflow must never be given one."
+            exit 1
+          fi
+          echo "Both FastAPI Cloud secrets are present."
+        env:
+          FASTAPI_CLOUD_TOKEN: ${{ secrets.FASTAPI_CLOUD_TOKEN }}
+          FASTAPI_CLOUD_APP_ID: ${{ secrets.FASTAPI_CLOUD_APP_ID }}
+
+      # Guard the mirror at deploy time as well as on PRs. pip-compile-check.yml
+      # only runs when a dependency file changes; this catches a stale
+      # pyproject.toml reaching the dev tier by any other route. Cheap, stdlib
+      # only, and the failure it prevents (dev silently on different package
+      # versions than production) is invisible at runtime.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+
+      - name: Verify pyproject.toml mirrors requirements.txt
+        run: python -m backend.scripts.sync_pyproject_deps --check
+
+      # Deliberate deviation from the CLI's own generated workflow, which runs
+      # `uv run fastapi deploy`. Two reasons:
+      #   1. fastapi-cloud-cli ships NO console script — the `fastapi` binary
+      #      comes from the `fastapi` package. `uvx --from fastapi-cloud-cli
+      #      fastapi deploy` therefore cannot work, and `uv run` in backend/
+      #      would first sync all 149 project pins just to run an uploader.
+      #   2. `python -m fastapi_cloud_cli deploy` is the module invocation and
+      #      needs only the CLI itself.
+      # The CLI version is pinned so a deploy is reproducible and a new release
+      # cannot change behaviour under us; bump it deliberately, and re-diff
+      # `fastapi cloud ci print-workflow` when you do.
+      - name: Install FastAPI Cloud CLI
+        run: pip install --disable-pip-version-check fastapi-cloud-cli==0.23.0
+
+      # The deploy uploads the directory holding pyproject.toml — here,
+      # backend/. It honours .gitignore and .fastapicloudignore and skips .env
+      # files, so local secrets are not swept into the archive.
+      - name: Deploy to FastAPI Cloud
+        working-directory: backend
+        run: |
+          if [ "${{ inputs.wait }}" = "false" ]; then
+            python -m fastapi_cloud_cli deploy --no-wait
+          else
+            python -m fastapi_cloud_cli deploy
+          fi
+        env:
+          FASTAPI_CLOUD_TOKEN: ${{ secrets.FASTAPI_CLOUD_TOKEN }}
+          FASTAPI_CLOUD_APP_ID: ${{ secrets.FASTAPI_CLOUD_APP_ID }}
+
+      - name: Next steps
+        if: success()
+        run: |
+          echo "Deployed. This tier is on trial — while using it, record:"
+          echo "  1. Do the 18 background loops in core/lifespan.py keep running"
+          echo "     when the app is idle? (surge engine, scheduled dispatch,"
+          echo "     payment retry). If the app scales to zero they stop"
+          echo "     SILENTLY — no error, work just never happens."
+          echo "  2. Do rider/driver WebSockets survive a full session?"
+          echo "  3. Which region is it actually serving from?"
+          echo ""
+          echo "Those three are the go/no-go gates for moving any further tier."
+          echo "See docs/runbooks/fastapi-cloud-dev.md."

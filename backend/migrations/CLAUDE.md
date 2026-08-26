@@ -22,3 +22,30 @@ RLS policy pattern:
 - Service role (backend) bypasses RLS by design; the frontend anon key must never touch user data directly
 
 Postgres functions for mutating money or credits: call from backend only, never from client. All money-touching functions must be `SECURITY DEFINER` with explicit `search_path` pinning.
+
+## One-off data-migration scripts (not part of backend/migrations/)
+
+A one-time backfill/import script (e.g. migrating records from a legacy system) is not a
+schema migration and does not belong in `backend/migrations/` — but it must **never** be
+committed to the repo with real production PII in it, plaintext or otherwise. (2026-08-14,
+PR #3918: `driver_bank_sin_migration.sql` / `driver_csv_migration.sql` were committed at the
+repo root with real, plaintext SIN, bank account/transit/institution numbers, DOBs, and home
+addresses for 157 drivers, plus names/phones/emails/license numbers for 189 more — live on
+`main`, publicly readable, for 11 days before discovery. See #4547.)
+
+Rules for this class of script:
+- **Never commit real production data.** Run it locally against a scratch/throwaway
+  connection, or on a branch that is never pushed, and discard it once the import is done.
+  If the script itself is worth preserving for audit/reproducibility, commit it with the
+  data redacted to synthetic/placeholder values — never the real rows.
+- If the script must be built from a real export file rather than generated inline, read
+  from a CSV/JSON dump instead of hardcoding rows — the root `.gitignore`'s blanket `*.csv`
+  rule already exists precisely to keep that class of file out of git.
+- Sensitive columns (SIN, bank account/transit/institution number, government ID, DOB
+  outside `users`/`drivers`' normal fields) reach `drivers`/`users` only via the existing
+  `encrypt_driver_pii()` Vault RPC. A local staging table holding the plaintext value in
+  between is fine — the SQL file that *populates* that staging table with real values is
+  the thing that must never reach git history.
+- CI has a corresponding backstop (`spinr-sin-bank-pii` rule in `.gitleaks.toml`) that flags
+  files naming a SIN/bank-account column identifier alongside bare 9-digit literals — but
+  that is a safety net for exactly this mistake, not a substitute for not making it.

@@ -168,7 +168,7 @@ Backend is a single horizontally-scalable process. All durable state lives in Su
 
 - `backend/server.py` — app factory; mounts ~25 routers
 - `backend/core/config.py` — pydantic-settings `Settings`; fails fast in production on weak secrets
-- `backend/core/lifespan.py` — startup/shutdown: DB health check + spawns 18 background asyncio loops (subscription expiry, surge engine, scheduled dispatch, payment retry, document expiry, corporate auto-topup, low-balance nudge, allowance reset, corporate KYB re-verification reminder, safety check-in, retention purge, reconciliation, Stripe reconcile, T4A annual job, driver earnings statements, stuck-ride sweeper, push retry, loop watchdog)
+- `backend/core/lifespan.py` — startup/shutdown: DB health check + spawns 40 background asyncio loops (full registry: `_WATCHDOG_LOOP_NAMES` in `lifespan.py`; among them: subscription expiry, surge engine, scheduled dispatch, payment retry, document expiry, corporate auto-topup, low-balance nudge, allowance reset, corporate KYB re-verification reminder, safety check-in, retention purge, reconciliation, Stripe reconcile, T4A annual job, driver earnings statements, stuck-ride sweeper, push retry, loop watchdog)
 - `backend/core/middleware.py` — CORS, security headers, rate limiting (SlowAPI + Redis)
 - `backend/db_supabase.py` — ~66 helper functions wrapping `supabase-py` via `run_sync()` (thread-pool with one retry on H2 GOAWAY)
 - `backend/socket_manager.py` — `ConnectionManager` (in-process WS registry); delegates to Redis pub/sub when active
@@ -227,7 +227,7 @@ When writing code that reads `ride.status`, treat any value not in the set above
 
 **WebSocket auth** — first message must be `{"type": "auth", "token": "<jwt>"}`. Connection keys: `"driver_{user_id}"` / `"rider_{user_id}"`. 30-second ping heartbeat; 30 msg/s rate limit; 64 KB max message.
 
-**Background task safety** — the 16 startup loops run on every replica concurrently. Dispatch uses an atomic DB claim; others use `reminder_sent` flags or idempotency keys. Any new loop must be replay-safe.
+**Background task safety** — the 40 startup loops run on every replica concurrently (26 hold best-effort Redis leader locks that fail open on Redis errors — see `docs/audit/2026-08-26-db-query-optimization-recommendations.md` §4.3). Dispatch uses an atomic DB claim; others use `reminder_sent` flags or idempotency keys. Any new loop must be replay-safe.
 
 **Settings in DB** — Stripe keys, Twilio credentials, and Google Maps API keys live in the `app_settings` Supabase table (managed via admin dashboard), not in `.env`. This allows rotation without redeployment.
 

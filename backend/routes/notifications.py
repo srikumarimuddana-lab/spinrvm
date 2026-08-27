@@ -346,8 +346,8 @@ async def register_push_token(body: RegisterTokenRequest, current_user: dict = D
 
 @api_router.get("")
 async def get_notifications(
-    limit: int = Query(30),
-    offset: int = Query(0),
+    limit: int = Query(30, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     unread_only: bool = Query(False),
     current_user: dict = Depends(get_current_user),
 ):

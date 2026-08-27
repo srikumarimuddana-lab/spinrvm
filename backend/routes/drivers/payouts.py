@@ -1350,8 +1350,8 @@ async def get_instant_payout_quote(
 
 @router.get("/payouts")
 async def get_payout_history(
-    limit: int = Query(20),
-    offset: int = Query(0),
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     current_user: dict = Depends(get_current_user),
 ):
     driver = (lambda _r: _r[0] if _r else None)(

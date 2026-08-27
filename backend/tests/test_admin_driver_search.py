@@ -46,7 +46,9 @@ def _run_search(search: str, matching_users: list[dict] | None = None) -> dict:
         "backend.routes.admin.drivers.db_supabase.get_rows",
         AsyncMock(side_effect=get_rows_side),
     ):
-        asyncio.run(admin_drivers.admin_get_drivers(search=search))
+        # limit/offset are explicit: calling the handler directly bypasses
+        # FastAPI, so their Query(...) defaults would arrive as Query objects.
+        asyncio.run(admin_drivers.admin_get_drivers(search=search, limit=50, offset=0))
     return captured
 
 
@@ -102,7 +104,7 @@ def test_multi_token_name_is_anded_across_user_columns():
         "backend.routes.admin.drivers.db_supabase.get_rows",
         AsyncMock(side_effect=get_rows_side),
     ):
-        asyncio.run(admin_drivers.admin_get_drivers(search="Nighil Kumar"))
+        asyncio.run(admin_drivers.admin_get_drivers(search="Nighil Kumar", limit=50, offset=0))
 
     and_clauses = captured_user_filters.get("$and")
     assert and_clauses is not None and len(and_clauses) == 2, "tokens must be ANDed, one $or per token"

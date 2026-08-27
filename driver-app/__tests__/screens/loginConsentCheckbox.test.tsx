@@ -1,17 +1,23 @@
 /**
- * docs/change-log/2026-08-20-explicit-signup-consent-checkbox.md
+ * docs/change-log/2026-08-20-explicit-signup-consent-checkbox.md,
+ * revised 2026-08-27 (docs/migration/2026-08-27-legacy-data-full-migration-approach.md §6a).
  *
- * Pins app/login.tsx's new explicit, unchecked-by-default consent
- * checkbox — the fix for the passive "by continuing you agree" text that
- * had no tappable action or opt-in gesture behind it (see the legal
- * fact-finding audit's §8):
- *  - the checkbox starts unchecked and the "Send Verification Code" button
- *    is disabled (accessibilityState.disabled) even with a valid phone
- *    number until it's checked
- *  - checking it (accessibilityRole="checkbox", accessibilityState.checked
- *    toggles) enables the button
+ * Pins app/login.tsx's explicit consent checkbox, updated for the
+ * 2026-08-27 fix: the checkbox no longer gates "Send Verification Code" —
+ * only phone validity does. The backend only ever reads consent_accepted
+ * for a brand-new account (routes/auth.py's verify_otp); gating this
+ * screen on it forced every returning driver (session expired, logged
+ * back in) to re-tick a box with zero effect for them. The checkbox stays
+ * visible/toggleable — a proactive new signup can still pre-accept it —
+ * and its state is still carried to /otp as a route param either way.
+ * otp.tsx now handles the genuine-new-account case inline if the backend
+ * comes back with consent_required.
+ *  - the checkbox starts unchecked; the "Send Verification Code" button is
+ *    enabled once the phone number is valid, regardless of checkbox state
+ *  - toggling it (accessibilityRole="checkbox", accessibilityState.checked)
+ *    still works, but never itself disables/enables the button
  *  - a successful continue navigates to /otp carrying consentAccepted as a
- *    route param, so otp.tsx's POST /auth/verify-otp call can send it
+ *    route param reflecting whatever the checkbox's state was
  *
  * Mirrors screens/settingsWavToggle.test.tsx's mocking conventions
  * (@testing-library/react-native, `t: (key) => key`).
@@ -71,7 +77,7 @@ function findContinueButton(screen: ReturnType<typeof render>) {
 afterEach(() => jest.clearAllMocks());
 
 describe('Driver LoginScreen — explicit consent checkbox', () => {
-  it('starts unchecked, with continue disabled even for a valid phone number', () => {
+  it('starts unchecked, with continue already enabled for a valid phone number', () => {
     const screen = render(<LoginScreen />);
     fireEvent.changeText(screen.getByTestId('phone-input'), '3065550199');
 
@@ -79,11 +85,11 @@ describe('Driver LoginScreen — explicit consent checkbox', () => {
       expect.objectContaining({ checked: false }),
     );
     expect(findContinueButton(screen).props.accessibilityState).toEqual(
-      expect.objectContaining({ disabled: true }),
+      expect.objectContaining({ disabled: false }),
     );
   });
 
-  it('checking the box (with a valid phone) enables the continue button', () => {
+  it('checking the box toggles its own state without changing the continue button', () => {
     const screen = render(<LoginScreen />);
     fireEvent.changeText(screen.getByTestId('phone-input'), '3065550199');
     fireEvent.press(findCheckbox(screen));
@@ -96,14 +102,20 @@ describe('Driver LoginScreen — explicit consent checkbox', () => {
     );
   });
 
-  it('tapping continue while unchecked never calls send-otp (RN ignores press on a disabled Touchable)', async () => {
+  it('tapping continue while unchecked still calls send-otp and carries consentAccepted:false to /otp', async () => {
     const screen = render(<LoginScreen />);
     fireEvent.changeText(screen.getByTestId('phone-input'), '3065550199');
     await act(async () => {
       fireEvent.press(findContinueButton(screen));
     });
-    expect(mockApiPost).not.toHaveBeenCalled();
-    expect(mockShowToast).not.toHaveBeenCalled();
+
+    await waitFor(() => expect(mockApiPost).toHaveBeenCalledWith('/auth/send-otp', { phone: '+13065550199' }));
+    expect(mockPush).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pathname: '/otp',
+        params: expect.objectContaining({ phoneNumber: '+13065550199', consentAccepted: 'false' }),
+      }),
+    );
   });
 
   it('navigates to /otp with consentAccepted carried as a route param once checked', async () => {
@@ -120,6 +132,16 @@ describe('Driver LoginScreen — explicit consent checkbox', () => {
         pathname: '/otp',
         params: expect.objectContaining({ phoneNumber: '+13065550199', consentAccepted: 'true' }),
       }),
+    );
+  });
+
+  it('an invalid phone number keeps continue disabled regardless of consent state', () => {
+    const screen = render(<LoginScreen />);
+    fireEvent.changeText(screen.getByTestId('phone-input'), '123'); // too short
+    fireEvent.press(findCheckbox(screen));
+
+    expect(findContinueButton(screen).props.accessibilityState).toEqual(
+      expect.objectContaining({ disabled: true }),
     );
   });
 });

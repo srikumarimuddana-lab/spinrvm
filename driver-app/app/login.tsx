@@ -34,11 +34,13 @@ export default function LoginScreen() {
   const [focused, setFocused] = useState(false);
   const inputRef = useRef<TextInput>(null);
   // Explicit, unchecked-by-default consent gesture — the account-creation
-  // endpoint (POST /auth/verify-otp, called from otp.tsx) now rejects a
+  // endpoint (POST /auth/verify-otp, called from otp.tsx) rejects a
   // brand-new signup unless this was actively checked. Previously this
   // screen only showed passive "by continuing you agree" text with no
   // tappable action behind it. See
-  // docs/change-log/2026-08-20-explicit-signup-consent-checkbox.md.
+  // docs/change-log/2026-08-20-explicit-signup-consent-checkbox.md. As of
+  // 2026-08-27 this no longer gates "Send Verification Code" — see the
+  // comment on canContinue below.
   const [consentAccepted, setConsentAccepted] = useState(false);
 
   // Request location permission and fetch location early so the map is
@@ -96,10 +98,15 @@ export default function LoginScreen() {
       showToast('error', 'Invalid Number', 'Please enter a valid 10-digit phone number.');
       return;
     }
-    if (!consentAccepted) {
-      showToast('error', 'Agreement Required', 'Please agree to the Terms of Service and Privacy Policy to continue.');
-      return;
-    }
+    // Consent is no longer required to get past this screen (2026-08-27,
+    // docs/migration/2026-08-27-legacy-data-full-migration-approach.md §6a)
+    // — the backend only reads consent_accepted when this phone number
+    // turns out to be a brand-new account (routes/auth.py's verify_otp);
+    // for a returning driver it's silently ignored. Gating here forced
+    // every returning driver to re-tick a box with zero effect for them
+    // on every re-login. The checkbox stays visible/toggleable for a
+    // proactive new signup; otp.tsx now prompts for it inline instead, but
+    // only if the backend actually comes back with consent_required.
 
     setLoading(true);
     const formattedNumber = `+1${phoneNumber.replace(/\D/g, '')}`;
@@ -136,7 +143,7 @@ export default function LoginScreen() {
   };
 
   const isValid = phoneNumber.length === 10;
-  const canContinue = isValid && consentAccepted;
+  const canContinue = isValid;
 
   return (
     <KeyboardAvoidingView

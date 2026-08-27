@@ -44,6 +44,13 @@ MAX_TRUSTED_ACCURACY_M = 50.0
 # collapsed.
 STATIONARY_SPEED_FLOOR_MPS = 0.7
 
+# Maximum plausible speed between two consecutive fixes (km/h). Any hop that
+# implies a speed above this is a teleportation spike — cell-tower fallback,
+# bad AGPS, or VPN-shifted location — and the outlier fix is dropped. 200 km/h
+# is well above any legal Saskatchewan road speed (max 110 km/h highway) and
+# tolerates momentary GPS catch-up after a tunnel or parking garage.
+MAX_PLAUSIBLE_SPEED_KMH = 200.0
+
 # Consecutive fixes within this radius (metres, widened by each fix's own
 # accuracy) of the cluster anchor are candidates to fold together. Sized so a
 # stopped vehicle's jitter collapses without swallowing a slow crawl through an
@@ -116,6 +123,83 @@ def filter_low_accuracy(
             continue
         kept.append(point)
     return kept, dropped, null_kept
+
+
+def filter_teleportation_spikes(
+    points: List[Dict[str, Any]],
+    max_speed_kmh: float = MAX_PLAUSIBLE_SPEED_KMH,
+) -> Tuple[List[Dict[str, Any]], int]:
+    """Drop GPS fixes that imply physically impossible movement.
+
+    Walks the trace and computes the implied speed between consecutive valid
+    fixes.  When a fix implies speed > ``max_speed_kmh`` it is treated as a
+    teleportation spike (cell-tower fallback, bad AGPS, VPN location shift) and
+    dropped.  The *previous* good fix becomes the reference for the next
+    comparison, so a single wild spike doesn't cascade into dropping the rest
+    of the trace.
+
+    A spike that jumps away AND back (the common pattern) loses only the
+    outlier point — the return fix is compared against the last *good* point,
+    so the distance is near-zero and it passes.
+
+    Returns ``(kept, dropped_count)``.  Input rows are never mutated.
+    """
+    if len(points) < 2:
+        return list(points), 0
+
+    kept: List[Dict[str, Any]] = [points[0]]  # first point is always kept
+    dropped = 0
+    prev_lat, prev_lng = _coord(points[0])
+    prev_ts: Optional[float] = None
+    ts_key = "timestamp"  # driver-app location batches carry epoch seconds
+    raw_ts = points[0].get(ts_key) or points[0].get("recorded_at")
+    if raw_ts is not None:
+        try:
+            prev_ts = float(raw_ts)
+        except (TypeError, ValueError):
+            pass
+
+    for i in range(1, len(points)):
+        cur = points[i]
+        c_lat, c_lng = _coord(cur)
+        if c_lat is None or prev_lat is None:
+            # Can't compute distance — keep it and let downstream reject.
+            kept.append(cur)
+            prev_lat, prev_lng = c_lat, c_lng
+            continue
+
+        dist_km = calculate_distance(prev_lat, prev_lng, c_lat, c_lng)
+
+        # Compute time delta if timestamps are available.
+        cur_ts: Optional[float] = None
+        raw = cur.get(ts_key) or cur.get("recorded_at")
+        if raw is not None:
+            try:
+                cur_ts = float(raw)
+            except (TypeError, ValueError):
+                pass
+
+        if cur_ts is not None and prev_ts is not None and cur_ts > prev_ts:
+            dt_hours = (cur_ts - prev_ts) / 3600.0
+            if dt_hours > 0:
+                implied_speed = dist_km / dt_hours
+                if implied_speed > max_speed_kmh:
+                    dropped += 1
+                    continue  # don't update prev — keep last good fix as ref
+        else:
+            # No usable timestamps — fall back to pure distance cap.
+            # A single hop > 10 km with no timing is almost certainly a spike
+            # (Saskatchewan's largest city is ~30 km across; consecutive
+            # location pings are seconds apart, not hours).
+            if dist_km > 10.0:
+                dropped += 1
+                continue
+
+        kept.append(cur)
+        prev_lat, prev_lng = c_lat, c_lng
+        prev_ts = cur_ts
+
+    return kept, dropped
 
 
 def collapse_stationary_clusters(

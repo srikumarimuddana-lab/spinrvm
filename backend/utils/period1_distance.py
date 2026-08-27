@@ -15,10 +15,10 @@ from typing import Any, Dict, List
 
 try:
     from ..geo_utils import calculate_distance
-    from .gps_filtering import collapse_stationary_clusters, filter_low_accuracy
+    from .gps_filtering import collapse_stationary_clusters, filter_low_accuracy, filter_teleportation_spikes
 except ImportError:  # python -m backend.server vs top-level
     from geo_utils import calculate_distance  # type: ignore
-    from utils.gps_filtering import collapse_stationary_clusters, filter_low_accuracy  # type: ignore
+    from utils.gps_filtering import collapse_stationary_clusters, filter_low_accuracy, filter_teleportation_spikes  # type: ignore
 
 
 def _normalize(point: Dict[str, Any]) -> Dict[str, Any]:
@@ -50,6 +50,7 @@ def batch_incremental_distance_km(points: List[Dict[str, Any]]) -> float:
 
     normalized = [_normalize(p) for p in points]
     kept, _dropped, _null = filter_low_accuracy(normalized)
+    kept, _spikes = filter_teleportation_spikes(kept)
     collapsed, _clusters = collapse_stationary_clusters(kept)
 
     total = 0.0

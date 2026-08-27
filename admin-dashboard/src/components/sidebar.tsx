@@ -9,7 +9,7 @@ import {
     Menu, X,
     Shield, ShieldAlert, Cloud, Trophy, Activity,
     Inbox, Clock, Headphones, BarChart3, Sparkles, Gift, Upload, FileText, Bug, Mail, Gavel,
-    PackageSearch, Flag, FileWarning, ScrollText, BookOpen,
+    PackageSearch, Flag, FileWarning, ScrollText, BookOpen, Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Suspense, useState, useEffect } from "react";
@@ -171,6 +171,7 @@ const NAV_GROUPS: NavGroup[] = [
             // require_super_admin (raw production error data), so an
             // "admin"-role user would see the entry and 403 on every call.
             { href: "/dashboard/sentry-logs", label: "Sentry Issues", icon: Bug, module: "settings", superAdminOnly: true },
+            { href: "/dashboard/stripe-events", label: "Stripe Events", icon: Zap, module: "settings", superAdminOnly: true },
             { href: "/dashboard/audit-logs", label: "Audit Logs", icon: Shield, module: "audit" },
             { href: "/dashboard/settings", label: "Settings", icon: Settings, module: "settings" },
             // Super-admin-only, stated with the flag rather than implied by a

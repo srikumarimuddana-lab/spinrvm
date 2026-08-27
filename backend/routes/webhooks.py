@@ -636,6 +636,16 @@ async def stripe_webhook(request: Request):
     if not is_new:
         return {"received": True, "duplicate": True, "event_id": event_id}
 
+    return await _dispatch_stripe_event(event_id, event_type, event_payload, data_object, stripe_secret)
+
+
+async def _dispatch_stripe_event(event_id, event_type, event_payload, data_object, stripe_secret=""):
+    """Core dispatch logic for a claimed Stripe event.
+
+    Extracted from stripe_webhook so the admin replay endpoint can re-process
+    a stuck event without needing to reconstruct Stripe signature verification.
+    Called by stripe_webhook after claim, and by admin/stripe_events.py replay.
+    """
     # ── Corporate flat-SaaS subscription events ─────────────────────
     # Checked first (cheap lookup) and, if matched, handled entirely by
     # _sync_corporate_subscription_event and returned immediately — the

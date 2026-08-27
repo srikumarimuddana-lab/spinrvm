@@ -16326,6 +16326,51 @@ how much they de-risk a public launch._
   — only confirmed it's red on the current `main` tip), and whether the two
   failures are related to each other or fully independent.
 
+### C46. Insurance-period GPS correction tool built and validated — ready to run, not yet applied
+
+- [ ] **Status:** open (operational — needs a human to actually run it).
+  `ACTION_ITEMS.md` B34 closed 2026-08-20 having built the
+  `driver_insurance_period_corrections` table and wired both consumers to
+  prefer a correction when one exists, but explicitly left "actually
+  correcting the 156 diverging rides" as separate, unresolved work. That
+  write path is now built: `backend/services/insurance_period_gps_correction.py`
+  + `backend/scripts/apply_legacy_insurance_period_gps_corrections.py`
+  (2026-08-27). 29 unit tests pass; an end-to-end run against the real
+  `driverlocationlogs.csv` and real (read-only) production data confirmed
+  186 candidates → 156 `DIVERGES` → exactly 156 correction records built,
+  zero dropped. Full log: `docs/change-log/2026-08-27-insurance-period-
+  gps-correction-tool.md`.
+- **What's left:** run the script for real. `driver_insurance_period_
+  corrections` is confirmed empty as of 2026-08-27 — nobody has ever
+  applied anything.
+  ```bash
+  cd backend
+  # Dry run first (default — no writes):
+  python scripts/apply_legacy_insurance_period_gps_corrections.py \
+      --driverlocationlogs-csv <path-to>/driverlocationlogs.csv \
+      --operator-user-id <a real admin's users.id>
+  # Then for real:
+  python scripts/apply_legacy_insurance_period_gps_corrections.py \
+      --driverlocationlogs-csv <path-to>/driverlocationlogs.csv \
+      --operator-user-id <a real admin's users.id> \
+      --apply
+  ```
+  `--operator-user-id` is not a formality — `corrected_by` is a `NOT NULL`
+  FK to `users(id)`, this is a regulatory audit trail naming who
+  authorized each correction. Requires `SUPABASE_URL`/
+  `SUPABASE_SERVICE_ROLE_KEY` env vars (same as any other backend script)
+  and a real `driverlocationlogs.csv` on disk (the clean 07-26 export, not
+  the corrupted 08-22 one — see `docs/audit/2026-08-25-mongodb-08-22-export-
+  drift-batch-readiness.md`).
+- **What was NOT verified:** the 3 `>1h` Period-2-start outliers the
+  original verification pass flagged (never individually root-caused)
+  are included in the 156-row backlog as-is — worth a human sanity-check
+  of those specific rides before `--apply`, per that pass's own
+  recommendation, still standing and not resolved by building this tool.
+- **Acceptance:** `driver_insurance_period_corrections` has 156 rows,
+  `admin_driver_distance_logs` and `compliance_export.py` show
+  `is_corrected: true` for the affected rides' Period-2 spans.
+
 ### A41. Legacy-migration data-quality audit (2026-08-19) — 5-agent sweep across backend/admin/driver-app/regulatory
 - [ ] **Status:** open — 3 live/near-live bugs found and fixed same session; a
   larger set of design-decision-dependent gaps documented below, not fixed.

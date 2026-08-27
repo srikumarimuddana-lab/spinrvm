@@ -233,10 +233,15 @@ is.
 
 **Sign-off:** this approach is accepted as Spinr's position for the legacy-ride insurance-audit
 trail — a disclosed, best-effort reconstruction as the floor for every legacy completed ride,
-strengthened with real GPS evidence wherever the old app happened to capture it. The
-correction-import tool itself (reads the old app's location-log export, matches by ride ID,
-writes correction rows) is scoped as Phase 3 in §4 above — not yet built. I'll build it next
-if you want it prioritized now rather than later.
+strengthened with real GPS evidence wherever the old app happened to capture it. **Built and
+validated 2026-08-27** — `backend/services/insurance_period_gps_correction.py` +
+`backend/scripts/apply_legacy_insurance_period_gps_corrections.py` (29 unit tests, plus an
+end-to-end run against the real `driverlocationlogs.csv` and real read-only production data:
+186 candidates, 156 `DIVERGES` → exactly 156 correction records built, zero dropped). See
+`docs/change-log/2026-08-27-insurance-period-gps-correction-tool.md` for the full log. **Not
+yet applied to production** — the table remains empty; running it for real is a separate,
+explicit action requiring a real admin's `users.id` (`--operator-user-id`), same operational
+posture as the booking-import runbook.
 
 ## 6. Surfacing gaps found while tracing driver-activity/analytics/rider-activity screens
 

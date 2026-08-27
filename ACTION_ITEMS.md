@@ -16252,6 +16252,44 @@ how much they de-risk a public launch._
   these 4 tables, AND a full regression pass (backend integration tests +
   a manual admin-dashboard settings-page load) confirms nothing broke.
 
+### C44. Production Supabase migrations are stale — migration 364 (`legacy_ride_badge_enabled`) and everything after 359 never ran
+
+- [ ] **Status:** open, found 2026-08-27 while verifying `app_settings` state
+  via the Supabase connector for an unrelated task (checking
+  `legacy_consent_notice_enabled`). `SELECT column_name FROM
+  information_schema.columns WHERE table_name='settings'` on the live
+  `spinrmobileapp` project (`soavhtdhefowwvforzwb`) does **not** include
+  `legacy_ride_badge_enabled` — the column migration 364 adds (shipped in
+  PR #4557, this session, 2026-08-25). `schema_migrations`' latest applied
+  row is `359_fix_emergency_contact_pii_vault_functions.sql`
+  (2026-08-22 04:11:58 UTC). Everything from 360 onward, including 364,
+  has never been run against production.
+- **Impact:** `backend/routes/rides/queries.py`'s `GET /{ride_id}` reads
+  `settings.get("legacy_ride_badge_enabled", False)` via a plain dict
+  `.get()` with a default — so this doesn't crash, it just silently
+  behaves as permanently off. The Imported badge/disclaimer feature
+  shipped this session (#4557/#4558) **cannot be turned on** until this
+  migration runs, no matter what the flag is set to in code or intent.
+- **Not yet checked:** whether 360-363 exist and what they contain (not
+  looked up this session — only confirmed 364 specifically, via the
+  column-presence check), or whether this gap predates 2026-08-22's cutoff
+  for unrelated reasons (e.g., a paused deploy pipeline). `ACTION_ITEMS.md`
+  C5 already documents Railway's deploy pipeline as degraded/paused — worth
+  checking whether that's related before assuming this is purely a
+  "someone forgot to run the migration script" gap.
+- **Action:** run `python -m backend.scripts.run_migrations --dry-run`
+  against production to see the actual pending list, then apply for real
+  per the documented process in `backend/scripts/CLAUDE.md`/root
+  `CLAUDE.md`'s Database Migrations section. Needs a human with production
+  `DATABASE_URL` access — not executable from this session (Supabase MCP's
+  `execute_sql`/`apply_migration` tools could technically run the raw SQL,
+  but per this session's own established policy, money/schema writes go
+  through the documented tooling, not ad hoc SQL from an agent session).
+- **What was NOT verified:** the full list of missing migrations beyond
+  confirming 364 specifically is absent; whether any *other* recently-merged
+  feature besides the legacy-ride badge is similarly silently inert in
+  production for the same reason.
+
 ### A41. Legacy-migration data-quality audit (2026-08-19) — 5-agent sweep across backend/admin/driver-app/regulatory
 - [ ] **Status:** open — 3 live/near-live bugs found and fixed same session; a
   larger set of design-decision-dependent gaps documented below, not fixed.

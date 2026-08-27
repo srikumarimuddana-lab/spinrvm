@@ -171,12 +171,18 @@ These were flagged as **BLOCKER**-class in the 2026-08-19 audit. Both now have a
 recorded, made by the product owner directly in this session (not by me — I'm documenting the
 call and its reasoning, not asserting legal authority I don't have).
 
-### 5a. No consent record for imported riders/drivers — DECIDED: turn the existing notice on
+### 5a. No consent record for imported riders/drivers — DECIDED, and already live
 
 **Decision:** enable `app_settings.legacy_consent_notice_enabled` — the one-time re-consent
-mechanism already built, tested, and dark-shipped since 2026-08-19, but never turned on.
-Every imported rider/driver (and every organic pre-tracking user with no recorded consent)
-will see a one-time notice on next login; accepting it stamps `consent_version` permanently.
+mechanism built and dark-shipped 2026-08-19. **Checked directly against production via the
+Supabase connector before acting: this flag is already `true`, set 2026-08-21 — three days
+before this session started, and four before this decision was even discussed.** No write was
+needed or made; I'm recording this as verified-live rather than claiming credit for flipping
+it. Every imported rider/driver (and every organic pre-tracking user with no recorded consent)
+has been seeing a one-time notice on login since 2026-08-21; accepting it stamps
+`consent_version` permanently. Worth a support/analytics check (outside this session's reach)
+for whether the mobile screens have actually rendered cleanly in the ~6 days it's been live —
+nobody explicitly confirmed real-device behavior when it was turned on.
 **What this decision does NOT resolve:** whether the *text* of Spinr's current Terms/Privacy
 Policy is itself legally sufficient for what's being asked of a migrated user was a separate,
 still-open question from the 2026-08-20 fact-finding pass (`docs/audit/2026-08-20-legacy-consent-legal-sufficiency-factsheet.md`)
@@ -306,7 +312,8 @@ A returning user never sees it again after their first successful login.
 
 - §2 — **Cancelled/failed bookings**: reversed to in-scope. Runbook updated (§6 of the
   runbook doc). Actual execution against production is still a human action.
-- §5a — **Consent notice**: `legacy_consent_notice_enabled` flip approved and executed.
+- §5a — **Consent notice**: approved to flip; verified via Supabase connector it was already
+  `true` in production since 2026-08-21 — no write needed.
 - §5b — **Insurance-period reconstruction**: sign-off recorded. Correction tool (GPS-based,
   393 rides) scoped, not yet built.
 - §6a — **Login checkbox re-prompt**: approved to fix. In progress.

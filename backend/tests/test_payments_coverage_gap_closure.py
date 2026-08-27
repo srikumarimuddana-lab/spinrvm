@@ -200,29 +200,28 @@ async def test_confirm_payment_real_intent_user_mismatch():
 
 @pytest.mark.anyio
 async def test_confirm_payment_real_ride_ownership_mismatch():
-    """Non-mock path: the intent belongs to the caller, but the named ride
-    belongs to someone else — must still 403."""
+    """Non-mock path: the named ride belongs to someone else — must 403
+    before ever reaching Stripe, not settle.
+
+    P0 #6 (commit 081ab91e7, "Deduplicate confirm_payment ride fetches (3 to
+    1 DB call)") collapsed confirm_payment's three separate get_ride calls
+    into one: the ride is fetched and its ownership checked exactly once,
+    immediately (routes/payments.py's unconditional `if ride_id:` block),
+    and every later branch (mock-path and non-mock-path alike) reuses that
+    same already-validated `ride` object instead of re-fetching. This test
+    used to mock a *second* get_ride call returning a mismatched ride deep
+    inside the non-mock try block — that call no longer exists, so the mock
+    was never hit and the request fell through to a real 500 further down
+    instead of the 403 this test asserts. Single mismatched get_ride return
+    now correctly exercises the one real ownership gate (mirrors
+    test_confirm_payment_mock_ride_ownership_mismatch's already-correct
+    pattern above)."""
     from backend.routes.payments import ConfirmPaymentRequest, confirm_payment
 
-    mock_intent = MagicMock()
-    mock_intent.status = "succeeded"
-    mock_intent.metadata = {"user_id": str(_USER["id"])}
-
-    with (
-        patch("backend.routes.payments.get_app_settings", new_callable=AsyncMock, return_value=_settings()),
-        patch("backend.routes.payments.stripe.PaymentIntent.retrieve", return_value=mock_intent),
-        patch("backend.routes.payments.db_supabase") as mock_db,
-    ):
-        # First get_ride (pre-claim ownership + idempotency check) is the
-        # caller's own ride; the second get_ride (post-retrieve, inside the
-        # non-mock try block) returns a ride owned by someone else.
+    with patch("backend.routes.payments.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(
-            side_effect=[
-                {"id": "ride-1", "rider_id": _USER["id"], "payment_status": "pending"},
-                {"id": "ride-1", "rider_id": _OTHER_USER_ID, "payment_status": "pending"},
-            ]
+            return_value={"id": "ride-1", "rider_id": _OTHER_USER_ID, "payment_status": "pending"}
         )
-        mock_db.claim_ride_payment_processing = AsyncMock(return_value=True)
 
         with pytest.raises(HTTPException) as exc:
             await confirm_payment(
@@ -231,6 +230,7 @@ async def test_confirm_payment_real_ride_ownership_mismatch():
             )
 
     assert exc.value.status_code == 403
+    mock_db.get_ride.assert_awaited_once()
 
 
 # ── create_payment_intent: requires_action success path, error handlers ────────

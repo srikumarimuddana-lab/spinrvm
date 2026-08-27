@@ -162,7 +162,17 @@ export function useDemandHeatmap(rideState: string, isOnline: boolean) {
       errorCountRef.current = 0;
     } catch {
       errorCountRef.current += 1;
-      if (errorCountRef.current >= MAX_CONSECUTIVE_ERRORS) {
+      // A driver who has already seen real data tolerates a blip (3 strikes,
+      // below) so a single transient failure mid-shift doesn't flip the UI.
+      // But a driver who has NEVER seen a successful fetch has nothing to
+      // protect from flicker — leaving them on the loading shimmer for up
+      // to 3 poll cycles (~4 minutes at the default 90s interval) reads as
+      // a broken app, not a degrading one. lastFetchRef is only set on a
+      // successful fetch, so its absence means this is still the initial
+      // load — surface the failure on the very first attempt instead.
+      const everSucceeded = lastFetchRef.current > 0;
+      const threshold = everSucceeded ? MAX_CONSECUTIVE_ERRORS : 1;
+      if (errorCountRef.current >= threshold) {
         setStatus('error');
       }
     }

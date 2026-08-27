@@ -103,6 +103,23 @@ class TestGetDriverBalanceLegacyActivityStats:
 
         return get_rows
 
+    def _count_documents(self, legacy_rides, real_rides):
+        """Stub for the activity-count query.
+
+        /balance counts completed rides with a `count="exact"` head request
+        rather than fetching them, so the unfiltered activity count arrives
+        here instead of through get_rows. It stays legacy-INCLUSIVE (A31) —
+        an EXCLUDE_LEGACY_RIDES leaf would mean a money query, which this
+        endpoint never counts.
+        """
+
+        async def count_documents(table, filters=None, **kw):
+            if table == "rides" and not (filters and "legacy_import_metadata" in filters):
+                return len(legacy_rides) + len(real_rides)
+            return 0
+
+        return count_documents
+
     async def test_all_legacy_rides_show_real_trip_count_but_zero_balance(self):
         from backend.routes.drivers import get_driver_balance
 
@@ -116,9 +133,15 @@ class TestGetDriverBalanceLegacyActivityStats:
             for i in range(3)
         ]
 
-        with patch(
-            "backend.db_supabase.get_rows",
-            AsyncMock(side_effect=self._get_rows(legacy_rides, [])),
+        with (
+            patch(
+                "backend.db_supabase.get_rows",
+                AsyncMock(side_effect=self._get_rows(legacy_rides, [])),
+            ),
+            patch(
+                "backend.db_supabase.count_documents",
+                AsyncMock(side_effect=self._count_documents(legacy_rides, [])),
+            ),
         ):
             with patch("backend.db_supabase.supabase") as mock_supabase:
                 mock_supabase.table.return_value.select.return_value.in_.return_value.execute.return_value = MagicMock(
@@ -139,9 +162,15 @@ class TestGetDriverBalanceLegacyActivityStats:
         legacy_rides = [_ride(id="legacy-1", legacy_import_metadata={"source": "previous_app"}, driver_earnings=20.00)]
         real_rides = [_ride(id="real-1", driver_earnings=15.00, tip_amount=3.00)]
 
-        with patch(
-            "backend.db_supabase.get_rows",
-            AsyncMock(side_effect=self._get_rows(legacy_rides, real_rides)),
+        with (
+            patch(
+                "backend.db_supabase.get_rows",
+                AsyncMock(side_effect=self._get_rows(legacy_rides, real_rides)),
+            ),
+            patch(
+                "backend.db_supabase.count_documents",
+                AsyncMock(side_effect=self._count_documents(legacy_rides, real_rides)),
+            ),
         ):
             with patch("backend.db_supabase.supabase") as mock_supabase:
                 mock_supabase.table.return_value.select.return_value.in_.return_value.execute.return_value = MagicMock(

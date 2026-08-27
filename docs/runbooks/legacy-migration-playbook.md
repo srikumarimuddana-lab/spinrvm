@@ -446,6 +446,51 @@ rushed).
     > This item necessarily follows the Oct 30 import itself, which has not happened. Today's PRs
     > added dry-run-only backfill tooling (SIN/DOB, `duration_estimated`) that itself was never
     > `--apply`'d, so there is nothing yet to reconcile. Still fully open, unchanged.
+11. **Legacy driver-profile import** (`drivers.csv` → real `users`/`drivers` rows) — the un-imported
+    driver population identified in `docs/migration/2026-08-27-legacy-data-full-migration-approach.md`
+    §4 Phase 1. Not covered by items 1-10 above (those cover consent/retention/bookings/vehicle-
+    history/insurance-periods/SIN-DOB/provenance-flags/collection-sign-off/never-import-list/final
+    reconciliation, but not the driver-profile-creation import itself), added as its own item because
+    it turned out to have two of its own batch-blocking findings, same shape as this playbook's
+    existing three-bugs-from-one-root-cause thesis.
+    > **[NEW 2026-08-27 — BUILT AND PARTIALLY VALIDATED AGAINST THE REAL EXPORT; ONE FINDING
+    > RESOLVED, ONE STILL OPEN.]** `backend/services/driver_import_service.py`'s
+    > `build_mongo_driver_import_plan`/`commit_mongo_driver_import_plan` + CLI
+    > (`backend/scripts/import_legacy_mongo_drivers.py`), 24 tests. Full root-cause writeup:
+    > `docs/migration/2026-08-27-legacy-driver-blank-name-root-cause.md`.
+    >
+    > **Finding A (resolved):** 588/925 rows (63.6%) have a blank `name` — confirmed, not assumed,
+    > to be abandoned onboarding (100% correlated with `set_up_profile=false`, 0/588 ever referenced
+    > by a `bookings.driver_id`) rather than a data-quality/export bug. Fixed as a warning +
+    > synthetic placeholder name (`"Unnamed Legacy Driver {id[-6:]}"`) + a new
+    > `legacy_import_metadata.incomplete_profile_in_source` flag, instead of the row-level error this
+    > playbook's own Stage 3 "never silently drop a leaf" discipline would otherwise have required
+    > escalating before shipping — escalated to the product owner first, decided, then built. Every
+    > row still lands forced `needs_review`/unverified/offline regardless.
+    >
+    > **Finding B (open, NOT decided here):** read-only join of the real export's 910 unique driver
+    > phones against live production Supabase (`soavhtdhefowwvforzwb`) found 324/910 (35.6%) already
+    > match an existing `users` row (all riders — almost all from `booking_import_service`'s own
+    > ride-time phone matching) and 212/910 (23.3%) already match an existing `drivers` row. The
+    > existing "matching account = error, never silently merge" rule
+    > (`build_mongo_driver_import_plan`'s existing-match branch, same rule as
+    > `booking_import_service.py`'s) is deliberate and correct as a safety rule, but at this
+    > confirmed scale it is a **second whole-batch blocker of the same shape as Finding A** under
+    > the current all-or-nothing `commit_mongo_driver_import_plan` — except downgrading it isn't a
+    > pure data-quality call the way Finding A was, it's a real merge-policy decision affecting 324
+    > real accounts. Recommended shape (not implemented): a `users`-only match is safe to skip
+    > (informational, not an error); a `drivers`-row match is very likely the same person and a
+    > candidate for a metadata-enrichment merge onto the existing driver rather than a rejection.
+    > **Stays open on this checklist until a decision-owner rules on it** — do not run `--apply`
+    > against production expecting a clean commit until Finding B is resolved one way or the other.
+    >
+    > **Riders (`customers.csv`) were spot-checked for the same shape, not fixed here:** a 250-of-
+    > 1,233 random-sample phone join found ~81% already match an existing `users` row (same
+    > booking-import phone-matching effect) — so the rider gap is profile *enrichment*, not account
+    > creation, a different-shaped problem than Phase 1's. 64/1,238 (5.2%) rider rows also have a
+    > blank name, but at least one of those *is* referenced by a real booking's `customer_id` —
+    > Finding A's "zero ride linkage, safe to synthesize" reasoning does **not** automatically carry
+    > over to riders without its own check. Both left as open follow-ups, not assumed.
 
 ## What this playbook is not
 

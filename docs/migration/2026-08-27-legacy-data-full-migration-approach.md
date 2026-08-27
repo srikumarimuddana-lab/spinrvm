@@ -107,6 +107,19 @@ new document-verification-state risk.
 **Recommendation:** build this before anything else in this phase — it's the dependency
 every other driver-activity item below needs.
 
+**Status (2026-08-27): core service + CLI built** (`build_mongo_driver_import_plan`/
+`commit_mongo_driver_import_plan` in `backend/services/driver_import_service.py`,
+`backend/scripts/import_legacy_mongo_drivers.py`, 24 tests), not yet run against production
+and no admin route wired up yet. Two findings from validating it against the real 08-22
+export, full writeup in `docs/migration/2026-08-27-legacy-driver-blank-name-root-cause.md`:
+one **resolved** (63.6% of rows had a blank `name` — confirmed as abandoned-onboarding rows
+with zero ride linkage, not a data bug; now a warning + placeholder name instead of a
+batch-blocking error), one **still open** (35.6% of rows' phones already match an existing
+production account — a second batch-blocking collision under the current strict "existing
+match = error" rule, at a scale that needs an explicit merge/skip policy decision before an
+Oct 30 `--apply` run; see that doc §3/§6 and `docs/runbooks/legacy-migration-playbook.md`
+item #11 for the recommended shape).
+
 ### Phase 2 — Vehicle history backfill (regulatory-flagged, high value)
 
 **What:** `vehicle_details.csv` (355 rows: VIN, insurance/registration expiry, year/color/
@@ -335,3 +348,10 @@ A returning user never sees it again after their first successful login.
 - Phases 1-2 (driver profiles, vehicle history): approved to build next.
 - Phases 3 (partially — the correction tool itself), 4, 5, 6: remain scoped-but-deferred as
   originally written — no change to that call.
+- Phase 1 blank-name policy: **decided, option b** (warning + placeholder name, not a
+  batch-blocking error) — root-caused against the real export as abandoned onboarding with
+  zero ride linkage, not a data-quality bug. See
+  `docs/migration/2026-08-27-legacy-driver-blank-name-root-cause.md`.
+- Phase 1 existing-match collision rate (35.6% of the real export, confirmed against
+  production): **not yet decided** — flagged for a decision-owner before the Oct 30
+  `--apply` run, not resolved silently. Same doc, §3/§6.

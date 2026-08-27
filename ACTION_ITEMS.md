@@ -16290,19 +16290,32 @@ how much they de-risk a public launch._
   feature besides the legacy-ride badge is similarly silently inert in
   production for the same reason.
 
-### C45. `backend-test` is currently red on `main` — 2 pytest failures block every PR repo-wide
+### C45. `backend-test` is currently red on `main` — pytest failures block every PR repo-wide
 
 - [ ] **Status:** open, found 2026-08-27 while triaging PR #4595's CI
   (a docs-only PR — the diff couldn't have caused this). Confirmed via a
   fresh check of `main`'s own latest completed `CI/CD Pipeline` run (run
   `33037591310`, head `152c6f1`): `backend-test` fails there too, with the
-  identical two test names and summary line.
+  identical failing test names and summary line.
+- **Reconfirmed on PR #4595's own CI later the same day** (run `33086879099`,
+  head `fb233e6e3`, still a docs+backend+rider/driver-app diff that
+  couldn't plausibly cause GST/PST-report or payment-confirmation
+  failures): same `backend-test` job, same failure 2, same failure 1 —
+  plus one **newly observed third failure**, added below.
 - **Failure 1 — `tests/test_compliance_reports.py::TestGstPstRows::test_truncation_flag_set_at_row_limit`**
   — `Failed: Timeout (>30.0s) from pytest-timeout`. Also throws a
   `PytestUnraisableExceptionWarning` on teardown (same test, not a separate
   failure). Shape (a timeout, not an assertion) suggests a perf regression
   or a hung external call in the GST/PST compliance-report row-truncation
   path — not yet root-caused.
+- **Failure 3 (found 2026-08-27, second confirmation pass) —
+  `tests/test_compliance_reports_http.py::test_gst_pst_remittance_docx_format`**
+  — also `Failed: Timeout`, same GST/PST compliance-report area as failure 1
+  but a different test file (HTTP-level DOCX-format test vs. the row-
+  truncation unit test). Not yet confirmed whether this is the *same*
+  underlying hang (e.g. both ultimately call the same slow compliance-report
+  code path) or an independent timeout — worth checking together with
+  failure 1 rather than assuming either one in isolation.
 - **Failure 2 — `tests/test_payments_coverage_gap_closure.py::test_confirm_payment_real_ride_ownership_mismatch[asyncio]`**
   — `AssertionError: assert 500 == 403`. The test expects a ride-ownership
   mismatch on payment confirmation to return a clean `403`; it's getting an
@@ -16326,11 +16339,12 @@ how much they de-risk a public launch._
   time, not because of a shared cause. Don't treat a `Money-path
   coverage floor check` / `Coverage regression check` failure as evidence
   for this item without checking C47 first.
-- **Action:** root-cause both failures directly (not from this session —
-  found while triaging an unrelated PR, not the task at hand). Priority on
-  failure 2 given the money/auth adjacency — trace what changed in the
+- **Action:** root-cause all three failures directly (not from this session
+  — found while triaging an unrelated PR, not the task at hand). Priority
+  on failure 2 given the money/auth adjacency — trace what changed in the
   payment-confirmation ownership-check path or its dependencies since this
-  test last passed.
+  test last passed. Failures 1 and 3 are worth investigating together
+  first (same feature area) before assuming two independent hangs.
 - **What was NOT verified:** when this started failing (no bisection done
   — only confirmed it's red on the current `main` tip), and whether the two
   failures are related to each other or fully independent.

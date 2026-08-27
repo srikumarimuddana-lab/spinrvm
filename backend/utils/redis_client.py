@@ -283,6 +283,7 @@ KNOWN_KEY_PREFIXES = [
     # attribution: someone staring at a memory graph trying to find the growth.
     "spinr:heatmap:",  # per-area driver heatmap payload cache
     "spinr:surge:status:",  # admin surge-status snapshot (30s)
+    "spinr:locwrite:",  # driver marker write-gate window (utils/location_write_gate)
 ]
 
 

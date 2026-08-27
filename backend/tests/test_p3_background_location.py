@@ -63,10 +63,27 @@ class TestUpdateLocationBatch:
 
         db_updates = []
 
+        async def _drivers_row_only(table, *_a, **_k):
+            # Seed the drivers-row fetch. Since the write-gate review (PR
+            # #4594), the v1 marker write is skipped entirely when no drivers
+            # row exists — previously it issued an update_one that matched
+            # zero rows, burned a gate window keyed on users.id, and counted
+            # outcome="written" for a write that never happened. These
+            # format-flexibility tests are about the SHAPE of the marker
+            # write, so a row must exist; the no-row branch has its own pin
+            # (test_no_driver_row_skips_marker_write).
+            if table == "drivers":
+                return [{"id": "driver_row_p3", "user_id": DRIVER_USER_ID, "is_online": False}]
+            return []
+
         with (
             patch(
                 "backend.routes.drivers._deps.db_supabase.update_one",
                 AsyncMock(side_effect=lambda t, q, d: db_updates.append((t, q, d))),
+            ),
+            patch(
+                "backend.routes.drivers._deps.db_supabase.get_rows",
+                AsyncMock(side_effect=_drivers_row_only),
             ),
             # check_location_integrity's teleport check compares against the
             # last point cached under f"loc:last:{driver_id}" -- in dev/test
@@ -147,6 +164,35 @@ class TestUpdateLocationBatch:
 
         _, query, _ = updates[0]
         assert query.get("user_id") == DRIVER_USER_ID
+
+    async def test_no_driver_row_skips_marker_write(self):
+        """No drivers row → no marker write, no gate window, clean success.
+
+        Review finding (senior-dev pass): the old fallback keyed the write
+        gate on users.id — an id-space no other ingestion path shares — and
+        counted outcome="written" for an update_one that matched zero rows,
+        polluting the exact counter the shadow measurement reads. The handler
+        now skips the marker write entirely when the drivers fetch comes back
+        empty; the 200 response is unchanged.
+        """
+        from backend.routes.drivers import update_location_batch
+
+        db_updates = []
+        with (
+            patch(
+                "backend.routes.drivers._deps.db_supabase.update_one",
+                AsyncMock(side_effect=lambda t, q, d: db_updates.append((t, q, d))),
+            ),
+            patch(
+                "backend.routes.drivers._deps.db_supabase.get_rows",
+                AsyncMock(return_value=[]),
+            ),
+            patch("utils.location_integrity.redis_get", AsyncMock(return_value=None)),
+        ):
+            result = await update_location_batch(batch=[_point()], current_user={"id": DRIVER_USER_ID})
+
+        assert result["success"] is True
+        assert not db_updates, "marker write must be skipped when no drivers row exists"
 
     async def test_single_driver_row_fetch_online_driver(self):
         """Ranked #25 / audit N10: the v1 location-write path must fetch the

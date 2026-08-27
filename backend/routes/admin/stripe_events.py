@@ -12,21 +12,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 try:
-    from ...dependencies import get_admin_user, require_super_admin
+    from ...dependencies import require_super_admin
     from ...utils.audit_logger import log_admin_action
 except ImportError:
     from dependencies import require_super_admin
     from utils.audit_logger import log_admin_action
-
-try:
-    from ..._base_imports import db_supabase
-except ImportError:
-    pass
-
-try:
-    from ... import db_supabase
-except ImportError:
-    pass  # type: ignore
 
 try:
     from ...db_supabase import (
@@ -39,9 +29,11 @@ try:
 except ImportError:
     from db_supabase import (  # type: ignore
         DatabaseError,
+        claim_stripe_event,
         mark_stripe_event_processed,
         unclaim_stripe_event,
     )
+    from settings_loader import get_app_settings  # type: ignore
 
 try:
     from ...repositories._base import run_sync, supabase

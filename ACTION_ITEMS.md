@@ -16619,7 +16619,7 @@ how much they de-risk a public launch._
      | grep -E 'spinr_db_calls_rejected|spinr_deadline_header_clamped'"
   ```
 
-### C43. Location write gate: read the shadow measurement, decide the flip, then delete the scaffolding
+### C48. Location write gate: read the shadow measurement, decide the flip, then delete the scaffolding
 
 - [ ] **Status:** open — filed from PR #4594's pre-merge review (BA + architect
   passes, 2026-08-27). The gate shipped flag-off in shadow mode *by design*:

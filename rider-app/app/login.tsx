@@ -61,7 +61,7 @@ export default function LoginScreen() {
   };
 
   const handleSendCode = async () => {
-    if (!isValid || !consentAccepted || loading) return;
+    if (!isValid || loading) return;
     setLoading(true);
     const formattedNumber = `+1${phoneNumber}`;
     try {
@@ -95,7 +95,17 @@ export default function LoginScreen() {
   };
 
   const isValid = phoneNumber.length === 10;
-  const canContinue = isValid && consentAccepted;
+  // Consent is no longer required to get past this screen. The backend only
+  // ever reads consent_accepted when this phone number turns out to be a
+  // brand-new account (routes/auth.py's verify_otp) -- for a returning user
+  // whose session just expired or who logged back out and in, it's silently
+  // ignored. Gating "Send Verification Code" on it forced every returning
+  // user to re-tick a box with zero legal effect for them, every time they
+  // re-authenticated. The checkbox itself stays visible/toggleable so a
+  // proactive new signup can still pre-accept it here; otp.tsx now prompts
+  // for it inline instead, but only if the backend actually comes back with
+  // consent_required (which only fires for genuine new-account creation).
+  const canContinue = isValid;
 
   return (
     <KeyboardAvoidingView

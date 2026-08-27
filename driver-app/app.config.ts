@@ -24,7 +24,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 'fingerprint'/'appVersion' rejected by EAS CLI). Bump manually when
     // shipping native changes that break JS-bundle compatibility. Pre-launch
     // with no production users, OTA compatibility risk is zero.
-    runtimeVersion: '2.6.0', // bump from 2.5.0 (SDK 57 dependency alignment, 2026-08-11): react-native-gesture-handler 2.31→2.32, react-native-safe-area-context 5.6→5.7, netinfo 11→12, datetimepicker 8→9 are all NATIVE-module changes — JS built against these must never OTA onto pre-alignment binaries. History: 2.5.0 added expo-sqlite (durable trip-location outbox); 2.4.0 isolated the react-native-screens 4.23.0 native line after 4.24.0 New-Arch/Bridgeless codegen resolved an expo-router <Screen> to a non-renderable object in release builds; 2.2.0 -> 2.3.0 added react-native-webview (Stripe embedded onboarding) + Android CAMERA, plus @iternio/react-native-auto-play + react-native-nitro-modules (Android Auto).
+    runtimeVersion: '2.7.0', // bump from 2.6.0 (@iternio/react-native-auto-play 0.4.7→0.5.13, 2026-08-26): a NATIVE library change — the voice API moved to new HybridVoice/AndroidWindowInformation Nitro hybrid objects and VirtualRenderer's display lifecycle was rewritten. 0.5.13 JS require()d on a 0.4.7 binary throws at hybrid-object creation; register.ts degrades that to "car support disabled" rather than a crash, but the driver silently loses Android Auto — so fence it. History: 2.6.0 (SDK 57 dependency alignment, 2026-08-11: react-native-gesture-handler 2.31→2.32, react-native-safe-area-context 5.6→5.7, netinfo 11→12, datetimepicker 8→9, all native-module changes); 2.5.0 added expo-sqlite (durable trip-location outbox); 2.4.0 isolated the react-native-screens 4.23.0 native line after 4.24.0 New-Arch/Bridgeless codegen resolved an expo-router <Screen> to a non-renderable object in release builds; 2.2.0 -> 2.3.0 added react-native-webview (Stripe embedded onboarding) + Android CAMERA, plus @iternio/react-native-auto-play + react-native-nitro-modules (Android Auto).
     splash: {
         image: './assets/images/splash-blank.png',
         resizeMode: 'contain',
@@ -253,6 +253,16 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 compileSdkVersion: 36,
                 targetSdkVersion: 36,
                 kotlinVersion: '2.2.21',
+                // Required by @iternio/react-native-auto-play >= 0.5.3 whenever
+                // minification is on: Nitro resolves its hybrid objects by class
+                // name, so R8/ProGuard renaming breaks Android Auto in release
+                // builds only — the only builds a real head unit will load.
+                // Minification is currently OFF (Expo default; no
+                // enableProguardInReleaseBuilds/enableMinifyInReleaseBuilds
+                // anywhere in this config), making this rule a no-op today — it
+                // exists so flipping minification on later can't silently kill
+                // the car app.
+                extraProguardRules: '-keep class com.margelo.nitro.swe.iternio.reactnativeautoplay.** { *; }',
             },
             ios: {
                 deploymentTarget: '16.4', // match ios.minimumOsVersion; expo-build-properties 57.x hard-validates this must be >= 16.4 (was 16.0, valid under 55.0.14 -- see maybeThrowInvalidVersions in expo-build-properties/build/pluginConfig.js); Firebase pods need >= 15

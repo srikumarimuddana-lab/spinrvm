@@ -16619,6 +16619,62 @@ how much they de-risk a public launch._
      | grep -E 'spinr_db_calls_rejected|spinr_deadline_header_clamped'"
   ```
 
+### C43. Location write gate: read the shadow measurement, decide the flip, then delete the scaffolding
+
+- [ ] **Status:** open — filed from PR #4594's pre-merge review (BA + architect
+  passes, 2026-08-27). The gate shipped flag-off in shadow mode *by design*:
+  nothing on the driver-GPS write path has ever been measured against real
+  traffic (E2 is built but blocked on E1), so the flag must flip on evidence,
+  not arithmetic. This item is that evidence loop — without it the gate is
+  permanent dead weight: an extra Redis SET NX per flush forever, with the
+  write reduction never realized.
+- **Owner:** repository owner (needs Fly ssh + admin-dashboard access).
+- **Dependency:** C11 (nothing scrapes/alerts on production metrics — counters
+  are per-process and reset on deploy). Until C11 lands, the read procedure is
+  the same manual scrape C42 documents:
+  ```bash
+  flyctl ssh console -a spinr-backend-yyz -C \
+    "curl -s -H 'Authorization: Bearer $METRICS_AUTH_TOKEN' localhost:8000/metrics \
+     | grep -E 'spinr_drivers_location_write_total|spinr_drivers_location_gate'"
+  ```
+  Sum across machines; counters reset on each deploy, so read a window with no
+  deploys in it.
+- **Steps:**
+  1. After ≥1 full weekday of normal traffic, read
+     `spinr_drivers_location_write_total` by `{path, outcome}`.
+     `shadow_throttled / (written + shadow_throttled)` on the rest_* paths is
+     the fraction of REST marker writes the flip would eliminate;
+     `period1_forced` is the floor coalescing can never cut (those writes are
+     regulatory). Sanity-check `gate_failed_total` ≈ 0 — a nonzero rate means
+     Redis trouble, fix that first.
+  2. Flip criterion (suggested, owner may tighten): flip ON if
+     shadow_throttled ≥ 15% of rest_* write volume — below that the win does
+     not pay for the moving part. Record the measured number here either way;
+     if below threshold, skip to step 4 and delete the gate's shadow branch
+     along with the rest.
+  3. Flip `location_marker_write_gate_enabled` ON via the admin dashboard
+     (migration 370 made it operable), **off-peak**, and watch for one peak
+     cycle: `POST /rides/{id}/arrive` 200m-geofence rejection rate (the one
+     hard-failure consumer of `drivers.lat/lng` — a stale marker shows the
+     driver as a user-visible rejection, self-corrects on retry), admin
+     live-map marker lag, and `stale_intent` flip counts. Rollback is the
+     same toggle, instant.
+  4. **Delete the scaffolding** once the flip decision has held for ~a week:
+     the shadow branch, the `unthrottled_before` asymmetry, and the flag +
+     migration-370 column (new migration; column drop is the documented
+     rollback of 370). A measurement flag without a removal step becomes
+     permanent complexity — this bullet is the removal step. The gate's
+     call-site funnel (`_write_marker_if_due` / `should_write_marker`) stays:
+     it is the seam a future batched-flush write-behind slots into, which is
+     the endgame if write volume ever warrants more than per-driver
+     coalescing (PostgREST bulk upsert, ≤6 HTTP calls/s fleet-wide vs ~85).
+- **Business context for the decision:** capacity-scaling.md's model — Supabase
+  compute is tier-fixed and does not autoscale; the flip defers the
+  Small→Medium (+$45/mo) pre-sizing decision by cutting steady-state marker
+  UPDATEs ~30% at the change log's 500-driver arithmetic (~120/s → ~85/s; the
+  WS share was already throttled pre-gate, so the flip's whole win is deduping
+  REST against the shared window).
+
 ### C41. `rider-app-test`/`driver-app-test` intermittently time out on unrelated files — two more leaked-async-update sources found and fixed (same class as C31/C37)
 
 - [x] **Status:** FIXED (2026-08-24) — found after this session repeatedly

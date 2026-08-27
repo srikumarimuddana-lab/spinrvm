@@ -40,6 +40,14 @@ Estimated steady-state cost at 500 drivers on a 30% on-trip / 70% idle mix:
 roughly 120 `drivers`-row UPDATEs/sec. **This is arithmetic from the configured
 client cadences, not a measurement** — see §9.
 
+Against the repo's actual constraint model (`docs/runbooks/capacity-scaling.md`:
+Supabase compute is tier-fixed, does not autoscale, and Small→Medium is a manual
++$45/mo pre-sizing decision): the WS share of those writes was already throttled
+to 1-per-3s pre-gate, so the flip's whole win is deduping REST flushes against
+the shared window — ~120/s → ~85/s (~30%) at the same arithmetic. That defers,
+not removes, the tier decision; the measured `shadow_throttled` fraction
+(ACTION_ITEMS C43) is what turns this into a real number.
+
 ## 3. Fix / remediation
 
 Adds `backend/utils/location_write_gate.py`: a single Redis-keyed window per
@@ -89,6 +97,21 @@ hard-rejects a driver more than 200 m from pickup, so a stale position yields a
 user-visible rejection rather than a display lag. At ≤3 s it self-corrects on the
 driver's next tap — but "every consumer is a passive reader" was not true as
 originally written.
+
+**Degraded-mode addendum (2026-08-27, architect review).** Two Redis failure
+modes the original analysis missed, both since fixed in `575da61`:
+
+- *Hung* (not raising) Redis: the shared client has no socket timeouts, so the
+  gate's pre-write `SET NX` could stall the durable write — and the sequential
+  WS message loop — indefinitely. Every Redis call the gate makes is now
+  bounded by `asyncio.wait_for(0.1s)`; a timeout is the degraded branch.
+- *Down* Redis: the original fail-open returned True unconditionally, deleting
+  the WS throttle during an outage (~3× pre-gate write volume at exactly the
+  moment the non-autoscaling DB tier could least absorb it — the only mode
+  strictly worse than pre-PR). The degraded branch now restores pre-gate
+  behaviour per family: REST fails fully open, WS falls back to an in-process
+  per-driver floor. `docs/runbooks/redis-down.md` now carries the
+  `spinr:locwrite:*` row.
 
 `.claude/context/domain-dispatch.md:55` sets the documented freshness budget at
 **30 s**; a 3 s gate is well inside it. `dispatch_service.py:115-142` warns *"Do
@@ -164,7 +187,7 @@ to the rider, which still runs on **every** ping and is untouched by this change
 | `backend/routes/drivers/location.py` | Added `_write_marker_if_due`; routed all three REST write sites through it | Closes the unthrottled REST path; enforces the Period 1 rule |
 | `backend/routes/websocket.py` | Both handlers call `should_write_marker`; dropped `_DRIVER_LOC_DB_WRITE_INTERVAL_S` and the cache-write call sites | Unifies WS with REST; survives reconnects |
 | `backend/socket_manager.py` | Annotated `update_driver_location` / `get_driver_location` as unused | Kept as the seed of a future Redis read path |
-| `backend/tests/test_location_write_gate.py` | New. 11 tests | Fail-open, Period 1, shadow mode, cross-path coalescing |
+| `backend/tests/test_location_write_gate.py` | New. 19 tests | Fail-open (raising AND hung Redis), degraded per-family fallback, Period 1, shadow mode, cross-path coalescing, interval guard |
 | `backend/tests/test_websocket_coverage.py` | One assertion updated to the new contract | Asserted the now-removed cache write |
 
 ## 7. Before / after
@@ -221,8 +244,9 @@ throttles cleanly if the gate module itself misbehaves.
 
 ## 9. Verification performed
 
-- [x] **Automated tests (unit).** 11 new tests in `test_location_write_gate.py`;
-      415 passing across `-k "location or presence or websocket or socket"`. The
+- [x] **Automated tests (unit).** 19 tests in `test_location_write_gate.py`
+      plus a route-level WS coalescing pin and a v1 no-driver-row pin;
+      690 passing across the affected sweep, full non-slow suite green. The
       cross-path coalescing tests run against the **real** `redis_set_nx`
       in-process fallback rather than a mock, so they cover actual keying.
 - [x] **Blast-radius grep performed.** Searched every reader of `drivers.lat`,

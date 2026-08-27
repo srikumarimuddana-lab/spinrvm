@@ -53,6 +53,13 @@ All of `CLAUDE.md` applies unchanged: ≤3-file subtasks committed one at a time
 
 End every cycle with the protocol's report shape — Discovery · Impact · Root cause · Options+scores · Adversarial review · Decision · Implementation · Validation (commands + counts) · Results · Remaining risks · **Next recommendation** — with every claim labeled KNOWN / INFERRED / TESTED / UNTESTED / UNKNOWN and confidence HIGH/MEDIUM/LOW. No "definitely safe", no "production ready" without evidence.
 
+## Operating-agreement caps (charter §Operating agreement — check before starting any cycle)
+
+- ≤ 2 charter tracks in flight; ≤ 1 open PR touching a regulated surface (money, rides/dispatch, auth, insurance periods, corporate billing, safety); ≤ 3 open swarm PRs total. At a cap: work review feedback, docs, or Process drafts instead of opening new work.
+- 24-hour soak after a regulated-surface merge before the next regulated cycle (docs/tests/dark-flagged changes exempt).
+- Transparency test at brainstorm time: *can a rider or driver see what this does and why, before it affects them?* Fail → redesign or drop. Driver-facing incentives are legal-review-required before the implementation cycle starts.
+- Every cycle names the KPI it moves and what the user will see; can't answer both → don't run the cycle.
+
 ## Hard bounds
 
 - Production is immutable without explicit human approval: no prod DB writes, credential rotation, irreversible migrations, mass user changes, payment-config changes, or disabling of any security control/gate/hook — ever, from this command.

@@ -145,10 +145,56 @@ Yes. Named, with mitigations and residuals:
 | R9 | **Doc drift** — charter/framework claims decaying as code moves | Framework loses its "verified truth" property | Date-stamped claims; assessment cycle re-verifies before each track | Low with the re-verify rule |
 
 **Net answer:** the swarm is safe to use *as governed* — every mitigation
-above already exists in the framework — but R1/R2/R4 are genuinely yours
-to manage as the human in the loop: keep merge review real (don't merge
-seconds after ready-for-review on code changes), cap concurrency, and
-treat driver-facing engagement features as legal-sensitive by default.
+above already exists in the framework — but R1/R2/R4 need active handling,
+which the operating agreement below makes binding rather than advisory.
+
+## Operating agreement — binding handling for R1/R2/R4
+
+These are standing rules, not suggestions. The swarm enforces its side at
+cycle time; the human side is stated so the scorecard can grade it.
+
+**R1 — throughput control (velocity vs live users)**
+1. At most **2 charter tracks in flight** at any time.
+2. At most **1 open PR** touching a regulated surface (money, rides/dispatch,
+   auth, insurance periods, corporate billing, safety) at any time.
+3. After a regulated-surface merge: a **24-hour soak window** — watch the
+   KPI/SLA tables and Sentry for that domain before the next regulated
+   cycle starts. Docs, tests, and dark (flag-off) changes are exempt.
+4. Rationale: per-change gates don't control *compounded* regression risk;
+   only rate limits do, and a numeric cap is the only "slow down" an
+   autonomous loop reliably obeys.
+
+**R2 — review economics (human bottleneck)**
+1. At most **3 open swarm PRs**; at the cap, the swarm stops opening new
+   ones and works review feedback, docs, or Process drafts instead —
+   back-pressure, not pile-up.
+2. **Two-tier merge rule**: docs-only and dark-flagged diffs may merge on a
+   light pass; a regulated-surface diff requires a real review (reading the
+   diff and its Change Impact Log — a same-minute ready-to-merged event on
+   such a PR is a scorecard finding, not a convenience).
+3. Every code-changing PR carries the **"In plain terms"** paragraph
+   (Track D) plus its auditor-agent evidence, so a real review costs
+   minutes, not hours.
+4. **First Process item worked overall: restore one automated PR reviewer**
+   (diagnose C9 or re-key C7) — the cheapest multiplier on review capacity.
+
+**R4 — identity keel (drift prevention)**
+1. Every cycle's brainstorm step answers a fixed **transparency test**:
+   *can a rider or driver see what this does and why, before it affects
+   them?* A feature that fails it is redesigned or dropped — regardless of
+   engagement upside.
+2. No cycle may weaken a code-enforced transparency invariant (surge cap
+   and pre-booking visibility, receipt line-item mapping, no hidden fees,
+   append-only audit trails); new user-facing behavior adds to the
+   *disclosed* surface, never the hidden one.
+3. Any **driver-facing incentive** (quests, streaks, bonuses, tiles) is
+   legal-review-required **before its implementation cycle starts**, not
+   before merge — by merge, design momentum already exists. Contractor
+   autonomy language is checked at proposal time.
+4. Every cycle names the **KPI it moves** and what the user will see;
+   automation that can't answer both doesn't run. The quarterly scorecard
+   re-grade is the drift detector, and P0/P1 backlog always preempts
+   charter novelty.
 
 ## New features vs enhancements?
 

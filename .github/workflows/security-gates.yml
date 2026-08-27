@@ -379,17 +379,19 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '20'
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
       - name: Audit
         working-directory: ${{ matrix.module }}
         run: |
           if [ -f yarn.lock ]; then
-            # yarn 1.x exit codes are a bitmask: 4=moderate, 8=high, 16=critical.
-            # --level high controls display only; the exit code still reflects all
-            # severities found. We only want to fail on HIGH(8) or CRITICAL(16).
-            # Use `|| rc=$?` not `; rc=$?` — bash -e (GitHub's default shell) exits
-            # immediately on non-zero before the semicolon-separated assignment runs.
-            rc=0; yarn audit --level high || rc=$?
-            if [ $((rc & 24)) -ne 0 ]; then exit 1; fi
+            # CR #4548: image-size (via expo -> metro, Metro's own
+            # dev-tooling) has 2 unpatched HIGH advisories with no fix
+            # possible today. See scripts/security/check_yarn_audit_allowlist.py
+            # for the scoped allowlist and full rationale.
+            yarn audit --level high --json > /tmp/yarn-audit.json || true
+            python3 "${GITHUB_WORKSPACE}/scripts/security/check_yarn_audit_allowlist.py" /tmp/yarn-audit.json
           elif [ -f package-lock.json ]; then npm audit --audit-level=high
           else echo "No lockfile in ${{ matrix.module }}"
           fi

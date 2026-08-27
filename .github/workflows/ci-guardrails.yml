@@ -158,20 +158,33 @@ jobs:
   coverage-regression-gate:
     name: Coverage regression check
     runs-on: ubuntu-latest
-    needs: [shared-coverage-run]
-    # Runs regardless of shared-coverage-run's outcome (success, failure, or
-    # an external cancellation like C47) so a shared-run problem degrades
-    # this gate exactly like a missing coverage.json always has, rather than
-    # silently vanishing as "skipped" -- see the download step below.
-    if: always()
+    needs: [detect-changes, shared-coverage-run]
+    # Runs whenever shared-coverage-run does (backend-touching PR, or any
+    # non-pull_request event -- same detect-changes fallback pattern as
+    # lint-trend-gate/breaking-change-gate above; this gate has nothing to
+    # compare on a PR that never touched backend/). Also runs regardless of
+    # shared-coverage-run's own outcome (success, failure, or an external
+    # cancellation like C47) so a shared-run problem degrades this gate
+    # exactly like a missing coverage.json always has, rather than silently
+    # vanishing as "skipped" -- see the download step below.
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.outputs.backend == 'true'
+      )
     continue-on-error: true
     outputs:
-      # C24 (ACTION_ITEMS.md): with no CODECOV_TOKEN, base_pct always
-      # resolves to 0 and "no regression detected" and "no baseline to
-      # compare against" become indistinguishable to anyone reading just
-      # needs.coverage-regression-gate.result (continue-on-error always
-      # reports that as 'success' regardless of what happened inside).
-      # This output lets guardrail-summary render the honest distinction.
+      # C24 (ACTION_ITEMS.md) / 2026-08-27 fix (docs/audit/2026-08-27-cicd-
+      # gates-guardrails-audit.md Section 3): this gate used to depend on a
+      # CODECOV_TOKEN secret that was never provisioned (no one has Codecov
+      # account access to create one), so base_pct always resolved to 0 and
+      # "no regression detected" was indistinguishable from "no baseline to
+      # compare against." Fixed by computing the base-branch baseline
+      # locally instead (see "Compute base-branch coverage" below) --
+      # removes the third-party dependency entirely rather than waiting on
+      # a token that may never arrive. This output still lets
+      # guardrail-summary render an honest distinction for the remaining
+      # failure mode (the base-commit pytest run itself failing outright).
       baseline_status: ${{ steps.assert_no_regression.outputs.baseline_status }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -214,20 +227,74 @@ jobs:
                   f.write('0')
           "
 
-      - name: Fetch base branch coverage from Codecov
-        id: base_coverage
+      - name: Resolve merge-base SHA
+        id: mb
         env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-          BASE_BRANCH: ${{ github.base_ref || inputs.base_branch }}
-          REPO: ${{ github.repository }}
+          # Preserves the pre-existing workflow_dispatch `base_branch` input
+          # (on: workflow_dispatch: inputs: above) -- a manual run has no
+          # pull_request.base.sha, so without this the comparison would
+          # silently always fall back to origin/main regardless of what the
+          # dispatch input asked for.
+          BASE_BRANCH_INPUT: ${{ inputs.base_branch }}
         run: |
-          # Attempt to fetch last known coverage for base branch from Codecov API
-          BASE_PCT=$(curl -s \
-            "https://codecov.io/api/v2/github/${REPO%%/*}/repos/${REPO##*/}/branches/${BASE_BRANCH}/coverage" \
-            -H "Authorization: Bearer ${CODECOV_TOKEN}" 2>/dev/null | \
-            python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('totals',{}).get('coverage','0'))" 2>/dev/null || echo "0")
-          echo "base_pct=$BASE_PCT" >> "$GITHUB_OUTPUT"
-          echo "Base branch coverage: $BASE_PCT%"
+          BASE="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$BASE" ]; then
+            BASE="origin/${BASE_BRANCH_INPUT:-main}"
+          fi
+          MB=$(git merge-base "$BASE" HEAD 2>/dev/null || echo "$BASE")
+          echo "sha=$MB" >> "$GITHUB_OUTPUT"
+          echo "Merge-base: $MB"
+
+      # Self-computed baseline, replacing the Codecov API dependency above
+      # (2026-08-27 fix, see this job's own outputs comment). Cached by
+      # merge-base SHA: many PRs share the same current main tip on any
+      # given day, so only the first PR against a given base commit pays
+      # for this second full pytest run -- every later one this run gets a
+      # cache hit and skips straight to "Extract base branch coverage"
+      # below. Cache is scoped to this job only (coverage.json for one
+      # specific commit, never invalidated -- a given SHA's coverage never
+      # changes), so no staleness risk from reusing a hit.
+      - name: Cache base-branch coverage
+        id: base_cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: base-coverage.json
+          key: coverage-regression-base-${{ steps.mb.outputs.sha }}
+
+      - name: Compute base-branch coverage (cache miss only)
+        if: steps.base_cache.outputs.cache-hit != 'true'
+        working-directory: backend
+        env:
+          SUPABASE_URL: https://test.supabase.co
+          SUPABASE_SERVICE_ROLE_KEY: test_key
+          JWT_SECRET: ci-only-not-a-real-secret-000000000000
+          ADMIN_PASSWORD: ci-placeholder-password
+          ENV: test
+        run: |
+          # Detached checkout of the merge-base commit -- this job's tree is
+          # not needed again after this step (PR-branch coverage was already
+          # extracted above), so overwriting it here is safe.
+          git checkout --quiet ${{ steps.mb.outputs.sha }}
+          pip install --require-hashes -r requirements-locked.txt --quiet \
+            || pip install -r requirements-locked.txt --quiet || true
+          pytest --cov=. --cov-report=json:../base-coverage.json -q --no-header 2>/dev/null || true
+
+      - name: Extract base branch coverage
+        id: base_coverage
+        run: |
+          python3 -c "
+          import json
+          try:
+              data = json.load(open('base-coverage.json'))
+              pct = data['totals']['percent_covered']
+          except Exception as e:
+              print(f'Base coverage read failed: {e}')
+              pct = 0
+          print(f'base_pct={pct}')
+          " | tee /tmp/base_pct_line
+          BASE_PCT=$(grep -oE '[0-9.]+' /tmp/base_pct_line | tail -1)
+          echo "base_pct=${BASE_PCT:-0}" >> "$GITHUB_OUTPUT"
+          echo "Base branch coverage: ${BASE_PCT:-0}%"
 
       - name: Assert no regression
         id: assert_no_regression
@@ -250,26 +317,31 @@ jobs:
           github_output = os.environ["GITHUB_OUTPUT"]
           github_summary = os.environ.get("GITHUB_STEP_SUMMARY")
 
-          # C24 (ACTION_ITEMS.md): base_pct==0 means "Fetch base branch
-          # coverage from Codecov" got no real data (no CODECOV_TOKEN
-          # configured) -- NOT "verified zero regression". Conflating those
-          # two into one silent PASS is exactly the bug this fixes. This
-          # branch must never claim regression was checked when it wasn't.
+          # 2026-08-27: base_pct==0 now means the base-commit pytest run
+          # itself produced no readable coverage.json (crashed outright, or
+          # the cache/compute step above was skipped for some other
+          # reason) -- NOT "verified zero regression". Conflating those two
+          # into one silent PASS was the original C24 bug (ACTION_ITEMS.md)
+          # when this depended on a never-provisioned CODECOV_TOKEN; this
+          # branch must still never claim regression was checked when it
+          # wasn't, now that the mechanism is a locally-computed baseline
+          # instead of a third-party API call.
           if base_pct <= 0:
               print("UNKNOWN: no base-branch coverage data available -- this run did NOT verify")
-              print("whether coverage regressed. See ACTION_ITEMS.md C24 (no CODECOV_TOKEN secret")
-              print("configured, so the Codecov API call in the previous step returned nothing).")
+              print("whether coverage regressed. The base-commit pytest run produced no readable")
+              print("coverage.json -- see the 'Compute base-branch coverage' step's own log.")
               with open(github_output, "a") as f:
                   f.write("baseline_status=no-baseline\n")
               if github_summary:
                   with open(github_summary, "a") as f:
                       f.write(
                           "### ⚠️ Coverage Regression: NOT actually checked\n\n"
-                          "No base-branch coverage data was available (missing `CODECOV_TOKEN` "
-                          "secret -- see `ACTION_ITEMS.md` **C24**). This run could not tell "
-                          "whether this PR regressed coverage or not. The green check above "
-                          "reflects that this gate doesn't block merges while the token is "
-                          "missing, not that coverage was verified.\n"
+                          "No base-branch coverage data was available (the base-commit pytest "
+                          "run produced no readable `coverage.json` — see the 'Compute base-branch "
+                          "coverage' step's log). This run could not tell whether this PR regressed "
+                          "coverage or not. The green check above reflects that this gate doesn't "
+                          "block merges when the baseline can't be computed, not that coverage was "
+                          "verified.\n"
                       )
               # Not sys.exit(1): a missing baseline is an infra gap outside any
               # single PR author's control, not something this specific PR

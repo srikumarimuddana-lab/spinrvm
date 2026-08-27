@@ -902,3 +902,54 @@ def test_admin_snapshot_fetch_failure_returns_error(app_with_ws):
             assert msg == {"type": "error", "message": "snapshot_failed"}
     finally:
         _stop(patches)
+
+
+@pytest.mark.anyio
+async def test_driver_location_second_ping_in_window_is_coalesced(app_with_ws):
+    """Pins ``unthrottled_before=False`` AT the WS call site, route level.
+
+    Two pings inside one 3 s window must produce exactly ONE durable
+    drivers-row UPDATE, with the flag off and the REAL gate running
+    (in-process Redis fallback; nothing gate-related patched). If a future
+    "simplification" drops the ``unthrottled_before=False`` kwarg at the call
+    site, the second ping falls through in shadow mode and this test fails —
+    the exact silent regression commit 50264f7 fixed, which every earlier
+    test missed because each sent a single ping (where "always writes" and
+    "one per window" are indistinguishable).
+    """
+    import backend.utils.location_write_gate as gate
+    import backend.utils.redis_client as rc
+
+    rc._local.clear()
+    gate._degraded_last_write.clear()
+
+    update_driver_loc_db = AsyncMock(return_value=None)
+    extra = [
+        patch("backend.routes.websocket.check_location_integrity", new=AsyncMock(return_value=(True, "ok"))),
+        patch("backend.routes.websocket.db_supabase.update_driver_location", new=update_driver_loc_db),
+        patch("backend.routes.websocket.resolve_active_rides_cached", new=AsyncMock(return_value=[])),
+        patch("backend.routes.websocket.buffer_ride_breadcrumb", new=AsyncMock(return_value=None)),
+        patch("backend.routes.websocket.get_app_settings", new=AsyncMock(return_value={})),
+        patch(
+            "backend.routes.websocket.manager.broadcast_driver_location_to_admins",
+            new=AsyncMock(return_value=None),
+        ),
+    ]
+    patches = _start(*_driver_auth_patches(extra))
+    try:
+        from backend.routes.websocket import router
+
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+        with client.websocket_connect(f"/ws/driver/{_DRIVER_USER['id']}") as ws:
+            ws.send_json({"type": "auth", "token": "tok"})
+            ws.receive_json()
+
+            ws.send_json({"type": "driver_location", "lat": 50.4452, "lng": -104.6189})
+            ws.send_json({"type": "driver_location", "lat": 50.4453, "lng": -104.6190})
+            ws.send_json({"type": "pong"})
+    finally:
+        _stop(patches)
+
+    update_driver_loc_db.assert_awaited_once()

@@ -71,8 +71,16 @@ All four are required — the import tool refuses to build a plan from `bookings
      accounting for the usual 08-22-vs-07-26 drift and unmatched/error exclusions). A number at
      or near **0** is the actual red flag now (suggests the wrong files were uploaded, or the
      tool silently reverted to completed-only) — see §6.
-   - **Already imported** — expect roughly **224** (the completed rows already committed; there
-     is no prior cancelled/failed run to also show up here yet).
+   - **Already imported** — expect roughly **186**, not the 224 this section previously said.
+     Corrected 2026-08-27 after a live `rides` query (`legacy_import_metadata ? 'old_booking_id'`,
+     read-only via the Supabase MCP connector against production) returned 186, all `completed`,
+     zero `cancelled`/`failed` — matching the figure independently used throughout
+     `ACTION_ITEMS.md` since the 2026-08-16 GST backfill, the 2026-08-18 insurance-period
+     reconstruction (CR #4081), and the 2026-08-20 verification pass, not the single 224 figure
+     recovered from one 2026-07-29 `audit_logs` row. That 224 audit-log figure is real (it's the
+     row the import tool itself wrote at commit time) but is not reconciled against the 186 seen
+     everywhere else — not root-caused here; flagging so a dry-run reporting ~186 already-imported
+     isn't mistaken for 38 rides having gone missing.
    - Check the report's **completed vs. cancelled/failed sub-counts separately** if the tool
      surfaces them — a plausible split is ~19 net-new completed alongside up to ~941 net-new
      cancelled/failed, not one combined number.

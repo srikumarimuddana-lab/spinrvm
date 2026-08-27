@@ -179,9 +179,16 @@ async def get_ride_history(
 
     try:
         _settings = await _deps.get_app_settings()
-        _fare_locked = _settings.get("fare_lock_enabled", False) if _settings else False
     except Exception:
-        _fare_locked = False
+        _settings = None
+    _fare_locked = _settings.get("fare_lock_enabled", False) if _settings else False
+    # Same flag + gating condition as get_ride/{ride_id}'s show_legacy_badge
+    # (below in this file) — fetched once per page here instead of per row.
+    # See docs/legacy-ride-history-presentation-plan.md Item 2/Section 6:
+    # only the single-ride detail endpoint computed this until now, so a
+    # rider scrolling their trip list saw no "Imported" distinction until
+    # tapping into a specific ride.
+    _legacy_badge_enabled = _settings.get("legacy_ride_badge_enabled", False) if _settings else False
 
     for r in rides:
         snap = r.get("fare_breakdown_snapshot")
@@ -199,6 +206,7 @@ async def get_ride_history(
             r["grand_total"] = _sum_fare_breakdown(r["fare_breakdown"])
             r["fare_locked"] = False
         r["actual_duration_minutes"] = _actual_duration_minutes(r)
+        r["show_legacy_badge"] = bool(_legacy_badge_enabled and r.get("legacy_import_metadata"))
 
     next_cursor = rides[-1]["id"] if has_more and rides else None
 

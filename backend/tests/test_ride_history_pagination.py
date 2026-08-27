@@ -220,3 +220,72 @@ async def test_get_ride_history_returns_next_cursor_when_extra_row_exists():
     assert len(result["rides"]) == 20
     assert result["rides"][-1]["id"] == "r19"
     assert result["next_cursor"] == "r19"
+
+
+@_skip_no_deps
+@pytest.mark.anyio
+async def test_get_ride_history_computes_show_legacy_badge_per_row():
+    """Section 6 gap (docs/migration/2026-08-27-legacy-data-full-migration-
+    approach.md): the list endpoint didn't compute show_legacy_badge at all,
+    only the single-ride detail endpoint did -- a rider scrolling their trip
+    history saw no "Imported" distinction until tapping into a specific ride.
+    Mirrors get_ride/{ride_id}'s own gating: flag on AND
+    legacy_import_metadata present."""
+    mock_rides = [
+        {
+            "id": "r1",
+            "status": "completed",
+            "created_at": "2026-05-29T10:00:00Z",
+            "legacy_import_metadata": {"old_booking_id": "b1"},
+        },
+        {"id": "r2", "status": "completed", "created_at": "2026-05-29T10:00:00Z", "legacy_import_metadata": {}},
+        {"id": "r3", "status": "completed", "created_at": "2026-05-29T10:00:00Z"},
+    ]
+
+    with (
+        patch("backend.routes.rides.queries._fetch_ride_history_page", AsyncMock(return_value=mock_rides)),
+        patch(
+            "backend.routes.rides._deps.get_app_settings",
+            AsyncMock(return_value={"legacy_ride_badge_enabled": True}),
+        ),
+    ):
+        result = await _rides_module.get_ride_history(
+            request=_MOCK_REQUEST,
+            limit=20,
+            before=None,
+            current_user={"id": "user-1"},
+        )
+
+    by_id = {r["id"]: r for r in result["rides"]}
+    assert by_id["r1"]["show_legacy_badge"] is True
+    assert by_id["r2"]["show_legacy_badge"] is False  # empty metadata dict is falsy
+    assert by_id["r3"]["show_legacy_badge"] is False  # no metadata key at all
+
+
+@_skip_no_deps
+@pytest.mark.anyio
+async def test_get_ride_history_show_legacy_badge_off_when_flag_disabled():
+    mock_rides = [
+        {
+            "id": "r1",
+            "status": "completed",
+            "created_at": "2026-05-29T10:00:00Z",
+            "legacy_import_metadata": {"old_booking_id": "b1"},
+        },
+    ]
+
+    with (
+        patch("backend.routes.rides.queries._fetch_ride_history_page", AsyncMock(return_value=mock_rides)),
+        patch(
+            "backend.routes.rides._deps.get_app_settings",
+            AsyncMock(return_value={"legacy_ride_badge_enabled": False}),
+        ),
+    ):
+        result = await _rides_module.get_ride_history(
+            request=_MOCK_REQUEST,
+            limit=20,
+            before=None,
+            current_user={"id": "user-1"},
+        )
+
+    assert result["rides"][0]["show_legacy_badge"] is False

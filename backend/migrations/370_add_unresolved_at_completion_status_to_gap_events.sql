@@ -8,4 +8,5 @@ ALTER TABLE ride_location_gap_events
     ADD CONSTRAINT ride_location_gap_events_status_valid
         CHECK (status IN ('open', 'resolved', 'unresolved_at_completion')) NOT VALID;
 
-VALIDATE CONSTRAINT ride_location_gap_events_status_valid;
+ALTER TABLE ride_location_gap_events
+    VALIDATE CONSTRAINT ride_location_gap_events_status_valid;

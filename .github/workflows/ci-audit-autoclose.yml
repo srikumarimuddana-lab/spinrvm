@@ -36,8 +36,14 @@ jobs:
       - name: Close recovered issues
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
         run: |
+          ARGS=""
+          if [ "$DRY_RUN" = "true" ]; then
+            ARGS="--dry-run"
+          fi
           python3 scripts/ci-audit/auto_close_recovered.py \
-            --repo "${{ github.repository }}" \
+            --repo "$REPO" \
             --min-green 3 \
-            ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '--dry-run' || '' }}
+            $ARGS

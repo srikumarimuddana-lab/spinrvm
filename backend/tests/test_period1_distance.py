@@ -53,3 +53,40 @@ def test_accepts_latitude_longitude_keys():
         {"latitude": 50.4420, "longitude": -104.6200, "accuracy": 8},
     ]
     assert batch_incremental_distance_km(pts) > 0.1
+
+
+def test_teleportation_spike_dropped_with_timestamps():
+    """A single fix that jumps 250 km away (Regina → Saskatoon) at impossible
+    speed must be dropped. The return fix is compared against the last GOOD
+    point, so it passes."""
+    pts = [
+        {"lat": 50.4400, "lng": -104.6200, "accuracy": 8, "timestamp": 1000},
+        {"lat": 52.1300, "lng": -106.6700, "accuracy": 8, "timestamp": 1005},  # ~250 km in 5s
+        {"lat": 50.4410, "lng": -104.6200, "accuracy": 8, "timestamp": 1010},
+    ]
+    km = batch_incremental_distance_km(pts)
+    assert km < 0.2  # ~111 m A→C, not the ~500 km round-trip through Saskatoon
+
+
+def test_teleportation_spike_dropped_without_timestamps():
+    """Without timestamps, a 100+ km hop is rejected by the distance-only
+    fallback (> 10 km single hop)."""
+    pts = [
+        {"lat": 50.4400, "lng": -104.6200, "accuracy": 8},
+        {"lat": 51.4400, "lng": -104.6200, "accuracy": 8},  # ~111 km north
+        {"lat": 50.4410, "lng": -104.6200, "accuracy": 8},
+    ]
+    km = batch_incremental_distance_km(pts)
+    assert km < 0.2  # spike dropped, result is A→C only
+
+
+def test_legitimate_fast_driving_kept():
+    """A driver doing 100 km/h on the highway should NOT be filtered out."""
+    # 1 km in 36 seconds = 100 km/h — well under the 200 km/h cap
+    pts = [
+        {"lat": 50.4400, "lng": -104.6200, "accuracy": 8, "timestamp": 1000},
+        {"lat": 50.4490, "lng": -104.6200, "accuracy": 8, "timestamp": 1036},
+        {"lat": 50.4580, "lng": -104.6200, "accuracy": 8, "timestamp": 1072},
+    ]
+    km = batch_incremental_distance_km(pts)
+    assert km > 1.5  # ~2 km total, should all be kept

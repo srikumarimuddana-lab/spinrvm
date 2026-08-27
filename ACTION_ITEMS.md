@@ -16190,6 +16190,68 @@ how much they de-risk a public launch._
   larger follow-up if this failure class recurs on a different pair of
   files.
 
+### C43. RLS disabled on 4 production tables — including `settings` (holds Stripe/Twilio/Google Maps keys)
+
+- [ ] **Status:** open, deliberately deferred by the user (2026-08-25) until
+  the legacy-migration work (A41-family, this item's own §"related work"
+  below) concludes — not fixed, not forgotten. Found via the Supabase MCP
+  connector's unprompted advisory scan against the live `spinrmobileapp`
+  project (`ca-central-1`, `soavhtdhefowwvforzwb`) while investigating
+  connector access for the legacy-ride migration.
+- **What's wrong:** `ENABLE ROW LEVEL SECURITY` is off on 4 `public` tables:
+  - `settings` — the `app_settings` table CLAUDE.md documents as holding
+    **Stripe keys, Twilio credentials, and Google Maps API keys** (kept in
+    DB specifically so they can rotate without redeploy). With RLS off,
+    anyone holding this project's anon/publishable key can read this table
+    directly via PostgREST, with no policy layer in the way.
+  - `document_files` — driver document files (license, insurance, etc.),
+    PIPEDA-sensitive.
+  - `driver_csv_import`, `driver_bank_import` — bulk driver import staging
+    tables (banking info in the latter).
+- **Blast-radius check performed (before recommending, not after):** grepped
+  `rider-app`, `driver-app`, and `admin-dashboard` for any `createClient(...)`
+  usage that would read these 4 tables with the anon key directly — **zero
+  matches** in real app code. The only `createClient` call anywhere in the
+  repo using an anon key is `frontend/config/supabase.ts`, a dead scaffold
+  file with literal placeholder strings (`'YOUR_SUPABASE_URL'`), not wired
+  into any shipped app. `docs/ENVIRONMENT_VARIABLES.md` documents
+  `NEXT_PUBLIC_SUPABASE_ANON_KEY` as **optional**, "used *if* the dashboard
+  reads from Supabase directly" — it doesn't, today. Every real read/write to
+  these 4 tables goes through the backend's `SUPABASE_SERVICE_ROLE_KEY`,
+  which bypasses RLS regardless of whether it's enabled.
+- **Why this reads as low-regression-risk to fix, whenever it's fixed:**
+  enabling RLS with zero policies (deny-all to `anon`/`authenticated`) would
+  match what's already true in practice today — no legitimate code path uses
+  those roles against these tables. That said, this has **not been
+  independently verified against a staging/canary run** — only via static
+  grep — so treat "low risk" as a strong hypothesis, not a guarantee, before
+  actually flipping it.
+- **Why deferred rather than fixed immediately:** user's explicit call
+  (2026-08-25) — hold off enabling RLS until the legacy-migration effort
+  (see the phased plan in `docs/migration/` from this same date, and the
+  existing A41 audit below) concludes, to avoid stacking an unrelated
+  production security change on top of an active data-migration effort.
+- **Remediation SQL (reference only — do not run without re-confirming the
+  blast-radius check above is still current, and ideally verifying in a
+  Supabase branch/staging environment first):**
+  ```sql
+  ALTER TABLE public.document_files ENABLE ROW LEVEL SECURITY;
+  ALTER TABLE public.settings ENABLE ROW LEVEL SECURITY;
+  ALTER TABLE public.driver_csv_import ENABLE ROW LEVEL SECURITY;
+  ALTER TABLE public.driver_bank_import ENABLE ROW LEVEL SECURITY;
+  ```
+- **What was NOT verified:** whether the project's anon/publishable key has
+  ever actually been distributed anywhere reachable by an external party
+  (mobile app bundle, public repo, leaked build artifact) — this item
+  documents the *capability* gap (RLS off = no enforcement layer), not
+  confirmed exploitation. Also not verified: exact column-level contents of
+  `settings` (whether secrets are stored plaintext or already
+  encrypted/referenced by ID) — sub-item worth checking before deciding
+  urgency once this is picked back up.
+- **Acceptance:** `get_advisors`' `rls_disabled` finding no longer lists
+  these 4 tables, AND a full regression pass (backend integration tests +
+  a manual admin-dashboard settings-page load) confirms nothing broke.
+
 ### A41. Legacy-migration data-quality audit (2026-08-19) — 5-agent sweep across backend/admin/driver-app/regulatory
 - [ ] **Status:** open — 3 live/near-live bugs found and fixed same session; a
   larger set of design-decision-dependent gaps documented below, not fixed.

@@ -106,6 +106,7 @@ def _mongo_row(**overrides):
         "is_deleted": "false",
         "is_block": "false",
         "status": "offline",
+        "set_up_profile": "true",
     }
     row.update(overrides)
     return row
@@ -156,6 +157,7 @@ def test_happy_path_creates_needs_review_offline_driver(monkeypatch):
     assert driver["legacy_import_metadata"]["old_driver_id"] == "6923ea32d1bde481895439f4"
     assert driver["legacy_import_metadata"]["was_deleted_in_source"] is False
     assert driver["legacy_import_metadata"]["was_blocked_in_source"] is False
+    assert driver["legacy_import_metadata"]["incomplete_profile_in_source"] is False
     assert driver["rating"] == 4.5
     assert driver["_plain_license_number"] == "41626417"
     # No vehicle data in Phase 1 -- that's vehicle_details.csv's job.
@@ -211,11 +213,42 @@ def test_invalid_phone_is_error(monkeypatch):
     assert not plan.drivers_to_insert
 
 
-def test_missing_name_is_error(monkeypatch):
+def test_missing_name_is_warning_with_placeholder_not_error(monkeypatch):
+    # Decided 2026-08-27 (option b): confirmed root cause is abandoned
+    # onboarding (set_up_profile=false in source, never referenced by any
+    # booking) — a blank name imports with a placeholder rather than
+    # blocking the whole batch's commit. See docs/migration/2026-08-27-
+    # legacy-driver-blank-name-root-cause.md.
     _install(monkeypatch)
-    plan = svc.build_mongo_driver_import_plan([_mongo_row(name="")], service_area=SERVICE_AREA, import_batch="b1")
-    assert any(e.field == "name" for e in plan.errors)
-    assert not plan.drivers_to_insert
+    plan = svc.build_mongo_driver_import_plan(
+        [_mongo_row(name="", set_up_profile="false")], service_area=SERVICE_AREA, import_batch="b1"
+    )
+    assert not plan.errors
+    assert any(w.field == "name" for w in plan.warnings)
+    assert len(plan.drivers_to_insert) == 1
+
+    driver = plan.drivers_to_insert[0]
+    assert driver["name"] == "Unnamed Legacy Driver 5439f4"  # last 6 chars of the _id fixture
+    assert driver["legacy_import_metadata"]["incomplete_profile_in_source"] is True
+    # Still forced needs_review/unverified/offline like every other row.
+    assert driver["status"] == "needs_review"
+    assert driver["is_verified"] is False
+
+    user = plan.users_to_insert[0]
+    assert user["first_name"] == "Unnamed"
+    assert user["last_name"] == "Legacy Driver 5439f4"
+
+
+def test_missing_name_with_set_up_profile_true_still_imports_but_flag_false(monkeypatch):
+    # A blank name with set_up_profile=true has not been observed in the
+    # real export, but the flag must reflect the source field truthfully
+    # rather than assume every blank name is an abandoned signup.
+    _install(monkeypatch)
+    plan = svc.build_mongo_driver_import_plan(
+        [_mongo_row(name="", set_up_profile="true")], service_area=SERVICE_AREA, import_batch="b1"
+    )
+    assert not plan.errors
+    assert plan.drivers_to_insert[0]["legacy_import_metadata"]["incomplete_profile_in_source"] is False
 
 
 def test_malformed_email_is_warning_not_error_row_still_imports(monkeypatch):

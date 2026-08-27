@@ -1634,6 +1634,15 @@ def print_vehicle_history_report(plan: VehicleHistoryBackfillPlan, *, dry_run: b
 #     never as an import-time rejection. A driver whose old-app account was
 #     deleted may still be the correct historical driver on a real completed
 #     ride, which is exactly the gap this section closes.
+#   - a blank `name` is a WARNING, not a row-level error (decided 2026-08-27,
+#     see docs/migration/2026-08-27-legacy-driver-blank-name-root-cause.md):
+#     confirmed against the real export that every blank-name row is an
+#     abandoned onboarding (set_up_profile=false, never referenced by any
+#     booking's driver_id), not a data-quality bug. The row still imports,
+#     with a synthetic `"Unnamed Legacy Driver {old_id[-6:]}"` name and
+#     `legacy_import_metadata.incomplete_profile_in_source=true`, so these
+#     ~63%-of-rows don't block the whole batch's commit. needs_review/
+#     unverified/offline already keeps them out of dispatch either way.
 #
 # Known follow-up NOT done by this section (flagged, not silently decided):
 #   the existing SIN/DOB backfill (plan_legacy_sin_dob_import, above) and the
@@ -1707,10 +1716,30 @@ def build_mongo_driver_import_plan(
             plan.errors.append(ImportErrorItem(old_id, "phone", "phone is not a valid 10-digit North American number"))
             continue
 
+        # Root cause (confirmed 2026-08-27 against the real export, not
+        # guessed at): a blank name is not a data-quality/export bug -- it is
+        # a 1:1 signal for an abandoned onboarding attempt. Every blank-name
+        # row has set_up_profile=false (the driver verified their phone via
+        # OTP and never finished the in-app profile step), and zero of them
+        # are ever referenced by any booking's driver_id -- these accounts
+        # never drove a trip. Rejecting the whole batch over rows with no
+        # historical-ride linkage would block the ~63% of rows that DO have
+        # a name and DO need importing, so this is a warning + a clearly
+        # synthetic placeholder name, not a row-level error. needs_review/
+        # unverified/offline below already keeps every one of these out of
+        # dispatch regardless of name.
         name = (row.get("name") or "").strip()
+        incomplete_profile_in_source = parse_bool(row.get("set_up_profile", "")) is False
         if not name:
-            plan.errors.append(ImportErrorItem(old_id, "name", "row has no name; needs manual review"))
-            continue
+            name = f"Unnamed Legacy Driver {old_id[-6:]}"
+            plan.warnings.append(
+                ImportErrorItem(
+                    old_id,
+                    "name",
+                    "row has no name (abandoned onboarding in source app, set_up_profile=false; "
+                    "never linked to any ride); imported with placeholder name, forced needs_review",
+                )
+            )
         first_name, last_name = split_name(name)
 
         # A malformed email is common in this export (unlike the curated
@@ -1789,6 +1818,7 @@ def build_mongo_driver_import_plan(
                 "source": MONGO_IMPORT_SOURCE,
                 "was_deleted_in_source": parse_bool(row.get("is_deleted", "")) is True,
                 "was_blocked_in_source": parse_bool(row.get("is_block", "")) is True,
+                "incomplete_profile_in_source": incomplete_profile_in_source,
             },
             "created_at": created_at,
             "updated_at": datetime.now(timezone.utc).isoformat(),

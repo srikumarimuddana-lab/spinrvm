@@ -271,7 +271,7 @@ Auto-mode tiers (demand / supply ratio → multiplier):
 Rules:
 - Every period transition is logged to `driver_insurance_periods` with `{driver_id, period, started_at, ended_at, ride_id?}` for regulatory audit
 - Never delete or mutate period rows — append only
-- Period 2 starts on `driver_accepted` (not `driver_assigned`) — in the batch-offer dispatch model a ride can be offered to multiple drivers at once, so a driver isn't obligated to it until they accept; `record_period_transition(..., 2, ...)` is only ever called from the accept handler (`routes/drivers/ride_flow.py`). A driver in `driver_assigned` state who hasn't yet accepted is still Period 1.
+- Period 2 starts on `driver_assigned` (not `driver_accepted`) — a driver becomes obligated to the ride the instant `claim_driver_atomic` succeeds and the offer is live, not only once they tap Accept. `record_period_transition(..., 2, ...)` is called at claim/offer time in `routes/rides/matching.py` (the real trigger) and on admin direct-assignment in `routes/admin/rides.py`; the call in `routes/drivers/ride_flow.py`'s accept handler is a redundant no-op safety net for the same period+ride_id. A driver in `driver_assigned` state is already Period 2, not Period 1.
 - A driver cannot be in Period 3 without a `ride_id` linking to an `in_progress` ride
 - Document expiry (license, insurance, vehicle registration) blocks Period 1+ — checked on every `go_online` call
 

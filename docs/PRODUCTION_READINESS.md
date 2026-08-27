@@ -51,8 +51,11 @@ wildcard blocked in prod, weak-secret fail-fast, vault encryption fail-closed,
 audit logs with delete lockdown, branch protection + security CI gates
 (Bandit/Semgrep/ESLint + secret scanning).
 
-Open security/PIPEDA items: `ACTION_ITEMS.md` B1 (analytics GPS interface),
-B2 (disputes PII + RLS + rounding), B4 (WS rate limit per-replica).
+B1 (analytics GPS interface), B2 (disputes PII + RLS + rounding) and B4 (WS
+rate limit per-replica) are all closed. For the current open set, read the `[ ]`
+items in `ACTION_ITEMS.md` directly — enumerating them here duplicates state that
+lives there and drifts out of date, which is how this line came to name three
+closed items.
 
 ## Performance vs SLA targets
 
@@ -60,7 +63,7 @@ B2 (disputes PII + RLS + rounding), B4 (WS rate limit per-replica).
 |---|---|---|
 | Dispatch offer → driver notification | < 2s | ✅ pushes off request path (`e9283fc`) |
 | Fare estimate | < 300ms | ✅ polyline overlapped (`d322709`) + driver index (`5788367`) |
-| Driver location write | < 150ms | ⚠️ open — ACTION_ITEMS B3 (per-ping ETA + ride query) |
+| Driver location write | < 150ms | ⚠️ unmeasured — B3 shipped (Redis active-ride cache, 100m ETA movement gate, 10:1 breadcrumb batching); never timed against live traffic, see E2 |
 | WS fan-out | < 100ms | ✅ targeted fan-out + 2s per-send timeout |
 | Stripe webhook | < 500ms | ✅ idempotent claim, allowlisted types |
 

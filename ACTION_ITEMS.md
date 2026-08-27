@@ -16463,8 +16463,27 @@ how much they de-risk a public launch._
   to one full-suite run + `actions/upload-artifact`/`download-artifact` to
   share the coverage JSON across the floor-check jobs would cut wasted
   CI cycles regardless of whether the external cancellation itself ever
-  gets root-caused. **Not implemented — touches `ci-guardrails.yml`/
-  `ci.yml` for every PR repo-wide, needs explicit go-ahead before changing.**
+  gets root-caused.
+- **Implemented (2026-08-27, explicit user go-ahead: "yes, go ahead and
+  build the coverage consolidation fix"):** new `shared-coverage-run` job
+  in `ci-guardrails.yml` runs `pytest --cov=.` once; `coverage-regression-
+  gate` and `money-path-coverage-floor-gate` now download its artifact
+  instead of each running their own full-suite pytest. Scope deliberately
+  limited to *within* `ci-guardrails.yml` only — `ci.yml`'s `backend-test`
+  remains a separate, third full-suite run, matching the already-documented
+  decision not to attempt cross-workflow sharing (see
+  `money-path-coverage-floor-gate`'s own header comment and
+  `docs/change-log/2026-08-19-money-path-coverage-floor-gate-fix.md` §4).
+  `corporate-coverage-floor-gate` also deliberately untouched — its
+  `-k corporate`-scoped run measures something narrower than the full
+  suite; swapping it to the shared full-suite artifact would silently
+  change (likely loosen) what it measures. Full reasoning, the real
+  tradeoffs this introduces (wall-clock serialization of the two gates;
+  correlated failure if the shared run itself hits the external
+  cancellation), and verification performed:
+  `docs/change-log/2026-08-27-ci-guardrails-coverage-consolidation.md`.
+  **Not yet verified against a live CI run** — pushed alongside this entry;
+  the real test is this exact PR's own next `ci-guardrails.yml` run.
 - **Correction issued:** the PR #4595 comments that called this "the same
   C45 flake" were wrong and should be read alongside this entry, not as
   the final word — see the PR's comment thread for the acknowledgment.

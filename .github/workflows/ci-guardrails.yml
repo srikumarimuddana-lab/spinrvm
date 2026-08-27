@@ -27,6 +27,11 @@ permissions:
   pull-requests: write
   issues: write
   checks: write
+  # ACTION_ITEMS.md C47: needed for shared-coverage-run's upload-artifact
+  # and the two downstream gates' download-artifact. `read` (not `write`)
+  # matches this repo's own proven-working precedent for the same pair of
+  # actions within one workflow run -- see ci-error-audit.yml.
+  actions: read
 
 # Cancel in-flight runs for the same PR
 concurrency:
@@ -34,10 +39,87 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ─── 0. Shared coverage run (feeds coverage-regression-gate and
+  # money-path-coverage-floor-gate below) ───────────────────────────────────
+  # ACTION_ITEMS.md C47: those two gates used to each independently run the
+  # full, unscoped backend pytest suite just to slice the resulting
+  # coverage.json differently afterward -- tripling CI compute per PR event
+  # (alongside ci.yml's own backend-test, deliberately left out of this
+  # consolidation -- see money-path-coverage-floor-gate's own comment below
+  # on cross-workflow artifact-sharing being rejected as too complex for a
+  # first version) and tripling each gate's exposure window to an
+  # unexplained external cancellation that intermittently kills these
+  # full-suite runs mid-flight (exit 143, "runner has received a shutdown
+  # signal" -- confirmed not a pytest failure; full investigation in C47).
+  # This job runs pytest --cov=. exactly once; both downstream gates
+  # download its coverage.json instead of re-running the suite themselves.
+  # Same-workflow artifact sharing only -- not the cross-workflow case
+  # already rejected, so this doesn't reopen that earlier decision.
+  shared-coverage-run:
+    name: Run backend test suite with coverage (shared)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Install backend deps
+        working-directory: backend
+        # See coverage-regression-gate below for why this step tolerates a
+        # transient install failure: the blocking backend-test job in ci.yml
+        # already surfaces a real dependency problem.
+        continue-on-error: true
+        run: |
+          pip install --require-hashes -r requirements-locked.txt --quiet \
+            || pip install -r requirements-locked.txt --quiet || true
+
+      - name: Run full backend test suite with coverage
+        working-directory: backend
+        env:
+          SUPABASE_URL: https://test.supabase.co
+          SUPABASE_SERVICE_ROLE_KEY: test_key
+          JWT_SECRET: ci-only-not-a-real-secret-000000000000
+          ADMIN_PASSWORD: ci-placeholder-password
+          ENV: test
+        run: |
+          pytest --cov=. --cov-report=json:../shared-coverage.json -q --no-header 2>/dev/null || true
+
+      - name: Upload shared coverage artifact
+        # if-no-files-found: warn (not error) -- a hard pytest crash before
+        # any coverage.json is written must not fail this step loudly; both
+        # downstream gates already have their own, pre-existing handling
+        # for a missing/corrupt coverage.json (coverage-regression-gate's
+        # try/except; money-path-coverage-floor-gate's fail-closed
+        # _coverage_floor_lib.py path) -- neither changes because of this.
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: shared-coverage-${{ github.run_id }}
+          # The pytest step above runs with working-directory: backend and
+          # writes to ../shared-coverage.json -- i.e. the repo root
+          # (GITHUB_WORKSPACE), which is what upload-artifact's `path:` is
+          # resolved relative to (not per-step working-directory). Matches
+          # the original jobs' own ../*.json convention.
+          path: shared-coverage.json
+          if-no-files-found: warn
+          retention-days: 1
+
   # ─── 1. Coverage regression gate ─────────────────────────────────────────
   coverage-regression-gate:
     name: Coverage regression check
     runs-on: ubuntu-latest
+    needs: [shared-coverage-run]
+    # Runs regardless of shared-coverage-run's outcome (success, failure, or
+    # an external cancellation like C47) so a shared-run problem degrades
+    # this gate exactly like a missing coverage.json always has, rather than
+    # silently vanishing as "skipped" -- see the download step below.
+    if: always()
     continue-on-error: true
     outputs:
       # C24 (ACTION_ITEMS.md): with no CODECOV_TOKEN, base_pct always
@@ -57,35 +139,27 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install backend deps
-        working-directory: backend
-        # continue-on-error so a transient wheel-download or hash-mismatch
-        # failure during the coverage guardrail run does NOT mark the whole job
-        # as failed. The coverage regression gate is advisory (continue-on-error
-        # at the job level); a pip install failure is already surfaced by the
-        # blocking backend-test job in ci.yml.
+      - name: Download shared coverage artifact
+        # ACTION_ITEMS.md C47: no longer runs its own full-suite pytest --
+        # downloads shared-coverage-run's single coverage.json instead.
+        # continue-on-error: true so a missing artifact (shared job crashed
+        # or was externally cancelled before uploading) doesn't hard-stop
+        # this step -- the extraction step below already has its own
+        # try/except that degrades identically to today's existing
+        # "coverage read failed" path when the file isn't there.
         continue-on-error: true
-        run: |
-          # B-P1-10: install from the SHA-256 hash-pinned lockfile (pytest,
-          # pytest-asyncio, pytest-cov are floor-pinned in requirements.txt
-          # and therefore included in the locked file).
-          pip install --require-hashes -r requirements-locked.txt --quiet \
-            || pip install -r requirements-locked.txt --quiet || true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: shared-coverage-${{ github.run_id }}
+          path: backend
 
-      - name: Run coverage on PR branch
+      - name: Extract PR branch coverage
         working-directory: backend
-        env:
-          SUPABASE_URL: https://test.supabase.co
-          SUPABASE_SERVICE_ROLE_KEY: test_key
-          JWT_SECRET: ci-only-not-a-real-secret-000000000000
-          ADMIN_PASSWORD: ci-placeholder-password
-          ENV: test
         run: |
-          pytest --cov=. --cov-report=json:../pr-coverage.json -q --no-header 2>/dev/null || true
           python3 -c "
-          import json, sys
+          import json
           try:
-              data = json.load(open('../pr-coverage.json'))
+              data = json.load(open('shared-coverage.json'))
               pct = data['totals']['percent_covered']
               print(f'PR branch coverage: {pct:.1f}%')
               with open('../.coverage-pr', 'w') as f:
@@ -255,13 +329,26 @@ jobs:
   #
   # Unlike corporate_*.py, these 5 files/package aren't cleanly separable by
   # a `-k` keyword filter (they're exercised across most of the suite), so
-  # this job runs the full suite with coverage rather than a scoped subset
-  # -- a real cost (duplicates ci.yml's backend-test full run) accepted
-  # deliberately over a cross-workflow artifact-sharing setup for a first
-  # version; see the change-log entry's Risk section.
+  # this gate needs full-suite coverage data rather than a scoped subset --
+  # originally accepted as a real cost (its own duplicate full-suite pytest
+  # run, on top of coverage-regression-gate's and ci.yml's backend-test's
+  # own separate full runs) over a cross-workflow artifact-sharing setup
+  # for a first version; see the change-log entry's Risk section.
+  # ACTION_ITEMS.md C47 (2026-08-27): the *same-workflow* half of that cost
+  # is now paid down -- this gate downloads shared-coverage-run's single
+  # coverage.json instead of running its own full suite. ci.yml's
+  # backend-test remains a separate, cross-workflow full run, still
+  # deliberately out of scope for the reason above.
   money-path-coverage-floor-gate:
     name: Money-path coverage floor check
     runs-on: ubuntu-latest
+    needs: [shared-coverage-run]
+    # Runs regardless of shared-coverage-run's outcome (success, failure, or
+    # an external cancellation like C47) so a shared-run problem produces
+    # this gate's existing fail-closed "coverage report missing" result
+    # instead of silently vanishing as "skipped" -- see the download step
+    # below and check_money_path_coverage_floor.py's own handling.
+    if: always()
     continue-on-error: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -280,32 +367,26 @@ jobs:
           echo "Changed files in this PR:"
           cat /tmp/changed_files_money.txt
 
-      - name: Install backend deps
-        working-directory: backend
-        # See coverage-regression-gate above for why this step tolerates a
-        # transient install failure: the blocking backend-test job in ci.yml
-        # already surfaces a real dependency problem.
+      - name: Download shared coverage artifact
+        # ACTION_ITEMS.md C47: no longer runs its own full-suite pytest --
+        # downloads shared-coverage-run's single coverage.json instead.
+        # continue-on-error: true so a missing artifact doesn't hard-stop
+        # this step; "Check per-module floors" below has no continue-on-
+        # error of its own, so a genuinely missing coverage.json still
+        # fails this job exactly like it always has (_coverage_floor_lib.py's
+        # existing "FAIL: expected coverage report ... but it does not
+        # exist" path) -- this gate stays blocking either way.
         continue-on-error: true
-        run: |
-          pip install --require-hashes -r requirements-locked.txt --quiet \
-            || pip install -r requirements-locked.txt --quiet || true
-
-      - name: Run full backend test suite with coverage
-        working-directory: backend
-        env:
-          SUPABASE_URL: https://test.supabase.co
-          SUPABASE_SERVICE_ROLE_KEY: test_key
-          JWT_SECRET: ci-only-not-a-real-secret-000000000000
-          ADMIN_PASSWORD: ci-placeholder-password
-          ENV: test
-        run: |
-          pytest --cov=. --cov-report=json:../money-coverage.json -q --no-header 2>/dev/null || true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: shared-coverage-${{ github.run_id }}
+          path: backend
 
       - name: Check per-module floors
         working-directory: backend
         run: |
           python3 scripts/check_money_path_coverage_floor.py \
-            --coverage-json ../money-coverage.json \
+            --coverage-json shared-coverage.json \
             --changed-files-file /tmp/changed_files_money.txt
 
   # ─── 2. Lint warning count gate ───────────────────────────────────────────

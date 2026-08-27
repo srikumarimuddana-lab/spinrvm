@@ -69,6 +69,17 @@
     "about": "About",
     "selectLanguage": "Select Language"
   },
+  "legacyConsent": {
+    "title": "An update on how we handle your information",
+    "body": "Spinr Mobility Inc. is committed to protecting your privacy under Canada's federal privacy law (PIPEDA). Your account carries no record of having reviewed our current Privacy Policy and Terms of Service — this can happen if your account was created before we started tracking consent, or if it was carried over from an earlier version of Spinr.",
+    "note": "Nothing about your account or how you use Spinr changes today. We just need your acknowledgment on file.",
+    "accept": "I understand, continue",
+    "acceptLabel": "I understand, continue to Spinr",
+    "viewPolicy": "Read the full policy",
+    "viewPolicyLabel": "Read the full Privacy Policy and Terms of Service",
+    "errorTitle": "Something went wrong",
+    "errorFallback": "Please try again."
+  },
   "languages": {
     "en": "English",
     "fr": "French",

@@ -49,6 +49,7 @@ Test-only change — no application code modified.
 
 from __future__ import annotations
 
+import contextlib
 from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1950,6 +1951,111 @@ class TestGetRideHistoryEnrichment:
             )
         assert result["total"] == 1
         assert any("ride_completed_at" in f for f in captured)
+
+
+class TestGetRideHistoryShowLegacyBadge:
+    """Section 6 gap (docs/migration/2026-08-27-legacy-data-full-migration-
+    approach.md): the list endpoint didn't compute show_legacy_badge at all,
+    only the single-ride detail endpoint did -- a driver scrolling their trip
+    history saw no "Imported" distinction until tapping into a specific ride.
+    Mirrors routes/rides/queries.py's get_ride/{ride_id} gating: flag on AND
+    legacy_import_metadata present."""
+
+    async def test_flag_on_and_metadata_present_sets_badge_true(self):
+        from backend.routes.drivers.ride_reads import get_ride_history
+
+        completed = _ride(status="completed", legacy_import_metadata={"old_booking_id": "b1"})
+
+        async def fake_get_rows(table, filters=None, **kw):
+            return [_driver()] if table == "drivers" else [completed]
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch("backend.routes.drivers.ride_reads.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows))
+            )
+            stack.enter_context(
+                patch("backend.routes.drivers.ride_reads.db_supabase.count_documents", AsyncMock(return_value=1))
+            )
+            stack.enter_context(
+                patch(
+                    "backend.settings_loader.get_app_settings",
+                    AsyncMock(return_value={"legacy_ride_badge_enabled": True}),
+                )
+            )
+            with contextlib.suppress(ModuleNotFoundError, AttributeError):
+                stack.enter_context(
+                    patch(
+                        "settings_loader.get_app_settings",
+                        AsyncMock(return_value={"legacy_ride_badge_enabled": True}),
+                    )
+                )
+            result = await get_ride_history(limit=20, offset=0, current_user={"id": _USER_ID})
+
+        assert result["rides"][0]["show_legacy_badge"] is True
+
+    async def test_flag_off_keeps_badge_false_even_with_metadata(self):
+        from backend.routes.drivers.ride_reads import get_ride_history
+
+        completed = _ride(status="completed", legacy_import_metadata={"old_booking_id": "b1"})
+
+        async def fake_get_rows(table, filters=None, **kw):
+            return [_driver()] if table == "drivers" else [completed]
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch("backend.routes.drivers.ride_reads.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows))
+            )
+            stack.enter_context(
+                patch("backend.routes.drivers.ride_reads.db_supabase.count_documents", AsyncMock(return_value=1))
+            )
+            stack.enter_context(
+                patch(
+                    "backend.settings_loader.get_app_settings",
+                    AsyncMock(return_value={"legacy_ride_badge_enabled": False}),
+                )
+            )
+            with contextlib.suppress(ModuleNotFoundError, AttributeError):
+                stack.enter_context(
+                    patch(
+                        "settings_loader.get_app_settings",
+                        AsyncMock(return_value={"legacy_ride_badge_enabled": False}),
+                    )
+                )
+            result = await get_ride_history(limit=20, offset=0, current_user={"id": _USER_ID})
+
+        assert result["rides"][0]["show_legacy_badge"] is False
+
+    async def test_no_legacy_metadata_keeps_badge_false_even_with_flag_on(self):
+        from backend.routes.drivers.ride_reads import get_ride_history
+
+        completed = _ride(status="completed")  # no legacy_import_metadata key at all
+
+        async def fake_get_rows(table, filters=None, **kw):
+            return [_driver()] if table == "drivers" else [completed]
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch("backend.routes.drivers.ride_reads.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows))
+            )
+            stack.enter_context(
+                patch("backend.routes.drivers.ride_reads.db_supabase.count_documents", AsyncMock(return_value=1))
+            )
+            stack.enter_context(
+                patch(
+                    "backend.settings_loader.get_app_settings",
+                    AsyncMock(return_value={"legacy_ride_badge_enabled": True}),
+                )
+            )
+            with contextlib.suppress(ModuleNotFoundError, AttributeError):
+                stack.enter_context(
+                    patch(
+                        "settings_loader.get_app_settings",
+                        AsyncMock(return_value={"legacy_ride_badge_enabled": True}),
+                    )
+                )
+            result = await get_ride_history(limit=20, offset=0, current_user={"id": _USER_ID})
+
+        assert result["rides"][0]["show_legacy_badge"] is False
 
 
 # ============================================================

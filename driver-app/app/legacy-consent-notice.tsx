@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../hooks/useToast';
+import { useLanguageStore } from '../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -27,6 +28,7 @@ import type { ThemeColors } from '@shared/theme/index';
 export default function LegacyConsentNoticeScreen() {
   const router = useRouter();
   const { colors } = useTheme();
+  const { t } = useLanguageStore();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [checking, setChecking] = useState(true);
   const [accepting, setAccepting] = useState(false);
@@ -65,7 +67,7 @@ export default function LegacyConsentNoticeScreen() {
       await api.post('/consent/accept');
       router.replace('/driver' as any);
     } catch (err: any) {
-      showToast('error', 'Something went wrong', getApiErrorMessage(err, 'Please try again.'));
+      showToast('error', t('legacyConsent.errorTitle'), getApiErrorMessage(err, t('legacyConsent.errorFallback')));
     } finally {
       setAccepting(false);
     }
@@ -92,29 +94,21 @@ export default function LegacyConsentNoticeScreen() {
           <Ionicons name="document-text-outline" size={48} color={colors.primary} />
         </View>
 
-        <Text style={styles.title}>An update on how we handle your information</Text>
-        <Text style={styles.body}>
-          Spinr Mobility Inc. is committed to protecting your privacy under Canada&apos;s federal
-          privacy law (PIPEDA). Your account carries no record of having reviewed our current
-          Privacy Policy and Terms of Service — this can happen if your account was created before
-          we started tracking consent, or if it was carried over from an earlier version of Spinr.
-        </Text>
-        <Text style={styles.note}>
-          Nothing about your account or how you drive with Spinr changes today. We just need your
-          acknowledgment on file.
-        </Text>
+        <Text style={styles.title}>{t('legacyConsent.title')}</Text>
+        <Text style={styles.body}>{t('legacyConsent.body')}</Text>
+        <Text style={styles.note}>{t('legacyConsent.note')}</Text>
 
         <TouchableOpacity
           style={[styles.primaryBtn, accepting && styles.btnDisabled]}
           onPress={handleAccept}
           disabled={accepting}
           activeOpacity={0.85}
-          accessibilityLabel="I understand, continue to Spinr"
+          accessibilityLabel={t('legacyConsent.acceptLabel')}
         >
           {accepting ? (
             <ActivityIndicator color="#fff" size="small" />
           ) : (
-            <Text style={styles.primaryBtnText}>I understand, continue</Text>
+            <Text style={styles.primaryBtnText}>{t('legacyConsent.accept')}</Text>
           )}
         </TouchableOpacity>
 
@@ -123,9 +117,9 @@ export default function LegacyConsentNoticeScreen() {
           onPress={handleViewPolicy}
           disabled={accepting}
           activeOpacity={0.7}
-          accessibilityLabel="Read the full Privacy Policy and Terms of Service"
+          accessibilityLabel={t('legacyConsent.viewPolicyLabel')}
         >
-          <Text style={styles.secondaryBtnText}>Read the full policy</Text>
+          <Text style={styles.secondaryBtnText}>{t('legacyConsent.viewPolicy')}</Text>
         </TouchableOpacity>
       </View>
     </SafeAreaView>

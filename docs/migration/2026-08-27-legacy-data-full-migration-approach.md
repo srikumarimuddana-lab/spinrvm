@@ -250,8 +250,12 @@ these are about *displaying* data that's already imported, not new imports:
 
 - **Rider-app and driver-app ride *list* screens don't compute `show_legacy_badge`** — only
   the single-ride detail endpoint does. So even with the flag on, a rider/driver scrolling
-  their trip history sees no visual distinction until they tap into a specific ride. Low-risk,
-  small fix (same pattern as the ride-detail flag) if you want list-level parity.
+  their trip history sees no visual distinction until they tap into a specific ride.
+  **Backend half fixed 2026-08-27**: both list endpoints
+  (`routes/rides/queries.py::get_ride_history`, `routes/drivers/ride_reads.py::get_ride_history`)
+  now compute and return `show_legacy_badge` per row, same gating as the detail endpoint — see
+  `docs/change-log/2026-08-27-legacy-badge-list-endpoint-parity.md`. **Still open**: neither
+  app's list-row UI reads the new field yet — the frontend wiring itself is the remaining step.
 - **Driver-app payout history's "Previous app" grouping filters on `payout_type === 'stripe_sync'`**,
   but the legacy-import offset payouts this session's booking importer writes use
   `payout_type === 'legacy_import'`. This looks like a real mismatch worth verifying — if

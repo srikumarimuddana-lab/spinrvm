@@ -1575,3 +1575,253 @@ def print_vehicle_history_report(plan: VehicleHistoryBackfillPlan, *, dry_run: b
         print(f"WARNING old_driver_id={item.old_driver_id} field={item.field}: {item.message}")
     for item in plan.errors[:100]:
         print(f"ERROR old_driver_id={item.old_driver_id} field={item.field}: {item.message}")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Legacy Mongo driver-profile import (drivers.csv from the raw Mongo export)
+#
+# ACTION_ITEMS.md / docs/migration/2026-08-27-legacy-data-full-migration-
+# approach.md Phase 1: `drivers.csv` (Mongo ObjectId-keyed, ~900 rows) is a
+# THIRD driver population, distinct from both the numeric-ID Saskatoon CSV
+# this module's build_plan() above already imports (IMPORT_SOURCE) and any
+# already-organic Spinr driver. It is the population `bookings.driver_id`/
+# `rides.legacy_import_metadata->old_driver_id` (booking_import_service.py)
+# actually references -- see docs/audit/2026-08-19-full-mongodb-export-
+# collection-inventory.md finding #2. No importer existed for it before this
+# section; without it, a legacy ride whose driver never happened to already
+# have a Spinr account imports with a NULL driver_id -- history exists on the
+# ride, but nothing shows under that driver's own activity/earnings screen.
+#
+# Deliberately separate build_*_plan()/commit_*_plan() functions rather than
+# extending build_plan() above: the two CSVs share almost no column names
+# (raw Mongo export vs. a bespoke recruitment sheet) and this module's own
+# read_mongo_export_csv() docstring already documents why the two must never
+# share a header-normalization pass. Helpers that ARE generic over any
+# phone/email-keyed row list (`_prefetch_existing`, `_select_in`,
+# `normalize_phone`, `split_name`, `_parse_legacy_epoch_ms`, `encrypt_pii`,
+# `generate_driver_code`, `get_service_area`) are reused directly, not
+# duplicated -- unlike the cross-module duplication convention documented on
+# `_parse_legacy_epoch_ms`, this is reuse *within* the same module.
+#
+# Safety rules, mirroring build_plan()'s own (see its docstring above):
+#   - a CSV row whose phone/email already matches an EXISTING user or driver
+#     NOT created by this importer is an ERROR, never a silent merge into
+#     that account -- exactly build_plan()'s own "matching user or driver
+#     already exists; handle manually before import" rule, reused verbatim.
+#     This matters more here than for the Saskatoon path: many of these
+#     phones already resolved during the ride import (booking_import_
+#     service.py's own rider/driver phone matching), so a large share of
+#     rows are EXPECTED to hit this path -- it is not a bug in the data.
+#   - every created driver lands `status='needs_review'`, `is_verified=
+#     False`, `is_online=False`, `is_available=False`, unconditionally. The
+#     export's own `documents` field is filenames only (no image bytes,
+#     confirmed in the audit doc) -- there is no way to verify a document
+#     was actually approved, so unlike build_plan() above (which can reach
+#     `status='active'` when the CSV says approved AND a live approved
+#     document row exists), no CSV field can ever promote a row past
+#     needs_review here. No driver_documents rows are created either, for
+#     the same reason -- nothing here is verifiable evidence.
+#   - vehicle fields are left at their table defaults/NULL. `vehicle_
+#     details.csv` (Phase 2) is a separate crosswalk keyed off this same
+#     `drivers.csv`'s `_id`/phone -- creating the driver row here is the
+#     dependency that crosswalk needs, not a place to guess at vehicle data.
+#   - old-app `status` ("online"/"offline", a live runtime toggle) and
+#     `is_block`/`is_deleted` are never trusted as durable profile facts --
+#     every imported driver starts offline/unavailable regardless, and
+#     block/delete state is preserved only as read-only history in
+#     `legacy_import_metadata` (`was_blocked_in_source`/
+#     `was_deleted_in_source`) for whoever reviews the needs_review queue,
+#     never as an import-time rejection. A driver whose old-app account was
+#     deleted may still be the correct historical driver on a real completed
+#     ride, which is exactly the gap this section closes.
+#
+# Known follow-up NOT done by this section (flagged, not silently decided):
+#   the existing SIN/DOB backfill (plan_legacy_sin_dob_import, above) and the
+#   vehicle-history backfill (plan_legacy_vehicle_history_backfill, above)
+#   both gate on `legacy_import_metadata.source == IMPORT_SOURCE` (the
+#   Saskatoon value) -- neither will pick up drivers created by this section
+#   without a separate, deliberate change to generalize that check to also
+#   accept MONGO_IMPORT_SOURCE. Not done here: changing an already-shipped,
+#   tested safety gate on two other backfills is out of scope for "create
+#   the driver rows" and deserves its own review, not a silent side effect.
+
+MONGO_IMPORT_SOURCE = "legacy_mongo_driver_import"
+
+REQUIRED_MONGO_DRIVER_COLUMNS = {"_id", "name", "phone"}
+
+
+@dataclass
+class MongoDriverImportPlan:
+    users_to_insert: list[dict[str, Any]] = field(default_factory=list)
+    drivers_to_insert: list[dict[str, Any]] = field(default_factory=list)
+    warnings: list[ImportErrorItem] = field(default_factory=list)
+    errors: list[ImportErrorItem] = field(default_factory=list)
+
+
+def validate_required_mongo_driver_columns(rows: list[dict[str, str]], plan: MongoDriverImportPlan) -> None:
+    if not rows:
+        plan.errors.append(ImportErrorItem("<file>", "drivers_csv", "drivers CSV is empty"))
+        return
+    missing = REQUIRED_MONGO_DRIVER_COLUMNS - set(rows[0].keys())
+    for col in sorted(missing):
+        plan.errors.append(ImportErrorItem("<file>", col, "drivers CSV is missing required column"))
+
+
+def build_mongo_driver_import_plan(
+    driver_rows: list[dict[str, str]],
+    *,
+    service_area: dict[str, Any],
+    import_batch: str,
+) -> MongoDriverImportPlan:
+    """Validate raw Mongo-export ``drivers.csv`` rows into a
+    ``MongoDriverImportPlan``. ``driver_rows`` must come from
+    ``read_mongo_export_csv`` (or an admin-upload equivalent preserving raw
+    Mongo column names) -- never ``read_csv``/``parse_csv_rows``, whose
+    header normalization corrupts ``_id`` (see that function's docstring).
+
+    Unlike build_plan() above, every row is scoped to the single
+    ``service_area`` the caller passes -- the raw export has no per-row
+    service-area column to check against (it predates Spinr's multi-city
+    service-area concept entirely).
+    """
+    plan = MongoDriverImportPlan()
+    validate_required_mongo_driver_columns(driver_rows, plan)
+    if plan.errors:
+        return plan
+
+    users_by_phone, users_by_email, drivers_by_phone = _prefetch_existing(driver_rows)
+    seen_old_ids: set[str] = set()
+
+    for row in driver_rows:
+        old_id = (row.get("_id") or "").strip()
+        if not old_id:
+            plan.errors.append(ImportErrorItem("<missing>", "_id", "row has no _id"))
+            continue
+        if old_id in seen_old_ids:
+            plan.errors.append(ImportErrorItem(old_id, "_id", "duplicate _id"))
+            continue
+        seen_old_ids.add(old_id)
+
+        phone = normalize_phone(row.get("phone", ""))
+        if not _PHONE_RE.match(phone):
+            plan.errors.append(ImportErrorItem(old_id, "phone", "phone is not a valid 10-digit North American number"))
+            continue
+
+        name = (row.get("name") or "").strip()
+        if not name:
+            plan.errors.append(ImportErrorItem(old_id, "name", "row has no name; needs manual review"))
+            continue
+        first_name, last_name = split_name(name)
+
+        # A malformed email is common in this export (unlike the curated
+        # Saskatoon sheet) and isn't required for anything -- the app is
+        # phone/OTP-auth, not email-auth. Drop it with a warning rather than
+        # reject a row that is otherwise perfectly good, historical-ride-
+        # linkage-wise.
+        email_raw = (row.get("email") or "").strip().lower()
+        email: str | None = email_raw or None
+        if email and not _EMAIL_RE.match(email):
+            plan.warnings.append(ImportErrorItem(old_id, "email", "email is not a valid format; imported without it"))
+            email = None
+
+        matched_user = users_by_phone.get(phone) or (users_by_email.get(email) if email else None)
+        matched_driver = drivers_by_phone.get(phone)
+        if matched_user or matched_driver:
+            meta = (matched_driver.get("legacy_import_metadata") or {}) if matched_driver else {}
+            if (
+                matched_driver
+                and meta.get("source") == MONGO_IMPORT_SOURCE
+                and str(meta.get("old_driver_id")) == old_id
+            ):
+                plan.warnings.append(
+                    ImportErrorItem(old_id, "resume", "driver already imported by a previous run of this importer")
+                )
+                continue
+            plan.errors.append(
+                ImportErrorItem(
+                    old_id, "phone/email", "matching user or driver already exists; handle manually before import"
+                )
+            )
+            continue
+
+        user_id = str(uuid.uuid4())
+        driver_id = str(uuid.uuid4())
+        created_at = _parse_legacy_epoch_ms(row.get("created_at", "")) or datetime.now(timezone.utc).isoformat()
+
+        rating: float | None = None
+        try:
+            rating_raw = float(row.get("ratings") or 0)
+            if 1.0 <= rating_raw <= 5.0:
+                rating = rating_raw
+        except ValueError:
+            pass
+
+        plan.users_to_insert.append(
+            {
+                "id": user_id,
+                "phone": phone,
+                "first_name": first_name,
+                "last_name": last_name,
+                "email": email,
+                "role": "driver",
+                "is_driver": True,
+                "profile_complete": True,
+                "created_at": created_at,
+            }
+        )
+        driver_row: dict[str, Any] = {
+            "id": driver_id,
+            "user_id": user_id,
+            "driver_code": generate_driver_code(),
+            "name": name,
+            "first_name": first_name,
+            "last_name": last_name,
+            "phone": phone,
+            "service_area_id": service_area["id"],
+            "status": "needs_review",
+            "is_verified": False,
+            "is_online": False,
+            "is_available": False,
+            "_plain_license_number": (row.get("license_number") or "").strip() or None,
+            "legacy_import_metadata": {
+                "batch": import_batch,
+                "old_driver_id": old_id,
+                "source": MONGO_IMPORT_SOURCE,
+                "was_deleted_in_source": parse_bool(row.get("is_deleted", "")) is True,
+                "was_blocked_in_source": parse_bool(row.get("is_block", "")) is True,
+            },
+            "created_at": created_at,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if rating is not None:
+            driver_row["rating"] = rating
+        plan.drivers_to_insert.append(driver_row)
+
+    return plan
+
+
+def commit_mongo_driver_import_plan(plan: MongoDriverImportPlan) -> None:
+    if plan.errors:
+        raise RuntimeError("refusing to commit with validation errors")
+    if plan.users_to_insert:
+        supabase.table("users").insert(plan.users_to_insert).execute()
+    drivers = []
+    for driver in plan.drivers_to_insert:
+        copied = dict(driver)
+        copied["license_number"] = encrypt_pii(copied.pop("_plain_license_number", None))
+        drivers.append(copied)
+    if drivers:
+        supabase.table("drivers").insert(drivers).execute()
+
+
+def print_mongo_driver_import_report(plan: MongoDriverImportPlan, *, dry_run: bool) -> None:
+    mode = "DRY RUN" if dry_run else "COMMIT"
+    print(f"{mode} report -- legacy Mongo driver-profile import")
+    print(f"  users planned: {len(plan.users_to_insert)}")
+    print(f"  drivers planned: {len(plan.drivers_to_insert)}")
+    print(f"  warnings: {len(plan.warnings)}")
+    print(f"  errors: {len(plan.errors)}")
+    for item in plan.warnings[:50]:
+        print(f"WARNING old_driver_id={item.old_driver_id} field={item.field}: {item.message}")
+    for item in plan.errors[:100]:
+        print(f"ERROR old_driver_id={item.old_driver_id} field={item.field}: {item.message}")

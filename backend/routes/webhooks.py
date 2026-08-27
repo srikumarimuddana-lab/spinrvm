@@ -661,12 +661,14 @@ async def stripe_webhook(request: Request):
             return {"received": True, "scope": "corporate_subscription", "event_id": event_id}
 
     # ── Dispatch ─────────────────────────────────────────────────────
-    # Any exception raised below propagates as 5xx, leaving processed_at
-    # NULL so Stripe retries. If Stripe's own retry window is exhausted
-    # before this succeeds, utils/stripe_reconcile.py's daily sweep
-    # (_reconcile_stuck_stripe_events, ACTION_ITEMS.md C10) will surface
-    # the row for manual review -- it does not auto-replay the payload
-    # (see that function's docstring for why).
+    # An exception raised below propagates as 5xx. Because
+    # claim_stripe_event already inserted the event_id row, Stripe's
+    # retry delivery will be deduped (returns False) UNLESS the failing
+    # path explicitly calls unclaim_stripe_event first. Paths that fail
+    # before any side effects should unclaim so the retry reprocesses;
+    # paths that partially applied side effects should leave the claim
+    # so _reconcile_stuck_stripe_events surfaces the row for manual
+    # review (ACTION_ITEMS.md C10).
     if event_type == "payment_intent.succeeded":
         meta = data_object.get("metadata") or {}
 
@@ -851,6 +853,7 @@ async def stripe_webhook(request: Request):
                         "ride_id": ride_id,
                     },
                 )
+                await unclaim_stripe_event(event_id)
                 raise HTTPException(status_code=500, detail="Ride update failed — Stripe will retry")
 
             logger.info(f"Payment confirmed via webhook for ride {ride_id}")
@@ -916,6 +919,7 @@ async def stripe_webhook(request: Request):
                         "ride_id": ride_id,
                     },
                 )
+                await unclaim_stripe_event(event_id)
                 raise HTTPException(status_code=500, detail="Ride update failed — Stripe will retry")
             logger.warning(f"Payment failed for ride {ride_id}: {failure_message}")
 

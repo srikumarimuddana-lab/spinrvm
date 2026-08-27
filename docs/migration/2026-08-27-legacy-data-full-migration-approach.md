@@ -256,12 +256,16 @@ these are about *displaying* data that's already imported, not new imports:
   now compute and return `show_legacy_badge` per row, same gating as the detail endpoint — see
   `docs/change-log/2026-08-27-legacy-badge-list-endpoint-parity.md`. **Still open**: neither
   app's list-row UI reads the new field yet — the frontend wiring itself is the remaining step.
-- **Driver-app payout history's "Previous app" grouping filters on `payout_type === 'stripe_sync'`**,
-  but the legacy-import offset payouts this session's booking importer writes use
-  `payout_type === 'legacy_import'`. This looks like a real mismatch worth verifying — if
-  confirmed, the legacy offset payouts may be showing up in the driver's *regular* payout
-  list instead of the intended "Previous app" footer section. Flagged, not yet confirmed as
-  a live bug — needs a direct read of `payout-history.tsx` to confirm before fixing.
+- **Driver-app payout history's "Previous app" grouping — confirmed and fixed 2026-08-27.**
+  The filter only matched `payout_type === 'stripe_sync'`; a full backend grep found two more
+  real previous-app types (`legacy_import`, the booking importer's offsetting payout; and
+  `legacy_outstanding_correction`, the legacy payout-correction service) that were falling
+  through into the driver's *regular* payout list instead of the "Previous app" footer. Fixed
+  by widening the grouping to an explicit 3-type set — see
+  `docs/change-log/2026-08-27-payout-history-previous-app-grouping.md`. Also corrected a stale
+  comment in the same file claiming this section "retires itself" after Aug 31, 2026 — that
+  cutoff was removed by a 2026-08-13 backend decision (previous-app payouts are now shown
+  permanently); the comment hadn't been updated to match.
 
 ## 6a. A third gap, found while investigating §5a — the ToS/Privacy checkbox re-prompts every returning login (not migration-specific, but directly adjacent to it)
 

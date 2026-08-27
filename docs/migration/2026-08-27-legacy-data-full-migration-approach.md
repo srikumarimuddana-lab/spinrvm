@@ -22,7 +22,7 @@ what's left, in the order it's safe to do it, with a straight risk call on each 
 
 | Data | Old collection | Current status |
 |---|---|---|
-| Completed trips | `bookings` (status=completed) | Imported since 2026-07-29; 224 rows in production today. The 19 net-new 08-22 rows are the separate, already-approved runbook — not part of this plan. |
+| Completed trips | `bookings` (status=completed) | Imported since 2026-07-29; **186** rows in production today (corrected 2026-08-27 — the 224 figure here was stale, traced to a single 2026-07-29 `audit_logs` row not reconciled against the live count; see `docs/runbooks/legacy-booking-import-2026-08-22-batch.md`). The 19 net-new 08-22 rows are the separate, already-approved runbook — not part of this plan. |
 | Rider profiles | `customers` | Phone-matched, 918/1,137 linked to real Spinr accounts. |
 | Driver SIN/DOB | `banks` | Imported into existing **encrypted** columns only. Raw banking numbers (account/transit/institution) deliberately never touched — Stripe Connect re-collects banking directly from the driver; there is no plan to change this, and it shouldn't be revisited. |
 | "Imported" transparency | admin-dashboard driver/rider list+detail rows, driver-app Documents screen, rider/driver-app ride-detail screens | All shipped (2026-08-19 and 2026-08-25 sessions). Ride-detail badge is dark-shipped, off by default (`legacy_ride_badge_enabled`). |
@@ -325,7 +325,9 @@ A returning user never sees it again after their first successful login.
   `true` in production since 2026-08-21 — no write needed.
 - §5b — **Insurance-period reconstruction**: sign-off recorded. Correction tool (GPS-based,
   393 rides) scoped, not yet built.
-- §6a — **Login checkbox re-prompt**: approved to fix. In progress.
+- §6a — **Login checkbox re-prompt**: approved to fix. **Done** — both apps'
+  `login.tsx` now only surface the consent checkbox when the backend actually
+  returns `consent_required`, not unconditionally on every login.
 - Phases 1-2 (driver profiles, vehicle history): approved to build next.
 - Phases 3 (partially — the correction tool itself), 4, 5, 6: remain scoped-but-deferred as
   originally written — no change to that call.

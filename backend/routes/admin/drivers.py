@@ -754,18 +754,27 @@ async def admin_get_driver_stats(
     # reason admin_ride_money_rollup/admin_payouts_overview_aggregates do
     # (P0-B) — previous-app money the driver already received, not new
     # Spinr income.
+    # Summed in SQL, not here. This used to fetch every completed non-legacy
+    # ride for every driver in scope (limit=50000, select *) and add them up in
+    # Python — for one stat card and a per-area column. The 50,000 cap was also
+    # a silent correctness ceiling: past it the card under-reported with no
+    # signal. admin_driver_earnings_rollup (migration 370) does the GROUP BY
+    # server-side and keeps the same semantics: completed only, legacy-excluded,
+    # lifetime (matching total_rides_sum, also a lifetime counter).
     driver_ids_set = {d["id"] for d in enriched_drivers}
     earnings_by_driver: Dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     if driver_ids_set:
-        earnings_rides = await db_supabase.get_rows(
-            "rides",
-            {"driver_id": {"$in": list(driver_ids_set)}, "status": "completed", **EXCLUDE_LEGACY_RIDES},
-            limit=50000,
+        _rollup_rows = await db_supabase.rpc(
+            "admin_driver_earnings_rollup",
+            {"p_driver_ids": list(driver_ids_set)},
         )
-        for r in earnings_rides:
-            did = r.get("driver_id")
-            if did:
-                earnings_by_driver[did] += Decimal(str(r.get("driver_earnings") or 0))
+        _rollup = _rollup_rows[0] if isinstance(_rollup_rows, list) and _rollup_rows else _rollup_rows
+        if not isinstance(_rollup, dict):
+            _rollup = {}
+        for did, amount in (_rollup.get("by_driver") or {}).items():
+            # Decimal(str(...)) — the RPC returns NUMERIC as a JSON string/number;
+            # never float() it (CLAUDE.md money rule).
+            earnings_by_driver[did] = Decimal(str(amount or 0))
 
     total_earnings_sum = float(sum(earnings_by_driver.values(), Decimal("0")))
     avg_rating = 0.0

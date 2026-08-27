@@ -8,7 +8,10 @@ Execute one full cycle of the swarm protocol (`docs/framework/08-swarm-protocol.
 /spinr-swarm                       # discovery mode: pick from ACTION_ITEMS.md, else sweep
 /spinr-swarm <area or file>        # cycle scoped to an area (e.g. dispatch, rider-app booking)
 /spinr-swarm audit                 # discovery sweep only — report + backlog entries, no implementation
+/spinr-swarm charter <A-H>         # work an Enhancement Charter track (docs/framework/09-enhancement-charter.md)
 ```
+
+Charter mode: the first invocation on a track is an **assessment cycle** — re-verify the track's "exists today" column against current code, score the gaps, file chosen items into `ACTION_ITEMS.md`, and recommend the first implementation cycle; no implementation. Later invocations implement one filed item per cycle under the full loop. Honor disposition labels (Research → ADR, Process → human-ready draft, never code). Open P0/P1 backlog items always preempt charter work. When a charter cycle adds UI surface, it must also state what it removed or simplified — the anti-overwhelm rule.
 
 ## 1 · Observe & pick (discovery mode)
 

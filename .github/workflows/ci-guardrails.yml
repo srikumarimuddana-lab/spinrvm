@@ -505,6 +505,57 @@ jobs:
             --coverage-json shared-coverage.json \
             --changed-files-file /tmp/changed_files_money.txt
 
+  # ─── 1d. Admin routes / utilities coverage floor ─────────────────────────
+  # CLAUDE.md's coverage-minimums table names ">= 70%" for "Admin routes,
+  # utilities" -- the one tier in that table with no enforcing gate, closed
+  # here (2026-08-27, docs/audit/2026-08-27-cicd-gates-guardrails-audit.md
+  # Section 3 / Phase 3). Same scoped-and-blocking-but-only-for-touched-
+  # files shape as corporate-coverage-floor-gate/money-path-coverage-floor-
+  # gate above; see backend/scripts/check_admin_coverage_floor.py's
+  # docstring for why this tracks two directory-aggregate keys
+  # (routes/admin/, utils/) rather than an explicit file list like its two
+  # siblings, and for the real measured baseline this gate's floors cite.
+  admin-coverage-floor-gate:
+    name: Admin/utils coverage floor check
+    runs-on: ubuntu-latest
+    needs: [shared-coverage-run]
+    # Same rationale as money-path-coverage-floor-gate above: runs
+    # regardless of shared-coverage-run's outcome so a shared-run problem
+    # produces this gate's existing fail-closed "coverage report missing"
+    # result instead of silently vanishing as "skipped".
+    if: always()
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: List changed files
+        run: |
+          BASE="${{ github.event.pull_request.base.sha || 'origin/main' }}"
+          git diff --name-only "$BASE"...HEAD > /tmp/changed_files_admin.txt || true
+          echo "Changed files in this PR:"
+          cat /tmp/changed_files_admin.txt
+
+      - name: Download shared coverage artifact
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: shared-coverage-${{ github.run_id }}
+          path: backend
+
+      - name: Check per-module floors
+        working-directory: backend
+        run: |
+          python3 scripts/check_admin_coverage_floor.py \
+            --coverage-json shared-coverage.json \
+            --changed-files-file /tmp/changed_files_admin.txt
+
   # ─── 2. Lint warning count gate ───────────────────────────────────────────
   lint-trend-gate:
     name: Lint warning trend check
@@ -1254,6 +1305,7 @@ jobs:
       - coverage-regression-gate
       - corporate-coverage-floor-gate
       - money-path-coverage-floor-gate
+      - admin-coverage-floor-gate
       - lint-trend-gate
       - security-posture-gate
       - migration-safety-gate
@@ -1270,6 +1322,7 @@ jobs:
               'Coverage Regression':  '${{ needs.coverage-regression-gate.result }}',
               'Corporate Coverage Floor': '${{ needs.corporate-coverage-floor-gate.result }}',
               'Money-Path Coverage Floor': '${{ needs.money-path-coverage-floor-gate.result }}',
+              'Admin/Utils Coverage Floor': '${{ needs.admin-coverage-floor-gate.result }}',
               'Lint Trend':           '${{ needs.lint-trend-gate.result }}',
               'Security Posture':     '${{ needs.security-posture-gate.result }}',
               'Migration Safety':     '${{ needs.migration-safety-gate.result }}',

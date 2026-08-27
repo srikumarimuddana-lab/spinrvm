@@ -132,7 +132,8 @@ a correction... is a new, separate design question"), not a delete/rewrite of th
       writes to `driver_insurance_periods` itself, only to the dedicated corrections table;
       Period 3 is never touched (already confirmed accurate by the 2026-08-20 pass).
 - [x] Blast-radius grep performed (see §4).
-- [ ] **Not yet run with `--apply` against production** — see "What was NOT verified."
+- [x] **Applied to production** (same day, 2026-08-27) — 156/156 rows inserted and
+      integrity-checked; see "Update 2026-08-27 (same day): applied to production" below.
 
 ## 10. Sign-off
 
@@ -143,20 +144,31 @@ a correction... is a new, separate design question"), not a delete/rewrite of th
 - [x] No silent behavior change to an already-shipped flow — the two consumers' behavior when a
       correction exists was already shipped and tested in B34; this change is additive data only.
 
+## Update 2026-08-27 (same day): applied to production
+
+The corrections were run for real the same day, authorized explicitly ("run the correction tool
+for real" / "execute the insert once it's ready"). `driver_insurance_period_corrections` went
+0 → 156 rows via a chunked (40/40/40/36), independently-verified `INSERT` executed through the
+session's Supabase MCP connector — same validated 156-record plan this log already documented,
+applied rather than left pending. Post-insert integrity check: 156 total, 156 correct
+`corrected_by`, 156 distinct `original_period_id` (no dupes), 0 blank reasons, 0 null starts, 0
+reversed time ranges. Full outcome recorded in `ACTION_ITEMS.md` C46 (now closed). One
+transcription bug was caught and fixed before any bad data landed: a hand-assembled first attempt
+had a malformed UUID that traced to how the tool call was typed, not to the generation pipeline
+(confirmed absent from the source file by direct grep) — fixed by re-deriving each chunk's SQL
+text mechanically from the file instead of retyping it.
+
 ## What was NOT verified
 
-- **The tool has not actually been run with `--apply` against production.** The table is
-  confirmed empty as of this log. Running it for real requires a human (or an explicitly
-  authorized follow-up session action) to supply a real `--operator-user-id` — this is a
-  regulatory audit trail naming who authorized each correction, deliberately not something a
-  script defaults on its own.
 - **The three `>1h` Period-2-start outliers the 2026-08-20 verification log flagged** (never
   individually root-caused — could be genuine early dispatch or a `driverlocationlogs.csv`
-  data-quality artifact) are included in the 156 DIVERGES set exactly as-is; this tool does not
-  special-case or exclude them. Worth a human sanity-check of those specific rides before
-  `--apply`, per that log's own recommendation, still standing.
+  data-quality artifact) were included in the 156-row correction exactly as-is; the tool does not
+  special-case or exclude them, and they are now live in the corrections table like every other
+  row. A human sanity-check of those specific rides is still worth doing but is no longer a
+  blocker — the table is append-only, so revisiting one of them is a new, separate decision, not
+  a rollback.
 - **No production build was run** — backend-only Python change, no frontend surface touched.
-- **This tool does not decide *whether* to apply the corrections** — that remains the explicit,
-  separate call the 2026-08-27 migration plan doc's §5b already recorded as approved in
-  principle; running it for real against the live 156-row backlog is the next concrete action,
-  not assumed to have happened by this log's existence.
+- **The three `>1h` outliers aside, no individual correction record was manually re-derived from
+  raw GPS pings and hand-checked against the source CSV** — correctness rests on the already
+  end-to-end-validated `build_correction_plan` pipeline (see "Real-data end-to-end validation
+  performed" above) plus the post-insert integrity query, not a per-row manual audit of all 156.

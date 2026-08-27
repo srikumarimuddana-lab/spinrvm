@@ -238,10 +238,10 @@ validated 2026-08-27** — `backend/services/insurance_period_gps_correction.py`
 `backend/scripts/apply_legacy_insurance_period_gps_corrections.py` (29 unit tests, plus an
 end-to-end run against the real `driverlocationlogs.csv` and real read-only production data:
 186 candidates, 156 `DIVERGES` → exactly 156 correction records built, zero dropped). See
-`docs/change-log/2026-08-27-insurance-period-gps-correction-tool.md` for the full log. **Not
-yet applied to production** — the table remains empty; running it for real is a separate,
-explicit action requiring a real admin's `users.id` (`--operator-user-id`), same operational
-posture as the booking-import runbook.
+`docs/change-log/2026-08-27-insurance-period-gps-correction-tool.md` for the full log.
+**Applied to production, same day** — `driver_insurance_period_corrections` now holds all
+156 rows, integrity-verified (correct operator, no duplicate `original_period_id`s, no blank
+reasons, no reversed time ranges). `ACTION_ITEMS.md` C46 closed.
 
 ## 6. Surfacing gaps found while tracing driver-activity/analytics/rider-activity screens
 

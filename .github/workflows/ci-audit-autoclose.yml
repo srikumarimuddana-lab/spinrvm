@@ -1,0 +1,43 @@
+name: CI Audit Auto-Close
+
+# CR #4612 (#4112 implementation plan, step 2): daily sweep that closes open
+# `[CI Audit]` issues whose underlying failure has demonstrably recovered
+# (N consecutive green runs of the same workflow on the same branch), or
+# whose branch no longer exists. Every close leaves an explanatory comment.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"   # daily, 06:17 UTC (off the :00 rush)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Preview only — report what would close, write nothing"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+jobs:
+  autoclose:
+    name: Close recovered ci-audit issues
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Close recovered issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/ci-audit/auto_close_recovered.py \
+            --repo "${{ github.repository }}" \
+            --min-green 3 \
+            ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '--dry-run' || '' }}

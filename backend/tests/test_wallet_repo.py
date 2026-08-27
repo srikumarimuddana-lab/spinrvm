@@ -736,6 +736,27 @@ async def test_claim_stripe_event_duplicate_stuck_unprocessed_logs_critical_and_
 
 
 @pytest.mark.asyncio
+async def test_claim_stripe_event_duplicate_with_failed_followup_still_returns_false():
+    mock_sb = MagicMock()
+    mock_sb.table.return_value.insert.return_value.execute.side_effect = Exception(
+        "duplicate key value violates unique constraint (23505)"
+    )
+    mock_sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.side_effect = (
+        Exception("connection reset")
+    )
+    with (
+        patch("repositories.wallet_repo.supabase", mock_sb),
+        patch("repositories.wallet_repo.logger") as mock_logger,
+    ):
+        from repositories.wallet_repo import claim_stripe_event
+
+        result = await claim_stripe_event("evt_1", "checkout.session.completed", {"id": "evt_1"})
+
+    assert result is False
+    mock_logger.warning.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_claim_stripe_event_non_duplicate_error_propagates():
     mock_sb = MagicMock()
     mock_sb.table.return_value.insert.return_value.execute.side_effect = RuntimeError("network unreachable")

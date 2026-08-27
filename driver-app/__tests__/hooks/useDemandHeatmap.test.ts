@@ -148,17 +148,44 @@ describe('failure handling', () => {
     expect(result.current.cells).toEqual([]);
   });
 
-  it('hides the overlay once failures become persistent', async () => {
-    // A single blip should not flip the UI; three consecutive failures mean
-    // the data is genuinely unavailable, and a permanent "unavailable" pill
-    // riding along on the map for the rest of a shift is not the silent
-    // degradation this feature promised. Once persistent, the overlay hides.
+  it('surfaces an error on the very first failed attempt, not after 3 cycles', async () => {
+    // Regression: a driver who has never seen a successful fetch used to sit
+    // on the unlabeled "loading" shimmer for up to 3 poll cycles (~4 minutes
+    // at the default 90s interval) before anything visible appeared — read
+    // as a broken app, reported live from a 2-driver Regina test. There is
+    // no "was working, now blipping" state to protect from flicker here, so
+    // the very first failure should surface immediately.
+    mockGet.mockRejectedValue(new Error('network down'));
+    const { result } = renderHook(() => useDemandHeatmap('idle', true));
+    await waitFor(() => expect(result.current.status).toBe('error'));
+    expect(result.current.visible).toBe(false);
+  });
+
+  it('tolerates a transient blip after already showing real data, hiding only once persistent', async () => {
+    // A single blip after the driver has already seen real cells should not
+    // flip the UI — three consecutive failures mean the data is genuinely
+    // unavailable, and a permanent "unavailable" pill riding along on the
+    // map for the rest of a shift is not the silent degradation this
+    // feature promised. Once persistent, the overlay hides.
     jest.useFakeTimers();
     try {
-      mockGet.mockRejectedValue(new Error('network down'));
+      mockGet.mockResolvedValueOnce({ data: v1Payload });
       const { result } = renderHook(() => useDemandHeatmap('idle', true));
-      // Advance past three poll cycles (default 90s, +/-10% jitter).
-      for (let i = 0; i < 3; i++) {
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.status).toBe('ready');
+
+      mockGet.mockRejectedValue(new Error('network down'));
+
+      // First blip after success: still tolerated.
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(120_000);
+      });
+      expect(result.current.status).toBe('ready');
+
+      // Two more consecutive failures (3 total): now genuinely unavailable.
+      for (let i = 0; i < 2; i++) {
         await act(async () => {
           await jest.advanceTimersByTimeAsync(120_000);
         });

@@ -40,10 +40,32 @@ from ._shared import (  # noqa: F401
     serialize_doc,
 )
 
+try:
+    from ...utils.location_write_gate import should_write_marker
+except ImportError:  # pragma: no cover - top-level execution fallback
+    from utils.location_write_gate import should_write_marker  # type: ignore
+
 router = APIRouter()
 
 _V2_ACTIVE_RIDE_STATUSES = {"driver_assigned", "driver_accepted", "driver_arrived", "in_progress"}
 _RAW_LOCATION_RETENTION = timedelta(days=90)
+
+# Period 1 insurance accumulator columns. A marker UPDATE carrying either of
+# these is never coalesced away — dropping one silently under-counts a
+# regulated SGI audit figure. See utils/location_write_gate.
+_PERIOD1_COLUMNS = ("period1_accum_km", "period1_accum_since")
+
+
+async def _write_marker_if_due(driver_filter: dict, update_data: dict, driver_id: str, path: str) -> None:
+    """Issue the ``drivers`` marker UPDATE unless the write gate coalesces it.
+
+    Every GPS ingestion route funnels its marker write through the gate so the
+    REST and WebSocket paths share one window per driver instead of writing the
+    same row from two uncoordinated throttles.
+    """
+    force = any(col in update_data for col in _PERIOD1_COLUMNS)
+    if await should_write_marker(driver_id, path=path, force=force):
+        await db_supabase.update_one("drivers", driver_filter, update_data)
 
 
 class TripLocationPoint(BaseModel):
@@ -202,7 +224,7 @@ async def _persist_v2_idle_batch(request: IdleLocationBatchRequest, current_user
                         update_data["period1_accum_since"] = datetime.now(timezone.utc)
             except Exception:
                 logger.error("period1 accumulator update failed for driver %s", driver["id"], exc_info=True)
-        await db_supabase.update_one("drivers", {"id": driver["id"]}, update_data)
+        await _write_marker_if_due({"id": driver["id"]}, update_data, str(driver["id"]), "rest_v2_idle")
 
     await _deps.mark_present(driver["id"])
     return result.ack.to_dict()
@@ -303,7 +325,7 @@ async def _persist_v2_location_batch(request: LocationBatchRequest, current_user
                 update_data = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc)}
                 if latest.heading is not None:
                     update_data["heading"] = latest.heading % 360
-                await db_supabase.update_one("drivers", {"id": driver["id"]}, update_data)
+                await _write_marker_if_due({"id": driver["id"]}, update_data, str(driver["id"]), "rest_v2_trip")
 
     if driver.get("is_online"):
         await _deps.mark_present(driver["id"])
@@ -657,7 +679,7 @@ async def update_location_batch(
                         if not driver_row.get("period1_accum_since"):
                             update_data["period1_accum_since"] = datetime.now(timezone.utc)
 
-        await db_supabase.update_one("drivers", {"user_id": current_user["id"]}, update_data)
+        await _write_marker_if_due({"user_id": current_user["id"]}, update_data, str(driver_id), "rest_v1")
         # Also sync to generic lat/lng fields if they exist to support legacy queries
         # (Though update_one might not support setting multiple top-level fields easily if we rely on $set mapping)
         # Let's trust db.drivers.update_one to handle the schema or the wrapper.

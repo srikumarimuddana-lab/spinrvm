@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { getDashboardOverview, getServiceAreas } from "@/lib/api";
+import { getStuckEventCount } from "@/lib/api/stripe-events";
 import { formatCurrency } from "@/lib/utils";
 import { useAuthStore } from "@/store/authStore";
 import {
     Car, Users, DollarSign, TrendingUp, Activity, UserCheck,
-    CreditCard, Clock, MapPin, UserPlus, Wifi,
+    CreditCard, Clock, MapPin, UserPlus, Wifi, AlertTriangle,
 } from "lucide-react";
 
 const RANGES = [
@@ -24,10 +26,20 @@ export default function DashboardPage() {
     const [data, setData] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(false);
+    const [stuckCount, setStuckCount] = useState(0);
+
+    const isSuperAdmin = user?.role === "super_admin";
 
     useEffect(() => {
         getServiceAreas().then((a) => setAreas(Array.isArray(a) ? a : [])).catch(() => {});
     }, []);
+
+    useEffect(() => {
+        if (!isSuperAdmin) return;
+        getStuckEventCount()
+            .then((r) => setStuckCount(r.count))
+            .catch(() => {});
+    }, [isSuperAdmin]);
 
     // Re-fetch whenever the time window or service area changes.
     useEffect(() => {
@@ -95,6 +107,17 @@ export default function DashboardPage() {
                 <div className="rounded-md border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
                     Dashboard data is temporarily unavailable. Check backend health and try again.
                 </div>
+            )}
+
+            {isSuperAdmin && stuckCount > 0 && (
+                <Link href="/dashboard/stripe-events" className="block">
+                    <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 flex items-center gap-3 hover:bg-destructive/15 transition-colors">
+                        <AlertTriangle className="h-4 w-4 text-destructive shrink-0" />
+                        <span className="text-sm text-destructive font-medium">
+                            {stuckCount} stuck Stripe {stuckCount === 1 ? "event" : "events"} need attention
+                        </span>
+                    </div>
+                </Link>
             )}
 
             {loading && !data ? (

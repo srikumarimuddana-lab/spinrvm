@@ -107,6 +107,7 @@ from .settings import router as settings_router
 from .sgi_forms import router as sgi_forms_router
 from .staff import router as staff_router
 from .stripe_connect_ledger import router as stripe_connect_ledger_router
+from .stripe_events import router as stripe_events_router
 from .stripe_import import router as stripe_import_router
 from .stripe_mode_audit import router as stripe_mode_audit_router
 from .stripe_payout_sync import router as stripe_payout_sync_router
@@ -177,6 +178,11 @@ admin_router.include_router(stripe_connect_ledger_router, dependencies=[Depends(
 # super_admin posture as the mapping import: gated at the mount AND re-checked
 # inside each handler.
 admin_router.include_router(stripe_mode_audit_router, dependencies=[Depends(require_super_admin)])
+# Stuck Stripe webhook event viewer + replay/dismiss. Exposes the
+# stripe_events table's processed_at=NULL rows so ops can investigate and
+# resolve stuck events from the admin panel instead of tailing logs.
+# Same require_super_admin posture as the other Stripe operational routers.
+admin_router.include_router(stripe_events_router, dependencies=[Depends(require_super_admin)])
 # Data Transfer module (export/import users+drivers with docs/history between
 # Spinr's own environments) — gated on require_super_admin, not a module flag.
 # Previously gated on require_module("bulk_operations"); that module string

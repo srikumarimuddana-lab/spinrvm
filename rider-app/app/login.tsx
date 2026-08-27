@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useRef, useMemo, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import {
   Image,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
 import api, { getApiErrorMessage } from '@shared/api/client';
@@ -18,6 +19,13 @@ import { showToast } from '../store/toastStore';
 import { useAuthStore } from '@shared/store/authStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+
+// Written by otp.tsx on every successful authentication (new or returning),
+// read here to decide whether to show the consent checkbox. Exported so
+// otp.tsx's write uses the exact same literal — see the note on
+// hasAuthenticatedBefore below for why this is a display-only heuristic,
+// not the actual consent enforcement point.
+export const HAS_AUTHENTICATED_BEFORE_KEY = 'spinr_rider_has_authenticated_before';
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -32,9 +40,39 @@ export default function LoginScreen() {
   // tappable action behind it. See
   // docs/change-log/2026-08-20-explicit-signup-consent-checkbox.md.
   const [consentAccepted, setConsentAccepted] = useState(false);
+  // Display-only heuristic, NOT the consent enforcement point (that's
+  // entirely server-side — see verify_otp / the consent_required rejection
+  // otp.tsx handles inline). This screen can't know whether the phone
+  // number about to be entered is new or returning until after OTP verify,
+  // so it can't gate on that directly. Instead: has *this device* ever
+  // completed a successful login before? If so, don't show the checkbox —
+  // a device that already signed in once is overwhelmingly likely to be a
+  // returning user re-authenticating, and there's no legal box for them to
+  // tick. Defaults to false (checkbox shown) so a fresh device, a slow
+  // AsyncStorage read, or a genuine new signup never has the checkbox
+  // hidden from it — if this ever turns out wrong (e.g. a different family
+  // member starts a real new signup on a device that has logged in
+  // before), otp.tsx's inline consent card is the actual safety net: the
+  // backend still rejects account creation with consent_required and
+  // otp.tsx prompts for it there, regardless of what this screen showed.
+  const [hasAuthenticatedBefore, setHasAuthenticatedBefore] = useState(false);
   const inputRef = useRef<TextInput>(null);
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+
+  useEffect(() => {
+    let cancelled = false;
+    AsyncStorage.getItem(HAS_AUTHENTICATED_BEFORE_KEY)
+      .then((value) => {
+        if (!cancelled && value === 'true') setHasAuthenticatedBefore(true);
+      })
+      .catch(() => {
+        // Fail open to showing the checkbox — see the state's own comment.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Login stays in the stack below /(tabs) after sign-in (we push /otp so the
   // user can swipe back to change their number). Without this guard, an iOS
@@ -229,6 +267,15 @@ export default function LoginScreen() {
         </View>
       </View>
 
+      {/* Consent checkbox is scoped to first login: a device that has
+          already completed a successful sign-in once (hasAuthenticatedBefore)
+          skips it entirely, since re-authenticating has zero legal effect
+          for a returning user (see the state's own comment above) and a
+          persistent "I agree..." checkbox on every login was confusing for
+          people who are, in fact, already Spinr customers. A genuinely new
+          signup always sees it: either here (fresh device) or inline in
+          otp.tsx if this device happened to skip it. */}
+      {!hasAuthenticatedBefore && (
       <View style={[styles.terms, { paddingBottom: insets.bottom + 16 }]}>
         {/* Explicit, unchecked-by-default consent checkbox — replaces the
             old passive "by continuing you agree" text, which had no
@@ -281,6 +328,7 @@ export default function LoginScreen() {
           </Text>
         </View>
       </View>
+      )}
       </ScrollView>
 
     </KeyboardAvoidingView>

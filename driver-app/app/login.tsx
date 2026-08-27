@@ -23,6 +23,13 @@ import { showToast } from '../hooks/useToast';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
+// Written by otp.tsx on every successful authentication (new or returning),
+// read here to decide whether to show the consent checkbox. Exported so
+// otp.tsx's write uses the exact same literal — see the note on
+// hasAuthenticatedBefore below for why this is a display-only heuristic,
+// not the actual consent enforcement point.
+export const HAS_AUTHENTICATED_BEFORE_KEY = 'spinr_driver_has_authenticated_before';
+
 export default function LoginScreen() {
   const router = useRouter();
   const { t } = useLanguageStore();
@@ -42,6 +49,36 @@ export default function LoginScreen() {
   // 2026-08-27 this no longer gates "Send Verification Code" — see the
   // comment on canContinue below.
   const [consentAccepted, setConsentAccepted] = useState(false);
+  // Display-only heuristic, NOT the consent enforcement point (that's
+  // entirely server-side — see verify_otp / the consent_required rejection
+  // otp.tsx handles inline). This screen can't know whether the phone
+  // number about to be entered is new or returning until after OTP verify,
+  // so it can't gate on that directly. Instead: has *this device* ever
+  // completed a successful login before? If so, don't show the checkbox —
+  // a device that already signed in once is overwhelmingly likely to be a
+  // returning driver re-authenticating, and there's no legal box for them
+  // to tick. Defaults to false (checkbox shown) so a fresh device, a slow
+  // AsyncStorage read, or a genuine new signup never has the checkbox
+  // hidden from it — if this ever turns out wrong (e.g. a different family
+  // member starts a real new signup on a device that has logged in
+  // before), otp.tsx's inline consent card is the actual safety net: the
+  // backend still rejects account creation with consent_required and
+  // otp.tsx prompts for it there, regardless of what this screen showed.
+  const [hasAuthenticatedBefore, setHasAuthenticatedBefore] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    AsyncStorage.getItem(HAS_AUTHENTICATED_BEFORE_KEY)
+      .then((value) => {
+        if (!cancelled && value === 'true') setHasAuthenticatedBefore(true);
+      })
+      .catch(() => {
+        // Fail open to showing the checkbox — see the state's own comment.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Request location permission and fetch location early so the map is
   // ready by the time the user reaches the dashboard after login.
@@ -286,7 +323,17 @@ export default function LoginScreen() {
       {/* Terms — explicit, unchecked-by-default consent checkbox. Replaces
           the old passive "by continuing you agree" text, which had no
           tappable action or opt-in gesture behind it. Icon (not color
-          alone) signals checked state for WCAG 2.1 AA. */}
+          alone) signals checked state for WCAG 2.1 AA.
+
+          Scoped to first login: a device that has already completed a
+          successful sign-in once (hasAuthenticatedBefore) skips this
+          entirely, since re-authenticating has zero legal effect for a
+          returning driver (see the state's own comment above) and a
+          persistent "I agree..." checkbox on every login was confusing for
+          people who are, in fact, already Spinr drivers. A genuinely new
+          signup always sees it: either here (fresh device) or inline in
+          otp.tsx if this device happened to skip it. */}
+      {!hasAuthenticatedBefore && (
       <View style={[styles.terms, { paddingBottom: insets.bottom + 16 }]}>
         {/* Checkbox toggle and the Terms/Privacy links are deliberately
             separate touchables (not one nested inside the other): a
@@ -336,6 +383,7 @@ export default function LoginScreen() {
           </Text>
         </View>
       </View>
+      )}
 
     </KeyboardAvoidingView>
   );

@@ -32,6 +32,15 @@ jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
 }));
+// Resolves to null by default (no device has "authenticated before" yet),
+// which is what every test in this file below assumes: the checkbox is
+// visible. mockAsyncGetItem is overridden per-test in the dedicated
+// "consent checkbox scoped to first login" describe block further down.
+const mockAsyncGetItem = jest.fn((..._args: any[]): Promise<string | null> => Promise.resolve(null));
+jest.mock('@react-native-async-storage/async-storage', () => ({
+  getItem: (...a: any[]) => mockAsyncGetItem(...a),
+  setItem: jest.fn(() => Promise.resolve()),
+}));
 
 const mockPush = jest.fn();
 const mockReplace = jest.fn();
@@ -179,5 +188,48 @@ describe('LoginScreen — explicit consent checkbox', () => {
     toggleConsent(renderer); // check
     toggleConsent(renderer); // uncheck
     expect(getContinueButton(renderer).props.accessibilityState).toMatchObject({ disabled: false });
+  });
+});
+
+describe('LoginScreen — consent checkbox scoped to first login', () => {
+  it('shows the checkbox when this device has never authenticated before (AsyncStorage empty)', async () => {
+    mockAsyncGetItem.mockResolvedValueOnce(null);
+    const renderer = await renderScreen();
+    expect(() => getConsentCheckbox(renderer)).not.toThrow();
+    // findAllByProps matches both the composite Text and its underlying host
+    // node for the same accessibilityLabel — assert presence, not an exact
+    // count, to avoid pinning that renderer implementation detail.
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Terms of Service' }).length).toBeGreaterThan(0);
+  });
+
+  it('hides the checkbox once this device has completed a login before (AsyncStorage flag set)', async () => {
+    mockAsyncGetItem.mockResolvedValueOnce('true');
+    const renderer = await renderScreen();
+    expect(() => getConsentCheckbox(renderer)).toThrow();
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Terms of Service' })).toHaveLength(0);
+  });
+
+  it('fails open to showing the checkbox if the AsyncStorage read rejects', async () => {
+    mockAsyncGetItem.mockRejectedValueOnce(new Error('storage unavailable'));
+    const renderer = await renderScreen();
+    expect(() => getConsentCheckbox(renderer)).not.toThrow();
+  });
+
+  it('still lets "Send Verification Code" continue when the checkbox is hidden (checkbox was never a phone-validity gate)', async () => {
+    mockAsyncGetItem.mockResolvedValueOnce('true');
+    const renderer = await renderScreen();
+    enterPhone(renderer, '3065550199');
+    await tapContinue(renderer);
+
+    expect(mockApiPost).toHaveBeenCalledWith('/auth/send-otp', { phone: '+13065550199' });
+    expect(mockPush).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pathname: '/otp',
+        // consentAccepted stays 'false' — there was no checkbox to check.
+        // Safe: otp.tsx's inline consent card is the actual backstop for a
+        // genuine new signup on a device that happens to have this flag set.
+        params: expect.objectContaining({ phoneNumber: '+13065550199', consentAccepted: 'false' }),
+      }),
+    );
   });
 });

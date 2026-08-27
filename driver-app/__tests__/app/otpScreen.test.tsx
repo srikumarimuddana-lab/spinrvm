@@ -24,6 +24,11 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import { TouchableOpacity, Text, TextInput } from 'react-native';
+// Global mock from jest.setup.js (getItem -> null, setItem -> resolved) —
+// referencing it directly here to assert on the "mark this device as
+// authenticated before" write, rather than adding a second, conflicting
+// local jest.mock() for the same module.
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('react-native-safe-area-context', () => ({
@@ -180,6 +185,9 @@ describe('OtpScreen (driver-app)', () => {
       phone: '+15551234567', code: '1234', client_app: 'driver', consent_accepted: true,
     });
     expect(mockSetTokens).toHaveBeenCalledWith('access-tok', 'refresh-tok', 900);
+    // Marks this device as having authenticated before, so login.tsx skips
+    // the consent checkbox on the next visit.
+    expect(AsyncStorage.setItem).toHaveBeenCalledWith('spinr_driver_has_authenticated_before', 'true');
   });
 
   it('sets the user directly when userData is returned (skips initialize())', async () => {

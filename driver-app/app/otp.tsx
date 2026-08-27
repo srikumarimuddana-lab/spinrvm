@@ -12,6 +12,7 @@ import {
   Animated,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAuthStore, type User } from '@shared/store/authStore';
@@ -21,6 +22,7 @@ import { showToast } from '../hooks/useToast';
 import { useLanguageStore } from '../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { HAS_AUTHENTICATED_BEFORE_KEY } from './login';
 
 export default function OtpScreen() {
   const router = useRouter();
@@ -217,6 +219,12 @@ export default function OtpScreen() {
       const { token, refresh_token, expires_in, user: userData } = otpData;
       if (token) {
         await useAuthStore.getState().setTokens(token, refresh_token ?? '', expires_in ?? 900);
+        // Marks this device as having completed a login at least once, so
+        // login.tsx skips the consent checkbox on the next visit — see
+        // HAS_AUTHENTICATED_BEFORE_KEY's own comment there. Not awaited
+        // (doesn't gate the sign-in flow); failure is harmless, it just
+        // means the checkbox shows again next time, same as a fresh device.
+        AsyncStorage.setItem(HAS_AUTHENTICATED_BEFORE_KEY, 'true').catch(() => {});
         if (userData) {
           useAuthStore.setState({
             user: userData,

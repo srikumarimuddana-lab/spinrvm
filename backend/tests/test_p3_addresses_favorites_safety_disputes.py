@@ -331,6 +331,9 @@ class TestSafety:
         (not rider-side) branch of the ride-membership check."""
         driver_row = {"id": "driver_row_1", "user_id": DRIVER_USER["id"]}
         ride = {"id": "ride_9", "rider_id": "some_other_rider", "driver_id": "driver_row_1"}
+        # routes.safety now reads the driver row auth already fetched, so the
+        # dependency override's user carries it exactly as get_current_user does.
+        DRIVER_USER["_driver"] = driver_row
         db = _mock_db(
             get_ride=AsyncMock(return_value=ride),
             get_rows=AsyncMock(return_value=[driver_row]),

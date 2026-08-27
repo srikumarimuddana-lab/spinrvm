@@ -74,9 +74,7 @@ async def rider_start_ride(
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
     # Verify this driver is the one assigned to the ride
-    driver_row = (lambda _r: _r[0] if _r else None)(
-        await _deps.db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
-    )
+    driver_row = await _deps.driver_row_for(current_user)
     if not driver_row or ride.get("driver_id") != driver_row["id"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     if ride.get("status") != RideStatus.DRIVER_ARRIVED:

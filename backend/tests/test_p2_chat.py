@@ -354,7 +354,9 @@ class TestGetRideMessagesDriver:
         ):
             result = await rides_mod.get_ride_messages(
                 ride_id=RIDE_ID,
-                current_user={"id": DRIVER_USER_ID},
+                # get_current_user attaches the driver row it already fetched;
+                # a direct call has to supply it the same way.
+                current_user={"id": DRIVER_USER_ID, "_driver": _driver_row(user_id=DRIVER_USER_ID)},
             )
 
         assert result["success"] is True

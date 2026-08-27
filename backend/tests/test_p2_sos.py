@@ -89,8 +89,6 @@ class TestTriggerEmergency:
             ws_calls.append(("admin_broadcast", message))
 
         async def _get_rows(table, query, **kwargs):
-            if table == "drivers":
-                return [driver_row] if driver_row else []
             if table == "emergency_contacts":
                 return emergency_contacts or []
             return []
@@ -124,7 +122,7 @@ class TestTriggerEmergency:
             result = await rides_mod.trigger_emergency(
                 ride_id=RIDE_ID,
                 body=_Req(),
-                current_user={"id": sender_user_id},
+                current_user={"id": sender_user_id, "_driver": driver_row},
             )
 
         return result, persisted, ws_calls, sms_calls
@@ -295,10 +293,7 @@ class TestTriggerEmergency:
         push_mock = AsyncMock()
         with (
             patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=_ride())),
-            patch(
-                "backend.routes.rides._deps.db_supabase.get_rows",
-                AsyncMock(return_value=[_driver_row()]),
-            ),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
             patch("backend.routes.rides._deps.db_supabase.insert_one", AsyncMock()),
             patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
             patch(
@@ -312,7 +307,7 @@ class TestTriggerEmergency:
             await rides_mod.trigger_emergency(
                 ride_id=RIDE_ID,
                 body=_Req(),
-                current_user={"id": DRIVER_USER_ID},
+                current_user={"id": DRIVER_USER_ID, "_driver": _driver_row()},
             )
             await asyncio.sleep(0)
 

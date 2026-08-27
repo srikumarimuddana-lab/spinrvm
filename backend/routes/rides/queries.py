@@ -338,9 +338,7 @@ async def get_ride(
 
     # Security check: must be rider or driver of this ride
     is_rider = ride.get("rider_id") == current_user["id"]
-    driver = (lambda _r: _r[0] if _r else None)(
-        await _deps.db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
-    )
+    driver = await _deps.driver_row_for(current_user)
     is_driver = driver and ride.get("driver_id") == driver["id"]
 
     if not (is_rider or is_driver):

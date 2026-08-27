@@ -107,18 +107,19 @@ new document-verification-state risk.
 **Recommendation:** build this before anything else in this phase — it's the dependency
 every other driver-activity item below needs.
 
-**Status (2026-08-27): core service + CLI built** (`build_mongo_driver_import_plan`/
-`commit_mongo_driver_import_plan` in `backend/services/driver_import_service.py`,
-`backend/scripts/import_legacy_mongo_drivers.py`, 24 tests), not yet run against production
-and no admin route wired up yet. Two findings from validating it against the real 08-22
-export, full writeup in `docs/migration/2026-08-27-legacy-driver-blank-name-root-cause.md`:
-one **resolved** (63.6% of rows had a blank `name` — confirmed as abandoned-onboarding rows
-with zero ride linkage, not a data bug; now a warning + placeholder name instead of a
-batch-blocking error), one **still open** (35.6% of rows' phones already match an existing
-production account — a second batch-blocking collision under the current strict "existing
-match = error" rule, at a scale that needs an explicit merge/skip policy decision before an
-Oct 30 `--apply` run; see that doc §3/§6 and `docs/runbooks/legacy-migration-playbook.md`
-item #11 for the recommended shape).
+**Status (2026-08-27): core service + CLI built and both real-export findings resolved**
+(`build_mongo_driver_import_plan`/`commit_mongo_driver_import_plan` in
+`backend/services/driver_import_service.py`, `backend/scripts/import_legacy_mongo_drivers.py`,
+25 tests), not yet run against production and no admin route wired up yet. Full writeup in
+`docs/migration/2026-08-27-legacy-driver-blank-name-root-cause.md`. Finding 1: 63.6% of rows
+had a blank `name` — confirmed as abandoned-onboarding rows with zero ride linkage, not a
+data bug; imports with a warning + placeholder name instead of blocking the batch. Finding 2:
+35.6% of rows' phones already match an existing production account — decided as "link, don't
+skip" (a `users`-only match gets a new driver row pointed at the existing account) / "enrich,
+don't duplicate" (a `drivers`-row match gets an additive history entry, no new row, no live
+field touched) rather than the original hard-error rule, once checked against production
+showed the real scale. See `docs/runbooks/legacy-migration-playbook.md` item #11 for the
+full decision record.
 
 ### Phase 2 — Vehicle history backfill (regulatory-flagged, high value)
 
@@ -353,5 +354,6 @@ A returning user never sees it again after their first successful login.
   zero ride linkage, not a data-quality bug. See
   `docs/migration/2026-08-27-legacy-driver-blank-name-root-cause.md`.
 - Phase 1 existing-match collision rate (35.6% of the real export, confirmed against
-  production): **not yet decided** — flagged for a decision-owner before the Oct 30
-  `--apply` run, not resolved silently. Same doc, §3/§6.
+  production): **decided and built** — link a new driver row to an existing account-only
+  match; enrich (additive history, no new row, no live field touched) an existing-driver
+  match. Same doc, §3/§6.

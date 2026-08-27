@@ -1,7 +1,9 @@
 # Legacy driver blank-name root cause, and a second collision finding surfaced while fixing it
 
-**Status:** decision made and shipped (option b below). One follow-on finding (existing-match
-collision rate) is new, real, and **explicitly not decided** in this doc — see §3.
+**Status:** both findings decided and shipped. Finding 1 (blank name, §2) shipped as option b.
+Finding 2 (existing-match collision rate, §3) was initially left undecided in this doc; the
+recommended link/enrich split was then reviewed, authorized, and built the same day — see the
+**[DECIDED AND SHIPPED]** update at the end of §3.
 
 **Scope:** this is the deep-dive behind one line item in
 `docs/migration/2026-08-27-legacy-data-full-migration-approach.md` §4 Phase 1, and directly feeds
@@ -79,7 +81,7 @@ reasoning, and `backend/tests/test_legacy_mongo_driver_import_service.py` for co
 Re-run against the real export after the fix: **924/925 rows now build cleanly** (587 warnings,
 all blank-name; 1 remaining error, an unrelated invalid-phone row — see §4).
 
-## 3. Finding 2 — a second, larger blocker surfaced while validating the fix (NOT yet decided)
+## 3. Finding 2 — a second, larger blocker surfaced while validating the fix
 
 Fixing the blank-name error doesn't make the batch actually committable against **production**,
 because `commit_mongo_driver_import_plan` also refuses on the pre-existing "matching user or
@@ -123,6 +125,46 @@ Two sub-populations behave differently and probably deserve different treatment:
    driver account (from the Saskatoon CSV import or organic signup). The old-app driver row is
    very likely *the same person's* history under the old app, not a duplicate account to create.
 
+**[DECIDED AND SHIPPED, 2026-08-27, same day.]** The recommended split above was reviewed and
+authorized, then built in `build_mongo_driver_import_plan`/`commit_mongo_driver_import_plan`:
+
+- Sub-population 1 (`users`-only match) → **link, don't skip.** The new driver row is still
+  created (nothing lost), but points at the *existing* `user_id` instead of a new one (`users.
+  phone` is `UNIQUE`, so a new user is never an option here), and `is_driver=True` is set on that
+  existing user if not already true. `is_driver`/`is_rider` is a real, load-bearing dual-role flag
+  pair already used elsewhere in this codebase (`backend/routes/auth.py`'s FCM-token-on-logout
+  handling explicitly branches on a "dual-role account") — this is not a new pattern.
+- Sub-population 2 (`drivers` match) → **enrich, don't duplicate.** No new driver row. The
+  matched driver's `legacy_import_metadata` gets an additive `mongo_driver_history` entry
+  (append-only list, so a phone re-matched across multiple old-app records accumulates real
+  history rather than overwriting it); every other field on that live driver — name, phone,
+  status, vehicle, rating, `is_verified`/`is_online`/`is_available` — is never touched.
+- Both merges follow the additive-merge-under-a-namespaced-key convention already established
+  elsewhere in this codebase (`stripe_mapping_import_service.py`'s `legacy_import_metadata.
+  stripe_migration`, `rider_import_service.py`'s `legacy_import_metadata.rider_csv_import`) rather
+  than inventing a new shape — confirmed safe against real production `legacy_import_metadata`
+  values (fetched read-only, phones only, no names) which already carry unrelated prior-importer
+  keys (`stripe_migration`, `rider_csv_import`, `address_present`, …) that the merge correctly
+  leaves untouched.
+- A driver/account already linked or enriched by a *previous* run of this importer for the same
+  `old_driver_id` is a resume (skip, warning), not a duplicate history entry — checked against
+  both the original top-level `source`/`old_driver_id` shape (a driver this importer directly
+  created) and the new `mongo_driver_history` list shape (a driver/account this importer linked
+  or enriched), via `_mongo_driver_already_linked`.
+- **Not done, and out of scope for this change:** actually running `--apply` against production.
+  This session has no live write credentials for the backend service role, matching every other
+  importer in this migration effort — building and validating the code is this session's job,
+  executing it is the product owner's, per the established pattern in
+  `docs/runbooks/legacy-migration-playbook.md`.
+
+Verification: 25 unit tests (`test_legacy_mongo_driver_import_service.py`, up from 22), covering
+both sub-populations, the resume check under both metadata shapes, and that a live driver's own
+fields are never touched. Additionally validated against **real production `legacy_import_metadata`
+shapes** (fetched read-only via the Supabase MCP, phones only — no names, no full row dumps kept):
+confirmed the additive merge preserves an existing driver's `stripe_migration` sub-key and an
+existing user's `rider_csv_import` sub-key untouched, and that `role`/`status`/other live fields on
+a matched account are never included in the update payload.
+
 ## 4. Residual: one row still needs manual handling either way
 
 Independent of both findings above, 1 row in the real export has a phone number that fails
@@ -148,41 +190,49 @@ have a blank name too, and — unlike drivers — at least one of those blank-na
 by a real booking (`customer_id` linkage), so the "zero ride linkage, safe to synthesize a
 placeholder" argument from §2 does **not** automatically carry over to riders without re-checking.
 
-## 6. What this means for Oct 30 — recommendation, not a decision
+## 6. What this means for Oct 30
 
-1. Finding 1 (blank name) is closed — shipped in this session, no further action.
-2. Finding 2 (existing-match collision) needs an explicit call before Oct 30, the same way the
-   blank-name policy did. Recommended shape of that decision (not yet made): treat a phone match
-   against an existing `drivers` row as a **metadata-enrichment merge** (attach
-   `legacy_import_metadata` history to the existing driver, create no new row) rather than a hard
-   error, since it is almost certainly the same person; treat a phone match against a `users`-only
-   (rider) row as **safe to skip** the driver-creation attempt entirely, logging it as an
-   informational note rather than a batch-blocking error, since the person's new-app identity is
-   already the rider account and the ride history linkage this import exists to build doesn't apply
-   to a driver profile nobody will use. Both of these are genuine merge-policy changes to
-   `build_mongo_driver_import_plan`'s existing-match branch — deliberately not implemented in this
-   session (surgical-change discipline: today's task was the blank-name fix, not a redesign of the
-   existing-match rule) and flagged here for a real decision before the Oct 30 run.
-3. Riders (§5) need their own gap-analysis pass before Oct 30 — profile enrichment from
+1. Finding 1 (blank name) is closed — shipped, no further action.
+2. Finding 2 (existing-match collision) is closed too. **Correction from this doc's own earlier
+   draft:** the recommendation originally written here for sub-population 1 was "safe to skip" —
+   on reflection (put to the product owner, who authorized building it) that was the wrong call:
+   skipping throws away exactly the history this importer exists to build, and the only real
+   obstacle (`users.phone` is `UNIQUE`) is solved by linking to the existing user, not by dropping
+   the row. What actually shipped is the "link, don't skip" / "enrich, don't duplicate" split
+   described in §3's `[DECIDED AND SHIPPED]` block above.
+3. Riders (§5) still need their own gap-analysis pass before Oct 30 — profile enrichment from
    `customers.csv`, not account creation, is the actual remaining work, and 5.2% of rows carry the
-   same blank-name pattern with a materially different ride-linkage answer than drivers had.
-4. `docs/runbooks/legacy-migration-playbook.md` (the canonical Oct 30 checklist) has a new item
-   #11 recording all of the above so it isn't rediscovered later.
+   same blank-name pattern with a materially different ride-linkage answer than drivers had. One
+   incidental finding while validating Finding 2 against real production data, not chased further
+   here since it's outside this change's scope: at least some riders already carry a
+   `legacy_import_metadata.rider_csv_import` marker (source `legacy_rider_csv_import`, batch
+   `20260817023332`) — meaning some rider profile enrichment may have already happened via a path
+   this doc didn't account for. Worth a real look before assuming §5's "not yet enriched" framing
+   is fully accurate for every rider.
+4. `docs/runbooks/legacy-migration-playbook.md` (the canonical Oct 30 checklist) has item #11
+   recording all of the above so it isn't rediscovered later.
 
 ## 7. Verification performed / not verified
 
 **Performed:** all counts above were run against the real 2026-08-22 Mongo export files and,
 for Finding 2, live read-only SQL against the production Supabase project (`soavhtdhefowwvforzwb`).
-`ruff check`/`ruff format --check` clean on the changed service/test files;
-178/178 tests pass across the full driver-import test family
-(`test_legacy_mongo_driver_import_service.py` + the 6 sibling files); the CLI's plan-build step was
-re-run end-to-end against the real `drivers.csv` (925 rows) with a mocked, empty Supabase client to
-confirm the blank-name fix behaves as described (924/925 clean, 1 residual phone error).
+`ruff check`/`ruff format --check` clean on the changed service/test files; 180/180 tests pass
+across the full driver-import test family (25 in `test_legacy_mongo_driver_import_service.py` +
+the 6 sibling files, zero collateral breakage). The CLI's plan-build step was re-run end-to-end
+against the real `drivers.csv` (925 rows) three times: against an empty mocked Supabase (confirms
+the blank-name fix alone, 924/925 clean, 1 residual phone error, unchanged from before the
+link/enrich change — a real regression check, not just "tests still pass"); against a store seeded
+with real production `legacy_import_metadata` shapes for two real phones from the export (confirms
+the additive merge preserves an existing driver's `stripe_migration` key and an existing user's
+`rider_csv_import` key untouched, and that no live field — `status`, `role`, etc. — is ever written
+by the update payload); and the full-export run surfaced 3 occurrences each of both seeded phones
+(the real export has old-app duplicate signups sharing a phone number), confirming the resume check
+correctly accumulates distinct history entries rather than colliding on them.
 
-**Not verified:** Finding 2's numbers were computed by phone-matching only (the same predicate the
-code itself uses) — a full `commit_mongo_driver_import_plan` dry run against the real production
-DB was **not** executed (no write path was exercised against production from this session; the
-324/212 figures come from read-only `SELECT`s, not from actually running the importer). The riders
+**Not verified:** a full `commit_mongo_driver_import_plan` --apply run against the real production
+DB was **not** executed — no write path was exercised against production from this session, only
+read-only `SELECT`s to size the findings and confirm metadata shapes; the product owner runs
+`--apply`, per the established pattern in `docs/runbooks/legacy-migration-playbook.md`. The riders
 sample (§5) is a 250-of-1,233 random sample, not an exhaustive join — treat the 81.2%/extrapolated
 ~1,000 figure as an estimate, not an exact count, until a full pass is run. No visual/UI
 verification was performed (this session's change is backend-only; the admin-dashboard driver page

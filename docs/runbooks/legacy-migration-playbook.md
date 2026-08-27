@@ -453,10 +453,10 @@ rushed).
     reconciliation, but not the driver-profile-creation import itself), added as its own item because
     it turned out to have two of its own batch-blocking findings, same shape as this playbook's
     existing three-bugs-from-one-root-cause thesis.
-    > **[NEW 2026-08-27 — BUILT AND PARTIALLY VALIDATED AGAINST THE REAL EXPORT; ONE FINDING
-    > RESOLVED, ONE STILL OPEN.]** `backend/services/driver_import_service.py`'s
-    > `build_mongo_driver_import_plan`/`commit_mongo_driver_import_plan` + CLI
-    > (`backend/scripts/import_legacy_mongo_drivers.py`), 24 tests. Full root-cause writeup:
+    > **[NEW 2026-08-27 — BUILT AND VALIDATED AGAINST THE REAL EXPORT; BOTH FINDINGS RESOLVED.]**
+    > `backend/services/driver_import_service.py`'s `build_mongo_driver_import_plan`/
+    > `commit_mongo_driver_import_plan` + CLI (`backend/scripts/import_legacy_mongo_drivers.py`),
+    > 25 tests. Full root-cause writeup:
     > `docs/migration/2026-08-27-legacy-driver-blank-name-root-cause.md`.
     >
     > **Finding A (resolved):** 588/925 rows (63.6%) have a blank `name` — confirmed, not assumed,
@@ -468,21 +468,30 @@ rushed).
     > escalating before shipping — escalated to the product owner first, decided, then built. Every
     > row still lands forced `needs_review`/unverified/offline regardless.
     >
-    > **Finding B (open, NOT decided here):** read-only join of the real export's 910 unique driver
+    > **Finding B (resolved, same day):** read-only join of the real export's 910 unique driver
     > phones against live production Supabase (`soavhtdhefowwvforzwb`) found 324/910 (35.6%) already
     > match an existing `users` row (all riders — almost all from `booking_import_service`'s own
     > ride-time phone matching) and 212/910 (23.3%) already match an existing `drivers` row. The
-    > existing "matching account = error, never silently merge" rule
+    > original "matching account = error, never silently merge" rule
     > (`build_mongo_driver_import_plan`'s existing-match branch, same rule as
-    > `booking_import_service.py`'s) is deliberate and correct as a safety rule, but at this
-    > confirmed scale it is a **second whole-batch blocker of the same shape as Finding A** under
-    > the current all-or-nothing `commit_mongo_driver_import_plan` — except downgrading it isn't a
-    > pure data-quality call the way Finding A was, it's a real merge-policy decision affecting 324
-    > real accounts. Recommended shape (not implemented): a `users`-only match is safe to skip
-    > (informational, not an error); a `drivers`-row match is very likely the same person and a
-    > candidate for a metadata-enrichment merge onto the existing driver rather than a rejection.
-    > **Stays open on this checklist until a decision-owner rules on it** — do not run `--apply`
-    > against production expecting a clean commit until Finding B is resolved one way or the other.
+    > `booking_import_service.py`'s) was deliberate and correct as a starting-point safety rule, but
+    > at this confirmed scale it was a **second whole-batch blocker of the same shape as Finding A**
+    > under the all-or-nothing `commit_mongo_driver_import_plan`. Put to the product owner (this
+    > doc's first pass recommended, but did not implement, a "skip the `users`-only matches"
+    > shape — reviewed again before building and revised: skipping was the wrong call, since it
+    > throws away exactly the history linkage this importer exists to build), then built as: a
+    > `users`-only match **links** a new driver row to the existing account (`is_driver=True`
+    > additive, no duplicate user — `users.phone` is `UNIQUE`); a `drivers`-row match **enriches**
+    > that driver's `legacy_import_metadata.mongo_driver_history` (additive, append-only list) with
+    > no new row and no live field ever touched. Both merges follow the additive-under-a-namespaced-
+    > key convention already used by `stripe_mapping_import_service.py`/`rider_import_service.py`
+    > elsewhere in this codebase, confirmed safe against real production `legacy_import_metadata`
+    > values (read-only check, phones only, no names) that already carry unrelated prior-importer
+    > keys the merge correctly preserves. A driver/account already linked or enriched by a previous
+    > run of this importer for the same `old_driver_id` resumes (skip, warning) rather than
+    > double-recording. `--apply` against production is still someone else's job (no session in this
+    > repo has live write credentials, per this playbook's own established pattern) — the code is
+    > ready, execution is not this item's job to close.
     >
     > **Riders (`customers.csv`) were spot-checked for the same shape, not fixed here:** a 250-of-
     > 1,233 random-sample phone join found ~81% already match an existing `users` row (same
@@ -491,6 +500,13 @@ rushed).
     > blank name, but at least one of those *is* referenced by a real booking's `customer_id` —
     > Finding A's "zero ride linkage, safe to synthesize" reasoning does **not** automatically carry
     > over to riders without its own check. Both left as open follow-ups, not assumed.
+    >
+    > **Incidental finding while validating Finding B against real data, not chased further here:**
+    > at least some riders already carry a `legacy_import_metadata.rider_csv_import` marker (source
+    > `legacy_rider_csv_import`) on real production rows checked during this pass — meaning some
+    > rider profile enrichment may already have happened via a path not accounted for above. Whoever
+    > runs the riders gap-analysis pass should check for this importer's actual coverage first
+    > rather than assuming zero riders are enriched.
 
 ## What this playbook is not
 

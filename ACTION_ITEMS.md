@@ -16482,8 +16482,40 @@ how much they de-risk a public launch._
   correlated failure if the shared run itself hits the external
   cancellation), and verification performed:
   `docs/change-log/2026-08-27-ci-guardrails-coverage-consolidation.md`.
-  **Not yet verified against a live CI run** — pushed alongside this entry;
-  the real test is this exact PR's own next `ci-guardrails.yml` run.
+- **Live-verified (2026-08-27, run `33091467676`, commit `4c76c6f41`) —
+  degradation path only, honestly, not the happy path:** the new
+  `shared-coverage-run` job got hit by the exact same external cancellation
+  on its very first live run (a **fourth** independent reproduction, now on
+  a job that didn't exist before this fix — rules out anything specific to
+  the old job definitions). This was actually a useful accident: it proved
+  the `if: always()` fallback design for real, not just in theory.
+  - `coverage-regression-gate` ran anyway, its download step genuinely
+    failed (`Unable to download artifact(s): Artifact not found`,
+    `continue-on-error: true` let it proceed), and its existing extraction
+    script correctly logged `Coverage read failed: [Errno 2] No such file
+    or directory` → wrote `0` → landed on the pre-existing, honest
+    "UNKNOWN: no base-branch coverage data available" path (C24) — never a
+    false PASS. Job conclusion: `success` (advisory, as designed).
+  - `money-path-coverage-floor-gate` also ran anyway, same artifact-missing
+    error, but printed `No tracked money-path module in this PR's diff --
+    gate not applicable, PASS` — this PR's diff doesn't touch any of the 5
+    tracked money-path files, so `check_money_path_coverage_floor.py`'s own
+    scope check short-circuits before it ever needs to open the coverage
+    file. **This means the fail-closed "coverage report missing AND a
+    tracked file is touched" path — the one that should genuinely block a
+    PR — was not exercised by this run.** Not a flaw found, just an honest
+    gap: this specific PR's diff never reaches that branch of the script,
+    with or without a real coverage.json.
+  - **The happy path (shared run succeeds, both gates compute a real
+    number) has not yet been observed on this PR** — every `ci-guardrails.yml`
+    run on this PR so far has hit the external cancellation on at least one
+    full-suite job (now 4 for 4). That is itself exactly the problem this
+    fix targets: fewer full-suite runs per event lowers the odds of hitting
+    it, but doesn't guarantee avoiding it, and this PR has had unusually
+    persistent bad luck (or the external cause correlates with something
+    about this specific PR/session — not established either way). Not
+    forcing another push purely to chase a clean run, in the same spirit as
+    this fix's own goal of not burning extra CI cycles chasing this issue.
 - **Correction issued:** the PR #4595 comments that called this "the same
   C45 flake" were wrong and should be read alongside this entry, not as
   the final word — see the PR's comment thread for the acknowledgment.

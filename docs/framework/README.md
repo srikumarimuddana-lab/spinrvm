@@ -20,6 +20,7 @@
 | 6 | [Operations & deployment](06-operations-deployment.md) | Ship dark, roll back by DNS, observe by numbers, run by runbook |
 | 7 | [Scorecard & roadmap](07-scorecard.md) | Where we honestly stand per pillar and the shortest path to world-class |
 | 8 | [Autonomous swarm protocol](08-swarm-protocol.md) | The continuous inspect → brainstorm → debate → implement → attack → verify loop, bound to the repo's real agents and invariants (`/spinr-swarm`) |
+| 9 | [Enhancement charter](09-enhancement-charter.md) | The swarm's standing mission backlog: eight enhancement tracks dispositioned against current code, the swarm-usage risk register, and the charter operating rules (`/spinr-swarm charter <A-H>`) |
 
 ## How the framework binds to the repo
 

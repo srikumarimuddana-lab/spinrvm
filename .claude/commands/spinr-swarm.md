@@ -8,7 +8,10 @@ Execute one full cycle of the swarm protocol (`docs/framework/08-swarm-protocol.
 /spinr-swarm                       # discovery mode: pick from ACTION_ITEMS.md, else sweep
 /spinr-swarm <area or file>        # cycle scoped to an area (e.g. dispatch, rider-app booking)
 /spinr-swarm audit                 # discovery sweep only — report + backlog entries, no implementation
+/spinr-swarm charter <A-H>         # work an Enhancement Charter track (docs/framework/09-enhancement-charter.md)
 ```
+
+Charter mode: the first invocation on a track is an **assessment cycle** — re-verify the track's "exists today" column against current code, score the gaps, file chosen items into `ACTION_ITEMS.md`, and recommend the first implementation cycle; no implementation. Later invocations implement one filed item per cycle under the full loop. Honor disposition labels (Research → ADR, Process → human-ready draft, never code). Open P0/P1 backlog items always preempt charter work. When a charter cycle adds UI surface, it must also state what it removed or simplified — the anti-overwhelm rule.
 
 ## 1 · Observe & pick (discovery mode)
 
@@ -49,6 +52,13 @@ All of `CLAUDE.md` applies unchanged: ≤3-file subtasks committed one at a time
 ## 7 · Report
 
 End every cycle with the protocol's report shape — Discovery · Impact · Root cause · Options+scores · Adversarial review · Decision · Implementation · Validation (commands + counts) · Results · Remaining risks · **Next recommendation** — with every claim labeled KNOWN / INFERRED / TESTED / UNTESTED / UNKNOWN and confidence HIGH/MEDIUM/LOW. No "definitely safe", no "production ready" without evidence.
+
+## Operating-agreement caps (charter §Operating agreement — check before starting any cycle)
+
+- ≤ 2 charter tracks in flight; ≤ 1 open PR touching a regulated surface (money, rides/dispatch, auth, insurance periods, corporate billing, safety); ≤ 3 open swarm PRs total. At a cap: work review feedback, docs, or Process drafts instead of opening new work.
+- 24-hour soak after a regulated-surface merge before the next regulated cycle (docs/tests/dark-flagged changes exempt).
+- Transparency test at brainstorm time: *can a rider or driver see what this does and why, before it affects them?* Fail → redesign or drop. Driver-facing incentives are legal-review-required before the implementation cycle starts.
+- Every cycle names the KPI it moves and what the user will see; can't answer both → don't run the cycle.
 
 ## Hard bounds
 

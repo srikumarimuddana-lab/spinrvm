@@ -126,7 +126,7 @@ store and hand turn-by-turn to the driver's own Google Maps / Waze.
   Google map composites there fine. **Do not enable `liteMode`**: it was tried on a
   compositing theory that turned out to be wrong (the blank map was an empty API key), and
   it pins the car marker to north and kills `animateMarkerToCoordinate`.
-  `VirtualRenderer.kt:313` paints the React host `DKGRAY` before your tree draws — so a
+  `VirtualRenderer.kt:383` (0.5.13; was :313 in 0.4.7) paints the React host `DKGRAY` before your tree draws — so a
   dark-grey screen means React never mounted, while a white one means it mounted and the map
   drew blank.
 - **Diagnosing the car screen:** there is no dev menu, red box, or Metro console on a head

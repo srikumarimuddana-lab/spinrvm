@@ -148,3 +148,41 @@ def test_interval_stays_far_below_stale_intent_threshold():
     before deleting this test.
     """
     assert gate.MARKER_WRITE_INTERVAL_S <= 30.0
+
+
+@pytest.mark.anyio
+async def test_rest_and_ws_paths_share_one_window(monkeypatch):
+    """The point of the gate: one window per driver across ingestion routes.
+
+    Previously the WebSocket handler throttled on per-connection in-process
+    state while the REST handlers had no throttle at all, so a driver flushing
+    the REST outbox while pinging over WebSocket wrote the same ``drivers`` row
+    from two uncoordinated paths. Exercised against the real ``redis_set_nx``
+    (in-process fallback), not a mock, so this covers the actual keying.
+    """
+    import utils.redis_client as rc
+
+    rc._local.clear()
+    monkeypatch.setattr(gate, "_gate_enabled", AsyncMock(return_value=True))
+
+    assert await gate.should_write_marker("driver-9", path="rest_v1") is True
+    # Same driver, different ingestion route, inside the window.
+    assert await gate.should_write_marker("driver-9", path="ws_single") is False
+    # A different driver is unaffected.
+    assert await gate.should_write_marker("driver-8", path="ws_single") is True
+
+
+@pytest.mark.anyio
+async def test_force_write_restarts_the_shared_window(monkeypatch):
+    """A Period 1 forced write refreshes the window rather than bypassing it.
+
+    The row genuinely was written, so the next caller should coalesce against
+    it exactly as it would against an ordinary write.
+    """
+    import utils.redis_client as rc
+
+    rc._local.clear()
+    monkeypatch.setattr(gate, "_gate_enabled", AsyncMock(return_value=True))
+
+    assert await gate.should_write_marker("driver-7", path="rest_v1", force=True) is True
+    assert await gate.should_write_marker("driver-7", path="ws_single") is False

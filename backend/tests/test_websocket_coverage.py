@@ -228,7 +228,12 @@ async def test_driver_location_happy_path_persists_and_fans_out(app_with_ws):
         _stop(patches)
 
     update_driver_loc_db.assert_awaited_once()
-    update_loc.assert_awaited_once()
+    # The ephemeral 60 s Redis location cache is no longer written on the ping
+    # path: ConnectionManager.get_driver_location never had a single caller, so
+    # the write was pure overhead. Dropping it keeps the location write gate's
+    # Redis SET NX net-free per ping. Durable persistence and fan-out below are
+    # unchanged — those are what this test is actually guarding.
+    update_loc.assert_not_awaited()
     buffer_crumb.assert_awaited_once()
     send_personal.assert_awaited()
     sent_msg, sent_target = send_personal.await_args.args[0], send_personal.await_args.args[1]

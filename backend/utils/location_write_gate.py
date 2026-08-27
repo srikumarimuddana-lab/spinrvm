@@ -21,9 +21,9 @@ it. Losing means another write already did.
 
 **Fails open.** ``redis_set_nx`` deliberately raises on a real Redis error and
 leaves the degradation choice to its caller (see its docstring). Here the write
-must win: a Redis blip may never suppress a durable location write, matching the
-Postgres-first / Redis-second ordering already documented at
-``routes/websocket.py`` and ``socket_manager.update_driver_location``.
+must win: a Redis blip may never suppress a durable location write. That is the
+same ordering the WebSocket handler already enforced by writing Postgres before
+touching Redis.
 
 **Shadow mode.** Gated on the ``location_marker_write_gate_enabled`` app setting
 (default OFF). While off, the gate still evaluates and counts what it *would*

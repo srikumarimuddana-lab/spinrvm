@@ -29,6 +29,7 @@ try:
     )
     from ..socket_manager import manager
     from ..utils.driver_presence import clear_presence, mark_present
+    from ..utils.location_write_gate import should_write_marker
     from ..utils.redis_client import redis_expire, redis_incr
 except ImportError:
     import db_supabase
@@ -41,6 +42,7 @@ except ImportError:
     )
     from socket_manager import manager
     from utils.driver_presence import clear_presence, mark_present
+    from utils.location_write_gate import should_write_marker  # type: ignore
     from utils.redis_client import redis_expire, redis_incr  # type: ignore
 
 db = db_supabase  # legacy alias
@@ -130,11 +132,6 @@ WS_MAX_MESSAGE_SIZE = 64 * 1024  # 64 KB max message payload
 # against the DB and every admin console. Legit clients send this on screen
 # focus / resync, never in bursts.
 RIDE_STATUS_ECHO_COOLDOWN_S = 2.0
-
-# F8: min seconds between durable drivers-row location UPDATEs per connection.
-# 1 Hz pings still refresh the Redis cache + rider/admin fan-out every tick;
-# only the authoritative Postgres write is throttled to this interval.
-_DRIVER_LOC_DB_WRITE_INTERVAL_S = 3.0
 
 _ADMIN_ROLES = {"admin", "super_admin", "operations", "support", "finance", "custom"}
 
@@ -790,22 +787,20 @@ async def websocket_endpoint(
                     if not trusted:
                         continue
 
-                    # Persist to the authoritative drivers table FIRST (before
-                    # the ephemeral Redis cache below — a Redis blip there
-                    # previously raised and skipped this write, leaving an
-                    # online driver with no car marker), but THROTTLED: at 1 Hz
-                    # pings this was one Postgres UPDATE per second per driver
-                    # (write amplification vs the 150ms location-write SLA).
-                    # The admin marker / /drivers/nearby readers tolerate a few
-                    # seconds of row staleness; the Redis cache and rider/admin
-                    # fan-out below still run on EVERY ping.
-                    _loc_now = asyncio.get_event_loop().time()
-                    if _loc_now - conn_state.get("last_loc_db_write", 0.0) >= _DRIVER_LOC_DB_WRITE_INTERVAL_S:
+                    # Persist to the authoritative drivers table, THROTTLED:
+                    # at 1 Hz pings this was one Postgres UPDATE per second per
+                    # driver (write amplification vs the 150ms location-write
+                    # SLA). The admin marker / /drivers/nearby readers tolerate
+                    # a few seconds of row staleness; presence and the
+                    # rider/admin fan-out below still run on EVERY ping.
+                    #
+                    # The window lives in Redis (utils/location_write_gate) so
+                    # it is shared with the REST /location-batch handlers and
+                    # survives reconnects — the previous per-connection timer
+                    # did neither, so a driver flushing REST while pinging over
+                    # WS wrote this row from two uncoordinated throttles.
+                    if await should_write_marker(driver_id, path="ws_single"):
                         await db_supabase.update_driver_location(driver_id, lat, lng, heading=data.get("heading"))
-                        conn_state["last_loc_db_write"] = _loc_now
-                    # Best-effort 60 s cache for the rider-map fast path;
-                    # swallows its own Redis errors (see ConnectionManager).
-                    await manager.update_driver_location(driver_id, lat, lng)
                     # Location pings are an even stronger liveness signal
                     # than pongs — fresh GPS proves the app is running and
                     # foregrounded, not just that TCP is open.
@@ -1016,18 +1011,13 @@ async def websocket_endpoint(
                             mocked=last_pt.get("mocked"),
                         )
                         if trusted:
-                            # Authoritative DB write first; the ephemeral Redis
-                            # cache is best-effort and must not gate it (mirrors
-                            # the single-ping handler — a Redis blip on the cache
-                            # previously skipped persistence and hid the marker).
-                            # Same F8 throttle as the single-ping handler.
-                            _loc_now = asyncio.get_event_loop().time()
-                            if _loc_now - conn_state.get("last_loc_db_write", 0.0) >= _DRIVER_LOC_DB_WRITE_INTERVAL_S:
+                            # Same shared write gate as the single-ping
+                            # handler — one window per driver across every GPS
+                            # ingestion route (utils/location_write_gate).
+                            if await should_write_marker(driver_id, path="ws_batch"):
                                 await db_supabase.update_driver_location(
                                     driver_id, _lat, _lng, heading=last_pt.get("heading")
                                 )
-                                conn_state["last_loc_db_write"] = _loc_now
-                            await manager.update_driver_location(driver_id, _lat, _lng)
                             await mark_present(driver_id)
 
                             # Fan-out latest batch position to riders — the single-ping

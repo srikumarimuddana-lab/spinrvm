@@ -1,6 +1,8 @@
 # Legacy (previous-app) Data — Full Migration Approach
 
-**Status:** DRAFT — awaiting user approval before any execution step below is run.
+**Status:** APPROVED (2026-08-27) — decisions in §2 and §5 finalized by the product owner.
+Phases 1-2 (driver profiles, vehicle history) and the two Section 6 display gaps are
+approved to proceed. Phases 3, 5, 6 remain scoped-but-not-started as described below.
 **Author:** Claude Code (interactive session), 2026-08-27.
 **Related:** `ACTION_ITEMS.md` A41 (prior audit), C43 (RLS finding, deferred until this
 concludes), `docs/audit/2026-08-19-full-mongodb-export-collection-inventory.md` (the
@@ -26,10 +28,11 @@ what's left, in the order it's safe to do it, with a straight risk call on each 
 | "Imported" transparency | admin-dashboard driver/rider list+detail rows, driver-app Documents screen, rider/driver-app ride-detail screens | All shipped (2026-08-19 and 2026-08-25 sessions). Ride-detail badge is dark-shipped, off by default (`legacy_ride_badge_enabled`). |
 | Driver insurance-period reconstruction | derived from `arrived_at`/`started_at`/`completed_at` on imported completed rides | Runs automatically on every completed-path import, rows marked `is_reconstructed=true`, now visible to the SGI compliance export. |
 
-## 2. The conflict I need you to resolve first — cancelled/failed bookings
+## 2. DECIDED (2026-08-27): cancelled/failed bookings ARE now in scope — reverses the earlier exclusion
 
-**This is the single biggest scope question, and it directly contradicts something you told
-me earlier in this same conversation.**
+**This directly contradicts something you told me earlier in this same conversation, and I
+flagged it rather than resolving it silently. Decision: import them.** Documenting the
+reversal explicitly, per your own request to review prior calls for anything sub-optimal.
 
 - Of 1,210 total bookings in the export, only 271 (22%) are `completed` — the ones already
   imported. The other **941 (78%)** are `cancelled` (712) or `failed` (225), or blank-status (2).
@@ -38,24 +41,35 @@ me earlier in this same conversation.**
   keep for cancelled trips too, not just completed ones.
 - **A cancelled/failed import path was already built** (2026-08-20, `booking_import_service.py`),
   reviewed, tested (23 new tests), and includes the matching admin-analytics exclusion fix
-  (migration 349) so it doesn't skew cancellation-rate KPIs. It was built but **never
-  committed to any branch/PR and never run against production** — it exists only as
-  historical work described in a change-log.
+  (migration 349) so it doesn't skew cancellation-rate KPIs. **Correction to my earlier
+  read of this** — I initially wrote this off as "built but never merged," going only off the
+  change-log's own header (which recorded it as an unmerged worktree branch at the time it
+  was written). Re-checked directly against the live file this session: the cancelled/failed
+  branch of `build_plan()` **is already present in `backend/services/booking_import_service.py`
+  on this branch today** — it must have landed via a later merge not reflected in that specific
+  change-log's header. Practical effect: this is not a resurrection job, it's **already-shipped
+  code that has simply never been run against the full booking set** (the original 224-row
+  production batch, and the 08-22 delta batch, were both filtered to `completed` only at
+  execution time, not because the code couldn't handle more).
 - **Earlier this session, you told me: "we are not using the cancelled trips information
   for migration."**
 
-I'm not resolving this silently either way. Options:
-- **(a) Honor your instruction** — cancelled/failed bookings stay excluded, full stop. If so,
-  I'd recommend documenting *why* explicitly (business call, not a technical limitation) so
-  a future session doesn't re-discover this gap and assume it's still open work.
-- **(b) Revisit it** — the regulatory retention argument for GPS+timestamp-on-cancelled-trips
-  is real, and the code to do it already exists, reviewed and tested. If you want this after
-  all, it's a low-effort resurrection (find the branch, re-verify against the current export,
-  run it), not new engineering.
+**Decision (2026-08-27, your explicit instruction):** reverse that — cancelled/failed
+bookings are now in scope. Reasoning: the regulatory retention argument (GPS + timestamp
+must be kept for cancelled trips too) is real and independent of anything about this specific
+migration effort, the code is already built, tested, and reviewed — not a new risk surface —
+and it directly serves your stated goal of complete historical fidelity. This does **not**
+change §3's already-excluded list (chats, reviews, coupons, etc. stay excluded) — only the
+`bookings` collection's own status filter widens from `completed`-only to `completed` +
+`cancelled` + `failed`.
 
-**I need your explicit answer here before I build anything else that assumes one or the
-other** — driver-activity and rider-activity completeness numbers below change depending on
-this.
+**What this means operationally:** the existing runbook
+(`docs/runbooks/legacy-booking-import-2026-08-22-batch.md`) needs its expected-count section
+updated — instead of ~19 net-new completed rides, a full run against the current export will
+also surface up to 941 never-before-imported cancelled/failed rows. See the runbook update
+(§6 below) — **actually running this against production is still a human action via the
+admin-dashboard import tool**, same as before; I don't have a path to execute it directly
+from this session.
 
 ## 3. Already correctly excluded — no action, listed so nobody re-litigates it
 
@@ -151,22 +165,72 @@ built (not a big build, but it's new code, not a data script).
 **Recommendation:** small in row-count, but do not rush it. Build the RPC, dry-run it,
 reconcile the $960 by hand before any write.
 
-## 5. Two items that are legal/product decisions, not engineering — must clear before Phase 1-6 execute for real
+## 5. Two former legal/product blockers — both actioned 2026-08-27
 
-These were already flagged as **BLOCKER**-class in the 2026-08-19 audit and are still open:
+These were flagged as **BLOCKER**-class in the 2026-08-19 audit. Both now have a decision
+recorded, made by the product owner directly in this session (not by me — I'm documenting the
+call and its reasoning, not asserting legal authority I don't have).
 
-1. **No consent record exists for any imported rider or driver.** A stored old-app policy
-   document is not evidence anyone accepted it. This is sharper now that SIN/DOB (the most
-   sensitive PIPEDA field) has already been backfilled for this population. This is a legal
-   call — not something I can resolve by writing code.
-2. **Insurance-period reconstruction's legal sufficiency.** Reconstructed `driver_insurance_periods`
-   rows (marked `is_reconstructed=true`) are an engineering best-effort from incomplete
-   source data, not source-of-truth SGI records. Whether that's acceptable for a real audit
-   response is a legal/regulatory call, not an engineering one.
+### 5a. No consent record for imported riders/drivers — DECIDED: turn the existing notice on
 
-I'm listing these here rather than treating them as solved — Phases 1-3 above *add more* rows
-of exactly this reconstructed/un-consented kind, so resolving these two questions gets more
-urgent, not less, the further this plan proceeds.
+**Decision:** enable `app_settings.legacy_consent_notice_enabled` — the one-time re-consent
+mechanism already built, tested, and dark-shipped since 2026-08-19, but never turned on.
+Every imported rider/driver (and every organic pre-tracking user with no recorded consent)
+will see a one-time notice on next login; accepting it stamps `consent_version` permanently.
+**What this decision does NOT resolve:** whether the *text* of Spinr's current Terms/Privacy
+Policy is itself legally sufficient for what's being asked of a migrated user was a separate,
+still-open question from the 2026-08-20 fact-finding pass (`docs/audit/2026-08-20-legacy-consent-legal-sufficiency-factsheet.md`)
+— this decision turns on the *mechanism* for capturing a consent gesture, it doesn't
+retroactively validate the legal content of what's being consented to. Worth a real legal
+read of that fact sheet's 7 open questions at some point, separate from this action.
+
+### 5b. Insurance-period reconstruction — DECIDED: keep the reconstruction, add GPS-based correction where the source data allows it
+
+**What existed before (today's actual behavior):** every legacy completed ride's driver
+insurance-period record — the audit trail SGI requires, proving whether a driver was "en
+route to pickup" (Period 2) or "passenger aboard" (Period 3) at any given moment — is
+automatically rebuilt from three snapshot timestamps already in the booking data: when the
+driver *arrived*, when the trip *started*, and when it *completed*. Every one of these rebuilt
+rows is clearly tagged `is_reconstructed=true`, and (since 2026-08-19) that tag is visible in
+the actual tool used to answer a real SGI records request — so nobody looking at the data
+would mistake it for a live, real-time recording.
+
+**The risk with that, in plain terms:** an estimate from 3 timestamps is a coarser picture
+than what was actually happening. Specifically, Period 2 ("en route to pickup") is deemed to
+start only at the moment the driver *arrived* — not the moment they actually got the trip and
+started driving toward the rider, which happened earlier. So the reconstructed record likely
+*understates* how long the driver was under commercial coverage during that leg. If a
+regulator ever formally challenged one specific ride's classification, "we estimated this
+from three timestamps" is weaker evidence than "here is the vehicle's actual recorded
+location and status throughout the trip."
+
+**What's new, and why it changes the recommendation:** the old app separately recorded real
+GPS-based phase data — literal `idle` → `going_to_pickup` → `on_ride` transitions with
+timestamps — for 393 of the already-imported completed rides (matched 100% by ride ID). This
+isn't an inference; it's what the driver's phone actually reported happening, moment to
+moment, back when the trip occurred. It was sitting unused in the export until this session's
+audit found it.
+
+**The better approach (approved):** for those 393 rides, use the *real* recorded
+`going_to_pickup` start time to correct Period 2's start boundary — replacing the coarser
+"assume it started at arrival" estimate with what genuinely happened. Critically, this is
+never done by editing the original reconstructed row (Spinr's insurance-period table is
+append-only by design — even the original 2026-08-19 reconstruction never allows in-place
+edits). Instead, it goes through `driver_insurance_period_corrections` (migration 355), a
+table purpose-built for exactly this: a new row that references the original by ID, states
+what changed and why, and never touches or deletes the original. The original,
+`is_reconstructed=true` row stays visible forever as the first-pass estimate; the correction
+sits alongside it as a documented improvement. For the remaining rides with no matching GPS
+log, the existing 3-timestamp reconstruction stands as-is — the best information genuinely
+available, already disclosed as an estimate, not silently presented as more precise than it
+is.
+
+**Sign-off:** this approach is accepted as Spinr's position for the legacy-ride insurance-audit
+trail — a disclosed, best-effort reconstruction as the floor for every legacy completed ride,
+strengthened with real GPS evidence wherever the old app happened to capture it. The
+correction-import tool itself (reads the old app's location-log export, matches by ride ID,
+writes correction rows) is scoped as Phase 3 in §4 above — not yet built. I'll build it next
+if you want it prioritized now rather than later.
 
 ## 6. Surfacing gaps found while tracing driver-activity/analytics/rider-activity screens
 
@@ -183,6 +247,31 @@ these are about *displaying* data that's already imported, not new imports:
   confirmed, the legacy offset payouts may be showing up in the driver's *regular* payout
   list instead of the intended "Previous app" footer section. Flagged, not yet confirmed as
   a live bug — needs a direct read of `payout-history.tsx` to confirm before fixing.
+
+## 6a. A third gap, found while investigating §5a — the ToS/Privacy checkbox re-prompts every returning login (not migration-specific, but directly adjacent to it)
+
+Raised by the user directly, then confirmed by reading the code: `login.tsx` (both apps) shows
+a mandatory "I agree to Spinr's Terms of Service and Privacy Policy" checkbox that must be
+checked before "Send Verification Code" is enabled — **every single time** a user lands on
+that screen, whether they're a brand-new signup or a returning user whose session simply
+expired (30-day refresh token) or who logged out and back in.
+
+**Why this happens:** the backend (`routes/auth.py::verify_otp`) only actually *uses* the
+`consent_accepted` flag when creating a brand-new account — for a returning user it's read
+and silently ignored ("harmless to send on a returning-user login too," per the code comment
+that added this checkbox on 2026-08-20). But the phone-entry screen can't yet know whether a
+given phone number belongs to a new or returning user — that's only knowable after OTP
+verification — so today's UI takes the simplest path and shows/requires the checkbox
+unconditionally for everyone, every time.
+
+**Impact:** a returning rider/driver whose session lapses is forced to re-tick a box that
+does nothing for them (their consent was already recorded, correctly, the first time) —
+pure friction, no legal benefit, exactly the UX cost flagged. Approved to fix (task tracked).
+**Fix approach:** stop gating "Send Verification Code" on the checkbox. Instead, only surface
+the consent requirement if the backend actually comes back with its existing
+`errors.auth.consent_required` response (which already only fires for genuine new-account
+creation) — at that point, and only then, show the checkbox/consent step before retrying.
+A returning user never sees it again after their first successful login.
 
 ## 7. Recommended sequencing
 
@@ -213,13 +302,14 @@ these are about *displaying* data that's already imported, not new imports:
 | Cancelled/failed bookings (§2) | Low technically, but contradicts your own earlier instruction | Yes | Depends entirely on your answer |
 | Legal blockers (§5 of this doc, i.e. consent + insurance-period sufficiency) | N/A — not a code risk | N/A | **Yes, for a compliance-complete claim** — not for basic functionality |
 
-## 9. What I'm asking you to approve
+## 9. Decisions log (2026-08-27)
 
-- Confirm the answer to Section 2 (cancelled/failed bookings).
-- Approve Phases 1 and 2 to start (the two I'd actually build first).
-- Tell me whether to also fix the two Section 6 display gaps now (cheap, isolated) or fold
-  them into a later batch.
-- Confirm Phases 3-6 stay deferred/optional as scoped, or reprioritize.
-- Acknowledge the two legal blockers are tracked (they already were, in the 2026-08-19 audit)
-  and are not something I can resolve — flagging again here so this doc doesn't imply the
-  migration is "done" once Phases 1-4 ship.
+- §2 — **Cancelled/failed bookings**: reversed to in-scope. Runbook updated (§6 of the
+  runbook doc). Actual execution against production is still a human action.
+- §5a — **Consent notice**: `legacy_consent_notice_enabled` flip approved and executed.
+- §5b — **Insurance-period reconstruction**: sign-off recorded. Correction tool (GPS-based,
+  393 rides) scoped, not yet built.
+- §6a — **Login checkbox re-prompt**: approved to fix. In progress.
+- Phases 1-2 (driver profiles, vehicle history): approved to build next.
+- Phases 3 (partially — the correction tool itself), 4, 5, 6: remain scoped-but-deferred as
+  originally written — no change to that call.

@@ -12,6 +12,9 @@ map-matched:
 
   * ``filter_low_accuracy`` drops fixes whose reported accuracy is worse than a
     trust threshold (they cannot support a metre-scale distance claim).
+  * ``filter_teleportation_spikes`` drops fixes implying impossible movement — a
+    cell-tower/AGPS/VPN jump reports good accuracy and moves far, so neither of
+    the other two filters catches it.
   * ``collapse_stationary_clusters`` folds a run of near-stationary fixes (a car
     stopped at a light / waiting at pickup) into a single location while
     preserving the elapsed time, so a parked car contributes ~0 km instead of a
@@ -30,8 +33,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 try:
     from ..geo_utils import calculate_distance
+    from .datetime_utils import parse_iso_utc
 except ImportError:  # pragma: no cover - dual import path
     from geo_utils import calculate_distance  # type: ignore
+    from utils.datetime_utils import parse_iso_utc  # type: ignore
 
 # A fix reporting worse than this horizontal accuracy (metres) cannot support a
 # metre-scale distance claim — driving on an open road is typically <15 m, so
@@ -44,12 +49,50 @@ MAX_TRUSTED_ACCURACY_M = 50.0
 # collapsed.
 STATIONARY_SPEED_FLOOR_MPS = 0.7
 
-# Maximum plausible speed between two consecutive fixes (km/h). Any hop that
-# implies a speed above this is a teleportation spike — cell-tower fallback,
-# bad AGPS, or VPN-shifted location — and the outlier fix is dropped. 200 km/h
-# is well above any legal Saskatchewan road speed (max 110 km/h highway) and
-# tolerates momentary GPS catch-up after a tunnel or parking garage.
-MAX_PLAUSIBLE_SPEED_KMH = 200.0
+# Maximum plausible speed between two consecutive fixes (km/h) before the newer
+# fix is treated as a teleportation spike — cell-tower fallback, bad AGPS, or
+# VPN-shifted location. 200 km/h is well above any legal Saskatchewan road speed
+# (max 110 km/h highway) and tolerates momentary GPS catch-up after a tunnel or
+# parking garage.
+#
+# Deliberately NOT named like the codebase's two other speed ceilings, which
+# answer different questions and must not be conflated:
+#   * ``route_segments.MAX_PLAUSIBLE_SPEED_KPH`` (180) — a route-quality signal
+#     on a stored trace; flags a segment, never discards a fix.
+#   * ``location_integrity.MAX_SPEED_KMH`` (300) — the anti-spoofing gate that
+#     rejects a whole write; loose on purpose so honest noise isn't refused.
+# This one discards a fix from a distance sum, so it sits between the two.
+# (``route_segments`` imports from this module, so reusing its constant here
+# would be a circular import.)
+TELEPORT_MAX_SPEED_KMH = 200.0
+
+# Ceiling for a single hop whose elapsed time is unknown (fixes carrying no
+# timestamp, or out-of-order ones). Consecutive pings are seconds apart, not
+# hours, and Saskatchewan's largest city is ~30 km across, so a hop this long
+# with no timing to justify it is almost certainly a spike.
+MAX_UNTIMED_HOP_KM = 10.0
+
+# After this many consecutive fixes disagree with the reference, the REFERENCE
+# is presumed stale rather than the fixes: that pattern reads as real movement
+# across a capture gap (Doze, a backgrounded app, or a run of low-accuracy fixes
+# removed upstream), not as a run of bad fixes. The filter re-anchors instead of
+# dropping the rest of the batch — see ``filter_teleportation_spikes``.
+MAX_CONSECUTIVE_SPIKE_DROPS = 3
+
+# Shortest sampling interval the implied-speed rule will credit (seconds).
+# Consecutive fixes routinely share a capture instant or sit microseconds apart
+# — fused/batched location providers emit bursts, and device clocks are coarse —
+# so a raw elapsed time can be near zero while the two fixes are metres apart,
+# which divides out to millions of km/h. Clamping up to the fastest sampling
+# rate we actually believe asks the right question of such a pair ("could a
+# vehicle cover this ground in one sampling interval?"): normal GPS scatter
+# stays, while a hop far too long for one interval is still caught.
+MIN_PLAUSIBLE_INTERVAL_S = 1.0
+
+# Epoch values above this are milliseconds, not seconds: 1e12 seconds is the
+# year 33658, while 1e12 milliseconds is 2001, so every real second-epoch sits
+# below it and every real millisecond-epoch above.
+_EPOCH_MS_THRESHOLD = 1e12
 
 # Consecutive fixes within this radius (metres, widened by each fix's own
 # accuracy) of the cluster anchor are candidates to fold together. Sized so a
@@ -90,6 +133,37 @@ def _speed_mps(point: Dict[str, Any]) -> Optional[float]:
         return None
 
 
+def point_epoch_seconds(point: Dict[str, Any]) -> Optional[float]:
+    """Capture time of a breadcrumb as epoch seconds, or ``None`` if unusable.
+
+    Accepts every timestamp shape the location pipeline actually produces, so a
+    caller never has to pre-parse:
+
+      * ``ts`` — already normalised upstream (fast path, see
+        ``period1_distance._normalize``)
+      * ``datetime`` objects — what the v2 outbox rows carry before they ever
+        round-trip through Postgres
+      * ISO-8601 strings — legacy v1 payloads and Supabase reads
+      * numeric epochs, in seconds or milliseconds (JS ``Date.now()`` clients)
+
+    Key order matches ``breadcrumbs._point_capture_time`` so this reads the same
+    field the persistence layer treats as capture time. Returns ``None`` rather
+    than raising: a fix with an unreadable timestamp is still a usable fix, it
+    just can't support a speed claim.
+    """
+    for key in ("ts", "captured_at", "device_timestamp", "recorded_at", "timestamp"):
+        raw = point.get(key)
+        if raw is None or isinstance(raw, bool):
+            continue
+        if isinstance(raw, (int, float)):
+            value = float(raw)
+            return value / 1000.0 if abs(value) > _EPOCH_MS_THRESHOLD else value
+        parsed = parse_iso_utc(raw)
+        if parsed is not None:
+            return parsed.timestamp()
+    return None
+
+
 def filter_low_accuracy(
     points: List[Dict[str, Any]],
     max_accuracy_m: float = MAX_TRUSTED_ACCURACY_M,
@@ -127,20 +201,39 @@ def filter_low_accuracy(
 
 def filter_teleportation_spikes(
     points: List[Dict[str, Any]],
-    max_speed_kmh: float = MAX_PLAUSIBLE_SPEED_KMH,
+    max_speed_kmh: float = TELEPORT_MAX_SPEED_KMH,
+    *,
+    max_untimed_hop_km: float = MAX_UNTIMED_HOP_KM,
+    max_consecutive_drops: int = MAX_CONSECUTIVE_SPIKE_DROPS,
 ) -> Tuple[List[Dict[str, Any]], int]:
     """Drop GPS fixes that imply physically impossible movement.
 
     Walks the trace and computes the implied speed between consecutive valid
     fixes.  When a fix implies speed > ``max_speed_kmh`` it is treated as a
     teleportation spike (cell-tower fallback, bad AGPS, VPN location shift) and
-    dropped.  The *previous* good fix becomes the reference for the next
+    dropped.  The *previous* good fix stays the reference for the next
     comparison, so a single wild spike doesn't cascade into dropping the rest
     of the trace.
 
     A spike that jumps away AND back (the common pattern) loses only the
     outlier point — the return fix is compared against the last *good* point,
     so the distance is near-zero and it passes.
+
+    Two guards keep that reference from going stale and eating real distance:
+
+      * when a pair has no usable elapsed time (no timestamp, or fixes out of
+        order) the implied speed is unknowable, so the hop falls back to the
+        coarser ``max_untimed_hop_km`` distance cap — and when the interval is
+        merely too short to believe, it is clamped to
+        ``MIN_PLAUSIBLE_INTERVAL_S`` rather than dividing by ~zero; and
+      * after ``max_consecutive_drops`` fixes in a row disagree with the
+        reference, the reference itself is presumed stale — that is what real
+        movement across a capture gap looks like — and the filter re-anchors on
+        the current fix instead of discarding the remainder of the batch.
+
+    Timestamps are read via ``point_epoch_seconds``, which accepts datetimes,
+    ISO-8601 strings and numeric epochs; a caller that strips them silently
+    reduces this filter to its distance fallback.
 
     Returns ``(kept, dropped_count)``.  Input rows are never mutated.
     """
@@ -149,55 +242,46 @@ def filter_teleportation_spikes(
 
     kept: List[Dict[str, Any]] = [points[0]]  # first point is always kept
     dropped = 0
+    consecutive_drops = 0
     prev_lat, prev_lng = _coord(points[0])
-    prev_ts: Optional[float] = None
-    ts_key = "timestamp"  # driver-app location batches carry epoch seconds
-    raw_ts = points[0].get(ts_key) or points[0].get("recorded_at")
-    if raw_ts is not None:
-        try:
-            prev_ts = float(raw_ts)
-        except (TypeError, ValueError):
-            pass
+    prev_ts = point_epoch_seconds(points[0])
 
-    for i in range(1, len(points)):
-        cur = points[i]
+    for cur in points[1:]:
         c_lat, c_lng = _coord(cur)
+        cur_ts = point_epoch_seconds(cur)
+
         if c_lat is None or prev_lat is None:
-            # Can't compute distance — keep it and let downstream reject.
+            # Can't compute a distance — keep it and let downstream reject it.
+            # prev_ts still advances so the NEXT hop measures its own elapsed
+            # time instead of one inflated by this gap (an inflated dt hides a
+            # spike by making its implied speed look survivable).
             kept.append(cur)
             prev_lat, prev_lng = c_lat, c_lng
+            prev_ts = cur_ts
+            consecutive_drops = 0
             continue
 
         dist_km = calculate_distance(prev_lat, prev_lng, c_lat, c_lng)
 
-        # Compute time delta if timestamps are available.
-        cur_ts: Optional[float] = None
-        raw = cur.get(ts_key) or cur.get("recorded_at")
-        if raw is not None:
-            try:
-                cur_ts = float(raw)
-            except (TypeError, ValueError):
-                pass
-
-        if cur_ts is not None and prev_ts is not None and cur_ts > prev_ts:
-            dt_hours = (cur_ts - prev_ts) / 3600.0
-            if dt_hours > 0:
-                implied_speed = dist_km / dt_hours
-                if implied_speed > max_speed_kmh:
-                    dropped += 1
-                    continue  # don't update prev — keep last good fix as ref
+        if cur_ts is not None and prev_ts is not None and cur_ts >= prev_ts:
+            elapsed_s = max(cur_ts - prev_ts, MIN_PLAUSIBLE_INTERVAL_S)
+            implied_speed_kmh = dist_km / (elapsed_s / 3600.0)
+            implausible = implied_speed_kmh > max_speed_kmh
         else:
-            # No usable timestamps — fall back to pure distance cap.
-            # A single hop > 10 km with no timing is almost certainly a spike
-            # (Saskatchewan's largest city is ~30 km across; consecutive
-            # location pings are seconds apart, not hours).
-            if dist_km > 10.0:
-                dropped += 1
-                continue
+            # Elapsed time is unusable: the fixes carry no timestamp, or they
+            # arrived out of order, so the interval would be negative. Fall
+            # back to distance only.
+            implausible = dist_km > max_untimed_hop_km
+
+        if implausible and consecutive_drops < max_consecutive_drops:
+            dropped += 1
+            consecutive_drops += 1
+            continue  # don't update prev — keep last good fix as the reference
 
         kept.append(cur)
         prev_lat, prev_lng = c_lat, c_lng
         prev_ts = cur_ts
+        consecutive_drops = 0
 
     return kept, dropped
 

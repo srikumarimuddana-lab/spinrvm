@@ -25,6 +25,14 @@ jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
 }));
+// otp.tsx imports HAS_AUTHENTICATED_BEFORE_KEY from ./login, which pulls in
+// the native AsyncStorage module at import time even though login.tsx's own
+// component never renders here.
+const mockAsyncSetItem = jest.fn((..._args: any[]) => Promise.resolve());
+jest.mock('@react-native-async-storage/async-storage', () => ({
+  getItem: jest.fn(() => Promise.resolve(null)),
+  setItem: (...a: any[]) => mockAsyncSetItem(...a),
+}));
 
 const mockBack = jest.fn();
 const mockReplace = jest.fn();
@@ -175,6 +183,9 @@ describe('OtpScreen', () => {
     });
     expect(mockSetTokens).toHaveBeenCalledWith('access-tok', 'refresh-tok', 900);
     expect(mockOtpVerified).toHaveBeenCalled();
+    // Marks this device as having authenticated before, so login.tsx skips
+    // the consent checkbox on the next visit.
+    expect(mockAsyncSetItem).toHaveBeenCalledWith('spinr_rider_has_authenticated_before', 'true');
   });
 
   it('sets the user directly and logs Analytics.login when userData is returned (skips initialize())', async () => {
@@ -397,6 +408,9 @@ describe('OtpScreen', () => {
     expect(mockSetTokens).not.toHaveBeenCalled();
     expect(mockOtpVerified).toHaveBeenCalled();
     expect(mockInitialize).toHaveBeenCalled();
+    // No token means no successful auth — never mark the device as
+    // "authenticated before".
+    expect(mockAsyncSetItem).not.toHaveBeenCalled();
   });
 
   it('defaults refresh_token/expires_in when the response has a token but omits them', async () => {

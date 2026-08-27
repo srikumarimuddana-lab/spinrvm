@@ -24,6 +24,14 @@ jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
 }));
+// Resolves to null by default (no device has "authenticated before"), which
+// keeps hasAuthenticatedBefore false and the consent checkbox visible for
+// every existing test below — matches this suite's assumption that the
+// checkbox/legal links are always present unless a test says otherwise.
+jest.mock('@react-native-async-storage/async-storage', () => ({
+  getItem: jest.fn(() => Promise.resolve(null)),
+  setItem: jest.fn(() => Promise.resolve()),
+}));
 
 const mockPush = jest.fn();
 const mockReplace = jest.fn();

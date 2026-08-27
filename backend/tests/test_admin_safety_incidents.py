@@ -96,10 +96,6 @@ def test_list_defaults_to_open_in_progress_scope(admin_client):
     with (
         patch("backend.db_supabase.get_rows", new=fake_get_rows),
         patch("backend.db_supabase.count_documents", new=AsyncMock(return_value=1)),
-        patch(
-            "routes.admin.safety._batch_fetch_drivers_and_users",
-            new=AsyncMock(return_value=({}, {})),
-        ),
     ):
         resp = admin_client.get("/api/admin/safety/incidents")
     assert resp.status_code == 200
@@ -121,10 +117,6 @@ def test_list_enriches_with_reporter_name(admin_client):
             new=_get_rows_by_table(safety_incidents=[_INCIDENT], users=[_USER]),
         ),
         patch("backend.db_supabase.count_documents", new=AsyncMock(return_value=1)),
-        patch(
-            "routes.admin.safety._batch_fetch_drivers_and_users",
-            new=AsyncMock(return_value=({}, {})),
-        ),
     ):
         resp = admin_client.get("/api/admin/safety/incidents")
     assert resp.status_code == 200
@@ -136,10 +128,6 @@ def test_list_search_is_pushed_into_db_filter_as_regex(admin_client):
     with (
         patch("backend.db_supabase.get_rows", new=fake_get_rows),
         patch("backend.db_supabase.count_documents", new=AsyncMock(return_value=0)),
-        patch(
-            "routes.admin.safety._batch_fetch_drivers_and_users",
-            new=AsyncMock(return_value=({}, {})),
-        ),
     ):
         resp = admin_client.get("/api/admin/safety/incidents", params={"search": "red light"})
     assert resp.status_code == 200
@@ -169,10 +157,6 @@ def test_list_filters_by_severity_role_category_ride_id(admin_client):
     with (
         patch("backend.db_supabase.get_rows", new=fake_get_rows),
         patch("backend.db_supabase.count_documents", new=AsyncMock(return_value=1)),
-        patch(
-            "routes.admin.safety._batch_fetch_drivers_and_users",
-            new=AsyncMock(return_value=({}, {})),
-        ),
     ):
         resp = admin_client.get(
             "/api/admin/safety/incidents",
@@ -204,10 +188,6 @@ def test_list_count_failure_falls_back_without_500(admin_client):
             new=_get_rows_by_table(safety_incidents=[_INCIDENT], users=[]),
         ),
         patch("backend.db_supabase.count_documents", new=AsyncMock(side_effect=RuntimeError("count down"))),
-        patch(
-            "routes.admin.safety._batch_fetch_drivers_and_users",
-            new=AsyncMock(return_value=({}, {})),
-        ),
     ):
         resp = admin_client.get("/api/admin/safety/incidents")
     assert resp.status_code == 200

@@ -638,7 +638,6 @@ export const getDriverStats = (params?: {
             daily_rides: { date: string; date_raw: string; count: number }[];
             daily_earnings: { date: string; date_raw: string; amount: number }[];
         };
-        drivers: any[];
         service_areas: { id: string; name: string }[];
     }>(`/api/admin/drivers/stats?${sp.toString()}`);
 };

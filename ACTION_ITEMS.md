@@ -16468,8 +16468,25 @@ how much they de-risk a public launch._
 - **Correction issued:** the PR #4595 comments that called this "the same
   C45 flake" were wrong and should be read alongside this entry, not as
   the final word — see the PR's comment thread for the acknowledgment.
+- **Reproduced on a second, independent commit (2026-08-27, same day):**
+  `Coverage regression check` failed again on the very next commit
+  (`7949843a0`, run `33088853684`, job `98576236030`) — `Run coverage on
+  PR branch` step: conclusion `cancelled`, ran 15:40:57–15:45:16 (4m 19s).
+  This run was deliberately *not* preceded by another push (waited for the
+  prior run to finish first, specifically to rule out self-inflicted
+  concurrency-group cancellation) — so this occurrence has no possible
+  concurrency-group explanation at all, unlike the first. Two independent
+  reproductions on two different commits, both un-preemptable by
+  concurrency, is real evidence this is a recurring external-cause issue
+  with this specific job/step rather than a one-off. Not re-commented on
+  the PR (same already-logged failure mode, no new information for a
+  reader there) — logged here per policy instead.
 - **What was NOT verified:** whether this is reproducible on other PRs/
-  commits (only this one commit's run was inspected in depth), and no
+  commits beyond the two now confirmed, whether it's specific to the
+  `Coverage regression check` / `Money-path coverage floor check` job
+  *steps* specifically (both run the full unscoped suite — see the
+  consolidation recommendation above) or would also hit `ci.yml`'s
+  `backend-test` job the same way if watched closely enough, and no
   access exists from this session to GitHub's own Actions-infra or billing
   logs to confirm the runner-preemption vs. spend-limit hypotheses.
 

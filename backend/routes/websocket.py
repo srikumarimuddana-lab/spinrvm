@@ -799,7 +799,7 @@ async def websocket_endpoint(
                     # survives reconnects — the previous per-connection timer
                     # did neither, so a driver flushing REST while pinging over
                     # WS wrote this row from two uncoordinated throttles.
-                    if await should_write_marker(driver_id, path="ws_single"):
+                    if await should_write_marker(driver_id, path="ws_single", unthrottled_before=False):
                         await db_supabase.update_driver_location(driver_id, lat, lng, heading=data.get("heading"))
                     # Location pings are an even stronger liveness signal
                     # than pongs — fresh GPS proves the app is running and
@@ -1014,7 +1014,7 @@ async def websocket_endpoint(
                             # Same shared write gate as the single-ping
                             # handler — one window per driver across every GPS
                             # ingestion route (utils/location_write_gate).
-                            if await should_write_marker(driver_id, path="ws_batch"):
+                            if await should_write_marker(driver_id, path="ws_batch", unthrottled_before=False):
                                 await db_supabase.update_driver_location(
                                     driver_id, _lat, _lng, heading=last_pt.get("heading")
                                 )

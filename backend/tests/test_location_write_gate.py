@@ -186,3 +186,103 @@ async def test_force_write_restarts_the_shared_window(monkeypatch):
 
     assert await gate.should_write_marker("driver-7", path="rest_v1", force=True) is True
     assert await gate.should_write_marker("driver-7", path="ws_single") is False
+
+
+@pytest.mark.anyio
+async def test_ws_path_throttles_even_in_shadow_mode(monkeypatch):
+    """Shadow mode must not hand the WS path writes it previously refused.
+
+    Regression: the first cut of this module let *every* caller fall through
+    while the flag was off. That was sound for REST (no pre-existing throttle)
+    but silently deleted the WebSocket handlers' unconditional 3 s throttle
+    (`conn_state["last_loc_db_write"]`), so merging it would have INCREASED
+    sustained write volume on the highest-frequency write path in the system —
+    the exact opposite of this module's purpose, and invisible because the flag
+    was off and the change looked inert.
+
+    Caught by an independent dispatch audit, not by the original test suite:
+    every earlier test called the gate exactly once, where "always writes" and
+    "throttled to one per window" are indistinguishable. Hence N calls here.
+    """
+    import utils.redis_client as rc
+
+    rc._local.clear()
+    monkeypatch.setattr(gate, "_gate_enabled", AsyncMock(return_value=False))
+
+    results = [
+        await gate.should_write_marker("driver-ws", path="ws_single", unthrottled_before=False) for _ in range(5)
+    ]
+    assert results == [True, False, False, False, False]
+
+
+@pytest.mark.anyio
+async def test_rest_path_still_writes_in_shadow_mode(monkeypatch):
+    """The other half of the contract: REST keeps writing while the flag is off.
+
+    REST had no throttle before the gate, so falling through is what preserves
+    its behaviour. If this ever returns False the gate has started changing
+    production behaviour before anyone flipped the flag.
+    """
+    import utils.redis_client as rc
+
+    rc._local.clear()
+    monkeypatch.setattr(gate, "_gate_enabled", AsyncMock(return_value=False))
+
+    results = [await gate.should_write_marker("driver-rest", path="rest_v1") for _ in range(5)]
+    assert results == [True, True, True, True, True]
+
+
+@pytest.mark.anyio
+async def test_ws_and_rest_both_throttle_once_flag_is_on(monkeypatch):
+    """With the flag on, both families coalesce against the one shared window."""
+    import utils.redis_client as rc
+
+    rc._local.clear()
+    monkeypatch.setattr(gate, "_gate_enabled", AsyncMock(return_value=True))
+
+    assert await gate.should_write_marker("driver-x", path="rest_v1") is True
+    assert (await gate.should_write_marker("driver-x", path="ws_single", unthrottled_before=False)) is False
+    assert await gate.should_write_marker("driver-x", path="rest_v1") is False
+
+
+@pytest.mark.anyio
+async def test_route_helper_writes_period1_through_an_active_throttle(monkeypatch):
+    """End-to-end at the route layer: flag ON, window held, Period 1 still writes.
+
+    The unit test above proves `should_write_marker(force=True)` returns True.
+    This proves the route helper actually *detects* the accumulator columns and
+    passes force, with the gate genuinely throttling — the earlier route tests
+    all ran with the flag off, where "shadow mode writes anyway" and "force
+    correctly overrode an active throttle" are indistinguishable.
+
+    If this regresses, SGI insurance-period distances under-count silently.
+    """
+    import utils.redis_client as rc
+    from routes.drivers import location as loc
+
+    rc._local.clear()
+    monkeypatch.setattr(gate, "_gate_enabled", AsyncMock(return_value=True))
+
+    writes = []
+
+    async def _fake_update_one(table, filt, data):
+        writes.append((table, filt, data))
+        return True
+
+    monkeypatch.setattr(loc.db_supabase, "update_one", _fake_update_one)
+
+    plain = {"lat": 50.4452, "lng": -104.6189}
+    withp1 = {"lat": 50.4452, "lng": -104.6189, "period1_accum_km": 1.25}
+
+    # First call takes the window.
+    await loc._write_marker_if_due({"id": "d1"}, dict(plain), "d1", "rest_v1")
+    assert len(writes) == 1
+
+    # Second, inside the window, no accumulator — correctly coalesced away.
+    await loc._write_marker_if_due({"id": "d1"}, dict(plain), "d1", "rest_v1")
+    assert len(writes) == 1
+
+    # Third, still inside the window, but carrying a Period 1 delta — must land.
+    await loc._write_marker_if_due({"id": "d1"}, dict(withp1), "d1", "rest_v1")
+    assert len(writes) == 2
+    assert writes[-1][2]["period1_accum_km"] == 1.25

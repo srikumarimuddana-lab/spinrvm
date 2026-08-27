@@ -212,18 +212,19 @@ return {..., "stats": stats, "area_stats": area_stats}
 
 - [x] **Automated tests** — full `pytest -m "not slow"` run to completion, split into 10
       chunks (a single process is killed by this container's memory ceiling; that is an
-      environment limit, not a test failure). **12,645 passed, 6 skipped, 1 xfailed**
-      across the ten chunks, with two pre-existing failures on the branch's base commit
-      that are **already fixed on `origin/main`** by `71698ad83` (`ACTION_ITEMS.md` C45)
-      and were resolved by merging it in:
+      environment limit, not a test failure). Post-merge result: **12,762 passed,
+      6 skipped, 1 xfailed, 0 failed** — all ten chunks exit 0.
+
+      Two failures seen on the branch's pre-merge base were **pre-existing and already
+      fixed on `origin/main`** by `71698ad83` (`ACTION_ITEMS.md` C45); merging main in
+      resolved both, and each was verified to reproduce on the *unmodified* tree first:
       - `test_payments_coverage_gap_closure.py::test_confirm_payment_real_ride_ownership_mismatch`
-        — verified to fail identically on the unmodified tree.
+        — an unawaitable `MagicMock` on `update_ride` turned the expected 403 into a 500.
       - `test_compliance_reports.py::test_truncation_flag_set_at_row_limit` — an
-        **infinite loop**, not a slow test: the P0 PR's `_get_all_rows_paginated` only
-        stops when a page comes back shorter than `page_size`, and the test's mock
-        returned the full `_ROW_LIMIT`-row list for every offset, so `all_rows` grew
-        without bound until the process was killed. Also verified to reproduce on the
-        unmodified tree.
+        **infinite loop**, not a slow test: `_get_all_rows_paginated` only stops when a
+        page comes back shorter than `page_size`, and the test's mock returned the full
+        `_ROW_LIMIT`-row list for every offset, so `all_rows` grew without bound until
+        the process was killed.
       Targeted suites re-run green after the fixture updates: `test_coverage_rides.py`
       (177), `test_e2e_sos_flow.py` (7), `test_ride_messages.py` + `test_p2_sos.py` (45),
       `test_admin_drivers_coverage.py` (138), `test_admin_safety_incidents.py`,
@@ -251,9 +252,11 @@ return {..., "stats": stats, "area_stats": area_stats}
       conventions match 159/302/303, no `migration-override-ok` needed, rollback complete;
       `spinr-money-auditor` → SAFE TO MERGE, no blockers, no float introduced, totals
       compute identically, legacy semantics unchanged.
-- [x] **Lint** — `ruff check` and `ruff format --check` on all touched files produce
-      **byte-identical** output before and after this branch (5 pre-existing errors,
-      4 pre-existing format diffs). This branch adds none.
+- [x] **Lint** — `ruff check` / `ruff format --check` over all 32 Python files this
+      branch touches, compared against `origin/main`'s content for the same files:
+      **6 errors both before and after**, and format diffs go **6 → 5** (the repo's
+      formatter hook cleaned `routes/admin/safety.py` while this branch was editing it).
+      This branch introduces no new lint or format finding.
 - [ ] **Manual repro in staging** — not performed; see §"What was NOT verified".
 - [x] **Feature flag** — deliberately none; justified in §8.
 

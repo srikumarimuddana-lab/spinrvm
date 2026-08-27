@@ -71,7 +71,12 @@ async def test_shadow_mode_counts_but_still_writes(monkeypatch, counted):
 
 @pytest.mark.anyio
 async def test_fails_open_when_redis_unavailable(monkeypatch, counted):
-    """A raising redis_set_nx must not suppress the durable write."""
+    """A raising redis_set_nx must not suppress a REST write.
+
+    REST wrote every time before the gate existed, so its degraded mode is
+    full fail-open (the WS family degrades differently — see the floor tests
+    below).
+    """
     monkeypatch.setattr(
         gate,
         "redis_set_nx",
@@ -82,6 +87,66 @@ async def test_fails_open_when_redis_unavailable(monkeypatch, counted):
 
     assert await gate.should_write_marker("driver-1", path="rest_v2_idle") is True
     assert _outcomes(counted) == ["written"]
+    assert ("spinr_drivers_location_gate_failed_total", {}) in counted
+
+
+@pytest.mark.anyio
+async def test_degraded_ws_keeps_inprocess_floor(monkeypatch, counted):
+    """Redis loss must not delete the WS throttle — the outage-amplification bug.
+
+    Pre-gate, the WS 3 s throttle was in-process and survived any Redis
+    outage. The first cut of the degraded branch returned True
+    unconditionally, so Redis-down un-throttled the hottest write path (~3x
+    sustained UPDATE volume) at exactly the moment the non-autoscaling DB
+    tier could least absorb it — found by the architect review. Degraded WS
+    now falls back to a module-level per-driver monotonic floor.
+    """
+    monkeypatch.setattr(gate, "redis_set_nx", AsyncMock(side_effect=RuntimeError("Redis down")))
+    monkeypatch.setattr(gate, "_degraded_last_write", {})
+
+    results = [
+        await gate.should_write_marker("driver-ws", path="ws_single", unthrottled_before=False) for _ in range(5)
+    ]
+    assert results == [True, False, False, False, False]
+    # A different driver gets its own floor.
+    assert await gate.should_write_marker("driver-other", path="ws_single", unthrottled_before=False) is True
+    # Every degraded evaluation is metered, allowed or not.
+    assert sum(1 for n, _l in counted if n == "spinr_drivers_location_gate_failed_total") == 6
+
+
+@pytest.mark.anyio
+async def test_degraded_rest_still_writes_every_time(monkeypatch, counted):
+    """The other half of the degraded contract: REST restores pre-gate reality."""
+    monkeypatch.setattr(gate, "redis_set_nx", AsyncMock(side_effect=RuntimeError("Redis down")))
+    monkeypatch.setattr(gate, "_degraded_last_write", {})
+
+    results = [await gate.should_write_marker("driver-r", path="rest_v1") for _ in range(3)]
+    assert results == [True, True, True]
+    assert _outcomes(counted) == ["written", "written", "written"]
+
+
+@pytest.mark.anyio
+async def test_hung_redis_times_out_and_degrades(monkeypatch, counted):
+    """A HUNG (not raising) Redis must not stall the SLA path behind the gate.
+
+    The shared Redis client sets no socket timeouts, so an unbounded await on
+    a black-holed socket would freeze the durable write — and the sequential
+    WS message loop behind it — indefinitely. The gate bounds every Redis call
+    with asyncio.wait_for and treats a timeout as the degraded branch.
+    """
+    import asyncio as _asyncio
+    import time as _time
+
+    async def _hung(*_a, **_k):
+        await _asyncio.sleep(5)
+
+    monkeypatch.setattr(gate, "redis_set_nx", _hung)
+    monkeypatch.setattr(gate, "_GATE_REDIS_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(gate, "_degraded_last_write", {})
+
+    t0 = _time.monotonic()
+    assert await gate.should_write_marker("driver-h", path="rest_v1") is True
+    assert _time.monotonic() - t0 < 1.0
     assert ("spinr_drivers_location_gate_failed_total", {}) in counted
 
 
@@ -105,11 +170,35 @@ async def test_period1_force_never_skipped(monkeypatch, counted):
 
 @pytest.mark.anyio
 async def test_period1_force_survives_redis_failure(monkeypatch, counted):
-    """A failed window refresh costs coalescing, never the write itself."""
+    """A failed window claim/refresh costs coalescing, never the write itself."""
+    monkeypatch.setattr(gate, "redis_set_nx", AsyncMock(side_effect=RuntimeError("down")))
     monkeypatch.setattr(gate, "redis_set", AsyncMock(side_effect=RuntimeError("down")))
 
     assert await gate.should_write_marker("driver-1", path="rest_v2_idle", force=True) is True
     assert _outcomes(counted) == ["period1_forced"]
+
+
+@pytest.mark.anyio
+async def test_period1_force_counts_written_when_window_free(monkeypatch, counted):
+    """Force with a FREE window is an ordinary write, not a forced one.
+
+    Labelling every forced-path write period1_forced would inflate the forced
+    share of the shadow measurement: with period1 tracking on, most idle
+    flushes carry a delta, and an operator summing written+shadow_throttled
+    would under-count real write volume. The force branch claims NX first —
+    acquired means coalescing suppressed nothing, so it counts written; only
+    a genuinely overridden (held) window counts period1_forced.
+    """
+    import utils.redis_client as rc
+
+    rc._local.clear()
+    monkeypatch.setattr(gate, "_gate_enabled", AsyncMock(return_value=True))
+
+    # Free window: force is a plain write.
+    assert await gate.should_write_marker("driver-6", path="rest_v1", force=True) is True
+    # Held window: force genuinely overrides.
+    assert await gate.should_write_marker("driver-6", path="rest_v1", force=True) is True
+    assert _outcomes(counted) == ["written", "period1_forced"]
 
 
 @pytest.mark.anyio
@@ -148,6 +237,10 @@ def test_interval_stays_far_below_stale_intent_threshold():
     before deleting this test.
     """
     assert gate.MARKER_WRITE_INTERVAL_S <= 30.0
+    # The Redis TTL is int(MARKER_WRITE_INTERVAL_S) seconds. A fractional
+    # constant would silently diverge from the effective window (0.5 -> 1 s
+    # TTL, 2.5 -> 2 s), so pin it integral and >= 1.
+    assert gate.MARKER_WRITE_INTERVAL_S == int(gate.MARKER_WRITE_INTERVAL_S) >= 1
 
 
 @pytest.mark.anyio

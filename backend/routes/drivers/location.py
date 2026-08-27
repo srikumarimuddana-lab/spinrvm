@@ -679,7 +679,14 @@ async def update_location_batch(
                         if not driver_row.get("period1_accum_since"):
                             update_data["period1_accum_since"] = datetime.now(timezone.utc)
 
-        await _write_marker_if_due({"user_id": current_user["id"]}, update_data, str(driver_id), "rest_v1")
+        # Only when a drivers row actually exists. In the fallback branch
+        # (driver_id = current_user["id"], no row) the update_one below would
+        # match zero rows anyway — but routing it through the gate burned a
+        # window keyed on a users.id no other path shares and, worse, counted
+        # outcome="written" for a write that never happened, polluting the
+        # exact counter the shadow measurement reads.
+        if driver_rows:
+            await _write_marker_if_due({"user_id": current_user["id"]}, update_data, str(driver_id), "rest_v1")
         # Also sync to generic lat/lng fields if they exist to support legacy queries
         # (Though update_one might not support setting multiple top-level fields easily if we rely on $set mapping)
         # Let's trust db.drivers.update_one to handle the schema or the wrapper.

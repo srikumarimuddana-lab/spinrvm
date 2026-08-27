@@ -167,10 +167,17 @@ async def should_write_marker(
         acquired = await redis_set_nx(key, "1", ttl=interval)
     except Exception as exc:
         # Fail open — a Redis outage must never suppress a durable write.
+        # ERROR level deliberately retained: this is a real failure of the
+        # gate, not a soft condition. But NO exc_info — this fires on the
+        # highest-frequency write path in the system, so during a Redis
+        # outage it would emit a full traceback per ping per driver (~150/s
+        # at 500 drivers), flooding logs exactly when the incident needs
+        # them readable. redis_client.redis_set_nx already logs the same
+        # exception one level down with detail, and
+        # spinr_drivers_location_gate_failed_total is the alerting path.
         logger.error(
             "location write gate: Redis unavailable, failing open",
             extra={"driver_id": str(driver_id), "path": path, "error": str(exc)},
-            exc_info=True,
         )
         _metric_inc(_GATE_FAILED_METRIC)
         _metric_inc(_WRITE_METRIC, {"path": path, "outcome": "written"})

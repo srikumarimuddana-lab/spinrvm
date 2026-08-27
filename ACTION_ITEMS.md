@@ -16797,7 +16797,8 @@ how much they de-risk a public launch._
 
 ### C45. `backend-test` is currently red on `main` — pytest failures block every PR repo-wide
 
-- [ ] **Status:** open, found 2026-08-27 while triaging PR #4595's CI
+- [ ] **Status:** open (failures 1 and 3 remain; failure 2 fixed 2026-08-27
+  same day, see below). Found 2026-08-27 while triaging PR #4595's CI
   (a docs-only PR — the diff couldn't have caused this). Confirmed via a
   fresh check of `main`'s own latest completed `CI/CD Pipeline` run (run
   `33037591310`, head `152c6f1`): `backend-test` fails there too, with the
@@ -16821,15 +16822,27 @@ how much they de-risk a public launch._
   underlying hang (e.g. both ultimately call the same slow compliance-report
   code path) or an independent timeout — worth checking together with
   failure 1 rather than assuming either one in isolation.
-- **Failure 2 — `tests/test_payments_coverage_gap_closure.py::test_confirm_payment_real_ride_ownership_mismatch[asyncio]`**
-  — `AssertionError: assert 500 == 403`. The test expects a ride-ownership
-  mismatch on payment confirmation to return a clean `403`; it's getting an
-  unhandled-exception `500` (`"An internal error occurred. Please try
-  again."`) instead. Money-path + auth-adjacent (payment confirmation
-  ownership check) — per CLAUDE.md's "do not silently swallow errors" rule,
-  a 500 here likely means a real exception is being thrown and caught
-  generically rather than the ownership check cleanly rejecting, worth
-  treating as a real regression, not a flaky test.
+- **Failure 2 — FIXED 2026-08-27 —
+  `tests/test_payments_coverage_gap_closure.py::test_confirm_payment_real_ride_ownership_mismatch[asyncio]`**
+  — was `AssertionError: assert 500 == 403`. Root-caused, not a production
+  bug: commit `081ab91e7` ("P0 #6: Deduplicate confirm_payment ride
+  fetches (3 to 1 DB call)", landed on `main` the day before, unrelated to
+  any Claude session) collapsed `confirm_payment`'s three separate
+  `get_ride` calls into one early, unconditional ownership gate — but this
+  test's mock still modeled the old three-call shape (`side_effect` with a
+  *second* `get_ride` return that no longer gets called), so the real
+  ownership check never saw a mismatch, execution fell through to an
+  unrelated incidentally-unconfigured mock (`update_ride` as a bare
+  `MagicMock`, not `AsyncMock`), and that crash got caught by
+  `confirm_payment`'s generic `except Exception` handler and turned into a
+  500. **Production's actual ownership enforcement was correct the whole
+  time** — verified by reading `routes/payments.py` directly and by the
+  sibling test (`test_confirm_payment_mock_ride_ownership_mismatch`, mock
+  path) which already used the correct single-fetch mock pattern and was
+  passing throughout. Fixed by updating the mock to match current reality
+  + added an `assert_awaited_once()` regression guard. Full root-cause
+  detail and verification: `docs/change-log/2026-08-27-confirm-payment-
+  ownership-test-fix.md`. No production code changed.
 - **Impact:** Every open PR touching backend code inherits this red gate
   regardless of its own diff.
 - **Correction (2026-08-27, later same day):** this entry originally claimed
@@ -16844,15 +16857,13 @@ how much they de-risk a public launch._
   time, not because of a shared cause. Don't treat a `Money-path
   coverage floor check` / `Coverage regression check` failure as evidence
   for this item without checking C47 first.
-- **Action:** root-cause all three failures directly (not from this session
-  — found while triaging an unrelated PR, not the task at hand). Priority
-  on failure 2 given the money/auth adjacency — trace what changed in the
-  payment-confirmation ownership-check path or its dependencies since this
-  test last passed. Failures 1 and 3 are worth investigating together
-  first (same feature area) before assuming two independent hangs.
-- **What was NOT verified:** when this started failing (no bisection done
-  — only confirmed it's red on the current `main` tip), and whether the two
-  failures are related to each other or fully independent.
+- **Action:** failure 2 fixed (see above). Failures 1 and 3 remain — worth
+  investigating together first (same GST/PST compliance-report feature
+  area) before assuming two independent hangs.
+- **What was NOT verified:** when failures 1/3 started (no bisection done
+  — only confirmed red on the current `main` tip), and whether they're
+  related to each other or fully independent. Failure 2's timeline is now
+  known precisely (introduced by `081ab91e7`, the day before this fix).
 
 ### C46. Insurance-period GPS correction tool built, validated, and applied to production (2026-08-27)
 

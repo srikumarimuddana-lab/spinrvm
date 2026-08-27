@@ -118,6 +118,7 @@ Payment Intents are used exclusively. This keeps Spinr in PCI-DSS SAQ-A scope.
 | `ride_offer:{ride_id}:{driver_id}` | C3 | 30 s | Contains pickup lat/lng |
 | `ws:dispatch:{channel}` | C2 | pubsub | No PII |
 | `session:{user_id}` | C3 | 15 min | Token hash |
+| `spinr:locwrite:{driver_id}` | C1 | 3 s | Write-gate window marker; value is literal `"1"`, no coordinates or PII |
 
 ---
 

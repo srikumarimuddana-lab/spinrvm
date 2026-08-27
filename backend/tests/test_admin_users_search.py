@@ -26,7 +26,9 @@ def test_search_matches_user_id_uuid():
         return []
 
     with patch("backend.routes.admin.users.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)):
-        asyncio.run(admin_users.admin_get_users(search="uid-rider-target"))
+        # limit/offset explicit: a direct call bypasses FastAPI, so their
+        # Query(...) defaults would arrive as Query objects.
+        asyncio.run(admin_users.admin_get_users(search="uid-rider-target", limit=50, offset=0))
 
     or_clauses = captured_filters.get("$or", [])
     # Raw term, not re.escape()'d: $regex compiles to a SQL ILIKE pattern and the

@@ -413,8 +413,8 @@ async def _resolve_driver_search_user_ids(tokens: List[str]) -> List[str]:
 
 @router.get("/drivers")
 async def admin_get_drivers(
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     search: Optional[str] = None,
     is_verified: Optional[bool] = None,
     is_online: Optional[bool] = None,
@@ -612,7 +612,10 @@ async def admin_get_drivers(
 
 class DriverSearchRequest(BaseModel):
     search: str
-    limit: int = 5
+    # Bounded here, not just on GET /admin/drivers: this handler calls
+    # admin_get_drivers() directly in Python, so the Query(le=...) on that
+    # endpoint's signature never runs for this path.
+    limit: int = Field(5, ge=1, le=200)
     is_online: Optional[bool] = None
     is_available: Optional[bool] = None
 

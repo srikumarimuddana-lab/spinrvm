@@ -354,12 +354,15 @@ async def get_ride_history(
     incentive_map: Dict[str, float] = {}
     if ride_ids:
         try:
-            claims = (
-                db_supabase.supabase.table("ride_incentive_claims")
-                .select("ride_id, bonus_amount")
-                .in_("ride_id", ride_ids)
-                .execute()
-            ).data or []
+            claims_res = await db_supabase.run_sync(
+                lambda: (
+                    db_supabase.supabase.table("ride_incentive_claims")
+                    .select("ride_id, bonus_amount")
+                    .in_("ride_id", ride_ids)
+                    .execute()
+                )
+            )
+            claims = getattr(claims_res, "data", None) or []
             for c in claims:
                 rid = str(c.get("ride_id", ""))
                 incentive_map[rid] = incentive_map.get(rid, 0) + float(c.get("bonus_amount") or 0)

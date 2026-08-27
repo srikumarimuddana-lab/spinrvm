@@ -161,6 +161,11 @@ _breaker = _CircuitBreaker()
 _DB_THREAD_POOL_SIZE = int(_os.environ.get("DB_THREAD_POOL_SIZE") or _os.environ.get("DB_THREAD_POOL_MAX") or "64")
 _DB_EXECUTOR = _ThreadPoolExecutor(max_workers=_DB_THREAD_POOL_SIZE, thread_name_prefix="spinr-db")
 
+# Default row cap for get_rows when no explicit limit is provided.
+# Prevents accidental full-table scans. Callers that genuinely need
+# more rows must pass an explicit limit (or use the paginated helper).
+_DEFAULT_ROW_LIMIT = 1000
+
 
 def _record_db_queue_depth() -> None:
     queue = getattr(_DB_EXECUTOR, "_work_queue", None)
@@ -876,6 +881,12 @@ async def get_rows(
 ):
     if not supabase:
         return []
+    if limit is not None and limit == 0:
+        return []
+
+    # Apply default limit when none specified to prevent unbounded queries
+    if limit is None:
+        limit = _DEFAULT_ROW_LIMIT
 
     def _fn():
         q = supabase.table(table).select(columns)
@@ -884,7 +895,7 @@ async def get_rows(
             q = q.order(order, desc=desc)
         if limit is not None and offset is not None:
             q = q.range(offset, offset + limit - 1)
-        elif limit:
+        elif limit is not None:
             q = q.limit(limit)
         elif offset is not None:
             q = q.offset(offset)

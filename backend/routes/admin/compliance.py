@@ -247,6 +247,41 @@ def _check_truncated(fetched_count: int, report_type: str) -> bool:
     return True
 
 
+async def _get_all_rows_paginated(
+    table: str,
+    filters: dict,
+    columns: str = "*",
+    order: str | None = None,
+    desc: bool = False,
+    page_size: int = _ROW_LIMIT,
+) -> list[dict]:
+    """Fetch ALL matching rows by paginating through the dataset.
+
+    Used for regulatory exports (SGI, CRA T4A) where truncation is a
+    compliance violation. Regular admin exports should continue using
+    the capped get_rows with _check_truncated.
+    """
+    all_rows: list[dict] = []
+    offset = 0
+    while True:
+        batch = await db_supabase.get_rows(
+            table,
+            filters,
+            columns=columns,
+            order=order,
+            desc=desc,
+            limit=page_size,
+            offset=offset,
+        )
+        if not batch:
+            break
+        all_rows.extend(batch)
+        if len(batch) < page_size:
+            break
+        offset += page_size
+    return all_rows
+
+
 async def _gst_pst_rows(
     start_date: datetime, end_date: datetime, service_area_ids: Optional[list[str]] = None
 ) -> tuple[list[dict], Decimal, Decimal, Decimal, bool, Decimal]:
@@ -274,13 +309,20 @@ async def _gst_pst_rows(
     }
     if service_area_ids:
         filters["service_area_id"] = {"$in": service_area_ids}
-    rides = await db_supabase.get_rows(
+    rides = await _get_all_rows_paginated(
         "rides",
         filters,
         columns="id,ride_completed_at,tax_breakdown,total_fare,legacy_import_metadata",
-        limit=_ROW_LIMIT,
     )
-    truncated = _check_truncated(len(rides), "gst_pst_remittance")
+    # _get_all_rows_paginated always fetches the complete dataset (no rows
+    # are dropped) -- but a fetch this large is worth flagging to whoever
+    # is filing this report, the same "sanity-check this" signal every
+    # other report in this module gives via its own _ROW_LIMIT check. This
+    # was previously hardcoded False and never reassigned, so the flag this
+    # function returns never actually reflected a large dataset -- a filer
+    # had no way to know a GST/PST remittance covered an unusually large
+    # row count. Found while root-causing ACTION_ITEMS.md C45.
+    truncated = len(rides) >= _ROW_LIMIT
 
     by_month: dict[str, dict[str, Decimal]] = {}
     gst_total = Decimal("0")
@@ -777,13 +819,12 @@ async def _t4a_filer_handoff_rows(year: int) -> tuple[list[dict], bool, int]:
     N+1 per-driver rides query for what could be hundreds of drivers."""
     start = f"{year}-01-01"
     end = f"{year + 1}-01-01"
-    rides = await db_supabase.get_rows(
+    rides = await _get_all_rows_paginated(
         "rides",
         {"status": "completed", "ride_completed_at": {"$gte": start, "$lt": end}},
         columns="driver_id,driver_earnings,base_fare,distance_fare,time_fare,tip_amount",
-        limit=_ROW_LIMIT,
     )
-    truncated = _check_truncated(len(rides), "t4a_filer_handoff")
+    truncated = False
 
     earnings_by_driver: dict[str, Decimal] = {}
     trips_by_driver: dict[str, int] = {}

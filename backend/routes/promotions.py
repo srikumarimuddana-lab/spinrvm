@@ -525,16 +525,6 @@ async def list_available_promos(
     total_rides = await db_supabase.count_documents(
         "rides", {"rider_id": user_id, "status": RideStatus.COMPLETED, **EXCLUDE_LEGACY_RIDES}
     )
-    recent_cutoff_30 = (now - timedelta(days=30)).isoformat()
-    await db_supabase.count_documents(
-        "rides",
-        {
-            "rider_id": user_id,
-            "status": RideStatus.COMPLETED,
-            "ride_completed_at": {"$gte": recent_cutoff_30},
-            **EXCLUDE_LEGACY_RIDES,
-        },
-    )
 
     # Pre-fetch all user promo applications in one query so per-promo usage
     # check is O(1) instead of one DB call per promo (N+1 reduction).

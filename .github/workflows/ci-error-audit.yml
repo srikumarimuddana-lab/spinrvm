@@ -246,9 +246,15 @@ jobs:
     runs-on: ubuntu-latest
     needs: [check-trigger, run-audit]
     # H3: also guard on run-audit succeeding
+    # CR #4612: only file issues for failures on `main` (or deliberate manual
+    # dispatches). Failures on ephemeral claude/* and dependabot/* branches
+    # produced most of the pre-dedup 2,500-issue backlog; for those branches
+    # the run-audit report artifact (uploaded above) is the record — no issue.
     if: |
       needs.check-trigger.outputs.should_run == 'true' &&
-      needs.run-audit.result == 'success'
+      needs.run-audit.result == 'success' &&
+      (github.event_name == 'workflow_dispatch' ||
+       needs.check-trigger.outputs.head_branch == 'main')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 

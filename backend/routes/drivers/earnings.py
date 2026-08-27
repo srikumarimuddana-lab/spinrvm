@@ -114,12 +114,15 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         total_incentives = Decimal("0")
         _ride_ids = [r["id"] for r in rides if r.get("id")]
         if _ride_ids:
-            _claims = (
-                db_supabase.supabase.table("ride_incentive_claims")
-                .select("bonus_amount")
-                .in_("ride_id", _ride_ids)
-                .execute()
-            ).data or []
+            _claims_res = await db_supabase.run_sync(
+                lambda: (
+                    db_supabase.supabase.table("ride_incentive_claims")
+                    .select("bonus_amount")
+                    .in_("ride_id", _ride_ids)
+                    .execute()
+                )
+            )
+            _claims = getattr(_claims_res, "data", None) or []
             total_incentives = sum((_d(c.get("bonus_amount") or 0) for c in _claims), Decimal("0"))
 
         # Cancellation/no-show fees the driver earned — lifetime, no date
@@ -402,12 +405,15 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
         _incentive_total = Decimal("0")
         if _ride_ids:
             try:
-                _claims = (
-                    db_supabase.supabase.table("ride_incentive_claims")
-                    .select("bonus_amount")
-                    .in_("ride_id", _ride_ids)
-                    .execute()
-                ).data or []
+                _claims_res = await db_supabase.run_sync(
+                    lambda: (
+                        db_supabase.supabase.table("ride_incentive_claims")
+                        .select("bonus_amount")
+                        .in_("ride_id", _ride_ids)
+                        .execute()
+                    )
+                )
+                _claims = getattr(_claims_res, "data", None) or []
                 _incentive_total = sum(Decimal(str(c.get("bonus_amount") or 0)) for c in _claims)
             except Exception:
                 logger.debug("earnings: ride_incentive_claims lookup failed", exc_info=True)

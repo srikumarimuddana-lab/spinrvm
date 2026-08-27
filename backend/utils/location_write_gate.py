@@ -25,13 +25,23 @@ must win: a Redis blip may never suppress a durable location write. That is the
 same ordering the WebSocket handler already enforced by writing Postgres before
 touching Redis.
 
-**Shadow mode.** Gated on the ``location_marker_write_gate_enabled`` app setting
-(default OFF). While off, the gate still evaluates and counts what it *would*
-have skipped as ``outcome="shadow_throttled"`` but every write still lands. That
-yields a real production measurement of write volume and throttle hit-rate at
-zero behavioural risk — the flag flips on from evidence, not from arithmetic.
-Nothing on this path has ever been measured against live traffic (ACTION_ITEMS
-E2 is built but blocked on E1).
+**Shadow mode, and why it is not universal.** Gated on the
+``location_marker_write_gate_enabled`` app setting (default OFF). While off, the
+gate evaluates and counts what it *would* have skipped as
+``outcome="shadow_throttled"`` but the write still lands — yielding a real
+production measurement of write volume and throttle hit-rate before any
+behaviour changes. Nothing on this path has ever been measured against live
+traffic (ACTION_ITEMS E2 is built but blocked on E1).
+
+That is only sound for a caller whose pre-gate behaviour was "write every time",
+which is true of the REST handlers and **not** of the WebSocket ones. The WS
+handlers already enforced an unconditional 3 s throttle
+(``conn_state["last_loc_db_write"]``), so letting them fall through in shadow
+mode would delete a shipped throttle and *increase* write volume on merge — the
+exact opposite of this module's purpose. Callers that were already throttled
+therefore pass ``unthrottled_before=False`` and honour the window regardless of
+the flag. Get this wrong and the failure is silent and backwards: the gate
+appears inert while quietly amplifying the write path it exists to protect.
 
 **Period 1 is never skipped.** ``routes/drivers/location.py`` folds the
 insurance-period deadhead accumulator (``period1_accum_km`` /
@@ -74,6 +84,7 @@ _PREFIX = "spinr:locwrite:"
 
 _WRITE_METRIC = "spinr_drivers_location_write_total"
 _GATE_FAILED_METRIC = "spinr_drivers_location_gate_failed_total"
+_SETTINGS_FAILED_METRIC = "spinr_drivers_location_gate_settings_failed_total"
 
 
 def _key(driver_id: str) -> str:
@@ -90,14 +101,33 @@ async def _gate_enabled() -> bool:
 
         settings = await get_app_settings() or {}
         return bool(settings.get(GATE_FLAG, False))
-    except Exception:
+    except Exception as exc:
         # Settings unreadable — degrade to today's behaviour (always write)
         # rather than throttling on an unknown flag state.
-        logger.error("location write gate: settings read failed", exc_info=True)
+        #
+        # DatabaseError.__str__ is only ever "Database operation failed"; the
+        # real driver error lives in details["original"] (CLAUDE.md: include it
+        # explicitly). Without this the log names the wrapper, not the cause.
+        _details = getattr(exc, "details", None) or {}
+        logger.error(
+            "location write gate: settings read failed",
+            extra={
+                "error": str(exc),
+                "original": _details.get("original"),
+                "flag": GATE_FLAG,
+            },
+            exc_info=True,
+        )
+        # Paired metric so this branch is alertable, not log-only — it is the
+        # same degraded-but-recovered shape as the Redis fail-open below, and
+        # previously only that half emitted a counter.
+        _metric_inc(_SETTINGS_FAILED_METRIC)
         return False
 
 
-async def should_write_marker(driver_id: str, *, path: str, force: bool = False) -> bool:
+async def should_write_marker(
+    driver_id: str, *, path: str, force: bool = False, unthrottled_before: bool = True
+) -> bool:
     """Return True iff this caller should issue the ``drivers`` marker UPDATE.
 
     ``path`` labels the ingestion route for metrics (``rest_v1``,
@@ -106,6 +136,13 @@ async def should_write_marker(driver_id: str, *, path: str, force: bool = False)
     ``force=True`` bypasses the gate for a write that must not be dropped (a
     Period 1 accumulator delta). The write still restarts the window, since the
     row genuinely was written.
+
+    ``unthrottled_before`` describes what this call site did *before* the gate
+    existed, and decides whether shadow mode applies to it. ``True`` (the REST
+    handlers) means the path wrote every time, so falling through while the flag
+    is off preserves that. ``False`` (the WebSocket handlers) means the path
+    already enforced its own 3 s throttle, so the window is honoured regardless
+    of the flag — otherwise shipping this module would *raise* write volume.
     """
     if not driver_id:
         return True
@@ -119,7 +156,10 @@ async def should_write_marker(driver_id: str, *, path: str, force: bool = False)
         except Exception as exc:
             # Non-fatal: the write proceeds regardless, we just lose one
             # window's coalescing.
-            logger.warning(f"location write gate: window refresh failed (driver={driver_id}): {exc}")
+            logger.warning(
+                "location write gate: window refresh failed",
+                extra={"driver_id": str(driver_id), "path": path, "error": str(exc)},
+            )
         _metric_inc(_WRITE_METRIC, {"path": path, "outcome": "period1_forced"})
         return True
 
@@ -128,7 +168,8 @@ async def should_write_marker(driver_id: str, *, path: str, force: bool = False)
     except Exception as exc:
         # Fail open — a Redis outage must never suppress a durable write.
         logger.error(
-            f"location write gate: Redis unavailable, failing open (driver={driver_id}): {exc}",
+            "location write gate: Redis unavailable, failing open",
+            extra={"driver_id": str(driver_id), "path": path, "error": str(exc)},
             exc_info=True,
         )
         _metric_inc(_GATE_FAILED_METRIC)
@@ -139,8 +180,11 @@ async def should_write_marker(driver_id: str, *, path: str, force: bool = False)
         _metric_inc(_WRITE_METRIC, {"path": path, "outcome": "written"})
         return True
 
-    # A marker write for this driver already landed inside the window.
-    if await _gate_enabled():
+    # A marker write for this driver already landed inside the window. Skip it
+    # when the flag is on, or when this caller was already throttled before the
+    # gate existed (shadow mode must not hand such a path a write it would not
+    # previously have made).
+    if not unthrottled_before or await _gate_enabled():
         _metric_inc(_WRITE_METRIC, {"path": path, "outcome": "throttled"})
         return False
 

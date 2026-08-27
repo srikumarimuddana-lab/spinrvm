@@ -46,11 +46,17 @@ Adds `backend/utils/location_write_gate.py`: a single Redis-keyed window per
 driver (`SET spinr:locwrite:{id} 1 NX EX 3`) shared by every GPS ingestion route,
 replacing both the per-connection WS timer and the absent REST throttle.
 
-Ships **flag-off, in shadow mode**. While `location_marker_write_gate_enabled` is
-off the gate evaluates and counts what it *would* have skipped as
-`outcome="shadow_throttled"`, but every write still lands. That produces a real
-production number for write volume and throttle hit-rate before any behaviour
-changes.
+Ships **flag-off, in shadow mode** — for the REST handlers. While
+`location_marker_write_gate_enabled` is off those three evaluate the gate, count
+what it *would* have skipped as `outcome="shadow_throttled"`, and still write.
+That produces a real production number for write volume and throttle hit-rate
+before any behaviour changes.
+
+The two WebSocket handlers pass `unthrottled_before=False` and honour the window
+regardless of the flag, because they already enforced their own unconditional 3 s
+throttle before this change. Letting them fall through in shadow mode would have
+removed a shipped throttle rather than preserving behaviour — see the correction
+in §5.
 
 Also removes the `manager.update_driver_location(...)` call sites from the two WS
 handlers. That wrote a 60 s `spinr:driver:location:{id}` cache on every ping,
@@ -71,6 +77,18 @@ Every consumer of `drivers.lat/lng` was enumerated by grep:
 | Surge supply counts | `utils/surge_engine.py:135` | 2-min engine cadence |
 | Admin live monitoring | `routes/admin/monitoring.py:161` | cosmetic |
 | Stale-intent reconciler | `utils/stale_intent_reconciler.py:135` | see below |
+| Arrival 200m geofence | `routes/drivers/ride_flow.py:740-756` | **hard-rejects** >200m; self-corrects on retry |
+| Live-route origin | `routes/rides/tracking.py:72-91` | display |
+| Active-ride rider poll | `routes/rides/queries.py:101-103` | display |
+| Trip-share safety link | `routes/rides/sharing.py:274-296` | display (exact, uncoarsened) |
+| "Drivers nearby" badge | `routes/rides/estimates.py:378-386` | display |
+
+The last five were **missed by my own blast-radius grep** and added by the
+dispatch audit. Only the first is a different risk shape: `POST /rides/{id}/arrive`
+hard-rejects a driver more than 200 m from pickup, so a stale position yields a
+user-visible rejection rather than a display lag. At ≤3 s it self-corrects on the
+driver's next tap — but "every consumer is a passive reader" was not true as
+originally written.
 
 `.claude/context/domain-dispatch.md:55` sets the documented freshness budget at
 **30 s**; a 3 s gate is well inside it. `dispatch_service.py:115-142` warns *"Do
@@ -101,15 +119,36 @@ the write, and `_is_dispatchable_driver` only requires non-null `lat`/`lng`.
 **Background loops:** no new loop added; no change to `core/lifespan.py`. No ride
 state machine, money, or wallet path is touched. `is_online` / `is_available` are
 never written by this path, so the `is_available ⇒ is_online` invariant is
-unaffected — and the open race in `docs/audit/findings.md` #13 (location writes
-vs. dispatch claim on the shared `drivers` row) is *reduced*, not widened, since
-there are strictly fewer writes.
+unaffected — independently confirmed by the dispatch audit, which verified both
+write sites emit only lat/lng/updated_at/heading/period1_*, never the
+availability columns.
+
+The open race in `docs/audit/findings.md` #13 (location writes vs. dispatch claim
+on the shared `drivers` row) is *reduced* **once the flag is on** — strictly
+fewer writes to the contended row — and unchanged while it is off. An earlier
+draft stated that reduction unconditionally; it only holds post-flip.
 
 ## 5. User-experience effect
 
-**Nobody, in the shipped state.** The flag is off, so every write still lands and
-behaviour is byte-identical to before — apart from the removed dead Redis cache
-write, which had no reader and therefore no observable effect.
+**Nobody, in the shipped state — after the correction below.**
+
+**Correction (2026-08-27, found by pre-merge audit).** The first cut of this
+change did not have that property and the claim here was wrong. Shadow mode let
+every caller fall through to a write while the flag was off. That preserved REST
+behaviour (no pre-existing throttle) but **deleted the WebSocket handlers'
+unconditional 3 s throttle**, so merging it would have *increased* sustained
+write volume on the highest-frequency write path in the system — the opposite of
+this change's purpose, arriving on merge, while looking inert because the flag
+was off. Neither the test suite nor the author caught it: every test called the
+gate exactly once, where "always writes" and "one write per window" are
+indistinguishable.
+
+Fixed via `should_write_marker(..., unthrottled_before=)`. Callers that already
+throttled before the gate existed (both WS handlers) honour the window regardless
+of the flag; only callers that previously wrote every time (the three REST
+handlers) fall through in shadow mode. Verified 1-of-5 writes on the WS path and
+5-of-5 on REST with the flag off, locked in by
+`test_ws_path_throttles_even_in_shadow_mode`.
 
 With the flag **on**: no rider- or driver-facing copy, screen, or flow changes. A
 driver's car marker on the admin live map and the rider's `/drivers/nearby` view
@@ -214,6 +253,8 @@ throttles cleanly if the gate module itself misbehaves.
 
 - [x] Rollback plan is concrete and testable (single `app_settings` flag).
 - [x] Blast radius is stated and enumerated by grep, not assumed.
-- [x] No silent behavior change to an already-shipped flow — the shipped state is
-      behaviourally identical; the flag flip is the behaviour change and its UX
-      effect is stated in §5.
+- [x] No silent behavior change to an already-shipped flow — **after the §5
+      correction**. The first cut violated exactly this gate on the WebSocket
+      path, silently and in the wrong direction, and was caught by pre-merge
+      audit rather than by tests. That is the argument for running the audit at
+      all while no automated PR review is active (C7/C9).

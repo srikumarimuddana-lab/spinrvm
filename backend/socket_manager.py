@@ -568,7 +568,7 @@ class ConnectionManager:
     # cheap. Wire a reader before reinstating the write. Endgame note (PR
     # #4594 review): two competing futures exist for this path — Redis as the
     # live-position read layer (this pair becomes load-bearing) vs. a batched
-    # write-behind flush to Postgres (ACTION_ITEMS C43 step 4 — this pair gets
+    # write-behind flush to Postgres (ACTION_ITEMS C48 step 4 — this pair gets
     # deleted). Neither is decided; whichever lands first should resolve the
     # other, not accrete alongside it.
     async def update_driver_location(self, driver_id: str, lat: float, lng: float):

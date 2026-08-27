@@ -46,7 +46,7 @@ Supabase compute is tier-fixed, does not autoscale, and Small→Medium is a manu
 to 1-per-3s pre-gate, so the flip's whole win is deduping REST flushes against
 the shared window — ~120/s → ~85/s (~30%) at the same arithmetic. That defers,
 not removes, the tier decision; the measured `shadow_throttled` fraction
-(ACTION_ITEMS C43) is what turns this into a real number.
+(ACTION_ITEMS C48) is what turns this into a real number.
 
 ## 3. Fix / remediation
 

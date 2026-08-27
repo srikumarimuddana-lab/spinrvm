@@ -20,21 +20,38 @@ Environment — the same variables the backend itself reads:
     SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 
 Safety, enforced in the service layer (not repeated here):
-  - a CSV row whose phone/email already matches an EXISTING user or driver
-    not created by a previous run of THIS importer is an error, never a
-    silent merge — expect a real share of the export to hit this path, since
-    many of these phones already resolved during the ride import
-    (booking_import_service.py's own rider/driver phone matching).
+  - a CSV row whose phone/email already matches an EXISTING account is
+    LINKED, never a competing duplicate — expect a real share of the export
+    to hit this path (35.6% of the real export, confirmed against
+    production), since many of these phones already resolved during the
+    ride import (booking_import_service.py's own rider/driver phone
+    matching). Two shapes, both additive-only: a match against an existing
+    DRIVER enriches that driver's history (no new row); a match against an
+    account with no driver yet gets a NEW driver row pointed at that
+    existing user (no duplicate user, `is_driver` flipped True). Neither
+    ever mutates a live driver's own name/phone/status/vehicle/rating.
   - every created driver lands status='needs_review', unverified, offline,
     unavailable — unconditionally. No document rows are created (the
     export's documents field is filenames only, no image bytes, nothing
     verifiable). No vehicle fields are set (vehicle_details.csv is a
     separate crosswalk — Phase 2, needs this driver row to exist first).
 
-Rollback for an applied run: every created driver's id and old_driver_id are
-printed. To revert, delete those driver rows (and their now-orphaned user
-rows, matched by the same batch's phone list) — no cascading state (no
-payout, no ride, no Stripe call) is triggered by this write.
+Rollback for an applied run — three different shapes printed separately,
+because they touch different rows:
+  - NEW rows (fresh user+driver, no existing-account match): delete those
+    driver rows and their now-orphaned user rows, matched by the printed
+    id/old_driver_id pairs — no cascading state (no payout, no ride, no
+    Stripe call) is triggered by this write.
+  - LINKED accounts (sub-population 1): delete the new driver row; on the
+    existing user, remove this batch's entry from
+    `legacy_import_metadata.mongo_driver_history` and only clear
+    `is_driver` back to False if it was False before this run AND no other
+    driver row now references that user — check both before touching it,
+    since a real driver signup between apply and rollback would make
+    clearing it wrong.
+  - ENRICHED drivers (sub-population 2): remove this batch's entry from the
+    existing driver's `legacy_import_metadata.mongo_driver_history` — no
+    other field on that driver was touched, so nothing else to revert.
 """
 
 from __future__ import annotations
@@ -86,25 +103,40 @@ def main() -> int:
         logger.error("refusing to apply: %d validation error(s) above", len(plan.errors))
         return 1
 
+    total_planned = len(plan.drivers_to_insert) + len(plan.users_to_update) + len(plan.drivers_to_enrich)
+
     if not args.apply:
         logger.info(
-            "dry run only — pass --apply to write %d driver(s)/user(s)",
+            "dry run only — pass --apply to write %d new driver(s), link %d existing account(s), "
+            "enrich %d existing driver(s)",
             len(plan.drivers_to_insert),
+            len(plan.users_to_update),
+            len(plan.drivers_to_enrich),
         )
         return 0
 
-    if not plan.drivers_to_insert:
+    if not total_planned:
         logger.info("nothing to apply")
         return 0
 
     svc.commit_mongo_driver_import_plan(plan)
-    logger.info("committed %d driver(s), batch=%s", len(plan.drivers_to_insert), batch)
+    logger.info(
+        "committed %d new driver(s), %d linked account(s), %d enriched driver(s), batch=%s",
+        len(plan.drivers_to_insert),
+        len(plan.users_to_update),
+        len(plan.drivers_to_enrich),
+        batch,
+    )
     for driver in plan.drivers_to_insert:
         logger.info(
             "created driver id=%s old_driver_id=%s",
             driver["id"],
             driver["legacy_import_metadata"]["old_driver_id"],
         )
+    for upd in plan.users_to_update:
+        logger.info("linked new driver profile to existing user id=%s", upd["id"])
+    for enrich in plan.drivers_to_enrich:
+        logger.info("enriched existing driver id=%s history only", enrich["id"])
     return 0
 
 

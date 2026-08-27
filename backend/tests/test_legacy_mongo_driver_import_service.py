@@ -29,6 +29,7 @@ class _FakeQuery:
         self.store = store
         self._filters = []
         self._insert = None
+        self._update = None
 
     def select(self, *_a, **_k):
         return self
@@ -48,6 +49,10 @@ class _FakeQuery:
         self._insert = rows if isinstance(rows, list) else [rows]
         return self
 
+    def update(self, fields):
+        self._update = fields
+        return self
+
     def _matched(self):
         rows = list(self.store.get(self.table, []))
         for op, col, val in self._filters:
@@ -62,6 +67,11 @@ class _FakeQuery:
         if self._insert is not None:
             self.store.setdefault(self.table, []).extend(self._insert)
             return _FakeExecute(list(self._insert))
+        if self._update is not None:
+            matched = self._matched()
+            for row in matched:
+                row.update(self._update)
+            return _FakeExecute(matched)
         return _FakeExecute(self._matched())
 
 
@@ -262,30 +272,94 @@ def test_malformed_email_is_warning_not_error_row_still_imports(monkeypatch):
     assert plan.users_to_insert[0]["email"] is None
 
 
-# ── build_mongo_driver_import_plan: existing-match safety rule ──────────
+# ── build_mongo_driver_import_plan: existing-match linking (2026-08-27) ─
+#
+# Decided: an existing-account match is no longer a hard error (see
+# docs/migration/2026-08-27-legacy-driver-blank-name-root-cause.md §3/§6).
 
 
-def test_existing_organic_user_match_is_error_never_silent_merge(monkeypatch):
-    _install(monkeypatch, store={"users": [{"id": "u-organic", "phone": "+13065551234", "email": None}]})
-    plan = svc.build_mongo_driver_import_plan([_mongo_row()], service_area=SERVICE_AREA, import_batch="b1")
-    assert any("already exists" in e.message for e in plan.errors)
-    assert not plan.drivers_to_insert
-    assert not plan.users_to_insert
-
-
-def test_existing_organic_driver_match_is_error_never_silent_merge(monkeypatch):
-    _install(
+def test_existing_user_match_links_new_driver_and_sets_is_driver(monkeypatch):
+    """Sub-population 1: phone matches an existing account with no driver
+    row yet -- link a NEW driver row to it, no duplicate user."""
+    fake = _install(
         monkeypatch,
-        store={"drivers": [{"id": "drv-organic", "phone": "+13065551234", "legacy_import_metadata": {}}]},
+        store={"users": [{"id": "u-organic", "phone": "+13065551234", "email": None, "is_driver": False}]},
     )
     plan = svc.build_mongo_driver_import_plan([_mongo_row()], service_area=SERVICE_AREA, import_batch="b1")
-    assert any("already exists" in e.message for e in plan.errors)
-    assert not plan.drivers_to_insert
+    assert not plan.errors
+    assert not plan.users_to_insert  # no duplicate user created
+    assert len(plan.drivers_to_insert) == 1
+    assert plan.drivers_to_insert[0]["user_id"] == "u-organic"
+
+    assert len(plan.users_to_update) == 1
+    upd = plan.users_to_update[0]
+    assert upd["id"] == "u-organic"
+    assert upd["is_driver"] is True
+    history = upd["legacy_import_metadata"]["mongo_driver_history"]
+    assert len(history) == 1
+    assert history[0]["old_driver_id"] == "6923ea32d1bde481895439f4"
+
+    svc.commit_mongo_driver_import_plan(plan)
+    stored_user = next(u for u in fake.store["users"] if u["id"] == "u-organic")
+    assert stored_user["is_driver"] is True
+    assert stored_user["phone"] == "+13065551234"  # unchanged -- update never touched it
 
 
-def test_resume_path_skips_with_warning_not_error(monkeypatch):
-    """A driver already created by a PREVIOUS run of THIS importer for the
-    same old_driver_id is a resume, not a conflict."""
+def test_existing_user_match_does_not_reflip_is_driver_if_already_true(monkeypatch):
+    _install(
+        monkeypatch,
+        store={"users": [{"id": "u-organic", "phone": "+13065551234", "email": None, "is_driver": True}]},
+    )
+    plan = svc.build_mongo_driver_import_plan([_mongo_row()], service_area=SERVICE_AREA, import_batch="b1")
+    assert not plan.errors
+    upd = plan.users_to_update[0]
+    assert "is_driver" not in upd  # already true -- don't rewrite what isn't changing
+    assert "legacy_import_metadata" in upd  # history is still recorded
+
+
+def test_existing_driver_match_enriches_history_no_new_row(monkeypatch):
+    """Sub-population 2: phone matches an existing REAL driver -- enrich
+    that driver's history, never create a competing needs_review row."""
+    fake = _install(
+        monkeypatch,
+        store={
+            "drivers": [
+                {
+                    "id": "drv-organic",
+                    "phone": "+13065551234",
+                    "legacy_import_metadata": {"source": "legacy_saskatoon_driver_import"},
+                    "name": "Real Driver",
+                    "status": "active",
+                }
+            ]
+        },
+    )
+    plan = svc.build_mongo_driver_import_plan([_mongo_row()], service_area=SERVICE_AREA, import_batch="b1")
+    assert not plan.errors
+    assert not plan.drivers_to_insert  # no duplicate driver row
+    assert not plan.users_to_insert
+
+    assert len(plan.drivers_to_enrich) == 1
+    enrich = plan.drivers_to_enrich[0]
+    assert enrich["id"] == "drv-organic"
+    meta = enrich["legacy_import_metadata"]
+    # The driver's OWN prior source is preserved, not clobbered.
+    assert meta["source"] == "legacy_saskatoon_driver_import"
+    assert len(meta["mongo_driver_history"]) == 1
+    assert meta["mongo_driver_history"][0]["old_driver_id"] == "6923ea32d1bde481895439f4"
+
+    svc.commit_mongo_driver_import_plan(plan)
+    stored_driver = next(d for d in fake.store["drivers"] if d["id"] == "drv-organic")
+    # Live fields never touched.
+    assert stored_driver["name"] == "Real Driver"
+    assert stored_driver["status"] == "active"
+    assert stored_driver["legacy_import_metadata"]["mongo_driver_history"]
+
+
+def test_resume_path_via_direct_creation_shape_skips_with_warning(monkeypatch):
+    """A driver already CREATED by a previous run of THIS importer for the
+    same old_driver_id is a resume, not new work -- the original top-level
+    source/old_driver_id shape."""
     _install(
         monkeypatch,
         store={
@@ -306,11 +380,38 @@ def test_resume_path_skips_with_warning_not_error(monkeypatch):
     assert any(w.field == "resume" for w in plan.warnings)
     assert not plan.drivers_to_insert
     assert not plan.users_to_insert
+    assert not plan.drivers_to_enrich
 
 
-def test_matching_driver_from_a_different_old_id_is_still_a_conflict_error(monkeypatch):
-    """Same phone, but the existing driver's legacy_import_metadata points at
-    a DIFFERENT old_driver_id -- must not be treated as a resume."""
+def test_resume_path_via_enrichment_history_shape_skips_with_warning(monkeypatch):
+    """A driver already ENRICHED by a previous run of THIS importer for the
+    same old_driver_id -- the mongo_driver_history list shape -- is also a
+    resume, not a second history entry."""
+    _install(
+        monkeypatch,
+        store={
+            "drivers": [
+                {
+                    "id": "drv-organic",
+                    "phone": "+13065551234",
+                    "legacy_import_metadata": {
+                        "source": "legacy_saskatoon_driver_import",
+                        "mongo_driver_history": [{"old_driver_id": "6923ea32d1bde481895439f4", "batch": "prior"}],
+                    },
+                }
+            ]
+        },
+    )
+    plan = svc.build_mongo_driver_import_plan([_mongo_row()], service_area=SERVICE_AREA, import_batch="b1")
+    assert not plan.errors
+    assert any(w.field == "resume" for w in plan.warnings)
+    assert not plan.drivers_to_enrich
+    assert not plan.drivers_to_insert
+
+
+def test_matching_driver_from_a_different_old_id_is_enriched_not_treated_as_resume(monkeypatch):
+    """Same phone, but the existing driver's history points at a DIFFERENT
+    old_driver_id -- a second real history entry, not a false resume."""
     _install(
         monkeypatch,
         store={
@@ -324,8 +425,11 @@ def test_matching_driver_from_a_different_old_id_is_still_a_conflict_error(monke
         },
     )
     plan = svc.build_mongo_driver_import_plan([_mongo_row()], service_area=SERVICE_AREA, import_batch="b1")
-    assert any("already exists" in e.message for e in plan.errors)
-    assert not plan.drivers_to_insert
+    assert not plan.errors
+    assert len(plan.drivers_to_enrich) == 1
+    assert plan.drivers_to_enrich[0]["legacy_import_metadata"]["mongo_driver_history"][0]["old_driver_id"] == (
+        "6923ea32d1bde481895439f4"
+    )
 
 
 # ── build_mongo_driver_import_plan: rating parsing ──────────────────────

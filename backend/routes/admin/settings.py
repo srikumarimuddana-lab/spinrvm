@@ -468,6 +468,12 @@ class SettingsUpdateRequest(BaseModel):
     # route_gap_monitor.py (FCM nudge), stale_p3_closer.py (autoclose).
     idle_location_v2_enabled: Optional[bool] = None
     period1_distance_tracking_enabled: Optional[bool] = None
+    # Migration 370. Driver location marker write gate (utils/
+    # location_write_gate.py): False = shadow mode (count-only), True =
+    # coalesced REST marker writes actually skip. Added in the same PR as
+    # the gate after review caught the column/field pair missing — the
+    # exact drift pattern documented above (legacy_consent_notice_enabled).
+    location_marker_write_gate_enabled: Optional[bool] = None
     p2_route_geometry_enabled: Optional[bool] = None
     rider_show_pickup_leg_enabled: Optional[bool] = None
     location_health_push_nudge_enabled: Optional[bool] = None

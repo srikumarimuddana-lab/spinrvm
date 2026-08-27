@@ -196,10 +196,24 @@ await _write_marker_if_due({"user_id": current_user["id"]}, update_data, str(dri
 
 ## 8. Rollback plan
 
-**Flip `location_marker_write_gate_enabled` to `false` in the `app_settings`
-table.** No redeploy, no migration, no data to unwind. Since the flag ships off,
-this is also the *current* state — turning it on is the deliberate action, and
-turning it back off is instant.
+**Flip `location_marker_write_gate_enabled` to `false` on the `settings` row.**
+No redeploy, no data to unwind. Since the flag ships off, this is also the
+*current* state — turning it on is the deliberate action, and turning it back
+off is instant.
+
+**Correction (2026-08-27, found by review).** As first merged, this rollback
+plan referenced a switch that could not be operated: no migration created the
+column, the admin save path silently dropped the unknown key
+(`SettingsUpdateRequest` is `extra="ignore"` + `model_dump(exclude_none=True)`),
+and a direct SQL flip failed on the missing column — the third instance of the
+settings-column drift pattern `test_admin_settings_write_allowlist_drift`
+documents. Fixed in the same PR: migration 370 adds the column, the admin write
+model gains the field, and the allowlist snapshot is updated.
+
+Scope caveat the original text elided: the flag governs only the REST shadow/
+enforce choice. The WS handlers honour the Redis-keyed window regardless of the
+flag, so reverting *that* behaviour (back to the per-connection in-process
+timer) is a code revert + redeploy, not a flag flip.
 
 Nothing here writes money, ride state, or insurance-period rows, so there is no
 data-level remediation to plan. A `git revert` of both commits restores the prior

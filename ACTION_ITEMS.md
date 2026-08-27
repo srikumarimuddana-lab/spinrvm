@@ -16312,11 +16312,20 @@ how much they de-risk a public launch._
   a 500 here likely means a real exception is being thrown and caught
   generically rather than the ownership check cleanly rejecting, worth
   treating as a real regression, not a flaky test.
-- **Impact:** `Money-Path Coverage Floor` and `Coverage regression check`
-  guard rails also fail as a downstream consequence (coverage can't be
-  computed when `backend-test` errors out) — same root cause, not two
-  separate gaps. Every open PR touching backend code inherits this red gate
+- **Impact:** Every open PR touching backend code inherits this red gate
   regardless of its own diff.
+- **Correction (2026-08-27, later same day):** this entry originally claimed
+  `Money-Path Coverage Floor` and `Coverage regression check` fail as a
+  *downstream consequence of the same root cause* as the two pytest
+  failures above. That was wrong — see **C47**, which found those two
+  `ci-guardrails.yml` jobs are killed by an external GitHub-Actions-level
+  cancellation (exit 143, "runner has received a shutdown signal", job step
+  conclusion `cancelled`) with pytest showing zero failures up to the kill,
+  not by either of the two pytest-level failures documented here. They land
+  near the same test file by coincidence of suite progress at cancellation
+  time, not because of a shared cause. Don't treat a `Money-path
+  coverage floor check` / `Coverage regression check` failure as evidence
+  for this item without checking C47 first.
 - **Action:** root-cause both failures directly (not from this session —
   found while triaging an unrelated PR, not the task at hand). Priority on
   failure 2 given the money/auth adjacency — trace what changed in the
@@ -16379,6 +16388,76 @@ how much they de-risk a public launch._
   show `is_corrected: true` for the affected rides' Period-2 spans (both
   consumers already shipped and tested in B34's original close — no
   consumer-side change was needed for this to take effect).
+
+### C47. `ci-guardrails.yml`'s coverage-gate jobs get externally cancelled mid-suite — not a pytest failure, not the C45 flake
+
+- [ ] **Status:** open (external-cause CI reliability gap). Found 2026-08-27
+  triaging PR #4595's CI: `Money-path coverage floor check` and `Coverage
+  regression check` (`ci-guardrails.yml`) both failed on the same commit
+  (`fb233e6e3`, run `33086878967`). Initially mis-diagnosed in a PR comment
+  as "the same C45 flake" — that was wrong; see the correction below and in
+  C45 itself.
+- **What the evidence actually shows (via `get_workflow_job` on both job
+  IDs, not just the log tail):**
+  - `Money-path coverage floor check` → step `Run full backend test suite
+    with coverage`: conclusion `failure`, ran 15:18:14–15:22:19 (4m 5s).
+  - `Coverage regression check` → step `Run coverage on PR branch`:
+    conclusion **`cancelled`**, ran 15:17:02–15:26:40 (9m 38s).
+  - Both logs show pytest passing every test up to the cutoff (all `.`, no
+    `F`/`E`), then `exit code 143` / "The runner has received a shutdown
+    signal" / "The operation was canceled" — a job killed from outside the
+    test process, not a pytest assertion or the `pytest-timeout` plugin
+    firing (contrast with C45's actual failure, which prints `Failed:
+    Timeout (>30.0s) from pytest-timeout` inline in pytest's own output).
+  - Both happened to die near `tests/test_compliance_reports.py` — that's
+    coincidence of how far the ~11-13 minute full suite gets by whatever
+    elapsed time each job is killed at, not a shared cause; the two jobs
+    died 4.5 minutes apart, ruling out one shared kill event at a fixed
+    wall-clock moment.
+- **Ruled out:**
+  - `timeout-minutes` — not set on either job in `ci-guardrails.yml`
+    (defaults to GitHub's 360-minute ceiling, nowhere close to 4-10 min).
+  - A shell-level `timeout` wrapper around the `pytest` invocation — none
+    present in either job's `run:` block.
+  - Concurrency-group cancellation — `ci-guardrails.yml`'s group
+    (`guardrails-${{ pull_request.number }}`) is distinct from every other
+    PR-triggered workflow's own group (`pr-checks-`, `security-gates-`,
+    `migration-check-`), and `list_workflow_runs` shows no newer run in
+    this PR's `guardrails-4595` group that could have preempted this one
+    (run `33086878967` is the latest; its own conclusion is `failure`, not
+    `cancelled` — a concurrency-preempted run shows as `cancelled` at the
+    run level, as seen on several *earlier* runs on this same branch from
+    this session's own successive pushes, e.g. runs `33076319221`,
+    `33038506808`, `33037903457` — this run isn't one of those).
+- **Not yet explained:** `get_workflow_run_usage` on run `33086878967`
+  reports `duration_ms: 0` for all 11 jobs, despite `get_workflow_job`
+  confirming real multi-minute wall-clock execution via step timestamps —
+  a genuine anomaly in this repo's Actions billing/usage reporting. No
+  billing-API access from this session to investigate further; flagging
+  rather than guessing at a cause (GitHub-side runner preemption and an
+  Actions-minutes/spend-limit cutoff are both plausible externally-caused
+  candidates, neither confirmed).
+- **Concrete, actionable finding regardless of the external cause:**
+  `Money-path coverage floor check`, `Coverage regression check`, and
+  `ci.yml`'s `backend-test` job each independently run the **entire**
+  unscoped `pytest --cov=.` suite just to slice the resulting coverage
+  differently afterward (`corporate-coverage-floor-gate` is the one gate
+  that already scopes its pytest invocation, via `-k corporate` — proof
+  the pattern is avoidable). Three full-suite runs per PR event where one
+  shared coverage artifact would do triples the CI compute and triples
+  each job's exposure window to whatever is doing the killing. Consolidating
+  to one full-suite run + `actions/upload-artifact`/`download-artifact` to
+  share the coverage JSON across the floor-check jobs would cut wasted
+  CI cycles regardless of whether the external cancellation itself ever
+  gets root-caused. **Not implemented — touches `ci-guardrails.yml`/
+  `ci.yml` for every PR repo-wide, needs explicit go-ahead before changing.**
+- **Correction issued:** the PR #4595 comments that called this "the same
+  C45 flake" were wrong and should be read alongside this entry, not as
+  the final word — see the PR's comment thread for the acknowledgment.
+- **What was NOT verified:** whether this is reproducible on other PRs/
+  commits (only this one commit's run was inspected in depth), and no
+  access exists from this session to GitHub's own Actions-infra or billing
+  logs to confirm the runner-preemption vs. spend-limit hypotheses.
 
 ### A41. Legacy-migration data-quality audit (2026-08-19) — 5-agent sweep across backend/admin/driver-app/regulatory
 - [ ] **Status:** open — 3 live/near-live bugs found and fixed same session; a

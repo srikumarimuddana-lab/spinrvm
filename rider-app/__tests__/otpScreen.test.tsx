@@ -519,4 +519,133 @@ describe('OtpScreen', () => {
     act(() => { changeBtn.props.onPress(); });
     expect(mockBack).toHaveBeenCalled();
   });
+
+  // 2026-08-27: docs/migration/2026-08-27-legacy-data-full-migration-approach.md
+  // §6a — login.tsx no longer gates on the consent checkbox, so a genuine
+  // new signup can reach here with consentAccepted:'false'. The backend
+  // rejects account creation with errors.auth.consent_required in that
+  // case; a returning user's verify-otp call never hits this branch since
+  // the backend only checks consent_accepted when creating a new account.
+  describe('inline consent recovery (errors.auth.consent_required)', () => {
+    function consentRequiredError() {
+      const err: any = new Error('Please agree to the Terms of Service and Privacy Policy to continue.');
+      err.messageKey = 'errors.auth.consent_required';
+      return err;
+    }
+
+    beforeEach(() => {
+      mockSearchParams = { phoneNumber: '+15551234567', consentAccepted: 'false' };
+    });
+
+    it('reveals the inline consent card instead of the generic failure toast', async () => {
+      mockApiPost.mockRejectedValueOnce(consentRequiredError());
+      const r = await renderScreen();
+      await enterCode(r, '1234');
+      const verifyBtn = findButtonByLabel(r, 'Verify and continue');
+      await act(async () => {
+        await verifyBtn.props.onPress();
+        await flush();
+      });
+      expect(mockShowToast).toHaveBeenCalledWith(
+        'One More Step',
+        'Please agree to our Terms of Service and Privacy Policy to finish creating your account.',
+        'warning',
+      );
+      expect(mockShowToast).not.toHaveBeenCalledWith('Verification Failed', expect.anything(), 'danger');
+      expect(() => findButtonByLabel(r, 'Agree and send new code')).not.toThrow();
+      // The consumed code is cleared -- retrying it would just fail server-side.
+      expect(r.root.findByType(TextInput).props.value).toBe('');
+    });
+
+    it('keeps "Agree & Send New Code" disabled until the checkbox is checked', async () => {
+      mockApiPost.mockRejectedValueOnce(consentRequiredError());
+      const r = await renderScreen();
+      await enterCode(r, '1234');
+      await act(async () => {
+        await findButtonByLabel(r, 'Verify and continue').props.onPress();
+        await flush();
+      });
+      const agreeBtn = findButtonByLabel(r, 'Agree and send new code');
+      expect(agreeBtn.props.accessibilityState).toMatchObject({ disabled: true });
+    });
+
+    it('checking the inline box and tapping Agree sends a fresh code and hides the consent card', async () => {
+      mockApiPost.mockRejectedValueOnce(consentRequiredError());
+      const r = await renderScreen();
+      await enterCode(r, '1234');
+      await act(async () => {
+        await findButtonByLabel(r, 'Verify and continue').props.onPress();
+        await flush();
+      });
+
+      const checkbox = r.root.findByProps({ accessibilityRole: 'checkbox' });
+      act(() => { checkbox.props.onPress(); });
+
+      mockApiPost.mockResolvedValueOnce({ data: {} });
+      const agreeBtn = findButtonByLabel(r, 'Agree and send new code');
+      await act(async () => {
+        await agreeBtn.props.onPress();
+        await flush();
+      });
+
+      expect(mockApiPost).toHaveBeenCalledWith('/auth/send-otp', { phone: '+15551234567' });
+      expect(mockShowToast).toHaveBeenCalledWith(
+        'Code Sent', 'A new verification code has been sent to your phone.', 'success',
+      );
+      // Consent card is gone; the normal Verify flow is back.
+      expect(() => findButtonByLabel(r, 'Verify and continue')).not.toThrow();
+      expect(() => findButtonByLabel(r, 'Agree and send new code')).toThrow();
+    });
+
+    it('sends consent_accepted:true on the next verify after agreeing inline', async () => {
+      mockApiPost.mockRejectedValueOnce(consentRequiredError());
+      const r = await renderScreen();
+      await enterCode(r, '1234');
+      await act(async () => {
+        await findButtonByLabel(r, 'Verify and continue').props.onPress();
+        await flush();
+      });
+
+      act(() => { r.root.findByProps({ accessibilityRole: 'checkbox' }).props.onPress(); });
+      mockApiPost.mockResolvedValueOnce({ data: {} }); // send-otp
+      await act(async () => {
+        await findButtonByLabel(r, 'Agree and send new code').props.onPress();
+        await flush();
+      });
+
+      mockApiPost.mockResolvedValueOnce({ data: { token: 't', refresh_token: 'r', expires_in: 900 } });
+      await enterCode(r, '5678');
+      await act(async () => {
+        await findButtonByLabel(r, 'Verify and continue').props.onPress();
+        await flush();
+      });
+
+      expect(mockApiPost).toHaveBeenLastCalledWith('/auth/verify-otp', {
+        phone: '+15551234567', code: '5678', client_app: 'rider', consent_accepted: true,
+      });
+    });
+
+    it('shows a failure toast without crashing if the resend-for-consent call itself fails', async () => {
+      mockApiPost.mockRejectedValueOnce(consentRequiredError());
+      const r = await renderScreen();
+      await enterCode(r, '1234');
+      await act(async () => {
+        await findButtonByLabel(r, 'Verify and continue').props.onPress();
+        await flush();
+      });
+
+      act(() => { r.root.findByProps({ accessibilityRole: 'checkbox' }).props.onPress(); });
+      mockApiPost.mockRejectedValueOnce(new Error('down'));
+      await act(async () => {
+        await findButtonByLabel(r, 'Agree and send new code').props.onPress();
+        await flush();
+      });
+
+      expect(mockShowToast).toHaveBeenCalledWith(
+        'Failed', 'Could not send a new code. Please try again.', 'danger',
+      );
+      // Stays visible so the user isn't stranded with no way forward.
+      expect(() => findButtonByLabel(r, 'Agree and send new code')).not.toThrow();
+    });
+  });
 });

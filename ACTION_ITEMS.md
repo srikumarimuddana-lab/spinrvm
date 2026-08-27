@@ -16795,43 +16795,73 @@ how much they de-risk a public launch._
   feature besides the legacy-ride badge is similarly silently inert in
   production for the same reason.
 
-### C45. `backend-test` is currently red on `main` — pytest failures block every PR repo-wide
+### C45. `backend-test` was red on `main` — 3 pytest failures, all fixed 2026-08-27
 
-- [ ] **Status:** open, found 2026-08-27 while triaging PR #4595's CI
-  (a docs-only PR — the diff couldn't have caused this). Confirmed via a
-  fresh check of `main`'s own latest completed `CI/CD Pipeline` run (run
-  `33037591310`, head `152c6f1`): `backend-test` fails there too, with the
-  identical failing test names and summary line.
+- [x] **Status: closed.** All three failures root-caused and fixed the same
+  day they were found. Originally found 2026-08-27 while triaging PR
+  #4595's CI (a docs-only PR — the diff couldn't have caused this).
+  Confirmed via a fresh check of `main`'s own latest completed `CI/CD
+  Pipeline` run (run `33037591310`, head `152c6f1`): `backend-test` failed
+  there too, with the identical failing test names and summary line.
 - **Reconfirmed on PR #4595's own CI later the same day** (run `33086879099`,
   head `fb233e6e3`, still a docs+backend+rider/driver-app diff that
   couldn't plausibly cause GST/PST-report or payment-confirmation
   failures): same `backend-test` job, same failure 2, same failure 1 —
   plus one **newly observed third failure**, added below.
-- **Failure 1 — `tests/test_compliance_reports.py::TestGstPstRows::test_truncation_flag_set_at_row_limit`**
-  — `Failed: Timeout (>30.0s) from pytest-timeout`. Also throws a
-  `PytestUnraisableExceptionWarning` on teardown (same test, not a separate
-  failure). Shape (a timeout, not an assertion) suggests a perf regression
-  or a hung external call in the GST/PST compliance-report row-truncation
-  path — not yet root-caused.
-- **Failure 3 (found 2026-08-27, second confirmation pass) —
-  `tests/test_compliance_reports_http.py::test_gst_pst_remittance_docx_format`**
-  — also `Failed: Timeout`, same GST/PST compliance-report area as failure 1
-  but a different test file (HTTP-level DOCX-format test vs. the row-
-  truncation unit test). Not yet confirmed whether this is the *same*
-  underlying hang (e.g. both ultimately call the same slow compliance-report
-  code path) or an independent timeout — worth checking together with
-  failure 1 rather than assuming either one in isolation.
-- **Failure 2 — `tests/test_payments_coverage_gap_closure.py::test_confirm_payment_real_ride_ownership_mismatch[asyncio]`**
-  — `AssertionError: assert 500 == 403`. The test expects a ride-ownership
-  mismatch on payment confirmation to return a clean `403`; it's getting an
-  unhandled-exception `500` (`"An internal error occurred. Please try
-  again."`) instead. Money-path + auth-adjacent (payment confirmation
-  ownership check) — per CLAUDE.md's "do not silently swallow errors" rule,
-  a 500 here likely means a real exception is being thrown and caught
-  generically rather than the ownership check cleanly rejecting, worth
-  treating as a real regression, not a flaky test.
-- **Impact:** Every open PR touching backend code inherits this red gate
-  regardless of its own diff.
+- **Failures 1 and 3 — FIXED 2026-08-27 —
+  `tests/test_compliance_reports.py::TestGstPstRows::test_truncation_flag_set_at_row_limit`
+  and `tests/test_compliance_reports_http.py::test_gst_pst_remittance_docx_format`**
+  — both were `Failed: Timeout (>30.0s) from pytest-timeout`. Root-caused by
+  actually reproducing the hang locally (ran it backgrounded, watched the
+  live process via `ps`: 99.8% CPU, `R` state, 3.8GB RSS and climbing before
+  being force-killed — a genuine unbounded loop, not "a hung external call"
+  as originally guessed here). Two distinct bugs, one real and one test-only:
+  1. **Real production gap**: `routes/admin/compliance.py`'s `_gst_pst_rows`
+     set `truncated = False` once and never reassigned it — dead code. The
+     caller (`get_gst_pst_remittance`) already had a correct `if truncated:`
+     warning-rendering block waiting for a real signal that never came, so a
+     GST/PST remittance (a CRA tax filing) that legitimately hit the
+     10,000-row limit would never show the "⚠ TRUNCATED" warning a filer
+     needs to see. No data was ever dropped (the underlying fetch is
+     exhaustive), but the warning about a large dataset was silently dead.
+     Fixed: `truncated = len(rides) >= _ROW_LIMIT`.
+  2. **Test-only bug (the actual cause of the 30s+ hang)**: failure 1's mock
+     ignored the `offset`/`limit` kwargs `_get_all_rows_paginated` calls
+     `get_rows` with, always returning the full 10,000-row fake dataset.
+     `_get_all_rows_paginated`'s pagination loop (correct against a real
+     backend, which naturally returns shrinking pages) never saw a
+     short/empty page against this mock, so it looped forever, re-fetching
+     10,000 rows every iteration until pytest-timeout finally killed it.
+     Fixed: mock now slices by the real `offset`/`limit` it receives.
+     **Failure 3 needed no changes of its own** — its mock returns a single
+     row, no infinite-loop risk — confirmed as a downstream victim of
+     failure 1's resource exhaustion (leftover CPU/memory pressure from the
+     hung previous test in the same session) by running both files together
+     after fixing only failure 1: 84/84 pass. Full detail + verification:
+     `docs/change-log/2026-08-27-gst-pst-truncation-flag-and-test-hang-fix.md`.
+- **Failure 2 — FIXED 2026-08-27 —
+  `tests/test_payments_coverage_gap_closure.py::test_confirm_payment_real_ride_ownership_mismatch[asyncio]`**
+  — was `AssertionError: assert 500 == 403`. Root-caused, not a production
+  bug: commit `081ab91e7` ("P0 #6: Deduplicate confirm_payment ride
+  fetches (3 to 1 DB call)", landed on `main` the day before, unrelated to
+  any Claude session) collapsed `confirm_payment`'s three separate
+  `get_ride` calls into one early, unconditional ownership gate — but this
+  test's mock still modeled the old three-call shape (`side_effect` with a
+  *second* `get_ride` return that no longer gets called), so the real
+  ownership check never saw a mismatch, execution fell through to an
+  unrelated incidentally-unconfigured mock (`update_ride` as a bare
+  `MagicMock`, not `AsyncMock`), and that crash got caught by
+  `confirm_payment`'s generic `except Exception` handler and turned into a
+  500. **Production's actual ownership enforcement was correct the whole
+  time** — verified by reading `routes/payments.py` directly and by the
+  sibling test (`test_confirm_payment_mock_ride_ownership_mismatch`, mock
+  path) which already used the correct single-fetch mock pattern and was
+  passing throughout. Fixed by updating the mock to match current reality
+  + added an `assert_awaited_once()` regression guard. Full root-cause
+  detail and verification: `docs/change-log/2026-08-27-confirm-payment-
+  ownership-test-fix.md`. No production code changed.
+- **Impact (historical):** every open PR touching backend code inherited
+  this red gate regardless of its own diff, until this closed.
 - **Correction (2026-08-27, later same day):** this entry originally claimed
   `Money-Path Coverage Floor` and `Coverage regression check` fail as a
   *downstream consequence of the same root cause* as the two pytest
@@ -16844,15 +16874,20 @@ how much they de-risk a public launch._
   time, not because of a shared cause. Don't treat a `Money-path
   coverage floor check` / `Coverage regression check` failure as evidence
   for this item without checking C47 first.
-- **Action:** root-cause all three failures directly (not from this session
-  — found while triaging an unrelated PR, not the task at hand). Priority
-  on failure 2 given the money/auth adjacency — trace what changed in the
-  payment-confirmation ownership-check path or its dependencies since this
-  test last passed. Failures 1 and 3 are worth investigating together
-  first (same feature area) before assuming two independent hangs.
-- **What was NOT verified:** when this started failing (no bisection done
-  — only confirmed it's red on the current `main` tip), and whether the two
-  failures are related to each other or fully independent.
+- **Action:** none — all three failures fixed same day. `backend-test`
+  should be green on `main`'s next run; verify on the next PR's CI rather
+  than assuming from this entry alone.
+- **What was NOT verified:** no bisection was done to find exactly when
+  failures 1/3 started diverging from a passing state (only confirmed red
+  on the `main` tip at investigation time) — moot now that both are fixed,
+  but the timeline for *why* is fully known: failure 2 traces to commit
+  `081ab91e7` (P0 #6 ride-fetch dedup, landed the day before); failures 1/3
+  trace to a test mock that never correctly modeled pagination, likely
+  broken since whenever this test was first written (not specifically
+  introduced by a recent change, unlike failure 2). No live/staging run
+  against a real ≥10,000-row GST/PST dataset — verified via the existing
+  mocked-unit-test harness only, consistent with this module's own testing
+  conventions.
 
 ### C46. Insurance-period GPS correction tool built, validated, and applied to production (2026-08-27)
 

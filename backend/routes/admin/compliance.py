@@ -314,7 +314,15 @@ async def _gst_pst_rows(
         filters,
         columns="id,ride_completed_at,tax_breakdown,total_fare,legacy_import_metadata",
     )
-    truncated = False
+    # _get_all_rows_paginated always fetches the complete dataset (no rows
+    # are dropped) -- but a fetch this large is worth flagging to whoever
+    # is filing this report, the same "sanity-check this" signal every
+    # other report in this module gives via its own _ROW_LIMIT check. This
+    # was previously hardcoded False and never reassigned, so the flag this
+    # function returns never actually reflected a large dataset -- a filer
+    # had no way to know a GST/PST remittance covered an unusually large
+    # row count. Found while root-causing ACTION_ITEMS.md C45.
+    truncated = len(rides) >= _ROW_LIMIT
 
     by_month: dict[str, dict[str, Decimal]] = {}
     gst_total = Decimal("0")

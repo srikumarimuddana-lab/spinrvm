@@ -39,6 +39,50 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ─── Detect changed surfaces (blast-radius-aware triggering, Phase 1) ─────
+  # docs/audit/2026-08-27-cicd-gates-guardrails-audit.md Section 2: this repo
+  # already path-filters migration-check.yml, the mobile-* workflows, and
+  # every deploy-*.yml correctly -- but ci.yml/ci-guardrails.yml/
+  # security-gates.yml run every job on every PR regardless of what changed,
+  # which is the direct cause of slow turnaround on a single-surface PR.
+  #
+  # Phase 1 (this change) wires the two already-advisory gates below
+  # (lint-trend-gate, breaking-change-gate) to this filter as a low-risk
+  # trial -- neither blocks a merge today, so a wrong filter mapping costs
+  # nothing worse than a job running when it didn't need to. Phase 2 (a
+  # follow-up, not this change) extends the same pattern to the blocking
+  # gates once this trial is observed clean across real PRs, and promotes
+  # this job into a shared `workflow_call` reusable workflow once ci.yml and
+  # security-gates.yml also need it (kept inline here for now, per CLAUDE.md
+  # "no single-use abstractions" -- one caller doesn't justify extraction
+  # yet).
+  #
+  # Uses dorny/paths-filter -- not a new dependency, already vendored and
+  # proven in this repo by eas-build.yml's own `detect` job (same pinned
+  # SHA). `github.ref == 'refs/heads/main'` and `merge_group` are NOT passed
+  # through this filter anywhere downstream -- every gate's own `if:` OR's
+  # in those two conditions directly, so a push to `main` or a merge-queue
+  # run always executes every job regardless of what this filter reports.
+  # Path-filtering is a PR-time fast-feedback optimization only; the last
+  # line of defense before `main` never skips anything.
+  detect-changes:
+    name: Detect changed surfaces
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      admin: ${{ steps.filter.outputs.admin }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+            admin:
+              - 'admin-dashboard/**'
+
   # ─── 0. Shared coverage run (feeds coverage-regression-gate and
   # money-path-coverage-floor-gate below) ───────────────────────────────────
   # ACTION_ITEMS.md C47: those two gates used to each independently run the
@@ -394,6 +438,20 @@ jobs:
     name: Lint warning trend check
     runs-on: ubuntu-latest
     continue-on-error: true
+    needs: [detect-changes]
+    # Phase 1 blast-radius trial (see detect-changes' own comment above).
+    # Lints both backend (ruff) and admin-dashboard (ESLint), so it needs
+    # either surface. detect-changes only runs `if: pull_request` (see its
+    # own job), so on a merge_group/workflow_dispatch run it's skipped and
+    # its outputs are empty -- `github.event_name != 'pull_request'` is the
+    # always-run-everything fallback for exactly that case, not a push-to-
+    # main check (this workflow has no `push:` trigger at all).
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.outputs.backend == 'true' ||
+        needs.detect-changes.outputs.admin == 'true'
+      )
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -828,6 +886,15 @@ jobs:
     name: Breaking change detection
     runs-on: ubuntu-latest
     continue-on-error: true
+    needs: [detect-changes]
+    # Phase 1 blast-radius trial (see detect-changes' own comment above).
+    # Only ever diffs backend/routes/ and backend/db_supabase.py, so
+    # backend is the only surface that can produce a finding here.
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.outputs.backend == 'true'
+      )
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

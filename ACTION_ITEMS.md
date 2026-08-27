@@ -16695,6 +16695,392 @@ how much they de-risk a public launch._
   larger follow-up if this failure class recurs on a different pair of
   files.
 
+### C43. RLS disabled on 4 production tables — including `settings` (holds Stripe/Twilio/Google Maps keys)
+
+- [ ] **Status:** open, deliberately deferred by the user (2026-08-25) until
+  the legacy-migration work (A41-family, this item's own §"related work"
+  below) concludes — not fixed, not forgotten. Found via the Supabase MCP
+  connector's unprompted advisory scan against the live `spinrmobileapp`
+  project (`ca-central-1`, `soavhtdhefowwvforzwb`) while investigating
+  connector access for the legacy-ride migration.
+- **What's wrong:** `ENABLE ROW LEVEL SECURITY` is off on 4 `public` tables:
+  - `settings` — the `app_settings` table CLAUDE.md documents as holding
+    **Stripe keys, Twilio credentials, and Google Maps API keys** (kept in
+    DB specifically so they can rotate without redeploy). With RLS off,
+    anyone holding this project's anon/publishable key can read this table
+    directly via PostgREST, with no policy layer in the way.
+  - `document_files` — driver document files (license, insurance, etc.),
+    PIPEDA-sensitive.
+  - `driver_csv_import`, `driver_bank_import` — bulk driver import staging
+    tables (banking info in the latter).
+- **Blast-radius check performed (before recommending, not after):** grepped
+  `rider-app`, `driver-app`, and `admin-dashboard` for any `createClient(...)`
+  usage that would read these 4 tables with the anon key directly — **zero
+  matches** in real app code. The only `createClient` call anywhere in the
+  repo using an anon key is `frontend/config/supabase.ts`, a dead scaffold
+  file with literal placeholder strings (`'YOUR_SUPABASE_URL'`), not wired
+  into any shipped app. `docs/ENVIRONMENT_VARIABLES.md` documents
+  `NEXT_PUBLIC_SUPABASE_ANON_KEY` as **optional**, "used *if* the dashboard
+  reads from Supabase directly" — it doesn't, today. Every real read/write to
+  these 4 tables goes through the backend's `SUPABASE_SERVICE_ROLE_KEY`,
+  which bypasses RLS regardless of whether it's enabled.
+- **Why this reads as low-regression-risk to fix, whenever it's fixed:**
+  enabling RLS with zero policies (deny-all to `anon`/`authenticated`) would
+  match what's already true in practice today — no legitimate code path uses
+  those roles against these tables. That said, this has **not been
+  independently verified against a staging/canary run** — only via static
+  grep — so treat "low risk" as a strong hypothesis, not a guarantee, before
+  actually flipping it.
+- **Why deferred rather than fixed immediately:** user's explicit call
+  (2026-08-25) — hold off enabling RLS until the legacy-migration effort
+  (see the phased plan in `docs/migration/` from this same date, and the
+  existing A41 audit below) concludes, to avoid stacking an unrelated
+  production security change on top of an active data-migration effort.
+- **Remediation SQL (reference only — do not run without re-confirming the
+  blast-radius check above is still current, and ideally verifying in a
+  Supabase branch/staging environment first):**
+  ```sql
+  ALTER TABLE public.document_files ENABLE ROW LEVEL SECURITY;
+  ALTER TABLE public.settings ENABLE ROW LEVEL SECURITY;
+  ALTER TABLE public.driver_csv_import ENABLE ROW LEVEL SECURITY;
+  ALTER TABLE public.driver_bank_import ENABLE ROW LEVEL SECURITY;
+  ```
+- **What was NOT verified:** whether the project's anon/publishable key has
+  ever actually been distributed anywhere reachable by an external party
+  (mobile app bundle, public repo, leaked build artifact) — this item
+  documents the *capability* gap (RLS off = no enforcement layer), not
+  confirmed exploitation. Also not verified: exact column-level contents of
+  `settings` (whether secrets are stored plaintext or already
+  encrypted/referenced by ID) — sub-item worth checking before deciding
+  urgency once this is picked back up.
+- **Acceptance:** `get_advisors`' `rls_disabled` finding no longer lists
+  these 4 tables, AND a full regression pass (backend integration tests +
+  a manual admin-dashboard settings-page load) confirms nothing broke.
+
+### C44. Production Supabase migrations are stale — migration 364 (`legacy_ride_badge_enabled`) and everything after 359 never ran
+
+- [ ] **Status:** open, found 2026-08-27 while verifying `app_settings` state
+  via the Supabase connector for an unrelated task (checking
+  `legacy_consent_notice_enabled`). `SELECT column_name FROM
+  information_schema.columns WHERE table_name='settings'` on the live
+  `spinrmobileapp` project (`soavhtdhefowwvforzwb`) does **not** include
+  `legacy_ride_badge_enabled` — the column migration 364 adds (shipped in
+  PR #4557, this session, 2026-08-25). `schema_migrations`' latest applied
+  row is `359_fix_emergency_contact_pii_vault_functions.sql`
+  (2026-08-22 04:11:58 UTC). Everything from 360 onward, including 364,
+  has never been run against production.
+- **Impact:** `backend/routes/rides/queries.py`'s `GET /{ride_id}` reads
+  `settings.get("legacy_ride_badge_enabled", False)` via a plain dict
+  `.get()` with a default — so this doesn't crash, it just silently
+  behaves as permanently off. The Imported badge/disclaimer feature
+  shipped this session (#4557/#4558) **cannot be turned on** until this
+  migration runs, no matter what the flag is set to in code or intent.
+- **Not yet checked:** whether 360-363 exist and what they contain (not
+  looked up this session — only confirmed 364 specifically, via the
+  column-presence check), or whether this gap predates 2026-08-22's cutoff
+  for unrelated reasons (e.g., a paused deploy pipeline). `ACTION_ITEMS.md`
+  C5 already documents Railway's deploy pipeline as degraded/paused — worth
+  checking whether that's related before assuming this is purely a
+  "someone forgot to run the migration script" gap.
+- **Action:** run `python -m backend.scripts.run_migrations --dry-run`
+  against production to see the actual pending list, then apply for real
+  per the documented process in `backend/scripts/CLAUDE.md`/root
+  `CLAUDE.md`'s Database Migrations section. Needs a human with production
+  `DATABASE_URL` access — not executable from this session (Supabase MCP's
+  `execute_sql`/`apply_migration` tools could technically run the raw SQL,
+  but per this session's own established policy, money/schema writes go
+  through the documented tooling, not ad hoc SQL from an agent session).
+- **What was NOT verified:** the full list of missing migrations beyond
+  confirming 364 specifically is absent; whether any *other* recently-merged
+  feature besides the legacy-ride badge is similarly silently inert in
+  production for the same reason.
+
+### C45. `backend-test` was red on `main` — 3 pytest failures, all fixed 2026-08-27
+
+- [x] **Status: closed.** All three failures root-caused and fixed the same
+  day they were found. Originally found 2026-08-27 while triaging PR
+  #4595's CI (a docs-only PR — the diff couldn't have caused this).
+  Confirmed via a fresh check of `main`'s own latest completed `CI/CD
+  Pipeline` run (run `33037591310`, head `152c6f1`): `backend-test` failed
+  there too, with the identical failing test names and summary line.
+- **Reconfirmed on PR #4595's own CI later the same day** (run `33086879099`,
+  head `fb233e6e3`, still a docs+backend+rider/driver-app diff that
+  couldn't plausibly cause GST/PST-report or payment-confirmation
+  failures): same `backend-test` job, same failure 2, same failure 1 —
+  plus one **newly observed third failure**, added below.
+- **Failures 1 and 3 — FIXED 2026-08-27 —
+  `tests/test_compliance_reports.py::TestGstPstRows::test_truncation_flag_set_at_row_limit`
+  and `tests/test_compliance_reports_http.py::test_gst_pst_remittance_docx_format`**
+  — both were `Failed: Timeout (>30.0s) from pytest-timeout`. Root-caused by
+  actually reproducing the hang locally (ran it backgrounded, watched the
+  live process via `ps`: 99.8% CPU, `R` state, 3.8GB RSS and climbing before
+  being force-killed — a genuine unbounded loop, not "a hung external call"
+  as originally guessed here). Two distinct bugs, one real and one test-only:
+  1. **Real production gap**: `routes/admin/compliance.py`'s `_gst_pst_rows`
+     set `truncated = False` once and never reassigned it — dead code. The
+     caller (`get_gst_pst_remittance`) already had a correct `if truncated:`
+     warning-rendering block waiting for a real signal that never came, so a
+     GST/PST remittance (a CRA tax filing) that legitimately hit the
+     10,000-row limit would never show the "⚠ TRUNCATED" warning a filer
+     needs to see. No data was ever dropped (the underlying fetch is
+     exhaustive), but the warning about a large dataset was silently dead.
+     Fixed: `truncated = len(rides) >= _ROW_LIMIT`.
+  2. **Test-only bug (the actual cause of the 30s+ hang)**: failure 1's mock
+     ignored the `offset`/`limit` kwargs `_get_all_rows_paginated` calls
+     `get_rows` with, always returning the full 10,000-row fake dataset.
+     `_get_all_rows_paginated`'s pagination loop (correct against a real
+     backend, which naturally returns shrinking pages) never saw a
+     short/empty page against this mock, so it looped forever, re-fetching
+     10,000 rows every iteration until pytest-timeout finally killed it.
+     Fixed: mock now slices by the real `offset`/`limit` it receives.
+     **Failure 3 needed no changes of its own** — its mock returns a single
+     row, no infinite-loop risk — confirmed as a downstream victim of
+     failure 1's resource exhaustion (leftover CPU/memory pressure from the
+     hung previous test in the same session) by running both files together
+     after fixing only failure 1: 84/84 pass. Full detail + verification:
+     `docs/change-log/2026-08-27-gst-pst-truncation-flag-and-test-hang-fix.md`.
+- **Failure 2 — FIXED 2026-08-27 —
+  `tests/test_payments_coverage_gap_closure.py::test_confirm_payment_real_ride_ownership_mismatch[asyncio]`**
+  — was `AssertionError: assert 500 == 403`. Root-caused, not a production
+  bug: commit `081ab91e7` ("P0 #6: Deduplicate confirm_payment ride
+  fetches (3 to 1 DB call)", landed on `main` the day before, unrelated to
+  any Claude session) collapsed `confirm_payment`'s three separate
+  `get_ride` calls into one early, unconditional ownership gate — but this
+  test's mock still modeled the old three-call shape (`side_effect` with a
+  *second* `get_ride` return that no longer gets called), so the real
+  ownership check never saw a mismatch, execution fell through to an
+  unrelated incidentally-unconfigured mock (`update_ride` as a bare
+  `MagicMock`, not `AsyncMock`), and that crash got caught by
+  `confirm_payment`'s generic `except Exception` handler and turned into a
+  500. **Production's actual ownership enforcement was correct the whole
+  time** — verified by reading `routes/payments.py` directly and by the
+  sibling test (`test_confirm_payment_mock_ride_ownership_mismatch`, mock
+  path) which already used the correct single-fetch mock pattern and was
+  passing throughout. Fixed by updating the mock to match current reality
+  + added an `assert_awaited_once()` regression guard. Full root-cause
+  detail and verification: `docs/change-log/2026-08-27-confirm-payment-
+  ownership-test-fix.md`. No production code changed.
+- **Impact (historical):** every open PR touching backend code inherited
+  this red gate regardless of its own diff, until this closed.
+- **Correction (2026-08-27, later same day):** this entry originally claimed
+  `Money-Path Coverage Floor` and `Coverage regression check` fail as a
+  *downstream consequence of the same root cause* as the two pytest
+  failures above. That was wrong — see **C47**, which found those two
+  `ci-guardrails.yml` jobs are killed by an external GitHub-Actions-level
+  cancellation (exit 143, "runner has received a shutdown signal", job step
+  conclusion `cancelled`) with pytest showing zero failures up to the kill,
+  not by either of the two pytest-level failures documented here. They land
+  near the same test file by coincidence of suite progress at cancellation
+  time, not because of a shared cause. Don't treat a `Money-path
+  coverage floor check` / `Coverage regression check` failure as evidence
+  for this item without checking C47 first.
+- **Action:** none — all three failures fixed same day. `backend-test`
+  should be green on `main`'s next run; verify on the next PR's CI rather
+  than assuming from this entry alone.
+- **What was NOT verified:** no bisection was done to find exactly when
+  failures 1/3 started diverging from a passing state (only confirmed red
+  on the `main` tip at investigation time) — moot now that both are fixed,
+  but the timeline for *why* is fully known: failure 2 traces to commit
+  `081ab91e7` (P0 #6 ride-fetch dedup, landed the day before); failures 1/3
+  trace to a test mock that never correctly modeled pagination, likely
+  broken since whenever this test was first written (not specifically
+  introduced by a recent change, unlike failure 2). No live/staging run
+  against a real ≥10,000-row GST/PST dataset — verified via the existing
+  mocked-unit-test harness only, consistent with this module's own testing
+  conventions.
+
+### C46. Insurance-period GPS correction tool built, validated, and applied to production (2026-08-27)
+
+- [x] **Status: closed.** `ACTION_ITEMS.md` B34 closed 2026-08-20 having built the
+  `driver_insurance_period_corrections` table and wired both consumers to
+  prefer a correction when one exists, but explicitly left "actually
+  correcting the 156 diverging rides" as separate, unresolved work. That
+  write path was built (`backend/services/insurance_period_gps_correction.py`
+  + `backend/scripts/apply_legacy_insurance_period_gps_corrections.py`,
+  2026-08-27; 29 unit tests pass; full build/validation log:
+  `docs/change-log/2026-08-27-insurance-period-gps-correction-tool.md`) and
+  then **actually run against production the same day**, via the
+  session's Supabase MCP connector (not the CLI script directly — the
+  156-row payload was generated by the same validated pipeline logic and
+  applied as a direct, chunked `INSERT`, batched 40/40/40/36 rows to keep
+  each statement's blast radius small and independently checkable).
+- **Applied and verified 2026-08-27:** `driver_insurance_period_corrections`
+  went from 0 → **156 rows**, confirmed with a post-insert integrity query:
+  156 total, 156 with the correct `corrected_by` operator
+  (`71ba3eea-287f-41d8-8e48-9d794ea531e0`), **156 distinct**
+  `original_period_id` values (no duplicates/double-corrections), 0 blank
+  `reason`s, 0 null `corrected_started_at`, 0 rows where
+  `corrected_ended_at <= corrected_started_at`. Matches the 2026-08-20
+  verification log's `DIVERGES` count exactly — zero dropped, zero
+  fabricated.
+- **Note for the record — a transcription bug caught before it mattered:**
+  the first `INSERT` attempt (a single 156-row statement built by
+  hand-transcribing the generated SQL file into the tool call) failed on
+  Postgres error `22P02: invalid input syntax for type uuid` — a
+  9-character UUID segment that did not actually exist anywhere in the
+  source file (confirmed by grep against the full file: zero matches for
+  that string or any fragment of it). Root cause was transcription, not
+  the generation pipeline. Fix: re-ran in 4 smaller chunks built directly
+  from the source file with `sed` (no manual retyping of UUIDs), each
+  chunk's exact text read back before use, with a row-count check
+  (0→40→80→120→156) after every chunk. No partial/bad rows ever landed —
+  each failed attempt is atomic per-statement and the table was
+  reconfirmed at 0 before the first successful chunk ran.
+- **What was NOT individually re-verified:** the 3 `>1h` Period-2-start
+  outliers the original 2026-08-20 verification pass flagged (never
+  individually root-caused — could be genuine early dispatch or a
+  `driverlocationlogs.csv` data-quality artifact) were included in the
+  156-row correction as-is, per the tool's documented design (it does not
+  special-case or exclude them). They are now live in
+  `driver_insurance_period_corrections` like every other row; a human
+  sanity-check of those specific rides is still worth doing but is no
+  longer a blocker to anything — the correction is append-only and would
+  need a new, separate decision to touch (see the tool's own
+  "correcting a correction" note, migration 355's header comment).
+- **Acceptance — met:** `driver_insurance_period_corrections` has 156 rows;
+  `admin_driver_distance_logs` and `scripts/compliance_export.py` will now
+  show `is_corrected: true` for the affected rides' Period-2 spans (both
+  consumers already shipped and tested in B34's original close — no
+  consumer-side change was needed for this to take effect).
+
+### C47. `ci-guardrails.yml`'s coverage-gate jobs get externally cancelled mid-suite — not a pytest failure, not the C45 flake
+
+- [ ] **Status:** open (external-cause CI reliability gap). Found 2026-08-27
+  triaging PR #4595's CI: `Money-path coverage floor check` and `Coverage
+  regression check` (`ci-guardrails.yml`) both failed on the same commit
+  (`fb233e6e3`, run `33086878967`). Initially mis-diagnosed in a PR comment
+  as "the same C45 flake" — that was wrong; see the correction below and in
+  C45 itself.
+- **What the evidence actually shows (via `get_workflow_job` on both job
+  IDs, not just the log tail):**
+  - `Money-path coverage floor check` → step `Run full backend test suite
+    with coverage`: conclusion `failure`, ran 15:18:14–15:22:19 (4m 5s).
+  - `Coverage regression check` → step `Run coverage on PR branch`:
+    conclusion **`cancelled`**, ran 15:17:02–15:26:40 (9m 38s).
+  - Both logs show pytest passing every test up to the cutoff (all `.`, no
+    `F`/`E`), then `exit code 143` / "The runner has received a shutdown
+    signal" / "The operation was canceled" — a job killed from outside the
+    test process, not a pytest assertion or the `pytest-timeout` plugin
+    firing (contrast with C45's actual failure, which prints `Failed:
+    Timeout (>30.0s) from pytest-timeout` inline in pytest's own output).
+  - Both happened to die near `tests/test_compliance_reports.py` — that's
+    coincidence of how far the ~11-13 minute full suite gets by whatever
+    elapsed time each job is killed at, not a shared cause; the two jobs
+    died 4.5 minutes apart, ruling out one shared kill event at a fixed
+    wall-clock moment.
+- **Ruled out:**
+  - `timeout-minutes` — not set on either job in `ci-guardrails.yml`
+    (defaults to GitHub's 360-minute ceiling, nowhere close to 4-10 min).
+  - A shell-level `timeout` wrapper around the `pytest` invocation — none
+    present in either job's `run:` block.
+  - Concurrency-group cancellation — `ci-guardrails.yml`'s group
+    (`guardrails-${{ pull_request.number }}`) is distinct from every other
+    PR-triggered workflow's own group (`pr-checks-`, `security-gates-`,
+    `migration-check-`), and `list_workflow_runs` shows no newer run in
+    this PR's `guardrails-4595` group that could have preempted this one
+    (run `33086878967` is the latest; its own conclusion is `failure`, not
+    `cancelled` — a concurrency-preempted run shows as `cancelled` at the
+    run level, as seen on several *earlier* runs on this same branch from
+    this session's own successive pushes, e.g. runs `33076319221`,
+    `33038506808`, `33037903457` — this run isn't one of those).
+- **Not yet explained:** `get_workflow_run_usage` on run `33086878967`
+  reports `duration_ms: 0` for all 11 jobs, despite `get_workflow_job`
+  confirming real multi-minute wall-clock execution via step timestamps —
+  a genuine anomaly in this repo's Actions billing/usage reporting. No
+  billing-API access from this session to investigate further; flagging
+  rather than guessing at a cause (GitHub-side runner preemption and an
+  Actions-minutes/spend-limit cutoff are both plausible externally-caused
+  candidates, neither confirmed).
+- **Concrete, actionable finding regardless of the external cause:**
+  `Money-path coverage floor check`, `Coverage regression check`, and
+  `ci.yml`'s `backend-test` job each independently run the **entire**
+  unscoped `pytest --cov=.` suite just to slice the resulting coverage
+  differently afterward (`corporate-coverage-floor-gate` is the one gate
+  that already scopes its pytest invocation, via `-k corporate` — proof
+  the pattern is avoidable). Three full-suite runs per PR event where one
+  shared coverage artifact would do triples the CI compute and triples
+  each job's exposure window to whatever is doing the killing. Consolidating
+  to one full-suite run + `actions/upload-artifact`/`download-artifact` to
+  share the coverage JSON across the floor-check jobs would cut wasted
+  CI cycles regardless of whether the external cancellation itself ever
+  gets root-caused.
+- **Implemented (2026-08-27, explicit user go-ahead: "yes, go ahead and
+  build the coverage consolidation fix"):** new `shared-coverage-run` job
+  in `ci-guardrails.yml` runs `pytest --cov=.` once; `coverage-regression-
+  gate` and `money-path-coverage-floor-gate` now download its artifact
+  instead of each running their own full-suite pytest. Scope deliberately
+  limited to *within* `ci-guardrails.yml` only — `ci.yml`'s `backend-test`
+  remains a separate, third full-suite run, matching the already-documented
+  decision not to attempt cross-workflow sharing (see
+  `money-path-coverage-floor-gate`'s own header comment and
+  `docs/change-log/2026-08-19-money-path-coverage-floor-gate-fix.md` §4).
+  `corporate-coverage-floor-gate` also deliberately untouched — its
+  `-k corporate`-scoped run measures something narrower than the full
+  suite; swapping it to the shared full-suite artifact would silently
+  change (likely loosen) what it measures. Full reasoning, the real
+  tradeoffs this introduces (wall-clock serialization of the two gates;
+  correlated failure if the shared run itself hits the external
+  cancellation), and verification performed:
+  `docs/change-log/2026-08-27-ci-guardrails-coverage-consolidation.md`.
+- **Live-verified (2026-08-27, run `33091467676`, commit `4c76c6f41`) —
+  degradation path only, honestly, not the happy path:** the new
+  `shared-coverage-run` job got hit by the exact same external cancellation
+  on its very first live run (a **fourth** independent reproduction, now on
+  a job that didn't exist before this fix — rules out anything specific to
+  the old job definitions). This was actually a useful accident: it proved
+  the `if: always()` fallback design for real, not just in theory.
+  - `coverage-regression-gate` ran anyway, its download step genuinely
+    failed (`Unable to download artifact(s): Artifact not found`,
+    `continue-on-error: true` let it proceed), and its existing extraction
+    script correctly logged `Coverage read failed: [Errno 2] No such file
+    or directory` → wrote `0` → landed on the pre-existing, honest
+    "UNKNOWN: no base-branch coverage data available" path (C24) — never a
+    false PASS. Job conclusion: `success` (advisory, as designed).
+  - `money-path-coverage-floor-gate` also ran anyway, same artifact-missing
+    error, but printed `No tracked money-path module in this PR's diff --
+    gate not applicable, PASS` — this PR's diff doesn't touch any of the 5
+    tracked money-path files, so `check_money_path_coverage_floor.py`'s own
+    scope check short-circuits before it ever needs to open the coverage
+    file. **This means the fail-closed "coverage report missing AND a
+    tracked file is touched" path — the one that should genuinely block a
+    PR — was not exercised by this run.** Not a flaw found, just an honest
+    gap: this specific PR's diff never reaches that branch of the script,
+    with or without a real coverage.json.
+  - **The happy path (shared run succeeds, both gates compute a real
+    number) has not yet been observed on this PR** — every `ci-guardrails.yml`
+    run on this PR so far has hit the external cancellation on at least one
+    full-suite job (now 4 for 4). That is itself exactly the problem this
+    fix targets: fewer full-suite runs per event lowers the odds of hitting
+    it, but doesn't guarantee avoiding it, and this PR has had unusually
+    persistent bad luck (or the external cause correlates with something
+    about this specific PR/session — not established either way). Not
+    forcing another push purely to chase a clean run, in the same spirit as
+    this fix's own goal of not burning extra CI cycles chasing this issue.
+- **Correction issued:** the PR #4595 comments that called this "the same
+  C45 flake" were wrong and should be read alongside this entry, not as
+  the final word — see the PR's comment thread for the acknowledgment.
+- **Reproduced on a second, independent commit (2026-08-27, same day):**
+  `Coverage regression check` failed again on the very next commit
+  (`7949843a0`, run `33088853684`, job `98576236030`) — `Run coverage on
+  PR branch` step: conclusion `cancelled`, ran 15:40:57–15:45:16 (4m 19s).
+  This run was deliberately *not* preceded by another push (waited for the
+  prior run to finish first, specifically to rule out self-inflicted
+  concurrency-group cancellation) — so this occurrence has no possible
+  concurrency-group explanation at all, unlike the first. Two independent
+  reproductions on two different commits, both un-preemptable by
+  concurrency, is real evidence this is a recurring external-cause issue
+  with this specific job/step rather than a one-off. Not re-commented on
+  the PR (same already-logged failure mode, no new information for a
+  reader there) — logged here per policy instead.
+- **What was NOT verified:** whether this is reproducible on other PRs/
+  commits beyond the two now confirmed, whether it's specific to the
+  `Coverage regression check` / `Money-path coverage floor check` job
+  *steps* specifically (both run the full unscoped suite — see the
+  consolidation recommendation above) or would also hit `ci.yml`'s
+  `backend-test` job the same way if watched closely enough, and no
+  access exists from this session to GitHub's own Actions-infra or billing
+  logs to confirm the runner-preemption vs. spend-limit hypotheses.
+
 ### A41. Legacy-migration data-quality audit (2026-08-19) — 5-agent sweep across backend/admin/driver-app/regulatory
 - [ ] **Status:** open — 3 live/near-live bugs found and fixed same session; a
   larger set of design-decision-dependent gaps documented below, not fixed.

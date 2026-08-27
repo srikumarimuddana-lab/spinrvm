@@ -168,7 +168,7 @@ Backend is a single horizontally-scalable process. All durable state lives in Su
 
 - `backend/server.py` — app factory; mounts ~25 routers
 - `backend/core/config.py` — pydantic-settings `Settings`; fails fast in production on weak secrets
-- `backend/core/lifespan.py` — startup/shutdown: DB health check + spawns 18 background asyncio loops (subscription expiry, surge engine, scheduled dispatch, payment retry, document expiry, corporate auto-topup, low-balance nudge, allowance reset, corporate KYB re-verification reminder, safety check-in, retention purge, reconciliation, Stripe reconcile, T4A annual job, driver earnings statements, stuck-ride sweeper, push retry, loop watchdog)
+- `backend/core/lifespan.py` — startup/shutdown: DB health check + spawns 40 background asyncio loops (full registry: `_WATCHDOG_LOOP_NAMES` in `lifespan.py`; among them: subscription expiry, surge engine, scheduled dispatch, payment retry, document expiry, corporate auto-topup, low-balance nudge, allowance reset, corporate KYB re-verification reminder, safety check-in, retention purge, reconciliation, Stripe reconcile, T4A annual job, driver earnings statements, stuck-ride sweeper, push retry, loop watchdog)
 - `backend/core/middleware.py` — CORS, security headers, rate limiting (SlowAPI + Redis)
 - `backend/db_supabase.py` — ~66 helper functions wrapping `supabase-py` via `run_sync()` (thread-pool with one retry on H2 GOAWAY)
 - `backend/socket_manager.py` — `ConnectionManager` (in-process WS registry); delegates to Redis pub/sub when active
@@ -227,7 +227,7 @@ When writing code that reads `ride.status`, treat any value not in the set above
 
 **WebSocket auth** — first message must be `{"type": "auth", "token": "<jwt>"}`. Connection keys: `"driver_{user_id}"` / `"rider_{user_id}"`. 30-second ping heartbeat; 30 msg/s rate limit; 64 KB max message.
 
-**Background task safety** — the 16 startup loops run on every replica concurrently. Dispatch uses an atomic DB claim; others use `reminder_sent` flags or idempotency keys. Any new loop must be replay-safe.
+**Background task safety** — the 40 startup loops run on every replica concurrently (26 hold best-effort Redis leader locks that fail open on Redis errors — see `docs/audit/2026-08-26-db-query-optimization-recommendations.md` §4.3). Dispatch uses an atomic DB claim; others use `reminder_sent` flags or idempotency keys. Any new loop must be replay-safe.
 
 **Settings in DB** — Stripe keys, Twilio credentials, and Google Maps API keys live in the `app_settings` Supabase table (managed via admin dashboard), not in `.env`. This allows rotation without redeployment.
 
@@ -271,7 +271,7 @@ Auto-mode tiers (demand / supply ratio → multiplier):
 Rules:
 - Every period transition is logged to `driver_insurance_periods` with `{driver_id, period, started_at, ended_at, ride_id?}` for regulatory audit
 - Never delete or mutate period rows — append only
-- Period 2 starts on `driver_accepted` (not `driver_assigned`) — in the batch-offer dispatch model a ride can be offered to multiple drivers at once, so a driver isn't obligated to it until they accept; `record_period_transition(..., 2, ...)` is only ever called from the accept handler (`routes/drivers/ride_flow.py`). A driver in `driver_assigned` state who hasn't yet accepted is still Period 1.
+- Period 2 starts on `driver_assigned` (not `driver_accepted`) — a driver becomes obligated to the ride the instant `claim_driver_atomic` succeeds and the offer is live, not only once they tap Accept. `record_period_transition(..., 2, ...)` is called at claim/offer time in `routes/rides/matching.py` (the real trigger) and on admin direct-assignment in `routes/admin/rides.py`; the call in `routes/drivers/ride_flow.py`'s accept handler is a redundant no-op safety net for the same period+ride_id. A driver in `driver_assigned` state is already Period 2, not Period 1.
 - A driver cannot be in Period 3 without a `ride_id` linking to an `in_progress` ride
 - Document expiry (license, insurance, vehicle registration) blocks Period 1+ — checked on every `go_online` call
 

@@ -156,9 +156,25 @@ def _mask_license_number(plain: Optional[str]) -> Optional[str]:
 
 
 async def _batch_fetch_drivers_and_users(rider_ids: List[str], driver_ids: List[str]) -> tuple:
-    """Batch-fetch drivers and users in 2-3 queries instead of N+1 loops."""
+    """Batch-fetch drivers and users in 2-3 queries instead of N+1 loops.
+
+    Both reads are column-projected, NOT ``select *``. Callers only ever read
+    the driver's identity/position (`user_id`, `name`, `lat`, `lng`,
+    `service_area_id`) and the user's display fields (the four
+    ``_user_display_name`` reads plus a direct `phone` on the unpaid-rides
+    view). The full rows carry encrypted driver PII and, on `users`, a
+    `profile_image` that for pre-storage-bucket accounts is a base64 data URI
+    — shipped on every one of this helper's ~10 admin endpoints, including a
+    10 000-row ride export, for fields nothing renders. Add a column here if a
+    caller starts reading one; do not widen back to ``*``.
+    """
     drivers_list = (
-        await db_supabase.get_rows("drivers", {"id": {"$in": driver_ids}}, limit=max(len(driver_ids), 1))
+        await db_supabase.get_rows(
+            "drivers",
+            {"id": {"$in": driver_ids}},
+            columns="id,user_id,name,lat,lng,service_area_id",
+            limit=max(len(driver_ids), 1),
+        )
         if driver_ids
         else []
     )
@@ -171,7 +187,12 @@ async def _batch_fetch_drivers_and_users(rider_ids: List[str], driver_ids: List[
         }
     )
     users_list = (
-        await db_supabase.get_rows("users", {"id": {"$in": all_user_ids}}, limit=max(len(all_user_ids), 1))
+        await db_supabase.get_rows(
+            "users",
+            {"id": {"$in": all_user_ids}},
+            columns="id,first_name,last_name,email,phone",
+            limit=max(len(all_user_ids), 1),
+        )
         if all_user_ids
         else []
     )
@@ -478,7 +499,9 @@ async def admin_get_drivers(
     # Filter by profile-photo moderation status (photo lives on users). Used by
     # the admin "Pending photos" queue. No matching users → no drivers.
     if photo_status:
-        photo_users = await db_supabase.get_rows("users", {"profile_image_status": photo_status}, limit=1000)
+        photo_users = await db_supabase.get_rows(
+            "users", {"profile_image_status": photo_status}, columns="id", limit=1000
+        )
         photo_uids = [u["id"] for u in photo_users if u.get("id")]
         if not photo_uids:
             return []
@@ -865,7 +888,16 @@ async def admin_get_driver_stats(
             "daily_rides": rides_chart,
             "daily_earnings": earnings_chart,
         },
-        "drivers": enriched_drivers,
+        # NOTE: this response deliberately does NOT carry the enriched driver
+        # rows. It used to return every one of them (up to the 5000-row fetch
+        # cap) as a "drivers" key — full `drivers` rows, encrypted PII and all,
+        # plus their users' base64 `profile_image` — on a stats endpoint the
+        # dashboard polls for eight numbers. Nothing consumed it: the drivers
+        # table is rendered from the separately-paginated GET /admin/drivers
+        # (admin-dashboard `dashboard/drivers/page.tsx` reads only `stats`,
+        # `area_stats`, `charts` and `service_areas` off this response).
+        # Removed 2026-08-27, audit P1 #10. Paginate GET /admin/drivers if a
+        # caller ever needs the rows again — do not re-add them here.
         "service_areas": [
             {"id": a["id"], "name": a.get("name", "Unknown")}
             for a in service_areas

@@ -663,7 +663,7 @@ async def confirm_payment(
     # Mock-payment shortcut (non-production only; production rejected above).
     if is_mock:
         if ride_id:
-            _ride = await db_supabase.get_ride(ride_id)
+            _ride = ride  # reuse already-fetched & validated ride (was: get_ride round-trip)
             if not _ride or _ride.get("rider_id") != current_user["id"]:
                 raise HTTPException(
                     status_code=403,
@@ -687,7 +687,7 @@ async def confirm_payment(
             raise HTTPException(status_code=403, detail="Not authorized to confirm this payment")
 
         if ride_id:
-            _ride = await db_supabase.get_ride(ride_id)
+            _ride = ride  # reuse already-fetched & validated ride (was: get_ride round-trip)
             if not _ride or _ride.get("rider_id") != current_user["id"]:
                 raise HTTPException(
                     status_code=403,

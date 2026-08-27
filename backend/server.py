@@ -395,6 +395,21 @@ if _mcp_asgi_app is not None:
 app.include_router(settings_router)
 app.include_router(settings_router, prefix="/api/v1")
 
+# Public per-audience legal-documents endpoint (GET /legal-documents). Same
+# dual-mount reasoning as settings_router directly above: routes/legal_documents.py's
+# own docstring documents it as "no auth, no /api/v1 prefix (mounted at root)",
+# and all four mobile call sites (rider-app/app/legal.tsx, driver-app/app/legal.tsx,
+# driver-app/app/become-driver.tsx, driver-app/app/crc-consent.tsx) fetch
+# `${backendUrl}/legal-documents` directly, with no /api/v1 prefix. This root
+# mount was simply never added when this endpoint replaced the old
+# /settings/legal blob above — legal_documents_router was only ever wired into
+# v1_api_router (below), so every one of those four fetches has been 404ing
+# in production, silently rendering the "not published yet" placeholder even
+# though every (audience, doc_type) row is fully published with real content.
+# The /api/v1 mount stays too (harmless, and the docstring's "no prefix" claim
+# was about the *canonical* path, not about forbidding a versioned alias).
+app.include_router(legal_documents_router)
+
 # Mount admin routes under /api so the admin dashboard can reach them at /api/admin/...
 app.include_router(admin_router, prefix="/api")
 app.include_router(admin_auth_router, prefix="/api")

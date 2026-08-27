@@ -17031,7 +17031,52 @@ how much they de-risk a public launch._
 
 ### C47. `ci-guardrails.yml`'s coverage-gate jobs get externally cancelled mid-suite — not a pytest failure, not the C45 flake
 
-- [ ] **Status:** open (external-cause CI reliability gap). Found 2026-08-27
+- [x] **Status: happy path verified 2026-08-27, closing this item.** The
+  external-cancellation root cause itself is still not identified (see
+  "Not yet explained" below, unchanged) — closing only because the
+  concrete, actionable half of this item (the coverage-consolidation fix)
+  is now fully verified end-to-end, including the one path that had never
+  been observed: a tracked money-path file, a successful shared run, and a
+  real computed coverage number. If the external cancellation resurfaces
+  and starts costing CI cycles again, reopen under a fresh item rather than
+  this one.
+- **THE HAPPY PATH, finally observed (2026-08-27, PR #4625, run
+  `33111838602`, commit `4c19bf15b`):** this PR's third commit
+  (`fix(rides): compute show_legacy_badge on both ride-history list
+  endpoints`) touches `backend/routes/rides/queries.py` — one of the 5
+  tracked money-path paths — giving the coverage-consolidation fix its
+  first real test against a qualifying diff.
+  - `Run backend test suite with coverage (shared)` (the `shared-coverage-
+    run` job) **completed successfully**, 20:10:34–20:23:54 (13m 20s), no
+    external cancellation — first clean full run observed since the fix
+    shipped.
+  - `Upload shared coverage artifact` succeeded; `Money-path coverage
+    floor check`'s `Download shared coverage artifact` step succeeded
+    (contrast with the four prior cancelled/degraded runs, all of which
+    hit "Artifact not found").
+  - `check_money_path_coverage_floor.py`'s actual log output (via
+    `get_job_logs` on job `98660817562`), quoted verbatim:
+    ```
+    money-path coverage floor check -- 1 tracked module(s) touched by this PR:
+      PASS  routes/rides/    92.2%  (floor 80%, measured 85.2% aggregate (2026-08-19, -k ride/dispatch/matching/booking/cancellation/lifecycle run); target 80% met)
+    PASS: all touched money-path modules meet their coverage floor.
+    ```
+    A real per-file coverage percentage, computed from the real shared
+    artifact, correctly identifying the one touched tracked module and
+    passing it against its floor. Not the "no tracked module" no-op, not
+    an artifact-missing degradation — the actual gate doing its actual job.
+  - `Coverage regression check` also ran clean off the same artifact this
+    time (`Download shared coverage artifact` succeeded), landing on its
+    own separate, pre-existing "no baseline" advisory path (C24, unrelated
+    to this fix) rather than an artifact-missing failure.
+  - The fail-closed path (coverage report missing AND a tracked file
+    touched) still has not been directly observed — that would require an
+    artifact-missing run on a PR that also touches a tracked file, which
+    by construction can't happen once the happy path is working. Treat
+    this as adequately covered by the fix's own `if: always()` design and
+    the artifact-missing-but-no-tracked-file case already verified
+    2026-08-27 earlier the same day (below) — not a further gap to chase.
+- [ ] **Status (superseded, kept for the record):** open (external-cause CI reliability gap). Found 2026-08-27
   triaging PR #4595's CI: `Money-path coverage floor check` and `Coverage
   regression check` (`ci-guardrails.yml`) both failed on the same commit
   (`fb233e6e3`, run `33086878967`). Initially mis-diagnosed in a PR comment
@@ -17142,6 +17187,8 @@ how much they de-risk a public launch._
     about this specific PR/session — not established either way). Not
     forcing another push purely to chase a clean run, in the same spirit as
     this fix's own goal of not burning extra CI cycles chasing this issue.
+    (**Superseded** — see "THE HAPPY PATH, finally observed" above, a
+    different PR, same day.)
 - **Correction issued:** the PR #4595 comments that called this "the same
   C45 flake" were wrong and should be read alongside this entry, not as
   the final word — see the PR's comment thread for the acknowledgment.

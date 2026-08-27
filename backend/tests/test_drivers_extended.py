@@ -490,7 +490,14 @@ class TestGetDriverBalance:
                 return payouts
             return []
 
-        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)),
+            # total_rides is a count query, not a fetch — see get_driver_balance.
+            patch(
+                "backend.routes.drivers._deps.db_supabase.count_documents",
+                AsyncMock(return_value=len(rides)),
+            ),
+        ):
             result = asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
 
         assert result["total_earnings"] == "20.00"

@@ -69,6 +69,17 @@
     "about": "关于",
     "selectLanguage": "选择语言"
   },
+  "legacyConsent": {
+    "title": "关于我们如何处理您的信息的更新",
+    "body": "Spinr Mobility Inc. 致力于根据加拿大联邦隐私法（PIPEDA）保护您的隐私。您的账户没有查看我们当前《隐私政策》和《服务条款》的记录——如果您的账户是在我们开始追踪同意记录之前创建的，或者是从早期版本的 Spinr 转移过来的，就可能出现这种情况。",
+    "note": "您的账户以及您使用 Spinr 的方式今天不会有任何变化。我们只需要您确认知悉。",
+    "accept": "我已了解，继续",
+    "acceptLabel": "我已了解，继续使用 Spinr",
+    "viewPolicy": "查看完整政策",
+    "viewPolicyLabel": "查看完整的隐私政策和服务条款",
+    "errorTitle": "出现问题",
+    "errorFallback": "请重试。"
+  },
   "languages": {
     "en": "英语",
     "fr": "法语",

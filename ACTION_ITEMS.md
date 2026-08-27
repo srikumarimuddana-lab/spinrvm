@@ -16813,43 +16813,73 @@ how much they de-risk a public launch._
   these 4 tables, AND a full regression pass (backend integration tests +
   a manual admin-dashboard settings-page load) confirms nothing broke.
 
-### C44. Production Supabase migrations are stale — migration 364 (`legacy_ride_badge_enabled`) and everything after 359 never ran
+### C44. Production Supabase migrations are stale — 363-369 (7 files, including 364 `legacy_ride_badge_enabled`) never ran
 
-- [ ] **Status:** open, found 2026-08-27 while verifying `app_settings` state
-  via the Supabase connector for an unrelated task (checking
-  `legacy_consent_notice_enabled`). `SELECT column_name FROM
-  information_schema.columns WHERE table_name='settings'` on the live
-  `spinrmobileapp` project (`soavhtdhefowwvforzwb`) does **not** include
-  `legacy_ride_badge_enabled` — the column migration 364 adds (shipped in
-  PR #4557, this session, 2026-08-25). `schema_migrations`' latest applied
-  row is `359_fix_emergency_contact_pii_vault_functions.sql`
-  (2026-08-22 04:11:58 UTC). Everything from 360 onward, including 364,
-  has never been run against production.
+- [ ] **Status:** open, found 2026-08-27, **corrected 2026-08-27 later the
+  same day** after re-querying `schema_migrations` directly (previous
+  entry below was wrong about the boundary — see correction).
+- **Correction:** the original write-up of this item claimed
+  `schema_migrations`' latest applied row was `359` and "everything from
+  360 onward never ran." That was based only on the *absence* of the 364
+  column, not on actually reading the table. A direct
+  `SELECT filename, applied_at, applied_by FROM schema_migrations WHERE
+  filename ~ '^3[6-9][0-9]_'` against the live `spinrmobileapp` project
+  (`soavhtdhefowwvforzwb`) shows **360, 361, and 362 are in fact applied**
+  (`360_widen_legal_documents_doc_type.sql` 2026-08-21 21:59:44 UTC,
+  `361_seed_new_legal_documents.sql` 22:07:20, `362_fix_rider_email_
+  verification_otp_user_id_type.sql` 23:30:24 — all three timestamped
+  *before* 359's own apply time of 2026-08-22 04:11:58, meaning 359 was
+  applied out of numeric order relative to 360-362, not after them). The
+  same query returns **nothing at all for 363 and above** — confirmed
+  against the same regex range, so the real gap starts at 363, not 360.
+  Also directly confirmed (not inferred from one column's absence):
+  neither `legacy_ride_badge_enabled` (364) nor `ai_public_chat_enabled`
+  (363) exist as columns on `settings` in production.
+- **The actual pending list (7 files, confirmed against
+  `backend/migrations/` + a second `schema_migrations` query that also
+  came back empty for all seven):**
+  `363_settings_add_ai_public_chat_enabled.sql`,
+  `364_settings_add_legacy_ride_badge_enabled_flag.sql`,
+  `365_merge_duplicate_crc_and_payout_faqs.sql`,
+  `366_seed_retention_and_passenger_insurance_faqs.sql`,
+  `367_seed_remaining_compliance_faqs.sql`,
+  `368_add_driver_documents_indexes.sql`,
+  `369_drop_duplicate_indexes.sql`. (370 exists locally too but belongs to
+  still-open PR #4624, not yet on `main` — irrelevant to this production
+  gap until that PR merges.)
+- **Note for whoever runs this:** `368_add_driver_documents_indexes.sql`
+  uses `CREATE INDEX CONCURRENTLY` — this is exactly the case
+  `run_migrations.py`'s CONCURRENTLY-safe statement splitting (ported from
+  the now-deleted `migrate.py`, see root `CLAUDE.md`'s Database Migrations
+  section) exists for. Don't hand-run this file's SQL through a plain
+  multi-statement session/transaction block; use the runner.
 - **Impact:** `backend/routes/rides/queries.py`'s `GET /{ride_id}` reads
   `settings.get("legacy_ride_badge_enabled", False)` via a plain dict
   `.get()` with a default — so this doesn't crash, it just silently
   behaves as permanently off. The Imported badge/disclaimer feature
-  shipped this session (#4557/#4558) **cannot be turned on** until this
-  migration runs, no matter what the flag is set to in code or intent.
-- **Not yet checked:** whether 360-363 exist and what they contain (not
-  looked up this session — only confirmed 364 specifically, via the
-  column-presence check), or whether this gap predates 2026-08-22's cutoff
-  for unrelated reasons (e.g., a paused deploy pipeline). `ACTION_ITEMS.md`
-  C5 already documents Railway's deploy pipeline as degraded/paused — worth
-  checking whether that's related before assuming this is purely a
-  "someone forgot to run the migration script" gap.
-- **Action:** run `python -m backend.scripts.run_migrations --dry-run`
-  against production to see the actual pending list, then apply for real
-  per the documented process in `backend/scripts/CLAUDE.md`/root
-  `CLAUDE.md`'s Database Migrations section. Needs a human with production
-  `DATABASE_URL` access — not executable from this session (Supabase MCP's
-  `execute_sql`/`apply_migration` tools could technically run the raw SQL,
-  but per this session's own established policy, money/schema writes go
-  through the documented tooling, not ad hoc SQL from an agent session).
-- **What was NOT verified:** the full list of missing migrations beyond
-  confirming 364 specifically is absent; whether any *other* recently-merged
-  feature besides the legacy-ride badge is similarly silently inert in
-  production for the same reason.
+  shipped this session (#4557/#4558) **cannot be turned on** until 364
+  runs, no matter what the flag is set to in code or intent. 363 gates the
+  public-website AI chat surface the same way (503 on first admin save
+  that includes the field, per its own header comment). 365-369 are
+  FAQ-content/index-only, no flag-gated feature blocked on them, but they
+  are still unapplied production drift.
+- **Action (unchanged in substance, list now correct):** run
+  `python -m backend.scripts.run_migrations --dry-run` against production
+  to confirm this exact 7-file list, then apply for real per the
+  documented process in `backend/scripts/CLAUDE.md`/root `CLAUDE.md`'s
+  Database Migrations section. Needs a human with production
+  `DATABASE_URL` access — not executable from this session (Supabase
+  MCP's `execute_sql`/`apply_migration` tools could technically run the
+  raw SQL, but per this session's own established policy, schema writes
+  go through the documented tooling — which also correctly handles 368's
+  `CONCURRENTLY` index — not ad hoc SQL from an agent session).
+- **What was NOT verified:** whether this gap relates to `ACTION_ITEMS.md`
+  C5's already-documented Railway deploy-pipeline pause (not checked);
+  whether any *other* recently-merged feature besides the legacy-ride
+  badge and public AI chat flag is similarly silently inert in production
+  for the same reason (365-369 audited by content above, but no broader
+  sweep of all `app_settings`-gated features was done). No production
+  write attempted from this session — read-only verification only.
 
 ### C45. `backend-test` was red on `main` — 3 pytest failures, all fixed 2026-08-27
 

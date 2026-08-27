@@ -250,6 +250,17 @@
     "failed": "Échoué",
     "failedMsg": "Impossible de renvoyer le code. Veuillez réessayer."
   },
+  "legacyConsent": {
+    "title": "Une mise à jour sur la gestion de vos renseignements",
+    "body": "Spinr Mobility Inc. s'engage à protéger votre vie privée conformément à la loi fédérale canadienne sur la protection des renseignements personnels (LPRPDE). Aucune acceptation de notre Politique de confidentialité et de nos Conditions d'utilisation actuelles n'est enregistrée pour votre compte — cela peut arriver si votre compte a été créé avant que nous commencions à suivre les consentements, ou s'il provient d'une version antérieure de Spinr.",
+    "note": "Rien ne change aujourd'hui dans votre compte ni dans votre façon de conduire avec Spinr. Nous avons simplement besoin de votre confirmation.",
+    "accept": "J'ai compris, continuer",
+    "acceptLabel": "J'ai compris, continuer vers Spinr",
+    "viewPolicy": "Lire la politique complète",
+    "viewPolicyLabel": "Lire la Politique de confidentialité et les Conditions d'utilisation complètes",
+    "errorTitle": "Une erreur est survenue",
+    "errorFallback": "Veuillez réessayer."
+  },
   "profile": {
     "editProfile": "Modifier le profil",
     "myVehicles": "Mes véhicules",

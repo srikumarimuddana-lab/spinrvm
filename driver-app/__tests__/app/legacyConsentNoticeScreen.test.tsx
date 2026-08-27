@@ -14,6 +14,16 @@ import TestRenderer, { act } from 'react-test-renderer';
 
 import LegacyConsentNoticeScreen from '../../app/legacy-consent-notice';
 
+// Real driver-app en.json lookup (not an identity stub) so this file's
+// existing English-text assertions keep exercising the actual translated
+// copy, same pattern as __tests__/components/SOSButton.test.tsx.
+jest.mock('../../store/languageStore', () => ({
+  useLanguageStore: () => ({
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    t: (key: string) => require('../../i18n').translate('en', key),
+  }),
+}));
+
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('react-native-safe-area-context', () => ({
   SafeAreaView: ({ children }: any) => children,

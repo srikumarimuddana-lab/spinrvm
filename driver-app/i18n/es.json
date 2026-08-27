@@ -360,5 +360,16 @@
       "fee": "Se aplica tarifa de aeropuerto"
     },
     "gotIt": "Entendido"
+  },
+  "legacyConsent": {
+    "title": "Una actualización sobre cómo manejamos su información",
+    "body": "Spinr Mobility Inc. se compromete a proteger su privacidad conforme a la ley federal canadiense de protección de datos (PIPEDA). Su cuenta no tiene registro de haber revisado nuestra Política de Privacidad y Términos de Servicio actuales — esto puede ocurrir si su cuenta se creó antes de que empezáramos a registrar el consentimiento, o si proviene de una versión anterior de Spinr.",
+    "note": "Nada cambia hoy en su cuenta ni en la forma en que conduce con Spinr. Solo necesitamos su confirmación registrada.",
+    "accept": "Entendido, continuar",
+    "acceptLabel": "Entendido, continuar a Spinr",
+    "viewPolicy": "Leer la política completa",
+    "viewPolicyLabel": "Leer la Política de Privacidad y los Términos de Servicio completos",
+    "errorTitle": "Algo salió mal",
+    "errorFallback": "Inténtelo de nuevo, por favor."
   }
 }

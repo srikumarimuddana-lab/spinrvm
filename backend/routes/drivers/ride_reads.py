@@ -369,7 +369,24 @@ async def get_ride_history(
         except Exception:
             logger.debug("ride_incentive_claims lookup failed", exc_info=True)
 
+    # Same flag + gating condition as routes/rides/queries.py's get_ride/{ride_id}
+    # and get_ride_history's show_legacy_badge — fetched once per page here.
+    # See docs/legacy-ride-history-presentation-plan.md Item 2/Section 6: only
+    # the single-ride detail endpoint computed this until now, so a driver
+    # scrolling their trip list saw no "Imported" distinction until tapping
+    # into a specific ride.
+    try:
+        from ...settings_loader import get_app_settings
+    except ImportError:
+        from settings_loader import get_app_settings  # type: ignore
+    try:
+        _settings = await get_app_settings() or {}
+    except Exception:
+        _settings = {}
+    _legacy_badge_enabled = bool(_settings.get("legacy_ride_badge_enabled", False))
+
     for r in rides:
+        r["show_legacy_badge"] = bool(_legacy_badge_enabled and r.get("legacy_import_metadata"))
         rid = str(r.get("id", ""))
         des = r.get("driver_earnings_snapshot")
         if des and isinstance(des, dict) and "total" in des:

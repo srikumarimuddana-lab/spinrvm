@@ -1,18 +1,24 @@
 /**
- * docs/change-log/2026-08-20-explicit-signup-consent-checkbox.md
+ * docs/change-log/2026-08-20-explicit-signup-consent-checkbox.md,
+ * revised 2026-08-27 (docs/migration/2026-08-27-legacy-data-full-migration-approach.md §6a).
  *
- * Pins app/login.tsx's new explicit, unchecked-by-default consent
- * checkbox — the fix for the passive "by continuing you agree" text that
- * had no tappable action or opt-in gesture behind it (see the legal
- * fact-finding audit's §8):
- *  - the checkbox starts unchecked and the "Send Verification Code" button
- *    is disabled (accessibilityState.disabled) even with a valid phone
- *    number until it's checked
- *  - checking it (accessibilityRole="checkbox", accessibilityState.checked
- *    toggles) enables the button
+ * Pins app/login.tsx's explicit consent checkbox, updated for the 2026-08-27
+ * fix: the checkbox no longer gates "Send Verification Code" — only phone
+ * validity does. The backend only ever reads consent_accepted for a
+ * brand-new account (routes/auth.py's verify_otp); gating this screen on it
+ * forced every returning user (session expired, logged back in) to re-tick
+ * a box with zero effect for them. The checkbox stays visible/toggleable —
+ * a proactive new signup can still pre-accept it — and its state is still
+ * carried to /otp as a route param either way. otp.tsx now handles the
+ * genuine-new-account case inline if the backend comes back with
+ * consent_required.
+ *  - the checkbox starts unchecked; the "Send Verification Code" button is
+ *    enabled once the phone number is valid, regardless of checkbox state
+ *  - toggling it (accessibilityRole="checkbox", accessibilityState.checked)
+ *    still works, but never itself disables/enables the button
+ *  - an invalid phone number still disables continue, checkbox state aside
  *  - a successful continue navigates to /otp carrying consentAccepted
- *    as a route param, so otp.tsx's POST /auth/verify-otp call can send it
- *  - the checkbox is never re-enabled while a send is in flight
+ *    as a route param reflecting whatever the checkbox's state was
  *
  * Uses react-test-renderer directly, matching verifyEmailScreen.test.tsx's
  * conventions.
@@ -110,7 +116,7 @@ beforeEach(() => {
 });
 
 describe('LoginScreen — explicit consent checkbox', () => {
-  it('starts unchecked, with the continue button disabled even for a valid phone number', async () => {
+  it('starts unchecked, with the continue button already enabled for a valid phone number', async () => {
     const renderer = await renderScreen();
     enterPhone(renderer, '3065550199');
 
@@ -118,10 +124,10 @@ describe('LoginScreen — explicit consent checkbox', () => {
     expect(checkbox.props.accessibilityState).toMatchObject({ checked: false });
 
     const button = getContinueButton(renderer);
-    expect(button.props.accessibilityState).toMatchObject({ disabled: true });
+    expect(button.props.accessibilityState).toMatchObject({ disabled: false });
   });
 
-  it('checking the box (with a valid phone) enables the continue button', async () => {
+  it('checking the box toggles its own state without changing the continue button', async () => {
     const renderer = await renderScreen();
     enterPhone(renderer, '3065550199');
     toggleConsent(renderer);
@@ -130,7 +136,7 @@ describe('LoginScreen — explicit consent checkbox', () => {
     expect(getContinueButton(renderer).props.accessibilityState).toMatchObject({ disabled: false });
   });
 
-  it('an invalid phone number keeps continue disabled even once consent is checked', async () => {
+  it('an invalid phone number keeps continue disabled regardless of consent state', async () => {
     const renderer = await renderScreen();
     enterPhone(renderer, '123'); // too short
     toggleConsent(renderer);
@@ -138,11 +144,18 @@ describe('LoginScreen — explicit consent checkbox', () => {
     expect(getContinueButton(renderer).props.accessibilityState).toMatchObject({ disabled: true });
   });
 
-  it('tapping continue while unchecked never calls send-otp (defence in depth behind the disabled button)', async () => {
+  it('tapping continue while unchecked still calls send-otp and carries consentAccepted:false to /otp', async () => {
     const renderer = await renderScreen();
     enterPhone(renderer, '3065550199');
-    await tapContinue(renderer); // consent still unchecked
-    expect(mockApiPost).not.toHaveBeenCalled();
+    await tapContinue(renderer); // consent left unchecked
+
+    expect(mockApiPost).toHaveBeenCalledWith('/auth/send-otp', { phone: '+13065550199' });
+    expect(mockPush).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pathname: '/otp',
+        params: expect.objectContaining({ phoneNumber: '+13065550199', consentAccepted: 'false' }),
+      }),
+    );
   });
 
   it('navigates to /otp with consentAccepted carried as a route param once checked', async () => {
@@ -160,11 +173,11 @@ describe('LoginScreen — explicit consent checkbox', () => {
     );
   });
 
-  it('unchecking after checking disables continue again', async () => {
+  it('unchecking after checking leaves continue enabled — phone validity is the only gate now', async () => {
     const renderer = await renderScreen();
     enterPhone(renderer, '3065550199');
     toggleConsent(renderer); // check
     toggleConsent(renderer); // uncheck
-    expect(getContinueButton(renderer).props.accessibilityState).toMatchObject({ disabled: true });
+    expect(getContinueButton(renderer).props.accessibilityState).toMatchObject({ disabled: false });
   });
 });

@@ -2338,10 +2338,10 @@
   resolved "https://registry.npmjs.org/@istanbuljs/schema/-/schema-0.1.6.tgz"
   integrity sha512-+Sg6GCR/wy1oSmQDFq4LQDAhm3ETKnorxN+y5nbLULOR3P0c14f2Wurzj3/xqPXtasLFfHd5iRFQ7AJt4KH2cw==
 
-"@iternio/react-native-auto-play@0.4.7":
-  version "0.4.7"
-  resolved "https://registry.yarnpkg.com/@iternio/react-native-auto-play/-/react-native-auto-play-0.4.7.tgz#f54e8cc2b857f60a952f1b4208c2ce8b6cb34b3d"
-  integrity sha512-Y4XzbTUqU2JhsFJST+RZkkYTbcmEQQgeKP3MPC1Vfc4ft0qJ9AWLCGkl72uebKgONtNkKCdVnCoTuaN9wJJykA==
+"@iternio/react-native-auto-play@0.5.13":
+  version "0.5.13"
+  resolved "https://registry.yarnpkg.com/@iternio/react-native-auto-play/-/react-native-auto-play-0.5.13.tgz#c962ecf69bda8fe01227ded90fe698478a1ffc25"
+  integrity sha512-zPZ7u3O23Ne6FMrGdBtE08+z60QDJPhIcoEp1xRvpWFZxhz+Qqvg8CcItsdtQ67hdGe7+N/7lxczOIBMyXHF5Q==
   dependencies:
     react-native-uuid "^2.0.3"
 

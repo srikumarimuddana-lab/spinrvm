@@ -38,9 +38,7 @@ async def get_chat_status(ride_id: str, current_user: dict = Depends(get_current
     # here would still leak ride existence (403 = exists-but-not-yours vs
     # 404 = no-such-ride), the exact disclosure this guard closes.
     if ride.get("rider_id") != current_user["id"]:
-        driver = (lambda _r: _r[0] if _r else None)(
-            await _deps.db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
-        )
+        driver = await _deps.driver_row_for(current_user)
         if not (driver and ride.get("driver_id") == driver["id"]):
             raise HTTPException(status_code=404, detail="Ride not found")
 
@@ -77,9 +75,7 @@ async def get_ride_messages(ride_id: str, current_user: dict = Depends(get_curre
 
     # Verify the user is part of the ride
     is_rider = ride.get("rider_id") == current_user["id"]
-    driver = (lambda _r: _r[0] if _r else None)(
-        await _deps.db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
-    )
+    driver = await _deps.driver_row_for(current_user)
     is_driver = driver and ride.get("driver_id") == driver["id"]
 
     if not (is_rider or is_driver):

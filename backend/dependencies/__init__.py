@@ -423,6 +423,13 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                 # the Supabase read load.
                 driver = await db_supabase.get_driver_by_user_id_cached(user["id"])
                 user["is_driver"] = True if driver else False
+                # Stash the row we just paid for. It is the full driver record
+                # and it used to be discarded here, so ~70 driver endpoints
+                # re-fetched the identical row uncached. Consumers must treat it
+                # as up-to-30s stale: read immutable fields (id) or
+                # display-only ones, never gate money, Stripe writes, presence
+                # or status transitions on it — those re-read deliberately.
+                user["_driver"] = driver
             _enforce_account_active(user)
             # Defense in depth — see the JWT path: strip any stored
             # _admin_verified so only _verify_admin_payload can grant admin.
@@ -513,6 +520,9 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         # path above — this is the JWT hot path for every API call.
         driver = await db_supabase.get_driver_by_user_id_cached(user["id"])
         user["is_driver"] = True if driver else False
+        # See the Firebase path: stash the already-fetched row for read-only
+        # consumers. Up to 30s stale by construction.
+        user["_driver"] = driver
     except (DatabaseError, ServiceUnavailableException):
         # Treat the drivers lookup the same as the users lookup — if the
         # DB is flaking, 503 so the client retries. Silently defaulting
@@ -635,11 +645,35 @@ async def get_current_user_allow_expired(
     _enforce_account_active(user)
     driver = await db_supabase.get_driver_by_user_id_cached(user["id"])
     user["is_driver"] = True if driver else False
+    user["_driver"] = driver
     logger.warning(
         f"[auth] expired-token grace used on safety endpoint by user {user_id} "
         f"(token expired {int(now_ts - float(exp))}s ago)"
     )
     return user
+
+
+async def driver_row_for(current_user: dict):
+    """The caller's own driver row, reusing the one auth already fetched.
+
+    ``get_current_user`` calls ``get_driver_by_user_id_cached`` on every
+    authenticated request to set ``is_driver`` and stashes the row on
+    ``_driver``. This returns that row instead of issuing a second, uncached
+    ``SELECT *`` for the same record — which ~70 endpoints used to do.
+
+    Returns None when the caller has no driver row (``_driver`` is legitimately
+    None then, so presence of the key is what is checked, not truthiness).
+    Falls back to the cached lookup if the key is absent, so a caller that did
+    not come through ``get_current_user`` still works.
+
+    STALENESS CONTRACT: this row can be up to 30s old. Use it for immutable
+    fields (``id``), participant checks and display. Do NOT gate money, Stripe
+    read-modify-writes, presence/``is_online``, suspension or any status
+    transition on it — those paths re-read deliberately and must keep doing so.
+    """
+    if "_driver" in current_user:
+        return current_user["_driver"]
+    return await db_supabase.get_driver_by_user_id_cached(current_user["id"])
 
 
 async def get_admin_user(current_user: dict = Depends(get_current_user)) -> dict:

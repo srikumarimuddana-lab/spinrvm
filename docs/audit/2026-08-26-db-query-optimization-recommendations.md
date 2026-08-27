@@ -1,6 +1,6 @@
 # Database Query Optimization — Audit & Recommendations
 
-**Date:** 2026-08-26
+**Date:** 2026-08-26 · **Updated:** 2026-08-27 (PR #4579 review follow-ups — measured `EXPLAIN` results in §2.2, dispatch-actor timeline in §3.2, per-site split of P0 #7, resolution of the deferred `EXPLAIN` item)
 **Scope:** Backend API call sites, background loops, and live Supabase query statistics
 **Project:** `spinrmobileapp` (`soavhtdhefowwvforzwb`, ca-central-1, Postgres 17.6)
 **Status:** **Recommendations only — no code, migration, or database change was made by this audit.**
@@ -95,7 +95,10 @@ These are server-side execution times only — network, TLS, and PostgREST overh
 
 **This table is the single most important piece of evidence in the audit.** A primary-key lookup of one row from a 212-row table should be sub-millisecond. Measured means of 36 ms, 45 ms, and 114 ms are two to three orders of magnitude off. The common factor in every slow entry is **`SELECT *` on `users` or `drivers`** — wide rows containing encrypted PII columns, `documents` JSONB, and `profile_image` (which `routes/admin/drivers.py:513-519` documents can be a base64 data URI). PostgREST also wraps every result in `json_agg`, so wide rows are serialized to JSON server-side before transmission.
 
-> **Follow-up required:** run `EXPLAIN (ANALYZE, BUFFERS)` on these three statements to separate row width from RLS-policy overhead. 57 `auth_rls_initplan` advisor warnings say policies re-evaluate `auth.<function>()` per row, which inflates exactly this shape of query. This audit did not run `EXPLAIN` against production.
+> **Follow-up performed (2026-08-27):** `EXPLAIN (ANALYZE, BUFFERS)` was run against production with live parameter values.
+> - `users` by PK: **Index Scan, 0.76 ms**. `drivers` by `user_id`: **Index Scan, 0.13 ms**. `refresh_tokens` by `user_id`: **Index Scan, 0.09 ms**. `rides` by `status`: **Index Scan, 0.10 ms**. All four are correctly indexed and fast today — so the historical 36–114 ms means are **not plan problems**; they reflect row width (`SELECT *` on ~1.4–1.6 KB rows serialized through `json_agg`) and past load. Column projection (P1 #9) is the fix, not an index.
+> - `driver_documents` WHERE `driver_id` AND `status`: **Seq Scan confirmed** — 1,892 of 1,902 rows discarded by the filter, 157 buffer reads, 0.58 ms/call. `index_advisor` estimates planner cost **186.7 → 11.0 (−94%)** with a `driver_id` index.
+> - RLS nuance: the backend's PostgREST traffic runs as `service_role`, which **bypasses RLS** — so the 57 `auth_rls_initplan` warnings do not explain these backend query times. They still matter for `anon`/`authenticated` direct access (storage, any future client-side reads).
 
 ### 2.3 Sequential scans on hot tables
 
@@ -187,6 +190,20 @@ Three independent actors each re-run the full dispatch attempt for the same ride
 
 Offer expiry itself costs ~6 queries per offered driver (`process_expired_offer` at `matching.py:1174`: update offer → update acceptance rate → set available → insurance-period RPC → re-read driver). Multiply by ~20 offer cycles in a 5-minute search and the arithmetic reaches 800–900 round-trips for one ride request.
 
+Timeline for a single ride nobody accepts (each `attempt` ≈ 25–30 queries, each `expiry` ≈ 6 queries × offered drivers):
+
+```
+t=0s    POST /rides (~22 q) ──► dispatch attempt #1 ──► offers sent (15 s timers start)
+t=10s   retry chain fires        ──► attempt #2
+t=10s   offer_expiry_reaper tick ──► (offers not yet expired — scan only)
+t=15s   batch-offer timeout      ──► expiry (~6 q × drivers) ──► attempt #3
+t=20s   retry chain fires        ──► attempt #4
+t=20s   offer_expiry_reaper tick ──► finds expired offers ──► expiry ──► attempt #5
+  …     the three actors keep overlapping every 10–15 s, each re-running the full attempt
+t=300s  ride_search_timeout ──► auto-cancel (stuck_ride_sweeper would also catch it on its 60 s cadence)
+        ≈ 20 offer cycles × (~18 expiry + ~28 attempt queries) ≈ 800–900 round-trips
+```
+
 ### 3.3 Three calls that block the entire process
 
 These use the **synchronous** Supabase client directly, with no `run_sync` offload. In an asyncio service, one blocking call stalls every other in-flight request on that worker:
@@ -227,7 +244,7 @@ Grouped by the priority order requested: ride latency → background load → ad
 | `routes/drivers/earnings.py:57/134/173/208` | `GET /drivers/balance` | Four bulk scans (10k/10k/5k/10k), all `SELECT *`, summed in Python | No — SQL aggregates |
 | `routes/rides/queries.py:254` | `GET /rides/stats` | `limit=10000` `SELECT *`; with `period=all` the date filter is dropped entirely — the rider's whole history including GPS polylines, for a count and two sums | No — aggregate RPC |
 | `routes/promotions.py:529-537` | `GET /promo/available` | `count_documents(...)` whose **result is never assigned** — a wasted round-trip on every call | **Dead code** |
-| `routes/payments.py:623/666/690` | `POST /payments/confirm` | `get_ride(ride_id)` called 3× for the same ride | No — reuse |
+| `routes/payments.py:623/666/690` | `POST /payments/confirm` | `get_ride(ride_id)` called 3× for the same ride — **all three inside the single `confirm_payment` handler** (def at `payments.py:584`), so the fix is a plain hoist of one `get_ride` to the top of the handler; no cross-layer request-stash needed | No — reuse |
 | `routes/maps_proxy.py:289` | `GET /maps/pickup-points` | All active venues (`limit=2000`, `SELECT *` incl. `pickup_points` JSONB) on every pin drop, no geo bound, no cache | No — radius filter |
 | ~70 driver endpoints | various | Re-fetch the driver row uncached with `SELECT *`, although `dependencies/__init__.py:424` already fetched it via the 30 s-cached `get_driver_by_user_id_cached` and discarded it | No — reuse the cached row |
 | `routes/rides/queries.py:407` | `GET /rides/{id}` | `find_one("service_areas")` per call, purely to read two static cancellation-fee numbers | No — cache |
@@ -375,17 +392,21 @@ Note one trap specific to this codebase: `db.py:94`'s legacy `count_documents` s
 
 Effort: **S** ≤ half a day · **M** 1–3 days · **L** > 3 days. Nothing below has been implemented.
 
+Test gates (per `CLAUDE.md`, restated inline because they are mandatory, not advisory): every money-adjacent item — the `limit=0` fix (#3), the estimate-path de-dup (#6), and the aggregate RPCs (P1 #11) — requires a regression test proving **identical output** before/after plus a `spinr-money-auditor` pass; the index migrations (#1, #2) require `spinr-migration-reviewer`; anything touching dispatch (P2 #13, #14) requires `spinr-dispatch-reviewer` and a `mock_supabase_client` dry run.
+
 ### P0 — Do first (small, isolated, high return)
 
 | # | Change | Impact | Risk & blast radius | Effort | Rollback |
 |---|---|---|---|---|---|
-| 1 | **Index `driver_documents (driver_id, status)`** plus covering indexes for the unindexed FKs `push_retry_queue.user_id`, `refresh_tokens.replaced_by` | Removes the largest single source of database work: 449 k seq scans / 702 M tuples; the 259 s query becomes an index lookup | Additive DDL. Blast radius: writes to these tables pay a marginal index-maintenance cost — negligible at 1,902 rows. No read-path behavior change | S | `DROP INDEX` |
+| 1 | **Index `driver_documents (driver_id, status)`** plus covering indexes for the unindexed FKs `push_retry_queue.user_id`, `refresh_tokens.replaced_by` | Removes the largest single source of database work: 449 k seq scans / 702 M tuples; the 259 s query becomes an index lookup. **Measured 2026-08-27**: Seq Scan discards 1,892/1,902 rows per call; `index_advisor` cost 186.7 → 11.0 (−94%) | Additive DDL. Blast radius: writes to these tables pay a marginal index-maintenance cost — negligible at 1,902 rows. No read-path behavior change | S | `DROP INDEX` |
 | 2 | **Drop the 3 exact-duplicate indexes** (§2.5) | Removes redundant write overhead on `surge_pricing` and `driver_location_history` | Low — each has a proven-identical twin still serving the pattern. Verify with `pg_indexes` immediately before | S | Recreate from the captured definition |
 | 3 | **Fix `repositories/_base.py:887`** — `elif limit:` → `elif limit is not None:`, and make `limit=0` return no rows | Closes the latent unbounded-query path | **Highest blast radius in this list**: `get_rows` is the universal read helper. ~40 call sites pass `limit=len(...)`. Requires a regression test asserting `limit=0` emits no unbounded query, and a sweep of every `limit=len(` site to confirm none *relies* on today's behavior | S | Revert (pure code) |
 | 4 | **Wrap the 3 blocking calls in `run_sync`** (§3.3) | Stops whole-process stalls that affect every concurrent request, including ride bookings | Low — mechanical, pattern copied from `routes/rides/queries.py:138`. Blast radius: `GET /drivers/balance`, `GET /drivers/earnings`, `GET /drivers/rides/history`. Same data, same shape | S | Revert |
 | 5 | **Delete the dead query** at `routes/promotions.py:529-537` | One fewer round-trip on every `GET /promo/available` | None — result is never assigned | S | Revert |
 | 6 | **Estimate-path de-duplication**: pass `_all_areas=_est_all_areas` at `estimates.py:406`; hoist the `area_fees` fetch out of the per-vehicle-type loop | Removes 1 + (N−1) queries per fare estimate, on a path polled every 15 s per rider with a 300 ms P95 target | Low but **fare-adjacent** — requires a test asserting byte-identical fare output. `booking.py:851` already proves the pattern. Blast radius: every fare quote | S | Revert |
-| 7 | **Bound the unbounded `get_rows` sites** (§4.2) | Replaces silent 1,000-row truncation with explicit, intentional limits | Low. Each site needs its own correct limit — do not apply one number globally | S–M | Revert |
+| 7a | **Bound the unbounded corporate-service reads** — `corporate_member_offboarding_service.py:59`, `corporate_suspension_service.py:60`, `corporate_wallet_winddown_service.py:100` | Truncation here leaves rides **uncancelled** during offboarding/suspension — a correctness fix, not just performance | Medium consequence: these callers act on every returned row, so verify iteration semantics (paginate, don't just cap) | S | Revert |
+| 7b | **Bound the `admin/sgi_forms.py:142/343/513` driver reads** | Unbounded `SELECT *` with encrypted PII decrypted per row | Also a PII-handling surface — pair the limit with `columns=` projection; give it a `spinr-security-auditor` pass | S | Revert |
+| 7c | **Bound the low-blast sites** — `corporate_repo.py:499` (entire `corporate_wallets` table), `support_tickets.py:740`, `admin/drivers.py:3937` | Hygiene; tables are small today | Low | S | Revert |
 | 8 | **Paginate the compliance export** (`bundle_document_uploader.py:180/198`) past the 1,000-row cap | **Regulatory**: fixes silent truncation of a 7-year SGI insurance-period audit obligation | Low technically, high in consequence-of-not-doing. Follow the existing paged pattern in `utils/document_expiry.py` | S | Revert |
 
 ### P1 — Your stated direction: pagination for listings, aggregates for analytics
@@ -417,7 +438,7 @@ Effort: **S** ≤ half a day · **M** 1–3 days · **L** > 3 days. Nothing belo
 |---|---|---|
 | 22 | **Rider polling → WebSocket-primary** (§5.1) | You asked to handle this later. Impact, data-collection effect, and risk are quantified in §5.1 for when you pick it up |
 | 23 | **Surge re-enable preparation** (§5.2) | Not urgent while `surge_enabled = false` everywhere — but items 1–3 of §5.2 should land **before** surge is switched on, not after |
-| 24 | **`EXPLAIN (ANALYZE, BUFFERS)`** on the three slow `SELECT *` statements in §2.2, and review the 57 `auth_rls_initplan` warnings | The 114 ms single-row `drivers` lookup is unexplained by row count and deserves its own investigation |
+| 24 | **`EXPLAIN` investigation — partially resolved 2026-08-27** (see the §2.2 follow-up note): current plans are Index Scans at 0.09–0.76 ms, so the historical 36–114 ms means came from row width and load, not plans | Residual: review the 57 `auth_rls_initplan` warnings for `anon`/`authenticated` surfaces (backend `service_role` traffic bypasses RLS), and re-measure these means after P0 #4 (blocking calls) and P1 #9 (projection) land |
 
 ---
 
@@ -429,7 +450,7 @@ Effort: **S** ≤ half a day · **M** 1–3 days · **L** > 3 days. Nothing belo
 - No code was edited. No migration file was written. No index was created or dropped.
 - No `DELETE`, `UPDATE`, or DDL was executed against the database. The only SQL run was read-only inspection. The `surge_pricing` cleanup statement in §5.2 is provided for your decision and was **not** executed.
 - No tests were run; no load testing or benchmarking was performed. Every impact estimate is reasoned from code paths and observed query statistics, not measured against a before/after build.
-- `EXPLAIN` was not run against production, so §2.2's slow single-row lookups are diagnosed by pattern (`SELECT *` on wide rows + RLS overhead), not proven.
+- ~~`EXPLAIN` was not run against production~~ **Updated 2026-08-27:** `EXPLAIN (ANALYZE, BUFFERS)` and `index_advisor` were subsequently run against production (read-only) — results in the §2.2 follow-up note. Load testing and before/after benchmarks remain not done.
 - Statistics cover 96 days from 2026-05-22. They include the period when surge was briefly enabled and may include development/testing traffic. Per-replica attribution is inferred from insert-rate arithmetic (§5.2), not from deployment telemetry.
 - Frontend surfaces (`rider-app`, `driver-app`, `admin-dashboard`) were read only where they document polling intervals. No frontend build was run.
 

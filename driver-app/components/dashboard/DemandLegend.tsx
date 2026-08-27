@@ -174,6 +174,17 @@ const createStyles = (colors: ThemeColors) =>
       width: 16,
       height: 10,
       borderRadius: 2,
+      // The two lightest ramp steps (and, in dark mode, the two darkest-on-
+      // dark-surface steps) fall below the WCAG 1.4.11 3:1 graphical-object
+      // floor against the pill's own surface color — see
+      // docs/change-log/2026-08-27-demand-legend-swatch-contrast-fix.md.
+      // colors.border is itself only ~1.2-1.5:1 against colors.surface (it's
+      // a deliberately subtle divider color), so it wouldn't fix this;
+      // colors.textDim clears 3:1 against colors.surface in both themes
+      // (5.74:1 light / 7.69:1 dark), giving every swatch a visible outline
+      // even where its fill nearly matches the pill background.
+      borderWidth: 1,
+      borderColor: colors.textDim,
     },
     label: {
       fontSize: 11,

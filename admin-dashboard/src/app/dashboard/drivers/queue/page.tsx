@@ -13,6 +13,7 @@ import {
     Camera,
     Check,
     X,
+    UserX,
 } from "lucide-react";
 import {
     getApprovalQueue,
@@ -64,6 +65,7 @@ const QUEUE_TABS = [
     { value: "new", label: "New applicants", icon: UserPlus },
     { value: "resubmitted", label: "Updated documents", icon: FileWarning },
     { value: "photo", label: "Photo review", icon: Camera },
+    { value: "incomplete", label: "Incomplete profiles", icon: UserX },
 ] as const;
 
 type QueueTab = (typeof QUEUE_TABS)[number]["value"];
@@ -73,6 +75,7 @@ const EMPTY_COPY: Record<QueueTab, string> = {
     new: "No first-time applicants waiting for review.",
     resubmitted: "No updated documents waiting for re-review.",
     photo: "No profile photos waiting for review.",
+    incomplete: "No drivers with incomplete profiles in the queue.",
 };
 
 export default function ApprovalQueuePage() {
@@ -136,11 +139,14 @@ export default function ApprovalQueuePage() {
         photo_review: 0,
     };
 
+    const incompleteCount = useMemo(() => items.filter((it) => it.profile_completeness_score != null && it.profile_completeness_score < 100).length, [items]);
+
     const tabCounts: Record<QueueTab, number> = {
         all: stats.total_pending,
         new: stats.new_applicants,
         resubmitted: stats.resubmissions,
         photo: stats.photo_review,
+        incomplete: incompleteCount,
     };
 
     const visibleItems = useMemo(
@@ -152,7 +158,9 @@ export default function ApprovalQueuePage() {
                       ? it.is_resubmission
                       : tab === "photo"
                         ? it.has_pending_photo
-                        : true,
+                        : tab === "incomplete"
+                          ? it.profile_completeness_score != null && it.profile_completeness_score < 100
+                          : true,
             ),
         [items, tab],
     );

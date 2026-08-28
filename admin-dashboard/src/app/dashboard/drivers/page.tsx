@@ -910,6 +910,7 @@ export default function DriversPage() {
                                 <TableHead className="h-11 pl-5 w-20"><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Actions</span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("name")} tabIndex={0} role="columnheader" aria-sort={sortKey === "name" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("name"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Driver<SortIcon col="name" /></span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("status")} tabIndex={0} role="columnheader" aria-sort={sortKey === "status" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("status"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Status<SortIcon col="status" /></span></TableHead>
+                                <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("profile_completeness_score")} tabIndex={0} role="columnheader" aria-sort={sortKey === "profile_completeness_score" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("profile_completeness_score"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Profile<SortIcon col="profile_completeness_score" /></span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("is_online")} tabIndex={0} role="columnheader" aria-sort={sortKey === "is_online" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("is_online"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Online<SortIcon col="is_online" /></span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("vehicle_type")} tabIndex={0} role="columnheader" aria-sort={sortKey === "vehicle_type" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("vehicle_type"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Vehicle Type<SortIcon col="vehicle_type" /></span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("vehicle_make")} tabIndex={0} role="columnheader" aria-sort={sortKey === "vehicle_make" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("vehicle_make"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Vehicle<SortIcon col="vehicle_make" /></span></TableHead>
@@ -926,6 +927,7 @@ export default function DriversPage() {
                                     <TableCell><div className="h-8 w-16 bg-muted rounded" /></TableCell>
                                     <TableCell className="py-4"><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-full bg-muted" /><div className="space-y-2"><div className="h-3 w-24 bg-muted rounded" /><div className="h-2 w-16 bg-muted rounded" /></div></div></TableCell>
                                     <TableCell><div className="h-4 w-16 bg-muted rounded" /></TableCell>
+                                    <TableCell><div className="h-4 w-14 bg-muted rounded" /></TableCell>
                                     <TableCell><div className="h-4 w-12 bg-muted rounded" /></TableCell>
                                     <TableCell><div className="h-3 w-16 bg-muted rounded" /></TableCell>
                                     <TableCell><div className="h-3 w-20 bg-muted rounded" /></TableCell>
@@ -937,7 +939,7 @@ export default function DriversPage() {
                                 </TableRow>
                             )) : sorted.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={11} className="text-center py-20 text-muted-foreground"><Users className="h-12 w-12 mx-auto mb-3 opacity-20" /><p className="text-base font-medium">No drivers found</p><p className="text-sm mt-1">Try adjusting your search or filters</p></TableCell>
+                                    <TableCell colSpan={12} className="text-center py-20 text-muted-foreground"><Users className="h-12 w-12 mx-auto mb-3 opacity-20" /><p className="text-base font-medium">No drivers found</p><p className="text-sm mt-1">Try adjusting your search or filters</p></TableCell>
                                 </TableRow>
                             ) : sorted.map(driver => {
                                 const areaName = serviceAreas.find(a => a.id === driver.service_area_id)?.name;
@@ -992,6 +994,17 @@ export default function DriversPage() {
                                                 : <Badge variant="default" className="bg-blue-100 text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 text-[10px] px-1.5 py-0 border-blue-200 dark:border-blue-800"><ShieldAlert className="h-3 w-3 mr-1" />Pending</Badge>}
                                                 <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${driver.is_online && !driver.account_deleted ? "border-success/40 text-success bg-success/10" : ""}`}>{driver.is_online && !driver.account_deleted ? "Online" : "Offline"}</Badge>
                                             </div>
+                                        </TableCell>
+                                        <TableCell>
+                                            {driver.profile_completeness_score === undefined || driver.profile_completeness_score === null ? (
+                                                <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-muted-foreground">—</Badge>
+                                            ) : driver.profile_completeness_score === 100 ? (
+                                                <Badge variant="default" className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0 border-emerald-200 dark:border-emerald-800">Complete</Badge>
+                                            ) : driver.profile_completeness_score >= 70 ? (
+                                                <Badge variant="default" className="bg-amber-100 text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-400 text-[10px] px-1.5 py-0 border-amber-200 dark:border-amber-800">Incomplete ({driver.profile_completeness_score}%)</Badge>
+                                            ) : (
+                                                <Badge variant="default" className="bg-destructive/15 text-destructive text-[10px] px-1.5 py-0">Missing ({driver.profile_completeness_score}%)</Badge>
+                                            )}
                                         </TableCell>
                                         <TableCell>
                                             <div className="flex flex-col gap-0.5 items-start">
@@ -1158,6 +1171,36 @@ export default function DriversPage() {
                                                 {selected.subscription_status === "active" && <Badge className="bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400"><CreditCard className="h-3 w-3" /> Spinr Pass</Badge>}
                                                 {selected.subscription_status === "expired" && <Badge className="bg-destructive/15 text-destructive"><CreditCard className="h-3 w-3" /> Pass Expired</Badge>}
                                             </div>
+                                            {/* Profile Completeness Summary */}
+                                            {(() => {
+                                                const score = selected.profile_completeness_score;
+                                                const missingCount = selected.profile_missing_count || 0;
+                                                if (score === undefined || score === null) return null;
+                                                return (
+                                                    <div className="mt-3 p-2.5 rounded-lg border bg-muted/30">
+                                                        <div className="flex items-center justify-between mb-1.5">
+                                                            <span className="text-xs font-medium text-foreground/80">
+                                                                Profile: {score}% complete{missingCount > 0 ? ` (${missingCount} field${missingCount === 1 ? '' : 's'} missing)` : ''}
+                                                            </span>
+                                                        </div>
+                                                        <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                                                            <div
+                                                                className={`h-full rounded-full transition-all ${score === 100 ? 'bg-emerald-500' : score >= 70 ? 'bg-amber-500' : 'bg-destructive'}`}
+                                                                style={{ width: `${Math.min(score, 100)}%` }}
+                                                            />
+                                                        </div>
+                                                        {score === 100 ? (
+                                                            <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-1.5 flex items-center gap-1"><CheckCircle className="h-3 w-3" />All required fields complete</p>
+                                                        ) : selected.profile_missing_fields && selected.profile_missing_fields.length > 0 ? (
+                                                            <div className="mt-1.5 flex flex-wrap gap-1">
+                                                                {selected.profile_missing_fields.map((field: string) => (
+                                                                    <span key={field} className="text-[10px] text-destructive bg-destructive/10 px-1.5 py-0.5 rounded">{field.replace(/_/g, ' ')}</span>
+                                                                ))}
+                                                            </div>
+                                                        ) : null}
+                                                    </div>
+                                                );
+                                            })()}
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-2">

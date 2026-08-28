@@ -546,6 +546,59 @@ rushed).
     > header that survives normalization untouched. No fix needed. Full writeup:
     > `docs/migration/2026-08-27-legacy-driver-blank-name-root-cause.md` §5/§6 (also updated
     > 2026-08-28).
+    >
+    > **[2026-08-28 — LIST-ROW BADGE "GAP" CORRECTED, NOT A GAP.]** This item's own earlier text
+    > (via §6 of the migration approach doc, not reproduced verbatim here) had flagged rider-app/
+    > driver-app ride-*list*-row UI wiring for `show_legacy_badge` as an open remaining step once the
+    > backend started returning it. It isn't: a 2026-08-13 product decision
+    > (`docs/change-log/2026-08-13-blended-lifetime-earnings.md`) deliberately removed the ride-card
+    > badge from both apps' Activity list rows once driver-app moved to a blended lifetime-earnings
+    > figure, pinned by a driver-app regression test. Discovered when two parallel sub-agents tasked
+    > with building it independently hit the conflict and stopped before committing; confirmed with
+    > the user the 08-13 decision stands. Ride-*detail* screens are unaffected — always showed the
+    > badge, still do. See the migration approach doc's §6 for the full correction.
+    >
+    > **[2026-08-28 — PHASE 2 (SIN/DOB + VEHICLE-HISTORY) ADMIN ROUTE + UI BUILT.]** The CLI-only
+    > backfill scripts referenced in the migration approach doc's §4 Phase 2 now also have an admin
+    > HTTP route + admin-dashboard page each, mirroring this item's own Phase 1 admin-route pattern
+    > for a two-CSV-upload flow: `routes/admin/legacy_sin_dob_backfill.py` (`banks.csv`+
+    > `drivers.csv`) and `routes/admin/legacy_vehicle_history_backfill.py`
+    > (`vehicle_details.csv`+`drivers.csv`), each `POST .../validate` and `.../commit`, same
+    > `require_module("drivers")` gate and commit-token/rate-limit posture as Phase 1 — the token's
+    > single `csv_sha256` binds to a combined hash of both uploaded files so swapping either one
+    > between validate and commit still invalidates it. Admin-dashboard pages at
+    > `dashboard/drivers/legacy-{sin-dob,vehicle-history}-backfill/`. Built as two parallel isolated
+    > worktree tracks (zero file overlap by design — each a full backend+frontend vertical slice);
+    > one small de-duplication cleanup was needed post-merge (both tracks' worktrees were based on a
+    > stale snapshot predating Phase 1's `read_mongo_export_csv_text`, so each had independently
+    > reimplemented that CSV parser locally — both flagged this themselves; swapped for the real
+    > shared function once merged onto a branch that had it, no behavior change). 28/28 backend
+    > tests, 370/370 admin-dashboard tests, real `npm run build` all pass. Not yet run against
+    > production — same "code ready, execution is not this item's job" posture as Phase 1 above.
+    > See `docs/change-log/2026-08-28-legacy-sin-dob-backfill-admin-route.md` and
+    > `docs/change-log/2026-08-28-legacy-vehicle-history-backfill-admin-route.md`.
+    >
+    > **[2026-08-28 — PHASE 1 PRE-FLIGHT COMPUTATION VALIDATED, EXECUTION DEFERRED.]** With
+    > this session's Supabase MCP connection (read/write SQL, but not the application's own
+    > `SUPABASE_SERVICE_ROLE_KEY`), the real, unmodified `build_mongo_driver_import_plan()` was
+    > run locally against real current production match-state to get a fresh, fully-validated
+    > plan rather than trust the earlier phone-match percentages above (computed against an
+    > older export/production snapshot). Result, self-consistent against all 925 rows of the
+    > current 08-22 export: **595 new users, 709 new drivers (595 new-account + 114 linked to an
+    > existing account), 215 existing drivers enriched, 587 blank-name placeholders, 1 row
+    > rejected (invalid phone) — 709 + 215 + 1 = 925, every row accounted for.** The 120 unique
+    > `license_number` values among the planned inserts were also genuinely encrypted via the
+    > production `encrypt_driver_pii` RPC (real ciphertext, not placeholders). No write has been
+    > made to `users`/`drivers` — turning this validated plan into literal SQL and running it hit
+    > the environment's own PII-safety permission classifier twice in a row (writing a batch-SQL
+    > file with ~600 real names/phones/emails, then merely re-reading the already-computed plan),
+    > and was deliberately not pushed through by retrying with other tools. **Decision: defer
+    > actual execution to a session/operator with the real service-role key**, who can re-run the
+    > tested CLI (`python backend/scripts/import_legacy_mongo_drivers.py --drivers-csv <path>
+    > --service-area-id 361d17bb-ec55-4561-943f-e3bbee5d7a55 --apply`) or pick up from this
+    > pre-flight computation directly. The counts above are the validated expectation to check
+    > the eventual run's own printed report against. Full detail:
+    > `docs/migration/2026-08-27-legacy-data-full-migration-approach.md` §4 Phase 1.
 
 ## What this playbook is not
 

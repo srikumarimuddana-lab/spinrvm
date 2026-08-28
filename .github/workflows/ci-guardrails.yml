@@ -2,7 +2,7 @@ name: CI Guard Rails
 
 on:
   pull_request:
-    branches: [main, develop]
+    branches: [main, staging]
     types: [opened, synchronize, reopened]
 
   # Runs this job against the merge queue's temporary merge commit once
@@ -1461,7 +1461,7 @@ jobs:
               .join('\n');
 
             const body = `## CI Guard Rails Summary\n\n| Gate | Status |\n|---|---|\n${rows}\n\n` +
-              `> Guard rails run on every PR to \`main\`/\`develop\`. ` +
+              `> Guard rails run on every PR to \`main\`/\`staging\`. ` +
               `Failures must be resolved or a [Change Request]` +
               `(https://github.com/${{ github.repository }}/issues/new?template=ci_change_request.yml) ` +
               `approved before merging.\n` +

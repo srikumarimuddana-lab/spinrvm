@@ -2,9 +2,9 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, staging]
   pull_request:
-    branches: [main, develop]
+    branches: [main, staging]
   # See docs/audit/2026-08-19-decision-writeups.md section 5 -- runs this
   # required check against the merge queue's temporary merge commit once
   # GitHub's native merge queue is enabled, closing the CR #4187 cross-PR

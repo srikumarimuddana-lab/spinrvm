@@ -23,11 +23,13 @@ import { showToast } from '../hooks/useToast';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
-// Written by otp.tsx on every successful authentication (new or returning),
-// read here to decide whether to show the consent checkbox. Exported so
-// otp.tsx's write uses the exact same literal — see the note on
-// hasAuthenticatedBefore below for why this is a display-only heuristic,
-// not the actual consent enforcement point.
+// Written by otp.tsx on every successful authentication (new or returning).
+// Exported so otp.tsx's write uses one literal rather than its own copy.
+// Nothing on this screen reads it any more — it gated the old consent
+// checkbox, which the clickwrap disclosure replaced. Left in place (still
+// written, still exported) rather than ripped out: it is a cheap, already-
+// shipped "has this device signed in before" signal, and deleting it would
+// mean every device that has it loses the history silently.
 export const HAS_AUTHENTICATED_BEFORE_KEY = 'spinr_driver_has_authenticated_before';
 
 export default function LoginScreen() {
@@ -40,45 +42,14 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [focused, setFocused] = useState(false);
   const inputRef = useRef<TextInput>(null);
-  // Explicit, unchecked-by-default consent gesture — the account-creation
-  // endpoint (POST /auth/verify-otp, called from otp.tsx) rejects a
-  // brand-new signup unless this was actively checked. Previously this
-  // screen only showed passive "by continuing you agree" text with no
-  // tappable action behind it. See
-  // docs/change-log/2026-08-20-explicit-signup-consent-checkbox.md. As of
-  // 2026-08-27 this no longer gates "Send Verification Code" — see the
-  // comment on canContinue below.
-  const [consentAccepted, setConsentAccepted] = useState(false);
-  // Display-only heuristic, NOT the consent enforcement point (that's
-  // entirely server-side — see verify_otp / the consent_required rejection
-  // otp.tsx handles inline). This screen can't know whether the phone
-  // number about to be entered is new or returning until after OTP verify,
-  // so it can't gate on that directly. Instead: has *this device* ever
-  // completed a successful login before? If so, don't show the checkbox —
-  // a device that already signed in once is overwhelmingly likely to be a
-  // returning driver re-authenticating, and there's no legal box for them
-  // to tick. Defaults to false (checkbox shown) so a fresh device, a slow
-  // AsyncStorage read, or a genuine new signup never has the checkbox
-  // hidden from it — if this ever turns out wrong (e.g. a different family
-  // member starts a real new signup on a device that has logged in
-  // before), otp.tsx's inline consent card is the actual safety net: the
-  // backend still rejects account creation with consent_required and
-  // otp.tsx prompts for it there, regardless of what this screen showed.
-  const [hasAuthenticatedBefore, setHasAuthenticatedBefore] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    AsyncStorage.getItem(HAS_AUTHENTICATED_BEFORE_KEY)
-      .then((value) => {
-        if (!cancelled && value === 'true') setHasAuthenticatedBefore(true);
-      })
-      .catch(() => {
-        // Fail open to showing the checkbox — see the state's own comment.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // Consent is given by continuing, not by a separate tick — the disclosure
+  // sits directly above the button and tapping it IS the acceptance gesture
+  // (clickwrap). The backend still gates account creation on
+  // consent_accepted (POST /auth/verify-otp) and still stamps
+  // consent_version / consent_accepted_at, so the recorded evidence of
+  // acceptance is unchanged; what changed is the gesture that produces it.
+  // Replaces the checkbox added 2026-08-20 —
+  // docs/change-log/2026-08-28-driver-login-clickwrap-consent.md.
 
   // Request location permission and fetch location early so the map is
   // ready by the time the user reaches the dashboard after login.
@@ -154,11 +125,14 @@ export default function LoginScreen() {
       const response = await api.post<{ success: boolean }>('/auth/send-otp', { phone: formattedNumber });
       if (response.data.success) {
         // Carried to otp.tsx so its POST /auth/verify-otp call can send
-        // consent_accepted — the account isn't created here, it's created
-        // (or not, if this checkbox was unchecked) on that later call.
+        // consent_accepted. Always 'true': reaching this line means the
+        // driver tapped "Send Verification Code" underneath the "By
+        // continuing, you agree to..." disclosure, which is the acceptance
+        // gesture. The account is still created (or refused) on that later
+        // call, by the backend, not here.
         router.push({
           pathname: '/otp',
-          params: { phoneNumber: formattedNumber, mode: 'backend', consentAccepted: String(consentAccepted) }
+          params: { phoneNumber: formattedNumber, mode: 'backend', consentAccepted: 'true' }
         });
       } else {
         showToast('error', 'Failed', 'Could not send verification code. Please try again.');
@@ -217,7 +191,7 @@ export default function LoginScreen() {
       >
         {/* Welcome text */}
         <View style={styles.welcomeSection}>
-          <Text style={styles.greeting}>Welcome back 👋</Text>
+          <Text style={styles.greeting}>Welcome to Spinr 👋</Text>
           <Text style={styles.title}>Enter your phone number</Text>
           <Text style={styles.subtitle}>
             We&apos;ll send you a verification code to confirm your identity
@@ -293,7 +267,7 @@ export default function LoginScreen() {
           accessibilityLabel="Send verification code"
           accessibilityRole="button"
           accessibilityState={{ disabled: loading || !canContinue }}
-          accessibilityHint="Sends a 6-digit code to your phone number"
+          accessibilityHint="Sends a 4-digit code to your phone number"
         >
           {loading ? (
             <ActivityIndicator color="#fff" size="small" />
@@ -320,70 +294,43 @@ export default function LoginScreen() {
         </View>
       </ScrollView>
 
-      {/* Terms — explicit, unchecked-by-default consent checkbox. Replaces
-          the old passive "by continuing you agree" text, which had no
-          tappable action or opt-in gesture behind it. Icon (not color
-          alone) signals checked state for WCAG 2.1 AA.
+      {/* Terms — clickwrap: the disclosure sits directly under the button
+          and tapping "Send Verification Code" is the acceptance gesture.
+          Always shown (not scoped to first login) because the sentence has
+          to be visible at the moment of the tap it describes; for a
+          returning driver it is a restatement, which is harmless, where a
+          persistent *checkbox* was confusing.
 
-          Scoped to first login: a device that has already completed a
-          successful sign-in once (hasAuthenticatedBefore) skips this
-          entirely, since re-authenticating has zero legal effect for a
-          returning driver (see the state's own comment above) and a
-          persistent "I agree..." checkbox on every login was confusing for
-          people who are, in fact, already Spinr drivers. A genuinely new
-          signup always sees it: either here (fresh device) or inline in
-          otp.tsx if this device happened to skip it. */}
-      {!hasAuthenticatedBefore && (
+          The Terms/Privacy links stay individually tappable and are NOT
+          wrapped in an outer touchable: a single TouchableOpacity around
+          the row defaults to accessible=true and collapses it into one
+          accessibility node, making the links unreachable by
+          VoiceOver/TalkBack — flagged by an independent
+          spinr-accessibility-reviewer pass as a blocker specifically
+          because this screen has no other pre-account path to the legal
+          documents. */}
       <View style={[styles.terms, { paddingBottom: insets.bottom + 16 }]}>
-        {/* Checkbox toggle and the Terms/Privacy links are deliberately
-            separate touchables (not one nested inside the other): a
-            single outer TouchableOpacity wrapping the link Text elements
-            defaults to accessible=true and collapses the whole row into
-            one accessibility node, making the links unreachable by
-            VoiceOver/TalkBack — flagged by an independent
-            spinr-accessibility-reviewer pass as a blocker specifically
-            because this screen has no other pre-account path to the
-            legal documents. */}
-        <View style={styles.consentRow} accessible={false}>
-          <TouchableOpacity
-            testID="consent-checkbox"
-            onPress={() => setConsentAccepted((c) => !c)}
-            activeOpacity={0.7}
-            disabled={loading}
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            accessibilityRole="checkbox"
-            accessibilityState={{ checked: consentAccepted, disabled: loading }}
-            accessibilityLabel={`${t('login.consentPrefix')} ${t('login.termsOfService')} ${t('login.and')} ${t('login.privacyPolicy')}`}
+        <Text style={styles.termsText}>
+          {t('login.termsPrefix')}{' '}
+          <Text
+            style={styles.termsLink}
+            onPress={() => router.push({ pathname: '/legal', params: { type: 'tos' } } as any)}
+            accessibilityRole="link"
+            accessibilityLabel={t('login.termsOfService')}
           >
-            <Ionicons
-              name={consentAccepted ? 'checkbox' : 'square-outline'}
-              size={22}
-              color={consentAccepted ? colors.primary : colors.textDim}
-            />
-          </TouchableOpacity>
-          <Text style={styles.termsText}>
-            {t('login.consentPrefix')}{' '}
-            <Text
-              style={styles.termsLink}
-              onPress={() => router.push({ pathname: '/legal', params: { type: 'tos' } } as any)}
-              accessibilityRole="link"
-              accessibilityLabel={t('login.termsOfService')}
-            >
-              {t('login.termsOfService')}
-            </Text>
-            {' '}{t('login.and')}{' '}
-            <Text
-              style={styles.termsLink}
-              onPress={() => router.push({ pathname: '/legal', params: { type: 'privacy' } } as any)}
-              accessibilityRole="link"
-              accessibilityLabel={t('login.privacyPolicy')}
-            >
-              {t('login.privacyPolicy')}
-            </Text>
+            {t('login.termsOfService')}
           </Text>
-        </View>
+          {' '}{t('login.and')}{' '}
+          <Text
+            style={styles.termsLink}
+            onPress={() => router.push({ pathname: '/legal', params: { type: 'privacy' } } as any)}
+            accessibilityRole="link"
+            accessibilityLabel={t('login.privacyPolicy')}
+          >
+            {t('login.privacyPolicy')}
+          </Text>
+        </Text>
       </View>
-      )}
 
     </KeyboardAvoidingView>
   );
@@ -568,15 +515,7 @@ function createStyles(colors: ThemeColors) {
       paddingHorizontal: 24,
       alignItems: 'center',
     },
-    consentRow: {
-      flexDirection: 'row',
-      alignItems: 'flex-start',
-      gap: 10,
-      minHeight: 44,
-      paddingVertical: 4,
-    },
     termsText: {
-      flex: 1,
       fontSize: 12,
       color: '#B0B0B0',
       lineHeight: 18,

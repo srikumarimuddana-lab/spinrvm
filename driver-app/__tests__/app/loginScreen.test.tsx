@@ -1,8 +1,7 @@
 /**
  * app/login.tsx — broader coverage beyond
- * screens/loginConsentCheckbox.test.tsx (covers only the explicit consent
- * checkbox's checked/disabled wiring and the happy-path navigate-to-/otp
- * call).
+ * screens/loginClickwrapConsent.test.tsx (covers only the clickwrap consent
+ * disclosure, its legal links, and the happy-path navigate-to-/otp call).
  *
  * Pins:
  *  - phone number validation: < 10 digits toasts and never calls the API;
@@ -225,10 +224,9 @@ describe('consent checkbox scoped to first login', () => {
     expect(mockApiPost).toHaveBeenCalledWith('/auth/send-otp', { phone: '+13065550199' });
     expect(mockPush).toHaveBeenCalledWith({
       pathname: '/otp',
-      // consentAccepted stays 'false' — there was no checkbox to check.
-      // Safe: otp.tsx's inline consent card is the actual backstop for a
-      // genuine new signup on a device that happens to have this flag set.
-      params: { phoneNumber: '+13065550199', mode: 'backend', consentAccepted: 'false' },
+      // Always 'true': tapping continue under the "By continuing, you
+      // agree to..." disclosure is itself the acceptance gesture.
+      params: { phoneNumber: '+13065550199', mode: 'backend', consentAccepted: 'true' },
     });
   });
 });

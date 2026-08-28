@@ -1083,7 +1083,13 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 pickup_label = ride.get("pickup_address") or "Nearby pickup"
                 dropoff_label = ride.get("dropoff_address") or "destination"
                 try:
-                    earnings_label = f"${float(ride.get('driver_earnings') or 0):.2f}"
+                    # Match the in-app offer panel and the driver-app's own
+                    # local notification (notifeeService.displayRideOfferNotification):
+                    # both show fare + area boost / incentives as one total.
+                    # Showing bare `driver_earnings` here made the push
+                    # under-state what the driver actually earns.
+                    _offer_total = float(ride.get("driver_earnings") or 0) + float(_total_bonus or 0)
+                    earnings_label = f"${_offer_total:.2f}"
                 except (TypeError, ValueError):
                     earnings_label = "New fare"
 

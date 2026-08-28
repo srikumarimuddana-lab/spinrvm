@@ -1791,6 +1791,20 @@ def build_mongo_driver_import_plan(
         return plan
 
     users_by_phone, users_by_email, drivers_by_phone = _prefetch_existing(driver_rows)
+    # Rows within the SAME CSV batch that share a phone (or email) must
+    # resolve to the same user_id / driver row rather than each
+    # independently deciding "no match yet, create new" -- the DB prefetch
+    # above is a single snapshot taken before this loop starts, so it can't
+    # see a user/driver this very loop is about to create. Without this, two
+    # same-phone rows both fall into the "create new" branch, producing two
+    # users_to_insert entries with an identical phone -- which then violates
+    # the phone UNIQUE constraint as a 409 on the bulk INSERT at commit time.
+    # Found 2026-08-28: the real 924-row export has 8 phone groups (15 rows)
+    # and 5 email groups (9 rows) sharing a value with a sibling row in the
+    # same file -- previously masked by an unrelated commit-timeout bug that
+    # always killed the request before the insert ever ran.
+    pending_driver_row_by_phone: dict[str, dict[str, Any]] = {}
+    pending_user_id_by_email: dict[str, str] = {}
     seen_old_ids: set[str] = set()
 
     for row in driver_rows:
@@ -1847,7 +1861,39 @@ def build_mongo_driver_import_plan(
 
         matched_user = users_by_phone.get(phone) or (users_by_email.get(email) if email else None)
         matched_driver = drivers_by_phone.get(phone)
+        pending_driver_row = pending_driver_row_by_phone.get(phone)
         create_new_user = True
+
+        if pending_driver_row is not None:
+            # A row earlier in this same batch already created (or linked)
+            # a driver for this exact phone -- merge into that row's own
+            # still-pending history in place. There is nothing in the DB
+            # yet to issue a drivers_to_enrich UPDATE against, and creating
+            # a second driver row here would duplicate the phone the same
+            # way a second users_to_insert row would.
+            history = list(pending_driver_row["legacy_import_metadata"].get("mongo_driver_history") or [])
+            history.append(
+                {
+                    "batch": import_batch,
+                    "old_driver_id": old_id,
+                    "source": MONGO_IMPORT_SOURCE,
+                    "was_deleted_in_source": parse_bool(row.get("is_deleted", "")) is True,
+                    "was_blocked_in_source": parse_bool(row.get("is_block", "")) is True,
+                    "incomplete_profile_in_source": incomplete_profile_in_source,
+                    "linked_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            pending_driver_row["legacy_import_metadata"]["mongo_driver_history"] = history
+            plan.warnings.append(
+                ImportErrorItem(
+                    old_id,
+                    "phone",
+                    "matches a driver created earlier in this same import batch "
+                    f"(old_driver_id={pending_driver_row['legacy_import_metadata']['old_driver_id']}); "
+                    "merged into that row's history instead of creating a duplicate",
+                )
+            )
+            continue
 
         if matched_driver or matched_user:
             driver_meta = (matched_driver.get("legacy_import_metadata") or {}) if matched_driver else {}
@@ -1932,6 +1978,24 @@ def build_mongo_driver_import_plan(
             )
             user_id = matched_user["id"]
             create_new_user = False
+        elif email and email in pending_user_id_by_email:
+            # A row earlier in this batch already created a new user with
+            # this same email but a DIFFERENT phone (so the pending_driver_row
+            # check above didn't catch it). users.email has no UNIQUE
+            # constraint, so this wouldn't 409, but creating a second
+            # account for what's evidently the same person contradicts the
+            # "never create a duplicate account" intent already established
+            # above for the DB-matched case.
+            user_id = pending_user_id_by_email[email]
+            create_new_user = False
+            plan.warnings.append(
+                ImportErrorItem(
+                    old_id,
+                    "email",
+                    "matches an account created earlier in this same import batch by email; "
+                    "linking new driver profile to it instead of creating a duplicate account",
+                )
+            )
         else:
             user_id = str(uuid.uuid4())
 
@@ -1988,6 +2052,12 @@ def build_mongo_driver_import_plan(
         if rating is not None:
             driver_row["rating"] = rating
         plan.drivers_to_insert.append(driver_row)
+        # Register this row's outcome so a LATER row in this same batch
+        # sharing the phone (or, for a brand-new account, the email) merges
+        # into it instead of independently deciding "no match, create new".
+        pending_driver_row_by_phone[phone] = driver_row
+        if create_new_user and email:
+            pending_user_id_by_email[email] = user_id
 
     return plan
 

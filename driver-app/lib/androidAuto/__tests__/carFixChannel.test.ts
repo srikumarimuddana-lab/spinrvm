@@ -94,6 +94,45 @@ describe('heading resolution', () => {
     expect(r.source).toBe('gps');
   });
 
+  /** A point `m` metres due west — so the true course is 270°. */
+  const west = (m: number, heading: number | null = null) => ({
+    ...SASKATOON,
+    longitude:
+      SASKATOON.longitude -
+      m / (111_320 * Math.cos((SASKATOON.latitude * Math.PI) / 180)),
+    heading,
+  });
+
+  it('west() really is a 270° course', () => {
+    expect(bearingBetween(SASKATOON, west(50))).toBeCloseTo(270, 0);
+  });
+
+  it('movement beats a reported course of 0 — the Android no-bearing placeholder', () => {
+    // Android's Location has a separate hasBearing() flag; getBearing()
+    // returns 0.0 when it is false, so "no course" reaches JS as a literal 0.
+    // Ranked above the derived branch it pinned the icon due north while the
+    // driver went west — the exact live-testing report this test pins down.
+    const r = resolveHeading(west(50, 0), SASKATOON, FRESH, FRESH);
+    expect(r.source).toBe('derived');
+    expect(r.fix.heading).toBeCloseTo(270, 0);
+  });
+
+  it('still reports ~0 for a driver genuinely heading north', () => {
+    // The guard against over-correcting: demoting the reported heading must
+    // not cost us a real northbound course, because movement measures it too.
+    const r = resolveHeading(north(50, 0), SASKATOON, FRESH, FRESH);
+    expect(r.source).toBe('derived');
+    expect(r.fix.heading).toBeCloseTo(0, 0);
+  });
+
+  it('falls back to a reported course when the car has not moved far enough', () => {
+    // Below MIN_COURSE_MOVE_M there is no better evidence, so a reported
+    // course is still the best answer available.
+    const r = resolveHeading(west(MIN_COURSE_MOVE_M - 2, 271), SASKATOON, FRESH, FRESH);
+    expect(r.source).toBe('gps');
+    expect(r.fix.heading).toBe(271);
+  });
+
   it('derives the course from movement when the fix has none', () => {
     // THE fix for the head unit: one-shot getCurrentPositionAsync carries no
     // course, and on Android Auto it is the dominant path — but the direction

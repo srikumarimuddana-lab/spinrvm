@@ -40,6 +40,7 @@ export interface ApprovalQueueResponse {
         new_applicants: number;
         resubmissions: number;
         photo_review: number;
+        incomplete_profiles: number;
     };
     items: ApprovalQueueItem[];
 }

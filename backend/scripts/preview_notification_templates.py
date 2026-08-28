@@ -425,7 +425,7 @@ RIDER_EMAIL_ITEMS = [
             paragraphs=[
                 f"Your account is ready. Open the {SAMPLE_APP} app, set a pickup and drop-off, "
                 "and you'll see the full price before you confirm — no surprises at drop-off.",
-                f"{SAMPLE_APP} is Saskatchewan-built and takes 0% commission — every dollar of the fare "
+                f"{SAMPLE_APP} is Canadian-built and takes 0% commission — every dollar of the fare "
                 "goes to your driver. GST and PST are shown as separate line items on your receipt.",
                 f"Questions any time: {SAMPLE_SUPPORT}",
             ],

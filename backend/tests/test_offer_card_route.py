@@ -95,3 +95,96 @@ async def test_db_error_returns_503():
     with patch.object(oc.db_supabase, "get_ride", AsyncMock(side_effect=RuntimeError("boom"))):
         resp = await oc._build_offer_card_response("ride-1", _token())
     assert resp.status_code == 503
+
+
+# ── Area boost / incentives ─────────────────────────────────────────────
+
+
+class _IncChain:
+    """Minimal supabase query-builder stand-in for the ride_incentives read."""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    def select(self, *a, **kw):
+        return self
+
+    def eq(self, *a, **kw):
+        return self
+
+    def or_(self, *a, **kw):
+        return self
+
+    def execute(self):
+        return type("R", (), {"data": self._rows})()
+
+
+def _patch_incentives(rows):
+    fake = type("S", (), {"table": staticmethod(lambda name: _IncChain(rows))})()
+    return (
+        patch.object(oc.db_supabase, "supabase", fake),
+        patch.object(oc.db_supabase, "run_sync", AsyncMock(side_effect=lambda fn: fn())),
+    )
+
+
+async def _render_kwargs(ride, incentive_rows):
+    """Run the endpoint with a stubbed renderer and return its kwargs."""
+    captured = {}
+
+    def _fake_render(**kwargs):
+        captured.update(kwargs)
+        return _PNG_MAGIC + b"x"
+
+    inc_supabase, inc_run_sync = _patch_incentives(incentive_rows)
+    with (
+        patch.object(oc.db_supabase, "get_ride", AsyncMock(return_value=ride)),
+        patch.object(oc.db_supabase, "get_user_by_id", AsyncMock(return_value=_RIDER)),
+        patch.object(oc, "render_offer_card", _fake_render),
+        inc_supabase,
+        inc_run_sync,
+    ):
+        await oc._build_offer_card_response("ride-1", _token())
+    return captured
+
+
+async def test_banner_carries_area_boost_bonus():
+    """The banner must show the boost the driver actually earns — the fare
+    headline plus a '+$X BONUS' pill — not the bare base fare."""
+    kwargs = await _render_kwargs(
+        {**_RIDE, "service_area_id": "area-1", "vehicle_type_id": "vt-std"},
+        [
+            {"bonus_amount": "5.00", "service_area_id": "area-1", "vehicle_type_id": None},
+            {"bonus_amount": "1.50", "service_area_id": None, "vehicle_type_id": "vt-std"},
+        ],
+    )
+    assert kwargs["fare"] == 17.20
+    assert kwargs["total_bonus"] == 6.5
+
+
+async def test_banner_skips_incentive_for_other_vehicle_type():
+    kwargs = await _render_kwargs(
+        {**_RIDE, "vehicle_type_id": "vt-std"},
+        [{"bonus_amount": "5.00", "service_area_id": None, "vehicle_type_id": "vt-xl"}],
+    )
+    assert kwargs["total_bonus"] is None
+
+
+async def test_banner_still_renders_when_incentive_lookup_fails():
+    """A failed boost lookup must cost the pill, never the banner."""
+    captured = {}
+
+    def _fake_render(**kwargs):
+        captured.update(kwargs)
+        return _PNG_MAGIC + b"x"
+
+    boom = type("S", (), {"table": staticmethod(lambda name: (_ for _ in ()).throw(RuntimeError("boom")))})()
+    with (
+        patch.object(oc.db_supabase, "get_ride", AsyncMock(return_value=_RIDE)),
+        patch.object(oc.db_supabase, "get_user_by_id", AsyncMock(return_value=_RIDER)),
+        patch.object(oc, "render_offer_card", _fake_render),
+        patch.object(oc.db_supabase, "supabase", boom),
+    ):
+        resp = await oc._build_offer_card_response("ride-1", _token())
+
+    assert resp.status_code == 200
+    assert captured["total_bonus"] is None

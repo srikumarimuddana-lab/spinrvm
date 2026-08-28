@@ -449,3 +449,90 @@ async def test_quest_progress_is_one_batched_query_for_the_whole_offer_batch():
         "driver_drv-2-user": None,
         "driver_drv-3-user": "Night Owl",
     }
+
+
+async def test_push_title_includes_area_boost_bonus():
+    """The FCM push title must show fare + incentives (area boost), matching
+    what the in-app offer panel and the driver-app's own local notification
+    show. Regression: it previously showed bare `driver_earnings`, so a
+    boosted ride pushed a lower number than the app displayed."""
+    from backend.routes.rides.matching import _match_driver_to_ride_attempt
+
+    ride = _make_ride(driver_earnings=12.5)
+    driver = _make_driver()
+
+    table_responses = {
+        "ride_incentives": MagicMock(
+            data=[
+                {
+                    "id": "inc-1",
+                    "name": "Area Boost",
+                    "bonus_amount": "5.00",
+                    "incentive_type": "per_ride",
+                    "service_area_id": None,
+                    "vehicle_type_id": None,
+                }
+            ]
+        ),
+    }
+
+    push_mock = AsyncMock()
+
+    with ExitStack() as stack:
+        mock_db = stack.enter_context(patch("backend.routes.rides.matching._deps.db_supabase"))
+        for p in _base_patches(table_responses):
+            stack.enter_context(p)
+        # After _base_patches so this binding wins.
+        stack.enter_context(patch("backend.routes.rides.matching._deps.send_push_notification", push_mock))
+
+        mock_db.get_rows = AsyncMock(return_value=[driver])
+        mock_db.find_one = AsyncMock(return_value={"id": "area-1", "polygon": None})
+        mock_db.claim_driver_atomic = AsyncMock(return_value=driver)
+        mock_db.get_driver_by_id = AsyncMock(return_value=driver)
+        mock_db.get_user_by_id = AsyncMock(return_value={"first_name": "Alex", "rating": 4.9, "profile_image": None})
+        mock_db.supabase.table = MagicMock(side_effect=_table_router(table_responses))
+        mock_db.run_sync = AsyncMock(side_effect=lambda fn: fn())
+        mock_manager = MagicMock()
+        mock_manager.send_personal_message = AsyncMock()
+        stack.enter_context(patch("backend.routes.rides.matching._deps.manager", mock_manager))
+
+        await _match_driver_to_ride_attempt("ride-1", ride=ride)
+
+    push_mock.assert_called_once()
+    title = push_mock.call_args.args[1]
+    assert title == "New ride · $17.50"
+
+    # And it stays consistent with what the WS offer panel renders.
+    payload, _ = mock_manager.send_personal_message.await_args.args
+    assert payload["fare"] == 12.5
+    assert payload["total_bonus"] == 5.0
+
+
+async def test_push_title_is_bare_fare_when_no_incentives():
+    from backend.routes.rides.matching import _match_driver_to_ride_attempt
+
+    ride = _make_ride(driver_earnings=12.5)
+    driver = _make_driver()
+    push_mock = AsyncMock()
+
+    with ExitStack() as stack:
+        mock_db = stack.enter_context(patch("backend.routes.rides.matching._deps.db_supabase"))
+        for p in _base_patches({}):
+            stack.enter_context(p)
+        stack.enter_context(patch("backend.routes.rides.matching._deps.send_push_notification", push_mock))
+
+        mock_db.get_rows = AsyncMock(return_value=[driver])
+        mock_db.find_one = AsyncMock(return_value={"id": "area-1", "polygon": None})
+        mock_db.claim_driver_atomic = AsyncMock(return_value=driver)
+        mock_db.get_driver_by_id = AsyncMock(return_value=driver)
+        mock_db.get_user_by_id = AsyncMock(return_value={"first_name": "Alex", "rating": 4.9, "profile_image": None})
+        mock_db.supabase.table = MagicMock(side_effect=_table_router({}))
+        mock_db.run_sync = AsyncMock(side_effect=lambda fn: fn())
+        mock_manager = MagicMock()
+        mock_manager.send_personal_message = AsyncMock()
+        stack.enter_context(patch("backend.routes.rides.matching._deps.manager", mock_manager))
+
+        await _match_driver_to_ride_attempt("ride-1", ride=ride)
+
+    push_mock.assert_called_once()
+    assert push_mock.call_args.args[1] == "New ride · $12.50"

@@ -34,12 +34,12 @@ _FONT_REGULAR = os.path.join(_FONT_DIR, "DejaVuSans.ttf")
 _FONT_BOLD = os.path.join(_FONT_DIR, "DejaVuSans-Bold.ttf")
 
 # Spinr palette.
-_BG = (11, 18, 32)            # deep navy
-_PANEL = (19, 28, 46)         # slightly lighter card panel
-_GREEN = (0, 210, 106)        # brand green / pickup marker
-_RED = (255, 59, 48)          # dropoff marker
+_BG = (11, 18, 32)  # deep navy
+_PANEL = (19, 28, 46)  # slightly lighter card panel
+_GREEN = (0, 210, 106)  # brand green / pickup marker
+_RED = (255, 59, 48)  # dropoff marker
 _WHITE = (245, 247, 250)
-_MUTED = (148, 163, 184)      # slate-400
+_MUTED = (148, 163, 184)  # slate-400
 
 
 # Strip a leading street number and unit/apt token so the banner shows the
@@ -101,6 +101,19 @@ def _pill_right(draw, right_x, y, text, font, *, fg, bg):
     return h
 
 
+def earnings_labels(fare: Optional[float], total_bonus: Optional[float]) -> tuple[str, Optional[str]]:
+    """Headline + optional boost-pill text for the banner.
+
+    Split out of the renderer so the money copy is unit-testable without
+    Pillow. Headline is base fare + boost (one number, matching the offer
+    panel and the push title); the pill says what share of it is the boost.
+    """
+    bonus = float(total_bonus or 0)
+    headline = f"${float(fare or 0) + bonus:.2f}"
+    pill = f"INCL. ${bonus:.2f} BOOST" if bonus > 0 else None
+    return headline, pill
+
+
 def render_offer_card(
     *,
     fare: float,
@@ -113,6 +126,13 @@ def render_offer_card(
     total_bonus: Optional[float] = None,
 ) -> Optional[bytes]:
     """Render the offer banner to PNG bytes. Returns None on any failure.
+
+    ``fare`` is the base ride earnings and ``total_bonus`` the area boost /
+    ride incentives on top of it; the headline draws their **sum**, with the
+    boost called out in the pill. That mirrors the in-app offer panel
+    (``RideOfferPanel.tsx``: ``totalEarnings = baseFare + totalBonus``) and the
+    push title, so the driver reads one number for what they actually earn on
+    every surface.
 
     Surge is intentionally never drawn — it is not surfaced to drivers on the
     offer card. The fare already reflects any surge.
@@ -131,7 +151,6 @@ def render_offer_card(
         f_fare = _font(_FONT_BOLD, 132)
         f_row = _font(_FONT_BOLD, 40)
         f_row_sub = _font(_FONT_REGULAR, 34)
-        f_pill = _font(_FONT_BOLD, 30)
         f_brand = _font(_FONT_BOLD, 34)
 
         margin = 56
@@ -139,19 +158,33 @@ def render_offer_card(
         # Header label.
         d.text((margin, 44), "NEW RIDE REQUEST", font=f_label, fill=_MUTED)
 
-        # Fare — the headline.
-        fare_text = f"${float(fare or 0):.2f}"
+        # Earnings — the headline. Base fare + area boost, the same total the
+        # offer panel and the push title show.
+        fare_text, _pill_text = earnings_labels(fare, total_bonus)
         d.text((margin, 78), fare_text, font=f_fare, fill=_GREEN)
         fare_right = margin + d.textlength(fare_text, font=f_fare)
 
-        # Bonus pill — right-anchored beside the fare. Surge is deliberately
-        # not shown to drivers; only the (already surge-inclusive) fare is.
-        _ = fare_right  # fare width computed for layout symmetry; pill is right-aligned
-        if total_bonus and total_bonus > 0:
-            _pill_right(
-                d, _W - margin, 112, f"+${float(total_bonus):.2f} BONUS", f_pill,
-                fg=_BG, bg=_GREEN,
-            )
+        # Bonus pill — right-anchored beside the headline. Reads "INCL." (not
+        # "+") because the headline above is already the total; a "+$X" pill
+        # beside it would read as money on top of that number. Surge is
+        # deliberately not shown to drivers; only the (already
+        # surge-inclusive) fare is.
+        #
+        # The headline and the pill share one row, and neither is fixed-width:
+        # a 3-digit total ("$105.00") next to a wide pill overruns it and the
+        # two overprint — verified by rendering. So the pill steps down a font
+        # size to fit, and is dropped outright if even the smallest won't —
+        # the headline already carries the boost, so losing the pill costs a
+        # callout, never the correct number.
+        if _pill_text:
+            avail = (_W - margin) - fare_right - 24  # 24px min gap
+            for _size in (30, 26, 22):
+                _f = _font(_FONT_BOLD, _size)
+                if d.textlength(_pill_text, font=_f) + 36 <= avail:  # 36 = _pill_right pad_x*2
+                    _pill_right(d, _W - margin, 112, _pill_text, _f, fg=_BG, bg=_GREEN)
+                    break
+            else:
+                logger.info("offer card: boost pill dropped, no room beside %s", fare_text)
 
         # Route panel.
         panel_top = 246
@@ -163,8 +196,9 @@ def render_offer_card(
             r = 11
             d.ellipse([margin + 40 - r, cy - r, margin + 40 + r, cy + r], fill=color)
             d.text((text_x, cy - 34), label, font=f_row_sub, fill=_MUTED)
-            d.text((text_x + 132, cy - 36), _ellipsize(d, area or "—", f_row, max_text_w - 132),
-                   font=f_row, fill=_WHITE)
+            d.text(
+                (text_x + 132, cy - 36), _ellipsize(d, area or "—", f_row, max_text_w - 132), font=f_row, fill=_WHITE
+            )
 
         _stop(panel_top + 44, _GREEN, "Pickup", pickup_area)
         # Connector line between the two stops.

@@ -84,6 +84,20 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # eas-version: latest below always pulls eas-cli's current dependency
+      # tree, and @oclif/plugin-autocomplete bumped its own engines.node to
+      # >=22.0.0 in 3.3.0, independent of eas-cli's own (unchanged) >=20.0.0
+      # requirement — yarn classic hard-fails the "Setup EAS" step's install
+      # under any older Node. This job previously had no setup-node step at
+      # all — same exposure as eas-build.yml/eas-native-build.yml/
+      # deploy-driver-play-testing.yml/ci.yml's mobile-build had; see
+      # eas-build.yml's comment for the full root-cause writeup. Node 22
+      # verified against this repo's own yarn install --frozen-lockfile in a
+      # local sandbox, not yet against a real GitHub Actions run of this job.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+
       - name: Setup EAS
         uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8
         with:

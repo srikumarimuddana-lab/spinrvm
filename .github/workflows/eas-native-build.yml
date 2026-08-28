@@ -64,9 +64,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # Node 22, not 20 — see eas-build.yml's rider job for the full
+      # root-cause writeup and the caveat on what "verified under Node 22"
+      # actually covers (the app's own install, not eas-cli's, on a real
+      # runner). Same fix, applied here since this workflow hits the
+      # identical expo-github-action + eas-version: latest combination.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 20
+          node-version: 22
 
       - uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8
         with:

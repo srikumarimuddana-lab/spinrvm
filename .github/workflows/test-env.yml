@@ -9,7 +9,19 @@ on:
 
 env:
   PYTHON_VERSION: '3.12'
-  NODE_VERSION: '20'
+  # 22, not 20: build-mobile-test/ota-update-test below both run "Setup EAS"
+  # (expo/expo-github-action, eas-version: latest), which always pulls
+  # eas-cli's current dependency tree — @oclif/plugin-autocomplete bumped its
+  # own engines.node to >=22.0.0 in 3.3.0, independent of eas-cli's own
+  # (unchanged) >=20.0.0 requirement, and yarn classic hard-fails that
+  # install under any older Node. Same root cause as
+  # eas-build.yml/eas-native-build.yml/deploy-driver-play-testing.yml/
+  # ci.yml's mobile-build/maestro-e2e.yml — see eas-build.yml's comment for
+  # the full writeup. rider-app-check/driver-app-check (plain tsc --noEmit,
+  # no EAS step) also read this var; both already verified fine under Node
+  # 22 this session (their tsc --noEmit ran under Node 22.22.2 in the
+  # sandbox that authored this fix, repeatedly, cleanly).
+  NODE_VERSION: '22'
 
 jobs:
   # ─── 1. Backend: Lint + Test ───
@@ -140,15 +152,21 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # setup-node MUST run before "Setup EAS": expo-github-action installs
+      # eas-cli using whatever Node is on PATH at that point, so running it
+      # first (as this job previously did) meant it always ran under the
+      # runner's default Node regardless of NODE_VERSION below — the same
+      # failure this env var change is meant to fix. See the top-level
+      # NODE_VERSION comment for the underlying eas-cli/Node story.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
       - name: Setup EAS
         uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: ${{ env.NODE_VERSION }}
 
       # Rider App — development build
       - name: Install rider-app deps
@@ -183,15 +201,17 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # setup-node MUST run before "Setup EAS" — see build-mobile-test's
+      # identical comment above.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
       - name: Setup EAS
         uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: ${{ env.NODE_VERSION }}
 
       - name: Install rider-app deps
         working-directory: rider-app

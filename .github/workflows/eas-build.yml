@@ -63,9 +63,21 @@ jobs:
         working-directory: rider-app
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # Node 22, not 20: eas-version: latest below always pulls eas-cli's
+      # current dependency tree, and @oclif/plugin-autocomplete bumped its own
+      # engines.node to >=22.0.0 in 3.3.0 (2026-08-2x) independent of eas-cli's
+      # own (unchanged) >=20.0.0 requirement. yarn classic hard-fails the
+      # install on that mismatch (not just a warning), which is why every run
+      # of this workflow failed from that release onward. Before this change,
+      # confirmed rider-app's and driver-app's own yarn install
+      # --frozen-lockfile (below) succeed under Node 22 in a local sandbox —
+      # that's evidence the app toolchain tolerates Node 22, NOT evidence the
+      # "Setup EAS" step's own eas-cli install succeeds on a real GitHub
+      # Actions runner under Node 22; that remains unverified until this
+      # workflow actually runs.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 20
+          node-version: 22
       - uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8
         with:
           eas-version: latest
@@ -115,9 +127,10 @@ jobs:
         working-directory: driver-app
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # Node 22 — see the rider job's comment above for why.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 20
+          node-version: 22
       - uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8
         with:
           eas-version: latest

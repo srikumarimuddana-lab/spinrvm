@@ -108,7 +108,7 @@ def compute_profile_completeness(
             "missing": data["missing"],
         }
 
-    score = int((filled_required / total_required) * 100) if total_required > 0 else 0
+    score = round((filled_required / total_required) * 100) if total_required > 0 else 100
 
     return {
         "score": score,

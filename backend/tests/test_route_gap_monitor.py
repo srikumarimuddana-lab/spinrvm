@@ -359,3 +359,30 @@ def test_orphaned_open_events_close_terminally_when_ride_no_longer_active():
             {"status": "unresolved_at_completion"},
         )
     ]
+
+
+def test_single_ride_helper_delegates_to_the_batched_one():
+    """utils/stale_p3_closer.py imports _latest_capture_time by name.
+
+    Renaming it to the batched form without leaving this wrapper broke that
+    import — and because stale_p3_closer's tests patch the symbol by string,
+    the failure surfaced as 11 unrelated-looking AttributeErrors rather than
+    as anything pointing at route_gap_monitor. Pinned so the cross-module
+    caller cannot be silently orphaned again.
+
+    It delegates rather than re-querying, so the NULL-captured_at filtering
+    and legacy-timestamp precedence stay defined in exactly one place.
+    """
+    calls: list = []
+
+    async def rpc(name, params):
+        calls.append(params)
+        return {"ride_1": (NOW - timedelta(seconds=5)).isoformat()}
+
+    with patch.object(route_gap_monitor.db_supabase, "rpc", rpc):
+        result = _run(route_gap_monitor._latest_capture_time("ride_1"))
+        missing = _run(route_gap_monitor._latest_capture_time("ride_404"))
+
+    assert result == NOW - timedelta(seconds=5)
+    assert missing is None
+    assert calls == [{"p_ride_ids": ["ride_1"]}, {"p_ride_ids": ["ride_404"]}]

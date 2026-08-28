@@ -96,3 +96,7 @@ admin-dashboard/playwright.audit.config.ts
 # does not untrack. For a genuinely non-PII CSV, add it with `git add -f` and
 # confirm it holds no personal data first.
 *.csv
+
+# Yarn drops install metadata into shared/ when resolving the file:../shared
+# dependency from rider-app/driver-app — a local install byproduct, never source.
+shared/.yarn-metadata.json

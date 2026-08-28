@@ -94,7 +94,7 @@ async def test_welcome_body_mentions_the_configured_app_name():
         settings={"company_app_name": "Northern Rides"},
     )
     assert "Open the Northern Rides app" in kwargs["rendered"].text
-    assert "Northern Rides is Saskatchewan-built" in kwargs["rendered"].text
+    assert "Northern Rides is Canadian-built" in kwargs["rendered"].text
 
 
 async def test_wallet_topup_body_mentions_the_configured_app_name():

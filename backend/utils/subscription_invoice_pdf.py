@@ -225,16 +225,34 @@ def generate_subscription_invoice_pdf(
     pdf.ln(4)
     pdf.set_font("Helvetica", "", 8)
     pdf.set_text_color(*_GRAY)
+    # Both of these name the issuing entity, so both must follow `company` for
+    # the same reason the header block above does — see this function's
+    # docstring: an invoice is a tax document a driver may file. They were
+    # hardcoded, which made a configured invoice contradict itself (a header
+    # reading the settings address over a footer still naming Saskatoon).
+    # `company is None` keeps the pre-retrofit literals, so the
+    # branded_receipt_enabled=false path is unchanged.
+    _issuer = to_latin1(company.name if company is not None else "Spinr Mobility Inc.")
     pdf.multi_cell(
         W,
         4.5,
-        "This invoice is issued by Spinr Mobility Inc. in connection with the Spinr Pass subscription service. "
+        f"This invoice is issued by {_issuer} in connection with the Spinr Pass subscription service. "
         "GST/PST/HST amounts are computed based on the service area province at the time of charge. "
         "Please retain this invoice for your records.",
         border=0,
     )
     pdf.ln(4)
     pdf.set_font("Helvetica", "", 8)
-    pdf.cell(0, 5, "Spinr Mobility Inc. · Saskatoon, SK · support@spinr.ca", align="C", ln=True)
+    pdf.cell(
+        0,
+        5,
+        to_latin1(
+            f"{company.identity_line} · {company.support_email}"
+            if company is not None
+            else "Spinr Mobility Inc. · Saskatoon, SK · support@spinr.ca"
+        ),
+        align="C",
+        ln=True,
+    )
 
     return bytes(pdf.output())

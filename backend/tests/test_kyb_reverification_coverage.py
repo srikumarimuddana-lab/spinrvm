@@ -72,7 +72,13 @@ async def test_malformed_flagged_at_timestamp_still_reflags():
         patch(P + "_metric_gauge") as mock_gauge,
     ):
         await run_kyb_reverification_tick()
-    mark.assert_awaited_once_with(company_id="c1")
+    assert mark.await_count == 1
+    _kw = mark.await_args.kwargs
+    assert _kw["company_id"] == "c1"
+    # The write is a conditional claim now: it must carry the re-flag
+    # cooldown boundary so the DB, not this loop, decides the winner
+    # when several replicas reach the same company at once.
+    assert _kw["not_flagged_since_iso"]
     mock_inc.assert_called_once()
 
 

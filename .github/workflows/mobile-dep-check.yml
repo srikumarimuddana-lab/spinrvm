@@ -15,7 +15,8 @@ on:
       - 'driver-app/package.json'
 
 env:
-  NODE_VERSION: '20'
+  # Node >=22: engines floor of @supabase/supabase-js@2.112.x and react-native@0.87 (CR #4551)
+  NODE_VERSION: '22'
 
 jobs:
   rider-app-dep-check:

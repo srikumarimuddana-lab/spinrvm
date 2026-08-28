@@ -33,6 +33,7 @@ import {
   TRIP_CADENCE,
   IDLE_CADENCE,
 } from '../utils/backgroundLocation';
+import { shouldDisplayFix } from '../utils/locationDisplayGate';
 import { consumePendingRideOffer } from '../services/pendingRideOffer';
 import { createLocationIntegrityChecker, resetLocationIntegrity } from '../utils/locationIntegrity';
 
@@ -63,8 +64,13 @@ const MAX_RECONNECT_ATTEMPTS = 10;
 const AUTH_WATCHDOG_MS = 10000;
 
 const LOCATION_CONFIGS: Record<string, { timeInterval: number; distanceInterval: number; accuracy: Location.Accuracy }> = {
-  idle:                  { timeInterval: 10_000, distanceInterval: 30, accuracy: Location.Accuracy.Balanced },
-  ride_offered:          { timeInterval: 10_000, distanceInterval: 30, accuracy: Location.Accuracy.Balanced },
+  // Idle-online raised Balanced/10s/30m → High/4s/10m (2026-08-28): Balanced
+  // yields cell/Wi-Fi fixes (±30–100 m) that rendered the car a block off the
+  // road and "sliding" while a driver cruised online without a ride (live
+  //-testing report, Albert St). Online time should look as accurate as trip
+  // time; cost is GNSS power draw only while the driver is online.
+  idle:                  { timeInterval: 4_000,  distanceInterval: 10, accuracy: Location.Accuracy.High },
+  ride_offered:          { timeInterval: 4_000,  distanceInterval: 10, accuracy: Location.Accuracy.High },
   // Pickup/trip phases tightened 4s/10m + 3s/8m → 2s/5m (2026-08-28): the
   // rider-side car marker animates between fixes, and a 3-4 s gap between
   // real positions reads as laggy/teleporting on the rider's map. Cost:
@@ -344,6 +350,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // ~1 location/minute for driver history without filling the trail with the
   // dense live-marker cadence. Reset when a trip starts / driver goes offline.
   const lastIdleDurableMsRef = useRef<number>(0);
+  // When a fix last passed the display accuracy gate — drives the stale
+  // override so the marker can't freeze on persistently poor signal.
+  const lastDisplayedFixMsRef = useRef<number>(0);
   // Tracks whether the REST /drivers/location-batch endpoint is healthy.
   // When false, the WS message is sent durable:true with v1-only fields so
   // the WS handler persists via the legacy path (simple INSERT, no unique
@@ -740,6 +749,16 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
             console.warn(`[Location] Untrusted fix kept for audit, hidden from display: ${integrity.reason}`);
             return;
           }
+          // ── Display accuracy gate (durable capture above is unconditional).
+          // A cell/Wi-Fi-grade fix (accuracy > 50 m) walks the marker off the
+          // road sideways; skip it for display AND the live WS marker — the
+          // rider's map is fed from the same send, so gating here fixes both
+          // ends with no backend change. shouldDisplayFix's stale override
+          // ensures the marker never freezes when only poor fixes exist.
+          if (!shouldDisplayFix(loc.coords.accuracy, Date.now() - lastDisplayedFixMsRef.current)) {
+            return;
+          }
+          lastDisplayedFixMsRef.current = Date.now();
           // Sensor mismatch: tag the payload instead of dropping the location.
           // Dropping made the driver invisible to dispatch on false positives
           // (phone on soft mount, smooth highway, cup holder vibration).
@@ -751,9 +770,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           locationRef.current = loc;
           const now = Date.now();
           // Tighten the render cadence during active trip phases so the driver
-          // UI distance counter and map marker stay responsive; coarse throttle
-          // is fine when idle to avoid unnecessary re-renders.
-          const renderThrottleMs = inTripPhase ? 3000 : 10000;
+          // UI distance counter and map marker stay responsive. Idle was 10s —
+          // visibly laggy for a driver cruising online (the marker + follow
+          // camera stuttered); 3.5s keeps re-renders modest while matching the
+          // 4s idle GPS cadence above.
+          const renderThrottleMs = inTripPhase ? 3000 : 3500;
           if (now - lastRenderMsRef.current >= renderThrottleMs) {
             lastRenderMsRef.current = now;
             setLocation(loc);

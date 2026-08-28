@@ -38,6 +38,7 @@ import {
   publishLiveRoute,
   registerLiveRoutePublisher,
 } from '../../../hooks/liveRouteShared';
+import { FOLLOW_ZOOM_TIERS, zoomTierForSpeed } from '../../../utils/locationDisplayGate';
 import api, { isAppCheckTokenReady } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -545,6 +546,31 @@ function DriverDashboard() {
     });
     return () => sub.remove();
   }, []);
+
+  // ── Idle follow-car camera with speed-adaptive zoom ──
+  // While online without a ride the camera tracks the car: zoomed in near
+  // intersections/stops (street names, one-ways, turn restrictions render on
+  // the vector map at ≥17 — zero extra API calls), zoomed out while cruising.
+  // Panning hands control to the driver; the recenter button resumes follow.
+  // Active-ride phases keep their deliberate route-overview framing — turn-by
+  //-turn/lane detail comes from the Google Maps/Waze handoff, not this map.
+  const followRef = useRef(true);
+  const followZoomTierRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (rideState !== 'idle' || !followRef.current) return;
+    const c = location?.coords;
+    if (!c || !mapRef.current) return;
+    const tier = zoomTierForSpeed(c.speed, followZoomTierRef.current);
+    followZoomTierRef.current = tier;
+    mapRef.current.animateCamera?.(
+      {
+        center: { latitude: c.latitude, longitude: c.longitude },
+        zoom: FOLLOW_ZOOM_TIERS[tier].zoom,
+      },
+      { duration: 700 },
+    );
+    // mapRef is a stable useRef object from useDriverDashboard().
+  }, [location, rideState, mapRef]);
   useEffect(() => {
     if (!pendingRecenterRef.current) return;
     if (!location?.coords || !mapRef.current) return;
@@ -667,6 +693,11 @@ function DriverDashboard() {
             latitudeDelta: region.latitudeDelta,
             longitudeDelta: region.longitudeDelta,
           };
+        }}
+        onPanDrag={() => {
+          // Driver is exploring (heatmap, hotspots) — stop the follow camera
+          // from yanking the map back; the recenter button resumes it.
+          followRef.current = false;
         }}
       >
         {/* Driver car marker */}
@@ -898,6 +929,9 @@ function DriverDashboard() {
             hotspots={heatmapHotspots}
             visible
             onPress={(lat, lng) => {
+              // Deliberate look-away — pause follow so the camera stays on the
+              // hotspot instead of snapping back to the car 3s later.
+              followRef.current = false;
               mapRef.current?.animateToRegion({
                 latitude: lat,
                 longitude: lng,
@@ -970,7 +1004,11 @@ function DriverDashboard() {
         mapRef={mapRef}
         location={location}
         currentRegionRef={currentRegionRef}
-        onRecenter={() => refreshLocation(false)}
+        onRecenter={() => {
+          followRef.current = true;
+          followZoomTierRef.current = null;
+          return refreshLocation(false);
+        }}
       />
 
       {/* Bottom Panels */}

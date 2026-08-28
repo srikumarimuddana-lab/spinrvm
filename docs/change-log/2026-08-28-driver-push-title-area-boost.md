@@ -13,7 +13,8 @@
 
 ## 1. Issue / gap identified
 
-The ride-offer push notification a driver receives (title: `New ride · $X.XX`)
+Both halves of the ride-offer push a driver receives — the title
+(`New ride · $X.XX`) and the BigPicture fare banner rendered behind it —
 showed only the base ride earnings, excluding any active area boost / ride
 incentive. The in-app offer panel — and the driver-app's own locally-rendered
 Notifee notification — show fare **+** bonus, so a boosted ride advertised a
@@ -21,19 +22,36 @@ lower number in the push tray than the app displayed on tap.
 
 ## 2. Root cause
 
-In `backend/routes/rides/matching.py`, the dispatch notify loop builds the push
-title from `ride["driver_earnings"]` alone, while the incentive total is
-computed in the same function (`_fetch_incentives()` → `_total_bonus`) and sent
-in the WebSocket/FCM payload as `total_bonus`. The client combines the two
-(`notifeeService.ts`: `offer.fare + (offer.total_bonus || 0)`); the server-sent
-push title never did. Two independent title builders, only one of which knew
-about the bonus.
+Two separate misses, same shape — a money surface built from
+`driver_earnings` alone while the boost lived in a field the caller ignored:
+
+1. **Title.** `backend/routes/rides/matching.py`'s dispatch notify loop builds
+   the title from `ride["driver_earnings"]`, even though the incentive total is
+   computed in the same function (`_fetch_incentives()` → `_total_bonus`) and
+   shipped in the WS/FCM payload as `total_bonus`. The client combines the two
+   (`notifeeService.ts`: `offer.fare + (offer.total_bonus || 0)`); the
+   server-built title never did.
+2. **Banner.** `backend/utils/offer_card.render_offer_card` has always accepted
+   a `total_bonus` argument and drawn a boost pill for it, but
+   `backend/routes/offer_card.py` never passed one — so the pill was dead code
+   in production and the banner drew the base fare as its headline. The
+   renderer's own unit test passed `total_bonus=2.50`, which is why the gap
+   looked covered.
 
 ## 3. Fix / remediation
 
-The server-side push title now uses `driver_earnings + _total_bonus`, matching
-the client's `totalEarnings` formula exactly. Display-only; nothing about what
-the driver is actually paid changed.
+1. Push title now uses `driver_earnings + _total_bonus`, matching the client's
+   `totalEarnings` formula exactly.
+2. The banner endpoint now looks up the ride's active incentives and passes the
+   total to the renderer, and the renderer's headline is now `fare + boost`
+   with the boost itemised in the pill — the same shape as the in-app offer
+   panel (big total, breakdown underneath).
+3. Pill copy changed from `+$5.00 BONUS` to `INCL. $5.00 BOOST`, because the
+   headline beside it is now the total: a `+$X` pill next to a total reads as
+   money on top of that number.
+
+Net effect: title, banner, and offer panel now all show one identical number.
+Display-only; nothing about what the driver is actually paid changed.
 
 ## 4. Risk & impact on existing functionality
 
@@ -46,10 +64,19 @@ the driver is actually paid changed.
 - **No money-path change.** `driver_earnings`, `ride_incentives`, wallet
   deltas, and payout logic are untouched; this only formats a string.
 - **No ride-state / insurance-period / WS-event change.**
-- Divergent surfaces that still show base fare only, deliberately left alone
-  (pre-existing, not introduced here): `backend/routes/offer_card.py` renders
-  the push's BigPicture banner from `driver_earnings` with no incentive lookup;
-  adding one would put a DB query on an image-render path. Flagged, not fixed.
+- **Banner blast radius: one caller.** `render_offer_card` is called from
+  exactly one place (`routes/offer_card.py`); `earnings_labels` is new. Nothing
+  else renders or reads the banner.
+- **One added DB read**, on the banner-render path only — a signed-URL image
+  GET the device makes after the push lands, explicitly off the dispatch hot
+  path (see that module's docstring), so the < 2 s offer→phone SLA is
+  untouched. The read is the same `ride_incentives` query dispatch already
+  runs; it fails open to "no pill" so a boost-lookup error can never cost the
+  driver the banner (or a 503 on an image the OS is fetching).
+- The incentive query is **duplicated** from `matching.py`'s `_fetch_incentives`
+  rather than shared: that one runs against `_deps`-injected Supabase handles
+  the dispatch tests patch, and rerouting it through a shared helper would have
+  changed what those tests intercept. Noted as a small, deliberate duplication.
 - Failure mode is unchanged: a non-numeric earnings value still falls back to
   the `"New fare"` label (the `+ float(_total_bonus or 0)` is inside the same
   `try`).
@@ -57,10 +84,14 @@ the driver is actually paid changed.
 ## 5. User-experience effect
 
 - **Driver-facing, visible immediately** to any driver receiving an offer push
-  on a ride in an incentivised area. The tray number now matches the in-app
-  offer number instead of under-stating it. For rides with no active incentive
-  the title is byte-identical to before.
-- No new copy — the same `New ride · $X.XX` format, corrected value.
+  on a ride in a boosted area. Both the tray title and the banner now show what
+  they'll actually earn, matching the in-app panel instead of under-stating it.
+  For rides with no active incentive both are byte-identical to before.
+- **Copy change (driver-visible):** the banner's boost pill now reads
+  `INCL. $5.00 BOOST` instead of `+$5.00 BONUS` — required by the headline
+  change; a `+$X` pill beside a total would over-state earnings, which is worse
+  than the bug being fixed. Not feature-flagged: the flag mechanism here would
+  itself be new, and the un-flagged state (today's build) is the wrong number.
 - Riders, corporate admins, and internal admins see nothing.
 
 ## 6. Files modified
@@ -69,6 +100,10 @@ the driver is actually paid changed.
 |---|---|---|
 | `backend/routes/rides/matching.py` | Push title earnings label now adds `_total_bonus` to `driver_earnings` | Match the in-app offer panel and the driver-app's local notification |
 | `backend/tests/test_dispatch_notify_loop_branches.py` | Two regression tests: title with an active incentive, and title with none | Lock the two branches so the title can't silently drift from the payload again |
+| `backend/routes/offer_card.py` | Looks up active `ride_incentives` for the ride and passes `total_bonus` to the renderer; fails open | The banner never received the boost, so its pill was dead code |
+| `backend/utils/offer_card.py` | New `earnings_labels()`; headline is now fare + boost, pill copy `INCL. $X BOOST` | One number for actual earnings, matching the offer panel and title |
+| `backend/tests/test_offer_card_route.py` | Tests: boost reaches the renderer, wrong-vehicle incentive skipped, lookup failure still renders | Cover the new query and its fail-open path |
+| `backend/tests/test_offer_card.py` | Unit tests for `earnings_labels` (sum, no-pill, missing fare) | Money copy testable without Pillow |
 
 ## 7. Before / after
 
@@ -85,13 +120,27 @@ earnings_label = f"${_offer_total:.2f}"
 # same ride → "New ride · $17.50"  (matches the offer panel)
 ```
 
+```python
+# Before — banner: caller never passed the boost, so the pill never drew
+render_offer_card(fare=_num(ride.get("driver_earnings")) or 0.0, ...)
+# headline "$12.50", no pill
+```
+
+```python
+# After — banner
+render_offer_card(fare=..., total_bonus=_total_bonus or None, ...)
+# earnings_labels(12.50, 5.00) -> ("$17.50", "INCL. $5.00 BOOST")
+```
+
 ## 8. Rollback plan
 
-Revert the four-line change in `matching.py` (`git revert` of the commit is a
-complete rollback here). No migration, no feature flag, no persisted state: the
-value is computed per push at send time, so the next dispatch after a redeploy
-uses whichever formula is live. Nothing already delivered needs correcting —
-no money, wallet, or ride row was written differently.
+`git revert` of the commits is a complete rollback here. No migration, no
+persisted state: both values are computed per offer at send/render time, so the
+next dispatch after a redeploy uses whichever formula is live. Nothing already
+delivered needs correcting — no money, wallet, or ride row was written
+differently. Partial rollback is possible too (reverting the banner change
+alone leaves the corrected title in place), though it reintroduces the
+title/banner mismatch and is not recommended.
 
 ## 9. Verification performed
 
@@ -100,8 +149,13 @@ no money, wallet, or ride row was written differently.
   `_total_bonus` (WS payload, FCM data payload) to confirm no other reader
   changes behavior.
 - Cross-checked the new formula against the client's:
-  `driver-app/services/notifeeService.ts:222` (`offer.fare + (offer.total_bonus || 0)`)
+  `driver-app/services/notifeeService.ts:222` (`offer.fare + (offer.total_bonus || 0)`),
+  `driver-app/components/panels/RideOfferPanel.tsx:150` (`totalEarnings = baseFare + totalBonus`),
   and `driver-app/lib/androidAuto/carCard.ts` (`totalEarningsLabel`).
+- Executed `earnings_labels` standalone (extracted, no backend imports):
+  `(12.50, 5.00) → ("$17.50", "INCL. $5.00 BOOST")`; `(12.50, 0/None) →
+  ("$12.50", None)`; `(None, None) → ("$0.00", None)`.
+- Confirmed `render_offer_card` has exactly one production caller.
 
 ## 10. What was NOT verified
 
@@ -114,5 +168,13 @@ no money, wallet, or ride row was written differently.
   incentive rows in the tests are mocked.
 - No end-to-end check that a real boosted ride's tray title now matches the
   in-app panel on a physical driver device.
-- `backend/routes/offer_card.py`'s banner fare was reviewed but not changed or
-  tested.
+- **The banner PNG was never rendered or looked at.** The headline/pill change
+  is verified at the label level only; nothing checked that a longer
+  `INCL. $X BOOST` pill still fits its right-anchored slot beside a wider
+  (now-summed) headline at the banner's fixed width. There is no visual-
+  regression tooling for this surface — and per CLAUDE.md none is active for
+  any Spinr surface — so this was reasoned about, not screenshotted. Worth one
+  manual render before this reaches drivers.
+- The duplicated incentive query in `routes/offer_card.py` was not measured
+  against a real Supabase; its latency contribution to banner render is
+  assumed-small, not benchmarked.

@@ -92,8 +92,36 @@ async def _build_offer_card_response(ride_id: str, t: str) -> Response:
         except (TypeError, ValueError):
             return None
 
+    # Area boost / ride incentives — the banner draws them as a "+$X BONUS"
+    # pill beside the fare, so the driver sees the same total the offer panel
+    # and the notification title show. Mirrors the incentive lookup in
+    # routes/rides/matching.py (`_fetch_incentives`); duplicated rather than
+    # shared because that one runs on the dispatch hot path against its own
+    # injected deps. Fails open to "no bonus" — a missing pill must never cost
+    # the driver the banner itself.
+    _total_bonus = 0.0
+    try:
+        iq = (
+            db_supabase.supabase.table("ride_incentives")
+            .select("bonus_amount, service_area_id, vehicle_type_id")
+            .eq("is_active", True)
+        )
+        sa_id = ride.get("service_area_id")
+        if sa_id:
+            iq = iq.or_(f"service_area_id.is.null,service_area_id.eq.{sa_id}")
+        ir = await db_supabase.run_sync(iq.execute)
+        vt_id = ride.get("vehicle_type_id")
+        for inc in ir.data or []:
+            if inc.get("vehicle_type_id") and inc["vehicle_type_id"] != vt_id:
+                continue
+            _total_bonus += float(inc.get("bonus_amount") or 0)
+    except Exception:
+        logger.warning("offer-card: incentive lookup failed for %s", ride_id, exc_info=True)
+        _total_bonus = 0.0
+
     png = render_offer_card(
         fare=_num(ride.get("driver_earnings")) or 0.0,
+        total_bonus=_total_bonus or None,
         distance_km=_num(ride.get("distance_km")),
         duration_minutes=_num(ride.get("duration_minutes")),
         rider_first_name=(rider or {}).get("first_name") or (rider or {}).get("name"),

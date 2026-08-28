@@ -1,43 +1,63 @@
 # CODEOWNERS — review routing for money/schema/security-sensitive paths.
 #
-# GitHub requires actual org members or teams here — the handles below are
-# placeholders (`@spinr-org/TBD-*`) until real GitHub usernames/teams are
-# assigned. Until then, GitHub will not be able to resolve these owners and
-# review-routing enforcement (via branch protection's "Require review from
-# Code Owners") will not actually block merges — this file alone is
-# necessary but not sufficient; branch protection must also enable that
-# setting once real owners are filled in. See ACTION_ITEMS.md E8.
+# Real-org-membership check (2026-08-28, docs/audit/2026-08-27-cicd-gates-
+# guardrails-audit.md Section 3 / ACTION_ITEMS.md E8): this repo currently
+# has exactly 2 collaborators and 0 GitHub teams (confirmed via the GitHub
+# API, not assumed) --
+#   @srikumarimuddana-lab  -- admin (the account/org owner)
+#   @ittalenthireca-sketch -- write (opens/authors PRs; per this repo's own
+#                              observed history, effectively the PR-author
+#                              identity, not an independent reviewer)
+#
+# The domain-team routing this file used to name (`@spinr-org/TBD-payments-
+# reviewers` etc.) was never real -- there is no `spinr-org` GitHub
+# organization with those teams, so GitHub could never resolve those
+# handles and "Require review from Code Owners" could never have enforced
+# anything even if branch protection enabled it. Replaced below with the
+# one real reviewing account this repo actually has. The domain structure
+# is kept (not collapsed to a single `*` rule) because it's real, useful
+# documentation of which paths are money/schema/security/dispatch/safety
+# -sensitive -- matching the same domain boundaries `.github/labeler.yml`
+# and `ci-guardrails.yml`'s `risk-label`/`change-impact-log-gate` jobs
+# already use -- and because it's a one-line-per-domain edit to point at a
+# real team the moment one exists, rather than a redesign.
 #
 # Rules are evaluated bottom-up: the last matching pattern wins, so more
 # specific paths are listed after more general ones.
+#
+# TO EXTEND once real per-domain reviewers/teams exist: replace the
+# relevant domain's `@srikumarimuddana-lab` below with `@spinr-org/<real-
+# team-slug>` (a team GitHub can actually resolve), then enable "Require
+# review from Code Owners" in Settings -> Branches -> main (see
+# docs/audit/2026-08-27-cicd-gates-guardrails-audit.md Section 1 for the
+# rest of that branch-protection checklist).
 
-# Default — every PR needs at least one reviewer from core eng
-# TODO(E8): replace with the real GitHub team slug (e.g. @spinr-org/backend-eng)
-*                                       @spinr-org/TBD-core-eng
+# Default — every PR needs at least one reviewer
+*                                       @srikumarimuddana-lab
 
 # Money-adjacent backend surfaces
-backend/routes/payments*               @spinr-org/TBD-payments-reviewers
-backend/services/fare_service.py       @spinr-org/TBD-payments-reviewers
-backend/services/corporate_*           @spinr-org/TBD-payments-reviewers
-backend/routes/corporate_*             @spinr-org/TBD-payments-reviewers
-backend/routes/wallet*                 @spinr-org/TBD-payments-reviewers
-backend/utils/payment_retry.py         @spinr-org/TBD-payments-reviewers
-backend/utils/surge_engine.py          @spinr-org/TBD-payments-reviewers
+backend/routes/payments*               @srikumarimuddana-lab
+backend/services/fare_service.py       @srikumarimuddana-lab
+backend/services/corporate_*           @srikumarimuddana-lab
+backend/routes/corporate_*             @srikumarimuddana-lab
+backend/routes/wallet*                 @srikumarimuddana-lab
+backend/utils/payment_retry.py         @srikumarimuddana-lab
+backend/utils/surge_engine.py          @srikumarimuddana-lab
 
 # Schema changes — every migration touches production data
-backend/migrations/                    @spinr-org/TBD-migration-reviewers
+backend/migrations/                    @srikumarimuddana-lab
 
 # Auth / security-sensitive surfaces
-backend/routes/auth*                   @spinr-org/TBD-security-reviewers
-backend/core/config.py                 @spinr-org/TBD-security-reviewers
-backend/core/middleware.py             @spinr-org/TBD-security-reviewers
-backend/utils/crypto.py                @spinr-org/TBD-security-reviewers
-backend/utils/rate_limiter.py          @spinr-org/TBD-security-reviewers
-.github/workflows/security-gates.yml   @spinr-org/TBD-security-reviewers
+backend/routes/auth*                   @srikumarimuddana-lab
+backend/core/config.py                 @srikumarimuddana-lab
+backend/core/middleware.py             @srikumarimuddana-lab
+backend/utils/crypto.py                @srikumarimuddana-lab
+backend/utils/rate_limiter.py          @srikumarimuddana-lab
+.github/workflows/security-gates.yml   @srikumarimuddana-lab
 
 # Dispatch / ride state machine
-backend/services/dispatch_service.py   @spinr-org/TBD-dispatch-reviewers
-backend/routes/rides/                  @spinr-org/TBD-dispatch-reviewers
+backend/services/dispatch_service.py   @srikumarimuddana-lab
+backend/routes/rides/                  @srikumarimuddana-lab
 
 # Safety / SOS
-backend/routes/safety*                 @spinr-org/TBD-safety-reviewers
+backend/routes/safety*                 @srikumarimuddana-lab

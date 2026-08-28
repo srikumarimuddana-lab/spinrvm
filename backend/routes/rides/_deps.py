@@ -23,7 +23,12 @@ from pydantic import BaseModel, Field
 
 try:
     from ... import db_supabase
-    from ...dependencies import generate_pickup_otp, get_current_user, get_current_user_allow_expired
+    from ...dependencies import (
+        driver_row_for,
+        generate_pickup_otp,
+        get_current_user,
+        get_current_user_allow_expired,
+    )
     from ...features import (
         calculate_airport_fee,
         calculate_all_fees,
@@ -75,7 +80,12 @@ try:
     from ...validators import validate_ride_location
 except ImportError:
     import db_supabase
-    from dependencies import generate_pickup_otp, get_current_user, get_current_user_allow_expired
+    from dependencies import (  # type: ignore
+        driver_row_for,
+        generate_pickup_otp,
+        get_current_user,
+        get_current_user_allow_expired,
+    )
     from features import (
         calculate_airport_fee,
         calculate_all_fees,

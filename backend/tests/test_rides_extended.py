@@ -511,7 +511,15 @@ class TestGetChatStatus:
                 AsyncMock(return_value=[{"id": DRIVER_ID, "user_id": "driver_user_xyz"}]),
             ),
         ):
-            result = asyncio.run(rides_mod.get_chat_status(ride_id=RIDE_ID, current_user={"id": "driver_user_xyz"}))
+            result = asyncio.run(
+                rides_mod.get_chat_status(
+                    ride_id=RIDE_ID,
+                    current_user={
+                        "id": "driver_user_xyz",
+                        "_driver": {"id": DRIVER_ID, "user_id": "driver_user_xyz"},
+                    },
+                )
+            )
         assert result["available"] is True
 
 

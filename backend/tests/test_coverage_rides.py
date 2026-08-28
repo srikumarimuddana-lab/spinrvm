@@ -2077,8 +2077,8 @@ async def test_get_ride_messages_success():
     msgs = [{"id": "m1", "text": "hi", "sender": "rider", "timestamp": "2025-01-01T00:00:00+00:00"}]
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)
-        mock_db.get_rows = AsyncMock(side_effect=[[], msgs])  # first=drivers (empty), second=messages
-        result = await get_ride_messages(ride_id=_RIDE_ID, current_user=_USER)
+        mock_db.get_rows = AsyncMock(return_value=msgs)
+        result = await get_ride_messages(ride_id=_RIDE_ID, current_user={**_USER, "_driver": None})
     assert result["success"] is True
     assert len(result["messages"]) == 1
 
@@ -2249,8 +2249,8 @@ async def test_rider_start_ride_not_driver():
 async def test_rider_start_ride_success():
     from backend.routes.rides import rider_start_ride
 
-    driver_user = {"id": _RIDER_ID, "is_driver": True}
     driver_row = {"id": _DRIVER_ID}
+    driver_user = {"id": _RIDER_ID, "is_driver": True, "_driver": driver_row}
     ride = _ride(status="driver_arrived", driver_id=_DRIVER_ID)
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)
@@ -2273,8 +2273,8 @@ async def test_rider_start_ride_push_target_app_is_rider():
 
     from backend.routes.rides import rider_start_ride
 
-    driver_user = {"id": _RIDER_ID, "is_driver": True}
     driver_row = {"id": _DRIVER_ID}
+    driver_user = {"id": _RIDER_ID, "is_driver": True, "_driver": driver_row}
     ride = _ride(status="driver_arrived", driver_id=_DRIVER_ID)
 
     push_calls: list = []
@@ -2456,7 +2456,7 @@ async def test_rider_start_ride_wrong_driver():
 
     from backend.routes.rides import rider_start_ride
 
-    driver_user = {"id": _RIDER_ID, "is_driver": True}
+    driver_user = {"id": _RIDER_ID, "is_driver": True, "_driver": {"id": _DRIVER_ID}}
     ride = _ride(status="driver_arrived", driver_id="some-other-driver")
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)
@@ -2472,7 +2472,7 @@ async def test_rider_start_ride_wrong_status():
 
     from backend.routes.rides import rider_start_ride
 
-    driver_user = {"id": _RIDER_ID, "is_driver": True}
+    driver_user = {"id": _RIDER_ID, "is_driver": True, "_driver": {"id": _DRIVER_ID}}
     ride = _ride(status="searching", driver_id=_DRIVER_ID)
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)
@@ -2489,11 +2489,10 @@ async def test_rider_start_ride_lost_race_returns_409():
 
     from backend.routes.rides import rider_start_ride
 
-    driver_user = {"id": _RIDER_ID, "is_driver": True}
+    driver_user = {"id": _RIDER_ID, "is_driver": True, "_driver": {"id": _DRIVER_ID}}
     ride = _ride(status="driver_arrived", driver_id=_DRIVER_ID)
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)
-        mock_db.get_rows = AsyncMock(return_value=[{"id": _DRIVER_ID}])
         mock_db.update_one = AsyncMock(return_value=None)
         with pytest.raises(HTTPException) as exc:
             await rider_start_ride(ride_id=_RIDE_ID, current_user=driver_user)
@@ -3096,19 +3095,14 @@ async def test_trigger_emergency_success():
         patch("backend.routes.rides._deps.send_sms", new_callable=AsyncMock, return_value={"success": True}),
     ):
         mock_db.get_ride = AsyncMock(return_value=ride)
-        mock_db.get_rows = AsyncMock(
-            side_effect=[
-                [],  # driver lookup for current_user
-                [{"phone": "+13065550001", "id": "ec-1"}],  # emergency contacts
-            ]
-        )
+        mock_db.get_rows = AsyncMock(return_value=[{"phone": "+13065550001", "id": "ec-1"}])
         mock_db.get_user_by_id = AsyncMock(return_value={"first_name": "Jane", "last_name": "Rider"})
         mock_db.insert_one = AsyncMock()
         mock_manager.broadcast_to_admins = AsyncMock()
         result = await trigger_emergency(
             ride_id=_RIDE_ID,
             body=EmergencyRequest(latitude=52.1, longitude=-106.6),
-            current_user=_USER,
+            current_user={**_USER, "_driver": None},
         )
     assert result["success"] is True
     assert result["contacts_notified"] == 1
@@ -3586,14 +3580,13 @@ async def test_get_ride_driver_view_redacts_terminal_location():
     ride = _ride(status="completed", rider_id="someone-else", driver_id=_DRIVER_ID, pickup_otp="1234")
     with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)
-        # is_driver check: this user's driver row id matches ride.driver_id
-        mock_db.get_rows = AsyncMock(return_value=[{"id": _DRIVER_ID}])
         mock_db.get_driver_by_id = AsyncMock(return_value={"id": _DRIVER_ID, "user_id": "driver-user-1"})
         mock_db.get_user_by_id = AsyncMock(return_value={"profile_image": None})
         result = await get_ride(
             request=_starlette_request(),
             ride_id=_RIDE_ID,
-            current_user={"id": "driver-user-1"},
+            # is_driver check: this user's driver row id matches ride.driver_id
+            current_user={"id": "driver-user-1", "_driver": {"id": _DRIVER_ID}},
         )
     assert "pickup_otp" not in result
 
@@ -3916,9 +3909,8 @@ async def test_get_share_trip_link_assigned_driver_success():
         mock_db.get_ride = AsyncMock(
             return_value=_ride(status="in_progress", rider_id=_RIDER_ID, driver_id=_DRIVER_ID, shared_trip_token=None)
         )
-        mock_db.get_rows = AsyncMock(return_value=[driver_row])
         mock_db.update_ride = AsyncMock()
-        result = await get_share_trip_link(ride_id=_RIDE_ID, current_user={"id": "driver-user"})
+        result = await get_share_trip_link(ride_id=_RIDE_ID, current_user={"id": "driver-user", "_driver": driver_row})
     assert result["success"] is True
     assert "share_token" in result
 

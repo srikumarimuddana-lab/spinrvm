@@ -23,15 +23,12 @@ try:
     from ...documents import _extract_signed_url
     from ...supabase_client import supabase
     from ...utils.audit_logger import log_admin_action
-    from .drivers import _batch_fetch_drivers_and_users, _user_display_name
+    from .drivers import _user_display_name
 except ImportError:
     import db_supabase  # type: ignore
     from dependencies import get_admin_user  # type: ignore
     from documents import _extract_signed_url  # type: ignore
-    from routes.admin.drivers import (  # type: ignore
-        _batch_fetch_drivers_and_users,
-        _user_display_name,
-    )
+    from routes.admin.drivers import _user_display_name  # type: ignore
     from supabase_client import supabase  # type: ignore
     from utils.audit_logger import log_admin_action  # type: ignore
 
@@ -115,7 +112,7 @@ async def admin_list_safety_incidents(
 
     # Batch-fetch reporter names so the queue table doesn't have to N+1.
     reporter_ids = list({r.get("reported_by_user_id") for r in page if r.get("reported_by_user_id")})
-    _drivers_map, users_map = await _batch_fetch_drivers_and_users([], [])
+    users_map: Dict[str, Any] = {}
     if reporter_ids:
         # Only the reporter's display name is used — project the columns
         # _user_display_name reads so base64 profile_image stays out of the read.
@@ -231,9 +228,7 @@ async def admin_get_safety_incident(incident_id: str):
                     )
                     entry["url"] = _extract_signed_url(res)
                 except Exception:
-                    logger.error(
-                        "safety_incident_photos signing failed for photo %s", row.get("id"), exc_info=True
-                    )
+                    logger.error("safety_incident_photos signing failed for photo %s", row.get("id"), exc_info=True)
             photos.append(entry)
     except Exception:
         logger.error("safety_incident_photos lookup failed", exc_info=True)

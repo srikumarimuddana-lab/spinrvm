@@ -49,6 +49,18 @@ router = APIRouter(prefix="/monitoring", tags=["Monitoring"])
 ACTIVE_RIDE_STATUSES = ["searching", "driver_assigned", "driver_arrived", "in_progress"]
 ON_RIDE_STATUSES = ["driver_assigned", "driver_arrived", "in_progress"]
 
+# Row cap for the two monitoring fetchers below. Both used to run with no
+# LIMIT and (for drivers) no filter at all — a full-table scan on every
+# monitoring poll and every WS snapshot request.
+#
+# This is a cap, NOT pagination, and that is deliberate: the WS
+# `drivers_snapshot` consumer treats each payload as complete and removes any
+# map marker absent from it (admin-dashboard `dashboard/monitoring/page.tsx`),
+# so serving a page would silently delete markers. A cap keeps the snapshot
+# whole at real fleet sizes and makes truncation loud instead of turning it
+# into wrong map state.
+_MONITORING_ROW_CAP = 2000
+
 
 def build_monitoring_ride(
     ride: Dict[str, Any],
@@ -130,10 +142,18 @@ async def fetch_monitoring_drivers() -> List[Dict[str, Any]]:
                 "vehicle_make, vehicle_model, vehicle_color, license_plate, "
                 "vehicle_type_id, rating, total_rides, service_area_id"
             )
+            .limit(_MONITORING_ROW_CAP)
             .execute()
         )
     )
     drivers = _rows_from_res(drivers_res)
+    if len(drivers) >= _MONITORING_ROW_CAP:
+        logger.warning(
+            "monitoring drivers snapshot hit the %s-row cap — the live map is now "
+            "incomplete and stale markers will not be reconciled away. Raise "
+            "_MONITORING_ROW_CAP or move this surface to a bounded query.",
+            _MONITORING_ROW_CAP,
+        )
     if not drivers:
         return []
 
@@ -212,10 +232,17 @@ async def fetch_monitoring_rides() -> List[Dict[str, Any]]:
                 "total_fare, distance_km, created_at, corporate_account_id"
             )
             .in_("status", ACTIVE_RIDE_STATUSES)
+            .limit(_MONITORING_ROW_CAP)
             .execute()
         )
     )
     rides = _rows_from_res(rides_res)
+    if len(rides) >= _MONITORING_ROW_CAP:
+        logger.warning(
+            "monitoring rides snapshot hit the %s-row cap — the live map is now "
+            "incomplete. Raise _MONITORING_ROW_CAP or bound this query by service area.",
+            _MONITORING_ROW_CAP,
+        )
     if not rides:
         return []
 

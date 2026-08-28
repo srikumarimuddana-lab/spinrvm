@@ -88,15 +88,16 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         # money and stays legacy-excluded below, unchanged). Second,
         # unfiltered query — every money computation below still reads
         # `rides` (legacy-excluded), untouched.
-        all_completed_rides = await db_supabase.get_rows(
+        # A count query, not a fetch: only the count is used here, so pulling
+        # up to 10,000 full ride rows across the wire to call len() on them was
+        # pure waste. count_documents issues a `count="exact"` head request.
+        total_rides = await db_supabase.count_documents(
             "rides",
             {
                 "driver_id": driver["id"],
                 "status": RideStatus.COMPLETED,
             },
-            limit=10000,
         )
-        total_rides = len(all_completed_rides)
 
         # GST/PST collected from riders, passed through to the driver as
         # income (utils/driver_statement.py and /earnings already include

@@ -1280,19 +1280,24 @@ class TestDriverStats:
             if table == "driver_documents":
                 return []
             if table == "rides":
-                if "driver_id" in filters:
-                    # The lifetime earnings-by-driver query (P1-A fix).
-                    assert filters.get("legacy_import_metadata") == {"$eq": {}}
-                    return [
-                        {"driver_id": "drv-1", "status": "completed", "driver_earnings": "42.00"},
-                        {"driver_id": "drv-1", "status": "completed", "driver_earnings": "8.00"},
-                    ]
-                # The daily-chart query.
+                # Only the daily-chart query reaches get_rows now; the
+                # earnings-by-driver sum moved to admin_driver_earnings_rollup.
                 assert filters.get("legacy_import_metadata") == {"$eq": {}}
+                assert "driver_id" not in filters
                 return []
             return []
 
-        with patch("db_supabase.get_rows", AsyncMock(side_effect=rows)):
+        async def rpc(func_name, params=None):
+            # Mirrors migration 370: {by_driver: {driver_id: numeric}, total}.
+            # The same 42.00 + 8.00 the old row fetch returned, now summed in SQL.
+            assert func_name == "admin_driver_earnings_rollup"
+            assert params["p_driver_ids"] == ["drv-1"]
+            return [{"by_driver": {"drv-1": "50.00"}, "total": "50.00"}]
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("db_supabase.rpc", AsyncMock(side_effect=rpc)),
+        ):
             resp = test_client.get("/api/admin/drivers/stats")
         assert resp.status_code == 200, resp.text
         body = resp.json()

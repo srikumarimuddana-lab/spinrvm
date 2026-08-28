@@ -178,9 +178,25 @@ def _mask_license_number(plain: Optional[str]) -> Optional[str]:
 
 
 async def _batch_fetch_drivers_and_users(rider_ids: List[str], driver_ids: List[str]) -> tuple:
-    """Batch-fetch drivers and users in 2-3 queries instead of N+1 loops."""
+    """Batch-fetch drivers and users in 2-3 queries instead of N+1 loops.
+
+    Both reads are column-projected, NOT ``select *``. Callers only ever read
+    the driver's identity/position (`user_id`, `name`, `lat`, `lng`,
+    `service_area_id`) and the user's display fields (the four
+    ``_user_display_name`` reads plus a direct `phone` on the unpaid-rides
+    view). The full rows carry encrypted driver PII and, on `users`, a
+    `profile_image` that for pre-storage-bucket accounts is a base64 data URI
+    — shipped on every one of this helper's ~10 admin endpoints, including a
+    10 000-row ride export, for fields nothing renders. Add a column here if a
+    caller starts reading one; do not widen back to ``*``.
+    """
     drivers_list = (
-        await db_supabase.get_rows("drivers", {"id": {"$in": driver_ids}}, limit=max(len(driver_ids), 1))
+        await db_supabase.get_rows(
+            "drivers",
+            {"id": {"$in": driver_ids}},
+            columns="id,user_id,name,lat,lng,service_area_id",
+            limit=max(len(driver_ids), 1),
+        )
         if driver_ids
         else []
     )
@@ -193,7 +209,12 @@ async def _batch_fetch_drivers_and_users(rider_ids: List[str], driver_ids: List[
         }
     )
     users_list = (
-        await db_supabase.get_rows("users", {"id": {"$in": all_user_ids}}, limit=max(len(all_user_ids), 1))
+        await db_supabase.get_rows(
+            "users",
+            {"id": {"$in": all_user_ids}},
+            columns="id,first_name,last_name,email,phone",
+            limit=max(len(all_user_ids), 1),
+        )
         if all_user_ids
         else []
     )
@@ -414,8 +435,8 @@ async def _resolve_driver_search_user_ids(tokens: List[str]) -> List[str]:
 
 @router.get("/drivers")
 async def admin_get_drivers(
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     search: Optional[str] = None,
     is_verified: Optional[bool] = None,
     is_online: Optional[bool] = None,
@@ -500,7 +521,9 @@ async def admin_get_drivers(
     # Filter by profile-photo moderation status (photo lives on users). Used by
     # the admin "Pending photos" queue. No matching users → no drivers.
     if photo_status:
-        photo_users = await db_supabase.get_rows("users", {"profile_image_status": photo_status}, limit=1000)
+        photo_users = await db_supabase.get_rows(
+            "users", {"profile_image_status": photo_status}, columns="id", limit=1000
+        )
         photo_uids = [u["id"] for u in photo_users if u.get("id")]
         if not photo_uids:
             return []
@@ -615,7 +638,10 @@ async def admin_get_drivers(
 
 class DriverSearchRequest(BaseModel):
     search: str
-    limit: int = 5
+    # Bounded here, not just on GET /admin/drivers: this handler calls
+    # admin_get_drivers() directly in Python, so the Query(le=...) on that
+    # endpoint's signature never runs for this path.
+    limit: int = Field(5, ge=1, le=200)
     is_online: Optional[bool] = None
     is_available: Optional[bool] = None
 
@@ -754,18 +780,27 @@ async def admin_get_driver_stats(
     # reason admin_ride_money_rollup/admin_payouts_overview_aggregates do
     # (P0-B) — previous-app money the driver already received, not new
     # Spinr income.
+    # Summed in SQL, not here. This used to fetch every completed non-legacy
+    # ride for every driver in scope (limit=50000, select *) and add them up in
+    # Python — for one stat card and a per-area column. The 50,000 cap was also
+    # a silent correctness ceiling: past it the card under-reported with no
+    # signal. admin_driver_earnings_rollup (migration 370) does the GROUP BY
+    # server-side and keeps the same semantics: completed only, legacy-excluded,
+    # lifetime (matching total_rides_sum, also a lifetime counter).
     driver_ids_set = {d["id"] for d in enriched_drivers}
     earnings_by_driver: Dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     if driver_ids_set:
-        earnings_rides = await db_supabase.get_rows(
-            "rides",
-            {"driver_id": {"$in": list(driver_ids_set)}, "status": "completed", **EXCLUDE_LEGACY_RIDES},
-            limit=50000,
+        _rollup_rows = await db_supabase.rpc(
+            "admin_driver_earnings_rollup",
+            {"p_driver_ids": list(driver_ids_set)},
         )
-        for r in earnings_rides:
-            did = r.get("driver_id")
-            if did:
-                earnings_by_driver[did] += Decimal(str(r.get("driver_earnings") or 0))
+        _rollup = _rollup_rows[0] if isinstance(_rollup_rows, list) and _rollup_rows else _rollup_rows
+        if not isinstance(_rollup, dict):
+            _rollup = {}
+        for did, amount in (_rollup.get("by_driver") or {}).items():
+            # Decimal(str(...)) — the RPC returns NUMERIC as a JSON string/number;
+            # never float() it (CLAUDE.md money rule).
+            earnings_by_driver[did] = Decimal(str(amount or 0))
 
     total_earnings_sum = float(sum(earnings_by_driver.values(), Decimal("0")))
     avg_rating = 0.0
@@ -891,7 +926,16 @@ async def admin_get_driver_stats(
             "daily_rides": rides_chart,
             "daily_earnings": earnings_chart,
         },
-        "drivers": enriched_drivers,
+        # NOTE: this response deliberately does NOT carry the enriched driver
+        # rows. It used to return every one of them (up to the 5000-row fetch
+        # cap) as a "drivers" key — full `drivers` rows, encrypted PII and all,
+        # plus their users' base64 `profile_image` — on a stats endpoint the
+        # dashboard polls for eight numbers. Nothing consumed it: the drivers
+        # table is rendered from the separately-paginated GET /admin/drivers
+        # (admin-dashboard `dashboard/drivers/page.tsx` reads only `stats`,
+        # `area_stats`, `charts` and `service_areas` off this response).
+        # Removed 2026-08-27, audit P1 #10. Paginate GET /admin/drivers if a
+        # caller ever needs the rows again — do not re-add them here.
         "service_areas": [
             {"id": a["id"], "name": a.get("name", "Unknown")}
             for a in service_areas

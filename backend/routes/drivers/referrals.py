@@ -274,8 +274,8 @@ async def apply_referral_code(req: ApplyReferralCodeRequest, current_user: dict 
 
 @router.get("/referrals")
 async def get_referred_drivers(
-    limit: int = Query(50),
-    offset: int = Query(0),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     current_user: dict = Depends(get_current_user),
 ):
     """Get list of drivers referred by current driver."""

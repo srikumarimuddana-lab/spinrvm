@@ -293,7 +293,7 @@ export default function LoginScreen() {
           accessibilityLabel="Send verification code"
           accessibilityRole="button"
           accessibilityState={{ disabled: loading || !canContinue }}
-          accessibilityHint="Sends a 6-digit code to your phone number"
+          accessibilityHint="Sends a 4-digit code to your phone number"
         >
           {loading ? (
             <ActivityIndicator color="#fff" size="small" />

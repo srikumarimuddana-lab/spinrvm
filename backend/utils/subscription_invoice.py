@@ -48,6 +48,31 @@ def invoice_number_for(payment: dict) -> str:
     return f"SPX-{str(payment.get('id', ''))[:8].upper()}"
 
 
+async def _invoice_company():
+    """Company identity for the invoice PDF, or None to keep the legacy shell.
+
+    Mirrors ``routes/drivers/subscriptions._branded_invoice_company``,
+    including its ``branded_receipt_enabled`` gate, so the admin-side invoice
+    and the driver's own copy of the same invoice resolve identity the same
+    way. Never raises — an invoice with the pre-retrofit shell beats no
+    invoice at all.
+    """
+    try:
+        from ..settings_loader import get_app_settings
+        from ..utils.company_details import load_company_details
+    except ImportError:  # pragma: no cover - direct module imports in tests
+        from settings_loader import get_app_settings  # type: ignore
+        from utils.company_details import load_company_details  # type: ignore
+    try:
+        settings = await get_app_settings()
+        if not bool(settings.get("branded_receipt_enabled", True)):
+            return None
+        return await load_company_details()
+    except Exception as exc:
+        logger.warning("subscription invoice: company identity unresolved, using legacy shell: %s", exc)
+        return None
+
+
 async def _resolve_invoice_scalars(payment: dict) -> dict:
     """Assemble the cadence/tax/date scalars shared by the PDF and the email.
 
@@ -121,7 +146,13 @@ async def build_subscription_invoice_pdf(payment: dict) -> Optional[Tuple[bytes,
 
     scalars = await _resolve_invoice_scalars(payment)
 
+    # Same identity the driver's own copy of this invoice uses (see
+    # routes/drivers/subscriptions.py). Without this, the admin download and
+    # email-resend rendered the whole invoice from hardcoded defaults while
+    # the driver's copy used Settings — the exact divergence this module's
+    # docstring exists to prevent ("byte-for-byte consistent").
     pdf_bytes = generate_subscription_invoice_pdf(
+        company=await _invoice_company(),
         invoice_number=scalars["invoice_number"],
         payment_date=scalars["payment_date"],
         driver_name=driver_name,

@@ -90,6 +90,12 @@ def test_loop_survives_tick_failure_and_lifespan_registers_it(monkeypatch):
 
     monkeypatch.setattr(route_finalizer, "route_finalizer_tick", tick)
     monkeypatch.setattr(route_finalizer.asyncio, "sleep", no_wait)
+    # Always win the leader lock. This test drives two ticks back to back with
+    # sleep mocked out, so no wall-clock passes and the real lock's TTL would
+    # never expire between them — the loop would correctly skip the second tick
+    # and this test would spin. Lock election is covered separately; what is
+    # under test here is that a raising tick does not kill the loop.
+    monkeypatch.setattr(route_finalizer, "try_acquire_leader_lock", AsyncMock(return_value=True))
 
     with pytest.raises(asyncio.CancelledError):
         _run(route_finalizer.route_finalizer_loop(interval_seconds=0))

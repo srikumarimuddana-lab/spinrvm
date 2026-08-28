@@ -22,12 +22,14 @@ try:
     from ..socket_manager import manager
     from .card_hold_release import release_open_hold
     from .metrics import inc as _metric_inc
+    from .redis_client import try_acquire_leader_lock
 except ImportError:
     import db_supabase  # type: ignore
     from features import send_push_notification  # type: ignore
     from socket_manager import manager  # type: ignore
     from utils.card_hold_release import release_open_hold  # type: ignore
     from utils.metrics import inc as _metric_inc  # type: ignore
+    from utils.redis_client import try_acquire_leader_lock  # type: ignore
 
 try:
     from ..supabase_client import supabase
@@ -142,6 +144,19 @@ async def _sweep() -> None:
 async def stuck_ride_sweeper_loop() -> None:
     await asyncio.sleep(random.uniform(0, _SWEEP_INTERVAL_SECONDS))
     while True:
+        # Leader lock: LOAD shedding only, not correctness. This loop is
+        # already replay-safe, so N replicas running it is correct — just N×
+        # the DB work at a 60s cadence, which the 2026-08-26 audit
+        # measured among the top query sources. Same rationale
+        # dispute_evidence_reminder.py already states for its own lock.
+        # Fails OPEN, so a Redis blip restores exactly today's behaviour.
+        # TTL < the minimum sleep below, or a pod finds its own key alive and
+        # halves the cadence.
+        # Jittered 0.9-1.1x, so the floor is 54s and 51s clears it.
+        if not await try_acquire_leader_lock("stuck_ride_sweeper", int(_SWEEP_INTERVAL_SECONDS * 0.85)):
+            _record_heartbeat("stuck_ride_sweeper (60s)")
+            await asyncio.sleep(_SWEEP_INTERVAL_SECONDS * (0.9 + random.random() * 0.2))
+            continue
         _t0 = time.monotonic()
         _had_error = False
         try:

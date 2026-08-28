@@ -33,6 +33,7 @@ jobs:
   # ─── 1. Backend: Lint + Test ───
   backend-check:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -69,6 +70,7 @@ jobs:
   # ─── 2. Rider App: TypeScript Check ───
   rider-app-check:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -96,6 +98,7 @@ jobs:
   # ─── 3. Driver App: TypeScript Check ───
   driver-app-check:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -125,6 +128,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [backend-check]
     if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
+    timeout-minutes: 10
+    env:
+      FLY_HEALTH_URL_STAGING: ${{ secrets.FLY_HEALTH_URL_STAGING }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -136,13 +142,19 @@ jobs:
       # (fly.staging.toml: min_machines_running = 0). It does NOT prove the
       # new revision deployed (a still-healthy old revision also passes);
       # the deploy workflow's own health step is the authority on that.
+      #
+      # Gated on the same optional FLY_HEALTH_URL_STAGING secret as that
+      # workflow's post-deploy probe (set it to
+      # https://spinr-backend-staging.fly.dev once the Fly app exists —
+      # docs/runbooks/staging-environment.md). Until then the step skips
+      # cleanly instead of failing every `staging` push for ~3 minutes
+      # while the app is still unprovisioned (ACTION_ITEMS.md E1).
       - name: Wait for staging backend to become healthy
-        env:
-          HEALTH_URL: https://spinr-backend-staging.fly.dev
+        if: ${{ env.FLY_HEALTH_URL_STAGING != '' }}
         run: |
-          echo "Polling ${HEALTH_URL}/health …"
+          echo "Polling ${FLY_HEALTH_URL_STAGING}/health …"
           for i in $(seq 1 18); do
-            STATUS=$(curl -sf --max-time 5 "${HEALTH_URL}/health" \
+            STATUS=$(curl -sf --max-time 5 "${FLY_HEALTH_URL_STAGING}/health" \
               -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
             echo "  attempt ${i}/18 → HTTP ${STATUS}"
             if [ "$STATUS" = "200" ]; then
@@ -164,6 +176,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [rider-app-check, driver-app-check]
     if: github.event_name == 'push' && github.ref == 'refs/heads/staging' && contains(github.event.head_commit.message, '[build]')
+    # eas build (no --no-wait) blocks on EAS's remote build queue for all four
+    # builds sequentially — generous bound, but not the 6-hour runner default.
+    timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -213,6 +228,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [rider-app-check, driver-app-check]
     if: github.event_name == 'push' && github.ref == 'refs/heads/staging' && !contains(github.event.head_commit.message, '[build]')
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

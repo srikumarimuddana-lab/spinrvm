@@ -265,13 +265,26 @@ Two small, concrete gaps worth fixing regardless of which phases above get appro
 these are about *displaying* data that's already imported, not new imports:
 
 - **Rider-app and driver-app ride *list* screens don't compute `show_legacy_badge`** — only
-  the single-ride detail endpoint does. So even with the flag on, a rider/driver scrolling
-  their trip history sees no visual distinction until they tap into a specific ride.
-  **Backend half fixed 2026-08-27**: both list endpoints
+  the single-ride detail endpoint does. **Backend half fixed 2026-08-27**: both list endpoints
   (`routes/rides/queries.py::get_ride_history`, `routes/drivers/ride_reads.py::get_ride_history`)
   now compute and return `show_legacy_badge` per row, same gating as the detail endpoint — see
-  `docs/change-log/2026-08-27-legacy-badge-list-endpoint-parity.md`. **Still open**: neither
-  app's list-row UI reads the new field yet — the frontend wiring itself is the remaining step.
+  `docs/change-log/2026-08-27-legacy-badge-list-endpoint-parity.md`. That backend addition is
+  harmless either way (an unused response field), so it stays as-is.
+  **Correction (2026-08-28): the frontend half is NOT an open gap — do not build it.** This
+  line originally called the missing list-row UI wiring "the remaining step," written without
+  checking whether the badge belonged on list rows in the first place. It doesn't: on
+  2026-08-13, a later and more deliberate product decision
+  (`docs/change-log/2026-08-13-blended-lifetime-earnings.md`) explicitly **removed** the
+  "Imported" ride-card badge from both apps' Activity list rows (superseding the earlier A30
+  decision this doc was still assuming), once driver-app moved to a single blended lifetime-
+  earnings figure that made a per-card "not counted here" badge false/redundant. A driver-app
+  regression test (`driver-app/__tests__/components/ActivityView.test.tsx`) pins "never shows
+  an imported/legacy badge or explainer on a ride card." **Discovered 2026-08-28** when two
+  parallel worktree sub-agents, tasked with building exactly this "remaining step," independently
+  found the conflict, stopped before committing anything, and escalated rather than silently
+  reversing a tested decision. Confirmed with the user: the 2026-08-13 decision stands. The
+  ride-*detail* screens (`ride-details.tsx`, `ride-detail.tsx`) are unaffected either way — they
+  still show the badge, and always did; only the list/card view is, and remains, badge-free.
 - **Driver-app payout history's "Previous app" grouping — confirmed and fixed 2026-08-27.**
   The filter only matched `payout_type === 'stripe_sync'`; a full backend grep found two more
   real previous-app types (`legacy_import`, the booking importer's offsetting payout; and

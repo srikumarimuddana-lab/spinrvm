@@ -71,10 +71,9 @@ async def send_driver_welcome_email(driver: dict[str, Any], user: dict[str, Any]
                     "Upload your driver's licence, vehicle insurance, vehicle inspection, and background "
                     f"check in the {company.app_name} driver app if you haven't already — we'll notify you "
                     "as soon as they've been reviewed.",
-                    "Take a few minutes to complete driver training at training.spinr.ca before your first "
-                    "ride — it covers pickups, safety, and rider communication.",
-                    f"{company.app_name} takes 0% commission — every dollar of the fare goes to you, the "
-                    "driver. No per-trip cut, ever.",
+                    "Complete your driver training at training.spinr.ca before your first ride.",
+                    f"{company.app_name} takes 0% commission — apart from fees and taxes, the trip fare "
+                    "is 100% yours. No per-trip cut, ever.",
                     "Check the Subscription screen in the driver app for your area's current Spinr Pass "
                     "status — some areas have no subscription fee right now.",
                     "While you wait, finish your vehicle details in the app so there's nothing left to do "

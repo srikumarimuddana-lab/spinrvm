@@ -24,9 +24,23 @@ before Spinr Pass's per-area kill switch existed.
 
 ## 3. Fix / remediation
 
-Added two paragraphs to `send_driver_welcome_email`'s copy: a training
-mention, and a **conditional** pointer to the in-app Subscription screen for
-the driver's area-specific Spinr Pass status.
+Three copy changes to `send_driver_welcome_email`:
+
+1. **Training** — added as its own short standalone line: "Complete your
+   driver training at training.spinr.ca before your first ride."
+2. **Subscription** — added a **conditional** pointer to the in-app
+   Subscription screen for the driver's area-specific Spinr Pass status.
+3. **Commission/fee line** — reworded from "every dollar of the fare goes to
+   you, the driver" to "apart from fees and taxes, the trip fare is 100%
+   yours."
+
+Change 3 is a **factual correction**, not just tone. The old wording said
+"every dollar of the fare" goes to the driver, which is not what the code
+does — `booking_fee`, `airport_fee`, and `area_fees` are all platform
+revenue. Traced through the payout path before rewording (see §4). The new
+wording is deliberately short at the requester's instruction ("I don't want
+to explain all the details") while staying true: it names fees/taxes as the
+exception rather than implying there is none.
 
 The subscription line is deliberately *not* an unconditional "your
 subscription is free" claim. `service_areas.spinr_pass_enabled` defaults to
@@ -46,11 +60,36 @@ writing it in (see conversation).
   and it asserts on `email_type`, `email_class`, `user_id`, and that the
   greeting name appears in the rendered HTML — it does not assert on
   paragraph count or exact copy, so the addition doesn't break it.
-- No state, table, or money path touched — pure copy addition inside an
+- No state, table, or money path touched — pure copy change inside an
   existing `paragraphs=[...]` list. Still renders through the shared
   `utils/email_layout.render_email` shell (structural "every email is
   branded" test `test_all_emails_are_branded.py` is unaffected — it checks
   routing through the layout, not copy content).
+- **Money-claim verification (for change 3).** Before rewording the
+  commission line, traced where fee money actually lands, because the old
+  copy made a payout promise the code does not keep. Findings, all
+  consistent across every code path:
+  - Driver receives `total_fare - (booking_fee + airport_fee)` + tip —
+    i.e. base + distance + time + surge + 100% of tips.
+    (`services/fare_service.py:297-299`, and the canonical settlement RPC
+    `migrations/337_settle_ride_card_payment_idempotent_earnings.sql:93-99`,
+    which explicitly mirrors it.)
+  - `booking_fee`, `airport_fee`, **and** `area_fees_total` are all platform
+    revenue. `services/ledger_service.py:129-154` is decisive — the
+    double-entry charge legs credit `platform_revenue` with
+    "area_fees + admin_earnings", stating "the platform earns its fees
+    gross". There are only four ledger accounts and none is a third-party
+    remittance liability, so these are not pass-through fees.
+  - `area_fees` is a **generic admin-configurable** fee (free-text name,
+    flat/per-km/percentage) — there is no dedicated "city fee" concept, and
+    it is a *separate* mechanism from `service_areas.airport_fee`. The new
+    copy therefore says "fees and taxes" generically rather than naming any
+    specific fee that may or may not exist in a given area.
+  - No inconsistency found between booking-time, estimate, route-recalc,
+    card settlement, wallet settlement, and ledger paths.
+  This is undocumented outside the code — `.claude/context/domain-payments.md`
+  has zero mentions of `area_fees`. Worth a follow-up doc entry; not done
+  here to keep this change scoped to copy.
 - Also updated `backend/scripts/preview_notification_templates.py` (a
   standalone QA preview tool, not part of the production runtime) to keep
   its sample copy in sync, and fixed an unrelated inaccuracy found while
@@ -63,8 +102,14 @@ writing it in (see conversation).
 ## 5. User-experience effect
 
 - **Driver-facing.** Every newly-registered driver's welcome email now has
-  two additional paragraphs. Not visible mid-session (one-time email sent at
+  two additional lines (training, subscription) and a reworded
+  commission/fee line. Not visible mid-session (one-time email sent at
   registration, not a live screen).
+- The commission line is the one drivers are most likely to read closely,
+  since it's a pay promise. It now sets a correct expectation up front
+  rather than an over-promise a driver would discover was wrong on their
+  first receipt — which is the worse outcome for trust, even though the old
+  wording sounded more generous.
 - Copy reviewed for tone (specific, non-technical, actionable) and, per the
   root-cause note above, for factual accuracy against actual `app_settings`/
   `service_areas` behavior rather than treated as a marketing throwaway line.
@@ -73,7 +118,7 @@ writing it in (see conversation).
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/utils/driver_emails.py` | Added training + area-conditional subscription paragraphs to `send_driver_welcome_email` | Requested content addition |
+| `backend/utils/driver_emails.py` | Added training + area-conditional subscription lines; reworded the commission/fee line | Requested content addition + factual correction of a payout claim |
 | `backend/scripts/preview_notification_templates.py` | Synced welcome-email sample copy; fixed suspended-driver sample to match real `_with_reason()` output | Keep QA preview tool accurate |
 
 ## 7. Before / after
@@ -81,16 +126,17 @@ writing it in (see conversation).
 ```
 # Before
 "Upload your driver's licence, ... as soon as they've been reviewed.",
-f"{company.app_name} takes 0% commission — ... No per-trip cut, ever.",
+f"{company.app_name} takes 0% commission — every dollar of the fare goes to you, the "
+"driver. No per-trip cut, ever.",
 "While you wait, finish your vehicle details ...",
 ```
 
 ```
 # After
 "Upload your driver's licence, ... as soon as they've been reviewed.",
-"Take a few minutes to complete driver training at training.spinr.ca "
-"before your first ride — it covers pickups, safety, and rider communication.",
-f"{company.app_name} takes 0% commission — ... No per-trip cut, ever.",
+"Complete your driver training at training.spinr.ca before your first ride.",
+f"{company.app_name} takes 0% commission — apart from fees and taxes, the trip fare "
+"is 100% yours. No per-trip cut, ever.",
 "Check the Subscription screen in the driver app for your area's current "
 "Spinr Pass status — some areas have no subscription fee right now.",
 "While you wait, finish your vehicle details ...",

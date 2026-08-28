@@ -188,7 +188,40 @@ async def load_company_details() -> CompanyDetails:
     except Exception as exc:
         logger.warning("company details: settings load failed, using static fallbacks: %s", exc)
         settings = {}
+    return build_company_details(settings)
 
+
+def load_company_details_cached() -> Optional[CompanyDetails]:
+    """Sync identity from the settings cache, or None when the cache is cold.
+
+    Exists for the synchronous report builders (fpdf2 / openpyxl), which
+    cannot await :func:`load_company_details`. Callers must handle None by
+    falling back — see ``report_branding._resolved_company_lines``.
+
+    Shares :func:`build_company_details` with the async path, so the two can
+    never assemble the same settings row differently.
+    """
+    try:
+        from ..settings_loader import get_cached_app_settings
+    except ImportError:  # pragma: no cover - direct module imports in tests
+        from settings_loader import get_cached_app_settings  # type: ignore
+    try:
+        settings = get_cached_app_settings()
+    except Exception as exc:  # pragma: no cover - defensive; must never break a render
+        logger.warning("company details: cached settings read failed: %s", exc)
+        return None
+    if settings is None:
+        return None
+    return build_company_details(settings)
+
+
+def build_company_details(settings: dict) -> CompanyDetails:
+    """Assemble a :class:`CompanyDetails` from a settings row.
+
+    Pure and synchronous, so both the async loader and the cached sync
+    accessor above produce identical output for identical input. An empty
+    dict yields the documented static fallbacks.
+    """
     name = _coalesce(settings, "company_name") or "Spinr"
     app_name = _coalesce(settings, "company_app_name") or "Spinr"
     address = _postal_address(settings)

@@ -52,6 +52,11 @@ try:
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
     from utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts, drop_legacy_rides  # type: ignore
 
+try:
+    from ...utils.profile_completeness import compute_profile_completeness
+except ImportError:  # pragma: no cover - dual-import pattern
+    from utils.profile_completeness import compute_profile_completeness  # type: ignore
+
 db = db_supabase  # legacy alias
 
 logger = logging.getLogger(__name__)
@@ -60,6 +65,15 @@ router = APIRouter()
 
 
 # ---------- Shared helpers (used by rides.py too via import) ----------
+
+
+def _enrich_with_completeness(drivers: list, users_by_id: dict) -> None:
+    """Bulk-attach profile completeness score and missing count to driver dicts."""
+    for d in drivers:
+        user = users_by_id.get(d.get("user_id")) if isinstance(d, dict) else None
+        result = compute_profile_completeness(d, user)
+        d["profile_completeness_score"] = result["score"]
+        d["profile_missing_count"] = len(result["missing_required"])
 
 
 def _user_display_name(user: Optional[Dict]) -> str:
@@ -3986,3 +4000,22 @@ async def generate_decal_pdf_endpoint(
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.get("/completeness")
+async def get_driver_completeness(
+    driver_id: str = Query(..., description="Driver ID"),
+    admin: dict = Depends(get_admin_user),
+):
+    """Return profile completeness score and missing fields for a driver."""
+    driver_rows = await db_supabase.get_rows("drivers", {"id": driver_id}, limit=1)
+    if not driver_rows:
+        raise HTTPException(status_code=404, detail="Driver not found")
+    driver = driver_rows[0]
+    user = None
+    if driver.get("user_id"):
+        user_rows = await db_supabase.get_rows("users", {"id": driver["user_id"]}, limit=1)
+        user = user_rows[0] if user_rows else None
+    result = compute_profile_completeness(driver, user)
+    result["driver_id"] = driver_id
+    return result

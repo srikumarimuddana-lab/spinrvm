@@ -59,6 +59,13 @@ BRAND_RED = "#FF3B30"
 BRAND_RED_CONTRAST = "#D32F2F"
 INK = "#1A1A1A"
 MUTED = "#6B7280"
+#: Inline hyperlink colour for body copy. Derived from the Info token
+#: (``#3B82F6`` in shared/theme/index.ts and .claude/context/brand-spinr.md)
+#: and darkened for legibility, for exactly the reason BRAND_RED_CONTRAST is
+#: darkened from the brand red: ``#3B82F6`` on white is 3.7:1, which fails
+#: WCAG AA for body text; this is 6.7:1, which passes. Not a new brand colour
+#: — a contrast-safe form of one already in the palette.
+LINK_BLUE = "#1D4ED8"
 BORDER = "#E5E7EB"
 SURFACE = "#FFFFFF"
 PAGE_BG = "#F0F0F0"
@@ -126,6 +133,30 @@ def _esc_multiline(value: object) -> str:
     """
     escaped = _esc(value).replace("\n", "<br>")
     return re.sub(r"  +", lambda m: "&nbsp;" * len(m.group()), escaped)
+
+
+def _linkify(escaped: str, links: Mapping[str, str]) -> str:
+    """Turn chosen literal phrases in an already-escaped paragraph into anchors.
+
+    Runs **after** escaping, never before: the replacement inserts markup, so
+    escaping afterwards would turn the anchor back into visible text.
+
+    Both halves come from a call site's own constants — a product URL and the
+    phrase that should carry it — never from recipient- or admin-authored
+    input, so this is not a way for email content to inject markup. Each
+    phrase is escaped before matching so it lines up with the escaped
+    paragraph it is searched in, and both are escaped again on the way into
+    the anchor.
+
+    Opt-in by design: emails that pass no ``links`` render byte-identically to
+    before this existed, which is what keeps the snapshot tests honest.
+    """
+    for text, url in links.items():
+        if not text or not url:
+            continue
+        anchor = f'<a href="{_esc(url)}" style="color:{LINK_BLUE};text-decoration:underline;">{_esc(text)}</a>'
+        escaped = escaped.replace(_esc(text), anchor)
+    return escaped
 
 
 def header_html(
@@ -217,6 +248,7 @@ def _body_html(
     paragraphs: Sequence[str],
     cta: Optional[Tuple[str, str]],
     footnote: Optional[str],
+    links: Optional[Mapping[str, str]] = None,
 ) -> str:
     parts: list[str] = []
     first_pad = "32px"
@@ -229,9 +261,12 @@ def _body_html(
         first_pad = "16px"
 
     for para in paragraphs:
+        body = _esc_multiline(para)
+        if links:
+            body = _linkify(body, links)
         parts.append(
             f'<tr><td style="padding:{first_pad} {_PAD_X}px 0;" class="px">'
-            f'<p style="color:{MUTED};font-size:15px;line-height:24px;margin:0;">{_esc_multiline(para)}</p></td></tr>'
+            f'<p style="color:{MUTED};font-size:15px;line-height:24px;margin:0;">{body}</p></td></tr>'
         )
         first_pad = "14px"
 
@@ -327,6 +362,7 @@ async def render_email(
     intro: Optional[str] = None,
     meta_lines: Sequence[str] = (),
     company: Optional[CompanyDetails] = None,
+    links: Optional[Mapping[str, str]] = None,
 ) -> RenderedEmail:
     """Render one branded email in HTML and plain text.
 
@@ -351,6 +387,13 @@ async def render_email(
         company: Pre-loaded identity, when the caller already resolved it (e.g.
             to interpolate the support address into its copy). Skips a second
             settings read; ``get_app_settings`` caches for 60 s either way.
+        links: Optional ``{visible phrase: url}`` map. Any paragraph
+            containing one of these phrases renders it as a hyperlink instead
+            of plain text — for a URL a recipient is meant to act on, which
+            several clients will not auto-link when written without a scheme
+            ("training.spinr.ca"). Pass only call-site constants; see
+            :func:`_linkify`. Affects HTML only: the plain-text alternative
+            already shows the URL as written, so it needs no markup.
 
     Returns:
         A :class:`RenderedEmail` — pass ``.html`` and ``.text`` straight to
@@ -376,7 +419,7 @@ async def render_email(
                style="max-width:{_MAX_WIDTH_PX}px;background:{SURFACE};border-radius:14px;overflow:hidden;">
 {_brand_rule_html()}
 {header_html(details, subtitle, heading=heading, intro=intro, meta_lines=meta_lines)}
-{_body_html(greeting, paras, cta, footnote)}
+{_body_html(greeting, paras, cta, footnote, links)}
 {footer_html(details)}
         </table>
       </td></tr>

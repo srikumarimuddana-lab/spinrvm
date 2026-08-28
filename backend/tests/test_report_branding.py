@@ -296,3 +296,59 @@ class TestBrandedWord:
         buf = io.BytesIO()
         doc.save(buf)
         assert len(buf.getvalue()) > 0
+
+
+class TestCompanyLinesResolveFromSettings:
+    """Report footers must follow admin Settings, not baked-in constants.
+
+    The bug these pin: Settings said Regina while every generated report
+    footer still said Saskatoon, because these builders are synchronous and
+    could not await a settings read.
+    """
+
+    def _details(self, identity, contact):
+        class _D:
+            identity_line = identity
+            contact_line = contact
+
+        return _D()
+
+    def test_uses_configured_identity_when_the_cache_is_warm(self, monkeypatch):
+        """Patches the settings source, not the function under test, so this
+        actually exercises the resolution path."""
+        import utils.company_details as cd
+
+        monkeypatch.setattr(
+            cd,
+            "load_company_details_cached",
+            lambda: self._details("Spinr Mobility Inc - Regina,SK", "support@spinr.ca - https://spinr.ca"),
+        )
+        identity, contact = report_branding._resolved_company_lines()
+        assert identity == "Spinr Mobility Inc - Regina,SK"
+        assert contact == "support@spinr.ca - https://spinr.ca"
+        assert "Saskatoon" not in identity
+
+    def test_falls_back_to_constants_when_the_cache_is_cold(self, monkeypatch):
+        import utils.company_details as cd
+
+        monkeypatch.setattr(cd, "load_company_details_cached", lambda: None)
+        identity, contact = report_branding._resolved_company_lines()
+        assert identity == report_branding.COMPANY_LINE
+        assert contact == report_branding.COMPANY_CONTACT_LINE
+
+    def test_fallback_constant_carries_no_location(self):
+        """A stale hardcoded city is actively wrong once the company moves;
+        the legal name alone is merely incomplete. Never re-add a city here."""
+        assert "Saskatoon" not in report_branding.COMPANY_LINE
+        assert "Regina" not in report_branding.COMPANY_LINE
+
+    def test_resolution_never_raises(self, monkeypatch):
+        """A footer that cannot resolve must still render."""
+        import utils.company_details as cd
+
+        def _boom():
+            raise RuntimeError("settings exploded")
+
+        monkeypatch.setattr(cd, "load_company_details_cached", _boom)
+        identity, contact = report_branding._resolved_company_lines()
+        assert identity == report_branding.COMPANY_LINE

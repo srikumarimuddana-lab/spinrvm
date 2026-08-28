@@ -146,7 +146,7 @@ async def send_welcome_email(user: dict[str, Any]) -> bool:
         paragraphs=[
             f"Your account is ready. Open the {company.app_name} app, set a pickup and drop-off, "
             "and you'll see the full price before you confirm — no surprises at drop-off.",
-            f"{company.app_name} is Saskatchewan-built and takes 0% commission — every dollar of the fare "
+            f"{company.app_name} is Canadian-built and takes 0% commission — every dollar of the fare "
             "goes to your driver. GST and PST are shown as separate line items on your receipt.",
             f"Questions any time: {company.support_email}",
         ],

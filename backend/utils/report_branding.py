@@ -54,8 +54,43 @@ LOGO_PATH = _ASSET_DIR / "spinr_logo.png"
 # Technologies Inc." — that direction was backwards; "Spinr Technologies
 # Inc." was never a real Spinr entity name. This line has been corrected
 # back to "Spinr Mobility Inc." rather than re-flipped again.
-COMPANY_LINE = "Spinr Mobility Inc. - Saskatoon, SK"
+#
+# LAST-RESORT ONLY. Every report footer now resolves the live identity from
+# admin Settings first (see _resolved_company_lines below); these constants are
+# reached only when the settings cache is cold — a first render after a
+# restart. The city was deliberately dropped from this line on 2026-08-28: a
+# stale hardcoded city is actively WRONG once an operator moves the company
+# (the change that prompted this: Settings said Regina while every report
+# footer still said Saskatoon), whereas the legal name alone is merely
+# incomplete. Never re-add a location here; put it in Settings.
+COMPANY_LINE = "Spinr Mobility Inc."
 COMPANY_CONTACT_LINE = "support@spinr.ca - www.spinr.ca"
+
+
+def _resolved_company_lines() -> "tuple[str, str]":
+    """``(identity_line, contact_line)`` from admin Settings, else the constants.
+
+    The whole point of this indirection: changing the company name, address,
+    support email or website is a Settings edit, never a code edit — including
+    for the PDF/Excel/Word reports, which previously baked those values in.
+
+    Imported lazily because ``company_details`` imports THIS module for the
+    fallback constants above; a module-level import here would be circular.
+
+    Never raises. A report that renders with a slightly stale footer beats a
+    report that fails to render.
+    """
+    try:
+        try:
+            from .company_details import load_company_details_cached
+        except ImportError:  # pragma: no cover - direct module imports in tests
+            from utils.company_details import load_company_details_cached  # type: ignore
+        details = load_company_details_cached()
+    except Exception:  # pragma: no cover - defensive; must never break a render
+        details = None
+    if details is None:
+        return COMPANY_LINE, COMPANY_CONTACT_LINE
+    return details.identity_line, details.contact_line
 
 # Mirrors services/data_transfer/tabular_writer.py's _sanitize_csv_cell
 # (OWASP CSV-injection guard). Duplicated rather than imported: importing
@@ -364,7 +399,8 @@ def _finalize_worksheet(ws, fieldnames: list[str], start_row: int, last_data_row
     ws.print_title_rows = f"{start_row}:{start_row}"
 
     footer_row = last_data_row + 2
-    footer_cell = ws.cell(row=footer_row, column=1, value=f"{COMPANY_LINE}  |  {COMPANY_CONTACT_LINE}")
+    _identity, _contact = _resolved_company_lines()
+    footer_cell = ws.cell(row=footer_row, column=1, value=f"{_identity}  |  {_contact}")
     footer_cell.font = Font(name=BRAND_FONT, size=8, color=MUTED_HEX)
 
 
@@ -579,13 +615,18 @@ def render_branded_pdf_footer(
 
     ``company_lines`` is an ``(identity_line, contact_line)`` pair resolved
     from ``app_settings`` by ``utils/company_details.load_company_details``
-    — the SAME source every outgoing email uses. Pass it so an operator who
-    renames the company in Settings sees it on generated documents too;
-    without it these fell back to the shipped constants forever, so emails
-    and PDFs disagreed after any rebrand. Settings loading is async and PDF
-    rendering is sync, hence a parameter rather than a lookup here.
+    — the SAME source every outgoing email uses. An async caller that has
+    already awaited the identity should still pass it (it is the freshest
+    value and needs no cache).
+
+    Omitting it no longer means "fall back to shipped constants forever":
+    ``_resolved_company_lines()`` now reads the same Settings values from the
+    synchronous cache, so a caller that cannot await still gets the
+    configured company. Only a cold cache reaches the constants. That closes
+    the gap where emails and generated documents disagreed after a rebrand or
+    an address change.
     """
-    identity, contact = company_lines or (COMPANY_LINE, COMPANY_CONTACT_LINE)
+    identity, contact = company_lines or _resolved_company_lines()
     pdf.set_font(BRAND_FONT, "", 7)
     pdf.set_text_color(*MUTED_RGB)
     pdf.set_y(-18)

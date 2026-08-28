@@ -7808,9 +7808,9 @@ jest-worker@^29.7.0:
     merge-stream "^2.0.0"
     supports-color "^8.0.0"
 
-jest@^30.3.0:
+jest@30.3.0:
   version "30.3.0"
-  resolved "https://registry.npmjs.org/jest/-/jest-30.3.0.tgz"
+  resolved "https://registry.yarnpkg.com/jest/-/jest-30.3.0.tgz#6460b889dd805e9677400505f16f1d9b14c285a3"
   integrity sha512-AkXIIFcaazymvey2i/+F94XRnM6TsVLZDhBMLsd1Sf/W0wzsvvpjeyUrCZD6HGG4SDYPgDJDBKeiJTBb10WzMg==
   dependencies:
     "@jest/core" "30.3.0"
@@ -10137,8 +10137,6 @@ strip-ansi@^6.0.0, strip-ansi@^6.0.1:
   version "6.0.1"
   resolved "https://registry.npmjs.org/strip-ansi/-/strip-ansi-6.0.1.tgz"
   integrity sha512-Y38VPSHcqkFrCpFnQ9vuSXmquuv5oXOKpGeT6aGrr3o3Gc9AlVa6JBfUSOCnbxGGZF+/0ooI7KrPuUSztUdU5A==
-  dependencies:
-    ansi-regex "^5.0.1"
 
 strip-ansi@^7.0.1:
   version "7.2.0"

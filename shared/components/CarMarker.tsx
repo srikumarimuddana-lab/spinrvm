@@ -3,8 +3,8 @@ import { Animated, View } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { AnimatedRegion, Marker } from 'react-native-maps';
 import {
-    bearingDegrees,
     distanceMeters,
+    selectBearing,
     shortestArcRotationTarget,
     snapToRoute,
     type TrackingLatLng,
@@ -119,8 +119,10 @@ const MAX_ROTATE_MS = 600;
  * Rotation: animated through an Animated.Value along the shortest arc, so
  * the car turns smoothly instead of snapping its angle. Bearing source
  * priority: route-segment direction (when `routeCoordinates` is provided and
- * the fix snaps onto the route) → GPS heading (when valid; expo-location
- * reports -1 standing still) → direction of travel between fixes.
+ * the fix snaps onto the route) → direction of travel between fixes → the
+ * reported GPS heading, used only until movement has established a bearing.
+ * Movement deliberately outranks the reported heading; see the position
+ * effect for why a reported heading of 0 cannot be trusted on Android.
  */
 const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     coordinate,
@@ -172,6 +174,11 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     const hasBearingRef = useRef(
         heading != null && Number.isFinite(heading) && heading >= 0,
     );
+    // Whether a bearing derived from real movement (route segment or travel
+    // direction) has been applied yet. Once one has, a reported GPS heading
+    // can no longer override it — see the priority note in the position
+    // effect below.
+    const hasMovementBearingRef = useRef(false);
 
     // Stable by construction — reads only refs and the stable Animated value.
     const animateRotationTo = useCallback(
@@ -219,20 +226,23 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         const snap = snapToRoute(coordinate, routeRef.current, MAX_ROUTE_SNAP_M);
         const target = snap?.coordinate ?? coordinate;
 
-        // Bearing priority: route segment → GPS heading → direction of travel.
-        const validHeading =
-            heading != null && Number.isFinite(heading) && heading >= 0 ? heading : null;
-        let bearing: number | null = null;
-        if (snap && movedM >= MIN_BEARING_MOVE_M) {
-            bearing = snap.bearing;
-        } else if (validHeading != null) {
-            bearing = validHeading;
-        } else if (movedM >= MIN_BEARING_MOVE_M) {
-            const from = prevTargetRef.current;
-            bearing = bearingDegrees(from.latitude, from.longitude, target.latitude, target.longitude);
-        }
+        // Bearing priority: route segment → direction of travel → reported
+        // GPS heading. See selectBearing() for why movement outranks the
+        // reported heading (Android's placeholder 0).
+        const { bearing, source } = selectBearing({
+            snap,
+            movedMeters: movedM,
+            from: prevTargetRef.current,
+            to: target,
+            heading,
+            hasMovementBearing: hasMovementBearingRef.current,
+            minMoveMeters: MIN_BEARING_MOVE_M,
+        });
         prevTargetRef.current = target;
-        if (bearing != null) animateRotationTo(bearing, duration);
+        if (bearing != null) {
+            if (source === 'route' || source === 'travel') hasMovementBearingRef.current = true;
+            animateRotationTo(bearing, duration);
+        }
 
         animatedRegion
             .timing({
@@ -252,6 +262,10 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     // route-segment bearing once one has been applied for this position.
     useEffect(() => {
         if (!headingValid) return;
+        // Never let a reported heading override a bearing already derived from
+        // real movement — on Android that value may be a placeholder 0 (see
+        // the priority note in the position effect).
+        if (hasMovementBearingRef.current) return;
         const onRoute = !!snapToRoute(prevTargetRef.current, routeRef.current, MAX_ROUTE_SNAP_M);
         if (onRoute && hasBearingRef.current) return;
         animateRotationTo(heading as number, MAX_ROTATE_MS);

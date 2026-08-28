@@ -40,11 +40,36 @@ permissions:
   security-events: write    # to upload SARIF
 
 jobs:
+  # Phase 2 blast-radius-aware triggering (docs/audit/2026-08-27-cicd-gates-
+  # guardrails-audit.md Section 5). Shared reusable filter, same one
+  # ci-guardrails.yml uses -- see .github/workflows/detect-changes.yml for
+  # the full fail-open contract (skip only on a real pull_request event
+  # where the filter ran and reported the surface untouched; push/
+  # merge_group/workflow_dispatch/schedule, or a filter failure, always run
+  # everything). This workflow also has `schedule:`/`push:` triggers of its
+  # own (daily drift catch, push to main) -- both already fall into the
+  # "not pull_request" always-run leg below, same as merge_group/
+  # workflow_dispatch.
+  #
+  # G3 (semgrep) and G5a (gitleaks git-history) are deliberately NOT gated:
+  # semgrep is a cross-cutting SAST scan over the whole repo (Python +
+  # TypeScript rules), and secret-scanning must never be path-filtered --
+  # a secret can leak in any file type, including a workflow file itself.
+  detect-changes:
+    uses: ./.github/workflows/detect-changes.yml
+
   # G1 — Python SAST (Bandit)
   bandit:
     name: G1 · Bandit (Python SAST)
     runs-on: ubuntu-latest
     continue-on-error: false
+    needs: [detect-changes]
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.outputs.backend == 'true'
+      )
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
@@ -74,6 +99,20 @@ jobs:
     name: G2 · ESLint security plugin
     runs-on: ubuntu-latest
     continue-on-error: false
+    needs: [detect-changes]
+    # Gates the whole 3-leg matrix together (any of rider/driver/admin
+    # touched runs all 3 legs) -- GitHub Actions can't skip individual
+    # matrix legs by path without restructuring into 3 separate jobs, and
+    # this matrix's own fail-fast:false rationale (don't let one module's
+    # install failure hide the others) argues against splitting it apart.
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.outputs.rider == 'true' ||
+        needs.detect-changes.outputs.driver == 'true' ||
+        needs.detect-changes.outputs.admin == 'true'
+      )
     strategy:
       # Without this, one failing module cancels the others mid-run and their
       # lint status is never reported. Observed 2026-08-02 on PR #3246:
@@ -346,6 +385,13 @@ jobs:
     name: G4a · pip-audit (Python deps)
     runs-on: ubuntu-latest
     continue-on-error: false
+    needs: [detect-changes]
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.outputs.backend == 'true'
+      )
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
@@ -364,6 +410,20 @@ jobs:
     runs-on: ubuntu-latest
     # Blocking on HIGH+ CVEs — baseline was clean when this was enabled (2026-04-27).
     continue-on-error: false
+    needs: [detect-changes]
+    # Gates the whole 4-leg matrix together, same rationale as
+    # eslint-security above (its own fail-fast:false comment already
+    # explains why one leg failing must not hide the others -- splitting
+    # into 4 jobs to filter per-leg would undo that).
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.outputs.rider == 'true' ||
+        needs.detect-changes.outputs.driver == 'true' ||
+        needs.detect-changes.outputs.admin == 'true' ||
+        needs.detect-changes.outputs.shared == 'true'
+      )
     strategy:
       # Without this, one failing module cancels the others mid-run and their
       # audit status is never reported. `shared` failed on every PR from
@@ -402,6 +462,13 @@ jobs:
     name: G4c · npm audit (admin-dashboard, HIGH blocking)
     runs-on: ubuntu-latest
     continue-on-error: false
+    needs: [detect-changes]
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.outputs.admin == 'true'
+      )
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -467,6 +534,17 @@ jobs:
     name: G5b · Gitleaks (admin bundle)
     runs-on: ubuntu-latest
     continue-on-error: false
+    needs: [detect-changes]
+    # This scans the compiled admin-dashboard bundle specifically -- there
+    # is nothing for it to build or scan when admin-dashboard/ wasn't
+    # touched, unlike G5a above which stays unconditional (git-history
+    # secret scanning must never be path-filtered).
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.outputs.admin == 'true'
+      )
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -507,6 +585,16 @@ jobs:
     name: G6 · Trivy container scan
     runs-on: ubuntu-latest
     continue-on-error: false
+    needs: [detect-changes]
+    # Builds the backend Docker image specifically -- nothing to build or
+    # scan differently when backend/ wasn't touched (the image content is
+    # a pure function of backend/Dockerfile + backend/**).
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.outputs.backend == 'true'
+      )
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Build backend Docker image
@@ -564,6 +652,13 @@ jobs:
     name: G7 · pip-licenses (Python deps)
     runs-on: ubuntu-latest
     continue-on-error: false
+    needs: [detect-changes]
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.outputs.backend == 'true'
+      )
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
@@ -605,6 +700,16 @@ jobs:
     name: G7b · license-checker (JS deps)
     runs-on: ubuntu-latest
     continue-on-error: false
+    needs: [detect-changes]
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.outputs.rider == 'true' ||
+        needs.detect-changes.outputs.driver == 'true' ||
+        needs.detect-changes.outputs.admin == 'true' ||
+        needs.detect-changes.outputs.shared == 'true'
+      )
     strategy:
       # Same rationale as the G4b yarn-audit matrix above: one failing module
       # must not cancel the others mid-run and mask their license state.
@@ -636,7 +741,11 @@ jobs:
   # Summary job — required check for branch protection once gates are enforced
   summary:
     name: Security gates summary
-    needs: [bandit, eslint-security, semgrep, pip-audit, yarn-audit, npm-audit-admin, gitleaks, bundle-secrets, container-scan, license-check]
+    # license-check-js (G7b) added -- pre-existing gap (predates this
+    # commit), found during spinr-cicd-infra-reviewer's self-review of the
+    # prior CI/CD audit PR: this job existed and was blocking but was never
+    # in this list, so the summary step-output never reflected it.
+    needs: [bandit, eslint-security, semgrep, pip-audit, yarn-audit, npm-audit-admin, gitleaks, bundle-secrets, container-scan, license-check, license-check-js]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -646,7 +755,8 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "G1 (bandit), G2 (eslint-security), G3 (semgrep), G4a-c" >> $GITHUB_STEP_SUMMARY
           echo "(pip-audit/yarn-audit/npm-audit), G5b (bundle-secrets)," >> $GITHUB_STEP_SUMMARY
-          echo "G6 (container-scan), and G7 (license-check) are **blocking**" >> $GITHUB_STEP_SUMMARY
+          echo "G6 (container-scan), and G7/G7b (license-check, license-check-js)" >> $GITHUB_STEP_SUMMARY
+          echo "are **blocking**" >> $GITHUB_STEP_SUMMARY
           echo "(OI-003-OI-006 resolved, pre-production enforcement)." >> $GITHUB_STEP_SUMMARY
           echo "G5a (gitleaks git-history) remains **advisory** pending a" >> $GITHUB_STEP_SUMMARY
           echo "clean secrets baseline — see that job's own comment for why." >> $GITHUB_STEP_SUMMARY

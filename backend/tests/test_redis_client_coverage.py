@@ -21,6 +21,7 @@ Test-only change — no application code modified.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -871,3 +872,113 @@ class TestTryAcquireLeaderLock:
 
         await redis_client.try_acquire_leader_lock("push_retry", 10)
         assert keys == ["spinr:push_retry:lock"]
+
+
+class TestLeaderLockDeniedBranches:
+    """P2-B6: what the four locked loops do on the tick they DON'T win.
+
+    In production (REDIS_URL set, N replicas) this is the common path for N-1
+    of them, so it is not an edge case — it is most of the work these loops do.
+    Every one of them must still record a heartbeat, or the watchdog sees
+    silence from most of the fleet and cannot tell a skipped tick from a hung
+    loop. That gap was real: push_retry recorded no heartbeat at all until the
+    lock made the silent branch the common case.
+    """
+
+    @pytest.mark.anyio
+    async def test_push_retry_records_a_heartbeat_when_it_loses(self, monkeypatch):
+        from backend.utils import push_retry
+
+        beats: list = []
+        tick = AsyncMock()
+        monkeypatch.setattr(push_retry, "_tick", tick)
+        monkeypatch.setattr(push_retry, "_record_heartbeat", lambda name: beats.append(name))
+        monkeypatch.setattr(push_retry, "try_acquire_leader_lock", AsyncMock(return_value=False))
+
+        async def _sleep(secs):
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(push_retry.asyncio, "sleep", _sleep)
+        with pytest.raises(asyncio.CancelledError):
+            await push_retry.push_retry_loop()
+
+        tick.assert_not_awaited()
+        assert beats == ["push_retry (30s)"]
+
+    @pytest.mark.anyio
+    async def test_route_gap_monitor_records_a_heartbeat_when_it_loses(self, monkeypatch):
+        from backend.utils import route_gap_monitor
+
+        beats: list = []
+        tick = AsyncMock()
+        monkeypatch.setattr(route_gap_monitor, "route_gap_monitor_tick", tick)
+        monkeypatch.setattr(route_gap_monitor, "_record_heartbeat", lambda name: beats.append(name))
+        monkeypatch.setattr(route_gap_monitor, "try_acquire_leader_lock", AsyncMock(return_value=False))
+
+        async def _sleep(secs):
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(route_gap_monitor.asyncio, "sleep", _sleep)
+        with pytest.raises(asyncio.CancelledError):
+            await route_gap_monitor.route_gap_monitor_loop(interval_seconds=15)
+
+        tick.assert_not_awaited()
+        assert beats == ["route_gap_monitor (15s)"]
+
+    @pytest.mark.anyio
+    async def test_route_finalizer_records_a_heartbeat_when_it_loses(self, monkeypatch):
+        from backend.utils import route_finalizer
+
+        beats: list = []
+        tick = AsyncMock()
+        monkeypatch.setattr(route_finalizer, "route_finalizer_tick", tick)
+        monkeypatch.setattr(route_finalizer, "_record_heartbeat", lambda name: beats.append(name))
+        monkeypatch.setattr(route_finalizer, "try_acquire_leader_lock", AsyncMock(return_value=False))
+
+        async def _sleep(secs):
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(route_finalizer.asyncio, "sleep", _sleep)
+        with pytest.raises(asyncio.CancelledError):
+            await route_finalizer.route_finalizer_loop(interval_seconds=15)
+
+        tick.assert_not_awaited()
+        assert beats == [route_finalizer._LOOP_NAME]
+
+    @pytest.mark.anyio
+    async def test_stuck_ride_sweeper_records_a_heartbeat_when_it_loses(self, monkeypatch):
+        from backend.utils import stuck_ride_sweeper
+
+        beats: list = []
+        sweep = AsyncMock()
+        monkeypatch.setattr(stuck_ride_sweeper, "_sweep", sweep)
+        monkeypatch.setattr(stuck_ride_sweeper, "_record_heartbeat", lambda name: beats.append(name))
+        monkeypatch.setattr(stuck_ride_sweeper, "try_acquire_leader_lock", AsyncMock(return_value=False))
+        monkeypatch.setattr(stuck_ride_sweeper.random, "uniform", lambda a, b: 0)
+
+        calls = {"n": 0}
+
+        async def _sleep(secs):
+            calls["n"] += 1
+            if calls["n"] > 1:  # the first sleep is the startup stagger
+                raise asyncio.CancelledError()
+
+        monkeypatch.setattr(stuck_ride_sweeper.asyncio, "sleep", _sleep)
+        with pytest.raises(asyncio.CancelledError):
+            await stuck_ride_sweeper.stuck_ride_sweeper_loop()
+
+        sweep.assert_not_awaited()
+        assert beats == ["stuck_ride_sweeper (60s)"]
+
+    def test_every_locked_loop_name_has_a_watchdog_threshold(self):
+        """A loop the watchdog tracks but has no threshold for falls back to a
+        generic 2h default — far too slack for a 15-30s cadence to mean
+        anything. push_retry had no entry at all."""
+        from backend.utils.loop_monitor import LOOP_THRESHOLDS
+
+        for name in (
+            "push_retry (30s)",
+            "route_finalizer (15s)",
+            "route_gap_monitor (15s)",
+        ):
+            assert name in LOOP_THRESHOLDS, f"{name} has no watchdog threshold"

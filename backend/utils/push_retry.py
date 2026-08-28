@@ -16,14 +16,20 @@ try:
     from ..db_supabase import run_sync
     from ..features import _is_expo_token, _send_expo_push
     from ..supabase_client import supabase
+    from .loop_monitor import record_heartbeat as _record_heartbeat
     from .redis_client import try_acquire_leader_lock
 except ImportError:
     from db_supabase import run_sync  # type: ignore
     from features import _is_expo_token, _send_expo_push  # type: ignore
     from supabase_client import supabase  # type: ignore
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat  # type: ignore
     from utils.redis_client import try_acquire_leader_lock  # type: ignore
 
 _LOOP_INTERVAL = 30  # seconds between ticks
+# Must match the name registered in core/lifespan.py and keyed in
+# utils/loop_monitor.py's LOOP_THRESHOLDS, or the watchdog tracks a
+# loop that never reports.
+_LOOP_NAME = "push_retry (30s)"
 _MAX_ATTEMPTS = 5  # give up after this many failures
 _BACKOFF_BASE = 60  # seconds; doubled for each subsequent attempt
 
@@ -75,12 +81,23 @@ async def push_retry_loop() -> None:
         # TTL < the minimum sleep below, or a pod finds its own key alive and
         # halves the cadence.
         if not await try_acquire_leader_lock("push_retry", int(_LOOP_INTERVAL * 0.85)):
+            # A skipped tick is still a live loop. Without this the watchdog
+            # would see nothing from N-1 of N replicas — and this loop recorded
+            # no heartbeat AT ALL before the lock existed, so it could never be
+            # flagged stale however badly it hung. The lock makes the silent
+            # branch the common case in production, which is what turned a
+            # latent gap into a real one.
+            _record_heartbeat(_LOOP_NAME)
             await asyncio.sleep(_LOOP_INTERVAL)
             continue
         try:
             await _tick()
         except Exception:
             logger.opt(exception=True).error("push_retry_loop tick failed")
+        # After the except, as elsewhere: a tick that raised must still show
+        # the loop alive, or the watchdog pages for a loop that is running fine
+        # and merely hit a bad row.
+        _record_heartbeat(_LOOP_NAME)
         await asyncio.sleep(_LOOP_INTERVAL)
 
 

@@ -76,23 +76,15 @@ jobs:
   # admin-coverage-floor-gate to `needs.detect-changes.outputs.admin`; that
   # would scope it to admin-dashboard changes and skip it on the
   # backend-admin-route PRs it actually exists to cover.
+  # Phase 2 (docs/audit/2026-08-27-cicd-gates-guardrails-audit.md Section 5):
+  # now a reusable workflow_call (.github/workflows/detect-changes.yml),
+  # shared with ci.yml and security-gates.yml -- extracted once a second and
+  # third caller needed the same filter job (kept inline through Phase 1,
+  # per CLAUDE.md "no single-use abstractions", when this was the only
+  # caller). Job name kept as `detect-changes` so every existing
+  # `needs.detect-changes.outputs.*` reference below is unchanged.
   detect-changes:
-    name: Detect changed surfaces
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    outputs:
-      backend: ${{ steps.filter.outputs.backend }}
-      admin: ${{ steps.filter.outputs.admin }} # admin-dashboard/** -- see NAMING NOTE above
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
-        id: filter
-        with:
-          filters: |
-            backend:
-              - 'backend/**'
-            admin:
-              - 'admin-dashboard/**'
+    uses: ./.github/workflows/detect-changes.yml
 
   # ─── 0. Shared coverage run (feeds coverage-regression-gate and
   # money-path-coverage-floor-gate below) ───────────────────────────────────
@@ -114,6 +106,22 @@ jobs:
     name: Run backend test suite with coverage (shared)
     runs-on: ubuntu-latest
     continue-on-error: true
+    needs: [detect-changes]
+    # Phase 2 (docs/audit/2026-08-27-cicd-gates-guardrails-audit.md Section
+    # 5): this is the single most expensive job in this workflow (a full
+    # `pytest --cov` run, ~15-18 min) -- the real turnaround-time win. Every
+    # downstream consumer (coverage-regression-gate, money-path-coverage-
+    # floor-gate, admin-coverage-floor-gate) already uses `if: always()` and
+    # a `continue-on-error: true` artifact-download step specifically so a
+    # skipped (or failed/cancelled) shared-coverage-run degrades them to
+    # their own existing "no coverage report" no-op path instead of
+    # cascading a skip -- unchanged by this gate.
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.outputs.backend == 'true'
+      )
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -431,6 +439,21 @@ jobs:
     name: Corporate coverage floor check
     runs-on: ubuntu-latest
     continue-on-error: false
+    needs: [detect-changes]
+    # Phase 2 (docs/audit/2026-08-27-cicd-gates-guardrails-audit.md Section
+    # 5): runs its own separate ~2 min scoped pytest ("Run corporate test
+    # suite with coverage" below), worth skipping outright for a PR that
+    # can't possibly touch a tracked corporate_* module. Blocking
+    # (continue-on-error: false) is unaffected by this gate -- a job
+    # skipped via `if:` reports `skipped`, which GitHub's required-checks
+    # mechanism treats as satisfying the check, same as every other gated
+    # job in this file.
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.outputs.backend == 'true'
+      )
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -510,13 +533,21 @@ jobs:
   money-path-coverage-floor-gate:
     name: Money-path coverage floor check
     runs-on: ubuntu-latest
-    needs: [shared-coverage-run]
-    # Runs regardless of shared-coverage-run's outcome (success, failure, or
-    # an external cancellation like C47) so a shared-run problem produces
-    # this gate's existing fail-closed "coverage report missing" result
-    # instead of silently vanishing as "skipped" -- see the download step
-    # below and check_money_path_coverage_floor.py's own handling.
-    if: always()
+    needs: [detect-changes, shared-coverage-run]
+    # Phase 2 (docs/audit/2026-08-27-cicd-gates-guardrails-audit.md Section
+    # 5) adds the detect-changes fail-open leg -- same pattern as
+    # corporate-coverage-floor-gate above. Otherwise unchanged: still runs
+    # regardless of shared-coverage-run's outcome (success, failure, or an
+    # external cancellation like C47) so a shared-run problem produces this
+    # gate's existing fail-closed "coverage report missing" result instead
+    # of silently vanishing as "skipped" -- see the download step below and
+    # check_money_path_coverage_floor.py's own handling.
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.outputs.backend == 'true'
+      )
     continue-on-error: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -570,12 +601,18 @@ jobs:
   admin-coverage-floor-gate:
     name: Admin/utils coverage floor check
     runs-on: ubuntu-latest
-    needs: [shared-coverage-run]
-    # Same rationale as money-path-coverage-floor-gate above: runs
-    # regardless of shared-coverage-run's outcome so a shared-run problem
-    # produces this gate's existing fail-closed "coverage report missing"
-    # result instead of silently vanishing as "skipped".
-    if: always()
+    needs: [detect-changes, shared-coverage-run]
+    # Same rationale as money-path-coverage-floor-gate above (Phase 2 fail-
+    # open leg added): runs regardless of shared-coverage-run's outcome so
+    # a shared-run problem produces this gate's existing fail-closed
+    # "coverage report missing" result instead of silently vanishing as
+    # "skipped".
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.outputs.backend == 'true'
+      )
     continue-on-error: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

@@ -1,0 +1,88 @@
+name: Detect changed surfaces
+
+# Reusable `workflow_call` filter job shared by ci.yml, ci-guardrails.yml,
+# and security-gates.yml (Phase 2, docs/audit/2026-08-27-cicd-gates-
+# guardrails-audit.md Section 2/5). Extracted from ci-guardrails.yml's own
+# Phase 1 inline job now that a second and third caller need it -- one
+# caller didn't justify extraction (CLAUDE.md "no single-use
+# abstractions"), three does.
+#
+# Uses dorny/paths-filter -- not a new dependency, already vendored and
+# proven in this repo by eas-build.yml's own `detect` job (same pinned
+# SHA this file uses).
+#
+# Every caller applies the SAME fail-open rule: only skip a job when the
+# triggering event is `pull_request` AND this filter actually ran and
+# reported the surface as untouched. On `push`, `merge_group`,
+# `workflow_dispatch`, or `schedule` -- or if this job itself fails to run
+# -- every caller's own `if:` falls back to "run everything". Path-
+# filtering is a PR-time fast-feedback optimization only; it is never the
+# last line of defense before `main`, and it never gets to silently decide
+# what runs on a non-PR event.
+#
+# NAMING NOTE: `admin` below means `admin-dashboard/**` (the frontend
+# surface) -- unrelated to `backend/routes/admin/`, which lives under the
+# `backend` output instead (see backend/scripts/check_admin_coverage_floor.py
+# for the gate that tracks that directory). Do not wire a backend-admin-
+# routes gate to this `admin` output.
+
+on:
+  workflow_call:
+    outputs:
+      backend:
+        description: "backend/** changed"
+        value: ${{ jobs.filter.outputs.backend }}
+      rider:
+        description: "rider-app/** or shared/** changed"
+        value: ${{ jobs.filter.outputs.rider }}
+      driver:
+        description: "driver-app/** or shared/** changed"
+        value: ${{ jobs.filter.outputs.driver }}
+      admin:
+        description: "admin-dashboard/** changed (frontend -- see NAMING NOTE above)"
+        value: ${{ jobs.filter.outputs.admin }}
+      shared:
+        description: "shared/** changed"
+        value: ${{ jobs.filter.outputs.shared }}
+      migrations:
+        description: "backend/migrations/** changed"
+        value: ${{ jobs.filter.outputs.migrations }}
+      workflows:
+        description: ".github/workflows/** changed -- a CI/CD change itself; every caller treats this as run-everything, not just another filtered surface"
+        value: ${{ jobs.filter.outputs.workflows }}
+
+jobs:
+  filter:
+    name: Detect changed surfaces
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      rider: ${{ steps.filter.outputs.rider }}
+      driver: ${{ steps.filter.outputs.driver }}
+      admin: ${{ steps.filter.outputs.admin }}
+      shared: ${{ steps.filter.outputs.shared }}
+      migrations: ${{ steps.filter.outputs.migrations }}
+      workflows: ${{ steps.filter.outputs.workflows }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+            rider:
+              - 'rider-app/**'
+              - 'shared/**'
+            driver:
+              - 'driver-app/**'
+              - 'shared/**'
+            admin:
+              - 'admin-dashboard/**'
+            shared:
+              - 'shared/**'
+            migrations:
+              - 'backend/migrations/**'
+            workflows:
+              - '.github/workflows/**'

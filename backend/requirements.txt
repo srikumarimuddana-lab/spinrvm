@@ -448,7 +448,7 @@ strenum==0.4.15
     # via supabase-functions
 strictyaml==1.7.3
     # via pyiceberg
-stripe==15.1.0
+stripe==15.5.1
     # via -r requirements.in
 supabase==2.29.0
     # via -r requirements.in

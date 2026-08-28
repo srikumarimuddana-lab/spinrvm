@@ -46,7 +46,7 @@ async def test_company_not_found_skips_notify():
         ),
         patch("utils.corporate_low_balance.get_corporate_account_by_id", AsyncMock(return_value=None)),
         patch("utils.corporate_low_balance.send_email", AsyncMock()) as m_send,
-        patch("utils.corporate_low_balance.mark_low_balance_notified", AsyncMock()) as m_mark,
+        patch("utils.corporate_low_balance.claim_low_balance_notification", AsyncMock(return_value=True)) as m_mark,
     ):
         from utils.corporate_low_balance import run_low_balance_tick
 
@@ -77,7 +77,7 @@ async def test_malformed_notified_at_timestamp_fails_closed_and_skips_notify():
             AsyncMock(return_value={"billing_email": "b@acme.test", "name": "Acme", "status": "active"}),
         ),
         patch("utils.corporate_low_balance.send_email", AsyncMock()) as m_send,
-        patch("utils.corporate_low_balance.mark_low_balance_notified", AsyncMock()) as m_mark,
+        patch("utils.corporate_low_balance.claim_low_balance_notification", AsyncMock(return_value=True)) as m_mark,
     ):
         from utils.corporate_low_balance import run_low_balance_tick
 
@@ -116,14 +116,20 @@ async def test_one_wallet_notify_exception_does_not_abort_batch():
         ),
         patch("utils.corporate_low_balance.get_corporate_account_by_id", AsyncMock(side_effect=fake_get_company)),
         patch("utils.corporate_low_balance.send_email", AsyncMock()) as m_send,
-        patch("utils.corporate_low_balance.mark_low_balance_notified", AsyncMock()) as m_mark,
+        patch("utils.corporate_low_balance.claim_low_balance_notification", AsyncMock(return_value=True)) as m_mark,
     ):
         from utils.corporate_low_balance import run_low_balance_tick
 
         await run_low_balance_tick()
     # Wallet w1's failure is swallowed; w2 still gets notified.
     m_send.assert_awaited_once()
-    m_mark.assert_awaited_once_with(wallet_id="w2")
+    assert m_mark.await_count == 1
+    _kw = m_mark.await_args.kwargs
+    assert _kw["wallet_id"] == "w2"
+    # The write is a conditional claim now, taken BEFORE the email:
+    # it must carry the rate-limit boundary so the DB decides which
+    # replica sends when several reach the same wallet at once.
+    assert _kw["not_notified_since_iso"]
 
 
 # ---------------------------------------------------------------------------

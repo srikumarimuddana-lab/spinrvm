@@ -66,7 +66,7 @@ async def _query_stuck_events(
     if not supabase:
         raise DatabaseError(details={"original": "supabase not initialised"})
 
-    select_cols = "event_id,event_type,created_at"
+    select_cols = "event_id,event_type,received_at"
     if include_payload:
         select_cols += ",payload"
 
@@ -75,7 +75,7 @@ async def _query_stuck_events(
             supabase.table("stripe_events")
             .select(select_cols)
             .is_("processed_at", "null")
-            .order("created_at", desc=False)
+            .order("received_at", desc=False)
             .range(offset, offset + limit - 1)
             .execute()
         )
@@ -92,7 +92,7 @@ async def _get_stuck_event(event_id: str) -> Optional[Dict[str, Any]]:
     def _fn():
         res = (
             supabase.table("stripe_events")
-            .select("event_id,event_type,created_at,processed_at,payload")
+            .select("event_id,event_type,received_at,processed_at,payload")
             .eq("event_id", event_id)
             .limit(1)
             .execute()
@@ -123,11 +123,11 @@ async def list_stuck_events(
     now = datetime.now(timezone.utc)
     items = []
     for row in rows:
-        created = row.get("created_at")
+        received = row.get("received_at")
         age_minutes = None
-        if created:
+        if received:
             try:
-                dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                dt = datetime.fromisoformat(received.replace("Z", "+00:00"))
                 age_minutes = int((now - dt).total_seconds() / 60)
             except (ValueError, TypeError):
                 pass
@@ -135,7 +135,7 @@ async def list_stuck_events(
             {
                 "event_id": row["event_id"],
                 "event_type": row.get("event_type"),
-                "created_at": created,
+                "received_at": received,
                 "age_minutes": age_minutes,
             }
         )
@@ -165,11 +165,11 @@ async def get_event_detail(event_id: str, admin: dict = Depends(require_super_ad
         raise HTTPException(status_code=404, detail="Event not found")
 
     now = datetime.now(timezone.utc)
-    created = row.get("created_at")
+    received = row.get("received_at")
     age_minutes = None
-    if created:
+    if received:
         try:
-            dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(received.replace("Z", "+00:00"))
             age_minutes = int((now - dt).total_seconds() / 60)
         except (ValueError, TypeError):
             pass
@@ -177,7 +177,7 @@ async def get_event_detail(event_id: str, admin: dict = Depends(require_super_ad
     return {
         "event_id": row["event_id"],
         "event_type": row.get("event_type"),
-        "created_at": created,
+        "received_at": received,
         "processed_at": row.get("processed_at"),
         "age_minutes": age_minutes,
         "payload": row.get("payload"),

@@ -286,8 +286,8 @@ export default function StripeEventsPage() {
                                                 </Badge>
                                             </td>
                                             <td className="py-3 text-muted-foreground text-xs">
-                                                {evt.created_at
-                                                    ? new Date(evt.created_at).toLocaleString()
+                                                {evt.received_at
+                                                    ? new Date(evt.received_at).toLocaleString()
                                                     : "Unknown"}
                                             </td>
                                             <td className="py-3">
@@ -361,7 +361,7 @@ export default function StripeEventsPage() {
                                 </div>
                                 <div>
                                     <span className="text-muted-foreground">Received</span>
-                                    <p>{detail.created_at ? new Date(detail.created_at).toLocaleString() : "Unknown"}</p>
+                                    <p>{detail.received_at ? new Date(detail.received_at).toLocaleString() : "Unknown"}</p>
                                 </div>
                                 <div>
                                     <span className="text-muted-foreground">Age</span>

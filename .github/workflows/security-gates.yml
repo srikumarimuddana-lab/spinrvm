@@ -3,16 +3,15 @@ name: Security Gates
 # Gates G1–G7 from docs/ci-security-gates.md (SAST, Semgrep, dep audit, secrets,
 # container scan, license check).
 #
-# Status as of 2026-08-03 (CI gate health audit, docs/ci/gate-health-2026-08.md;
-# CR-2026-007): the original "2-week baselining window" is over and
-# enforcement already happened — 8 of 10 jobs (G1, G2, G3, G4a, G4b, G4c, G6,
-# G7) are `continue-on-error: false` (blocking). Only G5a (gitleaks
-# git-history) and G5b (gitleaks admin bundle) remain `continue-on-error:
-# true` — see each job's own comment below for why: G5a has a specific,
-# still-open leaked-key reason; G5b does not (it's a candidate to flip to
-# blocking once a clean-baseline window has passed). Do not read this file's
-# age as evidence a job is still advisory; check that job's own
-# `continue-on-error` line and comment.
+# Status as of 2026-08-27 (docs/audit/2026-08-27-cicd-gates-guardrails-
+# audit.md): 9 of 10 jobs (G1, G2, G3, G4a, G4b, G4c, G5b, G6, G7) are
+# `continue-on-error: false` (blocking) — G5b promoted 2026-08-27, see its
+# own comment for the criterion that was met. Only G5a (gitleaks
+# git-history) remains `continue-on-error: true`, for a specific, still-open
+# reason (a real leaked Supabase service_role key in git history, not yet
+# confirmed rotated as of the audit above) — see its own comment below. Do
+# not read this file's age as evidence a job is still advisory; check that
+# job's own `continue-on-error` line and comment.
 #
 # Runs on every PR to main and on a daily schedule for main itself.
 
@@ -454,22 +453,20 @@ jobs:
   # the bundle (e.g. NEXT_PUBLIC_API_KEY) and pass git-history scanning
   # while still being present in the shipped artefact.
   #
-  # continue-on-error (2026-08-03, CR-2026-007): unlike G5a above, this is
-  # NOT advisory because of a known, still-open leak — it's a separate scan
-  # target (the built client bundle, not git history) and no triaged finding
-  # has ever been recorded against it. It has been green on every `main` run
-  # checked as of this date. It was set to true when this file was first
-  # authored, alongside G5a, without its own documented reason — likely
-  # inherited G5a's caution by proximity rather than a finding specific to
-  # this job. If it stays green through a few more weeks of real traffic
-  # (a genuinely new admin-dashboard env var landing is the main risk to
-  # watch for), flip this to `continue-on-error: false` — do not leave an
-  # advisory gate with no reason attached indefinitely; that's the failure
-  # mode this comment exists to prevent.
+  # Promoted to blocking 2026-08-27 (docs/audit/2026-08-27-cicd-gates-
+  # guardrails-audit.md Section 3), per this comment's own stated criterion
+  # below: 24 days green since the 2026-08-03 note, no triaged finding
+  # recorded anywhere in docs/change-log/ in that window. History for the
+  # prior advisory period, unchanged: unlike G5a, this was never advisory
+  # because of a known, still-open leak — it's a separate scan target (the
+  # built client bundle, not git history), just never promoted. It was set
+  # to `continue-on-error: true` when this file was first authored,
+  # alongside G5a, without its own documented reason — likely inherited
+  # G5a's caution by proximity rather than a finding specific to this job.
   bundle-secrets:
     name: G5b · Gitleaks (admin bundle)
     runs-on: ubuntu-latest
-    continue-on-error: true
+    continue-on-error: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -648,11 +645,11 @@ jobs:
           echo "## Security Gates Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "G1 (bandit), G2 (eslint-security), G3 (semgrep), G4a-c" >> $GITHUB_STEP_SUMMARY
-          echo "(pip-audit/yarn-audit/npm-audit), G6 (container-scan), and G7" >> $GITHUB_STEP_SUMMARY
-          echo "(license-check) are **blocking** (OI-003-OI-006 resolved," >> $GITHUB_STEP_SUMMARY
-          echo "pre-production enforcement). G5a/G5b (gitleaks) remain" >> $GITHUB_STEP_SUMMARY
-          echo "**advisory** pending a clean secrets baseline — see that job's" >> $GITHUB_STEP_SUMMARY
-          echo "own comment for why." >> $GITHUB_STEP_SUMMARY
+          echo "(pip-audit/yarn-audit/npm-audit), G5b (bundle-secrets)," >> $GITHUB_STEP_SUMMARY
+          echo "G6 (container-scan), and G7 (license-check) are **blocking**" >> $GITHUB_STEP_SUMMARY
+          echo "(OI-003-OI-006 resolved, pre-production enforcement)." >> $GITHUB_STEP_SUMMARY
+          echo "G5a (gitleaks git-history) remains **advisory** pending a" >> $GITHUB_STEP_SUMMARY
+          echo "clean secrets baseline — see that job's own comment for why." >> $GITHUB_STEP_SUMMARY
           echo "Review findings in individual job outputs; file P1 items for" >> $GITHUB_STEP_SUMMARY
           echo "any new HIGH/CRITICAL results in \`OPEN-ITEMS-TRACKER.md\`." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

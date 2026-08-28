@@ -423,7 +423,7 @@ class TestClaimDriverAtomic:
         from backend.repositories import driver_repo
 
         sb = MagicMock()
-        sb.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = _mk_result(
+        sb.table.return_value.update.return_value.eq.return_value.eq.return_value.is_.return_value.execute.return_value = _mk_result(
             [{"id": "d1"}]
         )
         with (
@@ -443,7 +443,9 @@ class TestClaimDriverAtomic:
         from backend.repositories import driver_repo
 
         sb = MagicMock()
-        sb.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = _mk_result([])
+        sb.table.return_value.update.return_value.eq.return_value.eq.return_value.is_.return_value.execute.return_value = _mk_result(
+            []
+        )
         with (
             patch.object(driver_repo, "supabase", sb),
             patch.object(driver_repo, "run_sync", _passthrough_run_sync),

@@ -241,28 +241,25 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     # per attempt keeps every consumer on the same snapshot AND keeps admin
     # edits landing on the very next attempt or retry.
     #
-    # Failure semantics are preserved exactly, which is why this is not a bare
-    # await: on error the row is left empty AND `area=None` is passed below, so
-    # resolve_matching_config re-attempts the same read and raises just as it
-    # does today — dispatch must never quietly fall back to the global radius
-    # and rating floor when the area's overrides are unknown. The consumers
-    # further down (cascade, polygon, quota) keep their existing fail-open
-    # behaviour against the empty row for the same reason they had it before:
-    # a missing cascade map means no cascade, not a dead dispatch.
+    # NEITHER read below swallows its exception, and that is load-bearing.
+    #
+    # Collapsing five reads into one also collapses five DIFFERENT failure
+    # handlers, and they were not the same: resolve_matching_config's read
+    # raised (aborting the attempt), the subscription gate's read failed
+    # CLOSED via the enclosing `except` that sets all_drivers = [], and the
+    # cascade/polygon/quota reads failed OPEN. Catching here would silently
+    # impose fail-open on all of them — worst of all on the subscription gate,
+    # where an empty row reads as subscription_required=False and dispatches
+    # to drivers who will be rejected at accept.
+    #
+    # Letting each read raise instead puts every consumer back on its ORIGINAL
+    # handler: this one propagates to match_driver_to_ride's recovery shell
+    # (exactly what resolve_matching_config's read did, and it ran first), and
+    # _parent_area() raises into whichever block called it — the gate's
+    # except, which fails closed, or the cascade's, which fails open.
     _ride_area: Dict[str, Any] = {}
-    _area_lookup_failed = False
     if ride.get("service_area_id"):
-        try:
-            _ride_area = await _deps.db_supabase.find_one("service_areas", {"id": ride["service_area_id"]}) or {}
-        except Exception:
-            _area_lookup_failed = True
-            logger.error(
-                "[DISPATCH] service-area lookup failed for ride_id=%s area=%s — "
-                "re-raising via resolve_matching_config rather than dispatching on global defaults",
-                ride_id,
-                ride.get("service_area_id"),
-                exc_info=True,
-            )
+        _ride_area = await _deps.db_supabase.find_one("service_areas", {"id": ride["service_area_id"]}) or {}
 
     _parent_area_box: Dict[str, Any] = {}
 
@@ -271,28 +268,26 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
 
         Lazy on purpose: the subscription gate only needs the parent when the
         child row does not already set the flag, so an eager fetch would ADD a
-        query for the common case. Fails open (returns {}) exactly as the two
-        call sites it replaces did.
+        query for the common case.
+
+        Deliberately does NOT catch. Its two call sites already sit inside
+        blocks with opposite failure policies — the subscription gate fails
+        CLOSED, the vehicle cascade fails OPEN — which is exactly what the two
+        separate reads it replaces did. Swallowing here would hand both the
+        cascade's fail-open policy and silently bypass the gate.
         """
         if "row" in _parent_area_box:
             return _parent_area_box["row"]
         _pid = _ride_area.get("parent_service_area_id")
         row: Dict[str, Any] = {}
         if _pid:
-            try:
-                row = await _deps.db_supabase.find_one("service_areas", {"id": _pid}) or {}
-            except Exception:
-                logger.error(
-                    "[DISPATCH] parent service-area lookup failed for area=%s — treating as unset",
-                    ride.get("service_area_id"),
-                    exc_info=True,
-                )
+            row = await _deps.db_supabase.find_one("service_areas", {"id": _pid}) or {}
         _parent_area_box["row"] = row
         return row
 
     # Algorithm + radius + rating floor + batch config (area overrides app settings).
     algorithm, min_rating, search_radius, max_offers, use_eta = await _shared.dispatch.resolve_matching_config(
-        ride, app_settings=app_settings, area=None if _area_lookup_failed else _ride_area
+        ride, app_settings=app_settings, area=_ride_area
     )
 
     # PIPEDA: do not log raw pickup lat/lng — coordinates are forbidden in logs

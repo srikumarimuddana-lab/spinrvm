@@ -370,9 +370,15 @@ async def test_cascade_subscription_subfilter_exception_fails_closed():
 
 
 async def test_cascade_lookup_outer_exception_is_non_fatal():
-    """A cascade-block failure (e.g. the area lookup itself blows up) must
-    not crash the dispatch attempt -- it just means no cascade drivers, and
-    the no-eligible-drivers retry still fires."""
+    """A cascade-block failure must not crash the dispatch attempt -- it just
+    means no cascade drivers, and the no-eligible-drivers retry still fires.
+
+    The failing read here is the PARENT-area lookup the cascade does when the
+    child row configures no cascade map of its own. The ride's own area read
+    is deliberately NOT the thing failing: that one is fatal by design, since
+    dispatching without the area's search radius and rating floor is worse
+    than not dispatching (see test_area_lookup_failure_aborts_the_attempt).
+    """
     from backend.routes.rides.matching import _match_driver_to_ride_attempt
 
     ride = _make_ride(vehicle_type_id="vt-suv")
@@ -393,7 +399,14 @@ async def test_cascade_lookup_outer_exception_is_non_fatal():
         patch("backend.routes.rides.matching._deps.spawn", side_effect=lambda coro: coro.close()),
     ):
         mock_db.get_rows = AsyncMock(return_value=[])
-        mock_db.find_one = AsyncMock(side_effect=RuntimeError("service_areas lookup failed"))
+        # Child area resolves; its parent (needed for the inherited cascade
+        # map) blows up.
+        mock_db.find_one = AsyncMock(
+            side_effect=[
+                {"id": "area-1", "parent_service_area_id": "area-parent"},
+                RuntimeError("service_areas lookup failed"),
+            ]
+        )
 
         result = await _match_driver_to_ride_attempt("ride-1", ride=ride)
 
@@ -473,31 +486,29 @@ async def test_service_area_row_is_read_once_per_attempt():
     mock_area_tz.assert_not_called()
 
 
-async def test_area_lookup_failure_still_reaches_resolve_matching_config():
-    """A failed area read must NOT quietly dispatch on global defaults.
+async def test_area_lookup_failure_aborts_the_attempt():
+    """A failed area read must abort, never dispatch on global defaults.
 
-    The de-duplication above hoists the read above resolve_matching_config, so
-    on failure the row is left empty and `area=None` is passed through — the
-    config resolver re-attempts the same read and raises exactly as it did
-    before the hoist. Dispatching with an unknown search_radius_km /
-    min_driver_rating would silently ignore the area's overrides.
+    De-duplicating five reads into one also merges five different failure
+    handlers, and they were NOT the same: resolve_matching_config's read
+    raised, the subscription gate's failed closed, the cascade's failed open.
+    Swallowing at the hoist would silently impose fail-open on all of them —
+    dispatching with an unknown search_radius_km / min_driver_rating, and with
+    subscription_required reading False off an empty row.
+
+    So the read is left to raise, up to match_driver_to_ride's recovery shell,
+    which re-arms the retry chain with backoff. resolve_matching_config must
+    never be reached with a half-known area.
     """
     from backend.routes.rides.matching import _match_driver_to_ride_attempt
 
     ride = _make_ride()
-    seen_kwargs: dict = {}
-
-    async def _resolve(_ride, **kwargs):
-        seen_kwargs.update(kwargs)
-        raise RuntimeError("service_areas lookup failed")
+    resolve = AsyncMock(return_value=("nearest", 0, 10.0, 3, False))
 
     with (
         patch("backend.routes.rides.matching._deps.db_supabase") as mock_db,
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
-        patch(
-            "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(side_effect=_resolve),
-        ),
+        patch("backend.routes.rides.matching._shared.dispatch.resolve_matching_config", resolve),
         patch("backend.routes.rides.matching._deps.spawn", side_effect=lambda coro: coro.close()),
     ):
         mock_db.get_rows = AsyncMock(return_value=[])
@@ -506,8 +517,60 @@ async def test_area_lookup_failure_still_reaches_resolve_matching_config():
         with pytest.raises(RuntimeError):
             await _match_driver_to_ride_attempt("ride-1", ride=ride)
 
-    assert "area" in seen_kwargs, "the already-fetched area row must be threaded through, not re-read"
-    assert seen_kwargs["area"] is None, "a failed area read must not be passed off as an empty area"
+    # Even with a resolver that would have happily returned global defaults,
+    # the attempt never gets that far.
+    resolve.assert_not_awaited()
+
+
+async def test_parent_area_failure_fails_the_subscription_gate_closed():
+    """The subscription gate must fail CLOSED when the parent read fails.
+
+    A child area that sets no subscription_required of its own inherits it
+    from its parent (Finding F: airport sub-areas inside a pass-required
+    city). If that parent read fails and the gate treats it as "not required",
+    dispatch offers the ride to drivers with no pass, who are then rejected at
+    accept — a wasted offer slot and a driver pinged for nothing.
+
+    The enclosing except already fails closed (all_drivers = []); this pins
+    that the parent lookup still reaches it rather than being swallowed into a
+    silent False.
+    """
+    from backend.routes.rides.matching import _match_driver_to_ride_attempt
+
+    ride = _make_ride()
+    driver = _make_driver("drv-1")
+    notified: list = []
+
+    with (
+        patch("backend.routes.rides.matching._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
+        patch(
+            "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+        ),
+        patch(
+            "backend.utils.driver_presence.present_driver_ids_checked",
+            AsyncMock(return_value=(set(), False)),
+        ),
+        patch("backend.utils.redis_client.redis_mget", AsyncMock(return_value=[])),
+        patch("backend.routes.rides.matching._dispatch_retry", AsyncMock()) as mock_retry,
+        patch("backend.routes.rides.matching._deps.spawn", side_effect=lambda coro: coro.close()),
+    ):
+        mock_db.get_rows = AsyncMock(side_effect=_rows_by_table(drivers=[driver]))
+        # Child area has no subscription_required of its own, so the gate goes
+        # to the parent — and that read fails.
+        mock_db.find_one = AsyncMock(
+            side_effect=[
+                {"id": "area-1", "parent_service_area_id": "area-parent"},
+                RuntimeError("parent lookup failed"),
+            ]
+        )
+        mock_db.claim_driver_atomic = AsyncMock(side_effect=lambda did: notified.append(did))
+
+        await _match_driver_to_ride_attempt("ride-1", ride=ride)
+
+    assert notified == [], "a driver was claimed despite an unresolved subscription gate"
+    mock_retry.assert_called_once()
 
 
 async def test_pass_required_area_reads_driver_subscriptions_once():

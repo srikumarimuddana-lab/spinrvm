@@ -282,6 +282,14 @@ async def claim_driver_atomic(driver_id: str) -> Optional[Dict[str, Any]]:
             )
             .eq("id", driver_id)
             .eq("is_available", True)
+            # Soft-deleted drivers are unclaimable. The follow-up
+            # get_driver_by_id this return value replaced filtered
+            # `deleted_at IS NULL`, and the caller's eligibility recheck only
+            # tests is_online/is_verified/status — so without this predicate a
+            # tombstoned row whose intent flags predate the deletion hardening
+            # (see routes/admin/drivers.py's note on that legacy category)
+            # could pass revalidation and be offered a ride.
+            .is_("deleted_at", "null")
             .execute()
         )
         data = _rows_from_res(res)

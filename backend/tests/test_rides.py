@@ -449,6 +449,9 @@ class TestRideMatching:
         mock_query = MagicMock()
         mock_query.update.return_value = mock_query
         mock_query.eq.return_value = mock_query
+        # The claim also filters deleted_at IS NULL — a soft-deleted driver
+        # must not be claimable.
+        mock_query.is_.return_value = mock_query
         mock_query.execute = MagicMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 

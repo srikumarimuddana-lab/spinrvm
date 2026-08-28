@@ -5,7 +5,10 @@ on:
   workflow_run:
     workflows:
       - CI/CD Pipeline
-      - Test Environment CI/CD        # H2: was "Test Environment" (name mismatch)
+      - Staging CI/CD                 # was "Test Environment CI/CD" until the
+                                      # 2026-08-28 develop→staging retarget of
+                                      # test-env.yml; H2: before that, was
+                                      # "Test Environment" (name mismatch)
       # ⚠ BLIND SPOT (M4): test-env.yml uses "|| true" / "|| echo" on several
       # steps so its jobs always report success. workflow_run will never fire
       # for genuine test-env failures until those suppressions are removed.

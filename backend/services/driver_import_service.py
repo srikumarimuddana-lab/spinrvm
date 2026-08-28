@@ -201,6 +201,22 @@ def read_mongo_export_csv(path: Path) -> list[dict[str, str]]:
         return [{k: (v or "").strip() for k, v in row.items()} for row in reader]
 
 
+def read_mongo_export_csv_text(text: str) -> list[dict[str, str]]:
+    """``read_mongo_export_csv``'s raw-preservation logic, for an admin
+    upload's in-memory CSV content instead of a filesystem ``Path``.
+
+    Deliberately does NOT call ``read_csv_text``/``parse_csv_rows`` -- same
+    reason as the file-path reader above: ``normalize_header`` corrupts a
+    raw Mongo export's own column names (``_id`` -> ``id``, most critically).
+    An admin-upload endpoint for this CSV must use this function, not
+    ``read_csv_text``.
+    """
+    if text.startswith("﻿"):
+        text = text[1:]
+    reader = csv.DictReader(io.StringIO(text))
+    return [{k: (v or "").strip() for k, v in row.items()} for row in reader]
+
+
 def read_csv(path: Path) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8-sig") as f:
         return parse_csv_rows(csv.DictReader(f))

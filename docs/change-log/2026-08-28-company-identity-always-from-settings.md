@@ -153,16 +153,45 @@ parameter-only behaviour exactly. No data written that a revert would strand.
 - **No PDF or Excel file was actually rendered.** `fpdf2`/`openpyxl` are not
   installable here. The footer *string* was verified against real settings;
   the rendered document was not. CI/staging is the first real render.
-- **Remaining hardcoded identity, not yet addressed** (follow-up commit):
-  `utils/t4a_pdf.py` (CRA slip — "Spinr Mobility Inc." and
-  "Saskatoon, SK, Canada"), `utils/email_receipt.py` legacy footer,
-  `routes/drivers/subscriptions.py` legacy invoice footer,
-  `utils/subscription_invoice.py` (passes no `company` at all), and
-  `services/data_transfer/sgi_form_filler.py` (`_COMPANY_NAME`).
-- **`sgi_form_filler.py` deliberately deferred for a decision.** It fills a
-  regulator's own fixed-format document. Making its company name dynamic is
-  defensible, but a regulator form is not a place to change behaviour without
-  someone confirming SGI accepts it — flagged rather than changed.
+### Follow-up commit (same branch) — remaining live call sites
+
+Now also settings-driven:
+
+| File | Change |
+|---|---|
+| `backend/utils/t4a_pdf.py` | New `_payer_identity()`; payer name, payer address and support email all read Settings. No hardcoded identity remains in the file. |
+| `backend/utils/subscription_invoice.py` | New `_invoice_company()`; the admin invoice download/resend now passes `company`, matching the driver's own copy. |
+
+`t4a_pdf` falls back to the legal name with **no address** on a cold cache —
+a blank-but-honest address beats printing a city the company may have left,
+and this is a CRA slip. Values are `pdf_safe`d because Settings is free text
+and fpdf2's core fonts are latin-1 only. **Note the trade-off this creates:**
+the payer on a tax slip is now editable from the admin UI, so Settings must
+be kept accurate — that is the direct consequence of the requested policy,
+not an accident.
+
+### Deliberately NOT changed
+
+- **`utils/email_receipt.py`'s `_LEGACY_FOOTER` and
+  `routes/drivers/subscriptions.py`'s `_LEGACY_INVOICE_FOOTER`.** These are
+  the pre-retrofit shells reached only when `branded_receipt_enabled` is
+  **false**; that flag is `true` in the live settings row (verified this
+  session), so they are dormant. Their entire purpose is to reproduce the old
+  output exactly, and they are pinned byte-for-byte by
+  `test_receipt_shell_snapshot.py` (`assert normalised == legacy_body`) and
+  `test_text_receipt_falls_back_to_the_legacy_footer_without_a_company`.
+  Making them dynamic would break those tests and defeat what they exist for.
+  The branded path they fall back *from* is fully settings-driven, so no live
+  document is affected.
+- **`services/data_transfer/sgi_form_filler.py` (`_COMPANY_NAME`).** Fills a
+  regulator's own fixed-format document (SGI D00032/D00033). Making it
+  dynamic is defensible, but a form submitted to a regulator is not somewhere
+  to change behaviour without someone confirming SGI accepts it. **Needs a
+  decision — flagged, not changed.**
+- Assorted support-email mentions in AI prompt text and support FAQ copy
+  (`ai/prompts.py`, `routes/support.py`, `ai/public_assistant.py`). These are
+  conversational copy, not document identity; sweeping them is a separate,
+  larger change.
 - The cold-cache window is reasoned about, not measured. No test asserts how
   often it is actually hit in production.
 

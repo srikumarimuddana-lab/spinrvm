@@ -151,7 +151,6 @@ def render_offer_card(
         f_fare = _font(_FONT_BOLD, 132)
         f_row = _font(_FONT_BOLD, 40)
         f_row_sub = _font(_FONT_REGULAR, 34)
-        f_pill = _font(_FONT_BOLD, 30)
         f_brand = _font(_FONT_BOLD, 34)
 
         margin = 56
@@ -170,9 +169,22 @@ def render_offer_card(
         # beside it would read as money on top of that number. Surge is
         # deliberately not shown to drivers; only the (already
         # surge-inclusive) fare is.
-        _ = fare_right  # fare width computed for layout symmetry; pill is right-aligned
+        #
+        # The headline and the pill share one row, and neither is fixed-width:
+        # a 3-digit total ("$105.00") next to a wide pill overruns it and the
+        # two overprint — verified by rendering. So the pill steps down a font
+        # size to fit, and is dropped outright if even the smallest won't —
+        # the headline already carries the boost, so losing the pill costs a
+        # callout, never the correct number.
         if _pill_text:
-            _pill_right(d, _W - margin, 112, _pill_text, f_pill, fg=_BG, bg=_GREEN)
+            avail = (_W - margin) - fare_right - 24  # 24px min gap
+            for _size in (30, 26, 22):
+                _f = _font(_FONT_BOLD, _size)
+                if d.textlength(_pill_text, font=_f) + 36 <= avail:  # 36 = _pill_right pad_x*2
+                    _pill_right(d, _W - margin, 112, _pill_text, _f, fg=_BG, bg=_GREEN)
+                    break
+            else:
+                logger.info("offer card: boost pill dropped, no room beside %s", fare_text)
 
         # Route panel.
         panel_top = 246

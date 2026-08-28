@@ -49,6 +49,10 @@ Two separate misses, same shape — a money surface built from
 3. Pill copy changed from `+$5.00 BONUS` to `INCL. $5.00 BOOST`, because the
    headline beside it is now the total: a `+$X` pill next to a total reads as
    money on top of that number.
+4. Pill now fits itself to the space left by the headline (30 → 26 → 22 px,
+   dropped if none fits). Found by rendering: headline and pill share one row
+   and neither is fixed-width, so a 3-digit total (`$105.00`) overprinted the
+   pill. Pre-existing latent bug, made more reachable by the summed headline.
 
 Net effect: title, banner, and offer panel now all show one identical number.
 Display-only; nothing about what the driver is actually paid changed.
@@ -101,7 +105,7 @@ Display-only; nothing about what the driver is actually paid changed.
 | `backend/routes/rides/matching.py` | Push title earnings label now adds `_total_bonus` to `driver_earnings` | Match the in-app offer panel and the driver-app's local notification |
 | `backend/tests/test_dispatch_notify_loop_branches.py` | Two regression tests: title with an active incentive, and title with none | Lock the two branches so the title can't silently drift from the payload again |
 | `backend/routes/offer_card.py` | Looks up active `ride_incentives` for the ride and passes `total_bonus` to the renderer; fails open | The banner never received the boost, so its pill was dead code |
-| `backend/utils/offer_card.py` | New `earnings_labels()`; headline is now fare + boost, pill copy `INCL. $X BOOST` | One number for actual earnings, matching the offer panel and title |
+| `backend/utils/offer_card.py` | New `earnings_labels()`; headline is now fare + boost; pill copy `INCL. $X BOOST`; pill font steps down / drops to avoid overprinting a wide headline | One number for actual earnings, matching the offer panel and title; keep the row legible at 3-digit totals |
 | `backend/tests/test_offer_card_route.py` | Tests: boost reaches the renderer, wrong-vehicle incentive skipped, lookup failure still renders | Cover the new query and its fail-open path |
 | `backend/tests/test_offer_card.py` | Unit tests for `earnings_labels` (sum, no-pill, missing fare) | Money copy testable without Pillow |
 
@@ -168,13 +172,22 @@ title/banner mismatch and is not recommended.
   incentive rows in the tests are mocked.
 - No end-to-end check that a real boosted ride's tray title now matches the
   in-app panel on a physical driver device.
-- **The banner PNG was never rendered or looked at.** The headline/pill change
-  is verified at the label level only; nothing checked that a longer
-  `INCL. $X BOOST` pill still fits its right-anchored slot beside a wider
-  (now-summed) headline at the banner's fixed width. There is no visual-
-  regression tooling for this surface — and per CLAUDE.md none is active for
-  any Spinr surface — so this was reasoned about, not screenshotted. Worth one
-  manual render before this reaches drivers.
+- **The banner was previewed via a replica, not by Pillow.** Pillow can't be
+  installed in this environment (PyPI blocked), so the layout was reproduced
+  in HTML at the same 1024×512 geometry, loading the same bundled DejaVu TTFs
+  at the same px sizes, and screenshotted with the pre-installed Chromium.
+  That preview is what surfaced the headline/pill collision. Glyph advances
+  match (same fonts, same em sizes) but Chromium's text baseline and rounding
+  are not byte-identical to Pillow's, so this is a close approximation, not
+  the production image — the fit thresholds were separately confirmed by
+  reading advance widths straight out of the TTF `hmtx` table, which is what
+  Pillow's `textlength()` sums.
+- The `$99.75` + `$25.00` case clears the pill by only ~2 px at full size.
+  It passes, but it is the tightest passing case — worth knowing if the pill
+  copy is ever lengthened again.
+- No test asserts pixels; the added test asserts the fit *rule* (which size is
+  chosen), not the rendered output. There is still no visual-regression
+  tooling for this surface, per CLAUDE.md.
 - The duplicated incentive query in `routes/offer_card.py` was not measured
   against a real Supabase; its latency contribution to banner render is
   assumed-small, not benchmarked.

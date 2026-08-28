@@ -127,3 +127,27 @@ def test_no_pill_without_a_boost(bonus):
 
 def test_missing_fare_does_not_crash_the_label():
     assert earnings_labels(None, None) == ("$0.00", None)
+
+
+def test_boost_pill_does_not_collide_with_a_wide_headline():
+    """The headline and the pill share one row and neither is fixed-width, so
+    a 3-digit total used to overprint the pill. Renders must stay clean; this
+    asserts the fit rule the renderer applies (step down, then drop)."""
+    from utils.offer_card import _FONT_BOLD, _font, _W
+
+    from PIL import Image, ImageDraw
+
+    d = ImageDraw.Draw(Image.new("RGB", (_W, 512)))
+    margin = 56
+
+    def pill_size_for(fare, bonus):
+        headline, pill = earnings_labels(fare, bonus)
+        avail = (_W - margin) - (margin + d.textlength(headline, font=_font(_FONT_BOLD, 132))) - 24
+        for size in (30, 26, 22):
+            if d.textlength(pill, font=_font(_FONT_BOLD, size)) + 36 <= avail:
+                return size
+        return None
+
+    assert pill_size_for(12.50, 5.00) == 30  # ordinary offer — full-size pill
+    assert pill_size_for(90.00, 15.00) == 22  # $105 headline — pill steps down
+    assert pill_size_for(62.50, 125.00) is None  # no room — pill dropped, total still right

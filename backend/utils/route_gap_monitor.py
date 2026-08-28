@@ -128,6 +128,19 @@ async def _latest_capture_times(ride_ids: list[str]) -> dict[str, Optional[datet
     return {rid: parse_iso_utc(payload.get(rid)) for rid in ride_ids}
 
 
+async def _latest_capture_time(ride_id: str) -> Optional[datetime]:
+    """Single-ride form of :func:`_latest_capture_times`.
+
+    Kept because utils/stale_p3_closer.py asks this question one ride at a
+    time, from a 15-minute loop where batching buys nothing — unlike the
+    15-second gap monitor, which is why the batched form exists at all.
+
+    It delegates rather than duplicating the query, so the NULL-captured_at
+    filtering and legacy-timestamp precedence can only ever be defined once.
+    """
+    return (await _latest_capture_times([ride_id])).get(ride_id)
+
+
 async def _open_gap_event(ride: dict, decision: GapDecision, threshold_seconds: int, now: datetime) -> bool:
     """Create the one durable alert for this gap start. Unique index makes replay safe."""
     if decision.gap_started_at is None:

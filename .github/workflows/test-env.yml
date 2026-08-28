@@ -1,11 +1,17 @@
-name: Test Environment CI/CD
+name: Staging CI/CD
 
-# Triggers on push to develop branch and PRs to develop
+# Staging pipeline: backend tests + TypeScript checks on every push/PR to
+# `staging`, then (push only) a staging health probe and mobile preview
+# updates. The backend deploy itself is NOT done here — that is
+# deploy-backend-staging.yml, which fires in parallel on `staging` pushes
+# touching backend/**. Retargeted 2026-08-28 from `develop`, a branch that
+# was never created (the workflow had never run): `staging` is the repo's
+# single pre-production branch (ACTION_ITEMS.md E1).
 on:
   push:
-    branches: [develop]
+    branches: [staging]
   pull_request:
-    branches: [develop]
+    branches: [staging]
 
 env:
   PYTHON_VERSION: '3.12'
@@ -114,20 +120,25 @@ jobs:
         working-directory: driver-app
         run: npx tsc --noEmit
 
-  # ─── 4. Deploy Backend to Test ───
-  deploy-backend-test:
+  # ─── 4. Staging health check ───
+  staging-health-check:
     runs-on: ubuntu-latest
     needs: [backend-check]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      # Railway auto-deploys on push to develop. Poll /health until healthy
-      # (up to 3 min) rather than sleeping a fixed 30s and eating the error.
-      - name: Wait for test backend to become healthy
+      # Liveness probe only. The deploy is deploy-backend-staging.yml (runs
+      # in parallel on `staging` pushes touching backend/**); this job just
+      # confirms the staging app answers /health, retrying up to 3 min —
+      # enough to cover the machine waking from scale-to-zero
+      # (fly.staging.toml: min_machines_running = 0). It does NOT prove the
+      # new revision deployed (a still-healthy old revision also passes);
+      # the deploy workflow's own health step is the authority on that.
+      - name: Wait for staging backend to become healthy
         env:
-          HEALTH_URL: https://spinr-backend-test.up.railway.app/api/v1
+          HEALTH_URL: https://spinr-backend-staging.fly.dev
         run: |
           echo "Polling ${HEALTH_URL}/health …"
           for i in $(seq 1 18); do
@@ -135,19 +146,24 @@ jobs:
               -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
             echo "  attempt ${i}/18 → HTTP ${STATUS}"
             if [ "$STATUS" = "200" ]; then
-              echo "Test backend is healthy."
+              echo "Staging backend is healthy."
               exit 0
             fi
             sleep 10
           done
-          echo "::error::Test backend health check timed out."
+          echo "::error::Staging backend health check timed out."
           exit 1
 
-  # ─── 5. Build Mobile Apps (Test/Preview) ───
+  # ─── 5. Build Mobile Apps (Preview) ───
+  # Native builds are expensive (4 EAS builds per run: 2 apps × 2 platforms),
+  # so — same convention as production mobile builds (CLAUDE.md Deployment:
+  # EAS only triggered when the commit message contains [build]) — they run
+  # only when the pushed commit asks for one. Every other push ships as a
+  # JS-only OTA update via job 6 below instead.
   build-mobile-test:
     runs-on: ubuntu-latest
     needs: [rider-app-check, driver-app-check]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/staging' && contains(github.event.head_commit.message, '[build]')
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -196,7 +212,7 @@ jobs:
   ota-update-test:
     runs-on: ubuntu-latest
     needs: [rider-app-check, driver-app-check]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop' && !contains(github.event.head_commit.message, '[build]')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/staging' && !contains(github.event.head_commit.message, '[build]')
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -220,9 +236,12 @@ jobs:
           else npm install --legacy-peer-deps
           fi
 
+      # `--branch test` is the EAS Update channel that preview builds are
+      # pinned to (an Expo channel name, not a git branch) — renaming it
+      # would orphan phones already on that channel, so it stays `test`.
       - name: Publish OTA update (rider)
         working-directory: rider-app
-        run: eas update --branch test --message "Test env update - $(git log -1 --pretty=%B)"
+        run: eas update --branch test --message "Staging update - $(git log -1 --pretty=%B)"
 
       - name: Install driver-app deps
         working-directory: driver-app
@@ -233,4 +252,4 @@ jobs:
 
       - name: Publish OTA update (driver)
         working-directory: driver-app
-        run: eas update --branch test --message "Test env update - $(git log -1 --pretty=%B)"
+        run: eas update --branch test --message "Staging update - $(git log -1 --pretty=%B)"

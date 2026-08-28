@@ -298,6 +298,9 @@ class TestCheckExpiringDocuments:
 
         now = datetime.now(timezone.utc)
         expired_doc = {
+            # driver_documents is fetched once for the whole fleet now, so rows
+            # carry driver_id and are keyed back to their driver by it.
+            "driver_id": "driver-1",
             "requirement_name": "SGI Ride-Share Endorsement",
             "expiry_date": _iso(now - timedelta(days=1)),
         }
@@ -317,8 +320,11 @@ class TestCheckExpiringDocuments:
     @pytest.mark.anyio
     async def test_driver_documents_fetch_exception_is_swallowed(self, monkeypatch):
         """A driver_documents lookup failure must not crash the whole sweep
-        — it's logged at debug level and the legacy-field result (if any)
-        still applies."""
+        — it's logged and the legacy-field result (if any) still applies.
+
+        Logged at ERROR since the lookup was batched: one failure now costs
+        every driver's document checks, not one driver's, so the old debug
+        level would have hidden a fleet-wide blind spot."""
         from backend.utils import document_expiry
 
         now = datetime.now(timezone.utc)
@@ -378,9 +384,7 @@ class TestDocumentExpiryLoop:
     async def test_loop_survives_a_failing_tick(self, monkeypatch):
         from backend.utils import document_expiry
 
-        monkeypatch.setattr(
-            document_expiry, "check_expiring_documents", AsyncMock(side_effect=RuntimeError("boom"))
-        )
+        monkeypatch.setattr(document_expiry, "check_expiring_documents", AsyncMock(side_effect=RuntimeError("boom")))
         heartbeat = MagicMock()
         monkeypatch.setattr(document_expiry, "_record_heartbeat", heartbeat)
 
@@ -393,3 +397,74 @@ class TestDocumentExpiryLoop:
 
         # Heartbeat still records even after a failing tick — loop survived.
         heartbeat.assert_called_once_with("document_expiry (12h)")
+
+
+class TestDocumentExpiryBatching:
+    """P2-B7: the driver_documents lookup is one fleet-wide query, not N+1."""
+
+    @pytest.mark.anyio
+    async def test_documents_fetched_once_for_the_whole_fleet(self, monkeypatch):
+        """This ran >= 1 driver_documents query PER DRIVER, inside a loop over
+        the entire drivers table, every 12h on every replica. Three drivers
+        must now cost one documents query, and each must still see only its
+        OWN documents — a batch that leaked rows across drivers would suspend
+        the wrong people."""
+        from backend.utils import document_expiry
+
+        now = datetime.now(timezone.utc)
+        drivers = [_driver(id=f"driver-{i}", user_id=f"user-{i}") for i in (1, 2, 3)]
+        # Only driver-2 has an expired document.
+        docs = [
+            {
+                "driver_id": "driver-2",
+                "requirement_name": "SGI Ride-Share Endorsement",
+                "expiry_date": _iso(now - timedelta(days=1)),
+            }
+        ]
+        tables: list = []
+
+        async def _get_rows(table, _filters=None, **kwargs):
+            tables.append(table)
+            if table == "drivers":
+                return drivers if kwargs.get("offset", 0) == 0 else []
+            if table == "driver_documents":
+                return docs
+            return []
+
+        monkeypatch.setattr(document_expiry.db, "get_rows", AsyncMock(side_effect=_get_rows))
+        monkeypatch.setattr(document_expiry.db, "update_one", AsyncMock(return_value={"id": "driver-2"}))
+        monkeypatch.setattr(document_expiry, "clear_presence", AsyncMock())
+        monkeypatch.setattr(document_expiry.manager, "disconnect", MagicMock())
+        push = AsyncMock()
+        monkeypatch.setattr(document_expiry, "send_push_notification", push)
+
+        await document_expiry.check_expiring_documents()
+
+        doc_queries = [t for t in tables if t == "driver_documents"]
+        assert len(doc_queries) == 1, f"driver_documents queried {len(doc_queries)}× for 3 drivers — expected 1"
+        # Exactly one driver is affected, and it is the right one.
+        push.assert_awaited_once()
+        assert push.await_args.args[0] == "user-2"
+
+    @pytest.mark.anyio
+    async def test_drivers_scan_is_projected(self, monkeypatch):
+        """The sweep walks the whole drivers table; unprojected it dragged the
+        entire fleet's base64 profile_image across the wire to read five date
+        columns."""
+        from backend.utils import document_expiry
+
+        seen: list = []
+
+        async def _get_rows(table, _filters=None, **kwargs):
+            if table == "drivers":
+                seen.append(kwargs.get("columns"))
+            return []
+
+        monkeypatch.setattr(document_expiry.db, "get_rows", AsyncMock(side_effect=_get_rows))
+
+        await document_expiry.check_expiring_documents()
+
+        assert seen and seen[0], "the drivers scan must pass an explicit column list"
+        for required in ("id", "user_id", "license_expiry_date", "doc_expiry_warned_at"):
+            assert required in seen[0], f"projection is missing {required}"
+        assert "profile_image" not in seen[0]

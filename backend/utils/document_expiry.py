@@ -105,7 +105,22 @@ async def check_expiring_documents():
     offset = 0
     while True:
         try:
-            page = await db.get_rows("drivers", {}, limit=_PAGE_SIZE, offset=offset)
+            # Projected, not SELECT *. This walks the entire drivers table every
+            # 12h, and the unprojected version dragged the whole fleet's base64
+            # profile_image across the wire for a job that reads five date
+            # columns. The set below is closed: user_id, id, the five legacy
+            # expiry fields, and doc_expiry_warned_at for the throttle claim.
+            page = await db.get_rows(
+                "drivers",
+                {},
+                columns=(
+                    "id,user_id,doc_expiry_warned_at,"
+                    "license_expiry_date,insurance_expiry_date,vehicle_inspection_expiry_date,"
+                    "background_check_expiry_date,work_eligibility_expiry_date"
+                ),
+                limit=_PAGE_SIZE,
+                offset=offset,
+            )
         except Exception as e:
             logger.error(f"Doc expiry: failed to fetch drivers (offset={offset}): {e}", exc_info=True)
             return
@@ -115,6 +130,39 @@ async def check_expiring_documents():
         if len(page) < _PAGE_SIZE:
             break
         offset += _PAGE_SIZE
+
+    # Approved documents for the WHOLE fleet, keyed by driver. This used to be
+    # >= 1 query per driver inside the loop below — a straight N+1 over the
+    # entire drivers table on every tick. Paged over the batch, so it is exact
+    # rather than capped: every approved row is still seen.
+    docs_by_driver: dict[str, list] = {}
+    _driver_ids = [d["id"] for d in all_drivers if d.get("id")]
+    if _driver_ids:
+        _DOC_PAGE_SIZE = 500
+        _doc_offset = 0
+        while True:
+            try:
+                _docs_page = await db.get_rows(
+                    "driver_documents",
+                    {"driver_id": {"$in": _driver_ids}, "status": "approved"},
+                    columns="driver_id,expiry_date,expires_at,requirement_name,type",
+                    limit=_DOC_PAGE_SIZE,
+                    offset=_doc_offset,
+                )
+            except Exception as e:
+                # Same posture as the per-driver version this replaces: a
+                # driver_documents failure degrades to legacy-field-only
+                # checking rather than halting the sweep. Logged at error (not
+                # the old debug) because it now costs every driver's document
+                # checks, not one driver's.
+                logger.error(f"Doc expiry: failed to batch-fetch driver_documents: {e}", exc_info=True)
+                docs_by_driver = {}
+                break
+            for _doc in _docs_page:
+                docs_by_driver.setdefault(_doc.get("driver_id"), []).append(_doc)
+            if len(_docs_page) < _DOC_PAGE_SIZE:
+                break
+            _doc_offset += _DOC_PAGE_SIZE
 
     notified = 0
     for driver in all_drivers:
@@ -153,35 +201,21 @@ async def check_expiring_documents():
                 days_left = (expiry_dt - now).days
                 expiring_docs.append({"label": label, "days_left": days_left})
 
-        # Also check document_files / driver_documents for expiry_date
-        try:
-            _DOC_PAGE_SIZE = 200
-            _doc_offset = 0
-            while True:
-                docs = await db.get_rows(
-                    "driver_documents",
-                    {"driver_id": driver["id"], "status": "approved"},
-                    limit=_DOC_PAGE_SIZE,
-                    offset=_doc_offset,
-                )
-                for doc in docs:
-                    exp_dt = parse_iso_utc(doc.get("expiry_date") or doc.get("expires_at"))
-                    if exp_dt is None:
-                        continue
-                    doc_name = doc.get("requirement_name") or doc.get("type") or "Document"
-                    # P2-6: same gate — process expired OR expiring within warning window
-                    if exp_dt > now and exp_dt > warning_cutoff:
-                        continue
-                    if exp_dt <= now:
-                        expired_docs.append(doc_name)
-                    else:
-                        days_left = (exp_dt - now).days
-                        expiring_docs.append({"label": doc_name, "days_left": days_left})
-                if len(docs) < _DOC_PAGE_SIZE:
-                    break
-                _doc_offset += _DOC_PAGE_SIZE
-        except Exception as e:
-            logger.debug(f"Failed to check driver_documents: {e}")
+        # Also check document_files / driver_documents for expiry_date. Rows
+        # come from the one fleet-wide fetch above, not a per-driver query.
+        for doc in docs_by_driver.get(driver["id"], []):
+            exp_dt = parse_iso_utc(doc.get("expiry_date") or doc.get("expires_at"))
+            if exp_dt is None:
+                continue
+            doc_name = doc.get("requirement_name") or doc.get("type") or "Document"
+            # P2-6: same gate — process expired OR expiring within warning window
+            if exp_dt > now and exp_dt > warning_cutoff:
+                continue
+            if exp_dt <= now:
+                expired_docs.append(doc_name)
+            else:
+                days_left = (exp_dt - now).days
+                expiring_docs.append({"label": doc_name, "days_left": days_left})
 
         # P2-6: Expired documents trigger BOTH suspension AND a push notification.
         # The suspension runs first so the driver cannot accept new rides even if

@@ -91,8 +91,8 @@ def _configured_threshold_seconds(settings: dict) -> int:
     return threshold
 
 
-async def _latest_capture_time(ride_id: str) -> Optional[datetime]:
-    """Newest accepted capture time for the ride, ignoring NULL captured_at.
+async def _latest_capture_times(ride_ids: list[str]) -> dict[str, Optional[datetime]]:
+    """Newest accepted capture time for EVERY given ride, in one call.
 
     ``ORDER BY captured_at DESC`` puts NULLs FIRST in Postgres, so a single
     legacy WS-path breadcrumb (v1 fields, no captured_at) permanently blinded
@@ -100,28 +100,30 @@ async def _latest_capture_time(ride_id: str) -> Optional[datetime]:
     to None, and concluded "no captures yet" — the phantom gap-since-trip-start
     was opened once and never resolved, and any REAL later blackout could not
     be distinguished (ride SPR-PE7TTB: 2 of 51 rows NULL, an 11-minute
-    mid-trip outage went undetected). Filter NULLs out, then fall back to the
-    legacy "timestamp" column for rides whose points are all v1-shaped.
+    mid-trip outage went undetected). NULLs are filtered out, then the legacy
+    "timestamp" column answers rides whose points are all v1-shaped.
+
+    This used to be per-ride: 1-2 serial queries for each of up to
+    MAX_ACTIVE_RIDES_PER_TICK rides, every 15s, on every replica — ~1000
+    round-trips a tick to answer one question per ride.
+
+    An RPC rather than a batched ``ride_id IN (...)``: the question is "newest
+    row PER ride", which PostgREST cannot express, and a batched query ordered
+    by captured_at DESC under a row cap would let busy rides fill the cap and
+    push a quiet ride's newest row out of the result — reintroducing exactly
+    the blindness described above, in a form that looks like a clean batch.
+    ``DISTINCT ON`` answers it exactly (migration 371).
+
+    A ride absent from the RPC result has no usable capture at all and maps to
+    None, the same value the old "no rows" path returned.
     """
-    rows = await db_supabase.get_rows(
-        "driver_location_history",
-        {"ride_id": ride_id, "captured_at": {"$notnull": True}},
-        order="captured_at",
-        desc=True,
-        limit=1,
-        columns="captured_at",
-    )
-    if rows:
-        return parse_iso_utc(rows[0].get("captured_at"))
-    rows = await db_supabase.get_rows(
-        "driver_location_history",
-        {"ride_id": ride_id, "timestamp": {"$notnull": True}},
-        order="timestamp",
-        desc=True,
-        limit=1,
-        columns="timestamp",
-    )
-    return parse_iso_utc(rows[0].get("timestamp")) if rows else None
+    if not ride_ids:
+        return {}
+    rows = await db_supabase.rpc("route_gap_latest_captures", {"p_ride_ids": ride_ids})
+    payload = rows[0] if isinstance(rows, list) and rows else rows
+    if not isinstance(payload, dict):
+        payload = {}
+    return {rid: parse_iso_utc(payload.get(rid)) for rid in ride_ids}
 
 
 async def _open_gap_event(ride: dict, decision: GapDecision, threshold_seconds: int, now: datetime) -> bool:
@@ -285,6 +287,10 @@ async def route_gap_monitor_tick() -> dict[str, int]:
     result["orphaned_closed"] = await _close_orphaned_open_events(now)
     current_open_gaps = 0
 
+    # One RPC for the whole tick instead of 1-2 queries per ride. Fetched up
+    # front so every ride in this tick is assessed against the same snapshot.
+    latest_captures = await _latest_capture_times([str(r["id"]) for r in rides if r.get("id")])
+
     for ride in rides:
         ride_id = ride.get("id")
         if not ride_id:
@@ -294,7 +300,7 @@ async def route_gap_monitor_tick() -> dict[str, int]:
         decision = assess_location_gap(
             now=now,
             trip_started_at=parse_iso_utc(ride.get("ride_started_at")),
-            last_captured_at=await _latest_capture_time(str(ride_id)),
+            last_captured_at=latest_captures.get(str(ride_id)),
             threshold_seconds=threshold_seconds,
         )
         if decision.state == "unknown":

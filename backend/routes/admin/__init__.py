@@ -94,6 +94,7 @@ from .export_approvals import router as export_approvals_router
 from .faqs import router as faqs_router
 from .incentives import router as incentives_router
 from .legacy_driver_import import router as legacy_driver_import_router
+from .legacy_sin_dob_backfill import router as legacy_sin_dob_backfill_router
 from .legal_documents import router as legal_documents_router
 from .maintenance import router as maintenance_router
 from .messaging import router as messaging_router
@@ -162,6 +163,12 @@ admin_router.include_router(driver_import_router, dependencies=[Depends(require_
 # a different CSV/population/service-layer pair from driver_import_router
 # above, same module grant since it creates/links/enriches driver rows too.
 admin_router.include_router(legacy_driver_import_router, dependencies=[Depends(require_module("drivers"))])
+# Legacy SIN/DOB backfill (Phase 2 of the 2026-08-27 migration plan) — writes
+# a vault-encrypted SIN + date_of_birth onto already-legacy-imported drivers
+# from the previous app's banks.csv/drivers.csv export. Same "drivers"
+# module gate as the bulk driver import above; the underlying write is
+# guarded further at commit time (never clobbers a value already on file).
+admin_router.include_router(legacy_sin_dob_backfill_router, dependencies=[Depends(require_module("drivers"))])
 # Driver earnings statements (payout section: date-filter -> download / email
 # to driver). Read-only + driver-addressed email; drivers module grant.
 admin_router.include_router(driver_statements_router, dependencies=[Depends(require_module("drivers"))])

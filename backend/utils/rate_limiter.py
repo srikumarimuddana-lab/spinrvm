@@ -455,6 +455,12 @@ driver_import_commit_limit = default_limiter.limit("10/hour")
 # /commit creates/links/enriches real rows and gets the tighter limit.
 legacy_mongo_driver_import_commit_limit = default_limiter.limit("10/hour")
 
+# Admin legacy SIN/DOB backfill (2 CSVs) — /validate is a read-only dry-run;
+# /commit writes a vault-encrypted SIN + date_of_birth onto matched drivers.
+# Same shape/reasoning as driver_import_commit_limit above: commit is the
+# write path and gets the tighter limit.
+legacy_sin_dob_backfill_commit_limit = default_limiter.limit("10/hour")
+
 # Admin Data Transfer jobs (list/detail/download-link) — read-only status
 # polling, but download-link regeneration mints a fresh signed Storage URL
 # each call; bound it the same as other admin list/detail endpoints.

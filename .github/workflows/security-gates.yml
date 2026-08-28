@@ -67,7 +67,8 @@ jobs:
     if: |
       always() && (
         github.event_name != 'pull_request' ||
-        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
         needs.detect-changes.outputs.backend == 'true'
       )
     steps:
@@ -108,7 +109,8 @@ jobs:
     if: |
       always() && (
         github.event_name != 'pull_request' ||
-        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
         needs.detect-changes.outputs.rider == 'true' ||
         needs.detect-changes.outputs.driver == 'true' ||
         needs.detect-changes.outputs.admin == 'true'
@@ -389,7 +391,8 @@ jobs:
     if: |
       always() && (
         github.event_name != 'pull_request' ||
-        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
         needs.detect-changes.outputs.backend == 'true'
       )
     steps:
@@ -418,7 +421,8 @@ jobs:
     if: |
       always() && (
         github.event_name != 'pull_request' ||
-        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
         needs.detect-changes.outputs.rider == 'true' ||
         needs.detect-changes.outputs.driver == 'true' ||
         needs.detect-changes.outputs.admin == 'true' ||
@@ -466,7 +470,8 @@ jobs:
     if: |
       always() && (
         github.event_name != 'pull_request' ||
-        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
         needs.detect-changes.outputs.admin == 'true'
       )
     steps:
@@ -542,7 +547,8 @@ jobs:
     if: |
       always() && (
         github.event_name != 'pull_request' ||
-        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
         needs.detect-changes.outputs.admin == 'true'
       )
     steps:
@@ -592,7 +598,8 @@ jobs:
     if: |
       always() && (
         github.event_name != 'pull_request' ||
-        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
         needs.detect-changes.outputs.backend == 'true'
       )
     steps:
@@ -656,7 +663,8 @@ jobs:
     if: |
       always() && (
         github.event_name != 'pull_request' ||
-        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
         needs.detect-changes.outputs.backend == 'true'
       )
     steps:
@@ -704,7 +712,8 @@ jobs:
     if: |
       always() && (
         github.event_name != 'pull_request' ||
-        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
         needs.detect-changes.outputs.rider == 'true' ||
         needs.detect-changes.outputs.driver == 'true' ||
         needs.detect-changes.outputs.admin == 'true' ||

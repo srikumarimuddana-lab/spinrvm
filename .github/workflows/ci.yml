@@ -45,7 +45,8 @@ jobs:
     if: |
       always() && (
         github.event_name != 'pull_request' ||
-        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
         needs.detect-changes.outputs.backend == 'true'
       )
 
@@ -143,7 +144,8 @@ jobs:
     if: |
       always() && (
         github.event_name != 'pull_request' ||
-        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
         needs.detect-changes.outputs.backend == 'true'
       )
 
@@ -168,7 +170,8 @@ jobs:
     if: |
       always() && (
         github.event_name != 'pull_request' ||
-        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
         needs.detect-changes.outputs.driver == 'true'
       )
 
@@ -223,7 +226,8 @@ jobs:
     if: |
       always() && (
         github.event_name != 'pull_request' ||
-        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
         needs.detect-changes.outputs.rider == 'true'
       )
 
@@ -272,7 +276,8 @@ jobs:
     if: |
       always() && (
         github.event_name != 'pull_request' ||
-        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
         needs.detect-changes.outputs.admin == 'true'
       )
 
@@ -337,7 +342,8 @@ jobs:
       always() && (
         github.ref == 'refs/heads/main' ||
         (github.event_name == 'pull_request' && (
-          needs.detect-changes.result == 'failure' ||
+          needs.detect-changes.result != 'success' ||
+          needs.detect-changes.outputs.workflows == 'true' ||
           needs.detect-changes.outputs.admin == 'true'
         ))
       )
@@ -503,7 +509,8 @@ jobs:
       always() && (
         github.ref == 'refs/heads/main' ||
         (github.event_name == 'pull_request' && (
-          needs.detect-changes.result == 'failure' ||
+          needs.detect-changes.result != 'success' ||
+          needs.detect-changes.outputs.workflows == 'true' ||
           needs.detect-changes.outputs.rider == 'true'
         ))
       )
@@ -562,7 +569,8 @@ jobs:
       always() && (
         github.ref == 'refs/heads/main' ||
         (github.event_name == 'pull_request' && (
-          needs.detect-changes.result == 'failure' ||
+          needs.detect-changes.result != 'success' ||
+          needs.detect-changes.outputs.workflows == 'true' ||
           needs.detect-changes.outputs.driver == 'true'
         ))
       )

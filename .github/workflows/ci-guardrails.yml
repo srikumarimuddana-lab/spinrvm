@@ -119,7 +119,8 @@ jobs:
     if: |
       always() && (
         github.event_name != 'pull_request' ||
-        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
         needs.detect-changes.outputs.backend == 'true'
       )
     steps:
@@ -185,9 +186,14 @@ jobs:
     # same Phase 1 trial even though it isn't one of the two jobs that
     # trial's own intro comment above names; both are advisory
     # (continue-on-error: true), matching that trial's stated safety bar.
-    # `needs.detect-changes.result == 'failure'` is the fail-open leg: if
-    # the filter itself couldn't run, default to running this job rather
-    # than silently skipping it on a PR that may have touched backend/.
+    # `needs.detect-changes.result != 'success'` is the fail-open leg: if
+    # the filter itself couldn't run -- failed, or was externally cancelled
+    # mid-flight like C47's intermittent runner shutdowns -- default to
+    # running this job rather than silently skipping it on a PR that may
+    # have touched backend/. `outputs.workflows == 'true'` is a second,
+    # independent fail-open leg: a PR that edits this workflow file itself
+    # must exercise the gate it's changing, not rely on the filter having
+    # (correctly) marked backend/ untouched.
     # Also runs regardless of shared-coverage-run's own outcome (success,
     # failure, or an external cancellation like C47) so a shared-run
     # problem degrades this gate exactly like a missing coverage.json
@@ -196,7 +202,8 @@ jobs:
     if: |
       always() && (
         github.event_name != 'pull_request' ||
-        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
         needs.detect-changes.outputs.backend == 'true'
       )
     continue-on-error: true
@@ -451,7 +458,8 @@ jobs:
     if: |
       always() && (
         github.event_name != 'pull_request' ||
-        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
         needs.detect-changes.outputs.backend == 'true'
       )
     steps:
@@ -545,7 +553,8 @@ jobs:
     if: |
       always() && (
         github.event_name != 'pull_request' ||
-        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
         needs.detect-changes.outputs.backend == 'true'
       )
     continue-on-error: false
@@ -610,7 +619,8 @@ jobs:
     if: |
       always() && (
         github.event_name != 'pull_request' ||
-        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
         needs.detect-changes.outputs.backend == 'true'
       )
     continue-on-error: false
@@ -658,14 +668,18 @@ jobs:
     # its outputs are empty -- `github.event_name != 'pull_request'` is the
     # always-run-everything fallback for exactly that case, not a push-to-
     # main check (this workflow has no `push:` trigger at all).
-    # `needs.detect-changes.result == 'failure'` is a second fail-open leg:
-    # if the filter job itself errors out on a PR run (checkout or
-    # dorny/paths-filter failure), default to running this job rather than
-    # silently skipping an advisory check with no visible reason.
+    # `needs.detect-changes.result != 'success'` is a second fail-open leg:
+    # if the filter job itself errors out or is cancelled on a PR run
+    # (checkout, dorny/paths-filter failure, or an external cancellation),
+    # default to running this job rather than silently skipping an advisory
+    # check with no visible reason. `outputs.workflows == 'true'` is a
+    # third leg: a PR editing this workflow file exercises the gate it
+    # changed instead of relying on the (possibly-wrong) filter result.
     if: |
       always() && (
         github.event_name != 'pull_request' ||
-        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
         needs.detect-changes.outputs.backend == 'true' ||
         needs.detect-changes.outputs.admin == 'true'
       )
@@ -1107,12 +1121,15 @@ jobs:
     # Phase 1 blast-radius trial (see detect-changes' own comment above).
     # Only ever diffs backend/routes/ and backend/db_supabase.py, so
     # backend is the only surface that can produce a finding here.
-    # `needs.detect-changes.result == 'failure'` fails open on a filter-job
-    # error, same rationale as lint-trend-gate above.
+    # `needs.detect-changes.result != 'success'` fails open on a filter-job
+    # error or cancellation, and `outputs.workflows == 'true'` fails open
+    # on a PR that edits this workflow file itself -- same rationale as
+    # lint-trend-gate above.
     if: |
       always() && (
         github.event_name != 'pull_request' ||
-        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
         needs.detect-changes.outputs.backend == 'true'
       )
     steps:

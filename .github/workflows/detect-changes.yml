@@ -12,13 +12,19 @@ name: Detect changed surfaces
 # SHA this file uses).
 #
 # Every caller applies the SAME fail-open rule: only skip a job when the
-# triggering event is `pull_request` AND this filter actually ran and
-# reported the surface as untouched. On `push`, `merge_group`,
-# `workflow_dispatch`, or `schedule` -- or if this job itself fails to run
-# -- every caller's own `if:` falls back to "run everything". Path-
-# filtering is a PR-time fast-feedback optimization only; it is never the
-# last line of defense before `main`, and it never gets to silently decide
-# what runs on a non-PR event.
+# triggering event is `pull_request` AND this filter actually completed
+# successfully (`result == 'success'` -- a `failure` or a `cancelled` run,
+# e.g. an external mid-flight cancellation like ACTION_ITEMS.md C47, both
+# fail open) AND reported the surface as untouched AND the PR didn't touch
+# `.github/workflows/**` itself (every caller also ORs in
+# `outputs.workflows == 'true'`, so a PR editing a gate exercises the gate
+# it's changing instead of relying on the filter having separately marked
+# some other surface as touched). On `push`, `merge_group`,
+# `workflow_dispatch`, or `schedule` -- or if this job itself doesn't run
+# or errors -- every caller's own `if:` falls back to "run everything".
+# Path-filtering is a PR-time fast-feedback optimization only; it is never
+# the last line of defense before `main`, and it never gets to silently
+# decide what runs on a non-PR event.
 #
 # NAMING NOTE: `admin` below means `admin-dashboard/**` (the frontend
 # surface) -- unrelated to `backend/routes/admin/`, which lives under the
@@ -56,6 +62,12 @@ jobs:
     name: Detect changed surfaces
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
+    # Explicit bound because this job is now a blocking dependency for ~21
+    # jobs across 3 heavy workflows (Phase 2) -- a hang here (e.g. a
+    # dorny/paths-filter GitHub API stall) should fail fast into every
+    # caller's `result != 'success'` fail-open leg rather than leave 21
+    # downstream jobs queued for the org/repo default timeout.
+    timeout-minutes: 5
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       rider: ${{ steps.filter.outputs.rider }}

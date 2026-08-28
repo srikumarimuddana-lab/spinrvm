@@ -1171,8 +1171,17 @@ def apply_legacy_sin_dob_import(plan: SinDobImportPlan, *, batch: str) -> list[s
         raise RuntimeError("refusing to apply with validation errors")
 
     now_iso = datetime.now(timezone.utc).isoformat()
-    conflicts: list[str] = []
-    for upd in plan.updates:
+
+    def _apply_one(upd: dict[str, Any]) -> str | None:
+        """Write one driver's update. Returns its old_driver_id if the race
+        guard didn't match (conflict), else None. Each row touches a
+        different driver_id with no cross-row dependency, so running these
+        concurrently changes nothing about *what* gets written, only how
+        long it takes -- same reasoning as commit_mongo_driver_import_plan's
+        own concurrency fix (2026-08-28): a plain sequential loop here, one
+        SELECT + one optional encrypt RPC + one UPDATE per row, hit the same
+        real-scale commit-timeout risk.
+        """
         fields: dict[str, Any] = {"updated_at": now_iso}
         plain_sin = upd.get("_plain_sin")
         if plain_sin:
@@ -1204,10 +1213,13 @@ def apply_legacy_sin_dob_import(plan: SinDobImportPlan, *, batch: str) -> list[s
         if upd.get("date_of_birth"):
             query = query.is_("date_of_birth", "null")
         res = query.execute()
-        if not res.data:
-            conflicts.append(upd["old_driver_id"])
+        return upd["old_driver_id"] if not res.data else None
 
-    return conflicts
+    if not plan.updates:
+        return []
+    with ThreadPoolExecutor(max_workers=_COMMIT_POOL_WORKERS, thread_name_prefix="sin-dob-backfill-apply") as pool:
+        results = [fut.result() for fut in [pool.submit(_apply_one, upd) for upd in plan.updates]]
+    return [old_id for old_id in results if old_id is not None]
 
 
 def sin_source(driver: dict[str, Any] | None) -> str | None:

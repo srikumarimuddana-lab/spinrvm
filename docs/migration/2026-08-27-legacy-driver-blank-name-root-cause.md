@@ -190,6 +190,19 @@ have a blank name too, and — unlike drivers — at least one of those blank-na
 by a real booking (`customer_id` linkage), so the "zero ride linkage, safe to synthesize a
 placeholder" argument from §2 does **not** automatically carry over to riders without re-checking.
 
+**Addendum (2026-08-28) — `rider_import_service.py` checked for the same `_id`-corruption class
+as Finding B/item #6's bug, found harmless:** `rider_import_service.py` has its own, separate
+`normalize_header`/`HEADER_ALIASES`/`read_csv_text` (not shared code with
+`driver_import_service.py`), and it exhibits the identical mechanical behavior — a raw Mongo `_id`
+header normalizes to `id` (same as the pre-fix driver-side bug). Confirmed against the real
+`customers.csv` (1,238 rows, header includes both `_id` and `customer_id` as distinct columns).
+Unlike the driver importer's pre-fix bug, though, this is **inert, not a live bug**: `build_plan`
+never reads `row["id"]`/`row["_id"]` anywhere — dedup/resume matches purely on `phone` (required)
+and `email` (fallback), and the one column that actually carries the Stripe linkage, `customer_id`,
+is a distinct raw CSV header (already `cus_…`-shaped) that survives normalization untouched (it
+isn't underscore-prefixed). No fix applied; noting it here so it isn't independently
+"rediscovered" as if it were the same class of live bug as item #6's.
+
 ## 6. What this means for Oct 30
 
 1. Finding 1 (blank name) is closed — shipped, no further action.
@@ -202,13 +215,26 @@ placeholder" argument from §2 does **not** automatically carry over to riders w
    described in §3's `[DECIDED AND SHIPPED]` block above.
 3. Riders (§5) still need their own gap-analysis pass before Oct 30 — profile enrichment from
    `customers.csv`, not account creation, is the actual remaining work, and 5.2% of rows carry the
-   same blank-name pattern with a materially different ride-linkage answer than drivers had. One
-   incidental finding while validating Finding 2 against real production data, not chased further
-   here since it's outside this change's scope: at least some riders already carry a
-   `legacy_import_metadata.rider_csv_import` marker (source `legacy_rider_csv_import`, batch
-   `20260817023332`) — meaning some rider profile enrichment may have already happened via a path
-   this doc didn't account for. Worth a real look before assuming §5's "not yet enriched" framing
-   is fully accurate for every rider.
+   same blank-name pattern with a materially different ride-linkage answer than drivers had.
+   **Correction (2026-08-28), closing out the incidental finding this point used to flag as
+   unresolved:** the `legacy_import_metadata.rider_csv_import` marker (batch `20260817023332`) on
+   918 production `users` rows was chased down — live production count confirms exactly 918 rows
+   (`SELECT count(*) FROM users WHERE legacy_import_metadata->'rider_csv_import'->>'source' =
+   'legacy_rider_csv_import'` → 918, out of 1,139 total `users`), and `git log` traces the batch
+   to commit `76b01fe26` (PR #4004,
+   `docs/change-log/2026-08-17-rider-provenance-backfill-executed.md`). That commit's own text is
+   explicit that it ran a **direct, one-time SQL `UPDATE` against production**, not
+   `rider_import_service.py`'s `commit_plan` — it stamped only the `rider_csv_import` provenance
+   sub-key onto 918 pre-existing `users` rows already phone-matched to `customers.csv`, and wrote
+   no other field. Production data confirms this indirectly: only 263/918 of those rows carry a
+   `stripe_customer_id`, even though `customers.csv`'s own `customer_id` column (which the real
+   importer *does* write to `stripe_customer_id`) would have populated far more of them had the
+   real importer ever actually run. **§5's "not yet enriched" framing was correct as written** — no
+   rider row has had email/name/`stripe_customer_id` backfilled from `customers.csv` by any
+   importer, and `rider_import_service.py` has never been executed (validate or commit) against
+   production. Only a provenance marker was manually stamped, ahead of the Oct 31 old-app
+   decommission, for audit-trail purposes — the rider profile-enrichment gap itself is unchanged
+   and still fully open.
 4. `docs/runbooks/legacy-migration-playbook.md` (the canonical Oct 30 checklist) has item #11
    recording all of the above so it isn't rediscovered later.
 
@@ -229,6 +255,16 @@ by the update payload); and the full-export run surfaced 3 occurrences each of b
 (the real export has old-app duplicate signups sharing a phone number), confirming the resume check
 correctly accumulates distinct history entries rather than colliding on them.
 
+**2026-08-28 addendum — verification performed for the rider gap-analysis follow-up (§5/§6):**
+live production SQL (`mcp__Supabase__execute_sql`, project `soavhtdhefowwvforzwb`) re-ran to get
+the exact `rider_csv_import` count (918/1,139) and batch (`20260817023332`, single batch, single
+timestamp), plus supporting counts (`is_rider`, `stripe_customer_id` presence) used to confirm no
+importer-driven enrichment occurred. `git log --all` traced the batch to commit `76b01fe26`
+(PR #4004) and its own change-log doc was read in full. The real `customers.csv` (1,238 rows) was
+located on disk (a leftover scratchpad export from an earlier session) and used to confirm
+`rider_import_service.py`'s `normalize_header('_id') == 'id'` behavior and that `build_plan` never
+reads that key.
+
 **Not verified:** a full `commit_mongo_driver_import_plan` --apply run against the real production
 DB was **not** executed — no write path was exercised against production from this session, only
 read-only `SELECT`s to size the findings and confirm metadata shapes; the product owner runs
@@ -238,4 +274,7 @@ sample (§5) is a 250-of-1,233 random sample, not an exhaustive join — treat t
 verification was performed (this session's change is backend-only; the admin-dashboard driver page
 already renders `legacy_import_metadata`/`needs_review` badges generically, confirmed by reading
 `admin-dashboard/src/app/dashboard/drivers/page.tsx`, but a placeholder name like "Unnamed Legacy
-Driver 5439f4" was not screenshotted in that UI).
+Driver 5439f4" was not screenshotted in that UI). The 2026-08-28 addendum's `customers.csv` is a
+leftover file from an earlier session's scratchpad, not re-pulled from Mongo this session — treated
+as representative (same row/column shape documented earlier in this file) but not re-verified as
+the canonical Oct 30 export.

@@ -521,12 +521,31 @@ rushed).
     > Finding A's "zero ride linkage, safe to synthesize" reasoning does **not** automatically carry
     > over to riders without its own check. Both left as open follow-ups, not assumed.
     >
-    > **Incidental finding while validating Finding B against real data, not chased further here:**
-    > at least some riders already carry a `legacy_import_metadata.rider_csv_import` marker (source
-    > `legacy_rider_csv_import`) on real production rows checked during this pass — meaning some
-    > rider profile enrichment may already have happened via a path not accounted for above. Whoever
-    > runs the riders gap-analysis pass should check for this importer's actual coverage first
-    > rather than assuming zero riders are enriched.
+    > **[RESOLVED 2026-08-28 — was "Incidental finding ... not chased further here," now chased down
+    > and closed.]** This item used to flag, without chasing it down, that at least some riders
+    > already carried a `legacy_import_metadata.rider_csv_import` marker on real production rows.
+    > That marker is now confirmed to belong to a **single** production batch, `20260817023332`, on
+    > exactly **918** `users` rows (`SELECT count(*) FROM users WHERE legacy_import_metadata->
+    > 'rider_csv_import'->>'source' = 'legacy_rider_csv_import'` against `soavhtdhefowwvforzwb`,
+    > live, 2026-08-28). `git log` traces that batch to commit `76b01fe26` (PR #4004,
+    > `docs/change-log/2026-08-17-rider-provenance-backfill-executed.md`), whose own text says
+    > explicitly: it ran a **direct, one-time SQL `UPDATE` against production**, not
+    > `rider_import_service.py`'s actual `commit_plan`. It stamped only the `rider_csv_import`
+    > provenance sub-key onto 918 pre-existing `users` rows already phone-matched to
+    > `customers.csv` — no other field (email, name, `stripe_customer_id`) was written. Production
+    > data corroborates this: only 263/918 of those rows carry a `stripe_customer_id`, far fewer
+    > than `customers.csv`'s own `customer_id` column would populate had the real importer (which
+    > does write `stripe_customer_id`) ever actually run. **Conclusion: no rider profile enrichment
+    > has happened via any importer** — `rider_import_service.py` has never been executed (validate
+    > or commit) against production. The "riders gap-analysis pass" flagged just above this point
+    > is still fully open; only a provenance/audit-trail marker exists today, not enrichment.
+    > `rider_import_service.py` was also checked for the same `_id`-header-corruption class of bug
+    > as this item's own Finding B/item #6 above (same mechanical behavior — `_id` normalizes to
+    > `id` there too) and found **inert**: `build_plan` never reads that column; its dedup/resume
+    > logic keys on `phone`/`email`, and the one Stripe-linkage column, `customer_id`, is a distinct
+    > header that survives normalization untouched. No fix needed. Full writeup:
+    > `docs/migration/2026-08-27-legacy-driver-blank-name-root-cause.md` §5/§6 (also updated
+    > 2026-08-28).
 
 ## What this playbook is not
 

@@ -284,6 +284,8 @@ export {
     adminRegenerateImportedSnapshots,
     adminValidateSinDobBackfill,
     adminCommitSinDobBackfill,
+    adminValidateVehicleHistoryBackfill,
+    adminCommitVehicleHistoryBackfill,
 } from "./api/imports";
 export type {
     DriverImportReportItem,
@@ -328,6 +330,12 @@ export type {
     SinDobBackfillCommitResult,
     SinDobBackfillFiles,
     SinDobBackfillOptions,
+    VehicleHistoryBackfillReportItem,
+    VehicleHistoryBackfillCounts,
+    VehicleHistoryBackfillReport,
+    VehicleHistoryBackfillCommitResult,
+    VehicleHistoryBackfillFiles,
+    VehicleHistoryBackfillOptions,
 } from "./api/imports";
 export {
     getCloudMessages,

@@ -639,3 +639,83 @@ export const adminRegenerateImportedSnapshots = (force: boolean, limit: number =
         headers: { "Content-Type": "application/json" },
     });
 
+/* ── Legacy Vehicle-History Backfill (2 CSVs) ── */
+// Super-admin/drivers-module-gated (backend/routes/admin/legacy_vehicle_history_backfill.py).
+// Phase 2 of the 2026-08-27 migration plan: backfills append-only
+// driver_vehicle_history rows (regulatory audit table, migration 157) from
+// the previous app's raw Mongo export. Takes two files — vehicle_details.csv
+// (VIN/plate/make/model/colour/year, keyed by a Mongo ObjectId driver_id)
+// and drivers.csv (the same export's driver collection, used only to
+// resolve that ObjectId to a phone number). No live vehicle/driver field is
+// ever mutated — only new history rows are appended.
+export interface VehicleHistoryBackfillReportItem {
+    old_driver_id: string;
+    field: string;
+    message: string;
+}
+export interface VehicleHistoryBackfillCounts {
+    vehicle_rows: number;
+    history_rows_to_insert: number;
+    skipped_unmatched: number;
+    skipped_not_legacy_driver: number;
+    skipped_already_backfilled: number;
+}
+export interface VehicleHistoryBackfillReport {
+    batch: string;
+    can_commit: boolean;
+    counts: VehicleHistoryBackfillCounts;
+    warnings: VehicleHistoryBackfillReportItem[];
+    errors: VehicleHistoryBackfillReportItem[];
+    // Proves a /validate call happened for this exact (batch, both files'
+    // bytes, admin) — /commit requires it back. The token binds
+    // sha256(vehicle_details_bytes + "|" + drivers_bytes), so swapping
+    // either file between validate and commit invalidates it. Optional: a
+    // locally-reconstructed "commit was refused, here's why" report never
+    // carries one — the fix is always to re-validate, which mints a fresh
+    // token.
+    validation_token?: string;
+}
+export interface VehicleHistoryBackfillCommitResult {
+    batch: string;
+    committed: boolean;
+    history_rows_inserted?: number;
+    warnings?: VehicleHistoryBackfillReportItem[];
+    // Present (with can_commit=false) when the commit was refused on errors.
+    can_commit?: boolean;
+    counts?: VehicleHistoryBackfillCounts;
+    errors?: VehicleHistoryBackfillReportItem[];
+}
+export interface VehicleHistoryBackfillFiles {
+    vehicleDetails: File;
+    drivers: File;
+}
+export interface VehicleHistoryBackfillOptions {
+    batch?: string;
+    // Required for /commit — pass report.validation_token from the
+    // preceding /validate call. Omitted for /validate itself.
+    validationToken?: string;
+}
+
+function vehicleHistoryBackfillFormData(files: VehicleHistoryBackfillFiles, opts?: VehicleHistoryBackfillOptions): FormData {
+    const fd = new FormData();
+    fd.append("vehicle_details_csv", files.vehicleDetails);
+    fd.append("drivers_csv", files.drivers);
+    if (opts?.batch) fd.append("batch", opts.batch);
+    if (opts?.validationToken) fd.append("validation_token", opts.validationToken);
+    return fd;
+}
+
+/** Dry-run: parse + validate both CSVs and return the report (no writes). */
+export const adminValidateVehicleHistoryBackfill = (files: VehicleHistoryBackfillFiles, opts?: VehicleHistoryBackfillOptions) =>
+    request<VehicleHistoryBackfillReport>("/api/admin/legacy-drivers/vehicle-history-backfill/validate", {
+        method: "POST",
+        body: vehicleHistoryBackfillFormData(files, opts),
+    });
+
+/** Commit the backfill. Returns committed=false + errors if the CSVs no longer validate. */
+export const adminCommitVehicleHistoryBackfill = (files: VehicleHistoryBackfillFiles, opts?: VehicleHistoryBackfillOptions) =>
+    request<VehicleHistoryBackfillCommitResult>("/api/admin/legacy-drivers/vehicle-history-backfill/commit", {
+        method: "POST",
+        body: vehicleHistoryBackfillFormData(files, opts),
+    });
+

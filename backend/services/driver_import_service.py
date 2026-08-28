@@ -29,6 +29,7 @@ import io
 import mimetypes
 import re
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -1991,6 +1992,45 @@ def build_mongo_driver_import_plan(
     return plan
 
 
+# Bounded pool for the per-row round-trips below (update/enrich loops, PII
+# encryption RPCs) -- local to this commit path, not the shared DB thread
+# pool in repositories/_base.py, so one big admin batch can't starve
+# concurrent request traffic. Sized well under Supabase/PostgREST's own
+# connection limits for a single admin-triggered burst.
+_COMMIT_POOL_WORKERS = 20
+
+
+def _run_concurrently(items: list, fn) -> None:
+    """Run fn(item) for every item on a bounded thread pool, then re-raise
+    the first exception hit (if any) -- same fail-the-whole-commit contract
+    the original sequential ``for`` loop had, just no longer serialized.
+    """
+    if not items:
+        return
+    with ThreadPoolExecutor(max_workers=_COMMIT_POOL_WORKERS, thread_name_prefix="legacy-import-commit") as pool:
+        futures = [pool.submit(fn, item) for item in items]
+        for fut in futures:
+            fut.result()
+
+
+def _update_user_row(upd: dict) -> None:
+    upd = dict(upd)
+    user_id = upd.pop("id")
+    if not upd:
+        return
+    upd["updated_at"] = datetime.now(timezone.utc).isoformat()
+    supabase.table("users").update(upd).eq("id", user_id).execute()
+
+
+def _update_driver_row(enrich: dict) -> None:
+    enrich = dict(enrich)
+    driver_id = enrich.pop("id")
+    if not enrich:
+        return
+    enrich["updated_at"] = datetime.now(timezone.utc).isoformat()
+    supabase.table("drivers").update(enrich).eq("id", driver_id).execute()
+
+
 def commit_mongo_driver_import_plan(plan: MongoDriverImportPlan) -> None:
     if plan.errors:
         raise RuntimeError("refusing to commit with validation errors")
@@ -1999,28 +2039,35 @@ def commit_mongo_driver_import_plan(plan: MongoDriverImportPlan) -> None:
     # users_to_update / drivers_to_enrich are additive-only updates to
     # EXISTING rows (never touched by the insert calls above/below) -- same
     # pop-id-then-update shape as rider_import_service.commit_plan's own
-    # users_to_update loop.
-    for upd in plan.users_to_update:
-        upd = dict(upd)
-        user_id = upd.pop("id")
-        if not upd:
-            continue
-        upd["updated_at"] = datetime.now(timezone.utc).isoformat()
-        supabase.table("users").update(upd).eq("id", user_id).execute()
-    drivers = []
-    for driver in plan.drivers_to_insert:
+    # users_to_update loop. Each row updates a different id with no
+    # cross-row dependency, so running them concurrently changes nothing
+    # about *what* gets written, only how long it takes -- issuing these
+    # (and the license-number encryption RPCs below) one HTTP round-trip at
+    # a time made a real-scale commit (924-row Phase 1 batch: 114 + 215
+    # sequential UPDATEs, ~120 sequential encrypt RPCs) take long enough to
+    # trip the request's upstream proxy timeout, surfacing to the operator
+    # as a raw "Internal Server Error" with NO write applied (confirmed via
+    # a zero-row check against production) rather than this function's own
+    # error handling ever getting a chance to run -- found 2026-08-28
+    # running the real batch.
+    _run_concurrently(plan.users_to_update, _update_user_row)
+
+    def _prepare_driver_insert(driver: dict) -> dict:
         copied = dict(driver)
         copied["license_number"] = encrypt_pii(copied.pop("_plain_license_number", None))
-        drivers.append(copied)
+        return copied
+
+    drivers: list = [None] * len(plan.drivers_to_insert)  # preserve original row order
+    if plan.drivers_to_insert:
+        with ThreadPoolExecutor(max_workers=_COMMIT_POOL_WORKERS, thread_name_prefix="legacy-import-commit") as pool:
+            futures = {
+                pool.submit(_prepare_driver_insert, driver): i for i, driver in enumerate(plan.drivers_to_insert)
+            }
+            for fut, i in futures.items():
+                drivers[i] = fut.result()
     if drivers:
         supabase.table("drivers").insert(drivers).execute()
-    for enrich in plan.drivers_to_enrich:
-        enrich = dict(enrich)
-        driver_id = enrich.pop("id")
-        if not enrich:
-            continue
-        enrich["updated_at"] = datetime.now(timezone.utc).isoformat()
-        supabase.table("drivers").update(enrich).eq("id", driver_id).execute()
+    _run_concurrently(plan.drivers_to_enrich, _update_driver_row)
 
 
 def print_mongo_driver_import_report(plan: MongoDriverImportPlan, *, dry_run: bool) -> None:
